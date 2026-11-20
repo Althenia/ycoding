@@ -1,0 +1,70 @@
+.interaction-control {
+  flex: none;
+  min-inline-size: 0;
+  padding: var(--yc-space-1) var(--yc-space-3);
+  color: var(--yc-ink-secondary);
+  background: var(--yc-plane-canvas);
+  font: var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-sans);
+}
+
+.app--conversation.app--selected .workspace__main:has(> .interaction-control) {
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+}
+
+.interaction-control__bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--yc-space-1) var(--yc-space-2);
+  align-items: center;
+}
+
+.interaction-control__label {
+  display: flex;
+  align-items: center;
+  gap: var(--yc-space-2);
+  flex: 1 1 12rem;
+  min-inline-size: 0;
+  min-block-size: var(--yc-control-h-dense);
+  overflow-wrap: anywhere;
+}
+
+.interaction-control__label[data-state="active"] { color: var(--yc-mint-ink); }
+.interaction-control__label[data-state="pending"] { color: var(--yc-amber-ink); }
+
+.interaction-control__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--yc-space-1);
+  min-block-size: var(--yc-control-h-dense);
+  padding: 0 var(--yc-space-2);
+  border: var(--yc-border-width) solid var(--yc-line-field);
+  border-radius: var(--yc-radius-pill);
+  color: var(--yc-ink);
+  background: var(--yc-plane-raised);
+  font: inherit;
+  cursor: var(--yc-cursor-action);
+  touch-action: manipulation;
+}
+
+.interaction-control__button:hover,
+.interaction-control__button:active { background: var(--yc-plane-hover); }
+.interaction-control__button:focus-visible { outline: 2px solid var(--yc-focus); outline-offset: 2px; }
+.interaction-control__button[aria-disabled="true"] { cursor: var(--yc-cursor-busy); color: var(--yc-ink-secondary); }
+.interaction-control__stop { color: var(--yc-coral-ink); }
+.interaction-control__notice { margin: var(--yc-space-1) 0 0; }
+
+.interaction-preview { margin: var(--yc-space-2) 0 0; min-inline-size: 0; }
+.interaction-preview figcaption { padding-block-end: var(--yc-space-1); color: var(--yc-ink-secondary); font-size: var(--yc-size-xs); }
+.interaction-preview__frame {
+  display: grid;
+  place-items: center;
+  block-size: min(12rem, 25vh);
+  overflow: hidden;
+  border-radius: var(--yc-radius-card);
+  background: var(--yc-plane-raised);
+  color: var(--yc-ink-secondary);
+}
+
+.interaction-preview__frame p { margin: 0; padding: var(--yc-space-2); }
+.interaction-preview__frame img { display: block; max-inline-size: 100%; max-block-size: min(12rem, 25vh); object-fit: contain; }

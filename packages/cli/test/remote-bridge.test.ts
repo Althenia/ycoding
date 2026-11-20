@@ -1422,6 +1422,23 @@ describe("remote bridge", () => {
     await bridge.close()
   })
 
+  test("routes Interaction invalidations only through the subscribed Session", async () => {
+    const test = harness({ sessions: [entry, second] })
+    try {
+      await test.bridge.connect()
+      const connection = test.records[0]
+      connection.deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: [entry.sessionID] })
+      const event = { id: "evt_interaction_synthetic", type: "session.interaction.changed", sourceEpoch: "source_synthetic", created: 1_000,
+        data: { sessionID: entry.sessionID, generation: crypto.randomUUID() } }
+      test.streams[0].stream.onEvent({ ...event, id: "evt_unsubscribed_synthetic", data: { ...event.data, sessionID: second.sessionID } })
+      test.streams[0].stream.onEvent(event)
+      await waitFor(() => sentEvents(connection).length > 0 ? true : undefined)
+      expect(sentEvents(connection)).toEqual([{ sessionID: entry.sessionID, event }])
+    } finally {
+      await test.bridge.close()
+    }
+  })
+
   test("reports each relay close code and whether it will reconnect", async () => {
     const test = harness({})
     await test.bridge.connect()

@@ -7,7 +7,6 @@ import { IsolatedBrowser } from "@ycoding-ai/schema/isolated-browser"
 import { Schema } from "effect"
 import { createSignal, onMount, type Accessor, type JSX } from "solid-js"
 import { DialogSessionBrowser, SessionIsolatedBrowserCommand } from "../src/component/dialog-session-browser"
-import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
 import { CommandPaletteDialog } from "../src/component/command-palette"
 import { ConfigProvider } from "../src/config"
 import { ClientProvider } from "../src/context/client"
@@ -87,330 +86,43 @@ test("production Session command is available and opens isolated browser for its
   }
 })
 
-test("Session command creates a one-time Chrome pairing code only on explicit request", async () => {
-  let commands!: Accessor<readonly KeymapCommand[]>
+test("Session Connect Chrome directs fresh setup to the native menu without legacy enrollment", async () => {
   const requests: Request[] = []
   const result = await renderBrowser({
-    command: true,
     baseUrl: "http://127.0.0.1:43210",
+    viewport: { width: 86, height: 14 },
     fetch: (url, request) => {
-      if (url.pathname === `/api/session/${first.sessionID}/browser` && request.method === "GET")
-        return json({ data: { state: "unavailable" } })
-      if (url.pathname !== `/api/session/${first.sessionID}/browser/start`) return undefined
-      requests.push(request)
-      return json({ data: { secret: "p".repeat(43), expiresAt: Date.now() + 120_000 } })
-    },
-    fixture: () => {
-      commands = Keymap.useCommands()
-      return <SessionIsolatedBrowserCommand sessionID={first.sessionID} location={first.location} />
-    },
-  })
-  try {
-    await result.app.waitFor(() => commands().some((command) => command.id === "session.browser.chrome"))
-    expect(requests).toHaveLength(0)
-    void commands()
-      .find((command) => command.id === "session.browser.chrome")!
-      .run()
-    await result.app.waitForFrame((frame) => frame.includes("Chrome connection"))
-    expect(result.app.captureCharFrame()).toContain("http://127.0.0.1:43210")
-    expect(result.app.captureCharFrame().replace(/\s+/g, " ")).toContain(
-      "Pairing lets YCoding use eligible Chrome tabs, including the active tab.",
-    )
-    expect(result.app.captureCharFrame()).not.toContain("one-time")
-    expect(requests).toHaveLength(0)
-    result.app.mockInput.pressKey("p")
-    await result.app.waitForFrame((frame) => frame.includes("p".repeat(43)))
-    expect(result.app.captureCharFrame()).toContain("Then enter this one-time code")
-    expect(requests.map((request) => request.method)).toEqual(["POST"])
-  } finally {
-    result.app.renderer.destroy()
-  }
-})
-
-test("Chrome pairing code survives status polls and paired disconnects never offer implicit re-pairing", async () => {
-  let commands!: Accessor<readonly KeymapCommand[]>
-  let statuses = 0
-  const requests: string[] = []
-  const result = await renderBrowser({
-    command: true,
-    baseUrl: "http://127.0.0.1:43210",
-    fetch: (url, request) => {
-      if (url.pathname === `/api/session/${first.sessionID}/browser` && request.method === "GET") {
-        statuses += 1
-        return json({ data: { state: "unavailable", paired: false } })
-      }
-      if (url.pathname === `/api/session/${first.sessionID}/browser/start`) {
-        requests.push(request.method)
-        return json({ data: { secret: "p".repeat(43), expiresAt: Date.now() + 120_000 } })
-      }
+      if (url.pathname.includes("/browser")) requests.push(request)
       return undefined
     },
     fixture: () => {
-      commands = Keymap.useCommands()
+      const dialog = useDialog()
+      onMount(() => dialog.replace(() => <CommandPaletteDialog />))
       return <SessionIsolatedBrowserCommand sessionID={first.sessionID} location={first.location} />
     },
   })
   try {
-    await result.app.waitFor(() => commands().some((command) => command.id === "session.browser.chrome"))
-    void commands().find((command) => command.id === "session.browser.chrome")!.run()
-    await result.app.waitForFrame((frame) => frame.includes("Chrome connection"))
-    result.app.mockInput.pressKey("p")
-    await result.app.waitForFrame((frame) => frame.includes("p".repeat(43)))
-    await Bun.sleep(4100)
-    expect(statuses).toBeGreaterThanOrEqual(2)
-    expect(result.app.captureCharFrame()).toContain("p".repeat(43))
-    expect(result.app.captureCharFrame()).not.toContain("Loading")
-    result.app.mockInput.pressKey("r")
-    await Bun.sleep(10)
-    expect(result.app.captureCharFrame()).toContain("p".repeat(43))
-    expect(result.app.captureCharFrame()).toContain("Pairing code (expires in two minutes)")
-  } finally {
-    result.app.renderer.destroy()
-  }
-})
-
-test("Chrome pairing code and actions stay visible in a short terminal", async () => {
-  let commands!: Accessor<readonly KeymapCommand[]>
-  const result = await renderBrowser({
-    command: true,
-    baseUrl: "http://127.0.0.1:43210",
-    viewport: { width: 74, height: 14 },
-    fetch: (url, request) => {
-      if (url.pathname === `/api/session/${first.sessionID}/browser` && request.method === "GET")
-        return json({ data: { state: "unavailable", paired: false } })
-      if (url.pathname === `/api/session/${first.sessionID}/browser/start`)
-        return json({ data: { secret: "p".repeat(43), expiresAt: Date.now() + 120_000 } })
-      return undefined
-    },
-    fixture: () => {
-      commands = Keymap.useCommands()
-      return <SessionIsolatedBrowserCommand sessionID={first.sessionID} location={first.location} />
-    },
-  })
-  try {
-    await result.app.waitFor(() => commands().some((command) => command.id === "session.browser.chrome"))
-    void commands()
-      .find((command) => command.id === "session.browser.chrome")!
-      .run()
-    await result.app.waitForFrame((frame) => frame.includes("Chrome connection"))
-    result.app.mockInput.pressKey("p")
-    await result.app.waitForFrame((frame) => frame.includes("p".repeat(43)))
-    const frame = result.app.captureCharFrame()
-    expect(frame).toContain("Pairing code (expires in two minutes)")
-    expect(frame).toContain("Not connected")
-    expect(frame).toContain("r refresh")
-  } finally {
-    result.app.renderer.destroy()
-  }
-})
-
-test("Chrome connection body scrolls so every instruction is reachable in a short terminal", async () => {
-  let commands!: Accessor<readonly KeymapCommand[]>
-  const result = await renderBrowser({
-    command: true,
-    baseUrl: "http://127.0.0.1:43210",
-    viewport: { width: 74, height: 14 },
-    fetch: (url, request) => {
-      if (url.pathname === `/api/session/${first.sessionID}/browser` && request.method === "GET")
-        return json({ data: { state: "unavailable", paired: false } })
-      if (url.pathname === `/api/session/${first.sessionID}/browser/start`)
-        return json({ data: { secret: "p".repeat(43), expiresAt: Date.now() + 120_000 } })
-      return undefined
-    },
-    fixture: () => {
-      commands = Keymap.useCommands()
-      return <SessionIsolatedBrowserCommand sessionID={first.sessionID} location={first.location} />
-    },
-  })
-  try {
-    await result.app.waitFor(() => commands().some((command) => command.id === "session.browser.chrome"))
-    void commands()
-      .find((command) => command.id === "session.browser.chrome")!
-      .run()
-    await result.app.waitForFrame((frame) => frame.includes("Chrome connection"))
-    result.app.mockInput.pressKey("p")
-    await result.app.waitForFrame((frame) => frame.includes("p".repeat(43)))
-    const initial = result.app.captureCharFrame()
-    expect(initial).toContain("p create pairing code")
-    expect(initial).toContain("r refresh")
-    expect(initial).toContain("Page Up/Page Down")
-    expect(initial).not.toContain("Model actions still require site permission.")
-
-    const seen: string[] = []
-    let frame = initial
-    for (let page = 0; page < 8 && !frame.replace(/\s+/g, " ").includes("site permission."); page++) {
+    await result.app.waitForFrame((frame) => frame.includes("Commands"))
+    await result.app.mockInput.typeText("Connect Chrome")
+    result.app.mockInput.pressEnter()
+    await result.app.waitForFrame((frame) => frame.includes("YCoding > Connect Chrome"))
+    for (const key of ["p", "r", "f"]) result.app.mockInput.pressKey(key)
+    expect(result.app.captureCharFrame()).not.toContain("http://127.0.0.1:43210")
+    const pages = [result.app.captureCharFrame()]
+    for (let page = 0; page < 4 && !pages.at(-1)?.includes("separate approval"); page++) {
       pressPage(result.app, "pagedown")
-      const previous = frame
-      await result.app.waitForFrame((next) => next !== previous)
-      frame = result.app.captureCharFrame()
-      expect(frame).toContain("Page Up/Page Down")
-      seen.push(...frame.split("\n").map((line) => line.trim()).filter((line) => line && !seen.includes(line)))
+      await result.app.renderOnce()
+      pages.push(result.app.captureCharFrame())
     }
-    const reached = seen.join("").replace(/\s+/g, "")
-    expect(reached).toContain("Model actions still require site permission.".replace(/\s+/g, ""))
-    expect(reached).toContain("In chrome://extensions, choose Load unpacked and select:".replace(/\s+/g, ""))
-    expect(reached).toContain(BrowserExtension.location().replace(/\s+/g, ""))
-    expect(reached).toContain("Local service address (enter once in the extension):".replace(/\s+/g, ""))
-    expect(reached).toContain("http://127.0.0.1:43210")
-
-    for (let page = 0; page < 8 && !frame.includes("Pairing code (expires in two minutes)"); page++) {
-      pressPage(result.app, "pageup")
-      const previous = frame
-      await result.app.waitForFrame((next) => next !== previous)
-      frame = result.app.captureCharFrame()
-    }
-    expect(frame).toContain("Pairing code (expires in two minutes)")
-    expect(frame).toContain("r refresh")
-
-    const pointerRow = frame.split("\n").findIndex((line) => line.includes("Pairing code"))
-    expect(pointerRow).toBeGreaterThanOrEqual(0)
-    for (let wheel = 0; wheel < 16 && !frame.replace(/\s+/g, " ").includes("site permission."); wheel++) {
-      const previous = frame
-      await result.app.mockMouse.scroll(20, pointerRow, "down")
-      await result.app.waitForFrame((next) => next !== previous)
-      frame = result.app.captureCharFrame()
-    }
-    expect(frame.replace(/\s+/g, " ")).toContain("site permission.")
-    expect(frame).toContain("Page Up/Page Down")
-  } finally {
-    result.app.renderer.destroy()
-  }
-})
-
-function hintFollowsNote(frame: string) {
-  const rows = frame.split("\n")
-  const hint = rows.findIndex((line) => line.includes("Page Up/Page Down scroll"))
-  return hint > 0 && rows[hint - 1].includes("permission.")
-}
-
-async function openChromeConnection(input: { paired: boolean; viewport: { width: number; height: number } }) {
-  let commands!: Accessor<readonly KeymapCommand[]>
-  const result = await renderBrowser({
-    command: true,
-    baseUrl: "http://127.0.0.1:43210",
-    viewport: input.viewport,
-    fetch: (url, request) => {
-      if (url.pathname === `/api/session/${first.sessionID}/browser` && request.method === "GET")
-        return json({ data: { state: "unavailable", paired: input.paired } })
-      if (url.pathname === `/api/session/${first.sessionID}/browser/start`)
-        return json({ data: { secret: "p".repeat(43), expiresAt: Date.now() + 120_000 } })
-      return undefined
-    },
-    fixture: () => {
-      commands = Keymap.useCommands()
-      return <SessionIsolatedBrowserCommand sessionID={first.sessionID} location={first.location} />
-    },
-  })
-  await result.app.waitFor(() => commands().some((command) => command.id === "session.browser.chrome"))
-  void commands()
-    .find((command) => command.id === "session.browser.chrome")!
-    .run()
-  return result
-}
-
-test("paired Chrome dialog in a tall terminal fits its content and omits the pairing-code instruction", async () => {
-  const result = await openChromeConnection({ paired: true, viewport: { width: 120, height: 46 } })
-  try {
-    await result.app.waitForFrame((frame) => frame.includes("Paired; waiting for Chrome to reconnect") && hintFollowsNote(frame))
-    const frame = result.app.captureCharFrame()
-    const rows = frame.split("\n")
-    const note = rows.findLastIndex((line) => line.includes("permission."))
-    const hint = rows.findIndex((line) => line.includes("Page Up/Page Down scroll"))
-    expect(note).toBeGreaterThan(0)
-    expect(hint).toBe(note + 1)
-    expect(hint).toBeLessThan(rows.length - 8)
-    expect(frame).not.toContain("one-time code")
-    expect(frame).toContain("In chrome://extensions, choose Load unpacked and select:")
-    expect(frame).toContain("Local service address (enter once in the extension):")
-    expect(frame).toContain("f forget pairing")
-  } finally {
-    result.app.renderer.destroy()
-  }
-})
-
-test("unpaired Chrome dialog in a tall terminal shows the code instruction and fits its content", async () => {
-  const result = await openChromeConnection({ paired: false, viewport: { width: 120, height: 46 } })
-  try {
-    await result.app.waitForFrame((frame) => frame.includes("Not connected"))
-    result.app.mockInput.pressKey("p")
-    await result.app.waitForFrame((frame) => frame.includes("p".repeat(43)) && hintFollowsNote(frame))
-    const frame = result.app.captureCharFrame()
-    const rows = frame.split("\n")
-    const note = rows.findLastIndex((line) => line.includes("permission."))
-    const hint = rows.findIndex((line) => line.includes("Page Up/Page Down scroll"))
-    expect(frame).toContain("Then enter this one-time code in the YCoding extension popup.")
-    expect(rows.findIndex((line) => line.includes("p".repeat(43)))).toBeLessThan(
-      rows.findIndex((line) => line.includes("Then enter this one-time code")),
-    )
-    expect(hint).toBe(note + 1)
-    expect(hint).toBeLessThan(rows.length - 8)
-  } finally {
-    result.app.renderer.destroy()
-  }
-})
-
-test("paired Chrome status offers explicit forget instead of another pairing code", async () => {
-  let commands!: Accessor<readonly KeymapCommand[]>
-  const requests: string[] = []
-  const result = await renderBrowser({
-    command: true,
-    baseUrl: "http://127.0.0.1:43210",
-    fetch: (url, request) => {
-      requests.push(request.method)
-      if (url.pathname === `/api/session/${first.sessionID}/browser`)
-        return json({ data: { state: "unavailable", paired: true } })
-      if (url.pathname === `/api/session/${first.sessionID}/browser/pairing` && request.method === "DELETE")
-        return json({ data: undefined }, { status: 204 })
-      return undefined
-    },
-    fixture: () => {
-      commands = Keymap.useCommands()
-      return <SessionIsolatedBrowserCommand sessionID={first.sessionID} location={first.location} />
-    },
-  })
-  try {
-    await result.app.waitFor(() => commands().some((command) => command.id === "session.browser.chrome"))
-    void commands().find((command) => command.id === "session.browser.chrome")!.run()
-    await result.app.waitForFrame((frame) => frame.includes("Paired; waiting for Chrome to reconnect"))
-    expect(result.app.captureCharFrame()).not.toContain("create pairing code")
-    const posts = requests.filter((method) => method === "POST")
-    result.app.mockInput.pressKey("p")
-    await Bun.sleep(10)
-    expect(requests.filter((method) => method === "POST")).toEqual(posts)
-    expect(result.app.captureCharFrame()).toContain("f forget pairing")
-  } finally {
-    result.app.renderer.destroy()
-  }
-})
-
-test("Chrome connection dialog describes profile-wide pairing without a separate grant", async () => {
-  let commands!: Accessor<readonly KeymapCommand[]>
-  const result = await renderBrowser({
-    command: true,
-    fetch: (url, request) =>
-      url.pathname === `/api/session/${first.sessionID}/browser` && request.method === "GET"
-        ? json({ data: { state: "connected", generation: 1, profileGranted: true } })
-        : undefined,
-    fixture: () => {
-      commands = Keymap.useCommands()
-      return <SessionIsolatedBrowserCommand sessionID={first.sessionID} location={first.location} />
-    },
-  })
-  try {
-    await result.app.waitFor(() => commands().some((command) => command.id === "session.browser.chrome"))
-    void commands()
-      .find((command) => command.id === "session.browser.chrome")!
-      .run()
-    await result.app.waitForFrame((frame) => frame.includes("Connected to YCoding"))
-    expect(result.app.captureCharFrame().replace(/\s+/g, " ")).toContain(
-      "Pairing lets YCoding use eligible Chrome tabs, including the active tab.",
-    )
-    expect(result.app.captureCharFrame()).not.toContain("Full-profile access:")
-    const frame = result.app.captureCharFrame().replace(/\s+/g, " ")
-    expect(frame).toContain("In chrome://extensions, choose Load unpacked and select:")
-    expect(frame.replace(/\s+/g, "")).toContain(BrowserExtension.location().replace(/\s+/g, ""))
-    expect(frame).toContain("Model actions still require site permission.")
-    expect(frame).not.toContain("human review")
+    const instructions = pages.join(" ").replace(/\s+/g, " ")
+    expect(instructions).toContain("ycoding-chrome-extension")
+    expect(instructions).toContain("Local service address and Pairing code")
+    expect(instructions).toContain("separate approval")
+    pressPage(result.app, "pageup")
+    await result.app.waitForFrame((frame) => !frame.includes("separate approval"))
+    result.app.mockInput.pressEscape()
+    await result.app.waitForFrame((frame) => !frame.includes("Chrome connection"))
+    expect(requests).toHaveLength(0)
   } finally {
     result.app.renderer.destroy()
   }

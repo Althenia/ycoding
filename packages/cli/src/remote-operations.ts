@@ -17,6 +17,7 @@ import {
   readDotsComputerTarget,
   alertTitle,
   isRemoteLatencySample,
+  isInteractionGeneration,
   isRemoteReviewItemID,
   isSessionDirectoryPath,
   isSessionID,
@@ -998,6 +999,12 @@ async function run(input: OperationInput) {
       return await capturedChangesPage(input, verified, sessionID, location, request.id, validated.cursor)
     case "attachment.read":
       return await input.local.attachmentRead(sessionID, location, validated.digest)
+    case "session.interaction.status":
+      return { data: await input.local.interactionStatus(sessionID, input.signal) }
+    case "session.interaction.preview":
+      return { data: await input.local.interactionPreview(sessionID, validated.generation, input.signal) }
+    case "session.interaction.stop":
+      return { data: await input.local.interactionStop(sessionID, validated.generation) }
     case "message.stream":
       return await input.local.messageRead(sessionID, location, validated.messageID, input.signal)
     case "subagent.list":
@@ -1271,6 +1278,8 @@ type Validated =
   | { readonly kind: "snapshot"; readonly limit?: number; readonly before?: string }
   | { readonly kind: "capturedChanges.list"; readonly cursor?: string }
   | { readonly kind: "attachment.read"; readonly digest: string }
+  | { readonly kind: "session.interaction.status" }
+  | { readonly kind: "session.interaction.preview" | "session.interaction.stop"; readonly generation: string }
   | { readonly kind: "message.stream"; readonly messageID: string }
   | { readonly kind: "subagent.list"; readonly cursor?: string }
   | { readonly kind: "session.pin" | "session.unpin" }
@@ -1539,6 +1548,11 @@ function validate(request: RemoteRequest): Validated {
     if (typeof fields.digest !== "string" || !/^[0-9a-f]{64}$/.test(fields.digest))
       throw new OperationError("invalid_message", "Invalid managed attachment digest")
     return { kind: "attachment.read", digest: fields.digest }
+  }
+  if (request.operation === "session.interaction.status") return { kind: request.operation }
+  if (request.operation === "session.interaction.preview" || request.operation === "session.interaction.stop") {
+    if (!isInteractionGeneration(fields.generation)) throw new OperationError("invalid_message", "Invalid Interaction generation")
+    return { kind: request.operation, generation: fields.generation }
   }
   if (request.operation === "session.message.stream") return { kind: "message.stream", messageID: messageID(fields.messageID) }
   if (request.operation === "session.pending.remove") return { kind: "pending.remove", messageID: messageID(fields.messageID) }
@@ -2340,6 +2354,9 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.pending.remove": ["messageID"],
   "session.pending.steer": ["messageID"],
   "session.attachment.read": ["digest"],
+  "session.interaction.status": [],
+  "session.interaction.preview": ["generation"],
+  "session.interaction.stop": ["generation"],
   "session.message.stream": ["messageID"],
   "session.subagent.list": ["cursor"],
   "session.pin": [],

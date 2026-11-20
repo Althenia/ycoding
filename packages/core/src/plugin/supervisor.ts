@@ -8,6 +8,7 @@ import { pathToFileURL } from "url"
 import { Agent } from "../agent"
 import { AISDK } from "../aisdk"
 import { Browser } from "../browser"
+import { InteractionRuntime } from "../interaction"
 import { IsolatedBrowser } from "../isolated-browser"
 import { Catalog } from "../catalog"
 import { Command } from "../command"
@@ -220,6 +221,7 @@ export const node = makeLocationNode({
     SdkPlugins.node,
     Agent.node,
     Browser.node,
+    InteractionRuntime.node,
     IsolatedBrowser.node,
     Catalog.node,
     Command.node,

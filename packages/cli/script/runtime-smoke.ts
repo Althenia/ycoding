@@ -12,6 +12,8 @@ const MODEL_ID = "smoke-model"
 const PROVIDER_ID = "openrouter"
 const OPENAI_MODEL_ID = "gpt-5.6"
 const OPENAI_PROVIDER_ID = "openai"
+const OPENAI_AGENT = "openai-smoke"
+const OPENAI_SYSTEM = "Runtime smoke synthetic Responses system prompt."
 const MCP_SERVER = "runtime-catalog"
 const GOAL_SYNTHESIS_TEXT = "Ship the safest database default decision"
 const GOAL_STEER_START = "User-proxy steer: begin with the safest database default"
@@ -419,6 +421,11 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         },
       },
       agents: {
+        [OPENAI_AGENT]: {
+          description: "Runtime smoke Responses fixture",
+          mode: "primary",
+          system: OPENAI_SYSTEM,
+        },
         reviewer: {
           description: "Runtime smoke managed subagent",
           mode: "subagent",
@@ -688,6 +695,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     phase = "OpenAI Responses continuation fallback"
     const openAIRequestsStart = requests.length
     const openAISession = await client.session.create({
+      agent: OPENAI_AGENT,
       model: { providerID: OPENAI_PROVIDER_ID, id: OPENAI_MODEL_ID },
       location: { directory: project },
     })
@@ -706,7 +714,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         pathname: request.pathname,
         store: request.body.store,
         previousResponseID: request.body.previous_response_id,
-        input: request.body.input,
+        inputItems: Array.isArray(request.body.input) ? request.body.input.length : undefined,
       }))
       throw new Error(
         `OpenAI continuation fallback was not recorded: diagnostics=${JSON.stringify(openAIDiagnostics?.requests)}, requests=${JSON.stringify(observed)}`,
@@ -740,6 +748,17 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       throw new Error("OpenAI benchmark did not preserve explicitly configured storage")
     if (openAIRequests[0]?.body.previous_response_id !== undefined)
       throw new Error("First OpenAI request unexpectedly referenced previous response state")
+    const systemInputs = (input: unknown) => {
+      if (!Array.isArray(input)) throw new Error("OpenAI request omitted its input array")
+      return input.filter((item: unknown) =>
+        typeof item === "object" && item !== null && "role" in item && item.role === "system",
+      )
+    }
+    const promptCopies = openAIRequests.map((request) => systemInputs(request.body.input).filter((item) =>
+      "content" in item && JSON.stringify(item.content).includes(OPENAI_SYSTEM),
+    ).length)
+    if (promptCopies[0] !== 1)
+      throw new Error(`First OpenAI request sent ${promptCopies[0]} copies of the system prompt`)
     if (openAIRequests[1]?.body.previous_response_id !== "resp_runtime_smoke_1")
       throw new Error("Second OpenAI request omitted the previous response ID")
     const continuedInput = JSON.stringify(openAIRequests[1]?.body.input)
@@ -747,13 +766,15 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       throw new Error("Continued OpenAI request omitted the new tool result")
     if (continuedInput.includes("runtime-smoke-openai-continuation"))
       throw new Error("Continued OpenAI request resent represented user history")
-    if (!continuedInput.includes('"role":"system"'))
-      throw new Error("Continued OpenAI request omitted current system instructions")
+    if (systemInputs(openAIRequests[1]?.body.input).length !== 0)
+      throw new Error("Continued OpenAI request resent the stored system input")
     if (openAIRequests[2]?.body.previous_response_id !== undefined)
       throw new Error("OpenAI fallback retained previous response state")
     const fallbackInput = JSON.stringify(openAIRequests[2]?.body.input)
     if (!fallbackInput.includes("runtime-smoke-openai-continuation") || !fallbackInput.includes('"function_call_output"'))
       throw new Error("OpenAI fallback did not restore full canonical history")
+    if (promptCopies[2] !== 1)
+      throw new Error(`OpenAI fallback sent ${promptCopies[2]} copies of the system prompt`)
 
     phase = "autonomy modes API"
     const modeSession = await client.session.create({
@@ -882,7 +903,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         throw new Error(`Provider request ${request.pathname} did not contain the stored bearer credential`)
     }
 
-    summary = `Runtime smoke passed: auth, archive=round-trip, autonomy=round-trip, goal=${completedGoal.goal?.status}, subagent=${persistedSubagent.state}, cache-hit=${diagnostics.cache.hitRatio}, tool-requests=${toolSummary.logical}/${toolSummary.physical}, namespace=${stableNamespace}, openai-fallback=${openAISummary.fallback}`
+    summary = `Runtime smoke passed: auth, archive=round-trip, autonomy=round-trip, goal=${completedGoal.goal?.status}, subagent=${persistedSubagent.state}, cache-hit=${diagnostics.cache.hitRatio}, tool-requests=${toolSummary.logical}/${toolSummary.physical}, namespace=${stableNamespace}, openai-fallback=${openAISummary.fallback}, openai-prior-id=${openAIRequests[1]?.body.previous_response_id}, openai-system-prompt-copies=${promptCopies.join("/")}`
   } catch (error) {
     const probe = async (read: () => Promise<unknown>) =>
       read().then(
@@ -900,7 +921,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
           path: request.pathname,
           model: request.model,
           maxTokens: request.maxTokens,
-          text: request.text.slice(0, 400),
+          inputItems: Array.isArray(request.body.input) ? request.body.input.length : undefined,
         })),
       )}`,
     )

@@ -505,7 +505,7 @@ Custom tools must be supplied through:
 
 This distinction is intentional: plugin and MCP lifecycles provide validation, permissions, cancellation, and cleanup that arbitrary source-file loading would bypass.
 
-The built-in `browser` tool is registered through the same Location-scoped internal plugin lifecycle. Omitted mode operates eligible tabs in the paired Chrome profile, including the active tab; explicit `mode: "owned"` operates Session-created Chrome tabs, and explicit `mode: "isolated"` operates an already-started Session-owned isolated browser. No mode starts pairing or falls back to another. The tool never exposes pairing to the model and applies per-site browser permissions to profile reads and hard human review to profile mutations at execution. See [`browser-extension.md`](./browser-extension.md) and the [isolated-browser contract](../specs/isolated-browser.md).
+The built-in `interaction` tool is registered through the Location-scoped internal plugin lifecycle. It requests native approval for a specific Chrome tab or macOS window and uses fresh observation revisions and element IDs. It requires separate confirmation for irreversible actions; isolated Chrome does not support those actions. The Browser and IsolatedBrowser HTTP and SDK contracts are separate from the model tool catalog.
 
 ## Themes
 

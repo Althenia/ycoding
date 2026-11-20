@@ -56,6 +56,9 @@ export const remoteOperations = [
   "session.pending.remove",
   "session.pending.steer",
   "session.attachment.read",
+  "session.interaction.status",
+  "session.interaction.preview",
+  "session.interaction.stop",
   "session.message.stream",
   "session.todo.list",
   "session.subagent.list",
@@ -151,6 +154,9 @@ export const remoteSessionOperations = [
   "session.pending.remove",
   "session.pending.steer",
   "session.attachment.read",
+  "session.interaction.status",
+  "session.interaction.preview",
+  "session.interaction.stop",
   "session.message.stream",
   "session.todo.list",
   "session.subagent.list",
@@ -329,6 +335,9 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "session.pending.remove": "mutation",
   "session.pending.steer": "mutation",
   "session.attachment.read": "read",
+  "session.interaction.status": "read",
+  "session.interaction.preview": "read",
+  "session.interaction.stop": "mutation",
   "session.message.stream": "read",
   "session.todo.list": "read",
   "session.subagent.list": "read",
@@ -995,6 +1004,9 @@ function validUsageReportInput(input: unknown): boolean {
 }
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation === "session.interaction.status") return input === undefined
+  if (operation === "session.interaction.preview" || operation === "session.interaction.stop")
+    return isRecord(input) && Object.keys(input).length === 1 && isInteractionGeneration(input.generation)
   if (operation === "dots.get") return input === undefined
   if (operation === "dots.set") return isRecord(input) && Object.keys(input).length === 2 &&
     typeof input.enabled === "boolean" && typeof input.expectedRevision === "number" &&
@@ -1601,6 +1613,10 @@ export function isSessionID(value: unknown): value is string {
     value.length <= RemoteLimits.maxSessionIDChars &&
     /^ses[A-Za-z0-9_-]+$/.test(value)
   )
+}
+
+export function isInteractionGeneration(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)
 }
 
 const remoteErrorCodeSet: ReadonlySet<string> = new Set(remoteErrorCodes)

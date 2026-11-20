@@ -22,6 +22,17 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.12.4",
+    date: "2026-11-20",
+    title: "YCoding Interaction",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "YCoding Interaction provides the native macOS helper and the matching Chrome extension for the `interaction` tool. This is the single built-in tool for browser and desktop interaction. The Browser and IsolatedBrowser HTTP and SDK contracts remain available." },
+      { tag: "Changed", text: "To upgrade from v0.12.3 or earlier, use the current installer instead of the installed `ycoding update` command. The installer accepts the Interaction archive and retires the old helper during replacement. Load the bundled Chrome extension from the new installation." },
+      { tag: "Fixed", text: "macOS installation verifies both the CLI executable and the Interaction helper against the YCoding signing certificate before replacing any files." },
+    ],
+  },
+  {
     version: "0.12.3",
     date: "2026-11-20",
     title: "Recover stuck hard reviews",

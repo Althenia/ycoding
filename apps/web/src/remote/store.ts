@@ -77,6 +77,7 @@ import type {
 } from "./transport"
 import { createLatencyDiagnostics } from "./latency"
 import { boundPlacement, hasWaitingSession, sessionActivityGroup, sessionListRefreshNotice, type RemoteConnectionState } from "./view-model"
+import { createInteractionControl, interactionEventGeneration, readInteractionStatus, type InteractionView } from "./interaction-control"
 import type { QueryClient } from "@tanstack/solid-query"
 import { Store, batch } from "@tanstack/solid-store"
 import { describeOutcome } from "./outcome"
@@ -231,6 +232,7 @@ export type RemoteStoreState = {
   readonly sessionCreation?: SessionCreation
   readonly activeSessionID?: string
   readonly view?: SessionView
+  readonly interaction?: InteractionView
   readonly history?: { readonly status: "idle" | "loading" | "error" | "stale"; readonly before?: string; readonly error?: string }
   readonly todos?: readonly TodoView[]
   readonly team?: TeamView
@@ -304,6 +306,10 @@ export type RemoteStore = {
   readonly connect: (deviceID: string) => void
   readonly disconnect: () => void
   readonly selectSession: (sessionID: string) => Promise<void>
+  readonly watchInteraction: (enabled: boolean) => void
+  readonly revealInteraction: (revealed: boolean) => void
+  readonly refreshInteraction: () => void
+  readonly stopInteraction: (generation: string) => void
   readonly watchTeam: (enabled: boolean) => void
   readonly watchFamilyActivity: (enabled: boolean) => void
   readonly loadMoreTeam: () => Promise<void>
@@ -596,6 +602,39 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     container.setState((previous) => ({ ...previous, ...patch }))
   }
 
+  const interaction = createInteractionControl((value) => setState({ interaction: value }))
+  let interactionWatching = false
+  let interactionToken: number | undefined
+  let interactionOwner: { readonly transport: RemoteTransport; readonly token: number } | undefined
+  const syncInteraction = () => {
+    const owner = transport
+    const sessionID = container.state.activeSessionID
+    const token = selectionToken
+    if (!interactionWatching || !owner || !sessionID || container.state.transport.kind !== "open" || subscribedSessionID !== sessionID || interactionToken !== token) {
+      if (interactionOwner) interaction.setSource()
+      interactionOwner = undefined
+      return
+    }
+    if (interactionOwner?.transport === owner && interactionOwner.token === token) return
+    interactionOwner = { transport: owner, token }
+    interaction.setSource({
+      status: async (signal) => {
+        const result = await owner.request("session.interaction.status", { sessionID, signal })
+        if (result.status === "failed" && result.error.code === "unknown_operation") return "unsupported"
+        return result.status === "ok" && typeof result.value === "object" && result.value !== null
+          ? readInteractionStatus(Reflect.get(result.value, "data")) ?? "error" : "error"
+      },
+      preview: async (generation, signal) => {
+        const result = await owner.request("session.interaction.preview", { sessionID, input: { generation }, signal })
+        return result.status === "ok" && typeof result.value === "object" && result.value !== null ? Reflect.get(result.value, "data") : undefined
+      },
+      stop: async (generation) => {
+        const result = await owner.request("session.interaction.stop", { sessionID, input: { generation } })
+        if (result.status !== "ok") throw new Error("Interaction Stop was not confirmed")
+      },
+    })
+  }
+
   const clearPendingLatency = () => {
     cancelLatencyUpload?.()
     cancelLatencyUpload = undefined
@@ -740,6 +779,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     setState({ ...patch, generation: container.state.generation + 1,
       mutations: [...mutations, ...[...sends.values()].filter((progress) => progress.deviceID === patch.activeDeviceID && !mutations.some((mutation) => mutation.id === progress.mutation.id)).map((progress) => progress.mutation)],
       mutationToasts: (patch.mutationToasts ?? container.state.mutationToasts)?.filter((toast) => !sends.has(toast.id) || sends.get(toast.id)?.deviceID === patch.activeDeviceID) })
+    syncInteraction()
     endQueries(ended)
   }
 
@@ -1514,6 +1554,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
     setState({ transport: status, connection: connectionFor(status, container.state.activeDeviceID), notifications: delivery.entries(),
       ...(status.kind === "closed" ? { lastRelayDrop: { code: status.code, reason: status.reason } } : {}) })
+    syncInteraction()
     if (reopened) latencyUnsupported = false
     if (opened) queueMicrotask(() => { if (isCurrentConnection(owner) && container.state.transport.kind === "open") void api.readTelemetryConsent() })
     if (status.kind === "open") scheduleLatencyUpload()
@@ -2483,6 +2524,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const active = transport
     // One selection owns the view; a superseded selection never writes state again.
     const token = ++selectionToken
+    syncInteraction()
     olderMessageIDs = new Set()
     const resetSessionList = container.state.sessionQuery.trim() !== "" || container.state.sessionFilter !== "all"
     if (resetSessionList) {
@@ -2575,6 +2617,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
     const previous = subscribedSessionID
     subscribedSessionID = sessionID
+    interactionToken = token
+    syncInteraction()
     if (previous !== undefined && previous !== sessionID) releaseSubscription(active, previous)
     const owned: HydrationWindow = { sessionID, events: [], streamed: streamedPartText(container.state.view?.id === sessionID ? container.state.view.messages : []) }
     hydration = owned
@@ -3317,6 +3361,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         onEvents: (sessionID, events) => {
           if (!isCurrentConnection(created)) return
           for (const event of events) {
+            if (typeof event === "object" && event !== null && Reflect.get(event, "type") === "session.interaction.changed") {
+              const generation = interactionEventGeneration(event, sessionID)
+              if (sessionID === container.state.activeSessionID && generation !== undefined) interaction.change(generation)
+              continue
+            }
             const createdAt = typeof event === "object" && event !== null ? Reflect.get(event, "created") : undefined
             if (typeof createdAt === "string" && Number.isFinite(Date.parse(createdAt))) latency.recordClient("stream.delay", now() - Date.parse(createdAt))
             queueEvent(sessionID, event)
@@ -3335,6 +3384,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       disconnectDevice()
     },
     selectSession,
+    watchInteraction: (enabled) => {
+      if (interactionWatching === enabled) return
+      interactionWatching = enabled
+      syncInteraction()
+    },
+    revealInteraction: interaction.reveal,
+    refreshInteraction: interaction.refresh,
+    stopInteraction: interaction.stop,
     watchTeam: (enabled) => {
       if (teamWatching === enabled) return
       teamWatching = enabled
@@ -4118,6 +4175,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       setState({ view: { ...view, autonomy } })
     },
     dispose: () => {
+      interactionWatching = false
+      syncInteraction()
       cancelSessionsFrameWindow?.()
       cancelSessionsFrameWindow = undefined
       sessionsFrameQueued = false
@@ -4313,6 +4372,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     // A new socket starts unsubscribed, so ownership follows this response and only
     // while the same selection still owns the view.
     subscribedSessionID = resubscribed.status === "ok" ? sessionID : undefined
+    interactionToken = subscribedSessionID === sessionID ? token : undefined
+    syncInteraction()
     compactionAttemptedToken = undefined
     const missedAfter = container.state.view?.id === sessionID ? container.state.view.watermark : undefined
     const reloaded = await reloadSnapshot(sessionID, token)

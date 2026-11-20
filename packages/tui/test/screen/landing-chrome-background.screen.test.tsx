@@ -20,7 +20,6 @@ const row = (id: string, title: string, updated: number, extra: Record<string, u
 })
 const executor = row("ses_executor_newest", "Renamed arbitrarily", 30, { origin: "dots-executor" })
 const ordinary = row("ses_ordinary_dots_title", "Dots · unattributed", 10)
-const created = row("ses_created_for_chrome", "New session", 40)
 
 function landingRoute(url: URL) {
   if (url.pathname === "/api/location") return json(location)
@@ -46,15 +45,8 @@ async function connectChrome(sessions: readonly ReturnType<typeof row>[]) {
   let data: ReturnType<typeof useData> | undefined
   const route: FetchHandler = (url, request) => {
     if (url.pathname === "/api/session" && request.method === "GET") return json({ data: sessions, cursor: {} })
-    if (url.pathname === "/api/session" && request.method === "POST") {
-      requests.push("create")
-      return json({ data: created })
-    }
-    const status = /^\/api\/session\/(ses_[a-z_]+)\/browser$/.exec(url.pathname)
-    if (status) {
-      requests.push(`status ${status[1]}`)
-      return json({ data: { state: "unavailable", paired: false } })
-    }
+    if ((url.pathname === "/api/session" && request.method === "POST") || url.pathname.includes("/browser"))
+      requests.push(`${request.method} ${url.pathname}`)
     return landingRoute(url)
   }
   const screen = await renderScreen({ width: 100, height: 40, route, settle: "Message YCoding…", data: (value) => { data = value } })
@@ -69,17 +61,15 @@ async function connectChrome(sessions: readonly ReturnType<typeof row>[]) {
     await screen.input.typeText("Connect Chrome")
     screen.input.pressEnter()
     for (let attempt = 0; attempt < 100 && !screen.frame().includes("Chrome connection"); attempt++) await Bun.sleep(20)
-    expect(screen.frame()).toContain("Chrome connection")
+    expect(screen.frame()).toContain("YCoding > Connect Chrome")
+    expect(screen.frame().replace(/\s+/g, " ")).toContain("Local service address")
     return requests
   } finally {
     await screen.dispose()
   }
 }
 
-test("landing Chrome pairing reuses the ordinary Session in the directory and skips a newer executor Session", async () => {
-  expect(await connectChrome([executor, ordinary])).toEqual([`status ${ordinary.id}`])
-}, 30_000)
-
-test("landing Chrome pairing creates a Session when only an executor Session matches the directory", async () => {
-  expect(await connectChrome([executor])).toEqual(["create", `status ${created.id}`])
+test("landing Connect Chrome is independent of Session availability", async () => {
+  expect(await connectChrome([executor, ordinary])).toEqual([])
+  expect(await connectChrome([executor])).toEqual([])
 }, 30_000)

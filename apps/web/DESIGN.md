@@ -913,6 +913,12 @@ Use the existing 24-unit SVG registry and semantic currentColor roles. Material 
 
 ## Components
 
+### Interaction control
+
+Keep a named Interaction control row above the run's scroll region. Use the canvas plane, small text, semantic status ink, and dense pill buttons with the standard coarse-pointer target and visible focus. Show the platform and reported target label when active. Keep Stop beside pending and active status, separate from stopping prompt generation. Pending Chrome control says that local approval is required without naming an approval surface. Web offers no approval or grant request. Report stopped cleanup separately from unavailability.
+
+Reveal the labeled preview only on request, in companion Activity from 1280px and inline below the status at narrower widths. Keep focus on the invoking button. Bound the preview to the available width and a 12rem by 25vh height cap, letterbox it on the raised plane, and state when it is withheld. Render at most one frame, without motion or download affordances. Closing the preview, changing views or connection, changing grant generation, or stopping clears the frame. `verify/interaction-control.integration.test.ts` exercises the rendered status, reveal and Stop.
+
 | Source family | Existing owner | Preserved behavior |
 | --- | --- | --- |
 | Landing, site header and footer | `src/ui/site.tsx`, `src/styles/site.css`, `src/content/site.ts` | Real destinations, install copy, offline notice and mobile navigation |

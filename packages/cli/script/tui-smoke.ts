@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { BUN_BINARY, platformBinary } from "../src/binary"
-import { verifyPackagedComputerHelper } from "./computer-use"
+import { verifyMacOSInteractionPackage } from "./package-macos-interaction"
 
 const dir = path.resolve(import.meta.dirname, "..")
 const outdir = path.resolve(dir, process.argv.find((arg) => arg.startsWith("--dir="))?.slice("--dir=".length) ?? "dist")
@@ -19,7 +19,7 @@ if (typeof metadata !== "object" || metadata === null || !("version" in metadata
 const version = Bun.spawnSync([binary, "--version"], { stdout: "pipe", stderr: "pipe" })
 if (version.exitCode !== 0 || version.stdout.toString().trim() !== `${BUN_BINARY} v${metadata.version}`)
   throw new Error(`TUI artifact version mismatch: expected ${metadata.version}, received ${version.stdout.toString().trim()} (exit ${version.exitCode})`)
-await verifyPackagedComputerHelper(path.dirname(binary))
+if (process.platform === "darwin") verifyMacOSInteractionPackage(binary)
 
 const help = Bun.spawnSync([binary, "--help"], { stdout: "pipe", stderr: "pipe" })
 const helpText = help.stdout.toString()

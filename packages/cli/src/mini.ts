@@ -117,7 +117,6 @@ export async function runMini(input: MiniCommandInput) {
         initialInput,
         replay: input.replay ?? true,
         replayLimit: input.replayLimit,
-        browserAddress: connection.address,
         demo: input.demo,
         tuiConfig: input.tuiConfig,
       })

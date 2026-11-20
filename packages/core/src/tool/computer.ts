@@ -399,7 +399,7 @@ export const Plugin = {
                     : result(yield* computer.unstage({ sessionID: context.sessionID, callID: context.callID, target }).pipe(Effect.ensuring(reservation.release)))
                 }
                 if (input.action === "desktop.list" || input.action === "desktop.launch" || input.action === "desktop.quit") {
-                  if (input.action === "desktop.launch") {
+                  if (input.action === "desktop.launch" || (input.action === "desktop.quit" && ComputerPolicy.isPrivateInteractionBundle(input.bundle_id))) {
                     const policy = ComputerPolicy.evaluate(input.bundle_id, { allow: ComputerPolicy.overrideFromEnv(process.env.YCODING_COMPUTER_ALLOW_APPS) })
                     if (policy.decision === "forbidden") return yield* new ToolFailure({ message: `app_not_allowed: Computer Use is not allowed to use ${input.bundle_id} (${policy.reason})` })
                   }

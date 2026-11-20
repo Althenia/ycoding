@@ -816,6 +816,12 @@ Use the local user's trailing bubble as attribution; do not print “You”. Ext
 
 ### Session Companion
 
+Show Interaction status above the run's scroll region with the shared compact canvas row, including the active platform and target. Keep the named Stop there independently of companion state and prompt generation. Offer Chrome and macOS requests on a local backend only; approval stays in the selected platform. Pending, unavailable, stopped, and the stopped cleanup result each have distinct text.
+
+Use the Desktop dialog, radio group, and field treatments for a Chrome proposal. Default to Existing tab and show a starting URL field only for Owned tab or Isolated Chrome. Submit only a credential-free HTTP(S) URL for those modes. Cancel and invalid input submit nothing. Direct existing and owned tab proposals to Chrome and isolated proposals to the macOS system prompt. A proposal does not activate control. The pending Chrome status says local approval is required without naming a prompt.
+
+On explicit reveal, place the labeled preview in Activity at the docked 1181px step and inline in the run below it. Keep the invoking control focused. Use one raised, bounded preview or a visible withheld state; discard its frame on close, view or connection change, generation change, or Stop. Verify the renderer through the synthetic native RPC in `test/renderer.integration.test.ts`.
+
 Place the context ring beside the window summary, above a full-width category breakdown. Use one label column and two consistently aligned numeric columns. Show Session usage and tasks without frames; open diagnostics, loaded child costs and compaction history through icon-led, named disclosures. Separate nested snapshot groups by indentation or a start-edge rule; do not fit a new key/value grid inside a narrow value column. In Activity and Running, place the icon first and wrap the complete command, task description and metadata in the available space without a horizontal scroll bar.
 
 ### Composer and navigation

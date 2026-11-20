@@ -449,6 +449,132 @@ async function clickText(page: Page, selector: string, label: string) {
   await page.evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].find(element => element.textContent.trim() === ${JSON.stringify(label)}).click()`)
 }
 
+test("Interaction request and Stop cross the Desktop RPC with the selected Session and exact generation", async () => {
+  const generation = "cf3aa01e-85ca-42fd-af3a-dd706075cb34"
+  const route = "/api/session/ses_test/interaction"
+  const pixels = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
+  let state: Record<string, unknown> = { state: "unavailable" }
+  sceneRead = (call) => {
+    if (call.route === route && call.method === "GET") return { data: state }
+    if (call.route === route && call.method === "POST") {
+      state = { state: "pending", platform: "macos", generation }
+      return { data: state }
+    }
+    if (call.route === `${route}/preview`) return { data: { state: "ready", generation, frame: { mimeType: "image/png", base64: pixels, width: 1, height: 1 } } }
+    if (call.route === `${route}/stop` && call.method === "POST") {
+      state = { state: "stopped", platform: "macos", generation, reason: "stopped", cleanup: "failed" }
+      return { data: state }
+    }
+    return undefined
+  }
+  await owned!.controller.connect({ mode: "shared", server: "http://127.0.0.1:1234" })
+  const page = await open()
+  try {
+    const status = `document.querySelector('[aria-label="Interaction control"]')`
+    await wait(page, `${status}?.textContent.includes('Interaction unavailable')`)
+    await clickText(page, '[aria-label="Interaction control"] button', 'Request macOS control')
+    await wait(page, `${status}?.textContent.includes('Awaiting approval in macOS')`)
+    state = { state: "active", platform: "macos", generation, label: "Synthetic window" }
+    await page.evaluate(`window.__desktopFixture.emit({ type: 'session.interaction.changed', data: { sessionID: 'ses_test', generation: ${JSON.stringify(generation)} } })`)
+    await wait(page, `${status}?.textContent.includes('Synthetic window')`)
+    expect(owned!.calls.filter((call) => call.route === `${route}/preview`)).toEqual([])
+    await page.evaluate(`const reveal = document.querySelector('button[aria-label="Show interaction preview"]'); reveal.focus(); reveal.click()`)
+    await wait(page, `document.querySelector('.rl-companion [aria-label="Interaction preview"] img')?.naturalWidth === 1`)
+    expect(await page.evaluate(`document.activeElement?.getAttribute('aria-label')`)).toBe("Hide interaction preview")
+    expect(owned!.calls.filter((call) => call.route === `${route}/preview`).map((call) => call.query.get("generation"))).toEqual([generation])
+    await page.evaluate(`const stop = document.querySelector('button[aria-label="Stop interaction"]'); stop.click(); stop.click()`)
+    await wait(page, `${status}?.textContent.includes('Cleanup failed')`)
+    expect(await page.evaluate(`document.querySelector('[aria-label="Interaction preview"]') === null`)).toBe(true)
+    expect(owned!.calls.filter((call) => call.method === "POST" && call.route.startsWith(route)).map((call) => [call.route, call.body])).toEqual([
+      [route, { platform: "macos" }], [`${route}/stop`, { generation }],
+    ])
+  } finally { await page.close(); await owned!.controller.connect({ mode: "shared", server: "http://synthetic.invalid" }) }
+}, 30_000)
+
+test("Interaction Stop revokes pending consent without revealing a preview", async () => {
+  const generation = "cf3aa01e-85ca-42fd-af3a-dd706075cb34"
+  const route = "/api/session/ses_test/interaction"
+  const proposal = { state: "pending", platform: "chrome", generation }
+  const requestEntered = Promise.withResolvers<void>()
+  const requestReply = Promise.withResolvers<{ data: typeof proposal }>()
+  let proposed = false
+  let stopped = false
+  sceneRead = (call) => {
+    if (call.route === route && call.method === "POST") { proposed = true; requestEntered.resolve(); return requestReply.promise }
+    if (call.route === `${route}/stop` && call.method === "POST") stopped = true
+    if (call.route !== route && call.route !== `${route}/stop`) return undefined
+    return { data: stopped ? { state: "stopped", platform: "chrome", generation, reason: "stopped", cleanup: "complete" } : proposed ? proposal : { state: "unavailable" } }
+  }
+  await owned!.controller.connect({ mode: "shared", server: "http://127.0.0.1:1234" })
+  const page = await open()
+  try {
+    const status = `document.querySelector('[aria-label="Interaction control"]')`
+    await wait(page, `${status}?.textContent.includes('Interaction unavailable')`)
+    await clickText(page, '[aria-label="Interaction control"] button', "Request Chrome control")
+    await clickText(page, 'dialog[open] button', "Request approval")
+    await requestEntered.promise
+    await page.evaluate(`window.__desktopFixture.emit({ type: 'session.interaction.changed', data: { sessionID: 'ses_test', generation: ${JSON.stringify(generation)} } })`)
+    await wait(page, `${status}?.textContent.includes('Awaiting local approval')`)
+    expect(await page.evaluate(`Array.from(${status}.querySelectorAll('button'), button => [button.getAttribute('aria-label'), button.getAttribute('aria-disabled')])`)).toEqual([["Stop interaction", "false"]])
+    await page.evaluate(`const stop = ${status}.querySelector('button[aria-label="Stop interaction"]'); stop.click(); stop.click()`)
+    await wait(page, `${status}?.textContent.includes('Cleanup complete')`)
+    const reads = () => owned!.calls.filter((call) => call.route === route && call.method === "GET").length
+    const readsBeforeReply = reads()
+    requestReply.resolve({ data: proposal })
+    await wait(page, `window.__desktopFixture.completed.interactionRequest === 1`)
+    expect(await page.evaluate(`${status}?.textContent.includes('Cleanup complete')`)).toBe(true)
+    expect(reads()).toBe(readsBeforeReply)
+    expect(owned!.calls.filter((call) => call.route.startsWith(route) && (call.method !== "GET" || call.route !== route)).map((call) => [call.method, call.route, call.body])).toEqual([
+      ["POST", route, { platform: "chrome", mode: "tab" }], ["POST", `${route}/stop`, { generation }],
+    ])
+  } finally {
+    requestReply.resolve({ data: proposal })
+    await page.close()
+    await owned!.controller.connect({ mode: "shared", server: "http://synthetic.invalid" })
+  }
+}, 30_000)
+
+test("Chrome Interaction proposes three local modes and sends a URL only for new tabs", async () => {
+  const route = "/api/session/ses_test/interaction"
+  sceneRead = (call) => call.route === route ? { data: { state: "unavailable" } } : undefined
+  await owned!.controller.connect({ mode: "shared", server: "http://127.0.0.1:1234" })
+  const page = await open()
+  try {
+    const dialog = `document.querySelector('dialog[open]')`
+    const requests = () => owned!.calls.filter((call) => call.method === "POST" && call.route === route).map((call) => call.body)
+    const openProposal = async () => {
+      await clickText(page, '[aria-label="Interaction control"] button', "Request Chrome control")
+      await wait(page, `${dialog}?.textContent.includes('Request Chrome control')`)
+    }
+    const submit = () => clickText(page, "dialog[open] button", "Request approval")
+    const fillURL = (value: string) => page.evaluate(`(() => { const input = ${dialog}.querySelector('input[type="url"]'); input.value = ${JSON.stringify(value)}; input.dispatchEvent(new InputEvent('input', { bubbles: true })); })()`)
+    await openProposal()
+    expect(await page.evaluate(`${dialog}.querySelector('input[type="url"]') === null`)).toBe(true)
+    expect(requests()).toEqual([])
+    await submit()
+    await wait(page, `window.__desktopFixture.completed.interactionRequest === 1`)
+    expect(requests()).toEqual([{ platform: "chrome", mode: "tab" }])
+    for (const [label, mode, url] of [["Owned tab", "owned", "https://example.test/owned"], ["Isolated Chrome", "isolated", "https://example.test/isolated"]] as const) {
+      await openProposal()
+      await clickText(page, 'dialog[open] [role="radio"]', label)
+      expect(await page.evaluate(`${dialog}.textContent.toLowerCase().includes(${JSON.stringify(mode === "owned" ? "approve the target in chrome" : "approve the target in the macos system prompt")})`)).toBe(true)
+      if (mode === "owned") {
+        await fillURL("https://fixture-user@example.test/")
+        await submit()
+        await wait(page, `${dialog}.textContent.includes('Use a credential-free HTTP or HTTPS URL.')`)
+        expect(requests()).toHaveLength(1)
+      }
+      await fillURL(url)
+      await submit()
+      await wait(page, `window.__desktopFixture.completed.interactionRequest === ${mode === "owned" ? 2 : 3}`)
+    }
+    expect(requests()).toEqual([
+      { platform: "chrome", mode: "tab" }, { platform: "chrome", mode: "owned", url: "https://example.test/owned" },
+      { platform: "chrome", mode: "isolated", url: "https://example.test/isolated" },
+    ])
+  } finally { await page.close(); await owned!.controller.connect({ mode: "shared", server: "http://synthetic.invalid" }) }
+}, 30_000)
+
 test("Desktop provider cards switch the default credential through the existing integration route", async () => {
   prepareImplementedSurface()
   let active = "cred_work"

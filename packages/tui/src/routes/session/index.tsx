@@ -137,6 +137,7 @@ import { switchLabel } from "../../util/model"
 import { findMessageBoundary, messageNavigationSlack } from "./message-navigation"
 import { noticeSummary } from "./notice-summary"
 import { dotsNoticeSummary } from "./dots-notice"
+import { SessionInteractionControl } from "./interaction-control"
 import { stringWidth } from "../../util/string-width"
 import {
   autonomyAutomated,
@@ -1884,6 +1885,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
             }
           >
             <box flexGrow={1} minHeight={0} paddingLeft={2} paddingRight={2} gap={1}>
+              <SessionInteractionControl sessionID={route.sessionID} />
               <Show when={subagent()}>
                 <SubagentSiblingSwitcher />
               </Show>

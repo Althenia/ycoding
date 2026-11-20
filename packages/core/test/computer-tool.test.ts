@@ -159,6 +159,38 @@ const call = (input: Record<string, unknown>, id: string) => ({
 })
 
 describe("computer tool policy ordering", () => {
+  it.effect("blocks private Interaction desktop reads and input before permission or dispatch", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      yield* waitForTool(registry, "computer")
+      calls.length = 0
+      const target = { platform: "macos", bundle_id: "app.ycoding.interaction", pid: 451, window_id: 73 }
+      const scenarios = [
+        { ...target, action: "desktop.inspect" },
+        { ...target, action: "desktop.query", text: "fixture" },
+        { ...target, action: "desktop.observe" },
+        { ...target, action: "desktop.capture" },
+        { ...target, action: "desktop.click", element: [0], expected_revision: "rev-1" },
+        { ...target, action: "desktop.stage", expected_revision: "rev-1" },
+        { ...target, action: "desktop.unstage" },
+        { action: "desktop.launch", platform: target.platform, bundle_id: target.bundle_id },
+        { action: "desktop.quit", platform: target.platform, bundle_id: target.bundle_id, pid: target.pid },
+      ]
+      const previous = process.env.YCODING_COMPUTER_ALLOW_APPS
+      process.env.YCODING_COMPUTER_ALLOW_APPS = target.bundle_id
+      try {
+        for (const input of scenarios) {
+          const settled = yield* settleTool(registry, call(input, input.action))
+          expect(settled.result, input.action).toMatchObject({ type: "error", value: expect.stringContaining("app_not_allowed") })
+        }
+      } finally {
+        if (previous === undefined) delete process.env.YCODING_COMPUTER_ALLOW_APPS
+        else process.env.YCODING_COMPUTER_ALLOW_APPS = previous
+      }
+      expect(calls).toEqual([])
+    }),
+  )
+
   it.effect("uses stage permission and guardrail resources for stage and unstage", () =>
     Effect.gen(function* () {
       calls.length = 0

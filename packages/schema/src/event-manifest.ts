@@ -13,6 +13,7 @@ import { Form } from "./form.js"
 import { Guardrail } from "./guardrail.js"
 import { InstallationEvent } from "./installation-event.js"
 import { Integration } from "./integration.js"
+import { Interaction } from "./interaction.js"
 import { LspEvent } from "./lsp-event.js"
 import { McpEvent } from "./mcp-event.js"
 import { ModelsDev } from "./models-dev.js"
@@ -62,6 +63,7 @@ const featureDefinitions = Event.inventory(
   ...Form.Event.Definitions,
   ...SessionTodo.Event.Definitions,
   ...ProviderUsage.Event.Definitions,
+  Interaction.Changed,
 )
 
 export const ServerDefinitions = Event.inventory(

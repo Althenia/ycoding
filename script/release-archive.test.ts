@@ -4,12 +4,39 @@ import os from "node:os"
 import path from "node:path"
 
 const script = path.join(import.meta.dir, "release-archive.ts")
-const version = "9.9.9"
+const version = "0.12.3"
 const targets = ["darwin-arm64", "darwin-x64", "linux-x64", "windows-x64"] as const
 const extension = ["icons/ycoding-128.png", "icons/ycoding-16.png", "icons/ycoding-32.png", "icons/ycoding-48.png", "manifest.json", "popup.css", "popup.html", "popup.js", "protocol.js", "service-worker.js"]
 const app = "YCoding Computer Use.app"
 const desktop = "YCoding Desktop.app"
 const desktopArchive = `YCoding-Desktop-v${version}-darwin-arm64.zip`
+
+test("Interaction archives use the replacement extension and reject a coexistence payload", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-interaction-archive-"))
+  try {
+    const source = path.join(root, "payload")
+    const directory = path.join(source, "ycoding-chrome-extension")
+    await Bun.write(path.join(source, "ycoding"), "synthetic executable\n")
+    await fs.chmod(path.join(source, "ycoding"), 0o755)
+    for (const file of ["manifest.json", "popup.html", "popup.css", "popup.js", "service-worker.js"])
+      await Bun.write(path.join(directory, file), "synthetic extension\n")
+    const application = path.join(source, "YCoding Interaction.app", "Contents")
+    await Bun.write(path.join(application, "MacOS/ycoding-interaction"), "synthetic helper\n")
+    await fs.chmod(path.join(application, "MacOS/ycoding-interaction"), 0o755)
+    await Bun.write(path.join(application, "Resources/YCoding.icns"), "synthetic icon\n")
+    await Bun.write(path.join(application, "_CodeSignature/CodeResources"), "synthetic signature\n")
+    await Bun.write(path.join(application, "Info.plist"), "<key>CFBundleIdentifier</key><string>app.ycoding.interaction</string><key>CFBundleDisplayName</key><string>YCoding Interaction</string><key>CFBundleIconFile</key><string>YCoding.icns</string>")
+    const args = ["create", "darwin-arm64", "0.12.4-rc.1", source, "prepared"]
+    const created = execute(root, args)
+    expect(created.exitCode, created.stderr.toString()).toBe(0)
+    await Bun.write(path.join(directory, "protocol.js"), "legacy artifact\n")
+    const coexistence = execute(root, [...args.slice(0, -1), "coexistence"])
+    expect(coexistence.exitCode).not.toBe(0)
+    expect(coexistence.stderr.toString()).toContain("unexpected or missing entries")
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
 const desktopEntries = ["", "Contents/", "Contents/Frameworks/", "Contents/Info.plist", "Contents/MacOS/", "Contents/MacOS/launcher", "Contents/Resources/", "Contents/Resources/AppIcon.icns", "Contents/Resources/metadata.json", "Contents/Resources/1z1pg577pmla1.tar.zst", "Contents/_CodeSignature/", "Contents/_CodeSignature/CodeResources"].map((entry) => `${desktop}/${entry}`).sort()
 
 function execute(root: string, args: string[]) {
@@ -180,7 +207,7 @@ test("native archive finalize needs no installed dependencies and publishes only
   try {
     const input = await archives(root)
     const checkout = path.join(root, "checkout")
-    for (const file of ["script/release-archive.ts", "packages/core/src/browser/extension.ts", "LICENSE", "NOTICE"])
+    for (const file of ["script/release-archive.ts", "packages/core/src/browser/extension.ts", "packages/cli/src/update/interaction-layout.ts", "LICENSE", "NOTICE"])
       await Bun.write(path.join(checkout, file), Bun.file(path.join(import.meta.dir, "..", file)))
     const result = Bun.spawnSync([process.execPath, path.join(checkout, "script/release-archive.ts"), "finalize", version, input, "release"], { cwd: root, stdout: "pipe", stderr: "pipe" })
     expect(result.exitCode, result.stderr.toString()).toBe(0)

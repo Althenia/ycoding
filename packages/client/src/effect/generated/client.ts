@@ -3075,6 +3075,63 @@ const Endpoint40_0 = (raw: RawClient["server.decision"]) => () =>
 
 const adaptGroup40 = (raw: RawClient["server.decision"]) => ({ list: Endpoint40_0(raw) })
 
+type Endpoint41_0Request = Parameters<RawClient["server.interaction"]["session.interaction.status"]>[0]
+type Endpoint41_0Input = { readonly sessionID: Endpoint41_0Request["params"]["sessionID"] }
+const Endpoint41_0 = (raw: RawClient["server.interaction"]) => (input: Endpoint41_0Input) =>
+  raw["session.interaction.status"]({ params: { sessionID: input["sessionID"] } }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint41_1Request = Parameters<RawClient["server.interaction"]["session.interaction.request"]>[0]
+type Endpoint41_1Input = {
+  readonly sessionID: Endpoint41_1Request["params"]["sessionID"]
+  readonly payload: Endpoint41_1Request["payload"]
+}
+const Endpoint41_1 = (raw: RawClient["server.interaction"]) => (input: Endpoint41_1Input) =>
+  raw["session.interaction.request"]({
+    params: { sessionID: input["sessionID"] },
+    payload: input["payload"],
+  } as Endpoint41_1Request).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint41_2Request = Parameters<RawClient["server.interaction"]["session.interaction.preview"]>[0]
+type Endpoint41_2Input = {
+  readonly sessionID: Endpoint41_2Request["params"]["sessionID"]
+  readonly generation: Endpoint41_2Request["query"]["generation"]
+}
+const Endpoint41_2 = (raw: RawClient["server.interaction"]) => (input: Endpoint41_2Input) =>
+  raw["session.interaction.preview"]({
+    params: { sessionID: input["sessionID"] },
+    query: { generation: input["generation"] },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint41_3Request = Parameters<RawClient["server.interaction"]["session.interaction.stop"]>[0]
+type Endpoint41_3Input = {
+  readonly sessionID: Endpoint41_3Request["params"]["sessionID"]
+  readonly generation: Endpoint41_3Request["payload"]["generation"]
+}
+const Endpoint41_3 = (raw: RawClient["server.interaction"]) => (input: Endpoint41_3Input) =>
+  raw["session.interaction.stop"]({
+    params: { sessionID: input["sessionID"] },
+    payload: { generation: input["generation"] },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+const adaptGroup41 = (raw: RawClient["server.interaction"]) => ({
+  status: Endpoint41_0(raw),
+  request: Endpoint41_1(raw),
+  preview: Endpoint41_2(raw),
+  stop: Endpoint41_3(raw),
+})
+
 const adaptClient = (raw: RawClient) => ({
   health: adaptGroup0(raw["server.health"]),
   server: adaptGroup1(raw["server.server"]),
@@ -3117,6 +3174,7 @@ const adaptClient = (raw: RawClient) => ({
   coordination: adaptGroup38(raw["server.coordination"]),
   dots: adaptGroup39(raw["server.dots"]),
   decision: adaptGroup40(raw["server.decision"]),
+  sessionInteraction: adaptGroup41(raw["server.interaction"]),
 })
 
 export const make = (options?: { readonly baseUrl?: URL | string }) =>

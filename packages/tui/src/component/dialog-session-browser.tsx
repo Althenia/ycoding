@@ -3,11 +3,11 @@ import { IsolatedBrowser } from "@ycoding-ai/schema/isolated-browser"
 import { BoxRenderable, ScrollBoxRenderable, TextAttributes } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { Option, Schema } from "effect"
-import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, on, onCleanup, Show } from "solid-js"
 import { Keymap } from "../context/keymap"
 import { useClient } from "../context/client"
 import { useTheme } from "../context/theme"
-import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
+import { ChromeConnectionInstructions } from "./chrome-connection-instructions"
 import { DialogHeader, DialogTitle, useDialog } from "../ui/dialog"
 import { DialogPrompt } from "../ui/dialog-prompt"
 
@@ -25,7 +25,7 @@ export function SessionIsolatedBrowserCommand(props: Props) {
         group: "Session",
         palette: true,
         bind: false,
-        run: () => dialog.replace(() => <DialogChromeConnection sessionID={props.sessionID} />),
+        run: () => dialog.replace(() => <DialogChromeConnection />),
       },
       {
         id: "session.browser.isolated",
@@ -40,130 +40,13 @@ export function SessionIsolatedBrowserCommand(props: Props) {
   return null
 }
 
-export function DialogChromeConnection(props: { sessionID: string }) {
-  const client = useClient()
-  const dialog = useDialog()
+export function DialogChromeConnection() {
   const { theme } = useTheme().contextual("elevated")
   const dimensions = useTerminalDimensions()
   let scroll: ScrollBoxRenderable | undefined
-  let body: BoxRenderable | undefined
-  const [bodyHeight, setBodyHeight] = createSignal(0)
-  const maxBodyHeight = () => Math.max(3, dimensions().height - Math.floor(dimensions().height / 4) - 5)
-  const baseUrl = client.baseUrl()
-  const address = baseUrl && URL.canParse(baseUrl) ? new URL(baseUrl) : undefined
-  const localAddress =
-    address?.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(address.hostname)
-      ? address.origin
-      : undefined
-  const [status, setStatus] = createSignal<"loading" | "connected" | "pairing" | "unavailable" | "paired">("loading")
-  const [secret, setSecret] = createSignal<string>()
-  const [paired, setPaired] = createSignal(false)
-  const [failure, setFailure] = createSignal(false)
-  const [pending, setPending] = createSignal(false)
-  let request: AbortController | undefined
-  let statusRequest: AbortController | undefined
-  let expiryTimer: ReturnType<typeof setTimeout> | undefined
-  let reconnectInterval: ReturnType<typeof setInterval> | undefined
-
-  const refresh = () => {
-    statusRequest?.abort()
-    const controller = new AbortController()
-    statusRequest = controller
-    setFailure(false)
-    if (!secret() && !paired()) setStatus("loading")
-    void client.api.browser
-      .status({ sessionID: props.sessionID }, { signal: controller.signal })
-      .then((value) => {
-        if (!controller.signal.aborted) {
-          const waiting = ["pairing", "unavailable", "paired"].includes(status())
-          setPaired(value.paired === true)
-          setStatus(
-            value.state === "connected" || value.state === "paused"
-              ? "connected"
-              : secret()
-                ? "pairing"
-                : value.paired
-                  ? "paired"
-                  : value.state,
-          )
-          if (waiting && value.state === "connected") {
-            dialog.clear()
-            stopReconnect()
-          }
-        }
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setFailure(true)
-      })
-  }
-
-  const pair = () => {
-    if (pending() || paired() || status() === "loading" || status() === "connected") return
-    request?.abort()
-    clearTimeout(expiryTimer)
-    const controller = new AbortController()
-    request = controller
-    setPending(true)
-    setSecret()
-    setFailure(false)
-    void client.api.browser
-      .start({ sessionID: props.sessionID }, { signal: controller.signal })
-      .then((value) => {
-        if (controller.signal.aborted) return
-        setSecret(value.secret)
-        setStatus("pairing")
-        expiryTimer = setTimeout(() => setSecret(), Math.max(0, value.expiresAt - Date.now()))
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setFailure(true)
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setPending(false)
-      })
-  }
-
-  const stopReconnect = () => {
-    if (reconnectInterval) {
-      clearInterval(reconnectInterval)
-      reconnectInterval = undefined
-    }
-  }
-
-  const forget = () => {
-    if (pending() || !paired()) return
-    const controller = new AbortController()
-    request?.abort()
-    request = controller
-    setPending(true)
-    setFailure(false)
-    void client.api.browser
-      .forget({ sessionID: props.sessionID }, { signal: controller.signal })
-      .then(() => {
-        if (controller.signal.aborted) return
-        setPaired(false)
-        setStatus(secret() ? "pairing" : "unavailable")
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setFailure(true)
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setPending(false)
-      })
-  }
-
-  onCleanup(() => {
-    request?.abort()
-    statusRequest?.abort()
-    clearTimeout(expiryTimer)
-    stopReconnect()
-    setSecret()
-  })
   Keymap.createLayer(() => ({
     mode: "modal",
     commands: [
-      { bind: "p", title: "Create Chrome pairing code", group: "Dialog", run: pair },
-      { bind: "r", title: "Refresh Chrome connection", group: "Dialog", run: () => !pending() && refresh() },
-      { bind: "f", title: "Forget Chrome pairing", group: "Dialog", run: forget },
       {
         id: "chrome-connection.page-up",
         title: "Scroll Chrome connection up",
@@ -178,90 +61,15 @@ export function DialogChromeConnection(props: { sessionID: string }) {
       },
     ],
   }))
-  createEffect(on(() => props.sessionID, refresh))
-
-  onMount(() => {
-    reconnectInterval = setInterval(() => {
-      refresh()
-    }, 2000)
-  })
-  onCleanup(stopReconnect)
 
   return (
     <box paddingBottom={1} flexDirection="column">
       <DialogHeader title={<DialogTitle>Chrome connection</DialogTitle>} />
-      <scrollbox
-        ref={(value: ScrollBoxRenderable) => {
-          scroll = value
-        }}
-        height={Math.min(maxBodyHeight(), bodyHeight() || maxBodyHeight())}
-        scrollbarOptions={{ visible: false }}
-      >
-        <box
-          ref={(value: BoxRenderable) => {
-            body = value
-          }}
-          onSizeChange={() => setBodyHeight(body?.height ?? 0)}
-          paddingLeft={4}
-          paddingRight={4}
-          paddingTop={1}
-          flexDirection="column"
-          flexShrink={0}
-        >
-          <box paddingBottom={1} flexDirection="column">
-            <text>
-              {failure()
-                ? "Chrome connection status unavailable"
-                : status() === "connected"
-                  ? "Connected to YCoding"
-                  : status() === "loading"
-                    ? "Loading"
-                    : status() === "paired"
-                      ? "Paired; waiting for Chrome to reconnect"
-                    : "Not connected"}
-            </text>
-            <Show when={secret()}>
-              {(code) => <text wrapMode="word">Pairing code (expires in two minutes): {code()}</text>}
-            </Show>
-            <Show when={failure()}>
-              <text fg={theme.text.feedback.error.default}>
-                Unable to load or create Chrome pairing. Press r to refresh.
-              </text>
-            </Show>
-            <text>
-              <Show when={!failure() && !pending() && !paired() && ["pairing", "unavailable"].includes(status())}>
-                <b>p</b> create pairing code{" "}
-              </Show>
-              <Show when={!failure() && !pending() && paired()}>
-                <b>f</b> forget pairing{" "}
-              </Show>
-              <b>r</b> refresh
-            </text>
-          </box>
-          <box flexDirection="column">
-            <text wrapMode="word">In chrome://extensions, choose Load unpacked and select:</text>
-            <text>{BrowserExtension.location()}</text>
-            <Show when={secret()}>
-              <text wrapMode="word">Then enter this one-time code in the YCoding extension popup.</text>
-            </Show>
-          </box>
-          <Show
-            when={localAddress}
-            fallback={<text wrapMode="word">Connect YCoding to a local loopback service before pairing Chrome.</text>}
-          >
-            {(url) => (
-              <box flexDirection="column">
-                <text>Local service address (enter once in the extension):</text>
-                <text>{url()}</text>
-              </box>
-            )}
-          </Show>
-          <text fg={theme.text.subdued} wrapMode="word">
-            Pairing lets YCoding use eligible Chrome tabs, including the active tab. Model actions still require site
-            permission.
-          </text>
-        </box>
-      </scrollbox>
+      <ChromeConnectionInstructions
+        maxHeight={Math.max(3, dimensions().height - Math.floor(dimensions().height / 4) - 5)}
+        inset={4}
+        ref={(value) => { scroll = value }}
+      />
       <text paddingLeft={4} fg={theme.text.subdued}>
         Page Up/Page Down scroll · Escape close
       </text>

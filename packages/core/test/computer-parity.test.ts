@@ -9,6 +9,13 @@ import { ComputerHistory } from "@ycoding-ai/core/computer/history"
 import { ComputerTool } from "@ycoding-ai/core/tool/computer"
 
 describe("computer app policy", () => {
+  test("forbids the private Interaction bundle even with an explicit allow override", () => {
+    for (const bundleID of ["app.ycoding.interaction", "app.YCoding.Interaction"]) {
+      expect(ComputerPolicy.evaluate(bundleID).decision).toBe("forbidden")
+      expect(ComputerPolicy.evaluate(bundleID, { allow: [bundleID] }).decision).toBe("forbidden")
+    }
+  })
+
   test("forbids system-security and credential apps closed", () => {
     for (const bundleID of ["com.apple.systempreferences", "com.apple.keychainaccess", "com.1password.1password", "app.ycoding.computer-use"]) {
       expect(ComputerPolicy.evaluate(bundleID).decision).toBe("forbidden")

@@ -5,10 +5,12 @@ import os from "node:os"
 import { capturedPartPatches } from "@ycoding-ai/client/file-change-summary"
 import { Service, type Endpoint } from "@ycoding-ai/client/service"
 import { isSessionDirectoryPath } from "../../remote/src/session-directory"
+import { interactionGeneration } from "../../../apps/web/src/remote/interaction-control"
+import { chromeInteractionURL } from "./interaction-request"
 import { BackendRestart, type RestartPorts } from "./restart"
 import { DesktopEditor, openDesktopEditor, type DraftEditorResult } from "./editor-integration"
 import type { YCodingEvent } from "@ycoding-ai/client"
-import { Coordination, Form, Integration, KeepAwake, PermissionSaved, Project, ProjectCopy, Pty, Schema, Telemetry } from "@ycoding-ai/client/effect"
+import { Coordination, Form, Integration, Interaction, KeepAwake, PermissionSaved, Project, ProjectCopy, Pty, Schema, Telemetry } from "@ycoding-ai/client/effect"
 import { terminalConnectInput, terminalControlInput, terminalResizeInput, terminalStreamInput, terminalWriteInput, agentSwitchInput, globalRequestsInput, usageDashboardInput, incidentsInput, incidentMutationInput, answerData, artifactInput, artifactMutationInput, artifactsInput, dotsTarget, editorInput, exportFilename, exportInput, insightsInput, pendingInput, predictionInput, promptGenerateInput, sameIdentity, sameTarget, sessionMarkdown, shellInput, sideChatContext, sideChatInput, skillInput, snapshotInput, steerInput, terminalInput, todoItems } from "./capabilities"
 import { currentModel, modelSelection, modelSource, openedModelLocation, projectDefault, projectModels, running, sameModelLocation, sessionModelLocation, switchRequest, type ModelLocation } from "./models"
 import { connectNative } from "./native-client"
@@ -58,6 +60,7 @@ const literal = (value: unknown, choices: readonly string[]) => typeof value ===
 const string = (value: unknown) => typeof value === "string"
 const boolean = (value: unknown) => typeof value === "boolean"
 const decodeKeepAwake = Schema.decodeUnknownSync(Schema.toCodecJson(KeepAwake.Status))
+const decodeInteractionRequest = Schema.decodeUnknownOption(Interaction.Request, { onExcessProperty: "error" })
 const decodeConsent = Schema.decodeUnknownSync(Schema.toCodecJson(Telemetry.Consent))
 const decodeConsentState = Schema.decodeUnknownSync(Schema.toCodecJson(Telemetry.ConsentState))
 const decodeSamples = Schema.decodeUnknownSync(Schema.toCodecJson(Telemetry.Page))
@@ -765,6 +768,44 @@ export class BackendController {
     { changed: "The backend connection changed while the Session was read. Refresh to retry." })
   }
 
+  async interactionStatus(input: unknown) {
+    checkedObject(input, { sessionID, revision: isRevision })
+    const revision = input.revision
+    if (!isRevision(revision)) throw new DesktopError("Refresh the connection before reading interaction status.")
+    const path = { sessionID: session(input.sessionID) }
+    return this.use("Interaction status could not be read.", (api, signal) => api.sessionInteraction.status(path, { signal }), { revision })
+  }
+
+  async interactionPreview(input: unknown) {
+    checkedObject(input, { sessionID, revision: isRevision, generation: interactionGeneration })
+    const { revision, generation } = input
+    if (!isRevision(revision) || !interactionGeneration(generation)) throw new DesktopError("Choose the current interaction preview.")
+    const query = { sessionID: session(input.sessionID), generation }
+    return this.use("Interaction preview could not be read.", (api, signal) => api.sessionInteraction.preview(query, { signal }), { revision })
+  }
+
+  async interactionStop(input: unknown) {
+    checkedObject(input, { sessionID, revision: isRevision, generation: interactionGeneration })
+    const { revision, generation } = input
+    if (!isRevision(revision) || !interactionGeneration(generation)) throw new DesktopError("Choose the current interaction to stop.")
+    const request = { sessionID: session(input.sessionID), generation }
+    await this.use("Stop was not confirmed. Check the reported status.", (api, signal) => api.sessionInteraction.stop(request, { signal }), { revision })
+  }
+
+  async interactionRequest(input: unknown) {
+    checkedObject(input, { sessionID, revision: isRevision, payload: object })
+    const revision = input.revision
+    const proposal = decodeInteractionRequest(input.payload)
+    if (!isRevision(revision) || proposal._tag === "None" || (proposal.value.url !== undefined && !chromeInteractionURL(proposal.value.url)))
+      throw new DesktopError("Choose a valid local interaction proposal.")
+    const path = { sessionID: session(input.sessionID) }
+    await this.use("The request was not confirmed. Check the reported status.", (api, signal) => {
+      const endpoint = this.current?.endpoint
+      if (!endpoint || !isLoopbackSelection(endpoint.url)) throw new DesktopError("Request interaction from the machine that runs the backend.")
+      return api.sessionInteraction.request({ ...path, payload: proposal.value }, { signal })
+    }, { revision })
+  }
+
   private projectAutonomy(value: Awaited<ReturnType<Native["api"]["session"]["autonomy"]["get"]>>) {
     if (!autonomyValid(value)) throw new Error("Invalid autonomy view")
     return { ...fields(value, ["mode", "permissions", "guardrails", "answers"]), ...(value.goal === undefined ? {} : { goal: value.goal === null ? null : fields(value.goal, ["text", "status", "iteration", "noProgress", "maxNoProgress", "lastProgressDigest"]) }), ...(value.defer === undefined ? {} : { defer: value.defer === null ? null : {} }), effective: { ...fields(value.effective, ["permissions", "guardrails", "answers", "deferred", "guardrailsEnabled"]), inherited: fields(value.effective.inherited, ["permissions", "guardrails", "answers"]) } }
@@ -1131,8 +1172,8 @@ export class BackendController {
     const changed = "The system change was not confirmed. Refresh status before retrying."
     return this.use(changed, async (api, signal, _revision, ensureCurrent) => {
       const location = await parityLocation(api, signal, modelSource(request.sessionID ?? (request.directory ? { directory: request.directory } : undefined)))
-      const sessionID = request.sessionID!
       const options = { signal }
+      const sessionID = request.sessionID!
       let pairing: SystemSnapshot["pairing"]
       ensureCurrent(changed)
       switch (request.kind) {

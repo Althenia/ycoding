@@ -122,10 +122,6 @@ async function renderFooter(
     onSubmit?: (prompt: RunPrompt) => boolean
     view?: FooterView
     onFormReply?: (input: unknown) => void
-    browserAddress?: string
-    onChromePair?: () => Promise<{ secret: string; expiresAt: number }>
-    onChromeStatus?: () => Promise<{ state: "unavailable" | "connected" | "pairing" | "paused"; paired?: boolean }>
-    onChromeForget?: () => Promise<void>
     agents?: RunAgent[]
     references?: RunReference[]
   } = {},
@@ -158,10 +154,6 @@ async function renderFooter(
           onPermissionReply={() => {}}
           onFormReply={(value) => input.onFormReply?.(value)}
           onFormCancel={() => {}}
-          browserAddress={input.browserAddress ? () => input.browserAddress : undefined}
-          onChromePair={input.onChromePair}
-          onChromeStatus={input.onChromeStatus ?? (async () => ({ state: "unavailable" }))}
-          onChromeForget={input.onChromeForget ?? (async () => {})}
           onCycle={input.onCycle ?? (() => {})}
           onInterrupt={() => false}
           onEditorOpen={async () => undefined}
@@ -765,16 +757,10 @@ test("direct footer recreates the frame across command panel transitions", async
   }
 })
 
-test("Mini Chrome command shows the service address and creates a code only on p", async () => {
-  const starts: number[] = []
+test("Mini Connect Chrome shows native pairing instructions without submitting a prompt", async () => {
   const prompts: RunPrompt[] = []
   const app = await renderFooter({
     height: 18,
-    browserAddress: "http://127.0.0.1:43094",
-    onChromePair: async () => {
-      starts.push(1)
-      return { secret: "one-time-code", expiresAt: Date.now() + 120_000 }
-    },
     onSubmit: (prompt) => {
       prompts.push(prompt)
       return true
@@ -784,92 +770,15 @@ test("Mini Chrome command shows the service address and creates a code only on p
     app.mockInput.pressKey("p", { ctrl: true })
     await app.renderOnce()
     await app.mockInput.typeText("chr")
-    await app.renderOnce()
-    expect(app.captureCharFrame()).toContain("Connect Chrome")
-    expect(app.captureCharFrame()).not.toContain("Open editor")
+    await app.waitForFrame((frame) => frame.includes("Connect Chrome"))
     app.mockInput.pressEnter()
-    await app.renderOnce()
-    expect(app.captureCharFrame()).toContain("http://127.0.0.1:43094")
-    expect(starts).toHaveLength(0)
+    await app.waitForFrame((frame) => frame.includes("YCoding > Connect Chrome"))
+    for (const key of ["p", "r", "f"]) app.mockInput.pressKey(key)
+    app.mockInput.pressKey("PAGEDOWN")
+    await app.waitForFrame((frame) => frame.includes("separate approval"))
     expect(prompts).toHaveLength(0)
-
-    app.mockInput.pressKey("p")
-    await app.renderOnce()
-    expect(starts).toHaveLength(1)
-    expect(app.captureCharFrame()).toContain("one-time-code")
-    expect(prompts).toHaveLength(0)
-    app.mockInput.pressKey("ESCAPE")
-    await app.renderOnce()
-    expect(app.captureCharFrame()).not.toContain("one-time-code")
-  } finally {
-    app.cleanup()
-  }
-})
-
-test("closing Mini Chrome pairing ignores a pending response and does not submit twice", async () => {
-  let settle!: (value: { secret: string; expiresAt: number }) => void
-  const response = new Promise<{ secret: string; expiresAt: number }>((resolve) => {
-    settle = resolve
-  })
-  const starts: number[] = []
-  const app = await renderFooter({
-    height: 18,
-    browserAddress: "http://127.0.0.1:43094",
-    onChromePair: () => {
-      starts.push(1)
-      return response
-    },
-  })
-  try {
-    app.mockInput.pressKey("p", { ctrl: true })
-    await app.renderOnce()
-    await app.mockInput.typeText("chr")
-    await app.renderOnce()
-    app.mockInput.pressEnter()
-    await app.renderOnce()
-    app.mockInput.pressKey("p")
-    app.mockInput.pressKey("p")
-    expect(starts).toHaveLength(1)
-    app.mockInput.pressKey("ESCAPE")
-    await app.renderOnce()
-    settle({ secret: "late-code", expiresAt: Date.now() + 120_000 })
-    await app.renderOnce()
-    expect(app.captureCharFrame()).not.toContain("late-code")
-    expect(app.captureCharFrame()).not.toContain("Local service address")
-  } finally {
-    app.cleanup()
-  }
-})
-
-test("Mini paired Chrome view hides pair and exposes deliberate forget", async () => {
-  const starts: number[] = []
-  const forgets: number[] = []
-  const app = await renderFooter({
-    browserAddress: "http://127.0.0.1:43094",
-    onChromePair: async () => {
-      starts.push(1)
-      return { secret: "unused", expiresAt: Date.now() + 120_000 }
-    },
-    onChromeStatus: async () => ({ state: "unavailable", paired: true }),
-    onChromeForget: async () => {
-      forgets.push(1)
-    },
-  })
-  try {
-    app.mockInput.pressKey("p", { ctrl: true })
-    await app.renderOnce()
-    await app.mockInput.typeText("chr")
-    await app.renderOnce()
-    app.mockInput.pressEnter()
-    await app.renderOnce()
-    expect(app.captureCharFrame()).toContain("Chrome is paired; waiting for Chrome to reconnect.")
-    expect(app.captureCharFrame()).not.toContain("Press p to create")
-    app.mockInput.pressKey("p")
-    await app.renderOnce()
-    expect(starts).toHaveLength(0)
-    app.mockInput.pressKey("f")
-    await app.renderOnce()
-    expect(forgets).toHaveLength(1)
+    app.mockInput.pressEscape()
+    await app.waitForFrame((frame) => !frame.includes("YCoding > Connect Chrome") && !frame.includes("separate approval"))
   } finally {
     app.cleanup()
   }

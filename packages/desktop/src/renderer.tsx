@@ -29,6 +29,9 @@ import { schemeStylesheet } from "../../../apps/web/src/theme/schemes"
 import { Icon as WebIcon, type IconName as WebIconName } from "../../../apps/web/src/ui/icon"
 import { ordinarySession } from "./sessions"
 import { Markdown, MarkdownClipboard } from "../../../apps/web/src/remote/ui/markdown"
+import { createInteractionControl, interactionEventGeneration, readInteractionStatus, type InteractionView } from "../../../apps/web/src/remote/interaction-control"
+import { InteractionControl, InteractionPreview } from "../../../apps/web/src/remote/ui/interaction-control"
+import { chromeInteractionURL } from "./interaction-request"
 import { WORKSPACE_DESTINATIONS, SharedActivityBar, SharedTrace, SharedListColumn, SharedSessionGroups, clampListWidth, type SharedActivityItem, type SharedSessionGroup, SharedCompanionSurface, SharedCompanionTabs, SharedConversationHeader, SharedMessageTurn, SharedContextRingButton, SharedContextBreakdownPanel, SharedTurnHead, SharedRadioGroup, SharedCompactionDivider, SharedEditedFilesCard, SharedActivitySurface, SharedPageSurface, SharedSessionsSurface, SharedWorkspacesSurface, SharedUsageSurface, SharedSettingsSurface, SharedLoadingSkeleton } from "../../../apps/web/src/remote/ui/shared-workspace"
 import { DESKTOP_THEMES, isDesktopThemeID, resolveDesktopTheme, DESKTOP_BUILT_IN_SLASH_COMMANDS, desktopSlashCommand, userDeliveryStates, userPendingInputs, assistantReplyText, validateFolderSegment, parsePromptStashes, pushPromptStash, formatQuotaProviders, formatCount, formatCompactCount, formatDurationMs, formatUsd, type DesktopThemeID, activeFields, appendPage, buildAnswer, chooseModel, chooseProfile, choiceFor, choiceProblem, composerTrigger, initialValues, insertCompletion, invalidIndexes, restoredPrompt, modelLabel, pagedItems, pagingFor, problemOf, profileLabel, railGroups, restoresFocus, sameSelection, samePaging, searchTerm, selectionFor, composerSlash, valueFor, variantsFor, visibleModels, withValue, workspaceBase, classifyDesktopSynthetic, dotSteerDisplay, visibleDesktopMessages, turnEditPlacements, groupAssistantParts, toolDisplaySummary, effortStopsFor, effortStopIndex, effortStopFraction, insertTextAtSelection, isEditableKeyboardTarget, isStandardEditShortcut, sessionState, type PastedText, type StashedPrompt, type Activity, type Field, type FocusAt, type MentionPick, type ModelChoice, type SlashAction, type Paging, type Value, railGroupLabels, railGroupOrder } from "./form-rules"
 import { JumpControls, PromptRail, followState, jumpBehavior, navigationTargets, pillClearance, promptTicks, type PromptTick } from "../../../apps/web/src/remote/ui/transcript-rail"
@@ -1128,8 +1131,8 @@ function SystemDialog(props: { options: UtilityOptions }) {
   const catalogData = () => catalog.result().isError ? undefined : currentSnapshot(catalog.result().data, connection().revision)
   const [changed, setChanged] = createSignal<Awaited<ReturnType<typeof api.manageSystem>>>()
   const data = () => currentSnapshot(changed(), connection().revision) ?? (snapshot.result().isError ? undefined : currentSnapshot(snapshot.result().data, connection().revision))
-  const [url, setURL] = createSignal("https://example.com")
   const [filter, setFilter] = createSignal("")
+  const [url, setURL] = createSignal("https://example.com")
   const [catalogSelection, setCatalogSelection] = createSignal<{ readonly kind: "agent" | "skill"; readonly id: string }>()
   const inspectedCatalogItem = () => {
     const current = catalogData()
@@ -2876,6 +2879,41 @@ function RunningActivity(props: { sessionID: string; data?: import("./contract")
 
 function Conversation(props: { sessionID: string }) {
   const telemetry = useDesktopTelemetry()
+  const [interactionView, setInteractionView] = createSignal<InteractionView>()
+  const [chromeProposalOpen, setChromeProposalOpen] = createSignal(false)
+  const interaction = createInteractionControl(setInteractionView)
+  const interactionMedia = window.matchMedia(COMPANION_DOCKED_QUERY)
+  const [interactionDocked, setInteractionDocked] = createSignal(interactionMedia.matches)
+  const moveInteractionPreview = () => { interaction.reveal(false); setInteractionDocked(interactionMedia.matches) }
+  interactionMedia.addEventListener("change", moveInteractionPreview)
+  onCleanup(() => { interactionMedia.removeEventListener("change", moveInteractionPreview); interaction.setSource() })
+  const localInteraction = () => {
+    const selection = savedSelection()
+    return selection.mode === "own" || selection.server === undefined ||
+      URL.canParse(selection.server) && ["127.0.0.1", "localhost", "[::1]"].includes(new URL(selection.server).hostname)
+  }
+  createEffect(on([() => props.sessionID, () => connection().revision, reading, teamOpen], ([sessionID, revision, connected, team]) => {
+    setChromeProposalOpen(false)
+    if (!connected || revision === undefined || team) { interaction.setSource(); return }
+    const owner = { sessionID, revision }
+    interaction.setSource({
+      status: async () => readInteractionStatus(await api.interactionStatus(owner)) ?? "error",
+      preview: (generation) => api.interactionPreview({ ...owner, generation }),
+      stop: (generation) => api.interactionStop({ ...owner, generation }),
+      request: (payload) => api.interactionRequest({ ...owner, payload }),
+    })
+  }))
+  onCleanup(api.onEvent((event) => {
+    const generation = interactionEventGeneration(event, props.sessionID)
+    if (generation !== undefined) interaction.change(generation)
+  }))
+  createEffect(() => {
+    if (interactionDocked() && (!companionOpen() || companionTab() !== "Activity")) interaction.reveal(false)
+  })
+  const revealInteraction = (revealed: boolean) => {
+    if (revealed && interactionDocked()) { setCompanionTab("Activity"); showCompanion(true) }
+    interaction.reveal(revealed)
+  }
   createEffect(on(() => [props.sessionID, ...scope()], () => { setTeamOpen(teamRequested); teamRequested = false }))
   createEffect(() => setLastSession(props.sessionID))
   onCleanup(() => setSessionGauge(undefined))
@@ -3476,6 +3514,13 @@ function Conversation(props: { sessionID: string }) {
         <p class="rl-presence" data-tone={running() ? "busy" : "idle"}><span>{workspaceBase(item().location.directory)} · {connectionOwnership()}</span></p>
       </>}</Show>
       </div></SharedConversationHeader><div class="rl-notices">
+      <Show when={interactionView()}>{(view) => <InteractionControl view={view()} inlinePreview={!interactionDocked()} onReveal={revealInteraction} onStop={interaction.stop} onRefresh={interaction.refresh} onRequest={localInteraction() ? (platform) => {
+        if (platform === "chrome") setChromeProposalOpen(true)
+        if (platform === "macos") interaction.request({ platform })
+      } : undefined} />}</Show>
+      <Show when={chromeProposalOpen() && localInteraction()}>
+        <ChromeInteractionProposal onClose={() => setChromeProposalOpen(false)} onRequest={(payload) => { setChromeProposalOpen(false); interaction.request(payload) }} />
+      </Show>
       <Show when={findOpen()}><div class="conversation__find"><label class="rl-field"><span class="desktop__sr">Find in transcript</span><span class="rl-input-icon"><Icon name="search" /><input type="search" placeholder="Find in transcript…" value={findQuery()} onInput={(event) => setFindQuery(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === "Escape") { setFindQuery(""); setFindOpen(false) } }} /></span></label><small role="status">{turns().length} matching turns</small><button type="button" class="rl-btn" onClick={() => setFindQuery("")}>Clear</button><button type="button" class="rl-icon-button" aria-label="Close find" onClick={() => { setFindQuery(""); setFindOpen(false) }}><Icon name="close" /></button></div></Show>
       <Show when={unsure()}><p role="status" class="conversation__notice">The pre-send check or message was not confirmed. Review the transcript and staged revert before continuing.</p></Show><Show when={activeRevert()}>{(value) => <p role="status" class="conversation__notice">A revert to message {value().messageID} is staged. Sending a message will commit the revert and remove later turns.</p>}</Show><Show when={revertNotice()}>{(notice) => <p role="status" class="conversation__notice">{notice()}</p>}</Show>
       <Show when={requestCount() > 0}><p role="status" class="conversation__notice" data-state="needs">This Session is waiting for you: {requestCount()} {requestCount() === 1 ? "request is" : "requests are"} below the transcript.</p></Show>
@@ -3530,6 +3575,7 @@ function Conversation(props: { sessionID: string }) {
         headerActions={<button type="button" class="rl-icon" aria-label="Close companion" onClick={() => setCompanionOpen(false)}><Icon name="close" /></button>}
         onRefresh={() => { if (reading()) { activityRead.refetch(); sessions.refetch(); if (reportedTaskIDs().length) childSessionsRead.refetch(); messages.refetch(); requests.refetch(); pendingRead.refetch(); insightsRead.refetch() } }}
         activityContent={<div class="rl-pane-body">
+          <Show when={interactionDocked() && companionTab() === "Activity" && interactionView()?.revealed ? interactionView() : undefined}>{(view) => <InteractionPreview view={view()} />}</Show>
           <Show when={activityRead.result().isPending}><SharedLoadingSkeleton kind="list" label="Reading activity…" /></Show>
           <Show when={activityRead.result().isError}><p role="alert">{failure(activityRead.result().error, "Activity could not be read. Refresh to retry.")}</p></Show>
           <Show when={shellPage()?.shell}>{(shell) => <section class="st-section" aria-label="Selected shell details"><h3>Shell details</h3><dl class="rl-meta"><dt>Command</dt><dd><code>{shell().command}</code></dd><dt>Directory</dt><dd><code>{shell().cwd}</code></dd><dt>Status</dt><dd>{shell().status}</dd><dt>PID</dt><dd>{shell().pid ?? "Not reported"}</dd><dt>Exit code</dt><dd>{shell().exit ?? "Not reported"}</dd><dt>Started</dt><dd>{new Date(shell().time.started).toLocaleString()}</dd><Show when={shell().time.completed}>{(completed) => <><dt>Completed</dt><dd>{new Date(completed()).toLocaleString()}</dd></>}</Show></dl></section>}</Show>
@@ -3569,6 +3615,36 @@ function Conversation(props: { sessionID: string }) {
       />
     </aside></Show>
   </section>
+}
+
+function ChromeInteractionProposal(props: {
+  readonly onClose: () => void
+  readonly onRequest: (payload: Parameters<DesktopAPI["interactionRequest"]>[0]["payload"]) => void
+}) {
+  const [mode, setMode] = createSignal<"tab" | "owned" | "isolated">("tab")
+  const [url, setURL] = createSignal("")
+  const [invalid, setInvalid] = createSignal(false)
+  const errorID = createUniqueId()
+  return <DesktopDialog title="Request Chrome control" onClose={props.onClose}>
+    <form noValidate onSubmit={(event) => {
+      event.preventDefault()
+      const selection = mode()
+      if (selection === "tab") { props.onRequest({ platform: "chrome", mode: selection }); return }
+      const target = chromeInteractionURL(url().trim())
+      if (!target) { setInvalid(true); return }
+      props.onRequest({ platform: "chrome", mode: selection, url: target })
+    }}>
+      <p>{mode() === "isolated" ? "Approve the target in the macOS system prompt." : "Approve the target in Chrome."} This request does not start control.</p>
+      <SharedRadioGroup label="Chrome target" value={mode()} options={[{ value: "tab", label: "Existing tab" }, { value: "owned", label: "Owned tab" }, { value: "isolated", label: "Isolated Chrome" }]} onChange={(selection) => {
+        if (selection === "tab" || selection === "owned" || selection === "isolated") { setMode(selection); setInvalid(false) }
+      }} />
+      <Show when={mode() !== "tab"}>
+        <label class="rl-field"><span>Starting URL</span><input type="url" value={url()} maxLength={2048} required aria-invalid={invalid()} aria-describedby={invalid() ? errorID : undefined} onInput={(event) => { setURL(event.currentTarget.value); setInvalid(false) }} /></label>
+        <Show when={invalid()}><p id={errorID} class="desktop__error" role="alert">Use a credential-free HTTP or HTTPS URL.</p></Show>
+      </Show>
+      <div class="desktop__actions"><button type="submit" class="rl-btn">Request approval</button><button type="button" class="rl-btn" onClick={props.onClose}>Cancel</button></div>
+    </form>
+  </DesktopDialog>
 }
 
 const root = createRootRoute({ component: App })

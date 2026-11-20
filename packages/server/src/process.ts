@@ -22,6 +22,9 @@ import { Status } from "./service-status"
 import type { ServerOptions } from "./options"
 import { RemoteConnection } from "./remote-connection"
 import { NativeDots } from "@ycoding-ai/core/dots/native"
+import { chromeConnectPath } from "@ycoding-ai/core/interaction/chrome"
+import { InteractionRuntime } from "@ycoding-ai/core/interaction/index"
+import { connectChromeInteraction, mountInteractionPlatforms, type ChromeTransport, type InteractionPlatforms } from "./interaction-platform"
 
 export interface Lifecycle<E = never, R = never> {
   readonly instanceID: string
@@ -44,6 +47,7 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
   plugins: ReadonlyArray<Parameters<SdkPlugins.Interface["register"]>[0]> = [],
   nativeFactory?: (host: NativeDots.Host) => Promise<void | (() => Promise<void>)>,
   replacements: LayerNode.Replacements = [],
+  interactionPlatforms?: InteractionPlatforms,
 ) {
   const password = options.password
   if (!password) return yield* Effect.fail(new Error("Missing server password"))
@@ -60,10 +64,11 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
   const quiet = Logger.layer([], { mergeWithExisting: false })
   const bound = yield* listen({ hostname, port }).pipe(Effect.provide(quiet))
   const application = yield* Ref.make(Option.none<App>())
+  const chromeInteraction = yield* Ref.make<ChromeTransport | undefined>(undefined)
   const ready = yield* Deferred.make<void>()
   // Request fibers may continue inbound trace context, but must not inherit the server startup parent.
   yield* bound.http
-    .serve(dispatch(password, status, application, shutdown), HttpMiddleware.logger)
+    .serve(dispatch(password, status, application, shutdown, chromeInteraction), HttpMiddleware.logger)
     .pipe(withoutParentSpan, Effect.provide(quiet))
   if (lifecycle)
     yield* lifecycle.onListen(bound.http.address, Deferred.succeed(shutdown, undefined).pipe(Effect.asVoid)).pipe(
@@ -109,6 +114,13 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
     )
     const hostPlugins = Context.get(context, SdkPlugins.Service)
     yield* Effect.forEach(plugins, (plugin) => hostPlugins.register(plugin), { discard: true })
+    if (interactionPlatforms) {
+      const authority = Context.get(context, InteractionRuntime.Service)
+      const address = bound.http.address
+      const origin = hostname === "127.0.0.1" && address._tag === "TcpAddress" ? HttpServer.formatAddress(address) : undefined
+      const transport = yield* mountInteractionPlatforms(authority, interactionPlatforms, origin).pipe(Effect.provideService(Scope.Scope, applicationScope))
+      yield* Ref.set(chromeInteraction, transport)
+    }
     if (nativeFactory) {
       const host = yield* NativeDots.live.pipe(Effect.provideContext(Context.add(context, Scope.Scope, applicationScope)))
       const stop = yield* Effect.promise(() => nativeFactory(host))
@@ -183,6 +195,7 @@ function dispatch(
   status: Status.Interface,
   application: Ref.Ref<Option.Option<App>>,
   shutdown: Deferred.Deferred<void>,
+  chromeInteraction: Ref.Ref<ChromeTransport | undefined>,
 ): App {
   const auth = ServerAuth.Config.of({ password: Option.some(password), username: "ycoding" })
   return Effect.gen(function* () {
@@ -201,6 +214,11 @@ function dispatch(
     const state = yield* status.current
     const app = yield* Ref.get(application)
     const ready = state.type === "ready" && Option.isSome(app)
+    if (ready && url.pathname === chromeConnectPath && url.search === "") {
+      const transport = yield* Ref.get(chromeInteraction)
+      if (!transport) return HttpServerResponse.empty({ status: 404 })
+      return yield* connectChromeInteraction(transport)
+    }
     if (
       (!ready || (!hasPtyConnectTicketURL(url) && !isBrowserConnectURL(url))) &&
       !(yield* authorizedRequest(request, auth))

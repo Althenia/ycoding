@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>YCoding Interaction</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <h1>YCoding Interaction</h1>
+    <p id="status" role="status">Checking connection…</p>
+    <form id="pair" hidden>
+      <label>Local service address <input name="address" placeholder="http://127.0.0.1:4096" required></label>
+      <label>Pairing code <input name="code" type="password" autocomplete="off" required></label>
+      <button type="submit">Connect</button>
+    </form>
+    <section id="requests" aria-label="Pending decisions"></section>
+    <section id="active" aria-label="Active control"></section>
+    <p id="feedback" role="alert"></p>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

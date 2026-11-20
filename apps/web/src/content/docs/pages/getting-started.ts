@@ -160,7 +160,7 @@ export const gettingStartedPages: readonly DocPage[] = [
           },
           {
             kind: "paragraph",
-            text: "macOS releases sign the computer-use app with a self-signed release identity; the signature is not an Apple Developer ID and does not notarize it. An archive downloaded with a web browser carries the `com.apple.quarantine` attribute, so after extracting it, clear that attribute before the first run. The curl installer and `ycoding update` download without it.",
+            text: "The macOS release signs the CLI and the `YCoding Interaction.app` helper with the same YCoding release certificate. The shell installer verifies both before installing either. This self-signed certificate is not an Apple Developer ID, and the package is not notarized. For a browser download, verify the archive against the release checksum before clearing its quarantine attribute.",
           },
           { kind: "code", language: "sh", label: "Clear quarantine on a browser-downloaded macOS archive", code: "xattr -dr com.apple.quarantine <extracted-folder>" },
         ],
@@ -188,15 +188,21 @@ export const gettingStartedPages: readonly DocPage[] = [
         heading: "Update an installation",
         blocks: [
           {
+            kind: "callout",
+            tone: "warning",
+            title: "Upgrade from v0.12.3 or earlier",
+            text: "On macOS or Linux, use the shell installer above to install v0.12.4 or later from v0.12.3 or earlier. An older `ycoding update` cannot install the new archive layout. On Windows, close YCoding and replace it with the contents of the release ZIP.",
+          },
+          {
             kind: "paragraph",
-            text: "Run the explicit update command to install the newest release. It verifies the archive checksum and contents before replacing an installed binary. Self-update supports macOS arm64/x64 and Linux x64; on Windows, close YCoding and replace the executable manually with the release ZIP contents. On macOS, releases sign `YCoding Computer Use.app` with the same release identity, so its code requirement stays the same across those releases; macOS and you still decide whether a Privacy & Security grant applies. An earlier ad-hoc signed release has a different requirement, so after updating from one, macOS may ask for authorization again. If a computer operation still reports a denied permission, remove the existing YCoding Computer Use entries in Privacy & Security and allow the new ones when the next operation asks.",
+            text: "From v0.12.4 on macOS or Linux, use `ycoding update` to install a release. It verifies the archive checksum and contents before replacement. The updater verifies the YCoding signing certificate for both the CLI and the Interaction helper on macOS.",
           },
           { kind: "code", language: "sh", label: "Install the newest release", code: "ycoding update" },
           {
             kind: "code",
             language: "sh",
             label: "Install one published version",
-            code: "ycoding update --version 0.7.2",
+            code: "ycoding update --version 0.12.4",
           },
           {
             kind: "paragraph",

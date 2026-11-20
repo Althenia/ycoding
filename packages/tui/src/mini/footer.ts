@@ -58,7 +58,6 @@ import type {
   RunTuiConfig,
   StreamCommit,
 } from "./types"
-import type { Browser } from "@ycoding-ai/schema/browser"
 
 type CycleResult = {
   modelLabel?: string
@@ -85,10 +84,6 @@ type RunFooterOptions = {
   onPermissionReply: (input: PermissionReply) => void | Promise<void>
   onFormReply: (input: FormReply) => void | Promise<void>
   onFormCancel: (input: FormCancel) => void | Promise<void>
-  browserAddress?: () => string | undefined
-  onChromePair?: (signal: AbortSignal) => Promise<{ secret: string; expiresAt: number }>
-  onChromeStatus?: (signal: AbortSignal) => Promise<Browser.Status>
-  onChromeForget?: (signal: AbortSignal) => Promise<void>
   onCycleVariant?: () => CycleResult | void
   onModelSelect?: (model: NonNullable<RunInput["model"]>) => CycleResult | void | Promise<CycleResult | void>
   onVariantSelect?: (variant: string | undefined) => CycleResult | void | Promise<CycleResult | void>
@@ -318,10 +313,6 @@ export class RunFooter implements FooterApi {
               onPermissionReply: footer.handlePermissionReply,
               onFormReply: footer.handleFormReply,
               onFormCancel: footer.handleFormCancel,
-              browserAddress: options.browserAddress,
-              onChromePair: options.onChromePair,
-              onChromeStatus: options.onChromeStatus,
-              onChromeForget: options.onChromeForget,
               onCycle: footer.handleCycle,
               onInterrupt: footer.handleInterrupt,
               onBackground: options.onBackground,

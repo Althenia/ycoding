@@ -455,6 +455,14 @@ import type {
   DotsThreadRespondInput,
   DotsThreadRespondOutput,
   DecisionListOutput,
+  SessionInteractionStatusInput,
+  SessionInteractionStatusOutput,
+  SessionInteractionRequestInput,
+  SessionInteractionRequestOutput,
+  SessionInteractionPreviewInput,
+  SessionInteractionPreviewOutput,
+  SessionInteractionStopInput,
+  SessionInteractionStopOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -3690,6 +3698,55 @@ export function make(options: ClientOptions) {
       list: (requestOptions?: RequestOptions) =>
         request<{ readonly data: DecisionListOutput }>(
           { method: "GET", path: `/api/decision`, successStatus: 200, declaredStatuses: [401, 400], empty: false },
+          requestOptions,
+        ).then((value) => value.data),
+    },
+    sessionInteraction: {
+      status: (input: SessionInteractionStatusInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionInteractionStatusOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/interaction`,
+            successStatus: 200,
+            declaredStatuses: [404, 403, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      request: (input: SessionInteractionRequestInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionInteractionRequestOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/interaction`,
+            body: input["payload"],
+            successStatus: 200,
+            declaredStatuses: [404, 403, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      preview: (input: SessionInteractionPreviewInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionInteractionPreviewOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/interaction/preview`,
+            query: { generation: input["generation"] },
+            successStatus: 200,
+            declaredStatuses: [404, 403, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      stop: (input: SessionInteractionStopInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionInteractionStopOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/interaction/stop`,
+            body: { generation: input["generation"] },
+            successStatus: 200,
+            declaredStatuses: [404, 403, 409, 401, 400],
+            empty: false,
+          },
           requestOptions,
         ).then((value) => value.data),
     },

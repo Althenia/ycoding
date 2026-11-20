@@ -3,6 +3,10 @@ import { Browser } from "@ycoding-ai/core/browser"
 import { connect, type Client, type Event } from "@ycoding-ai/core/browser/isolated-cdp"
 import { IsolatedBrowserExecutor } from "@ycoding-ai/core/browser/isolated-executor"
 import { IsolatedBrowser } from "@ycoding-ai/core/isolated-browser"
+import { makeAuthority } from "@ycoding-ai/core/interaction/authority"
+import { makeChromeIsolatedDriver } from "@ycoding-ai/core/interaction/chrome-isolated"
+import { Interaction } from "@ycoding-ai/schema/interaction"
+import { SessionID } from "@ycoding-ai/schema/session-id"
 import { Cause, Effect, Exit } from "effect"
 import { spawn } from "node:child_process"
 import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises"
@@ -11,6 +15,61 @@ import { join } from "node:path"
 import { Readable, Writable } from "node:stream"
 
 const chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+test("actual isolated Chrome observations satisfy the Interaction authority contract", async () => {
+  const chromeExecutable = process.env.YCODING_TEST_ISOLATED_BROWSER_CHROME
+  if (!chromeExecutable) throw new Error("Set YCODING_TEST_ISOLATED_BROWSER_CHROME to the pinned Chrome for Testing executable")
+  const documents: string[] = []
+  const fixture = Bun.serve({ hostname: "127.0.0.1", port: 0,
+    fetch(request) {
+      if (request.headers.get("sec-fetch-dest") === "document") {
+        const url = new URL(request.url)
+        documents.push(`${url.pathname}${url.search}`)
+      }
+      return new Response("<!doctype html><button>Show record</button>", { headers: { "content-type": "text/html" } })
+    },
+  })
+  const authority = makeAuthority()
+  const sessionID = SessionID.create()
+  const stop = new AbortController()
+  let leaseID: Interaction.ID | undefined
+  let attachmentError: unknown
+  const isolated = makeChromeIsolatedDriver({
+    chromeExecutable,
+    lost: (id, reason) => { native.stop(id, reason) },
+    confirmIsolated: async ({ candidateID }) => ({
+      candidateID, signal: stop.signal,
+      async bind(id) { leaseID = id; return true },
+      close: () => stop.abort("stopped"),
+    }),
+  })
+  const native = authority.register({ ...isolated.driver, attach: (...args) => isolated.driver.attach(...args).catch((error: unknown) => {
+    attachmentError = error
+    throw error
+  }) }, "chrome-isolated")
+  try {
+    const pending = authority.request(sessionID, { platform: "chrome", mode: "isolated", url: `http://127.0.0.1:${fixture.port}/approved?fixture=1` })
+    if (pending.state !== "pending") throw new Error("Expected pending isolated Interaction")
+    const [candidate] = native.pending()
+    const [target] = await native.inventory(candidate.candidateID)
+    const proof = await isolated.approve({ candidateID: candidate.candidateID, sessionID, targetID: target.id }, stop.signal)
+    if (!proof) throw new Error("Expected fixture consent for the isolated Chrome lease")
+    expect(documents).toEqual([])
+    const approved = await native.approve(proof)
+    if (attachmentError) throw attachmentError
+    expect(approved).toBe(true)
+    expect(authority.status(sessionID)).toMatchObject({ state: "active", generation: pending.generation })
+
+    const observed = await authority.observe(sessionID, pending.generation)
+    expect(observed).toEqual({ revision: 1, pathname: "/approved", elements: [
+      { id: expect.any(String), role: "button", label: "Show record", editable: false },
+    ] })
+    expect(documents).toEqual(["/approved?fixture=1"])
+  } finally {
+    native.disconnect()
+    try { if (leaseID) await isolated.driver.detach({ id: leaseID }, "stopped") } finally { await fixture.stop(true) }
+  }
+}, 30_000)
 
 describe("real isolated Chrome executor", () => {
   test("uses the private pipe and enforces semantic, clipboard, file, origin, and observation boundaries", async () => {

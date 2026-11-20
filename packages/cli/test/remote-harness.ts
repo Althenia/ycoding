@@ -1,5 +1,6 @@
 import { expect } from "bun:test"
 import { ServerProcess } from "@ycoding-ai/server/process"
+import type { InteractionPlatforms } from "@ycoding-ai/server/interaction-platform"
 import type { RemoteConnection } from "@ycoding-ai/server/remote-connection"
 import type { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Effect, Exit, Logger, Scope } from "effect"
@@ -49,6 +50,7 @@ export type IsolatedServerOptions = {
   readonly provider?: ProviderFixture
   readonly remote?: RemoteConnection.Interface
   readonly replacements?: LayerNode.Replacements
+  readonly interactionPlatforms?: InteractionPlatforms
 }
 
 export async function startServer(directory: string, options: IsolatedServerOptions = {}) {
@@ -69,7 +71,7 @@ export async function startServer(directory: string, options: IsolatedServerOpti
     },
     models: { fetch: false },
     fs: { filewatcher: false, fff: false },
-  }, undefined, options.remote ? async () => options.remote! : undefined, [], undefined, options.replacements ?? []).pipe(Effect.provideService(Scope.Scope, scope))
+  }, undefined, options.remote ? async () => options.remote! : undefined, [], undefined, options.replacements ?? [], options.interactionPlatforms).pipe(Effect.provideService(Scope.Scope, scope))
   // Runtime-owned request markers are supplied when the assembled router dispatches.
   const starting = startingRaw as Effect.Effect<Effect.Success<typeof startingRaw>, Effect.Error<typeof startingRaw>>
   try {

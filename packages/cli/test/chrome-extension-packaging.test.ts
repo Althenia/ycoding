@@ -1,194 +1,29 @@
 import { expect, test } from "bun:test"
-import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
-import { VERSION } from "@ycoding-ai/core/browser/protocol"
-import { cp, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readdir, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { pathToFileURL } from "node:url"
 import { chromeExtensionSource, copyChromeExtension } from "../script/chrome-extension"
-import { releasedExtensionFiles, releasedUpdaterAcceptsLinuxArchive } from "./fixtures/v0.7.15-updater"
 
-async function packaged<T>(use: (bin: string, extension: string) => Promise<T>) {
+test("packages the Interaction extension with a self-contained Chromium worker", async () => {
   const bin = await mkdtemp(path.join(os.tmpdir(), "ycoding-extension-package-"))
   try {
-    await copyChromeExtension(bin)
-    return await use(bin, path.join(bin, "ycoding-chrome-extension"))
-  } finally {
-    await rm(bin, { recursive: true, force: true })
-  }
-}
-
-async function archive(bin: string, extra: string[] = []) {
-  await writeFile(path.join(bin, "ycoding"), "executable\n")
-  for (const file of extra) await writeFile(path.join(bin, "ycoding-chrome-extension", file), `${file}\n`)
-  const tar = Bun.spawnSync(["tar", "-czf", "release.tar.gz", "ycoding", "ycoding-chrome-extension"], {
-    cwd: bin,
-    env: { ...process.env, COPYFILE_DISABLE: "1" },
-  })
-  expect(tar.exitCode, tar.stderr.toString()).toBe(0)
-  return new Uint8Array(await readFile(path.join(bin, "release.tar.gz")))
-}
-
-test("copies the Chrome extension runtime files beside a built executable", async () => {
-  await packaged(async (_, extension) => {
-    const files = (await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: extension })))
-      .map((file) => file.split(path.sep).join("/"))
-      .sort()
-    expect(files).toEqual([...BrowserExtension.files])
-    expect(files).toEqual(releasedExtensionFiles)
-    expect(await readFile(path.join(extension, "manifest.json"), "utf8")).toBe(
-      await readFile(path.join(chromeExtensionSource, "manifest.json"), "utf8"),
-    )
-  })
-})
-
-test("packages an archive that the released v0.7.15 updater accepts", async () => {
-  await packaged(async (bin) => {
-    await releasedUpdaterAcceptsLinuxArchive(await archive(bin))
-  })
-})
-
-test("the released v0.7.15 updater rejects an archive with an additional extension file", async () => {
-  await packaged(async (bin) => {
-    await expect(releasedUpdaterAcceptsLinuxArchive(await archive(bin, ["indicator.js"]))).rejects.toThrow(
-      "did not contain the exact direct entries",
-    )
-  })
-})
-
-test("bundles the indicator module into service-worker.js and keeps protocol.js external", async () => {
-  await packaged(async (_, extension) => {
-    const worker = await readFile(path.join(extension, "service-worker.js"), "utf8")
-    expect([...worker.matchAll(/(?:from|import\()\s*["']([^"']+)["']/g)].map((match) => match[1])).toEqual([
-      "./protocol.js",
+    const extension = await copyChromeExtension(bin)
+    expect(path.dirname(extension)).toBe(bin)
+    expect(path.basename(extension)).toBe("ycoding-chrome-extension")
+    expect((await readdir(extension)).sort()).toEqual([
+      "manifest.json", "popup.css", "popup.html", "popup.js", "service-worker.js",
     ])
-    expect(worker).toContain("data-ycoding-agent-icon")
-    expect(worker).toContain("M40 40h32v64H40zm144 0h32v64h-32zM40 112h64v64H72v-32H40zm112 0h64v32h-32v32h-32zm-40 72h32v32h-32z")
-    expect(worker).toContain("[data-ycoding-agent-marker]")
-  })
-})
-
-test("embeds the Geist faces and their license only in popup.css, with no font bytes in service-worker.js and no fonts.js", async () => {
-  await packaged(async (bin, extension) => {
-    const worker = await readFile(path.join(extension, "service-worker.js"), "utf8")
-    const sans = Buffer.from(
-      await readFile(path.join(chromeExtensionSource, "../../assets/brand/fonts/Geist.woff2")),
-    ).toString("base64")
-    const mono = Buffer.from(
-      await readFile(path.join(chromeExtensionSource, "../../assets/brand/fonts/GeistMono.woff2")),
-    ).toString("base64")
-    const license = (
-      await readFile(path.join(chromeExtensionSource, "../../assets/brand/fonts/OFL.txt"), "utf8")
-    ).trim()
-    expect(worker).not.toContain(sans)
-    expect(worker).not.toContain(mono)
-    expect(worker).not.toContain("YCodingGeist")
-    expect(worker.replaceAll("\r\n", "\n")).not.toContain(license.replaceAll("\r\n", "\n"))
-    expect(await Bun.file(path.join(extension, "fonts.js")).exists()).toBe(false)
-    const css = await readFile(path.join(extension, "popup.css"), "utf8")
-    expect(css).not.toBe(await readFile(path.join(chromeExtensionSource, "popup.css"), "utf8"))
-    expect(css).toContain(sans)
-    expect(css).toContain(mono)
-    expect(css.replaceAll("\r\n", "\n")).toContain(license.replaceAll("\r\n", "\n"))
-    await releasedUpdaterAcceptsLinuxArchive(await archive(bin))
-  })
-})
-
-test("the packaged service worker passes the extension lifecycle and marker suite without indicator.js", async () => {
-  await packaged(async (bin, extension) => {
-    const mirror = path.join(bin, "mirror")
-    await cp(extension, mirror, { recursive: true })
-    await writeFile(
-      path.join(mirror, "indicator.js"),
-      `export { timing } from ${JSON.stringify(pathToFileURL(path.join(chromeExtensionSource, "indicator.js")).href)}\n`,
-    )
-    await mkdir(path.join(mirror, "test/fixtures"), { recursive: true })
-    for (const file of ["service-worker.case.js", "fake-page.js"])
-      await copyFile(path.join(chromeExtensionSource, "test/fixtures", file), path.join(mirror, "test/fixtures", file))
-    const child = Bun.spawn([process.execPath, "test", "./test/fixtures/service-worker.case.js"], {
-      cwd: mirror,
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ])
-    expect(exitCode, stdout + stderr).toBe(0)
-    expect(stderr).toMatch(/\d+ pass/)
-  })
-}, 60000)
-
-test("packages bridge version 6 matching the runtime handshake", async () => {
-  await packaged(async (_, extension) => {
-    const protocol = await import(pathToFileURL(path.join(extension, "protocol.js")).href)
-    const sourceProtocol = await import(pathToFileURL(path.join(chromeExtensionSource, "protocol.js")).href)
-    expect(VERSION).toBe(6)
-    expect(sourceProtocol.VERSION).toBe(VERSION)
-    expect(protocol.VERSION).toBe(6)
-    expect(protocol.VERSION).toBe(VERSION)
-  })
-})
-
-test("ships only bundled, minified entries plus manifest and assets, with no source modules or sourcemaps", async () => {
-  await packaged(async (_, extension) => {
-    const files = (await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: extension })))
-      .map((file) => file.split(path.sep).join("/"))
-      .sort()
-    expect(files).toEqual([...BrowserExtension.files])
-    expect(files.some((file) => file.endsWith(".map"))).toBe(false)
-    for (const sourceOnly of ["indicator.js", "group-marker.js", "fonts.js", "DESIGN.md"]) expect(files).not.toContain(sourceOnly)
-
-    const codeLines = (text: string) =>
-      text
-        .replace(/\/\*![\s\S]*?\*\//g, "")
-        .split("\n")
-        .filter((line) => line.trim()).length
-    for (const entry of ["service-worker.js", "protocol.js", "popup.js", "popup.css"] as const) {
-      const packagedText = await readFile(path.join(extension, entry), "utf8")
-      expect(packagedText, entry).not.toBe(await readFile(path.join(chromeExtensionSource, entry), "utf8"))
-      expect(codeLines(packagedText), entry).toBeLessThanOrEqual(2)
-      expect(packagedText, entry).not.toContain("sourceMappingURL")
-    }
-
-    const popup = await readFile(path.join(extension, "popup.js"), "utf8")
-    expect(popup).toContain("#pairing-form")
-    expect(popup).not.toContain("actionRevision")
-
-    const protocol = await import(pathToFileURL(path.join(extension, "protocol.js")).href)
-    const sourceProtocol = await import(pathToFileURL(path.join(chromeExtensionSource, "protocol.js")).href)
-    expect(protocol.VERSION).toBe(sourceProtocol.VERSION)
-    expect(protocol.connectURL("http://127.0.0.1:4096")).toBe("ws://127.0.0.1:4096/api/browser/connect")
-    expect(protocol.tabID()).toMatch(/^btab_[0-9a-f]{32}$/)
-
-    const manifest = JSON.parse(await readFile(path.join(extension, "manifest.json"), "utf8"))
-    expect(manifest.background.service_worker).toBe("service-worker.js")
-    expect(manifest.action.default_popup).toBe("popup.html")
-    const html = await readFile(path.join(extension, "popup.html"), "utf8")
-    expect(html).toContain('src="popup.js"')
-    expect(html).toContain('href="popup.css"')
-  })
-})
-
-test("packages Edge and Brave variants from the same sources with family manifests", async () => {
-  const bin = await mkdtemp(path.join(os.tmpdir(), "ycoding-extension-families-"))
-  try {
-    for (const family of BrowserExtension.families) {
-      await copyChromeExtension(bin, family.id)
-      const extension = path.join(bin, family.directory)
-      const files = (await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: extension })))
-        .map((file) => file.split(path.sep).join("/"))
-        .sort()
-      expect(files).toEqual([...BrowserExtension.files])
-      const manifest = JSON.parse(await readFile(path.join(extension, "manifest.json"), "utf8"))
-      expect(manifest.manifest_version).toBe(3)
-      expect(manifest.description).toContain(family.label)
-      expect(manifest.background.service_worker).toBe("service-worker.js")
-      expect(await readFile(path.join(extension, "service-worker.js"), "utf8")).toBe(
-        await readFile(path.join(bin, "ycoding-chrome-extension", "service-worker.js"), "utf8"),
+    for (const file of ["manifest.json", "popup.css", "popup.html", "popup.js"]) {
+      expect(await Bun.file(path.join(extension, file)).text()).toBe(
+        await Bun.file(path.join(chromeExtensionSource, file)).text(),
       )
     }
+    const manifest = await Bun.file(path.join(extension, "manifest.json")).json()
+    expect(manifest.name).toBe("YCoding Interaction")
+    expect(manifest.background).toEqual({ service_worker: "service-worker.js", type: "module" })
+    const worker = await Bun.file(path.join(extension, manifest.background.service_worker)).text()
+  expect(worker).not.toMatch(/^import[ \t]/m)
+    expect(worker).toContain("runtime.onMessage.addListener")
   } finally {
     await rm(bin, { recursive: true, force: true })
   }

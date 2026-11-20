@@ -27,7 +27,7 @@ Latency and client-timing telemetry stays in local SQLite and is disabled until 
 - **Many providers.** OpenAI, Anthropic, Google, GitHub Copilot, Muse (Meta), OpenRouter, xAI, Amazon Bedrock, Azure, Mistral, Groq, and more, plus any OpenAI-compatible endpoint.
 - **Your phone as a remote.** The Focus workspace puts Sessions, Usage, and Settings in a collapsible desktop rail or a three-item phone bar, with explicit New session and Back actions. Enroll your machine once, then read transcripts, send prompts, and answer permissions, guardrail reviews, and questions from any browser or the installable phone app, with opt-in push alerts when a Session needs you.
 - **Repository-native customization.** Agents, commands, skills, hooks, plugins, and MCP servers live next to your code.
-- **Browser and computer control.** Work in [paired Chrome tabs or agent-owned tabs](./docs/browser-extension.md) and in [scoped macOS windows](./docs/computer-use.md), with per-site and per-tool permissions.
+- **YCoding Interaction.** On macOS, approve one Chrome tab or window at a time for the `interaction` tool. Use [Connect Chrome](./docs/browser-extension.md#connect-chrome) to pair the bundled extension; pairing does not grant tab access.
 - **Workspace memory.** Save and search [linked Markdown knowledge](./docs/memory.md) with an offline graph, kept separate from transcripts and prompts.
 - **Next-message prediction.** Run `/suggest [hint]` in the TUI or web composer to get a suggested next message from recent conversation text, optionally with project or global memory: fill, never send.
 - **Prompt drafts.** Run `/prompt <intent>` in the TUI or web composer to turn a rough intent into one draft prompt for review. Choose a mode and, optionally, project or global memory: fill, never send.
@@ -57,7 +57,7 @@ Run a single prompt without opening the interface:
 ycoding --model <[profile#]provider/model[#variant]> "Explain this repository"
 ```
 
-Keep up to date with `ycoding update`. See [installation](https://ycoding.althenia.app/docs/installation) for macOS permissions, quarantine, and upgrade notes.
+Use the installer above to upgrade from v0.12.3 or earlier. Use `ycoding update` for subsequent releases on macOS and Linux. See [installation](https://ycoding.althenia.app/docs/installation) for macOS permissions and archive verification.
 
 ## Three surfaces, one runtime
 
@@ -80,7 +80,7 @@ See [remote workspace](https://ycoding.althenia.app/docs/usage/remote) for sign-
 
 ### macOS desktop app
 
-Build a native window from source with `bun run build:desktop -- --outdir=<fresh-directory>`. At startup, choose **Start my own backend** (a private bundled backend that stops when the window closes) or **Connect to a shared backend** (an explicit local URL or the running managed service, left running on close). It uses the same native client and events as the terminal, not the relay. Release archives do not include it. See [packages/desktop](./packages/desktop/README.md).
+Download the separate signed Apple silicon Desktop ZIP from [GitHub Releases](https://github.com/Althenia/ycoding/releases/latest), or build it from source with `bun run build:desktop -- --outdir=<fresh-directory>`. At startup, choose **Start my own backend** (a private bundled backend that stops when the window closes) or **Connect to a shared backend** (an explicit local URL or the running managed service, left running on close). It uses the same native client and events as the terminal, not the relay. See [packages/desktop](./packages/desktop/README.md).
 
 ### Native Dots access
 

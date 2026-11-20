@@ -5,6 +5,7 @@ import { createGunzip } from "node:zlib"
 import semver from "semver"
 import type { UpdateProgress } from "./progress"
 import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
+import { interactionApplication, interactionCLIIdentifier, interactionExtensionFiles, interactionSigningRequirement, usesInteractionLayout } from "./interaction-layout"
 
 const repository = "Althenia/ycoding"
 const maxArchiveBytes = 512 * 1024 * 1024
@@ -41,6 +42,7 @@ export type InstallReleaseInput = {
   readonly filesystem?: {
     readonly rename: Rename
     readonly verifyApplication?: (application: string) => Promise<void>
+    readonly verifyExecutable?: (executable: string) => Promise<void>
   }
   readonly onProgress?: (event: UpdateProgress.Event) => void
 }
@@ -100,8 +102,9 @@ export async function installRelease(input: InstallReleaseInput) {
   let retainRollback = false
   try {
     const currentLayout = semver.gte(input.version, currentLayoutRelease)
-    const appExecutable = currentLayout ? "ycoding-computer-use" : legacyComputerHelper
-    const computerApp = currentLayout ? "YCoding Computer Use.app" : legacyComputerApp
+    const interactionLayout = usesInteractionLayout(input.version)
+    const appExecutable = interactionLayout ? interactionApplication.executable : currentLayout ? "ycoding-computer-use" : legacyComputerHelper
+    const computerApp = interactionLayout ? interactionApplication.name : currentLayout ? "YCoding Computer Use.app" : legacyComputerApp
     const bareHelper = input.platform === "darwin" && semver.gte(input.version, pairedMacOSRelease) && !currentLayout
     const installedNames = bareHelper ? ["ycoding", legacyComputerHelper] : ["ycoding"]
     const appRequired = input.platform === "darwin" && semver.gte(input.version, appMacOSRelease)
@@ -115,9 +118,9 @@ export async function installRelease(input: InstallReleaseInput) {
     const required = [
       ...installedNames,
       ...(appRequired ? appFiles : []),
-      ...(currentLayout ? BrowserExtension.files.map((file) => `${extension}/${file}`) : []),
+      ...(currentLayout ? (interactionLayout ? interactionExtensionFiles : BrowserExtension.files).map((file) => `${extension}/${file}`) : []),
     ]
-    const files = readArchive(await expandArchive(archive), required)
+    const files = readArchive(await expandArchive(archive), required, interactionLayout)
     await Promise.all(
       required.map(async (name) => {
         const candidate = path.join(temporary, name)
@@ -126,23 +129,26 @@ export async function installRelease(input: InstallReleaseInput) {
         if (name === "ycoding" || name === legacyComputerHelper || name === appFiles[1]) await chmod(candidate, 0o755)
       }),
     )
+    if (appRequired && interactionLayout) {
+      const executable = path.join(temporary, "ycoding")
+      if (input.filesystem?.verifyExecutable) await input.filesystem.verifyExecutable(executable)
+      else verifyMacOSSignature(executable, "YCoding executable", ["-R", interactionSigningRequirement(interactionCLIIdentifier)])
+    }
     if (appRequired) {
       const metadata = await Bun.file(path.join(temporary, appFiles[0])).text()
+      const identifier = interactionLayout ? interactionApplication.identifier : currentLayout ? "app.ycoding.computer-use" : "app.ycoding.computer-helper"
+      const displayName = interactionLayout ? interactionApplication.displayName : "YCoding Computer Use"
       if (
-        !metadata.includes(`<key>CFBundleIdentifier</key><string>app.ycoding.${currentLayout ? "computer-use" : "computer-helper"}</string>`) ||
-        !metadata.includes("<key>CFBundleDisplayName</key><string>YCoding Computer Use</string>") ||
+        !metadata.includes(`<key>CFBundleIdentifier</key><string>${identifier}</string>`) ||
+        !metadata.includes(`<key>CFBundleDisplayName</key><string>${displayName}</string>`) ||
         !metadata.includes("<key>CFBundleIconFile</key><string>YCoding.icns</string>")
       )
         throw new Error("Computer helper app has invalid bundle metadata")
       const application = path.join(temporary, computerApp)
       if (input.filesystem?.verifyApplication) await input.filesystem.verifyApplication(application)
-      else {
-        const verification = Bun.spawnSync(["/usr/bin/codesign", "--verify", "--deep", "--strict", application], {
-          stdout: "pipe",
-          stderr: "pipe",
-        })
-        if (verification.exitCode !== 0) throw new Error("Computer helper app signature verification failed")
-      }
+      else verifyMacOSSignature(application, "Computer helper app", [
+        "--deep", ...(interactionLayout ? ["-R", interactionSigningRequirement(interactionApplication.identifier)] : []),
+      ])
     }
     const move = input.filesystem?.rename ?? rename
     if (!bareHelper && !appRequired && !currentLayout) {
@@ -168,7 +174,7 @@ export async function installRelease(input: InstallReleaseInput) {
         return { label: bundle.label, target, candidate: path.join(temporary, bundle.name), exists: installed !== undefined }
       }),
     )
-    const superseded = currentLayout && input.platform === "darwin" ? await installedSuperseded(installDirectory, uid) : []
+    const superseded = currentLayout && input.platform === "darwin" ? await installedSuperseded(installDirectory, uid, interactionLayout) : []
     rollback = await mkdtemp(path.join(installDirectory, ".ycoding-update-backup-"))
     const transaction: InstallTransaction = {
       executableBackedUp: false,
@@ -308,15 +314,26 @@ async function restoreRelease(input: {
   return recovery
 }
 
-async function installedSuperseded(directory: string, uid: number | undefined) {
+function verifyMacOSSignature(file: string, label: string, args: readonly string[]) {
+  const verification = Bun.spawnSync(["/usr/bin/codesign", "--verify", "--strict", ...args, file], { stdout: "pipe", stderr: "pipe" })
+  if (verification.exitCode !== 0) throw new Error(`${label} signature verification failed`)
+}
+
+async function installedSuperseded(directory: string, uid: number | undefined, interactionLayout: boolean) {
   const helper = path.join(directory, legacyComputerHelper)
-  const app = path.join(directory, legacyComputerApp)
-  const [installedHelper, installedApp] = await Promise.all([statIfExists(helper), statIfExists(app)])
+  const installedHelper = await statIfExists(helper)
   if (installedHelper && (!installedHelper.isFile() || installedHelper.isSymbolicLink() || installedHelper.uid !== uid))
     throw new Error("Installed computer helper must be a regular file owned by the current user")
-  if (installedApp && (!installedApp.isDirectory() || installedApp.isSymbolicLink() || installedApp.uid !== uid))
-    throw new Error("Installed computer helper app must be an owned directory")
-  return [...(installedHelper ? [helper] : []), ...(installedApp ? [app] : [])]
+  const applications = interactionLayout ? [legacyComputerApp, "YCoding Computer Use.app"] : [legacyComputerApp]
+  const installed = await Promise.all(applications.map(async (name) => {
+    const app = path.join(directory, name)
+    const stat = await statIfExists(app)
+    if (!stat) return []
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== uid)
+      throw new Error("Installed computer helper app must be an owned directory")
+    return [app]
+  }))
+  return [...(installedHelper ? [helper] : []), ...installed.flat()]
 }
 
 const exists = (file: string) => statIfExists(file).then((value) => value !== undefined)
@@ -403,7 +420,7 @@ async function expandArchive(archive: Uint8Array) {
   return Buffer.concat(chunks)
 }
 
-function readArchive(tar: Uint8Array, required: ReadonlyArray<string>) {
+function readArchive(tar: Uint8Array, required: ReadonlyArray<string>, exactLayout: boolean) {
   const files = new Map<string, Uint8Array>()
   const names = new Set<string>()
   let offset = 0
@@ -426,6 +443,8 @@ function readArchive(tar: Uint8Array, required: ReadonlyArray<string>) {
     if (!directory && type !== 48 && type !== 0) throw new Error(`Release archive entry ${name} has an unsupported type`)
     const normalized = directory ? name.replace(/\/$/, "") : name
     if (!safeName(normalized)) throw new Error(`Release archive entry has an unsafe name: ${JSON.stringify(name)}`)
+    if (exactLayout && !(directory ? required.some((file) => file.startsWith(normalized + "/")) : required.includes(normalized)))
+      throw new Error(`Release archive has unexpected entry ${normalized}`)
     if (names.has(normalized)) throw new Error(`Release archive has duplicate entry ${normalized}`)
     names.add(normalized)
     if (names.size > maxArchiveEntries) throw new Error("Release archive has too many entries")

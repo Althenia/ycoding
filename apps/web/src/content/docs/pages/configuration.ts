@@ -229,7 +229,7 @@ export const configurationPages: readonly DocPage[] = [
               ["`shell`", "string", "unset", "Shell for terminal and shell-tool execution."],
               ["`shell_sandbox`", "`disabled` | `optional` | `required`", "unset", "`disabled` runs on the host; `optional` uses an enforceable sandbox when available and warns otherwise; `required` rejects the command before approval or spawn when none is available."],
               ["`shell_memory_limit_mb`", "integer 0–1048576", "unset (unlimited)", "Default shell process-tree memory ceiling in MiB; `0` means unlimited."],
-              ["`autoupdate`", "boolean | `notify`", "unset (checks enabled)", "Omitted, `true`, and `notify` announce new releases; `false` disables the check. Installation always requires `ycoding update`."],
+              ["`autoupdate`", "boolean | `notify`", "unset (checks enabled)", "Omitted, `true`, and `notify` announce new releases; `false` disables the check. Installation is explicit; use the current installer when upgrading from v0.12.3 or earlier."],
               ["`share`", "`manual` | `auto` | `disabled`", "unset", "Session sharing policy."],
               ["`enterprise.url`", "string", "unset", "Enterprise sharing endpoint."],
               ["`permissions`", "array of `{ action, resource, effect }`", "unset", "Global ordered tool permission rules."],

@@ -55,9 +55,9 @@ test("source verification runs the native decision follow regression files in th
   for (const file of files) expect(await Bun.file(path.join(import.meta.dir, "../packages/cli", file)).exists()).toBe(true)
 })
 
-test("native archive finalization transfers each prepared archive once and leaves manual publication disabled", () => {
+test("native builders upload each archive once and the finalizer checks the complete set", () => {
   const build = workflowJob(workflow, "build")
-  const release = workflowJob(workflow, "release-tui")
+  const release = workflowJob(workflow, "finalize-release")
   expect(workflow).not.toContain("\n  package:")
   expect(build).toContain('bun script/release-archive.ts create "${{ matrix.target }}" "$RELEASE_VERSION"')
   expect(build).toContain("compression-level: 0")
@@ -68,9 +68,8 @@ test("native archive finalization transfers each prepared archive once and leave
   expect(release).toContain('bun script/release-archive.ts finalize "$RELEASE_VERSION" downloaded release')
   expect(release).not.toContain("uses: ./.github/actions/setup-bun")
   expect(release).toContain("uses: ./.github/actions/install-bun")
-  const publish = release.split("      - name: Publish GitHub release\n")[1] ?? ""
-  expect(publish).toStartWith("        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')\n")
-  expect(release.indexOf("release-archive.ts finalize")).toBeLessThan(release.indexOf("- name: Publish GitHub release"))
+  expect(release).not.toContain("- name: Publish GitHub release")
+  expect(release.indexOf("release-archive.ts finalize")).toBeLessThan(release.indexOf("- name: Upload release checksums"))
   expect(release).not.toContain("release-assets-")
 })
 
@@ -100,7 +99,7 @@ test("release workflow packages and checksums every CLI archive", () => {
   expect(build.indexOf("Verify build metadata")).toBeLessThan(build.indexOf("Create and validate native archive"))
   expect(build.indexOf("Stage native executables")).toBeLessThan(build.indexOf("Create and validate native archive"))
   expect(build.indexOf("Create and validate native archive")).toBeLessThan(build.indexOf("Upload native archive"))
-  expect(workflowJob(workflow, "release-tui")).toContain('bun script/release-archive.ts finalize "$RELEASE_VERSION" downloaded release')
+  expect(workflowJob(workflow, "finalize-release")).toContain('bun script/release-archive.ts finalize "$RELEASE_VERSION" downloaded release')
 })
 
 test("compressed release assets are uploaded without an additional compression pass", () => {
@@ -112,7 +111,7 @@ test("compressed release assets are uploaded without an additional compression p
 test("macOS release builds sign the app with the pinned release certificate and never fall back to ad hoc", () => {
   const build = workflowJob(workflow, "build")
   const importStep = build.split("      - name: Import macOS signing identity")[1]?.split("      - name: Build TUI artifact")[0] ?? ""
-  const stage = build.split("      - name: Stage native executables")[1]?.split("      - name: Create and validate native archive")[0] ?? ""
+  const stage = build.split("      - name: Verify packaged macOS signatures")[1]?.split("      - name: Upload native archive")[0] ?? ""
   expect(build).toContain("      YCODING_MACOS_SIGNING_IDENTITY: YCoding Code Signing")
   expect(build).toContain("      YCODING_MACOS_SIGNING_SHA1: 9dd524184b0db949ffac7f0ada0ae860ac7f5f85\n")
   expect(importStep).toContain("if: runner.os == 'macOS'")
@@ -133,8 +132,8 @@ test("macOS release builds sign the app with the pinned release certificate and 
   expect(importStep).not.toContain("login.keychain")
   expect(importStep).toContain('grep -F "$(printf \'%s\' "$YCODING_MACOS_SIGNING_SHA1" | tr a-f A-F) \\"$YCODING_MACOS_SIGNING_IDENTITY\\""')
   expect(build.indexOf("- name: Import macOS signing identity")).toBeLessThan(build.indexOf("- name: Build TUI artifact"))
-  expect(stage).toContain('codesign --verify --deep --strict "$staging/YCoding Computer Use.app"')
-  expect(stage).toContain('codesign -d -r- "$staging/YCoding Computer Use.app" 2>&1 | grep -Ex "designated => identifier')
+  expect(stage).toContain("codesign --verify --strict -R")
+  expect(stage).toContain("codesign --verify --deep --strict -R")
   expect(build).toContain("if: ${{ always() && runner.os == 'macOS' }}")
   expect(build).toContain('security list-keychains -d user -s "${original[@]}"')
   expect(build).toContain('security delete-keychain "$keychain"')
@@ -165,32 +164,20 @@ test("release archives include the Chrome extension beside the executable", () =
 })
 
 test("macOS release archives stage the signed app and preserve its bundle tree", () => {
-  expect(workflow).toContain('cp -R "dist/tui/tui-${{ matrix.target }}/bin/YCoding Computer Use.app" "$staging/"')
-  expect(workflow).toContain('codesign --verify --deep --strict "$staging/YCoding Computer Use.app"')
+  expect(workflow).toContain('cp -R "dist/tui/tui-${{ matrix.target }}/bin/YCoding Interaction.app" "$staging/"')
+  expect(workflow).toContain('"$payload/YCoding Interaction.app"')
   expect(workflow).not.toContain("bin/ycoding-computer-use")
   expect(workflowJob(workflow, "build")).toContain("Create and validate native archive")
 })
 
-const pin = "9dd524184b0db949ffac7f0ada0ae860ac7f5f85"
-
 test.each([
-  ["a self-signed root requirement", `identifier "app.ycoding.computer-use" and certificate root = H"${pin}"`, true],
-  ["a self-signed leaf requirement", `identifier "app.ycoding.computer-use" and certificate leaf = H"${pin}"`, true],
-  ["an ad-hoc cdhash requirement", 'cdhash H"1593f00c9269224608bcfc16986b4c7b1b09a2d5"', false],
-  ["a different certificate", `identifier "app.ycoding.computer-use" and certificate leaf = H"${"0".repeat(40)}"`, false],
-  ["a different identifier", `identifier "app.ycoding.other" and certificate leaf = H"${pin}"`, false],
-  ["an unanchored identifier only", 'identifier "app.ycoding.computer-use"', false],
-])("the release signature check accepts only the pinned certificate: %s", (_, requirement, accepted) => {
-  const stage = workflow.split("      - name: Stage native executables")[1]?.split("      - name: Create and validate native archive")[0] ?? ""
-  const check = stage.split("\n").find((line) => line.includes("codesign -d -r-"))?.trim()
-  expect(check).toBeDefined()
-  const command = check!.replace(/^codesign -d -r- "[^"]+" 2>&1/, 'printf "%s\\n" "designated => $REQUIREMENT"')
-  const result = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", command], {
-    env: { ...process.env, REQUIREMENT: requirement, YCODING_MACOS_SIGNING_SHA1: pin },
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  expect(result.exitCode === 0, result.stderr.toString()).toBe(accepted)
+  ["cli", "ycoding", ""],
+  ["interaction", "YCoding Interaction.app", " --deep"],
+])("the release verifies the archived %s against the pinned certificate before upload", (identifier, entry, deep) => {
+  const stage = workflow.split("      - name: Verify packaged macOS signatures")[1]?.split("      - name: Upload native archive")[0] ?? ""
+  expect(stage).toContain(
+    String.raw`codesign --verify${deep} --strict -R "=identifier \"app.ycoding.${identifier}\" and certificate leaf = H\"$YCODING_MACOS_SIGNING_SHA1\"" "$payload/${entry}"`,
+  )
 })
 
 test("release archives keep the layout installed updaters accept and ship the license texts as separate assets", () => {
@@ -213,7 +200,7 @@ test("one v tag verifies a shared note and publishes only the TUI GitHub release
   expect(verify).toContain("bun test --cwd apps/web ./test/remote-store-container.test.ts")
   expect(verify).not.toContain("bun run test:integration:remote")
   expect(verify).toContain("bun run build:cloudflare")
-  expect(tui).toContain("if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
+  expect(tui).toContain("if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}")
   expect(tui).toContain('gh release create "v$version"')
   expect(tui?.match(/--title "[^"]+"/g)).toEqual(['--title "YCoding $version"', '--title "YCoding $version"'])
   expect(tui).toContain('"docs/releases/v$version.md" --verify-tag')
@@ -254,7 +241,8 @@ test("app preview Worker deploys only after the relay and only when the reposito
 
 test("GitHub Release publication waits for every check and web deployment waits for publication", () => {
   const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0]
-  expect(tui).toContain("needs: [verify-source, build, build-desktop]")
+  expect(workflowJob(workflow, "finalize-release")).toContain("needs: [verify-source, build, build-desktop]")
+  expect(tui).toContain("needs: finalize-release")
   expect(tui).toContain("github.event_name == 'push'")
   expect(workflow.split("\n  deploy-web:")[1]).toContain("needs: release-tui")
 })
@@ -266,9 +254,9 @@ test("an existing release is replaced through staged, verified publication with 
   expect(publish.indexOf('if gh release view "$RELEASE_TAG"')).toBeLessThan(publish.indexOf("bun script/release-publish.ts"))
   expect(publish).toContain('--run "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --manifest release-publish-manifest.json release/* "docs/releases/v$version.md"')
   expect(publish.indexOf("bun script/release-publish.ts")).toBeLessThan(publish.indexOf('gh release create "v$version"'))
-  expect(tui.indexOf("- name: Setup Bun")).toBeLessThan(tui.indexOf("- name: Publish GitHub release"))
+  expect(tui.indexOf("- name: Install Bun")).toBeLessThan(tui.indexOf("- name: Publish GitHub release"))
   const manifest = tui.split("- name: Upload release publication manifest")[1] ?? ""
-  expect(manifest).toContain("if: always()")
+  expect(manifest).toContain("if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}")
   expect(manifest).toContain("path: release-publish-manifest.json")
   expect(workflow).not.toContain('"$GITHUB_WORKSPACE/script/release-publish.test.ts"')
 })
@@ -288,6 +276,63 @@ test("manual release runs prepare assets without publishing or deploying", () =>
   expect(workflow).toContain("workflow_dispatch:")
   expect(workflow.split("\n  release-tui:")[1]).toContain("github.event_name == 'push'")
   expect(workflow.split("\n  deploy-web:")[1]).toContain("github.event_name == 'push'")
+})
+
+test("release dispatch finalizes with read-only contents access and never schedules publication", () => {
+  const parsed: unknown = Bun.YAML.parse(workflow)
+  const tagPush = "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}"
+  expect(parsed).toHaveProperty("jobs.finalize-release.permissions.contents", "read")
+  expect(parsed).toHaveProperty("jobs.release-tui.if", tagPush)
+  expect(parsed).toHaveProperty("jobs.release-tui.needs", "finalize-release")
+  expect(parsed).toHaveProperty("jobs.release-tui.permissions.contents", "write")
+  expect(workflowJob(workflow, "finalize-release")).not.toMatch(/gh release|release-publish-manifest/)
+  expect(workflowJob(workflow, "release-tui")).toContain("sha256sum --check")
+})
+
+test("release contexts stay out of the version resolver's shell source", () => {
+  expect(workflow).toContain("REQUESTED_RELEASE_VERSION: ${{ inputs.version }}")
+  expect(workflow).toContain("RELEASE_REF_NAME: ${{ github.ref_name }}")
+  expect(workflow).not.toMatch(/"\$\{\{ (?:inputs.version|github.ref_name) \}\}"/)
+})
+
+test("release source checks cover Interaction and stored OpenAI Responses without live services", () => {
+  const verify = workflowJob(workflow, "verify-source")
+  const expected = [
+    ["Verify Interaction wire and runtime boundaries", "types", [
+      "./test/interaction-chrome.test.ts", "./test/interaction-macos.test.ts", "./test/session-interaction.test.ts", "./test/interaction-platform.test.ts",
+    ]],
+    ["Verify stored OpenAI Responses continuation", "types", [
+      "./test/provider/openai-responses.test.ts", "./test/openai-api-key-cache-boundary.test.ts",
+    ]],
+    ["Verify Interaction connector and extension", "cli", [
+      "./test/remote-interaction.test.ts", "./test/interaction-chrome-controller.test.js",
+    ]],
+  ] as const
+  for (const [name, suite, files] of expected) {
+    const step = verify.split(`      - name: ${name}\n`)[1]?.split("\n      - name: ")[0] ?? ""
+    expect(step).toContain(`if: matrix.suite == '${suite}'`)
+    expect(step).not.toMatch(/test-integration|\.integration\.test|smoke:/)
+    for (const file of files) expect(step).toContain(file)
+  }
+})
+
+test.each([
+  ["0.12.4-rc.1+build.2", "preview", "branch", "0.12.4-rc.1+build.2"],
+  ["", "v0.12.4", "tag", "0.12.4"],
+  ["", "v0.11.0-preview", "branch", "0.12.4"],
+  ["0.12.04", "preview", "branch", null],
+  ["0.12.4\nANOTHER=value", "preview", "branch", null],
+  ["0.12.4$(printf unexpected)", "preview", "branch", null],
+  ["", "v0.12.4/invalid", "tag", null],
+])("release version validates the selected input before environment export (%j, %j, %s)", (requested, ref, type, expected) => {
+  const result = Bun.spawnSync(["bash", "script/release-version.sh"], {
+    cwd: path.join(import.meta.dir, ".."),
+    env: { ...process.env, REQUESTED_RELEASE_VERSION: requested, RELEASE_REF_NAME: ref, RELEASE_REF_TYPE: type, GITHUB_ENV: "/dev/stdout" },
+    stdout: "pipe", stderr: "pipe",
+  })
+  expect(result.exitCode).toBe(expected === null ? 1 : 0)
+  expect(result.stdout.toString()).toBe(expected === null ? "" : `RELEASE_VERSION=${expected}\nYCODING_VERSION=${expected}\n`)
+  expect(result.stderr.toString()).toBe(expected === null ? "Invalid release version\n" : "")
 })
 
 test("release workflow verifies the web application and relay before the Cloudflare build", () => {
@@ -682,7 +727,8 @@ test("packaging overlaps source verification without bypassing publication or de
     ["verify-source", undefined],
     ["build", undefined],
     ["build-desktop", undefined],
-    ["release-tui", "[verify-source, build, build-desktop]"],
+    ["finalize-release", "[verify-source, build, build-desktop]"],
+    ["release-tui", "finalize-release"],
     ["deploy-web", "release-tui"],
   ] as const
   expect(jobs.filter((_, index) => index % 2 === 0).sort()).toEqual(dependencies.map(([name]) => name).sort())
@@ -690,7 +736,7 @@ test("packaging overlaps source verification without bypassing publication or de
     const job = jobs[jobs.indexOf(name) + 1] ?? ""
     expect(/^    needs: (.+)$/m.exec(job)?.[1]).toBe(needs)
     expect(/^    if: (.+)$/m.exec(job)?.[1]).toBe(
-      name === "deploy-web"
+      name === "deploy-web" || name === "release-tui"
         ? "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}"
         : "${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}",
     )
@@ -853,7 +899,7 @@ test("every Bun-installing job installs the pinned Bun through the hardened inst
   expect(setupBun).toContain("      uses: ./.github/actions/install-bun\n")
   expect(setupBun).not.toContain("oven-sh/setup-bun")
   expect(setupBun.indexOf("uses: ./.github/actions/install-bun")).toBeLessThan(setupBun.indexOf("Install dependencies"))
-  expect(workflowJob(workflow, "release-tui")).toContain("      - name: Install Bun\n        uses: ./.github/actions/install-bun\n")
+  for (const job of ["finalize-release", "release-tui"]) expect(workflowJob(workflow, job)).toContain("      - name: Install Bun\n        uses: ./.github/actions/install-bun\n")
   for (const job of ["verify-source", "build", "deploy-web"]) expect(workflowJob(workflow, job)).toContain("uses: ./.github/actions/setup-bun")
 })
 

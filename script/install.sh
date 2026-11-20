@@ -12,12 +12,14 @@ binary_backup=
 helper_backup=
 app_backup=
 legacy_app_backup=
+computer_use_backup=
 legacy_helper_backup=
 app_name=
 app_executable=ycoding-computer-helper
 helper_required=true
 bundle_id=app.ycoding.computer-helper
 legacy_app=ycoding-computer-helper.app
+computer_use_app="YCoding Computer Use.app"
 legacy_helper=ycoding-computer-helper
 extension_name=ycoding-chrome-extension
 extension_files="icons/ycoding-128.png icons/ycoding-16.png icons/ycoding-32.png icons/ycoding-48.png manifest.json popup.css popup.html popup.js protocol.js service-worker.js"
@@ -94,6 +96,12 @@ cleanup() {
     if [ "$extension_installed" = true ] || [ "$extension_backed_up" = true ]; then
       rm -rf "$install_dir/$extension_name" || restore_status=1
     fi
+    if [ -n "$computer_use_backup" ] && [ -d "$computer_use_backup/$computer_use_app" ]; then
+      if ! mv -f "$computer_use_backup/$computer_use_app" "$install_dir/$computer_use_app"; then
+        printf 'ycoding installer: Computer Use app backup retained at %s\n' "$computer_use_backup/$computer_use_app" >&2
+        restore_status=1
+      fi
+    fi
     if [ "$extension_backed_up" = true ]; then
       if mv -f "$extension_backup" "$install_dir/$extension_name"; then
         extension_backed_up=false
@@ -126,6 +134,7 @@ cleanup() {
   if [ -n "$helper_backup" ] && [ "$helper_backed_up" = false ]; then rm -f "$helper_backup"; fi
   if [ -n "$app_backup" ] && [ "$app_backed_up" = false ]; then rm -rf "$app_backup"; fi
   if [ -n "$legacy_app_backup" ] && [ "$legacy_app_backed_up" = false ]; then rm -rf "$legacy_app_backup"; fi
+  if [ -n "$computer_use_backup" ] && [ ! -e "$computer_use_backup/$computer_use_app" ]; then rmdir "$computer_use_backup"; fi
   if [ -n "$legacy_helper_backup" ] && [ "$legacy_helper_backed_up" = false ]; then rm -f "$legacy_helper_backup"; fi
   if [ -n "$extension_candidate" ]; then rm -rf "$extension_candidate"; fi
   if [ -n "$extension_backup" ] && [ "$extension_backed_up" = false ]; then rm -rf "$extension_backup"; fi
@@ -222,6 +231,14 @@ fetch_verified "$asset"
 # precede it, while prereleases of later versions follow it.
 app_required=false
 version_core=${version%%+*}
+interaction_layout=false
+if printf '%s\n' "${version_core%%-*}" | awk -F . '
+  $1 > 0 || ($1 == 0 && ($2 > 12 || ($2 == 12 && $3 >= 4))) { found=1 }
+  END { exit !found }
+'; then
+  interaction_layout=true
+  extension_files="manifest.json popup.css popup.html popup.js service-worker.js"
+fi
 # Releases after 0.7.1, including their prereleases, include the Chrome extension.
 if printf '%s\n' "${version_core%%-*}" | awk -F . '
   $1 > 0 || ($1 == 0 && ($2 > 7 || ($2 == 7 && $3 > 1))) { found=1 }
@@ -237,14 +254,21 @@ if [ "$operating_system" = darwin ]; then
   # Releases after 0.7.1, including their prereleases, ship only the computer-use app;
   # its filename is its macOS privacy-settings display name.
   app_name=$legacy_app
+  app_display_name="YCoding Computer Use"
   if printf '%s\n' "${version_core%%-*}" | awk -F . '
     $1 > 0 || ($1 == 0 && ($2 > 7 || ($2 == 7 && $3 > 1))) { found=1 }
     END { exit !found }
   '; then
-    app_name="YCoding Computer Use.app"
+    app_name=$computer_use_app
     app_executable=ycoding-computer-use
     helper_required=false
     bundle_id=app.ycoding.computer-use
+  fi
+  if [ "$interaction_layout" = true ]; then
+    app_name="YCoding Interaction.app"
+    app_display_name="YCoding Interaction"
+    app_executable=ycoding-interaction
+    bundle_id=app.ycoding.interaction
   fi
 fi
 
@@ -275,6 +299,16 @@ if [ "$extension_required" = true ]; then
   })
 fi
 printf '%s\n' "$required_files" >"$temporary/required"
+if [ "$interaction_layout" = true ]; then
+  awk 'NR == FNR {
+    allowed[$0] = 1
+    dir = $0
+    while (sub(/\/[^\/]+$/, "", dir)) allowed[dir "/"] = 1
+    next
+  }
+  !($0 in allowed) { exit 1 }
+  ' "$temporary/required" "$temporary/entries" || fail "Release archive has unexpected entries"
+fi
 missing=$(while IFS= read -r file; do grep -Fx -- "$file" "$temporary/entries" >/dev/null || printf '%s ' "$file"; done <"$temporary/required")
 [ -z "$missing" ] || fail "Release archive is missing required entries: $missing"
 # Check types and advertised uncompressed sizes before writing extracted files.
@@ -309,17 +343,26 @@ if [ "$app_required" = true ]; then
   done
   grep -Fq "<key>CFBundleIdentifier</key><string>$bundle_id</string>" "$app/Contents/Info.plist" ||
     fail "Computer helper app has an invalid bundle identifier"
-  grep -Fq '<key>CFBundleDisplayName</key><string>YCoding Computer Use</string>' "$app/Contents/Info.plist" ||
+  grep -Fq "<key>CFBundleDisplayName</key><string>$app_display_name</string>" "$app/Contents/Info.plist" ||
     fail "Computer helper app has an invalid display name"
   grep -Fq '<key>CFBundleIconFile</key><string>YCoding.icns</string>' "$app/Contents/Info.plist" ||
     fail "Computer helper app has an invalid icon reference"
-  /usr/bin/codesign --verify --deep --strict "$app" || fail "Computer helper app signature verification failed"
+  if [ "$interaction_layout" = true ]; then
+    signer=9dd524184b0db949ffac7f0ada0ae860ac7f5f85
+    /usr/bin/codesign --verify --strict -R "=identifier \"app.ycoding.cli\" and certificate leaf = H\"$signer\"" "$temporary/extract/ycoding" ||
+      fail "YCoding executable signature verification failed"
+    /usr/bin/codesign --verify --deep --strict -R "=identifier \"$bundle_id\" and certificate leaf = H\"$signer\"" "$app" ||
+      fail "Interaction app signature verification failed"
+  else
+    /usr/bin/codesign --verify --deep --strict "$app" || fail "Computer helper app signature verification failed"
+  fi
 fi
 if [ "$extension_required" = true ]; then
   extension="$temporary/extract/$extension_name"
-  for directory in "$extension" "$extension/icons"; do
-    [ -d "$directory" ] && [ ! -L "$directory" ] || fail "Release archive contains an invalid Chrome extension directory"
-  done
+  [ -d "$extension" ] && [ ! -L "$extension" ] || fail "Release archive contains an invalid Chrome extension directory"
+  if [ "$interaction_layout" = false ]; then
+    [ -d "$extension/icons" ] && [ ! -L "$extension/icons" ] || fail "Release archive contains an invalid Chrome extension icons directory"
+  fi
   for file in $extension_files; do
     [ -f "$extension/$file" ] && [ ! -L "$extension/$file" ] && [ -s "$extension/$file" ] || fail "Release archive contains an invalid Chrome extension file"
   done
@@ -379,6 +422,11 @@ if [ "$operating_system" = "darwin" ]; then
   fi
 
   install_transaction=true
+  if [ "$interaction_layout" = true ] && { [ -e "$install_dir/$computer_use_app" ] || [ -L "$install_dir/$computer_use_app" ]; }; then
+    [ -d "$install_dir/$computer_use_app" ] && [ ! -L "$install_dir/$computer_use_app" ] && [ -O "$install_dir/$computer_use_app" ] || fail "Installed Computer Use app must be an owned directory"
+    computer_use_backup=$(mktemp -d "$install_dir/.ycoding-computer-use-backup.XXXXXX") || fail "Failed to reserve the Computer Use app rollback path"
+    mv -f "$install_dir/$computer_use_app" "$computer_use_backup/$computer_use_app" || fail "Failed to preserve the superseded Computer Use app"
+  fi
   if [ -n "$binary_backup" ]; then
     mv -f "$install_dir/ycoding" "$binary_backup" || fail "Failed to preserve the installed ycoding executable"
     binary_backed_up=true
@@ -428,12 +476,14 @@ if [ -n "$binary_backup" ]; then rm -f "$binary_backup"; fi
 if [ -n "$helper_backup" ]; then rm -f "$helper_backup"; fi
 if [ -n "$app_backup" ]; then rm -rf "$app_backup"; fi
 if [ -n "$legacy_app_backup" ]; then rm -rf "$legacy_app_backup"; fi
+if [ -n "$computer_use_backup" ]; then rm -rf "$computer_use_backup"; fi
 if [ -n "$legacy_helper_backup" ]; then rm -f "$legacy_helper_backup"; fi
 if [ -n "$extension_backup" ]; then rm -rf "$extension_backup"; fi
 binary_backup=
 helper_backup=
 app_backup=
 legacy_app_backup=
+computer_use_backup=
 legacy_helper_backup=
 extension_backup=
 

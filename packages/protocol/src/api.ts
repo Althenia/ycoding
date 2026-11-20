@@ -44,6 +44,7 @@ import { makeIsolatedBrowserGroup } from "./groups/isolated-browser.js"
 import { CoordinationGroup } from "./groups/coordination.js"
 import { DotsGroup } from "./groups/dots.js"
 import { DecisionGroup } from "./groups/decision.js"
+import { InteractionGroup } from "./groups/interaction.js"
 
 type LocationGroups<LocationId extends HttpApiMiddleware.AnyId> =
   | HttpApiGroup.AddMiddleware<typeof AgentGroup, LocationId>
@@ -124,6 +125,7 @@ type ApiGroups<
   | typeof ConfigGroup
   | typeof CoordinationGroup
   | typeof DecisionGroup
+  | typeof InteractionGroup
   | LocationGroups<LocationId>
   | CatalogGroups<LocationId, LocationService, CatalogLocationId, CatalogLocationService>
   | FormGroups<LocationId, LocationService, FormLocationId, FormLocationService>
@@ -243,6 +245,7 @@ const makeApiFromGroup = <
     .add(CoordinationGroup)
     .add(DotsGroup)
     .add(DecisionGroup)
+    .add(InteractionGroup)
     .annotateMerge(
       OpenApi.annotations({
         title: "ycoding HttpApi",

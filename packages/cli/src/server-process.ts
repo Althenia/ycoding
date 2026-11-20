@@ -16,6 +16,7 @@ import path from "node:path"
 import { Effect, FiberSet, FileSystem, Option, Redacted, Schedule, Schema } from "effect"
 import { HttpServer } from "effect/unstable/http"
 import { Env } from "./env"
+import { packagedInteractionPlatforms } from "./interaction-platform"
 import { DatabaseRecovery } from "./services/database-recovery"
 import { ServiceConfig } from "./services/service-config"
 
@@ -67,6 +68,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
         if (!claimed || (yield* Service.incumbent(discovery)) !== undefined) return
       }
       const { start } = yield* Effect.promise(() => import("@ycoding-ai/server/process"))
+      const interactionPlatforms = yield* Effect.tryPromise(() => packagedInteractionPlatforms(process.platform, process.execPath))
       const environmentPassword = yield* Env.password
       // Keep the lease credential out of the environment inherited by tools.
       if (options.mode === "stdio") {
@@ -172,6 +174,8 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
             onDiagnostic: (message) => { logRemoteDiagnostic(Effect.logWarning("Dots remote connector diagnostic", { detail: message })) },
           })
         },
+        [],
+        interactionPlatforms,
       )
       const server = yield* startAtPort(port).pipe(
         Effect.catch(Effect.fnUntraced(function* (error) {

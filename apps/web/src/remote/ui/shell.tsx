@@ -83,6 +83,7 @@ import { LoadingPlaceholder } from "./loading"
 import { SubagentBar, TeamAnswerForm } from "./subagent-bar"
 import { createRowVirtualizer, sameKeys, scrollParent } from "./virtual-rows"
 import { RunningExecution, TeamView } from "./team-view"
+import { InteractionControl, InteractionPreview } from "./interaction-control"
 import { SharedActivityBar, SharedCompanionSurface, SharedContextBreakdownPanel, SharedContextRingButton, SharedConversationHeader, SharedTrace, SharedWorkspaceFrame, WORKSPACE_DESTINATIONS, type SharedActivityItem } from "./shared-workspace"
 import { requestAutonomousDialog } from "./autonomous-dialog"
 import { SessionStatusDetails } from "./status-bar"
@@ -194,6 +195,14 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   let loadedControlsRoot: string | undefined
   const readPhoneLayout = () => getComputedStyle(document.documentElement).getPropertyValue("--yc-phone-layout").trim() === "1"
   const [phoneLayout, setPhoneLayout] = createSignal(readPhoneLayout())
+  const interactionMedia = window.matchMedia("(min-width: 1280px)")
+  const [interactionDocked, setInteractionDocked] = createSignal(interactionMedia.matches)
+  const moveInteractionPreview = () => {
+    remote.store.revealInteraction(false)
+    setInteractionDocked(interactionMedia.matches)
+  }
+  interactionMedia.addEventListener("change", moveInteractionPreview)
+  onCleanup(() => interactionMedia.removeEventListener("change", moveInteractionPreview))
   const updatePhoneLayout = createThrottler(() => setPhoneLayout(readPhoneLayout()), { wait: 50 })
   window.addEventListener("resize", updatePhoneLayout.maybeExecute)
   onCleanup(() => window.removeEventListener("resize", updatePhoneLayout.maybeExecute))
@@ -397,6 +406,11 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   })
   createEffect(() => remote.store.watchTeam(view() === "/remote/session" && state().activeSessionID !== undefined))
   onCleanup(() => remote.store.watchTeam(false))
+  createEffect(() => remote.store.watchInteraction(!conversationHidden() && selected()))
+  onCleanup(() => remote.store.watchInteraction(false))
+  createEffect(() => {
+    if (interactionDocked() && (!teamOpen() || companionTab() !== "activity")) remote.store.revealInteraction(false)
+  })
   createEffect(() => {
     const team = state().team
     if (!teamOpen() || team?.status !== "ready") { loadedControlsRoot = undefined; return }
@@ -412,7 +426,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     const layer = teamLayer
     requestAnimationFrame(() => void Promise.allSettled(layer?.getAnimations().map((animation) => animation.finished) ?? []).then(() => { if (!teamOpen()) setTeamVisible(false) }))
   }
-  const openTeam = () => {
+  const showTeam = (focusTab: boolean) => {
     if (!teamOpen()) companionTrigger = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : teamTrigger
     if (office.presentation() === "office") office.present("conversation")
     if (phoneLayout()) {
@@ -429,7 +443,15 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     setTeamOpen(true)
     teamLayer?.getBoundingClientRect()
     teamFrame = requestAnimationFrame(() => setTeamEntering(false))
-    queueMicrotask(() => teamLayer?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus({ preventScroll: true }))
+    if (focusTab) queueMicrotask(() => teamLayer?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus({ preventScroll: true }))
+  }
+  const openTeam = () => showTeam(true)
+  const revealInteraction = (revealed: boolean) => {
+    if (revealed && interactionDocked()) {
+      setCompanionTab("activity")
+      showTeam(false)
+    }
+    remote.store.revealInteraction(revealed)
   }
   const openCompanion = (event: Event) => {
     if (!(event instanceof CustomEvent) || !["activity", "running", "changes", "context"].includes(event.detail)) return
@@ -502,12 +524,17 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     if (current && (current.deviceID !== state().activeDeviceID || current.generation !== state().generation)) setProviderConnect(undefined)
   })
   const paletteSessionSelected = () => selected() && (view() !== "/remote/session" || (ownsSessionDevice() && ownsSessionRoute()))
-  const teamView = () => <TeamView
+  const teamView = () => <>
+    <Show when={interactionDocked() && teamOpen() && companionTab() === "activity" && state().interaction?.revealed ? state().interaction : undefined}>
+      {(interaction) => <InteractionPreview view={interaction()} />}
+    </Show>
+    <TeamView
     connectionKey={`${state().activeDeviceID}:${state().generation}`}
     data={() => state().team!} currentSessionID={state().activeSessionID ?? ""} now={Date.now} sheet={true}
     onClose={closeTeam} onOpen={openFromTeam} onCancel={remote.store.cancelSubagent} onAnswer={remote.store.answerSubagent} onPin={remote.store.pinSubagent} onContinueRecovery={remote.store.continueRecovery}
     onLoadOlder={remote.store.loadMoreTeam} onViewShell={remote.store.teamShellOutput} onKillShell={remote.store.killTeamShell}
     onOpenSideChat={openFromTeam} onCreateSideChat={remote.store.createSideChat} onLoadOlderSideChats={remote.store.loadMoreSideChats} />
+  </>
   const contextWindow = () => state().view?.contextWindow
   const companionSummary = () => sessionCompanionSummary(state().view, activeSession()?.model)
   const goalLabel = () => state().view?.autonomy === undefined ? "Unreported" : state().view?.autonomy?.goal?.status === "active" ? "Active" : state().view?.autonomy?.goal ? "Stopped" : "Off"
@@ -608,6 +635,9 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
           event.stopPropagation()
           toggleProjectContext()
         }}><For each={[context().detail.id]}>{() => <ProjectPanel data={projects} project={context().detail} />}</For></aside>}</Show>} companion={teamPanel()}>
+            <Show when={!conversationHidden() ? state().interaction : undefined}>{(interaction) =>
+              <InteractionControl view={interaction()} inlinePreview={!interactionDocked()} onReveal={revealInteraction} onStop={remote.store.stopInteraction} onRefresh={remote.store.refreshInteraction} />
+            }</Show>
             <div class="workspace__scroll" ref={scrollHost} onScroll={() => {
               if (scrollHost) lastScroll = { top: scrollHost.scrollTop, distance: scrollHost.scrollHeight - scrollHost.clientHeight - scrollHost.scrollTop }
             }}>

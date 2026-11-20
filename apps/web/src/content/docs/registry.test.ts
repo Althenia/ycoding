@@ -315,6 +315,15 @@ describe("remote recovery documentation", () => {
 })
 
 describe("page structure", () => {
+  test("the installation guide routes upgrades from v0.12.3 through the installer", () => {
+    const page = findDocPage("installation")
+    const update = page?.sections.find((section) => section.heading === "Update an installation")
+    const warning = update?.blocks.find((block) => block.kind === "callout" && block.title === "Upgrade from v0.12.3 or earlier")
+    expect(warning).toMatchObject({ kind: "callout", text: expect.stringContaining("use the shell installer above") })
+    expect(JSON.stringify(page?.sections)).toContain("YCoding Interaction.app")
+    expect(JSON.stringify(page?.sections)).not.toContain("YCoding Computer Use.app")
+  })
+
   test("the remote guide describes family-finished and attention categories", () => {
     const section = findDocPage("usage/remote")?.sections.find((entry) => entry.heading === "Notifications and availability")
     const text = JSON.stringify(section?.blocks)

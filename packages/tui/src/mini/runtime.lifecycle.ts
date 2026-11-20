@@ -27,7 +27,6 @@ import type {
   RunTuiConfig,
 } from "./types"
 import { formatModelLabel } from "./variant.shared"
-import type { Browser } from "@ycoding-ai/schema/browser"
 
 const FOOTER_HEIGHT = 4
 
@@ -66,10 +65,6 @@ export type LifecycleInput = {
   onPermissionReply: (input: PermissionReply) => void | Promise<void>
   onFormReply: (input: FormReply) => void | Promise<void>
   onFormCancel: (input: FormCancel) => void | Promise<void>
-  browserAddress?: () => string | undefined
-  onChromePair?: (signal: AbortSignal) => Promise<{ secret: string; expiresAt: number }>
-  onChromeStatus?: (signal: AbortSignal) => Promise<Browser.Status>
-  onChromeForget?: (signal: AbortSignal) => Promise<void>
   onCycleVariant?: () => CycleResult | void
   onModelSelect?: (model: NonNullable<RunInput["model"]>) => CycleResult | void | Promise<CycleResult | void>
   onVariantSelect?: (variant: string | undefined) => CycleResult | void | Promise<CycleResult | void>
@@ -239,10 +234,6 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     onPermissionReply: input.onPermissionReply,
     onFormReply: input.onFormReply,
     onFormCancel: input.onFormCancel,
-    browserAddress: input.browserAddress,
-    onChromePair: input.onChromePair,
-    onChromeStatus: input.onChromeStatus,
-    onChromeForget: input.onChromeForget,
     onCycleVariant: input.onCycleVariant,
     onModelSelect: input.onModelSelect,
     onVariantSelect: input.onVariantSelect,

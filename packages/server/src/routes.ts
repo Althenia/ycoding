@@ -13,6 +13,7 @@ import { Observability } from "@ycoding-ai/core/observability"
 import { MemoryTelemetry } from "@ycoding-ai/core/observability/memory-telemetry"
 import { locationServices } from "@ycoding-ai/core/location-services"
 import { KeepAwake } from "@ycoding-ai/core/keep-awake"
+import { InteractionRuntime } from "@ycoding-ai/core/interaction/index"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Config } from "@ycoding-ai/core/config"
 import { Command } from "@ycoding-ai/core/command"
@@ -117,6 +118,7 @@ const applicationServices = LayerNode.group([
   SessionDecisions.node,
   SessionOrchestrationNotifier.node,
   KeepAwake.node,
+  InteractionRuntime.node,
   TelemetryConsent.node,
   RetentionSettings.node,
   ModelIncident.node,

@@ -2,23 +2,31 @@ import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { BrowserExtension } from "../packages/core/src/browser/extension"
+import { interactionApplication, interactionExtensionDirectory, interactionExtensionFiles, usesInteractionLayout } from "../packages/cli/src/update/interaction-layout"
 
 const targets = ["darwin-arm64", "darwin-x64", "linux-x64", "windows-x64"] as const
 type Target = typeof targets[number]
-const application = "YCoding Computer Use.app"
+const computerUseApplication = {
+  name: "YCoding Computer Use.app",
+  executable: "ycoding-computer-use",
+  identifier: "app.ycoding.computer-use",
+  displayName: "YCoding Computer Use",
+}
 const desktopApplication = "YCoding Desktop.app"
 
-function payload(target: Target, withApplication: boolean) {
+function payload(target: Target, withApplication: boolean, version: string) {
+  const interaction = usesInteractionLayout(version)
+  const app = interaction ? interactionApplication : computerUseApplication
   return [
     target === "windows-x64" ? "ycoding.exe" : "ycoding",
-    "ycoding-chrome-extension/",
-    "ycoding-chrome-extension/icons/",
-    ...BrowserExtension.files.map((file) => `ycoding-chrome-extension/${file}`),
+    `${interactionExtensionDirectory}/`,
+    ...(interaction ? [] : [`${interactionExtensionDirectory}/icons/`]),
+    ...(interaction ? interactionExtensionFiles : BrowserExtension.files).map((file) => `${interactionExtensionDirectory}/${file}`),
     ...(withApplication ? [
-      `${application}/`, `${application}/Contents/`, `${application}/Contents/Info.plist`,
-      `${application}/Contents/MacOS/`, `${application}/Contents/MacOS/ycoding-computer-use`,
-      `${application}/Contents/Resources/`, `${application}/Contents/Resources/YCoding.icns`,
-      `${application}/Contents/_CodeSignature/`, `${application}/Contents/_CodeSignature/CodeResources`,
+      `${app.name}/`, `${app.name}/Contents/`, `${app.name}/Contents/Info.plist`,
+      `${app.name}/Contents/MacOS/`, `${app.name}/Contents/MacOS/${app.executable}`,
+      `${app.name}/Contents/Resources/`, `${app.name}/Contents/Resources/YCoding.icns`,
+      `${app.name}/Contents/_CodeSignature/`, `${app.name}/Contents/_CodeSignature/CodeResources`,
     ] : []),
   ].sort()
 }
@@ -71,22 +79,23 @@ async function tree(directory: string, prefix = ""): Promise<string[]> {
   }))).flat().sort()
 }
 
-async function validatePayload(directory: string, target: Target) {
+async function validatePayload(directory: string, target: Target, version: string) {
   const withApplication = target.startsWith("darwin")
-  if (JSON.stringify(await tree(directory)) !== JSON.stringify(payload(target, withApplication)))
+  const app = usesInteractionLayout(version) ? interactionApplication : computerUseApplication
+  if (JSON.stringify(await tree(directory)) !== JSON.stringify(payload(target, withApplication, version)))
     throw new Error("Invalid release payload: unexpected or missing entries")
-  for (const file of [target === "windows-x64" ? undefined : "ycoding", withApplication ? `${application}/Contents/MacOS/ycoding-computer-use` : undefined].filter((file) => file !== undefined))
+  for (const file of [target === "windows-x64" ? undefined : "ycoding", withApplication ? `${app.name}/Contents/MacOS/${app.executable}` : undefined].filter((file) => file !== undefined))
     if (((await fs.stat(path.join(directory, file))).mode & 0o111) === 0) throw new Error(`Invalid release payload: ${file} is not executable`)
   if (!withApplication) return
-  const plist = await Bun.file(path.join(directory, application, "Contents/Info.plist")).text()
-  for (const [key, value] of [["CFBundleIdentifier", "app.ycoding.computer-use"], ["CFBundleDisplayName", "YCoding Computer Use"], ["CFBundleIconFile", "YCoding.icns"]])
+  const plist = await Bun.file(path.join(directory, app.name, "Contents/Info.plist")).text()
+  for (const [key, value] of [["CFBundleIdentifier", app.identifier], ["CFBundleDisplayName", app.displayName], ["CFBundleIconFile", "YCoding.icns"]])
     if (!plist.includes(`<key>${key}</key><string>${value}</string>`)) throw new Error(`Invalid release payload: ${key}`)
 }
 
 async function validateArchive(file: string, target: Target, version: string) {
   const info = await fs.lstat(file)
   if (!info.isFile() || info.isSymbolicLink() || info.size === 0) throw new Error("Invalid release archive file")
-  const expected = payload(target, includesApplication(target, version))
+  const expected = payload(target, includesApplication(target, version), version)
   if (process.platform === "win32") {
     const listing = run(["7z", "l", "-slt", file]).split(/\n-{10,}\n/)[1]
     if (!listing) throw new Error("Invalid release archive listing")
@@ -107,7 +116,7 @@ async function validateArchive(file: string, target: Target, version: string) {
   for (const [index, name] of names.entries()) {
     const mode = modes[index]!.split(/\s/)[0]!
     if (mode[0] !== (name.endsWith("/") ? "d" : "-")) throw new Error("Invalid release archive entry type")
-    if (!zip && (name === "ycoding" || name.endsWith("/ycoding-computer-use")) && !mode.includes("x")) throw new Error("Invalid release archive executable mode")
+    if (!zip && (name === "ycoding" || name.includes("/Contents/MacOS/") && !name.endsWith("/")) && !mode.includes("x")) throw new Error("Invalid release archive executable mode")
   }
   if (zip) run(["unzip", "-t", file])
 }
@@ -148,11 +157,12 @@ async function createDesktop(version: string, app: string, output: string) {
 }
 
 async function create(target: Target, version: string, directory: string, output: string) {
-  await validatePayload(directory, target)
+  await validatePayload(directory, target, version)
   await fs.mkdir(output, { recursive: true })
   const file = path.join(output, filename(target, version))
   if (await Bun.file(file).exists()) throw new Error("Release archive already exists")
-  const entries = [target === "windows-x64" ? "ycoding.exe" : "ycoding", "ycoding-chrome-extension", ...(includesApplication(target, version) ? [application] : [])]
+  const app = usesInteractionLayout(version) ? interactionApplication : computerUseApplication
+  const entries = [target === "windows-x64" ? "ycoding.exe" : "ycoding", interactionExtensionDirectory, ...(includesApplication(target, version) ? [app.name] : [])]
   run(target === "windows-x64" ? ["7z", "a", "-tzip", "-mm=Deflate", file, ...entries] : ["tar", "-czf", file, ...entries], directory)
   await validateArchive(file, target, version)
   console.log(`Prepared ${filename(target, version)}`)

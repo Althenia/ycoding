@@ -1,6 +1,18 @@
 # Chrome extension browser bridge
 
-YCoding connects eligible existing and future Chrome tabs through one explicit pairing in the YCoding Manifest V3 extension. Release installs place it in `ycoding-chrome-extension` beside the `ycoding` executable, for example `~/.local/bin/ycoding-chrome-extension`; that folder is a bundled, minified build of the extension sources, not the sources themselves, and `bun run build:extension` reproduces it at `dist/ycoding-chrome-extension`. A source checkout running under Bun uses `extensions/chrome` directly. The **Connect Chrome** dialog shows the folder for the running YCoding. Paired tabs retain their existing login state; agent-owned mode creates new background tabs. Neither mode copies cookies, profile files, passwords, or browser storage into YCoding.
+## Connect Chrome
+
+Use the signed macOS package with Chrome and the YCoding service on the same Mac. The service must listen on `127.0.0.1`. The **Connect Chrome** command in the terminal shows these instructions:
+
+1. Find **YCoding > Connect Chrome** in the macOS menu bar. If the menu is unavailable, check that the signed **YCoding Interaction** helper is beside the executable and the local service is listening on `127.0.0.1`.
+2. In `chrome://extensions`, turn on **Developer mode**, choose **Load unpacked**, and select `ycoding-chrome-extension` beside the `ycoding` executable. Open the **YCoding Interaction** popup. If it still shows the old extension after an update, select **Reload** in `chrome://extensions`.
+3. Choose **Connect Chrome** in the macOS menu and authenticate. Enter the private panel's address and one-time code in **Local service address** and **Pairing code**, then choose **Connect** in the extension. Keep the code out of chat and model prompts. Approve tab access separately for the selected Session.
+
+## Legacy browser bridge
+
+The released model uses the Interaction tool for browser and desktop control. The Browser and Isolated Browser HTTP and SDK operations are separate from the Interaction tool.
+
+The separate Manifest V3 extension in `extensions/chrome` uses the authenticated Session browser API below. Paired tabs retain their browser login state; agent-owned mode creates new background tabs. Neither mode copies cookies, profile files, passwords, or browser storage into YCoding.
 
 ## Security and non-interruption boundary
 
@@ -31,12 +43,12 @@ Page observations use the Chrome accessibility tree and include bounded role, na
 
 ## Manual installation and pairing
 
-YCoding also runs in Microsoft Edge and Brave. Build family-named copies with `bun packages/cli/script/chrome-extension.ts dist all` (or `edge` / `brave`), which emit `ycoding-edge-extension` and `ycoding-brave-extension` from the same sources with family-named manifest text. Load the matching folder from `edge://extensions` or `brave://extensions` with developer mode enabled, then pair the same way. The shipped `ycoding-chrome-extension` folder also loads unpacked in Edge and Brave unchanged. Pairing binds to whichever extension ID the browser assigns, so each browser pairs separately. Native tab-strip rendering of the favicon marker in Edge and Brave is a manual check; the automated suites cover the marker DOM contract, not each browser's tab strip pixels.
+The legacy extension also loads unpacked in Edge or Brave. Pairing binds to the extension installation; pair each browser separately.
 
 1. Open `chrome://extensions` in the Chrome profile you intend to pair.
-2. Enable **Developer mode**, choose **Load unpacked**, and select the extension folder shown in the **Connect Chrome** dialog: `ycoding-chrome-extension` beside the installed `ycoding` executable, or `extensions/chrome` in a source checkout.
-3. In the Mini or full YCoding Session command palette, choose **Connect Chrome**. The status distinguishes an existing durable pairing from a new pairing: when Chrome is paired but disconnected, the view says it is waiting for Chrome to reconnect and does not offer a new code. Use **f** to explicitly forget that pairing before creating another. When no pairing exists, press **p** to create a one-time pairing code. The authenticated `POST /api/session/:sessionID/browser/start` API provides the same code and explicitly replaces prior trust. Copy the returned secret directly to the extension popup; do not paste it into chat or a model prompt.
-4. In the extension popup's pairing form, enter the code and choose **Connect YCoding**. **Local service address** is visible in that form and defaults to loopback; enter a different local address if the **Connect Chrome** dialog provides one. The extension remembers the address and reconnect credential. Pairing lists eligible tabs, including the active tab, for approved operations; every active Session on this backend can request access under its own Session identity and create new background tabs. Chrome's debugger warning appears when an operation attaches to a tab.
+2. Enable **Developer mode**, choose **Load unpacked**, and select the legacy `extensions/chrome` folder.
+3. Call authenticated `POST /api/session/:sessionID/browser/start` to create a one-time pairing code and replace prior trust. Enter the code in the legacy extension popup, not in chat or in a model prompt.
+4. In the legacy popup enter the loopback service address and choose **Connect YCoding**. The extension remembers the address and reconnect credential. Pairing lists eligible tabs for approved operations; active Sessions request access under their own identities. Chrome displays its debugger warning when an operation attaches to a tab.
 5. A paired offline connection with automatic reconnect enabled shows **Reconnecting** and retries in the background without another code. An explicit bridge stop retains trust but disables automatic reconnect and clears recovery alarms; the popup shows the saved connection as paused instead of offering a pairing form. Choose **Retry connection** to resume the approved backend. Choose **Forget pairing** to clear local trust, clear recovery alarms, and revoke the server credential; if the server is temporarily unavailable, the extension retains only the pending revocation and completes it after reconnect. The authenticated `DELETE /api/session/:sessionID/browser/pairing` operation revokes backend trust from an active Session.
 
 For agent-owned tabs, choose `mode: "owned"` in the browser tool, inspect bridge status for its current generation, then open an approved URL. Preserve the returned tab and document fences for observation and actions. Use the explicit close operation when finished; selecting an existing tab in Chrome never grants owned-mode access to it. A Chrome native debugger-banner **Cancel** detaches and blocks the affected existing tab from being rediscovered under the current pairing. The toolbar badge is per tab, not a count of listed tabs.
@@ -45,11 +57,7 @@ The compact popup is 320 CSS pixels wide and keeps pairing scope visible before 
 
 The agent is instructed to ask before irreversible submissions, purchases, payments, deletions, sending messages, or accepting legal terms, to proceed without asking for reading, navigation, and reversible input that submits nothing, and to never solve CAPTCHAs or enter passwords, one-time codes, or payment secrets, handing the page to the user instead. These are guidance rules in the tool description; the dispatch-time permission and guardrail checks above are unchanged and remain the enforcement boundary.
 
-The extension requires no package installation or build step. A source checkout loads its modules unbundled. Release packaging bundles `indicator.js` and `group-marker.js` into the shipped `service-worker.js` with Bun and leaves `protocol.js` as its own file, so the release folder contains exactly the files `icons/ycoding-{16,32,48,128}.png`, `manifest.json`, `popup.css`, `popup.html`, `popup.js`, `protocol.js`, and `service-worker.js`; installed updaters reject any other entry in it.
-
-`install:local` installs the unpacked `ycoding-chrome-extension` folder alongside the executable and computer helper and removes any stale signed extension package from the destination. In `chrome://extensions`, enable **Developer mode**, select **Load unpacked**, and choose that folder. Local file placement does not load or reload the extension inside Chrome.
-
-After `ycoding update`, the installer, or a checkout change replaces the extension folder, run the matching YCoding and select **Reload** for the unpacked YCoding extension in `chrome://extensions`. Chrome does not guarantee that changing files on disk replaces an already loaded service worker. The extension and backend use bridge protocol version 6; a worker on another version cannot authenticate and will not appear as a connected bridge with an empty profile grant. If the popup becomes unpaired after a version mismatch, create a new pairing code and connect again.
+The legacy extension loads its source modules unbundled and uses bridge protocol version 6. After changing those files, select **Reload** on the legacy extension in `chrome://extensions` and use a matching backend. A worker on another version cannot authenticate.
 
 ## Public operations
 
@@ -73,6 +81,8 @@ All normal HTTP operations retain the server's existing authentication and Sessi
 | Extension bridge | `GET /api/browser/connect`                       | Secret-free WebSocket URL; exact extension Origin plus first-frame pairing authenticates it.                                                 |
 
 The process-global Core `Browser.Service` exposes corresponding `status`, `list`, `start`, `open`, `close`, `release`, `observe`, `action`, `control`, `stop`, and `forget` methods. Each operation validates its caller Session; normal HTTP Session-location middleware and model permissions remain caller-scoped. Its transport-only `attach` method validates a first-frame pairing or reconnect handshake and returns scoped `receive`/`detach` hooks for Server.
+
+The following `browser` tool behavior describes the legacy implementation. The signed package registers Interaction for model calls and retains the Browser HTTP and SDK APIs.
 
 The `browser` model tool intentionally omits pairing controls. Its `deliver` operation (`mode: "owned"`) marks a caller-owned tab to remain open after control ends and has no HTTP counterpart. Its `release` operation (`mode: "profile"`) gives back the caller's control of a paired tab and needs no site permission. Its default and explicit `mode: "profile"` return eligible paired tabs; `mode: "owned"` returns the caller's created tabs, and isolated mode returns temporary headless tabs. Owned open requires target-site permissions and close requires control/read permissions. Paired list/observe/capture/scroll actions require site read permissions; paired mutations also require site, destination when known, and control permissions for group changes. Browser tool calls bypass guardrail reviews; deny rules continue to block operations. Group and ungroup use the Action endpoint with a source tab, fresh observation fence, member tab IDs, title for group or returned group ID for ungroup. An exact action retry returns its retained settlement; conflicting reuse is rejected. Owned open call IDs cannot create a second tab in one bridge generation.
 

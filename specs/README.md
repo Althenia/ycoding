@@ -39,6 +39,7 @@ Generated clients follow the assembled public `HttpApi`. GitHub issues own activ
 | [Plugin MCP domain](./plugin-mcp.md)         | Define trusted Location-scoped MCP operations for runtime plugins and their approval boundary. |
 | [Session-owned PTY](./pty.md)                 | Explain owned terminal lifecycle, control fencing, bounded replay, and TUI recovery.    |
 | [Selected-tab browser](./browser.md)          | Explain explicit Chrome sharing, pairing, semantic actions, fencing, and safety bounds. |
+| [Session Interaction](./interaction.md)       | Define native consent, typed dispatch, live preview and revocation. |
 | [Machine-local Web latency](./web-latency.md) | Explain sanitized remote ingestion, local SQLite retention, bounded readout, and timing limits. |
 
 ## Decisions and proposals

@@ -213,6 +213,10 @@ export function createDesktopRPC(controller: BackendController, preferences: {
     vcsDiff: (input: Parameters<DesktopAPI["vcsDiff"]>[0]) => controller.vcsDiff(input),
     systemSnapshot: (input?: Parameters<DesktopAPI["systemSnapshot"]>[0]) => controller.systemSnapshot(input),
     manageSystem: (input: Parameters<DesktopAPI["manageSystem"]>[0]) => controller.manageSystem(input),
+    interactionStatus: (input: Parameters<DesktopAPI["interactionStatus"]>[0]) => controller.interactionStatus(input),
+    interactionPreview: (input: Parameters<DesktopAPI["interactionPreview"]>[0]) => controller.interactionPreview(input),
+    interactionStop: (input: Parameters<DesktopAPI["interactionStop"]>[0]) => controller.interactionStop(input),
+    interactionRequest: (input: Parameters<DesktopAPI["interactionRequest"]>[0]) => controller.interactionRequest(input),
     state: () => ({ ...controller.state(), ...(notice ? { notice } : {}) }),
     preferences: () => preferences.read(preferences.path),
     connect: async (input: Parameters<DesktopAPI["connect"]>[0]) => {

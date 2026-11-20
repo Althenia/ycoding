@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "YCoding Interaction",
+  "version": "1.0.0",
+  "description": "Approve and stop YCoding control of an exact Chrome tab.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzYjF5SitAKZJgg3P1aoAY7O4Amjetctu2oTOKSyQK/maMVJpFHUSyoJVlruPN0LSqV7LGgrkyvA/UdI0NcZ/HTvsOX/oT/4u4NQyaPGtYO5vimde9rUgmwc1kkq9pN17f96GiALBaDZ2EXnkmKI88jtC3DzS8Yvz/R1FU4TXrblolNXNjHn9Q/EpdmcSoB7riL/x1WcpAsaxFzxELGk2OBXZXAwJgkb9V3kUY2xRen+yplVfDiElbxX6NPsvFTdjj6/r5ree/t/StW+BTVEI2o1VezEAElA8BtOYvfjFe/VYl0J1mbs06EMC9gpSm40w9NL2Xa0eaIZnDoEezfYZVQIDAQAB",
+  "permissions": ["debugger", "tabs", "tabGroups"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "incognito": "not_allowed",
+  "background": { "service_worker": "service-worker.js", "type": "module" },
+  "action": { "default_title": "YCoding Interaction", "default_popup": "popup.html" },
+  "content_security_policy": { "extension_pages": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src data:; connect-src ws://127.0.0.1:*; object-src 'none'" }
+}

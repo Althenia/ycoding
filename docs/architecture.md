@@ -103,6 +103,8 @@ Owns the public Effect `HttpApi`: operation groups, request and response transpo
 
 Owns concrete handlers, middleware implementations, CORS and authentication policy, service status, event feeds, and managed-process lifecycle. Server does not redefine public shapes independently of Protocol and Schema.
 
+Core owns Session Interaction grants and the Location-scoped model tool. Server mounts the signed local adapters and exposes typed request, status, preview and Stop through Protocol. The relay forwards only status, preview and Stop for the verified Session and device. No HTTP client or relay peer can approve a native grant. The Browser and IsolatedBrowser groups are independent public contracts.
+
 ### `packages/client`
 
 Owns generated and handwritten Client APIs for the public `HttpApi`, plus local-service discovery helpers. Regenerate Client output through the package's owning command after public Protocol changes; do not edit generated files directly.

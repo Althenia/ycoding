@@ -6,6 +6,7 @@ import { HttpClient } from "effect/unstable/http"
 import { Agent } from "../agent"
 import { AISDK } from "../aisdk"
 import { Browser } from "../browser"
+import { InteractionRuntime } from "../interaction"
 import { IsolatedBrowser } from "../isolated-browser"
 import { Catalog } from "../catalog"
 import { Command } from "../command"
@@ -41,9 +42,8 @@ import { Reference } from "../reference"
 import { Ripgrep } from "../ripgrep"
 import { SessionAutonomy } from "../session/autonomy"
 import { SessionGuardrail } from "../session/guardrail"
-import { BrowserTool } from "../tool/browser"
+import { InteractionTool } from "../tool/interaction"
 import { ConversationCompactTool } from "../tool/conversation-compact"
-import { ComputerTool } from "../tool/computer"
 import { SessionInstructions } from "../session/instructions"
 import { SessionRunnerModel } from "../session/runner/model"
 import { SessionTodo } from "../session/todo"
@@ -88,6 +88,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
   const aisdk = yield* AISDK.Service
   const agent = yield* Agent.Service
   const browser = yield* Browser.Service
+  const interaction = yield* InteractionRuntime.Service
   const isolatedBrowser = yield* IsolatedBrowser.Service
   const catalog = yield* Catalog.Service
   const command = yield* Command.Service
@@ -138,6 +139,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
     Context.make(AISDK.Service, aisdk),
     Context.make(Agent.Service, agent),
     Context.make(Browser.Service, browser),
+    Context.make(InteractionRuntime.Service, interaction),
     Context.make(IsolatedBrowser.Service, isolatedBrowser),
     Context.make(Catalog.Service, catalog),
     Context.make(Command.Service, command),
@@ -198,7 +200,6 @@ const pre = [
   CommandPlugin.Plugin,
   SkillPlugin.Plugin,
   ConversationCompactTool.Plugin,
-  ComputerTool.Plugin,
   ...SystemPromptPlugin.Plugins,
   PatchTool.Plugin,
   EditTool.Plugin,
@@ -221,7 +222,7 @@ const pre = [
   GoalTool.Plugin,
   CoordinationTool.Plugin,
   DecisionTool.Plugin,
-  BrowserTool.Plugin,
+  InteractionTool.Plugin,
   WorktreeTool.Plugin,
 ] as const satisfies readonly InternalPlugin[]
 

@@ -2,7 +2,7 @@
 
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { chmod, copyFile, mkdir, mkdtemp, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
+import { chmod, cp, mkdir, mkdtemp, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { build } from "vite"
@@ -13,14 +13,10 @@ import { collectNodeAssets, copyNodeAssets, hashNodeAssets, seaAssetMap } from "
 import { mainConfig } from "../vite.node.config"
 import { nodeExecArgv, nodeTarget, type NodeTarget } from "../src/node/target"
 import { NODE_BINARY, platformBinary } from "../src/binary"
-import {
-  buildComputerHelper,
-  computerHelperBuildAvailable,
-  COMPUTER_HELPER_APPLICATION,
-  COMPUTER_HELPER_BINARY,
-  verifyPackagedComputerHelper,
-} from "./computer-use"
+import { computerHelperBuildAvailable } from "./computer-use"
+import { packageMacOSInteraction, verifyMacOSInteractionPackage } from "./package-macos-interaction"
 import { copyChromeExtension } from "./chrome-extension"
+import { interactionApplication } from "../src/update/interaction-layout"
 
 const NODE_VERSION = "26.4.0"
 const dir = path.resolve(import.meta.dirname, "..")
@@ -114,12 +110,8 @@ for (const target of targets) {
   await writeFile("dist-node/sea.json", `${JSON.stringify(config, null, 2)}\n`)
   run(builder, ["--build-sea", "dist-node/sea.json"])
   if (target.platform !== "win32") await chmod(output, 0o755)
-  await buildComputerHelper(target, path.dirname(output))
+  if (target.platform === "darwin") await packageMacOSInteraction(output, target.arch)
   await copyChromeExtension(path.dirname(output))
-  if (target.platform === "darwin" && process.platform === "darwin") run("codesign", ["--sign", "-", output])
-  if (target.platform === "darwin" && process.platform !== "darwin") {
-    console.warn(`${output} must be signed on macOS before it can run`)
-  }
   await writeFile(
     path.join(outdir, name, "package.json"),
     `${JSON.stringify(
@@ -207,22 +199,19 @@ async function resolveTargetNode(target: NodeTarget, host?: string) {
 async function smoke(output: string, target: NodeTarget) {
   const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-node-smoke-"))
   const executable = path.join(root, path.basename(output))
-  await copyFile(output, executable)
-  if (target.platform === "darwin") {
-    const app = COMPUTER_HELPER_APPLICATION
-    const contents = path.join(root, app, "Contents")
-    await mkdir(path.join(contents, "MacOS"), { recursive: true })
-    await mkdir(path.join(contents, "_CodeSignature"))
-    await mkdir(path.join(contents, "Resources"))
-    for (const file of ["Info.plist", `MacOS/${COMPUTER_HELPER_BINARY}`, "_CodeSignature/CodeResources", "Resources/YCoding.icns"]) {
-      await copyFile(path.join(path.dirname(output), app, "Contents", file), path.join(contents, file))
+  try {
+    await cp(output, executable)
+    if (target.platform === "darwin") {
+      const app = interactionApplication.name
+      await cp(path.join(path.dirname(output), app), path.join(root, app), { recursive: true })
+      verifyMacOSInteractionPackage(executable)
     }
+    if (process.platform !== "win32") await chmod(executable, 0o755)
+    run(executable, ["--version"], root)
+    run(executable, ["--help"], root)
+  } finally {
+    await rm(root, { recursive: true, force: true })
   }
-  if (process.platform !== "win32") await chmod(executable, 0o755)
-  await verifyPackagedComputerHelper(root, target.platform)
-  run(executable, ["--version"], root)
-  run(executable, ["--help"], root)
-  await rm(root, { recursive: true, force: true })
 }
 
 function targetName(target: NodeTarget) {

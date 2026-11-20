@@ -157,6 +157,9 @@ export type LocalServer = {
   readonly snapshot: (sessionID: string, location: LocalLocation, options?: { readonly limit?: number; readonly before?: string }, signal?: AbortSignal) => Promise<unknown>
   readonly pendingList: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly attachmentRead: (sessionID: string, location: LocalLocation, digest: string) => Promise<{ readonly mime: string; readonly bytes: number; readonly data: string }>
+  readonly interactionStatus: (sessionID: string, signal?: AbortSignal) => ReturnType<YCodingClient["sessionInteraction"]["status"]>
+  readonly interactionPreview: (sessionID: string, generation: string, signal?: AbortSignal) => ReturnType<YCodingClient["sessionInteraction"]["preview"]>
+  readonly interactionStop: (sessionID: string, generation: string) => ReturnType<YCodingClient["sessionInteraction"]["stop"]>
   readonly messageRead: (sessionID: string, location: LocalLocation, messageID: string, signal?: AbortSignal) => Promise<SessionMessageInfo>
   readonly todoList: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly subagentPage: (parentID: string, location: LocalLocation, cursor?: string) => Promise<unknown>
@@ -356,6 +359,15 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       call(() => client.session.pending.list({ sessionID }, request(location, timeoutMs))),
     attachmentRead: (sessionID, location, digest) =>
       call(() => client.session.attachment.read({ sessionID, digest }, request(location, timeoutMs))),
+    interactionStatus: (sessionID, signal) => call(() => client.sessionInteraction.status({ sessionID }, {
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
+    })),
+    interactionPreview: (sessionID, generation, signal) => call(() => client.sessionInteraction.preview({ sessionID, generation }, {
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
+    })),
+    interactionStop: (sessionID, generation) => call(() => client.sessionInteraction.stop({ sessionID, generation }, {
+      signal: AbortSignal.timeout(timeoutMs),
+    })),
     messageRead: (sessionID, location, messageID, signal) =>
       call(() => client.session.message({ sessionID, messageID }, request(location, timeoutMs, signal))),
     todoList: (sessionID, location) =>

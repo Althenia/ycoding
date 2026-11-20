@@ -276,7 +276,11 @@ test("the expanded DesktopAPI crosses RPC and bridge without changing arguments"
     vcsDiff: { source: "ses_test", mode: "git" },
     systemSnapshot: { sessionID: "ses_test" },
     manageSystem: { kind: "remote-set", revision: 1, enabled: false },
-  } satisfies { [K in "browseDirectory" | "openDirectory" | "createDirectory" | "integrations" | "manageIntegration" | "mcpServers" | "manageMcp" | "manageSession" | "vcsDiff" | "systemSnapshot" | "manageSystem"]: Parameters<DesktopAPI[K]>[0] }
+    interactionStatus: { sessionID: "ses_test", revision: 1 },
+    interactionPreview: { sessionID: "ses_test", revision: 1, generation: "cf3aa01e-85ca-42fd-af3a-dd706075cb34" },
+    interactionStop: { sessionID: "ses_test", revision: 1, generation: "cf3aa01e-85ca-42fd-af3a-dd706075cb34" },
+    interactionRequest: { sessionID: "ses_test", revision: 1, payload: { platform: "chrome", mode: "owned", url: "https://example.test/owned" } },
+  } satisfies { [K in "browseDirectory" | "openDirectory" | "createDirectory" | "integrations" | "manageIntegration" | "mcpServers" | "manageMcp" | "manageSession" | "vcsDiff" | "systemSnapshot" | "manageSystem" | "interactionStatus" | "interactionPreview" | "interactionStop" | "interactionRequest"]: Parameters<DesktopAPI[K]>[0] }
   const calls: unknown[][] = []
   const controller = new Proxy({}, { get: (_target, name) => (...args: unknown[]) => { calls.push([name, ...args]); return Promise.resolve(undefined) } }) as BackendController
   const handlers = createDesktopRPC(controller, { path: "/synthetic/preferences", read: async () => ({}), save: async () => {}, validate: () => ({ mode: "own" }) })

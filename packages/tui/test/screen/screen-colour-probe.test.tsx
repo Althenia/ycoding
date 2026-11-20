@@ -3,7 +3,6 @@ import { describe, expect, test } from "bun:test"
 import { json, type FetchHandler, sessionSnapshot } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "../viewport"
 import { renderScreen } from "./harness"
-import type { useData } from "../../src/context/data"
 
 const viewports = [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE] as const
 const chrome = [15, 17, 21, 255] satisfies [number, number, number, number]
@@ -114,14 +113,8 @@ describe("screen chrome colour probes", () => {
   test("offers Chrome connection from the landing command palette", async () => {
     const requests: string[] = []
     const route: FetchHandler = (url, request) => {
-      if (url.pathname === "/api/session" && request.method === "POST") {
-        requests.push("create")
-        return json({ data: session })
-      }
-      if (url.pathname === `/api/session/${sessionID}/browser`) {
-        requests.push("status")
-        return json({ data: { state: "unavailable", paired: false } })
-      }
+      if (url.pathname.includes("/browser") || (url.pathname === "/api/session" && request.method === "POST"))
+        requests.push(url.pathname)
       return landingRoute(url)
     }
     const screen = await renderScreen({ width: 100, height: 40, route, settle: "Message YCoding…" })
@@ -131,37 +124,9 @@ describe("screen chrome colour probes", () => {
       await screen.input.typeText("Connect Chrome")
       await waitFor(screen, "Connect Chrome")
       screen.input.pressEnter()
-      await waitFor(screen, "Chrome connection")
-      expect(requests).toEqual(["create", "status"])
-    } finally {
-      await screen.dispose()
-    }
-  }, 30_000)
-
-  test("landing Chrome pairing reuses a Session in the current Location", async () => {
-    const requests: string[] = []
-    let data: ReturnType<typeof useData> | undefined
-    const route: FetchHandler = (url, request) => {
-      if (url.pathname === "/api/session" && request.method === "GET") return json({ data: [session], cursor: {} })
-      if (url.pathname === "/api/session" && request.method === "POST") requests.push("create")
-      if (url.pathname === `/api/session/${sessionID}/browser`) {
-        requests.push("status")
-        return json({ data: { state: "unavailable", paired: false } })
-      }
-      return landingRoute(url)
-    }
-    const screen = await renderScreen({ width: 100, height: 40, route, settle: "Message YCoding…", data: (value) => { data = value } })
-    try {
-      await waitFor(screen, "Message YCoding…", () => {
-        const current = data
-        return current?.location.info()?.directory === directory && current.session.list().some((item) => item.id === sessionID && item.location.directory === current.location.default().directory)
-      })
-      screen.input.pressKey("p", { ctrl: true })
-      await waitFor(screen, "Commands")
-      await screen.input.typeText("Connect Chrome")
-      screen.input.pressEnter()
-      await waitFor(screen, "Chrome connection")
-      expect(requests).toEqual(["status"])
+      await waitFor(screen, "YCoding > Connect Chrome")
+      expect(screen.lines().join(" ").replace(/\s+/g, " ")).toContain("Session control and site access require separate approval.")
+      expect(requests).toEqual([])
     } finally {
       await screen.dispose()
     }

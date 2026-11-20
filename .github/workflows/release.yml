@@ -20,6 +20,9 @@ permissions:
 
 env:
   YCODING_CHANNEL: latest
+  REQUESTED_RELEASE_VERSION: ${{ inputs.version }}
+  RELEASE_REF_NAME: ${{ github.ref_name }}
+  RELEASE_REF_TYPE: ${{ github.ref_type }}
 
 jobs:
   verify-source:
@@ -55,20 +58,7 @@ jobs:
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
       - name: Resolve release version
-        run: |
-          set -euo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
-          elif [[ "${{ github.ref_name }}" == v* ]]; then
-            version="${{ github.ref_name }}"
-            version="${version#v}"
-          else
-            version="$(ls docs/releases/v*.md | sed 's#.*/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
-          fi
-          printf '%s\n' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' \
-            || { echo "Invalid release version: $version" >&2; exit 1; }
-          echo "RELEASE_VERSION=$version" >>"$GITHUB_ENV"
-          echo "YCODING_VERSION=$version" >>"$GITHUB_ENV"
+        run: bash script/release-version.sh
 
       - name: Verify release notes exist
         run: |
@@ -92,6 +82,21 @@ jobs:
           bun run lint:effect-patterns
           bun test --cwd packages/core ./test/aisdk.test.ts -t "AI SDK incomplete completion|AI SDK disabled-tool declarations"
           bun test --cwd packages/core --timeout 40000 ./test/session-runner.test.ts -t "disabled-tool declarations|rejects a declared (Google|Codex|OpenAI SDK) tool during terminal recovery|fails provider-executed tool-only terminal response recovery without a third request|fails repeated (empty|reasoning-only) responses without a third response step"
+
+      - name: Verify stored OpenAI Responses continuation
+        if: matrix.suite == 'types'
+        run: |
+          bun test --cwd packages/ai ./test/provider/openai-responses.test.ts
+          bun test --cwd packages/core ./test/openai-api-key-cache-boundary.test.ts
+
+      - name: Verify Interaction wire and runtime boundaries
+        if: matrix.suite == 'types'
+        run: |
+          bun test --cwd packages/schema ./test/interaction.test.ts
+          bun test --cwd packages/protocol ./test/interaction.test.ts
+          bun test --cwd packages/client ./test/session-interaction.test.ts
+          bun test --cwd packages/core ./test/interaction.test.ts ./test/interaction-chrome.test.ts ./test/interaction-macos.test.ts
+          bun test --cwd packages/server ./test/interaction.test.ts ./test/interaction-platform.test.ts
 
       - name: Verify web application and relay
         if: matrix.suite == 'web'
@@ -150,6 +155,13 @@ jobs:
       - name: Verify Chrome extension suites
         if: matrix.suite == 'cli'
         run: bun test --cwd extensions/chrome ./test/protocol.test.js ./test/service-worker.test.js ./test/design-md.test.js
+
+      - name: Verify Interaction connector and extension
+        if: matrix.suite == 'cli'
+        run: |
+          bun test --cwd packages/cli ./test/interaction-platform.test.ts ./test/remote-interaction.test.ts
+          bun test --cwd packages/remote ./test/interaction.test.ts
+          bun test --cwd extensions/interaction-chrome ./test/interaction-chrome-controller.test.js
 
       - name: Verify transcript and approval suites
         if: matrix.suite == 'tui-project'
@@ -281,18 +293,7 @@ jobs:
           persist-credentials: false
 
       - name: Resolve release version
-        run: |
-          set -euo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
-          elif [[ "${{ github.ref_name }}" == v* ]]; then
-            version="${{ github.ref_name }}"
-            version="${version#v}"
-          else
-            version="$(ls docs/releases/v*.md | sed 's#.*/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
-          fi
-          echo "RELEASE_VERSION=$version" >>"$GITHUB_ENV"
-          echo "YCODING_VERSION=$version" >>"$GITHUB_ENV"
+        run: bash script/release-version.sh
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
@@ -362,13 +363,21 @@ jobs:
           cp "dist/tui/tui-${{ matrix.target }}/bin/ycoding${{ runner.os == 'Windows' && '.exe' || '' }}" "$staging/"
           cp -R "dist/tui/tui-${{ matrix.target }}/bin/ycoding-chrome-extension" "$staging/"
           if [ "${{ runner.os }}" = "macOS" ]; then
-            cp -R "dist/tui/tui-${{ matrix.target }}/bin/YCoding Computer Use.app" "$staging/"
-            codesign --verify --deep --strict "$staging/YCoding Computer Use.app"
-            codesign -d -r- "$staging/YCoding Computer Use.app" 2>&1 | grep -Ex "designated => identifier \"app\.ycoding\.computer-use\" and certificate (leaf|root) = H\"$YCODING_MACOS_SIGNING_SHA1\"" >/dev/null
+            cp -R "dist/tui/tui-${{ matrix.target }}/bin/YCoding Interaction.app" "$staging/"
           fi
 
       - name: Create and validate native archive
         run: bun script/release-archive.ts create "${{ matrix.target }}" "$RELEASE_VERSION" "dist/release-bin/${{ matrix.target }}" "dist/release-archive/${{ matrix.target }}"
+
+      - name: Verify packaged macOS signatures
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          payload=$(mktemp -d "$RUNNER_TEMP/ycoding-payload.XXXXXX")
+          trap 'rm -rf "$payload"' EXIT
+          tar -xzf "dist/release-archive/${{ matrix.target }}/"*.tar.gz -C "$payload"
+          codesign --verify --strict -R "=identifier \"app.ycoding.cli\" and certificate leaf = H\"$YCODING_MACOS_SIGNING_SHA1\"" "$payload/ycoding"
+          codesign --verify --deep --strict -R "=identifier \"app.ycoding.interaction\" and certificate leaf = H\"$YCODING_MACOS_SIGNING_SHA1\"" "$payload/YCoding Interaction.app"
 
       - name: Upload native archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -409,18 +418,7 @@ jobs:
           persist-credentials: false
 
       - name: Resolve release version
-        run: |
-          set -euo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
-          elif [[ "${{ github.ref_name }}" == v* ]]; then
-            version="${{ github.ref_name }}"
-            version="${version#v}"
-          else
-            version="$(ls docs/releases/v*.md | sed 's#.*/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
-          fi
-          echo "RELEASE_VERSION=$version" >>"$GITHUB_ENV"
-          echo "YCODING_VERSION=$version" >>"$GITHUB_ENV"
+        run: bash script/release-version.sh
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
@@ -512,14 +510,14 @@ jobs:
           fi
           if [ -e "$keychain" ]; then security delete-keychain "$keychain"; fi
 
-  release-tui:
-    name: finalize and publish TUI release
+  finalize-release:
+    name: finalize release archives and checksums
     needs: [verify-source, build, build-desktop]
     if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -527,17 +525,7 @@ jobs:
           persist-credentials: false
 
       - name: Resolve release version
-        run: |
-          set -euo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
-          elif [[ "${{ github.ref_name }}" == v* ]]; then
-            version="${{ github.ref_name }}"
-            version="${version#v}"
-          else
-            version="$(ls docs/releases/v*.md | sed 's#.*/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
-          fi
-          echo "RELEASE_VERSION=$version" >>"$GITHUB_ENV"
+        run: bash script/release-version.sh
 
       - name: Download prepared target archives
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -560,8 +548,46 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  release-tui:
+    name: publish TUI release
+    needs: finalize-release
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Resolve release version
+        run: bash script/release-version.sh
+
+      - name: Download prepared target archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: release
+          pattern: release-archive-*
+          merge-multiple: true
+
+      - name: Download validated checksums
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-checksums-${{ env.RELEASE_VERSION }}
+          path: release
+
+      - name: Verify publication inputs
+        run: |
+          set -euo pipefail
+          cp LICENSE NOTICE release/
+          (cd release && sha256sum --check "ycoding-$RELEASE_VERSION-checksums.txt")
+
+      - name: Install Bun
+        uses: ./.github/actions/install-bun
+
       - name: Publish GitHub release
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -584,7 +610,7 @@ jobs:
           fi
 
       - name: Upload release publication manifest
-        if: always()
+        if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-publish-manifest-${{ env.RELEASE_VERSION }}

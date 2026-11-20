@@ -4,6 +4,7 @@ import { createReadStream } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { applicationName, numericBundleVersion } from "./app-bundle"
+import { interactionApplication, interactionCLIIdentifier, interactionSigningRequirement, usesInteractionLayout } from "../../cli/src/update/interaction-layout"
 
 export const smokeUnavailable = "electrobun@1.18.1 BrowserWindow unconditionally creates a persist:default BrowserView without partition or incognito support; isolated smoke is unavailable."
 export type Entry = { path: string; type: "file" | "dir" | "symlink"; mode: number; size?: number; sha256?: string; target?: string }
@@ -115,6 +116,18 @@ export async function finalizeBuild(boundary: BuildBoundary, input: { desktop: s
   const validation = path.join(output, "validation")
   const payload = await validatePayload(path.join(built, "Contents"), validation)
   if (await fileDigest(payload.manifest).catch(() => "") !== prepared) throw new Error("The built application's backend manifest differs from the prepared manifest.")
+  if (usesInteractionLayout(input.version)) {
+    const backend = path.join(path.dirname(payload.manifest), "backend")
+    for (const entry of [
+      { name: "ycoding", identifier: interactionCLIIdentifier, args: [] },
+      { name: interactionApplication.name, identifier: interactionApplication.identifier, args: ["--deep"] },
+    ]) {
+      const verification = await boundary.codesign([
+        "--verify", "--strict", ...entry.args, "-R", interactionSigningRequirement(entry.identifier), path.join(backend, entry.name),
+      ])
+      if (verification.status !== 0) throw new Error(`The packaged backend signature for ${entry.name} does not verify: ${verification.output.trim()}`)
+    }
+  }
   const version = numericBundleVersion(input.version)
   for (const app of [built, payload.app]) for (const key of ["CFBundleVersion", "CFBundleShortVersionString"]) {
     const value = await execute("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", path.join(app, "Contents/Info.plist")]).catch(error => { throw new Error(`The bundle version metadata is missing: ${key}`, { cause: error }) })

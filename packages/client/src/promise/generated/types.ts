@@ -37,6 +37,9 @@ export type TelemetryRequestSample = {
     | "session.pending.remove"
     | "session.pending.steer"
     | "session.attachment.read"
+    | "session.interaction.status"
+    | "session.interaction.preview"
+    | "session.interaction.stop"
     | "session.message.stream"
     | "session.todo.list"
     | "session.subagent.list"
@@ -736,6 +739,8 @@ export type FormMetadata1 = { [x: string]: any }
 
 export type ProviderUsagePaceMilestone = "almost-out" | "cutting-it-close" | "will-run-out"
 
+export type InteractionGeneration = string
+
 export type SessionStatus =
   | { type: "idle" }
   | {
@@ -965,6 +970,20 @@ export type DotsPendingRequest = {
 }
 
 export type DotsRespondResult = { outcome: "sent" | "unknown" }
+
+export type InteractionPlatform = "chrome" | "macos"
+
+export type InteractionStopReason =
+  | "stopped"
+  | "rejected"
+  | "expired"
+  | "disconnected"
+  | "target_lost"
+  | "uncertain"
+  | "permission"
+  | "shutdown"
+
+export type InteractionFrame = { mimeType: "image/png" | "image/jpeg"; base64: string; width: number; height: number }
 
 export type TelemetrySample = TelemetryRequestSample | TelemetryLongTaskSample | TelemetryClientSample
 
@@ -2753,6 +2772,16 @@ export type ProviderQuotaPace = {
   }
 }
 
+export type SessionInteractionChanged = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.interaction.changed"
+  location?: LocationRef
+  data: { sessionID: string; generation: InteractionGeneration }
+}
+
 export type SessionStatus2 = {
   id: string
   created: number
@@ -2949,6 +2978,22 @@ export type DotsTranscriptTurn = {
 }
 
 export type DotsPendingRequests = { threadID: string; requests: Array<DotsPendingRequest> }
+
+export type InteractionStatus =
+  | { state: "unavailable" }
+  | { state: "pending"; platform: InteractionPlatform; generation: InteractionGeneration }
+  | { state: "active"; platform: InteractionPlatform; generation: InteractionGeneration; label: string }
+  | {
+      state: "stopped"
+      platform: InteractionPlatform
+      generation: InteractionGeneration
+      reason: InteractionStopReason
+      cleanup: "pending" | "complete" | "failed"
+    }
+
+export type InteractionPreview =
+  | { state: "unavailable"; generation: InteractionGeneration }
+  | { state: "ready"; generation: InteractionGeneration; frame: InteractionFrame }
 
 export type TelemetryPage = { data: Array<{ receivedAt: number; sample: TelemetrySample }>; cursor: { next?: string } }
 
@@ -5867,6 +5912,7 @@ export type ServerEvent =
   | FormAssessed
   | TodoUpdated
   | ProviderQuotaPace
+  | SessionInteractionChanged
   | SessionStatus2
   | SessionIdle
   | TuiPromptAppend
@@ -6246,6 +6292,9 @@ export type ServerTelemetryAppendInput = {
             | "session.pending.remove"
             | "session.pending.steer"
             | "session.attachment.read"
+            | "session.interaction.status"
+            | "session.interaction.preview"
+            | "session.interaction.stop"
             | "session.message.stream"
             | "session.todo.list"
             | "session.subagent.list"
@@ -13469,3 +13518,31 @@ export type DotsThreadRespondInput = {
 export type DotsThreadRespondOutput = { data: DotsRespondResult }["data"]
 
 export type DecisionListOutput = { data: Array<DecisionItem> }["data"]
+
+export type SessionInteractionStatusInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionInteractionStatusOutput = { data: InteractionStatus }["data"]
+
+export type SessionInteractionRequestInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly payload:
+    | { readonly platform: "macos"; readonly mode?: never; readonly url?: never }
+    | { readonly platform: "chrome"; readonly mode?: "tab"; readonly url?: never }
+    | { readonly platform: "chrome"; readonly mode: "owned" | "isolated"; readonly url: string }
+}
+
+export type SessionInteractionRequestOutput = { data: InteractionStatus }["data"]
+
+export type SessionInteractionPreviewInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly generation: { readonly generation: string }["generation"]
+}
+
+export type SessionInteractionPreviewOutput = { data: InteractionPreview }["data"]
+
+export type SessionInteractionStopInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly generation: { readonly generation: string }["generation"]
+}
+
+export type SessionInteractionStopOutput = { data: InteractionStatus }["data"]

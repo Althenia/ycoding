@@ -12,11 +12,12 @@ import { Script } from "@ycoding-ai/script"
 import * as ServiceConfig from "../src/services/service-config"
 import { attentionSoundAssets, nodeExecArgv } from "../src/node/target"
 import { NODE_BINARY } from "../src/binary"
+import { interactionApplication } from "../src/update/interaction-layout"
 
 const macTest = process.platform === "darwin" && process.arch === "arm64" ? test : test.skip
 
 macTest(
-  "builds and smokes a macOS Node CLI with its complete signed computer app",
+  "builds and smokes a macOS Node CLI with its complete signed Interaction app",
   async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-node-build-"))
     try {
@@ -39,7 +40,7 @@ macTest(
       expect(status, error.slice(-2048)).toBe(0)
       expect(
         await Bun.file(
-          path.join(directory, "cli-node-darwin-arm64/bin/YCoding Computer Use.app/Contents/Resources/YCoding.icns"),
+          path.join(directory, "cli-node-darwin-arm64/bin", interactionApplication.name, "Contents/Resources/YCoding.icns"),
         ).exists(),
       ).toBe(true)
       expect(

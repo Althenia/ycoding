@@ -1,5 +1,7 @@
 export * as ComputerPolicy from "./policy"
 
+import { macOSInteractionBundleID } from "../interaction/macos"
+
 export type Decision = "allowed" | "elevated" | "forbidden"
 
 export interface Evaluation {
@@ -34,6 +36,10 @@ const elevated: ReadonlyArray<readonly [string, string]> = [
 export const forbiddenBundleIDs = forbidden.map(([bundleID]) => bundleID)
 export const elevatedBundleIDs = elevated.map(([bundleID]) => bundleID)
 
+export function isPrivateInteractionBundle(bundleID: string): boolean {
+  return bundleID.toLowerCase() === macOSInteractionBundleID
+}
+
 // The override is the comma-separated bundle ID list in YCODING_COMPUTER_ALLOW_APPS.
 // It removes a bundle from the static forbidden list for users who accept the risk;
 // elevated-risk apps stay elevated because that only drops saved approval.
@@ -43,6 +49,8 @@ export function overrideFromEnv(value: string | undefined): ReadonlyArray<string
 }
 
 export function evaluate(bundleID: string, overrides: Overrides = {}): Evaluation {
+  if (isPrivateInteractionBundle(bundleID))
+    return { decision: "forbidden", bundleID, reason: "native Interaction approval and enrollment are private" }
   const banned = forbidden.find(([candidate]) => candidate === bundleID)
   if (banned && !(overrides.allow ?? []).includes(bundleID))
     return { decision: "forbidden", bundleID, reason: banned[1] }

@@ -18,13 +18,10 @@ import { ModeChips } from "../component/prompt/mode-chips"
 import { Header, headerModelLabel } from "./session/header"
 import { useClient } from "../context/client"
 import { BrandMark } from "../component/logo"
-import { useToast } from "../ui/toast"
 import { DialogChromeConnection } from "../component/dialog-session-browser"
-import { errorMessage } from "../util/error"
 import { modelDaybreak } from "../util/session-daybreak"
 import type { ModelDaybreak, SessionAutonomyView } from "@ycoding-ai/client"
 import { localAutonomyView, type AutonomyChange } from "../util/session-autonomy"
-import { isBackgroundSession } from "../util/session"
 
 let once = false
 export const landingPlaceholder = { normal: ["Message YCoding…"] }
@@ -121,7 +118,6 @@ export function Home(props: { submitDisabled?: boolean } = {}) {
   const location = useLocation()
   const dialog = useDialog()
   const client = useClient()
-  const toast = useToast()
   const [promptOverlay, setPromptOverlay] = createSignal(false)
   const [landingModes, setLandingModes] = createSignal<Required<AutonomyChange>>({ permissions: "manual", guardrails: "manual", answers: "manual" })
   const [landingGoal, setLandingGoal] = createSignal<string | undefined>(undefined)
@@ -134,13 +130,7 @@ export function Home(props: { submitDisabled?: boolean } = {}) {
       group: "Session",
       palette: true,
       bind: false,
-      run: () => {
-        const existing = data.session.list().find((item) => !isBackgroundSession(item) && item.location.directory === data.location.default().directory)
-        const session = existing ? Promise.resolve(existing) : client.api.session.create({ location: { directory: data.location.default().directory } })
-        void session
-          .then((item) => dialog.replace(() => <DialogChromeConnection sessionID={item.id} />))
-          .catch((error) => toast.show({ title: "Could not connect Chrome", message: errorMessage(error), variant: "error" }))
-      },
+      run: () => dialog.replace(() => <DialogChromeConnection />),
     }],
   }))
   const landingAutonomy = createMemo(() =>

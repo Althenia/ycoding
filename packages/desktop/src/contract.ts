@@ -1,4 +1,4 @@
-import type { YCodingClient, YCodingEvent } from "@ycoding-ai/client"
+import type { InteractionPreview, InteractionStatus, SessionInteractionRequestInput, YCodingClient, YCodingEvent } from "@ycoding-ai/client"
 import type { Pty } from "@ycoding-ai/client/effect"
 
 export class DesktopError extends Error {}
@@ -319,6 +319,9 @@ export function validateInstallUpdateInput(value: unknown): { readonly version?:
 
 export type AttentionNotification = { readonly kind: "request" | "complete" | "failure"; readonly silent: boolean }
 
+type InteractionOwner = { readonly sessionID: string; readonly revision: number }
+type InteractionFence = InteractionOwner & { readonly generation: string }
+
 export type DesktopAPI = {
   readonly notify: (input: AttentionNotification) => Promise<void>
   readonly quit: () => Promise<void>
@@ -340,6 +343,10 @@ export type DesktopAPI = {
   readonly vcsDiff: (input: { readonly source?: DesktopSource; readonly mode: "git" | "branch" }) => Promise<VcsDiffSnapshot>
   readonly systemSnapshot: (input?: SystemInput) => Promise<SystemSnapshot>
   readonly manageSystem: (input: SystemManageInput) => Promise<SystemSnapshot>
+  readonly interactionStatus: (input: InteractionOwner) => Promise<InteractionStatus>
+  readonly interactionPreview: (input: InteractionFence) => Promise<InteractionPreview>
+  readonly interactionStop: (input: InteractionFence) => Promise<void>
+  readonly interactionRequest: (input: InteractionOwner & { readonly payload: SessionInteractionRequestInput["payload"] }) => Promise<void>
   readonly preferences: () => Promise<Preferences>
   readonly state: () => Promise<ConnectionState>
   readonly connect: (selection: Selection) => Promise<ConnectionState>

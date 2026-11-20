@@ -7,7 +7,8 @@ import pkg from "../package.json"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import { modelsData } from "./generate"
 import { BUN_BINARY } from "../src/binary"
-import { buildComputerHelper, computerHelperBuildAvailable } from "./computer-use"
+import { computerHelperBuildAvailable } from "./computer-use"
+import { packageMacOSInteraction } from "./package-macos-interaction"
 import { copyChromeExtension } from "./chrome-extension"
 import { antigravityBuildDefinitions } from "./antigravity-build-env"
 import { museBuildDefinitions } from "./muse-build-env"
@@ -123,7 +124,7 @@ for (const item of targets) {
   }
 
   const helperStarted = performance.now()
-  await buildComputerHelper({ platform: item.os, arch: item.arch }, path.join(outdir, name, "bin"))
+  if (item.os === "darwin") await packageMacOSInteraction(path.join(outdir, name, "bin", binary), item.arch)
   console.log(`build ${name} phase=computer-helper duration_ms=${Math.round(performance.now() - helperStarted)}`)
   const extensionStarted = performance.now()
   await copyChromeExtension(path.join(outdir, name, "bin"))

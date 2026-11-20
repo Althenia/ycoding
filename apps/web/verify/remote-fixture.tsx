@@ -1044,6 +1044,19 @@ function createFixtureStore(): Fixture {
   let fixtureNotices: readonly RemoteNotice[] = []
   let previousStatus = { running: new Set(statusRunning), attention: new Set<string>() }
   let noticeSerial = 0
+  const interaction: { status: Record<string, unknown>; preview?: ReturnType<typeof Promise.withResolvers<RemoteRequestOutcome>> } | undefined =
+    accountParams.has("interaction") ? { status: { state: "unavailable" } } : undefined
+  if (interaction) Object.assign(window, { interactionFixture: {
+    change: (status: Record<string, unknown>, owner = sessionID) => {
+      if (owner === sessionID) interaction.status = status
+      handlers?.onEvents?.(owner, [{ type: "session.interaction.changed", data: { sessionID: owner, generation: status.generation } }])
+    },
+    holdPreview: () => { interaction.preview = Promise.withResolvers<RemoteRequestOutcome>() },
+    releasePreview: (value: unknown) => {
+      interaction.preview?.resolve({ status: "ok", value: { data: value } })
+      interaction.preview = undefined
+    },
+  } })
 
   const storedLatency: { receivedAt: number; sample: RemoteLatencySample }[] = [{ receivedAt: Date.now(), sample: {
     kind: "request", at: new Date().toISOString(), operation: "session.list", outcome: "ok", queueMs: 0, settlementMs: 8, totalMs: 8,
@@ -1058,6 +1071,15 @@ function createFixtureStore(): Fixture {
     input?: Readonly<Record<string, unknown>>,
     targetSessionID = sessionID,
   ): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
+    if (interaction && operation.startsWith("session.interaction.")) {
+      if (targetSessionID !== sessionID) return { status: "failed", error: { code: "session_not_allowed", message: "Session not found" } }
+      if (operation === "session.interaction.status") return { status: "ok", value: { data: interaction.status } }
+      if (operation === "session.interaction.preview") return interaction.preview?.promise ?? { status: "ok", value: { data: { state: "unavailable", generation: input?.generation } } }
+      if (operation === "session.interaction.stop") {
+        interaction.status = { state: "stopped", platform: "chrome", generation: input?.generation, cleanup: "pending", reason: "stopped" }
+        return { status: "ok", value: { data: interaction.status } }
+      }
+    }
     if (paletteAcceptance && ["provider.auth.list", "workspace.list", "session.list"].includes(operation)) {
       const mode = acceptanceReadModes.get(operation)
       if (mode === "held") return new Promise<void>((resolve) => {

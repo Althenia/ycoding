@@ -2419,6 +2419,58 @@ export interface DecisionApi<E = never> {
   readonly list: DecisionListOperation<E>
 }
 
+type Endpoint41_0Request = Parameters<RawClient["server.interaction"]["session.interaction.status"]>[0]
+export type Endpoint41_0Input = { readonly sessionID: Endpoint41_0Request["params"]["sessionID"] }
+export type Endpoint41_0Output = EffectValue<
+  ReturnType<RawClient["server.interaction"]["session.interaction.status"]>
+>["data"]
+export type SessionInteractionStatusOperation<E = never> = (
+  input: Endpoint41_0Input,
+) => Effect.Effect<Endpoint41_0Output, E>
+
+type Endpoint41_1Request = Parameters<RawClient["server.interaction"]["session.interaction.request"]>[0]
+export type Endpoint41_1Input = {
+  readonly sessionID: Endpoint41_1Request["params"]["sessionID"]
+  readonly payload: Endpoint41_1Request["payload"]
+}
+export type Endpoint41_1Output = EffectValue<
+  ReturnType<RawClient["server.interaction"]["session.interaction.request"]>
+>["data"]
+export type SessionInteractionRequestOperation<E = never> = (
+  input: Endpoint41_1Input,
+) => Effect.Effect<Endpoint41_1Output, E>
+
+type Endpoint41_2Request = Parameters<RawClient["server.interaction"]["session.interaction.preview"]>[0]
+export type Endpoint41_2Input = {
+  readonly sessionID: Endpoint41_2Request["params"]["sessionID"]
+  readonly generation: Endpoint41_2Request["query"]["generation"]
+}
+export type Endpoint41_2Output = EffectValue<
+  ReturnType<RawClient["server.interaction"]["session.interaction.preview"]>
+>["data"]
+export type SessionInteractionPreviewOperation<E = never> = (
+  input: Endpoint41_2Input,
+) => Effect.Effect<Endpoint41_2Output, E>
+
+type Endpoint41_3Request = Parameters<RawClient["server.interaction"]["session.interaction.stop"]>[0]
+export type Endpoint41_3Input = {
+  readonly sessionID: Endpoint41_3Request["params"]["sessionID"]
+  readonly generation: Endpoint41_3Request["payload"]["generation"]
+}
+export type Endpoint41_3Output = EffectValue<
+  ReturnType<RawClient["server.interaction"]["session.interaction.stop"]>
+>["data"]
+export type SessionInteractionStopOperation<E = never> = (
+  input: Endpoint41_3Input,
+) => Effect.Effect<Endpoint41_3Output, E>
+
+export interface SessionInteractionApi<E = never> {
+  readonly status: SessionInteractionStatusOperation<E>
+  readonly request: SessionInteractionRequestOperation<E>
+  readonly preview: SessionInteractionPreviewOperation<E>
+  readonly stop: SessionInteractionStopOperation<E>
+}
+
 export interface AppApi<E = never> {
   readonly health: HealthApi<E>
   readonly server: ServerApi<E>
@@ -2461,4 +2513,5 @@ export interface AppApi<E = never> {
   readonly coordination: CoordinationApi<E>
   readonly dots: DotsApi<E>
   readonly decision: DecisionApi<E>
+  readonly sessionInteraction: SessionInteractionApi<E>
 }
