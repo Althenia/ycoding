@@ -33,6 +33,7 @@ const catalog: CatalogView = {
     { id: "btw", name: "BTW", mode: "subagent", hidden: false },
   ],
   models: [
+    ...(modelScenario === "many" ? ["alpha", "beta", "gamma"].flatMap((provider) => Array.from({ length: 8 }, (_, index) => ({ providerID: provider, providerName: provider[0]!.toUpperCase() + provider.slice(1), id: `${provider}-model-${index}`, name: `${provider} model ${index}`, variants: [] }))) : []),
     ...(modelScenario === "picker-width" ? [
       { ...widthProvider, id: widthModel.id, name: "Synthetic width model", variants: ["high"], profiles: [{ name: widthProfile, active: true, variants: ["high"] }] },
       ...Array.from({ length: 16 }, (_, index) => ({ ...widthProvider, id: `synthetic-model-${index}`, name: `Synthetic model ${index}`, variants: [] })),
@@ -47,8 +48,8 @@ const catalog: CatalogView = {
     { providerID: "openai", providerName: "OpenAI", id: "quant-fp8-fast", name: "Quant FP8 Fast", variants: [] },
     { providerID: "openai", providerName: "OpenAI", id: "effort-spectrum", name: "Effort Spectrum", variants: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "custom"] },
   ],
-  commands: [{ name: "plan", description: "Plan work" }],
-  skills: [{ id: "frontend-workflow", name: "Frontend workflow", slash: true }, { id: "gpt-subgent-routing", name: "GPT subagent routing", slash: false }, { id: "audit", name: "Audit", slash: false }, ...Array.from({ length: 63 }, (_, index) => ({ id: `skill-${String(index).padStart(2, "0")}`, name: `Skill ${index}`, slash: false }))],
+  commands: [{ name: "plan", description: "Plan work" }, ...(new URLSearchParams(location.search).get("ns") === "1" ? [{ name: "ui:review", description: "Review a screen" }] : [])],
+  skills: [...(new URLSearchParams(location.search).get("ns") === "1" ? [{ id: "ui-design", name: "UI design", slash: true }] : []), { id: "frontend-workflow", name: "Frontend workflow", slash: true }, { id: "gpt-subgent-routing", name: "GPT subagent routing", slash: false }, { id: "audit", name: "Audit", slash: false }, ...Array.from({ length: 63 }, (_, index) => ({ id: `skill-${String(index).padStart(2, "0")}`, name: `Skill ${index}`, slash: false }))],
   references: [{ name: "design-system", uri: "file:///workspace/design-system" }],
   resources: [{ name: "Runbook", description: "Operational reference", uri: "mcp://docs/runbook" }],
 }
@@ -56,6 +57,8 @@ const modesManual: AutonomyModes = { permissions: "manual", guardrails: "manual"
 const fixtureEffective = (modes: AutonomyModes, inherited: EffectiveAutonomyView["inherited"] = {}) => ({ ...modes, inherited, deferred: false, guardrailsEnabled: true })
 const fixtureAutonomy = (modes: AutonomyModes, goal?: NonNullable<NonNullable<RemoteStoreState["view"]>["autonomy"]>["goal"]) => ({ mode: "normal" as const, ...modes, effective: fixtureEffective(modes), ...(goal ? { goal } : {}) })
 const requests: { operation: string; input: unknown }[] = []
+const sentImages = new Map<string, string>()
+let sentCount = 0
 let resolveCompact: ((accepted: boolean) => void) | undefined
 const workspace = { id: "work_one", projectID: "project_hash", directory: "/workspace/ycoding", name: "YCoding" }
 const other = { id: "work_two", projectID: "other_hash", directory: "/workspace/other", name: "Other repository" }
@@ -114,7 +117,17 @@ const store: RemoteStore = {
     return { status: "ok", files: [{ path: "apps/web/src/remote/ui/composer.tsx", uri: "file:///workspace/ycoding/apps/web/src/remote/ui/composer.tsx", kind: "file" as const }].filter((item) => item.path.includes(query)) }
   },
   setDraft: (sessionID: string, text: string) => update({ ...state(), drafts: { ...state().drafts, [sessionID]: text } }),
-  sendPrompt: async (input: { readonly skills?: readonly string[] }) => { requests.push({ operation: "session.prompt", input }); return true },
+  sendPrompt: async (input: { readonly skills?: readonly string[]; readonly text?: string; readonly files?: readonly { readonly uri: string; readonly name?: string }[] }) => {
+    requests.push({ operation: "session.prompt", input })
+    if (new URLSearchParams(location.search).get("echo") !== "1") return true
+    const attachments = (input.files ?? []).map((file, index) => {
+      const digest = (sentImages.size + index + 1).toString(16).padStart(64, "0")
+      sentImages.set(digest, file.uri)
+      return { name: file.name ?? "Attachment", mime: file.uri.slice(5, file.uri.indexOf(";")), bytes: file.uri.length, digest }
+    })
+    update({ ...state(), view: { ...state().view!, messages: [...state().view!.messages, { kind: "user", id: `msg_sent_${sentCount++}`, text: input.text ?? "", state: "promoted", delivery: "steer", created: Date.now(), ...(attachments.length ? { attachments } : {}) }] } })
+    return true
+  },
   activateSkill: async (skill: string) => { requests.push({ operation: "session.skill", input: { skill } }); return true },
   runCommand: async (input: unknown) => { requests.push({ operation: "session.command", input }); return true },
   compactSession: async () => {
@@ -134,7 +147,7 @@ const store: RemoteStore = {
   cancelSubagent: async () => ({ status: "failed", message: "Team is not available in this fixture." }), answerSubagent: async () => ({ status: "failed", message: "Team is not available in this fixture." }), killTeamShell: async () => ({ status: "failed", message: "Team is not available in this fixture." }),
   teamShellOutput: async () => { throw new Error("Team is not available in this fixture.") }, createSideChat: async () => ({ status: "failed", message: "Team is not available in this fixture." }),
   selectWorkspace: () => {}, refreshSessions: () => {}, searchSessions: () => {}, nextSessionsPage: async () => {}, previousSessionsPage: async () => {},
-  reloadMessages: async () => {}, loadImageSource: async () => { throw new Error("Composer fixture does not load images") }, loadShellOutputPage: async () => {}, switchModel: async () => true, switchAgent: async () => true, retryMutation: async (id) => { requests.push({ operation: "retry", input: { id } }) }, dismissMutation: (id) => update({ ...state(), mutations: state().mutations.filter((item) => item.id !== id) }), dismissMutationToast: (id) => update({ ...state(), mutationToasts: state().mutationToasts?.filter((item) => item.id !== id) }), readNotification: async () => {}, readAllNotifications: async () => {}, loadMoreNotifications: async () => {}, reloadNotifications: async () => {},
+  reloadMessages: async () => {}, loadImageSource: async (image: { readonly digest: string }) => { const source = sentImages.get(image.digest); if (source === undefined) throw new Error("Composer fixture does not load images"); return source }, loadShellOutputPage: async () => {}, switchModel: async () => true, switchAgent: async () => true, retryMutation: async (id) => { requests.push({ operation: "retry", input: { id } }) }, dismissMutation: (id) => update({ ...state(), mutations: state().mutations.filter((item) => item.id !== id) }), dismissMutationToast: (id) => update({ ...state(), mutationToasts: state().mutationToasts?.filter((item) => item.id !== id) }), readNotification: async () => {}, readAllNotifications: async () => {}, loadMoreNotifications: async () => {}, reloadNotifications: async () => {},
   replyPermission: async () => {}, replyGuardrail: async () => {}, replyForm: async () => {}, cancelForm: async () => {},
   setAutonomous: async (change) => { requests.push({ operation: "session.autonomy.set", input: change }); setModes(change); return true },
   setGoal: async (goal) => { requests.push({ operation: "session.goal.set", input: { goal } }); update({ ...state(), view: { ...state().view!, autonomy: { ...state().view!.autonomy!, goal: { text: goal, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } } }); return true },
@@ -142,6 +155,7 @@ const store: RemoteStore = {
 }
 Object.assign(window, { composerUseCommandMutation: () => update({ ...state(), mutations: state().mutations.map((mutation) => ({ ...mutation, kind: "command", operation: "session.command", input: { id: mutation.id, command: "review" } })) }) })
 Object.assign(window, { composerRequests: () => requests, composerState: () => state(), composerSetMutation: (status: "sending" | "unknown" | "failed" | "sent" | null, sessionID = "ses_fixture") => update({ ...state(), mutations: status === null || status === "sent" ? [] : [{ id: "msg_fixture", kind: "prompt", label: "Prompt", state: status, sessionID, operation: "session.prompt", input: { text: "Review" }, detail: status === "failed" ? "Send failed" : status === "unknown" ? "The outcome is unknown" : undefined }], mutationToasts: status === "failed" || status === "unknown" ? [{ id: "msg_fixture", label: "Prompt", state: status, sessionID: "ses_fixture", detail: status === "failed" ? "Send failed" : "The outcome is unknown" }] : [] }), composerSetPending: (delivery: "steer" | "queue", text = "Review") => update({ ...state(), view: { ...state().view!, messages: [{ kind: "user", id: "msg_fixture", text, delivery, state: "pending", created: 1 }] } }), composerSetUpload: (percent: number) => update({ ...state(), upload: { sessionID: "ses_fixture", name: "capture.png", percent } }), composerSetStatus: (status: "idle" | "running" | "tool" | "tool-auto" | "family-auto" | "waiting" | "goal" | "goal-auto" | "auto") => update({ ...state(), view: { ...state().view!, status: status === "running" || status === "tool" || status === "tool-auto" || status === "waiting" ? "running" : "idle", executionStarted: status === "running" ? Date.now() - 6000 : undefined, messages: status === "tool" || status === "tool-auto" ? [{ kind: "assistant", id: "msg_tool", created: Date.now(), parts: [{ kind: "tool", callID: "call_tool", name: "shell", status: "running", content: [], started: Date.now() }] }] : [], requests: status === "waiting" ? [{ kind: "permission", id: "p", action: "read", resources: [], askedAt: Date.now() }] : [], autonomy: fixtureAutonomy(status === "goal-auto" || status === "auto" || status === "tool-auto" || status === "family-auto" ? { permissions: "auto", guardrails: "auto", answers: "manual" } as const : modesManual, status === "goal" || status === "goal-auto" ? { text: "Finish task", status: "active", iteration: 2, noProgress: 0, maxNoProgress: 3 } : undefined) }, sessionStatus: status === "family-auto" ? { running: new Set(["ses_fixture"]), attention: new Set<string>(), outstanding: new Set<string>(), failed: new Set<string>(), lost: new Set<string>() } : undefined }) })
+Object.assign(window, { composerSetMessages: (messages: NonNullable<RemoteStoreState["view"]>["messages"]) => update({ ...state(), view: { ...state().view!, messages } }) })
 Object.assign(window, { composerClearCatalogs: () => update({ ...state(), catalogs: {} }) })
 Object.assign(window, { composerFailCatalogs: () => update({ ...state(), catalogs: Object.fromEntries(Object.keys(state().catalogs).map((key) => [key, { ...catalog, status: "error", message: "Catalog could not be loaded" }])) }) })
 Object.assign(window, { composerSwitchSession: () => update({ ...state(), activeSessionID: "ses_other", view: createSessionView("ses_other") }) })

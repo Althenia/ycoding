@@ -255,7 +255,7 @@ describe("session summary", () => {
     expect(sessionChips(pinned, active, { role: "member", name: "Atlas" })).toContainEqual({ label: "Member · Atlas", tone: "neutral" })
     expect(sessionChips(pinned, active).map((chip) => chip.label)).toEqual(["Pinned", "Autonomous Manual"])
   })
-    test("new-session composer uses a compact neutral repository picker, preserves accessible required state, and draws a cobalt focus ring", async () => {
+    test("new-session composer uses a compact neutral repository picker, preserves accessible required state, and draws a green focus ring", async () => {
     const newSessionSource = await Bun.file(new URL("./new-session.tsx", import.meta.url)).text()
     expect(newSessionSource).not.toContain("new-session-composer__brand")
     expect(newSessionSource).not.toContain("A LITTLE CONTEXT. A CLEAR NEXT STEP.")
@@ -280,7 +280,7 @@ describe("session summary", () => {
     const focusRule = declarationsWhere(composerCss, (rule) => rule.header === ".new-session-composer__repository :is(.mini-picker__trigger, .new-session-composer__refresh):focus-visible")
     expect(focusRule.outline).toBe("2px solid var(--yc-focus)")
     expect(focusRule["outline-offset"]).toBe("2px")
-    expect(composerCss.rules.filter((rule) => rule.header.includes("new-session-composer__repository") || rule.header.includes("new-session-composer__refresh")).flatMap((rule) => Object.values(rule.declarations)).filter((value) => /--yc-(cobalt|mint)-solid/.test(value))).toEqual([])
+    expect(composerCss.rules.filter((rule) => rule.header.includes("new-session-composer__repository") || rule.header.includes("new-session-composer__refresh")).flatMap((rule) => Object.values(rule.declarations)).filter((value) => /--yc-(green|mint)-solid/.test(value))).toEqual([])
     const labelAlign = declarationsWhere(composerCss, (rule) => rule.header === ".new-session-composer__repository .mini-picker__trigger span")
     expect(labelAlign["text-align"]).toBe("start")
   })
@@ -484,20 +484,26 @@ describe("tonal sidebar and phone navigation", () => {
     const tablet = "@media (min-width: 768px)"
     const phone = "@media (max-width: 767px), (max-height: 599px) and (pointer: coarse)"
     expect(declared(css, ".app > .activity-bar")).toMatchObject({ "grid-area": "activity", display: "none" })
-    expect(declared(css, ".app > .status-bar")).toMatchObject({ "grid-area": "status", display: "none" })
+    expect(css.rules.some((rule) => rule.header.includes("status-bar"))).toBe(false)
     expect(declarationsWhere(css, (rule) => rule.header === ".app" && rule.conditions.includes(tablet))).toMatchObject({
       "grid-template-columns": "var(--yc-activity-w) var(--yc-rail-w) minmax(0, 1fr)",
-      "grid-template-rows": "auto minmax(0, 1fr) var(--yc-status-h)",
-      "grid-template-areas": '"activity rail header" "activity rail workspace" "status status status"',
+      "grid-template-rows": "auto minmax(0, 1fr)",
+      "grid-template-areas": '"activity rail header" "activity rail workspace"',
     })
-    expect(declarationsWhere(css, (rule) => rule.header === ".app > .activity-bar, .app > .status-bar" && rule.conditions.includes(tablet)).display).toBe("flex")
+    expect(declarationsWhere(css, (rule) => rule.header === ".app > .activity-bar" && rule.conditions.includes(tablet)).display).toBe("flex")
     expect(declarationsWhere(css, (rule) => rule.header.split(",").map((part) => part.trim()).includes(".app > .activity-bar") && rule.conditions.includes(phone)).display).toBe("none")
     expect(declared(css, ".session-row--active").background).toBe("var(--yc-plane-selected)")
     expect(declared(css, ".workspace__rail-navigation")["border-block-start"]).toBe("1px solid var(--yc-line-subtle)")
     const source = await shell()
     expect(source).not.toContain("function PrimaryNav")
     expect(source).toContain('<SharedActivityBar label="Remote workspace" items={activityItems()}')
-    expect(source).toContain('<SharedStatusBar label="Session status" items={statusItems()} trace={trace()} />')
+    expect(source).not.toContain("SharedStatusBar")
+    expect(source).not.toContain("remoteStatusEntries")
+    expect(declarationsWhere(css, (rule) => rule.header === ".app--rail-collapsed" && rule.conditions.includes(tablet))).toMatchObject({ "--rail-collapsed": "0px" })
+    expect(declarationsWhere(css, (rule) => rule.header === ".app--rail-collapsed .workspace__rail" && rule.conditions.includes(tablet)).display).toBe("none")
+    expect(source).toContain('aria-label={railCollapsed() ? "Show session list" : "Hide session list"}')
+    expect(source).toContain('aria-controls="session-rail"')
+    expect(source).toContain("aria-expanded={!railCollapsed()}")
   })
 
   test("keeps five labeled phone targets with owned leading under the icon and a heavier active label", async () => {
@@ -667,7 +673,7 @@ describe("open Sessions rows", () => {
     expect(option["border-block-end"]).toBeUndefined()
     const active = declared(css, ".session-filters__option--active")
     expect(active["border-block-end-color"]).toBeUndefined()
-    expect(active.background).toBe("var(--yc-cobalt-tonal)")
+    expect(active.background).toBe("var(--yc-green-tonal)")
   })
 })
 
@@ -794,7 +800,7 @@ describe("W83 flat request forms", () => {
     expect(grade.border).toBe("0")
     expect(grade["border-radius"]).toBe("var(--yc-radius-card)")
     expect(grade["border-block-end"]).toBeUndefined()
-    expect(declared(css, '.decision-grades li[data-selected="true"]').background).toBe("var(--yc-cobalt-tonal)")
+    expect(declared(css, '.decision-grades li[data-selected="true"]').background).toBe("var(--yc-green-tonal)")
     const hard = declared(css, ".request--hard")
     expect(hard.border).toBe("2px solid var(--yc-coral-ink)")
     expect(hard["box-shadow"]).toBe("0 0 0 3px color-mix(in srgb, var(--yc-coral-ink) 18%, transparent)")

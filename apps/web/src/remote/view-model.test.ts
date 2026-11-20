@@ -31,6 +31,7 @@ import {
   attachConfirmationValid,
   detachConfirmationValid,
   dotSteerReceipt,
+  assistantCopyText,
   dotsConnectionView,
   shellOutputPaging,
   sessionProjectLabel,
@@ -231,7 +232,7 @@ test("only attention that is neither failed nor lost counts as a waiting Session
 })
 
 test("prompt receipts distinguish sending from failed and unknown delivery", () => {
-  expect(promptReceipt("pending", "steer", { state: "sending" }).label).toBe("Sending prompt")
+  expect(promptReceipt("pending", "steer", { state: "sending" })).toEqual({ state: "sending", label: "Sending", detail: "Sending prompt" })
   expect(promptReceipt("pending", "queue", { state: "unknown" }).label).toBe("Outcome unknown")
   expect(promptReceipt("pending", "queue", { state: "failed" }).label).toBe("Send failed")
 })
@@ -245,11 +246,11 @@ test("telemetry consent notice appears only for connected undecided machines", (
 })
 
 test("prompt receipts preserve queue and read facts over late send outcomes", () => {
-  expect(promptReceipt("pending", "queue").text).toBe("Queued")
-  expect(promptReceipt("pending", "steer").text).toBe("Processing · steer")
-  expect(promptReceipt("promoted", "steer").label).toBe("Sent, not yet read")
+  expect(promptReceipt("pending", "queue")).toEqual({ state: "queued", label: "Sent", detail: "Queued for processing" })
+  expect(promptReceipt("pending", "steer")).toEqual({ state: "processing", label: "Sent", detail: "Processing prompt" })
+  expect(promptReceipt("promoted", "steer")).toEqual({ state: "sent", label: "Sent", detail: "Sent, not yet read" })
   for (const state of ["sending", "failed", "unknown"] as const) {
-    expect(promptReceipt("consumed", "steer", { state })).toEqual({ label: "Read by YCoding", text: "Read", mark: "✓✓" })
+    expect(promptReceipt("consumed", "steer", { state })).toEqual({ state: "read", label: "Read by YCoding", detail: "Read by YCoding" })
   }
 })
 
@@ -258,13 +259,13 @@ test("the latest user prompt keeps a processing receipt while the session runs",
   expect(latestPromptProcessing("running", messages, "latest")).toBe(true)
   expect(latestPromptProcessing("running", messages, "older")).toBe(false)
   for (const status of ["idle", "failed", "interrupted", undefined] as const) expect(latestPromptProcessing(status, messages, "latest")).toBe(false)
-  expect(promptReceipt("pending", "steer", { state: "sending" }, true)).toMatchObject({ label: "Sending prompt", text: "Sending" })
-  expect(promptReceipt("pending", "steer", undefined, true).text).toBe("Processing · steer")
-  expect(promptReceipt("pending", "queue", undefined, true)).toMatchObject({ label: "Queued for processing", text: "Queued" })
-  expect(promptReceipt("promoted", "steer", undefined, true)).toEqual({ label: "Processing prompt", text: "Processing", mark: "◷" })
-  expect(promptReceipt("consumed", "steer", undefined, true)).toEqual({ label: "Processing prompt", text: "Processing", mark: "◷" })
-  expect(promptReceipt("promoted", "queue", undefined, false).text).toBe("Sent")
-  expect(promptReceipt("consumed", "steer", undefined, false)).toEqual({ label: "Read by YCoding", text: "Read", mark: "✓✓" })
+  expect(promptReceipt("pending", "steer", { state: "sending" }, true)).toMatchObject({ state: "sending", label: "Sending" })
+  expect(promptReceipt("pending", "steer", undefined, true)).toMatchObject({ state: "processing", label: "Sent" })
+  expect(promptReceipt("pending", "queue", undefined, true)).toMatchObject({ state: "queued", label: "Sent", detail: "Queued for processing" })
+  expect(promptReceipt("promoted", "steer", undefined, true)).toEqual({ state: "processing", label: "Sent", detail: "Processing prompt" })
+  expect(promptReceipt("consumed", "steer", undefined, true)).toEqual({ state: "processing", label: "Sent", detail: "Processing prompt" })
+  expect(promptReceipt("promoted", "queue", undefined, false)).toMatchObject({ state: "sent", label: "Sent" })
+  expect(promptReceipt("consumed", "steer", undefined, false)).toEqual({ state: "read", label: "Read by YCoding", detail: "Read by YCoding" })
 })
 
 const connectionStates: readonly RemoteConnectionState[] = [
@@ -1031,13 +1032,20 @@ describe("Dot-originated steer display and receipts", () => {
     expect(dotSteerDisplay({ kind: "synthetic", id: "m7", text: "No description internal steer", created: 1 })).toBeUndefined()
     expect(dotSteerDisplay({ kind: "synthetic", id: "m8", description: "Queued", text: "Later", delivery: "queue", pending: true, created: 1 })).toBeUndefined()
 
-    expect(dotSteerReceipt(false, undefined, false)).toEqual({ label: "Dot steer prompt", text: "Dot steer", mark: "✓" })
-    expect(dotSteerReceipt(true, "steer", false)).toEqual({ label: "Processing Dot steer prompt", text: "Processing · steer", mark: "◷" })
-    expect(dotSteerReceipt(false, undefined, true)).toEqual({ label: "Processing Dot steer prompt", text: "Processing · Dot steer", mark: "◷" })
+    expect(dotSteerReceipt(false, undefined, false)).toBeUndefined()
+    expect(dotSteerReceipt(true, "steer", false)).toMatchObject({ state: "processing", label: "Sent" })
+    expect(dotSteerReceipt(true, "queue", false)).toMatchObject({ state: "queued", label: "Sent" })
+    expect(dotSteerReceipt(false, undefined, true)).toMatchObject({ state: "processing", label: "Sent" })
+    for (const receipt of [dotSteerReceipt(true, "steer", false), dotSteerReceipt(false, undefined, true)]) expect(JSON.stringify(receipt)).not.toContain("Dot")
 
     const steerMsg = { kind: "synthetic" as const, id: "msg_dot", description: "Steer", text: "Inspect Argo CD", created: 2 }
     expect(latestPromptProcessing("running", [{ kind: "user", id: "msg_u", text: "Hi", state: "consumed", created: 1 }, steerMsg], "msg_dot")).toBe(true)
     expect(latestPromptProcessing("running", [{ kind: "user", id: "msg_u", text: "Hi", state: "consumed", created: 1 }, steerMsg], "msg_u")).toBe(false)
     expect(capturedChangesVisible("running", [{ kind: "assistant", id: "msg_a", parts: [], created: 1 }, steerMsg], "msg_a")).toBe(true)
   })
+})
+
+test("assistant copy text joins the non-empty reply text parts and ignores reasoning and tool output", () => {
+  expect(assistantCopyText({ parts: [{ kind: "reasoning", text: "thinking" }, { kind: "text", text: "First **reply**" }, { kind: "tool" }, { kind: "text", text: "  " }, { kind: "text", text: "Second" }] })).toBe("First **reply**\n\nSecond")
+  expect(assistantCopyText({ parts: [{ kind: "tool" }] })).toBe("")
 })

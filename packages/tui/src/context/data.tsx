@@ -1698,6 +1698,28 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           projectPending(pending)
           break
         }
+        case "session.input.withdrawn": {
+          removePending(event.data.sessionID, event.data.inputID)
+          setStore(
+            "session",
+            "input",
+            event.data.sessionID,
+            (store.session.input[event.data.sessionID] ?? []).filter((id) => id !== event.data.inputID),
+          )
+          message.update(event.data.sessionID, (draft, index) => {
+            const position = index.get(event.data.inputID)
+            if (position === undefined) return
+            draft.splice(position, 1)
+            index.clear()
+            draft.forEach((message, indexValue) => index.set(message.id, indexValue))
+          })
+          break
+        }
+        case "session.input.steered": {
+          const position = (store.session.pending[event.data.sessionID] ?? []).findIndex((item) => item.id === event.data.inputID)
+          if (position !== -1) setStore("session", "pending", event.data.sessionID, position, "delivery", "steer")
+          break
+        }
         case "session.input.consumed":
           message.update(event.data.sessionID, (draft, index) => {
             event.data.inputIDs.forEach((inputID) => {

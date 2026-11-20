@@ -224,8 +224,11 @@ export type SessionSnapshotInput =
   | { readonly sessionID: string; readonly revision: number; readonly sourceEpoch: string; readonly before: string }
 export type SessionSnapshot = { readonly revision: number; readonly sessionID: string; readonly sourceEpoch: string; readonly item: SessionItem; readonly messages: Awaited<ReturnType<YCodingClient["session"]["snapshot"]>>["messages"]; readonly watermark: { readonly seq?: number }; readonly before?: string }
 export type PendingInput = { readonly id: string; readonly sessionID: string; readonly admittedSeq: number; readonly timeCreated: number } & (
-  | { readonly type: "user" | "synthetic"; readonly delivery: "steer" | "queue"; readonly text: string; readonly description?: string }
+  | { readonly type: "user" | "synthetic"; readonly delivery: "steer" | "queue"; readonly text: string; readonly description?: string; readonly source?: string }
   | { readonly type: "compaction" })
+export type PendingInputAction = { readonly sessionID: string; readonly messageID: string }
+export type SessionAttachmentInput = { readonly sessionID: string; readonly digest: string }
+export type SessionAttachment = { readonly revision: number; readonly sessionID: string; readonly digest: string; readonly mime: string; readonly bytes: number; readonly data: string }
 export type PendingInputs = { readonly revision: number; readonly sessionID: string; readonly items: readonly PendingInput[] }
 export type SessionTodo = { readonly content: string; readonly status: "pending" | "in_progress" | "completed" | "cancelled"; readonly priority: "high" | "medium" | "low" }
 export type SessionInsightsInput = { readonly sessionID: string; readonly taskSessionIDs?: readonly string[] }
@@ -379,6 +382,9 @@ export type DesktopAPI = {
   readonly switchModel: (input: ModelSwitch) => Promise<void>
   readonly sessionSnapshot: (input: SessionSnapshotInput) => Promise<SessionSnapshot>
   readonly pendingInputs: (sessionID: string) => Promise<PendingInputs>
+  readonly removePending: (input: PendingInputAction) => Promise<void>
+  readonly steerPending: (input: PendingInputAction) => Promise<void>
+  readonly sessionAttachment: (input: SessionAttachmentInput) => Promise<SessionAttachment>
   readonly sessionInsights: (input: SessionInsightsInput) => Promise<SessionInsights>
   readonly switchAgent: (input: AgentSwitch) => Promise<void>
   readonly activateSkill: (input: SkillActivation) => Promise<void>

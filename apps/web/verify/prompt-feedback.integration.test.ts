@@ -55,14 +55,14 @@ for (const [width, text] of [[390, "Review"], [390, long], [1440, long]] as cons
     const sending = await page.evaluate(geometry, (value: unknown) => { const record = decodeRecord(value); return { ...record, bubble: (decodeArray(decodeNumber))(record["bubble"]), inline: (decodeBoolean)(record["inline"]), receipt: (decodeArray(decodeNumber))(record["receipt"]), status: (decodeString)(record["status"]), focused: (decodeBoolean)(record["focused"]), animation: (decodeString)(record["animation"]), toasts: (decodeNumber)(record["toasts"]) } })
     expect(sending.bubble).toEqual(before.bubble)
     expect(sending.inline).toBe(false)
-    expect(sending.status).toBe("Sending prompt")
+    expect(sending.status).toBe("Sending")
     expect(sending.focused).toBe(true)
     expect(sending.toasts).toBe(0)
     expect(sending.animation).toBe("none")
     expect(sending.receipt[1]).toBeGreaterThanOrEqual(sending.bubble[1]! + sending.bubble[3]!)
     expect(sending.receipt[3]).toEqual(before.receipt[3])
     await page.evaluate(`window.composerSetMutation('sent')`)
-    await wait(page, `document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') !== 'Sending prompt'`)
+    await wait(page, `document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') !== 'Sending'`)
     const accepted = await page.evaluate(geometry, (value: unknown) => { const record = decodeRecord(value); return { ...record, bubble: (decodeArray(decodeNumber))(record["bubble"]), inline: (decodeBoolean)(record["inline"]), receipt: (decodeArray(decodeNumber))(record["receipt"]), status: (decodeString)(record["status"]), focused: (decodeBoolean)(record["focused"]), animation: (decodeString)(record["animation"]), toasts: (decodeNumber)(record["toasts"]) } })
     expect(accepted.bubble).toEqual(before.bubble)
     expect(accepted.toasts).toBe(0)
@@ -75,7 +75,7 @@ test("a failed or unknown send replaces the sending receipt and raises its error
   try {
     for (const status of ["failed", "unknown"] as const) {
       await page.evaluate(`window.composerSetMutation('sending')`)
-      await wait(page, `document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') === 'Sending prompt'`)
+      await wait(page, `document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') === 'Sending'`)
       await page.evaluate(`window.composerSetMutation(${JSON.stringify(status)})`)
       await wait(page, `document.querySelector('.mutation-toast--${status}') !== null`)
       expect(await page.evaluate(`({ ring: document.querySelector('.transcript-message__sending') !== null, retry: document.querySelectorAll('.transcript-message__send-error button').length })`))
@@ -90,7 +90,7 @@ test("configured commands show sending and failure receipts with a correlated re
   const page = await open(390, "/review")
   try {
     await page.evaluate(`window.composerSetMutation('sending'); window.composerUseCommandMutation()`)
-    expect(await page.evaluate(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).toBe("Sending prompt")
+    expect(await page.evaluate(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).toBe("Sending")
     for (const status of ["failed", "unknown"] as const) {
       await page.evaluate(`window.composerSetMutation(${JSON.stringify(status)}); window.composerUseCommandMutation()`)
       expect(await page.evaluate(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).toBe(status === "failed" ? "Send failed" : "Outcome unknown")
@@ -108,9 +108,9 @@ test("a send in flight for another Session never changes this Session's receipt"
   try {
     await page.evaluate(`window.composerSetMutation('sending', 'ses_other')`)
     await Bun.sleep(150)
-    expect(await page.evaluate(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).not.toBe("Sending prompt")
+    expect(await page.evaluate(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).not.toBe("Sending")
     await page.evaluate(`window.composerSetMutation('sending')`)
-    await wait(page, `document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') === 'Sending prompt'`)
+    await wait(page, `document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') === 'Sending'`)
     await page.evaluate(`window.composerSwitchSession()`)
     await wait(page, `document.querySelector('.transcript-message__bubble') === null`)
     expect(await page.evaluate(`document.querySelectorAll('.transcript-message__sending').length`)).toBe(0)
@@ -121,11 +121,11 @@ test("reduced motion keeps the same static sending receipt", async () => {
   const page = await open(390, "Review", true)
   try {
     await page.evaluate(`window.composerSetMutation('sending')`)
-    await wait(page, `document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') === 'Sending prompt'`)
+    await wait(page, `document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') === 'Sending'`)
     const reduced = await page.evaluate(geometry, (value: unknown) => { const record = decodeRecord(value); return { ...record, bubble: (decodeArray(decodeNumber))(record["bubble"]), inline: (decodeBoolean)(record["inline"]), receipt: (decodeArray(decodeNumber))(record["receipt"]), status: (decodeString)(record["status"]), focused: (decodeBoolean)(record["focused"]), animation: (decodeString)(record["animation"]), toasts: (decodeNumber)(record["toasts"]) } })
     expect(reduced.inline).toBe(false)
     expect(reduced.animation).toBe("none")
-    expect(reduced.status).toBe("Sending prompt")
+    expect(reduced.status).toBe("Sending")
   } finally { await page.close() }
 })
 

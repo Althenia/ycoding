@@ -184,10 +184,12 @@ export function autocompleteBound(availableAbove: number, viewportHeight: number
   return Math.floor(Math.max(54, Math.min(share, availableAbove - 8)))
 }
 
+const canonical = (value: string) => value.toLocaleLowerCase().replace(/[:/._]+/g, "-")
+
 function fuzzy(value: string, query: string): number {
   if (!query) return 1
-  const target = value.toLocaleLowerCase()
-  const search = query.toLocaleLowerCase()
+  const target = canonical(value)
+  const search = canonical(query)
   const at = target.indexOf(search)
   if (at >= 0) return 100 - at
   let offset = 0

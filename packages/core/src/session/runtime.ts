@@ -288,6 +288,10 @@ export class DestinationNotDirectoryError extends Schema.TaggedErrorClass<Destin
 export class SessionPlacementConflictError extends Schema.TaggedErrorClass<SessionPlacementConflictError>()(
   "Session.SessionPlacementConflictError", { sessionID: SessionSchema.ID },
 ) {}
+export const PendingInputNotFoundError = SessionPending.NotFoundError
+export type PendingInputNotFoundError = SessionPending.NotFoundError
+export const PendingInputInvalidError = SessionPending.InvalidError
+export type PendingInputInvalidError = SessionPending.InvalidError
 export const MessageNotFoundError = SessionRevert.MessageNotFoundError
 export type MessageNotFoundError = SessionRevert.MessageNotFoundError
 
@@ -298,6 +302,8 @@ export type Error =
   | MessageDecodeError
   | OperationUnavailableError
   | PromptConflictError
+  | PendingInputNotFoundError
+  | PendingInputInvalidError
   | SyntheticConflictError
   | AttachmentError
   | CompactionConflictError
@@ -378,6 +384,16 @@ export interface Interface {
    * unhandled compaction barriers.
    */
   readonly pending: (sessionID: SessionSchema.ID) => Effect.Effect<SessionPending.Info[], NotFoundError>
+  /** Removes one unconsumed user input; it never becomes a message and nothing is woken or interrupted. */
+  readonly withdrawPending: (input: {
+    sessionID: SessionSchema.ID
+    inputID: SessionMessage.ID
+  }) => Effect.Effect<void, NotFoundError | PendingInputNotFoundError | PendingInputInvalidError>
+  /** Makes one unconsumed user input a steer and wakes the Session so it promotes at the next safe boundary. */
+  readonly steerPending: (input: {
+    sessionID: SessionSchema.ID
+    inputID: SessionMessage.ID
+  }) => Effect.Effect<void, NotFoundError | PendingInputNotFoundError | PendingInputInvalidError>
   /**
    * Durable, ordered session log read. Replays durable session events after
    * the exclusive `after` cursor, emits a `Synced` marker at the captured
@@ -2213,6 +2229,38 @@ const layer = Layer.effect(
         yield* result.get(sessionID)
         return yield* SessionPending.list(db, sessionID)
       }),
+      withdrawPending: Effect.fn("Session.withdrawPending")((input) =>
+        Effect.uninterruptible(
+          Effect.gen(function* () {
+            yield* result.get(input.sessionID)
+            yield* SessionPending.withdraw(db, events, input.sessionID, input.inputID)
+          }),
+        ),
+      ),
+      steerPending: Effect.fn("Session.steerPending")((input) =>
+        Effect.uninterruptible(
+          Effect.gen(function* () {
+            yield* result.get(input.sessionID)
+            yield* SessionPending.steer(db, events, input.sessionID, input.inputID).pipe(
+              Effect.ensuring(
+                Effect.suspend(() =>
+                  activeShells.has(input.sessionID)
+                    ? Effect.void
+                    : execution.wake(input.sessionID).pipe(
+                        Effect.catchTag("Session.ScopeUnavailableError", (error) =>
+                          Effect.logError("Could not wake steered Session input", {
+                            sessionID: input.sessionID,
+                            inputID: input.inputID,
+                            error,
+                          }),
+                        ),
+                      ),
+                ),
+              ),
+            )
+          }),
+        ),
+      ),
       log: (input) =>
         Stream.unwrap(
           result

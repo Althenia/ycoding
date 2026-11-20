@@ -60,7 +60,7 @@ describe("quiet workspace", () => {
       await until(page, `document.querySelector('.workspace__rail input[aria-label="Search sessions"]') !== null`)
       expect(await page.evaluate(`document.querySelector('.workspace__rail input[aria-label="Search sessions"]').closest('label').querySelector('kbd') === null`)).toBe(true)
       for (const collapsed of [false, true]) {
-        if (collapsed) { await page.evaluate(`document.querySelector('[aria-label="Hide workspace sidebar"]').click()`); await until(page, `document.querySelector('.app--rail-collapsed') !== null`) }
+        if (collapsed) { await page.evaluate(`document.querySelector('[aria-label="Hide session list"]').click()`); await until(page, `document.querySelector('.app--rail-collapsed') !== null`) }
         for (const modifier of ["ctrlKey", "metaKey"]) {
           await page.evaluate(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ${modifier}: true, bubbles: true, cancelable: true }))`)
           await until(page, `document.querySelector('dialog.overlay--command-palette[open]') !== null`)
@@ -69,7 +69,7 @@ describe("quiet workspace", () => {
           await until(page, `document.querySelector('dialog.overlay--command-palette') === null`)
         }
       }
-      await page.evaluate(`document.querySelector('[aria-label="Show workspace sidebar"]').click()`)
+      await page.evaluate(`document.querySelector('[aria-label="Show session list"]').click()`)
       await until(page, `document.querySelector('.workspace__rail').getBoundingClientRect().width === 256`)
     } finally { await page.close() }
   }, 30_000)
@@ -726,19 +726,18 @@ describe("quiet workspace", () => {
       await page.setViewport(1440, 900)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&workspaces=many&theme=dark`)
       await until(page, `document.querySelectorAll('.sessions-table__name').length > 0`)
-      await page.evaluate(`document.querySelector('.workspace__rail button[aria-label="Hide workspace sidebar"]').click()`)
+      await page.evaluate(`(() => { const toggle = document.querySelector('.app-header button[aria-label="Hide session list"]'); toggle.focus(); toggle.click() })()`)
       await until(page, `document.querySelector('.app--rail-collapsed') !== null`)
       expect(await page.evaluate(`(() => {
         const rail=document.querySelector('.workspace__rail');const body=rail.querySelector('.workspace__rail-body');
-        return {width:rail.getBoundingClientRect().width,links:document.querySelectorAll('.activity-bar a').length,focus:document.activeElement?.getAttribute('aria-label') ?? '',picker:document.querySelector('.sessions-page__workspace-select').getBoundingClientRect().height>0,bodyHidden:body.inert && body.getClientRects().length===0}
-      })()`)).toEqual({ width: 60, links: 6, focus: "Show workspace sidebar", picker: true, bodyHidden: true })
+        return {width:rail.getBoundingClientRect().width,links:document.querySelectorAll('.activity-bar a').length,focus:document.activeElement?.getAttribute('aria-label') ?? '',expanded:document.activeElement?.getAttribute('aria-expanded'),controls:document.activeElement?.getAttribute('aria-controls'),picker:document.querySelector('.sessions-page__workspace-select').getBoundingClientRect().height>0,bodyHidden:body.inert && body.getClientRects().length===0}
+      })()`)).toEqual({ width: 0, links: 6, focus: "Show session list", expanded: "false", controls: "session-rail", picker: true, bodyHidden: true })
       expect(await page.evaluate(`[...document.querySelectorAll('.activity-bar a')].every(link => { const box=link.getBoundingClientRect();return box.width>=44&&box.height>=32 })`)).toBe(true)
       await page.evaluate(`document.querySelector('.activity-bar a[href="/remote/settings"]').click()`)
       await until(page, `document.querySelector('.app--settings') !== null`)
-      expect(await page.evaluate(`['.workspace-resume','.workspace__new-chat'].every(selector => {const rail=document.querySelector('.workspace__rail').getBoundingClientRect(),element=document.querySelector('.workspace__rail '+selector),box=element.getBoundingClientRect();return box.width>=44&&box.height>=44&&box.left>=rail.left&&box.right<=rail.right})`)).toBe(true)
-      await page.evaluate(`document.querySelector('.workspace__rail button[aria-label="Show workspace sidebar"]').click()`)
+      await page.evaluate(`(() => { const toggle = document.querySelector('.app-header button[aria-label="Show session list"]'); toggle.focus(); toggle.click() })()`)
       await until(page, `document.querySelector('.workspace__rail').getBoundingClientRect().width === 256`)
-      expect(await page.evaluate(`document.activeElement?.getAttribute('aria-label') ?? ''`)).toBe("Hide workspace sidebar")
+      expect(await page.evaluate(`document.activeElement?.getAttribute('aria-label') ?? ''`)).toBe("Hide session list")
     } finally { await page.close() }
   }, 30_000)
 })

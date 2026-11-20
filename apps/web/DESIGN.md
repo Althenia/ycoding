@@ -18,17 +18,17 @@ colors:
   ink-secondary: "#404449"
   ink-tertiary: "#565b62"
   ink-inverse: "#f3f6fb"
-  focus: "#2f70f2"
+  focus: "#088955"
   scrim: "rgba(243, 246, 251, 0.5)"
   selection: "rgba(47, 112, 242, 0.32)"
-  cobalt-tonal: "#e4edfe"
-  cobalt-tonal-hover: "#d5e4fe"
-  cobalt-line: "#87b1fe"
-  cobalt-graphic: "#2f70f2"
-  cobalt-solid: "#165be2"
-  cobalt-solid-hover: "#024bd0"
-  cobalt-ink: "#0045c6"
-  on-cobalt: "#fafcfe"
+  green-tonal: "#e4efe8"
+  green-tonal-hover: "#d6e7dc"
+  green-line: "#85bd9c"
+  green-graphic: "#088955"
+  green-solid: "#007547"
+  green-solid-hover: "#00653d"
+  green-ink: "#045e39"
+  on-green: "#fbfcfb"
   mint-tonal: "#d1f8e1"
   mint-tonal-hover: "#bef1d4"
   mint-line: "#5fc995"
@@ -81,6 +81,15 @@ colors:
   terminal-fg: "#d8e6de"
   terminal-dim: "#8fa79b"
   terminal-accent: "#5fe3a1"
+  code-ink: "#151618"
+  code-keyword: "#642bb4"
+  code-string: "#045e39"
+  code-number: "#a2001b"
+  code-comment: "#565b62"
+  code-function: "#025c83"
+  code-type: "#744c00"
+  code-property: "#026263"
+  code-meta: "#404449"
 typography:
   font-sans: '"Geist", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif'
   font-mono: '"JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace'
@@ -168,7 +177,6 @@ layout:
   rail-min-w: 232px
   rail-max-w: 360px
   activity-w: 80px
-  status-h: 28px
   companion-w: 448px
   docs-nav-w: 248px
   docs-toc-w: 200px
@@ -242,17 +250,17 @@ themes:
       ink-secondary: "#bfc5cd"
       ink-tertiary: "#a1a8b2"
       ink-inverse: "#0e1116"
-      focus: "#5d94ff"
+      focus: "#55a67a"
       scrim: "rgba(14, 17, 22, 0.72)"
       selection: "rgba(93, 148, 255, 0.32)"
-      cobalt-tonal: "#162a4f"
-      cobalt-tonal-hover: "#1a3363"
-      cobalt-line: "#2e5eba"
-      cobalt-graphic: "#5d94ff"
-      cobalt-solid: "#2064eb"
-      cobalt-solid-hover: "#0e52d5"
-      cobalt-ink: "#9bbeff"
-      on-cobalt: "#f1f4f8"
+      green-tonal: "#143021"
+      green-tonal-hover: "#163b28"
+      green-line: "#226f49"
+      green-graphic: "#55a67a"
+      green-solid: "#027e4d"
+      green-solid-hover: "#056b41"
+      green-ink: "#9ac8ac"
+      on-green: "#f2f4f3"
       mint-tonal: "#0b3421"
       mint-tonal-hover: "#094029"
       mint-line: "#00764c"
@@ -301,6 +309,15 @@ themes:
       coral-solid-hover: "#ffa09a"
       coral-ink: "#fea09a"
       on-coral: "#0e1116"
+      code-ink: "#f1f4f8"
+      code-keyword: "#c4afff"
+      code-string: "#9ac8ac"
+      code-number: "#fea09a"
+      code-comment: "#a1a8b2"
+      code-function: "#6cc9ff"
+      code-type: "#f9ac30"
+      code-property: "#56d4d5"
+      code-meta: "#bfc5cd"
     elevation:
       float: "0 1px 2px rgba(0, 0, 0, 0.35), 0 12px 32px -8px rgba(0, 0, 0, 0.5)"
   onedark-light:
@@ -318,17 +335,17 @@ themes:
       ink-secondary: "#414447"
       ink-tertiary: "#55585c"
       ink-inverse: "#f3f6f9"
-      focus: "#2f70f2"
+      focus: "#088955"
       scrim: "rgba(243, 246, 249, 0.5)"
       selection: "rgba(47, 112, 242, 0.32)"
-      cobalt-tonal: "#e4edfe"
-      cobalt-tonal-hover: "#d5e4fe"
-      cobalt-line: "#87b1fe"
-      cobalt-graphic: "#2f70f2"
-      cobalt-solid: "#165be2"
-      cobalt-solid-hover: "#024bd0"
-      cobalt-ink: "#0045c6"
-      on-cobalt: "#fafcfe"
+      green-tonal: "#e4efe8"
+      green-tonal-hover: "#d6e7dc"
+      green-line: "#85bd9c"
+      green-graphic: "#088955"
+      green-solid: "#007547"
+      green-solid-hover: "#00653d"
+      green-ink: "#045e39"
+      on-green: "#fbfcfb"
       mint-tonal: "#d1f8e1"
       mint-tonal-hover: "#bef1d4"
       mint-line: "#5fc995"
@@ -392,17 +409,17 @@ themes:
       ink-secondary: "#c5cbd7"
       ink-tertiary: "#a4abb9"
       ink-inverse: "#1c1f26"
-      focus: "#679cff"
+      focus: "#63ac83"
       scrim: "rgba(28, 31, 38, 0.72)"
       selection: "rgba(103, 156, 255, 0.32)"
-      cobalt-tonal: "#24385f"
-      cobalt-tonal-hover: "#274172"
-      cobalt-line: "#3767c4"
-      cobalt-graphic: "#679cff"
-      cobalt-solid: "#2064eb"
-      cobalt-solid-hover: "#0e52d5"
-      cobalt-ink: "#b9d2ff"
-      on-cobalt: "#f0f3fa"
+      green-tonal: "#223e2e"
+      green-tonal-hover: "#254935"
+      green-line: "#2d7852"
+      green-graphic: "#63ac83"
+      green-solid: "#027e4d"
+      green-solid-hover: "#056b41"
+      green-ink: "#b9d8c5"
+      on-green: "#f0f4f1"
       mint-tonal: "#1b422f"
       mint-tonal-hover: "#1a4d35"
       mint-line: "#038053"
@@ -466,17 +483,17 @@ themes:
       ink-secondary: "#c1c7d5"
       ink-tertiary: "#a1a8b9"
       ink-inverse: "#14171f"
-      focus: "#5d94ff"
+      focus: "#55a67a"
       scrim: "rgba(20, 23, 31, 0.72)"
       selection: "rgba(93, 148, 255, 0.32)"
-      cobalt-tonal: "#1c3056"
-      cobalt-tonal-hover: "#1f3969"
-      cobalt-line: "#3161bd"
-      cobalt-graphic: "#5d94ff"
-      cobalt-solid: "#2064eb"
-      cobalt-solid-hover: "#0e52d5"
-      cobalt-ink: "#b4cfff"
-      on-cobalt: "#eff2f9"
+      green-tonal: "#1a3627"
+      green-tonal-hover: "#1d412e"
+      green-line: "#26724c"
+      green-graphic: "#55a67a"
+      green-solid: "#027e4d"
+      green-solid-hover: "#056b41"
+      green-ink: "#b4d6c1"
+      on-green: "#eff3f0"
       mint-tonal: "#133a28"
       mint-tonal-hover: "#10452e"
       mint-line: "#017a4f"
@@ -540,17 +557,17 @@ themes:
       ink-secondary: "#26292d"
       ink-tertiary: "#3f4348"
       ink-inverse: "#f6f9fd"
-      focus: "#003eb5"
+      focus: "#045534"
       scrim: "rgba(246, 249, 253, 0.5)"
       selection: "rgba(0, 62, 181, 0.32)"
-      cobalt-tonal: "#e7effe"
-      cobalt-tonal-hover: "#d7e5ff"
-      cobalt-line: "#396ccf"
-      cobalt-graphic: "#003eb5"
-      cobalt-solid: "#0039aa"
-      cobalt-solid-hover: "#003193"
-      cobalt-ink: "#003193"
-      on-cobalt: "#fefeff"
+      green-tonal: "#e7f1eb"
+      green-tonal-hover: "#d7e9dd"
+      green-line: "#2d7e55"
+      green-graphic: "#045534"
+      green-solid: "#034f2f"
+      green-solid-hover: "#024428"
+      green-ink: "#024428"
+      on-green: "#fefefe"
       mint-tonal: "#d3f9e3"
       mint-tonal-hover: "#bff3d6"
       mint-line: "#068758"
@@ -618,17 +635,17 @@ themes:
       ink-secondary: "#dbdee3"
       ink-tertiary: "#c0c4cb"
       ink-inverse: "#020204"
-      focus: "#a5c5fe"
+      focus: "#a5cdb5"
       scrim: "rgba(2, 2, 4, 0.72)"
       selection: "rgba(165, 197, 254, 0.32)"
-      cobalt-tonal: "#06183c"
-      cobalt-tonal-hover: "#09214f"
-      cobalt-line: "#4a7cdc"
-      cobalt-graphic: "#a5c5fe"
-      cobalt-solid: "#afcbff"
-      cobalt-solid-hover: "#c3d8fe"
-      cobalt-ink: "#cddfff"
-      on-cobalt: "#020204"
+      green-tonal: "#021f10"
+      green-tonal-hover: "#022a17"
+      green-line: "#428d65"
+      green-graphic: "#a5cdb5"
+      green-solid: "#aed3bc"
+      green-solid-hover: "#c3ddcd"
+      green-ink: "#cee3d6"
+      on-green: "#010202"
       mint-tonal: "#002212"
       mint-tonal-hover: "#002c1a"
       mint-line: "#2c9667"
@@ -701,7 +718,7 @@ R1–R12 apply with their stated surface scopes. Each Web rule states its curren
 | ID | Status | Binding statement | Enforcing check |
 | --- | --- | --- | --- |
 | W1 | approved | Web CSS MUST use the declared `--yc-*` theme roles and fixed breakpoint steps; documented base and dark token values MUST agree with `tokens.css`. | `src/styles/design-md.test.ts`, `src/styles/tokens.test.ts` |
-| W2 | approved | Primary actions MUST use `--yc-cobalt-solid` and `--yc-on-cobalt`, NEVER the foreground green for the surface; normal-size labels MUST reach 4.5:1 in both themes. | `src/styles/contrast.test.ts` |
+| W2 | approved | Primary actions MUST use `--yc-green-solid` and `--yc-on-green`, NEVER a status or foreground role for the surface; normal-size labels MUST reach 4.5:1 in both themes. | `src/styles/contrast.test.ts` |
 | W3 | approved | Dense controls MUST become 44px on coarse pointers; gutter/display overrides MUST follow the steps below rather than viewport interpolation. | `src/styles/tokens.test.ts` |
 | W4 | approved | Loading placeholders MUST wait 140 ms, reserve region-specific geometry, and remain static under reduced motion. | `verify/loading.integration.test.ts` |
 | W5 | approved | The Running and recent carousel MUST reserve its initial height and show at most ten roots; it and the Session list MUST order waiting families first, then running families, then the rest, with descending reported activity time within each group, using updated time only when activity is unreported and a stable Session ID tie-break. Waiting means attention outside the failure-only and loss-only subsets; Running excludes Waiting, and Idle excludes both and archived Sessions. The Session filters MUST read All, Waiting, Running, Idle in that order. Waiting carousel cards MUST say Waiting for you using the attention ink and dot, and each card MUST expose its status as an accessible description. A failed Waiting read MUST report its unavailability without blocking Running and recent cards. Pins MUST NOT override that activity order. Status and activity updates MUST refresh order without clearing resident rows, and a refresh of a ready Session list MUST NOT show it as loading. Active cursors MUST bind to an ordering epoch and reject changed membership or sort keys instead of silently skipping or repeating roots. The browser MUST retain its rows until a complete bounded window around the visible anchor settles, then replace that window atomically; previous and next cursors MUST keep roots moved outside that window reachable. Restoration MUST resolve an interior anchor through the virtualizer's key and measurement, render it outside overscan when needed, then correct its viewport offset without changing focus. A failed anchored refresh MUST preserve the ready list, connection, and cursors and report its failure in a named Session list status region using the existing panel-note treatment; an unsupported anchor-field rejection MUST identify the machine update required, without an alternate request path. A missing anchor starts at the first page. Pagination MUST follow the same sort keys; carousel pagination appears only on overflow. A mouse MUST be able to drag the rail (pan cursor at rest, panning cursor and no snapping mid-drag, a press that travels under 6px stays a click, and a drag release MUST NOT open the card under the pointer); a pointer click MUST NOT leave a focus ring on the opened card while keyboard focus keeps the ring. | `verify/running-sessions.integration.test.ts`, `verify/remote-inventory-feed.integration.test.ts`, `test/remote-activity-order.test.ts`, `test/remote-carousel.test.ts`, `test/remote-session.test.ts`, `test/remote-speed.test.ts`, `src/remote/view-model.test.ts`, `src/remote/ui/remote-redesign.test.ts`, `../../packages/cli/test/remote-operations.test.ts`, `../../packages/remote/test/contract.test.ts` |
@@ -729,12 +746,12 @@ R1–R12 apply with their stated surface scopes. Each Web rule states its curren
 | W27 | approved | Settings → Machine MUST show one Keep machine awake row after the picker: a named switch for the manual preference, an effective-state text label (On, Off, Checking, Unavailable, Unsupported, Error), and one polite status region with idle/lid parts, defer hold, and the reported system-sleep control (`system`: off, on, held, setup, unsupported, error; absent from older connectors and then omitted). Keep the full macOS safety explanation visible on wide layouts. On phone layouts, show the battery and heat caution alongside status and keep the same full explanation in a collapsed-by-default, named `Keep-awake safety details` disclosure (W95). Its control MUST expose its expanded state and controlled region, keep keyboard focus, and never change the switch or send a keep-awake request. A deferred family holds effective On even when the switch is unchecked; expose lid errors without claiming lid control; system `on` MUST state that a closed lid on battery stays awake until the battery dies and Sleep does not sleep, `setup` MUST name `ycoding keep-awake setup`, and system `error` MUST use the attention tone with an alert. Keep older connector status readable and label missing lid state unreported. Disable unknown, unsupported, unreachable, older, silent, or failed reads with explicit reason/Retry, never false Off. Disable changes in flight, retain reported state on failure, and reconcile an unknown outcome once without replay. Reread on Settings open or machine change; never remember machine preference or use a browser wake lock. Reuse `.defs__row`, `.switch`, `.field__hint`, `.button--secondary`, and `--yc-coral-ink`/`--yc-amber-ink` tones. | `src/remote/keep-awake.test.ts`, `test/remote-keep-awake.test.ts`, `verify/keep-awake-settings.integration.test.ts` |
 | W28 | approved | A guardrail request returned for the selected family MUST be answerable from that view using family authorization, not an owner-Session equality check. Show its owner and escaped inspectable action/targets; missing context disables approval and leaves Reject. Hard reviews MUST show the Hard review badge, Approve once, and Reject without Always. A pending hard request MUST head `Guardrail review (hard review)` and MUST show only the authorized typed actions available under current policy; the browser MUST NOT infer or synthesize a decision from category mode. An escalated guardrail or permission request MUST identify its handoff in the existing request-note treatment with the canonical decisionReviewText output and the typed actions currently available, beside any queued prompt and without a generic stuck state, while preserving the request's authorized typed actions; a failed, refused, invalid, or unsupported-route decision names its fixed reason and the manual action (an unsupported strict structured-output route also names configuring a supported decision helper) and shows no invented choice or confidence: a recorded decision failure reads Decision unavailable with its fixed diagnostic reason and NEVER as a model escalation, a valid model escalation retains its reported choice and unrounded confidence, and a historical escalation with no recorded reason reads that the diagnostic reason was not recorded without an invented choice or confidence. Its durable escalation notice MUST render chronologically through the existing System-message treatment with that same canonical text; restart retains that notice but no interrupted request or action. Settled guardrail rows MUST use collapsed-by-default `.transcript-notice` disclosures in settlement order before live requests. Expanded rows, graded escalation notices, pending escalated request cards, and review-box guardrail items MUST list Allow, Deny, Approve all, Approve, Reject, and Escalate grades as reported with unrounded confidence and literal, wrapping evidence; mark the reported choice with Selected text and the green strong border, never color alone. Absent grades MUST retain the reported choice/confidence treatment. Expanded decision-tool blocks MUST render each graded answer without selecting a null choice or hiding other tool output. Disable duplicate pending sends, retain failed/uncertain outcomes without replay, fence obsolete replies, and keep phone jump controls clear of actions. Reuse request-card, danger outline/halo, token, and focus treatments. | `test/remote-session.test.ts`, `verify/guardrail-family.integration.test.ts`, `src/remote/projection.test.ts`, `src/remote/decision-grades.test.ts`, `src/remote/ui/guardrail-label.test.ts`, `verify/review-box.integration.test.ts` |
 | W29 | approved | Team activity MUST combine reported active subagent tasks and actually running shell rows, while task-tab totals stay separate. Exited, timed-out, memory-limited, or killed shells MUST NOT count as running. Until the relevant shell read settles, activity MUST remain qualified as unreported rather than claim an exact zero; truncated loaded activity MUST NOT be presented as an exact total. Canonical backend root-running state MUST drive Session running filters and carousel placement, including live background work, without inventing model execution, generation speed, or a model elapsed-start time. Preserve known activity during same-family refreshes. | `src/remote/ui/team-model.test.ts`, `test/remote-team.test.ts`, `verify/team.integration.test.ts`, `verify/running-sessions.integration.test.ts` |
-| W30 | approved | Icon-bearing action controls MUST NOT use decorative hue borders, outlines, or focus halos. Their focus role MUST be the cobalt `--yc-focus` ring (2px, at least 3:1 on every plane) with the existing outline/halo geometry, including shared buttons, Team, navigation, camera, picker and inline actions; it stays distinct from the hover plane and the selected check. Expanded Team and outlined task actions MUST use transparent or neutral borders. Pending agent/model pickers MUST retain their pending description and use a neutral border with `--yc-cobalt-tonal` fill. Preserve semantic hue glyphs, filled primary actions, status marks, and selected-item highlights. Keyboard focus MUST remain visible; forced-colors system rendering remains the accessibility exception. | `verify/modal-close.integration.test.ts`, `verify/mobile-native.integration.test.ts`, `src/styles/contrast.test.ts` |
+| W30 | approved | Icon-bearing action controls MUST NOT use decorative hue borders, outlines, or focus halos. Their focus role MUST be the green `--yc-focus` ring (2px, at least 3:1 on every plane) with the existing outline/halo geometry, including shared buttons, Team, navigation, camera, picker and inline actions; it stays distinct from the hover plane and the selected check. Expanded Team and outlined task actions MUST use transparent or neutral borders. Pending agent/model pickers MUST retain their pending description and use a neutral border with `--yc-green-tonal` fill. Preserve semantic hue glyphs, filled primary actions, status marks, and selected-item highlights. Keyboard focus MUST remain visible; forced-colors system rendering remains the accessibility exception. | `verify/modal-close.integration.test.ts`, `verify/mobile-native.integration.test.ts`, `src/styles/contrast.test.ts` |
 | W31 | approved | Cursor roles MUST be defined only by the design system's `cursors` tokens and shared foundation rules. Components MUST consume semantic roles, NEVER introduce cursor keywords, custom cursor images, or document-wide mouse-move cursor handlers. Enabled actions MUST show action, editable/selectable text text, unavailable controls disabled, and busy controls busy; background loading MUST NOT turn usable controls into unavailable cursors. Office MUST show pan on the floor, action on selectable actors, and panning during a drag, restoring the role on release, cancellation, exit, or disposal. | `src/styles/cursors.test.ts`, `src/styles/design-md.test.ts`, `verify/cursors.integration.test.ts`, `verify/office-engine.integration.test.ts` |
 | W32 | approved | The conversation transcript and both Session lists (the sidebar rail and the Sessions table) MUST be windowed: only rows near the viewport (at least six rows of overscan) are mounted, keyed by message or Session ID so row identity and measured size survive prepend, trim, and reorder. Each list MUST own its scroller's `overflow-anchor` as `none`, so the virtualizer alone decides position; every scroll-position write MUST land in the same task as the DOM change that caused it, so no intermediate frame shows a shifted row. The row at the reader's position MUST keep its viewport offset (within 1px) through older-history and Session-page loading, streaming growth below or above it, and resize; while following the latest message the last row MUST stay at the bottom. Rows mounted by scrolling MUST NOT replay the entrance animation. Windowed rows MUST render with the same classes and tokens as unwindowed rows, keep keyboard focus mounted, and expose position (`aria-posinset`/`aria-setsize` on the sidebar list, `aria-rowindex`/`aria-rowcount` on the Sessions table). Smooth scrolling MUST respect reduced motion. | `verify/transcript-stability.integration.test.ts`, `src/remote/ui/virtual-rows.test.ts` |
 | W33 | approved | A remote route MUST paint its page frame or its loading placeholder within two frames of navigation and MUST NOT leave the active route panel empty while its reads load; a revisit while its reads are fresh, or after hovering its navigation link, MUST show the cached content on the first frame. While a connection's first Session list loads, the Conversation route MUST show the screen loading placeholder, never the New-session composer. It reuses the existing loading placeholder (W4) with no new token or component. | `verify/remote-transitions.integration.test.ts`, `src/remote/ui/route-panel.test.ts`, `src/remote/queries.test.ts` |
 | W34 | approved | Sending MUST release the submitted draft without waiting for network acknowledgement and MUST keep the composer editable. Correlated failures and retries MUST retain the submitted input without erasing a newer draft. Agent/model catalog failures MUST show the reported reason and a named Retry agent and model catalog action using the existing field-hint and secondary-button treatments; Retry MUST target the same Session or repository and restore both selectors on success. Unsupported catalogs MUST state that the connected machine needs updating. | `verify/composer-controls.integration.test.ts`, `verify/remote-shell-layout.integration.test.ts`, `test/remote-session-send.test.ts` |
-| W35 | approved | New chat at `/remote` MUST open a standalone draft paired directly with the compact, neutral repository selector and refresh action aligned at the composer's start edge, keep the composer card and submit control visually primary, keep the required-repository state unmistakable through accessible labeling (`aria-required`, `aria-describedby` pointing at the helper line, the compact neutral `Required` badge, and the helper line) without a filled hue trigger or hue border, draw the cobalt `--yc-focus` ring with a 2px offset on `:focus-visible`, ship no invented draft text, show one truthful helper line with no contradictory optional/required copy, and use the compact phone composer summary so compose and send stay prominent. Session detail at `/remote/session` MUST show the selected transcript with its Session and device IDs in the URL. Its title and Back to Sessions action MUST stay pinned above the scrolling transcript, and a selected Session MUST remain reachable through a contextual Resume session action outside primary navigation. A workspace's plus action MUST record its workspace and source in the URL and lock that repository; an unavailable origin MUST block creation instead of choosing another repository. Navigation MUST NOT create a Session or discard the selected Session's unsent draft or an interacted-with landing draft. Inactive retained content MUST be inert and non-painted. Uncertain creation MUST retain attachments; successful creation releases the submitted landing. Sidebar collapse and resize MUST retain the reader's anchor within 1px; focus handoff MUST NOT scroll either viewport. | `verify/workspace-shell.integration.test.ts`, `verify/conversation-reading.integration.test.ts`, `verify/new-session.integration.test.ts` |
+| W35 | approved | New chat at `/remote` MUST open a standalone draft paired directly with the compact, neutral repository selector and refresh action aligned at the composer's start edge, keep the composer card and submit control visually primary, keep the required-repository state unmistakable through accessible labeling (`aria-required`, `aria-describedby` pointing at the helper line, the compact neutral `Required` badge, and the helper line) without a filled hue trigger or hue border, draw the green `--yc-focus` ring with a 2px offset on `:focus-visible`, ship no invented draft text, show one truthful helper line with no contradictory optional/required copy, and use the compact phone composer summary so compose and send stay prominent. Session detail at `/remote/session` MUST show the selected transcript with its Session and device IDs in the URL. Its title and Back to Sessions action MUST stay pinned above the scrolling transcript, and a selected Session MUST remain reachable through a contextual Resume session action outside primary navigation. A workspace's plus action MUST record its workspace and source in the URL and lock that repository; an unavailable origin MUST block creation instead of choosing another repository. Navigation MUST NOT create a Session or discard the selected Session's unsent draft or an interacted-with landing draft. Inactive retained content MUST be inert and non-painted. Uncertain creation MUST retain attachments; successful creation releases the submitted landing. Sidebar collapse and resize MUST retain the reader's anchor within 1px; focus handoff MUST NOT scroll either viewport. | `verify/workspace-shell.integration.test.ts`, `verify/conversation-reading.integration.test.ts`, `verify/new-session.integration.test.ts` |
 | W36 | approved | The main transcript MUST show human-facing question text and recorded answers without opening a completed tool disclosure; pending, cancelled, and failed questions MUST retain truthful state. A parent Conversation MUST expose its pending direct child questions with the existing Team answer form and request-card anatomy. Team and Conversation MUST share the owned answer operation, reject duplicate in-flight answers, retain family ownership checks, and NEVER automatically replay uncertain mutations. Reuse request header/body/action classes, Markdown, shared field/button tokens, and existing Team focus treatment; NEVER invent API or durable producer fields. | `verify/conversation-questions.integration.test.ts`, `src/remote/question-history.test.ts`, `test/remote-child-question.test.ts` |
 | W37 | approved | A submitted attachment upload MUST remain visible for its owning Session after the editor releases that submitted draft, including 0% before the first acknowledgement, reported chunk progress, and Cancel upload. Upload state MUST NOT appear in another Session or an inactive landing. Failed preparation MUST retain the submitted originals and prompt ID in the existing receipt with its explicit Retry send, without replacing newer editor text or attachments or automatically replaying an uncertain upload. A locally rejected oversized request MUST explain its limit without releasing the draft. Reuse the existing upload status, progress element, failure receipt, and button tokens. | `verify/upload-flow.integration.test.ts`, `test/remote-session-send.test.ts` |
 | W38 | approved | Initial Sessions inventory reads MUST show named loading content in both Running and recent and the shared Session rail, NEVER an unexplained empty reserved region after the 140ms reveal. Reuse session-shaped placeholders and existing card/list tokens; expose one status per region and mark decorative duplicates hidden. Running and recent skeletons MUST follow their cards' typography- and spacing-derived dimensions, border, radius, and surface treatment without changing shared session placeholders. A populated carousel MUST retain its 196px initial reserve through settlement; background refresh MUST retain loaded cards and workspace controls without replacing them with skeletons. Empty settled inventory MUST show the existing truthful empty state. | `verify/conversation-reading.integration.test.ts`, `verify/running-sessions.integration.test.ts` |
@@ -783,9 +800,9 @@ R1–R12 apply with their stated surface scopes. Each Web rule states its curren
 | W83 | approved | Remote screens MUST build hierarchy from typography, whitespace and semantic tonal planes. Source-defined conversation and companion header boundaries, code, captured diff, request, search and selected-detail planes MUST use their owned semantic border and surface roles. Fields, pickers, the composer, floating layers, focus and hard-review danger states retain their meaningful boundaries (W9, W30, W64). The Usage provider divider remains a section boundary. NEVER add arbitrary nested frames, repeated full-width row rules or dashed decorative content frames. | `src/remote/ui/usage-layout.test.ts`, `verify/design-contract.integration.test.ts`, `verify/light-office.integration.test.ts` |
 | W84 | approved | Session, Settings and Usage records MUST remain open rows separated by whitespace, with semantic hover, focus and current states. The Machine cards keep their distinct W74 selection/edit contract. Projects MUST use open Master-first sections without enclosing decorative project frames. Content MUST determine row height, with the existing dense minimum on fine pointers and 44px minimum on coarse pointers and below 768px. Session rail names MUST wrap within measured rows and share a minimum height and end edge; keyed windowing and measured sizes under W32 remain binding. | `src/remote/ui/virtual-rows.test.ts`, `src/remote/ui/settings-layout.test.ts`, `verify/remote-inventory-feed.integration.test.ts`, `verify/projects.integration.test.ts` |
 | W85 | approved | Settings and Usage sections MUST open with an icon-led heading in the section's owned `Icon` and MUST NOT render `§NN` ordinals or section counters. Usage keeps its section-owned icons and the Group select (W58). A section that is not rendered (Office on a phone layout) leaves no gap. Headings MUST NOT change section order, content or visibility. Settings remains one stacked column with every section visible (W48); NEVER add an accordion or master-detail layout. | `src/remote/ui/settings-layout.test.ts`, `src/remote/ui/usage-layout.test.ts`, `verify/usage-page.integration.test.ts`, `verify/remote-fidelity.integration.test.ts` |
-| W86 | approved | Each assistant turn MUST open with the Y mark, agent, model, effort and response metadata, never an ordinal. User input MUST render right-aligned (W6) as a borderless `--yc-cobalt-tonal` capsule with `--yc-radius-composer` corners and a `--yc-radius-control` end-bottom corner. Place the delivery receipt below it. Use normal ink for prose and contrast-checked accents for Markdown headings, links and code. Style annotations as tonal disclosures on the shared W47 track; preserve streaming nodes, virtualizer anchors, W20 card placement and W59. An expanded shell tool card MUST keep its disclosure body, command, results and captured output within the header's inline edges. Long lines MUST stay selectable and scroll within their output blocks without widening the transcript. Session totals and costs MUST NOT render beside messages. | `src/remote/ui/transcript-layout.test.ts`, `src/remote/ui/transcript-rows.test.ts`, `verify/transcript.integration.test.ts`, `verify/conversation-reading.integration.test.ts`, `verify/transcript-stability.integration.test.ts`, `verify/remote-tool-output.integration.test.ts` |
+| W86 | approved | Each assistant turn MUST open with the Y mark, agent, model, effort and response metadata, never an ordinal. User input MUST render right-aligned (W6) as a borderless `--yc-green-tonal` capsule with `--yc-radius-composer` corners and a `--yc-radius-control` end-bottom corner. Place the delivery receipt below it. Use normal ink for prose and contrast-checked accents for Markdown headings, links and code. Style annotations as tonal disclosures on the shared W47 track; preserve streaming nodes, virtualizer anchors, W20 card placement and W59. An expanded shell tool card MUST keep its disclosure body, command, results and captured output within the header's inline edges. Long lines MUST stay selectable and scroll within their output blocks without widening the transcript. Session totals and costs MUST NOT render beside messages. | `src/remote/ui/transcript-layout.test.ts`, `src/remote/ui/transcript-rows.test.ts`, `verify/transcript.integration.test.ts`, `verify/conversation-reading.integration.test.ts`, `verify/transcript-stability.integration.test.ts`, `verify/remote-tool-output.integration.test.ts` |
 | W87 | approved | Figures in Usage and summary values in Settings MUST be typographic figures: `--yc-font-sans` at an existing `--yc-size-*` step with tabular numerals, labels in uppercase at `--yc-tracking-wide`, and compact metadata in `--yc-font-mono`. Conversation gets no header statistics block, and no figure is derived, estimated or zero-filled beyond W58, W59 and W61. | `src/styles/tokens.test.ts`, `src/remote/ui/usage-layout.test.ts`, `verify/usage-overview.integration.test.ts` |
-| W88 | approved | From 768px outside the phone layout, the 80px `--yc-activity-w` activity bar and the 256px `--yc-rail-w` Session list column MUST sit on `--yc-plane-chrome`, each ending in a `--yc-line-subtle` pane separator; the column keeps a plain YCoding wordmark and the shared W46 anatomy without a machine footer. Every activity item MUST show its 20px glyph above a visible one- or two-word label in a 72×56px target; navigation is NEVER icon-only. The current destination MUST expose `aria-current`, a `--yc-cobalt-tonal` fill and `--yc-cobalt-ink` glyph and label without a border or halo. Chat counts pending requests and Sessions counts waiting Sessions as an amber badge on the glyph corner, and the item's accessible name states the wait. Session selection MUST remain independently identifiable on `--yc-plane-selected` within the shared list; selecting a project MUST NOT replace that list. Phone navigation follows the same W46 destination inventory. | `src/remote/ui/shell-model.test.ts`, `src/remote/ui/remote-redesign.test.ts`, `src/styles/composition.test.ts`, `verify/workspace-rail-team.integration.test.ts`, `verify/remote-navigation.integration.test.ts` |
+| W88 | approved | From 768px outside the phone layout, the 80px `--yc-activity-w` activity bar and the 256px `--yc-rail-w` Session list column MUST sit on `--yc-plane-chrome`, each ending in a `--yc-line-subtle` pane separator; the column keeps a plain YCoding wordmark and the shared W46 anatomy without a machine footer. Every activity item MUST show its 20px glyph above a visible one- or two-word label in a 72×56px target; navigation is NEVER icon-only. The current destination MUST expose `aria-current`, a `--yc-green-tonal` fill and `--yc-green-ink` glyph and label without a border or halo. Chat counts pending requests and Sessions counts waiting Sessions as an amber badge on the glyph corner, and the item's accessible name states the wait. Session selection MUST remain independently identifiable on `--yc-plane-selected` within the shared list; selecting a project MUST NOT replace that list. Phone navigation follows the same W46 destination inventory. | `src/remote/ui/shell-model.test.ts`, `src/remote/ui/remote-redesign.test.ts`, `src/styles/composition.test.ts`, `verify/workspace-rail-team.integration.test.ts`, `verify/remote-navigation.integration.test.ts` |
 | W89 | approved | Sign-in and invitation MUST center their existing narrow form composition horizontally and vertically in the available page below the wordmark/theme bar, with natural scrolling when content exceeds the available height. Keep one open, unframed column with no enclosing panel border, fill or radius. Errors retain the danger note and alert semantics; Google and access-key controls, loading, invitation validation and the once-only key reveal MUST retain their actual states and operations. Source error examples are separate states, NEVER simultaneous invented errors or account facts. | `verify/invite.integration.test.ts`, `verify/remote-fidelity.integration.test.ts` |
 | W90 | approved | Connection, notice and consent strips MUST present as tonal strips: a tone-soft fill, a leading tone icon or dot, `--yc-radius-card`, inset by `--yc-gutter`, with no inline-start bar and no rule. A strip exists only while it has something to say; W52 consent text and actions and the W24 popup rule are unchanged. | `src/remote/ui/remote-redesign.test.ts`, `verify/remote-shell-layout.integration.test.ts` |
 | W91 | approved | The conversation MUST keep an opaque bordered identity header above the scrolling transcript and a docked Session companion on desktop, with a focus-contained phone surface. Preserve focus handoff, notifications, Office, policy controls, hard-review treatment and their existing authorization. The composer MUST expose its supported model effort choices without inventing variants. The companion Context tab MUST label the per-category breakdown an estimated input breakdown (request estimate, separate from provider-reported window tokens and cumulative spend), share each category against the sum of the seven estimated categories, and clear the shown window and breakdown on compaction, revert, or a provider/model change. | `verify/remote-shell-layout.integration.test.ts`, `verify/composer-controls.integration.test.ts`, `verify/modal-close.integration.test.ts`, `verify/review-box.integration.test.ts`, `verify/workspace-shell.integration.test.ts`, `src/remote/projection.test.ts` |
@@ -812,18 +829,20 @@ R1–R12 apply with their stated surface scopes. Each Web rule states its curren
 | W111 | implemented | Web controls MUST retain the 12px text floor and authored link, icon and scrolling affordances. Native control tooltips MUST use the shared owned hover/focus tooltip. A tooltip inside an open native dialog MUST remain in that dialog's top layer, remain hoverable, and retain the trigger's accessible description and focus. Escape MUST dismiss an open tooltip without dismissing its enclosing dialog or immediately reopening within the same hovered or focused trigger; with no tooltip open, normal dialog Escape MUST remain unchanged. | `src/styles/typography.test.ts`, `src/styles/composition.test.ts`, `verify/workspace-rail-team.integration.test.ts`, `verify/scrollbar.integration.test.ts` |
 | W112 | approved | The Project conversation header MUST keep its Project identity and navigation, compact status and role, and existing conversation and context actions outside the identity disclosure. On phones the identity and conversation tools keep the top row; Project actions may wrap below it and Sessions opens the existing context sheet. Closing the full Master and role details MUST grow the existing transcript viewport without replacing the conversation or losing its draft. The Project context's separate overview disclosure MUST close only the member status breakdown, running capacity and activity. Leave Project coordination, Sessions and its count and waiting cue, New session, Add session and the member cards and their actions usable. Both disclosures start expanded, expose their own expanded state and controlled region, and use the shared Collapsible (W95). Neither changes the other, the existing Sessions and Settings disclosures, or whole-context visibility. Reopening context MUST retain the overview choice. | `verify/projects.integration.test.ts`, `verify/mobile-native.integration.test.ts` |
 | W113 | approved | The composer model chip and the model switch within Effort/Profile settings MUST open the same Choose model list. Keep model settings reachable, with a named back action where the list replaces settings and one named close action. Focus the search on entry; ArrowDown and ArrowUp move the active result and Enter in the search chooses it. Escape or selection MUST restore focus to the invoking control; the explicit Close action dismisses the picker and restores the composer chip. Retain the anchored desktop popover and content-sized phone sheet (W8, W41). The header, search (including its visible focus ring), and compact Recent and provider groups MUST fit without horizontal scrolling, including long provider, profile and model names or IDs. Retain full accessible labels and selection state. Only the bounded result list scrolls vertically. Searching, backing out and dismissing MUST preserve the draft and model settings and MUST NOT submit any changes. | `verify/model-replay.integration.test.ts`, `verify/model-picker-width.integration.test.ts` |
-| W114 | implemented | Genuine Dot-originated steer prompts (`kind: "synthetic"` outside internal envelopes, system/review/instruction/history/peer/audit metadata and notices) MUST render with the same right-aligned `--yc-cobalt-tonal` prompt capsule as user prompts (W86), displaying cleaned user-facing steer text with transport markup stripped while keeping `transcript-message--synthetic` class, `Dot steer prompt` accessible labeling and a `Dot steer` receipt rather than human authorship claims. When steer text is empty or contains only transport markup, NEVER invent text or render an empty bubble. Keep non-steer synthetic notices, `Dots.peer`, `Goal · steer` and side-chat history snapshots unchanged. | `src/remote/projection.test.ts`, `src/remote/view-model.test.ts`, `src/remote/ui/conversation-folio.test.tsx`, `verify/transcript.integration.test.ts` |
+| W114 | implemented | Genuine Dot-originated steer prompts (`kind: "synthetic"` outside internal envelopes, system/review/instruction/history/peer/audit metadata and notices) MUST render with the same right-aligned `--yc-green-tonal` prompt capsule as user prompts (W86), displaying cleaned user-facing steer text with transport markup stripped while keeping `transcript-message--synthetic` class, `Dot steer prompt` accessible labeling and a `Dot steer` receipt rather than human authorship claims. When steer text is empty or contains only transport markup, NEVER invent text or render an empty bubble. Keep non-steer synthetic notices, `Dots.peer`, `Goal · steer` and side-chat history snapshots unchanged. | `src/remote/projection.test.ts`, `src/remote/view-model.test.ts`, `src/remote/ui/conversation-folio.test.tsx`, `verify/transcript.integration.test.ts` |
 | W115 | approved | From 768px outside the phone layout the remote workspace MUST show one 28px `--yc-status-h` status bar across the window's bottom edge on `--yc-plane-chrome` with a `--yc-line-subtle` top boundary. It reads connection, machine, and for an open Session its model, autonomy and context meter, then the running count at the end edge. Values come from reported state only and an unreported value is omitted, never zero. Connection and machine open Settings, autonomy opens the autonomy dialog, context opens the companion Context tab and the running count opens Sessions; model is a static readout. The running count is a polite live region; when a child task runs it switches to the branch glyph and names `N Sessions running, a child task started`. Below 1100px of bar width, long labels switch to their short forms. Below 768px the bar is absent and the phone bottom bar remains. | `src/remote/ui/shell-model.test.ts`, `src/remote/ui/shared-workspace.test.ts`, `src/remote/ui/remote-redesign.test.ts` |
 | W116 | approved | While the open Session executes, a 2px mint trace MUST run along the status bar's top edge and the conversation header's bottom boundary; when a child task also runs, a Y junction branches off the trace. The trace is `aria-hidden`; the status bar's running count carries the announcement. Under `prefers-reduced-motion: reduce` the loops stop, the run shows a static 50% mint line, and the branch and junction appear with an opacity change of at most 80ms and no travel. An idle Session draws no header trace. | `src/remote/ui/shared-workspace.test.ts`, `verify/design-contract.integration.test.ts` |
-| W117 | approved | Adjacent planes MUST differ by a visible step: in light themes canvas→raised MUST reach at least 1.15:1 and chrome→raised at least 1.10:1. Dark themes keep their measured steps (canvas→raised about 1.11:1) and carry pane structure on `--yc-line-subtle` separators of at least 3:1 against chrome, canvas and raised; field and composer boundaries use `--yc-line-field` at 3:1 or more on every plane. Every text tier MUST reach 4.5:1 on every plane including selected (7:1 in High contrast), and white on cobalt solid at least 4.5:1, in default, One Dark, One Dark Pro and High contrast schemes. | `src/styles/contrast.test.ts`, `src/theme/schemes.test.ts` |
+| W117 | approved | Adjacent planes MUST differ by a visible step: in light themes canvas→raised MUST reach at least 1.15:1 and chrome→raised at least 1.10:1. Dark themes keep their measured steps (canvas→raised about 1.11:1) and carry pane structure on `--yc-line-subtle` separators of at least 3:1 against chrome, canvas and raised; field and composer boundaries use `--yc-line-field` at 3:1 or more on every plane. Every text tier MUST reach 4.5:1 on every plane including selected (7:1 in High contrast), and white on green solid at least 4.5:1, in default, One Dark, One Dark Pro and High contrast schemes. | `src/styles/contrast.test.ts`, `src/theme/schemes.test.ts` |
+| W118 | approved | A Session with admitted, unpromoted queued user input MUST show one compact pending tray directly above the composer field and no tray when there is none. Only real user-authored queued messages count; steer prompts (which promote at the next step boundary and keep their transcript receipt), synthetic, system, compaction, notification and unadmitted optimistic rows are NEVER listed. The collapsed tray shows a stacked edge, the count and a one-line preview of the first message; the expanded tray lists every message in order. Each row has icon buttons named Steer now and Remove pending message that call the Session's pending operations and then re-read the list; Steer now moves the message out of the tray into the transcript flow; a stale input shows the short status note "That input is no longer pending." and the list refreshes. The tray uses `--yc-plane-raised`, `--yc-line-subtle` and `--yc-radius-card`. | `src/remote/pending-tray.test.ts`, `test/remote-session.test.ts`, `verify/composer-fixes.integration.test.ts` |
+| W119 | approved | Every user, assistant and agent message body MUST render through the shared Markdown component. A fenced code block MUST render as a `transcript-md__code` card on `--yc-plane-raised` with a `--yc-plane-hover` header holding the `code` icon and language label (Markdown, TypeScript, JavaScript, Rust, Python, JSON, Bash, or Code) and the Wrap lines toggle (`aria-pressed`) and Copy code button (Copied with a check). Syntax spans MUST use the `--yc-code-*` roles at 4.5:1 or better on the raised and hover planes in every theme; the span text MUST equal the raw code. Raw HTML stays inert text and unsafe links are dropped. | `src/remote/ui/markdown.test.ts`, `src/remote/ui/code-highlight.test.ts`, `src/styles/contrast.test.ts`, `verify/composer-fixes.integration.test.ts` |
 
 ## Colors
 
-Every theme declares the same Instrument role set: six planes (chrome, canvas, raised, hover, selected, inverse), three lines (divider, subtle, field), three ink tiers plus inverse ink, focus, scrim, selection, and for each of cobalt, mint, violet, teal, sky, amber and coral a tonal fill and its hover, a line, a graphic, a solid with its hover and on-color, and an ink. `src/styles/tokens.css` holds the default light and dark values in the front matter; `src/theme/schemes.ts` holds One Dark, One Dark Pro and High contrast. Exported source colors resolve to these roles, not a parallel palette.
+Every theme declares the same Instrument role set: six planes (chrome, canvas, raised, hover, selected, inverse), three lines (divider, subtle, field), three ink tiers plus inverse ink, focus, scrim, selection, and for each of green, mint, violet, teal, sky, amber and coral a tonal fill and its hover, a line, a graphic, a solid with its hover and on-color, and an ink. `src/styles/tokens.css` holds the default light and dark values in the front matter; `src/theme/schemes.ts` holds One Dark, One Dark Pro and High contrast. Exported source colors resolve to these roles, not a parallel palette.
 
 Chrome carries the activity bar, the Session list column, the companion, the status bar and the phone bars; canvas carries the reading track and public pages; raised carries cards, fields, the composer, request cards and dialog bodies. In light themes canvas→raised is 1.18:1 and chrome→raised 1.12:1. Dark themes keep their measured steps and draw pane structure with `--yc-line-subtle` separators at 3:1 or more (W117). `--yc-line-divider` separates rows inside a component that already has a boundary and never marks a pane edge.
 
-Cobalt is the interaction hue: primary actions (`--yc-cobalt-solid` with `--yc-on-cobalt`), focus, current navigation and product-chrome links. Mint means running and completed work only. Use violet for reasoning and Projects, teal for terminal and tools, sky for files, models and Markdown headings and links, amber for attention, usage and goals, and coral for failures and destructive actions. Effort hues follow the selected variant. Companion tabs use their accent on selection; labels, glyphs and state text carry the meaning independently of color. An estimate's categorical color never implies permission, verification or execution status.
+Green is the interaction hue: primary actions (`--yc-green-solid` with `--yc-on-green`), focus, current navigation and product-chrome links. Mint means running and completed work only. Use violet for reasoning and Projects, teal for terminal and tools, sky for files, models and Markdown headings and links, amber for attention, usage and goals, and coral for failures and destructive actions. Effort hues follow the selected variant. Companion tabs use their accent on selection; labels, glyphs and state text carry the meaning independently of color. An estimate's categorical color never implies permission, verification or execution status.
 
 ## Typography
 
@@ -909,7 +928,7 @@ Use the existing 24-unit SVG registry and semantic currentColor roles. Material 
 
 Reuse shared Modal, Collapsible, buttons, fields, progress parts, notices, code blocks and scrollbars. Keep their leaf stylesheet ownership; moving component styles requires removing superseded global rules. Activity's four accounting slots retain inclusive labels and separate loading, unreported, value and unsupported-cost states. Empty/error inventories never appear alongside populated task rows.
 
-Render user and assistant text, reasoning, substantive system and coordination notices, and narrative tool results as selectable Markdown. Keep terminal logs literal. Fenced code uses JetBrains Mono, preserves whitespace, and places its language or `text` at the start of the header and the Copy action at the end. Copy writes the rendered code text to the browser clipboard; the header stays still and only the `<pre>` can scroll horizontally. Use tone and spacing for open reasoning, tool and captured-file disclosures rather than framing each body.
+Render user and assistant text, reasoning, substantive system and coordination notices, and narrative tool results as selectable Markdown. Keep terminal logs literal. Fenced code renders as a card on `--yc-plane-raised` with a `--yc-line-subtle` border, `--yc-radius-card` corners and a `--yc-plane-hover` header bar. The header starts with the `code` icon and the language label (Markdown, TypeScript, JavaScript, Rust, Python, JSON, Bash, or Code for an empty or unknown language) and ends with a Wrap lines toggle (`aria-pressed`) and a Copy code button that shows Copied with a check for 1.6 seconds. Copy writes the raw code text to the browser clipboard. The body uses JetBrains Mono, preserves whitespace and scrolls horizontally inside the `<pre>` unless Wrap lines is on, while the header stays still. Syntax spans use the `--yc-code-*` roles (keyword, string, number and literal, comment, function, type, property, meta; plain text uses `--yc-code-ink`); each reaches 4.5:1 on the raised and hover planes in the light and dark themes. Unknown languages render as plain text. The card classes are `transcript-md__code`, `transcript-md__code-head`, `transcript-md__code-lang`, `transcript-md__code-actions` and `transcript-md__code-button`; spans are `code-token code-token--<kind>`. The pending tray sits at the top of the composer body: a `--yc-plane-raised` card with a `--yc-line-subtle` border and a stacked edge while collapsed, a `--yc-weight-semibold` count, the first message as a one-line preview, and 32px icon actions (44px on coarse pointers). Use tone and spacing for open reasoning, tool and captured-file disclosures rather than framing each body.
 
 Cursor roles belong to the shared foundation: surface, action, text, disabled, busy, pan, panning, zoom-in, horizontal adjustment and vertical resize. Components consume those declared roles rather than cursor keywords or document-wide pointer handlers. Background reads do not disable usable controls; Office restores its pan role after release or cancellation.
 
@@ -917,7 +936,7 @@ Cursor roles belong to the shared foundation: surface, action, text, disabled, b
 
 Product copy comes from the route's content owner and runtime, not the specimen's source-file captions, synthetic accounts, example versions or sample statistics. Keep every genuine reported message, tool, cost, quota and error even when the source stages less content. A source alternate state is not simultaneous content. The plain YCoding wordmark retains product identity without importing specimen monograms into every header.
 
-New chat pairs the compact, neutral repository selector and refresh action directly above the composer's start edge so the composer card and submit control stay visually primary, keeps the real repository requirement accessible (`aria-required`, `aria-describedby`, the compact `Required` badge and the helper line) without a hue fill or border, and draws the cobalt `:focus-visible` ring. Unsupported operations remain unavailable instead of gaining drawn controls. Preserve pending-request provenance, explicit denies, confirmation boundaries and uncertain outcomes; no uncertain mutation is automatically replayed.
+New chat pairs the compact, neutral repository selector and refresh action directly above the composer's start edge so the composer card and submit control stay visually primary, keeps the real repository requirement accessible (`aria-required`, `aria-describedby`, the compact `Required` badge and the helper line) without a hue fill or border, and draws the green `:focus-visible` ring. Unsupported operations remain unavailable instead of gaining drawn controls. Preserve pending-request provenance, explicit denies, confirmation boundaries and uncertain outcomes; no uncertain mutation is automatically replayed.
 
 Ordinary Session collections and Project root candidates exclude child Sessions and compaction helpers identified by the `compaction` agent or reserved `ses_compaction_` identity, never by title. Counts use those same projected rows. Direct Session and snapshot reads retain child metadata, side chats and parent navigation; opening a helper does not add it to an ordinary collection.
 
@@ -929,7 +948,7 @@ This document governs `apps/web`. `.stitch/DESIGN.md` maps its approved source s
 
 ## Accessibility
 
-Preserve semantic headings and landmarks, visible focus, keyboard navigation, native text selection, named controls and content-sized dialogs/sheets. Normal text needs 4.5:1; meaningful boundaries and focus need 3:1. Focus uses the cobalt `--yc-focus` ring at 3:1 or more on every plane. Phone Context access MUST remain visible beside Team and Notifications; its control, companion tabs and other coarse-pointer actions MUST retain at least 44px targets and focus return. W7 owns standard and WebKit scrollbars unconditionally, with readable forced-color system inks. Contrast tests do not certify every rendered background or state.
+Preserve semantic headings and landmarks, visible focus, keyboard navigation, native text selection, named controls and content-sized dialogs/sheets. Normal text needs 4.5:1; meaningful boundaries and focus need 3:1. Focus uses the green `--yc-focus` ring at 3:1 or more on every plane. Phone Context access MUST remain visible beside Team and Notifications; its control, companion tabs and other coarse-pointer actions MUST retain at least 44px targets and focus return. W7 owns standard and WebKit scrollbars unconditionally, with readable forced-color system inks. Contrast tests do not certify every rendered background or state.
 
 Office, long transcripts and expanded changes stay reachable without page overflow. Public header controls retain 44px targets inside the 56px header. Source cards, HTML metadata and passing screenshots confer no decision authority.
 

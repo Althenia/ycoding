@@ -1111,6 +1111,12 @@ const layer = Layer.effectDiscard(
       }),
     )
     yield* events.project(SessionEvent.Forked, (event) => projectFork(db, event))
+    yield* events.project(SessionEvent.InputWithdrawn, (event) =>
+      SessionPending.projectWithdrawn(db, { id: event.data.inputID, sessionID: event.data.sessionID }),
+    )
+    yield* events.project(SessionEvent.InputSteered, (event) =>
+      SessionPending.projectSteered(db, { id: event.data.inputID, sessionID: event.data.sessionID }),
+    )
     yield* events.project(SessionEvent.InputPromoted, (event) =>
       Effect.gen(function* () {
         if (event.durable === undefined)

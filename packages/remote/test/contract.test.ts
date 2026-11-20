@@ -129,6 +129,20 @@ test("one-message stream requests accept only an indexed Session message ID", ()
     expect(parseClientMessage(JSON.stringify({ ...frame, input })).ok).toBe(false)
 })
 
+test("pending input controls are Session-scoped mutations that accept only an indexed message ID", () => {
+  for (const operation of ["session.pending.remove", "session.pending.steer"] as const) {
+    const frame = { type: "request", id: "req_pending", operation, sessionID: "ses_1", input: { messageID: "msg_1" } }
+    expect(remoteOperationAccess[operation]).toBe("mutation")
+    expect(remoteOperations).toContain(operation)
+    expect(requireSession(operation)).toBe(true)
+    expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+    expect(parseRelayToAgentMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+    expect(parseClientMessage(JSON.stringify({ ...frame, sessionID: undefined }))).toMatchObject({ ok: false, error: { code: "session_required" } })
+    for (const input of [undefined, {}, { messageID: "../x" }, { messageID: "ses_1" }, { messageID: "msg_1", delivery: "steer" }, { messageID: "msg_1", directory: "/tmp" }])
+      expect(parseClientMessage(JSON.stringify({ ...frame, input })).ok).toBe(false)
+  }
+})
+
 test("compaction history is a read-only Session-scoped operation with no caller placement or paging fields", () => {
   const request = { type: "request", id: "req_compactions", operation: "session.compaction.list", sessionID: "ses_1" }
   expect(parseClientMessage(JSON.stringify(request))).toMatchObject({ ok: true, value: request })
@@ -848,6 +862,8 @@ describe("remote operations", () => {
       "session.compact",
       "session.snapshot",
       "session.pending.list",
+      "session.pending.remove",
+      "session.pending.steer",
       "session.attachment.read",
       "session.message.stream",
       "session.todo.list",

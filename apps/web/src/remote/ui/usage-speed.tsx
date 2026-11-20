@@ -61,7 +61,7 @@ function SeriesChart(props: {
   </div>
 }
 
-const green = "var(--yc-cobalt-ink)"
+const green = "var(--yc-green-ink)"
 const yellow = "var(--yc-amber-ink)"
 const muted = "var(--yc-ink-secondary)"
 const danger = "var(--yc-coral-ink)"

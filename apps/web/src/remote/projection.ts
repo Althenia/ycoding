@@ -682,7 +682,8 @@ export function visibleTranscriptMessages(messages: readonly RemoteMessageView[]
 
 export function readPendingInputs(payload: unknown, sessionID: string): readonly RemoteMessageView[] | undefined {
   if (!isRecord(payload) || !Array.isArray(payload.data)) return undefined
-  const rows = payload.data.flatMap((item): readonly RemoteMessageView[] => {
+  const entries = payload.data.filter((item) => !(isRecord(item) && item.type === "compaction"))
+  const rows = entries.flatMap((item): readonly RemoteMessageView[] => {
     if (!isRecord(item) || !isRecord(item.data) || item.sessionID !== sessionID) return []
     const id = stringField(item.id)
     const created = numberField(item.timeCreated)
@@ -704,7 +705,7 @@ export function readPendingInputs(payload: unknown, sessionID: string): readonly
       ...(metadata === undefined ? {} : { metadata }),
       ...(metadata && stringField(metadata.contextSource) ? { source: stringField(metadata.contextSource) } : {}) }]
   })
-  return rows.length === payload.data.length ? rows : undefined
+  return rows.length === entries.length ? rows : undefined
 }
 
 export function reconcilePendingInputs(view: SessionView, pending: readonly RemoteMessageView[], retainIDs: ReadonlySet<string> = new Set()): SessionView {
@@ -1116,6 +1117,12 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
       return view.messages.some((message) => message.id === data.inputID && message.kind === "synthetic")
         ? { ...view, messages: view.messages.map((message) => message.id === data.inputID && message.kind === "synthetic" ? { ...message, pending: false } : message) }
         : updateUserMessage(view, stringField(data.inputID), (message) => ({ ...message, state: "promoted" }))
+    case "session.input.withdrawn": {
+      const id = stringField(data.inputID)
+      return { ...view, messages: view.messages.filter((message) => !(message.id === id && message.kind === "user" && message.state === "pending")) }
+    }
+    case "session.input.steered":
+      return updateUserMessage(view, stringField(data.inputID), (message) => message.state === "pending" ? { ...message, delivery: "steer" } : message)
     case "session.input.consumed": {
       const ids = stringList(data.inputIDs)
       return ids.reduce(

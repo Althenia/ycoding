@@ -35,16 +35,16 @@
 }
 
 .button--primary {
-  --button-bg: var(--yc-cobalt-solid);
-  --button-fg: var(--yc-on-cobalt);
-  --button-border: var(--yc-cobalt-solid);
+  --button-bg: var(--yc-green-solid);
+  --button-fg: var(--yc-on-green);
+  --button-border: var(--yc-green-solid);
   /* Declared directly as well as through the variant variables: the pinned
      contrast checks read the resolved pair from this rule. */
-  background: var(--yc-cobalt-solid);
-  color: var(--yc-on-cobalt);
+  background: var(--yc-green-solid);
+  color: var(--yc-on-green);
 }
 
-@media (hover: hover) { .button--primary:hover:not(:disabled) { background: var(--yc-cobalt-solid-hover); color: var(--yc-on-cobalt); } }
+@media (hover: hover) { .button--primary:hover:not(:disabled) { background: var(--yc-green-solid-hover); color: var(--yc-on-green); } }
 
 .button--secondary {
   --button-bg: var(--yc-plane-raised);

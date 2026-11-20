@@ -152,22 +152,30 @@ export function latestPromptProcessing(status: SessionView["status"] | undefined
   return messages.findLast(isPromptMessage)?.id === messageID
 }
 
-export function promptReceipt(state: "pending" | "promoted" | "consumed" | undefined, delivery: "steer" | "queue" | undefined, mutation?: Pick<PendingMutation, "state">, processing = false) {
-  if (state === "consumed" && !processing) return { label: "Read by YCoding", text: "Read", mark: "✓✓" }
-  if (mutation?.state === "failed") return { label: "Send failed", text: "Send failed", mark: "!" }
-  if (mutation?.state === "unknown") return { label: "Outcome unknown", text: "Outcome unknown", mark: "!" }
-  if (mutation?.state === "sending") return { label: "Sending prompt", text: "Sending", mark: "◷" }
-  if (state === "pending") return { label: delivery === "queue" ? "Queued for processing" : "Processing prompt", text: delivery === "queue" ? "Queued" : "Processing · steer", mark: "◷" }
-  if (processing) return { label: "Processing prompt", text: "Processing", mark: "◷" }
-  return { label: "Sent, not yet read", text: "Sent", mark: "✓" }
+export type PromptReceiptState = "sending" | "queued" | "processing" | "sent" | "read" | "failed" | "unknown"
+export type PromptReceipt = { readonly state: PromptReceiptState; readonly label: string; readonly detail: string }
+
+const receiptLabels = { sending: "Sending", queued: "Sent", processing: "Sent", sent: "Sent", read: "Read by YCoding", failed: "Send failed", unknown: "Outcome unknown" } as const
+const receiptDetails = { sending: "Sending prompt", queued: "Queued for processing", processing: "Processing prompt", sent: "Sent, not yet read", read: "Read by YCoding", failed: "Send failed", unknown: "Outcome unknown" } as const
+const promptReceiptOf = (state: PromptReceiptState): PromptReceipt => ({ state, label: receiptLabels[state], detail: receiptDetails[state] })
+
+export function promptReceipt(state: "pending" | "promoted" | "consumed" | undefined, delivery: "steer" | "queue" | undefined, mutation?: Pick<PendingMutation, "state">, processing = false): PromptReceipt {
+  if (state === "consumed" && !processing) return promptReceiptOf("read")
+  if (mutation?.state === "failed") return promptReceiptOf("failed")
+  if (mutation?.state === "unknown") return promptReceiptOf("unknown")
+  if (mutation?.state === "sending") return promptReceiptOf("sending")
+  if (state === "pending") return promptReceiptOf(delivery === "queue" ? "queued" : "processing")
+  if (processing) return promptReceiptOf("processing")
+  return promptReceiptOf("sent")
 }
 
-export function dotSteerReceipt(pending: boolean | undefined, delivery: "steer" | "queue" | undefined, processing = false) {
-  if (pending) return delivery === "queue"
-    ? { label: "Dot steer prompt queued for processing", text: "Queued · Dot steer", mark: "◷" }
-    : { label: "Processing Dot steer prompt", text: "Processing · steer", mark: "◷" }
-  if (processing) return { label: "Processing Dot steer prompt", text: "Processing · Dot steer", mark: "◷" }
-  return { label: "Dot steer prompt", text: "Dot steer", mark: "✓" }
+export function dotSteerReceipt(pending: boolean | undefined, delivery: "steer" | "queue" | undefined, processing = false): PromptReceipt | undefined {
+  if (pending) return promptReceiptOf(delivery === "queue" ? "queued" : "processing")
+  return processing ? promptReceiptOf("processing") : undefined
+}
+
+export function assistantCopyText(message: { readonly parts: readonly { readonly kind: string; readonly text?: string }[] }): string {
+  return message.parts.flatMap((part) => part.kind === "text" && part.text !== undefined && part.text.trim() !== "" ? [part.text] : []).join("\n\n")
 }
 
 export function formInputState(form: FormView, draft: FormDraft) {
@@ -1065,6 +1073,15 @@ export function userMessageDisplay(message: { readonly text: string; readonly at
     return start || end ? "" : " "
   })
   return { text: text.trim() === "" ? "" : text, images, files }
+}
+
+export function pendingTrayItems(messages: readonly RemoteMessageView[], unadmittedIDs: ReadonlySet<string> = new Set()) {
+  return messages.flatMap((message) => {
+    if (message.kind !== "user" || message.state !== "pending" || message.delivery !== "queue" || unadmittedIDs.has(message.id) || /^(Subagent|Project) notification:/.test(message.text)) return []
+    const display = userMessageDisplay(message)
+    const text = display.text.trim() || (display.images.length + display.files.length > 0 ? "Attachment" : "")
+    return text === "" ? [] : [{ id: message.id, text }]
+  })
 }
 
 export function reasoningSummary(input: { readonly started?: number; readonly completed?: number; readonly open: boolean }) {

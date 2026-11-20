@@ -46,7 +46,7 @@ Each approved rule binds inherited surfaces. An exception records an unresolved 
 
 ## Colors
 
-The mark's Trace, Frost, Attention, dark Surface, Rule, and Canvas are SVG asset colors, not an instruction to replace surface theme roles. Interaction is blue on every surface: the TUI's default interaction blue, and cobalt (`--yc-cobalt-*`) on Web and Desktop for primary actions, focus, selection and current navigation. Mint (`--yc-mint-*`) marks running and completed work only. The surface palettes share role names, not a claimed color match.
+The mark's Trace, Frost, Attention, dark Surface, Rule, and Canvas are SVG asset colors, not an instruction to replace surface theme roles. The YCoding brand accent is green. On Web and Desktop the green family (`--yc-green-*`) carries primary actions, the user message bubble, the working indicator, primary icons, focus, selection and current navigation; the TUI keeps its default theme's interaction role. Mint (`--yc-mint-*`) marks running and completed work only. Red stays reserved for Stop and errors and amber for warnings and High effort. The surface palettes share role names, not a claimed color match.
 
 Adjacent GUI planes differ by a visible step. In light themes canvas→raised reaches at least 1.15:1 and chrome→raised at least 1.10:1. Dark themes keep their measured steps and draw pane structure with `--line-subtle` separators of at least 3:1 (`apps/web/DESIGN.md` W117). See surface files and `assets/brand/README.md`.
 

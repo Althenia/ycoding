@@ -1,4 +1,4 @@
-import { utf8Length, type FormRequest, type Messages, type SessionFileChanges, type ModelOption, type ModelProfileOption, type ModelSelection, type SessionItem, type Sessions, type PromptFile, type PromptAgent } from "./contract"
+import { utf8Length, type PendingInput, type FormRequest, type Messages, type SessionFileChanges, type ModelOption, type ModelProfileOption, type ModelSelection, type SessionItem, type Sessions, type PromptFile, type PromptAgent } from "./contract"
 import { isInternalTranscriptEnvelope } from "@ycoding-ai/client/transcript-visibility"
 import { ordinarySession } from "./sessions"
 export { isInternalTranscriptEnvelope } from "@ycoding-ai/client/transcript-visibility"
@@ -244,6 +244,7 @@ export const restoresFocus = (wasLocked: boolean, locked: boolean, focusAt: Focu
 export type ComposerTrigger = { readonly kind: "command" | "skill" | "mention"; readonly start: number; readonly query: string }
 
 const triggerWord = /^[A-Za-z0-9_-]*$/
+const commandWord = /^[A-Za-z0-9_.:-]*$/
 
 export function composerTrigger(text: string, caret: number): ComposerTrigger | undefined {
   const at = Math.max(0, Math.min(caret, text.length))
@@ -255,7 +256,7 @@ export function composerTrigger(text: string, caret: number): ComposerTrigger | 
   if (marker === "/") {
     if (start !== 0 && text[start - 1] !== "\n") return undefined
     const query = token.slice(1)
-    return triggerWord.test(query) ? { kind: "command", start, query } : undefined
+    return commandWord.test(query) ? { kind: "command", start, query } : undefined
   }
   if (marker === "$") {
     const query = token.slice(1)
@@ -300,7 +301,7 @@ export function restoredPrompt(input: Pick<Extract<Messages[number], { type: "us
 export type SlashAction = { readonly kind: "local" | "backend"; readonly name: string; readonly args: string } | { readonly kind: "prompt" }
 
 export function slashAction(text: string, local: readonly string[], backend: readonly string[]): SlashAction {
-  const match = /^\/([A-Za-z0-9][A-Za-z0-9_-]*)(?:[ \t]+([\s\S]*))?$/.exec(text)
+  const match = /^\/([A-Za-z0-9][A-Za-z0-9_.:-]*)(?:[ \t]+([\s\S]*))?$/.exec(text)
   if (!match) return { kind: "prompt" }
   const name = match[1]!
   const args = (match[2] ?? "").trim()
@@ -417,6 +418,28 @@ function classifySyntheticNotice(message: Extract<Messages[number], { type: "syn
   return undefined
 }
 
+export type DeliveryState = "sending" | "sent" | "read"
+
+export function userDeliveryStates(messages: readonly Messages[number][], sendingID?: string): ReadonlyMap<string, DeliveryState> {
+  const states = new Map<string, DeliveryState>()
+  let consumed = false
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]!
+    if (message.type === "assistant") consumed = true
+    if (message.type === "user") states.set(message.id, message.id === sendingID ? "sending" : consumed ? "read" : "sent")
+  }
+  return states
+}
+
+export function assistantReplyText(content: Extract<Messages[number], { type: "assistant" }>["content"]) {
+  const text = content.flatMap((part) => part.type === "text" && part.text.length > 0 ? [part.text] : []).join("\n\n")
+  return text === "" ? undefined : text
+}
+
+export function userPendingInputs(items: readonly PendingInput[]) {
+  return items.filter((item): item is Extract<PendingInput, { readonly text: string }> => item.type === "user" && item.source === undefined && !/^(Subagent|Project) notification:/.test(item.text))
+}
+
 export function isDotSteerSynthetic(message: SyntheticSteerInput): boolean {
   if (message.type !== "synthetic" || typeof message.text !== "string") return false
   if ("source" in message && message.source !== undefined) return false
@@ -445,14 +468,6 @@ export function dotSteerDisplay(message: SyntheticSteerInput): { readonly text: 
   if (!isDotSteerSynthetic(message) || message.type !== "synthetic" || typeof message.text !== "string") return undefined
   const text = stripSteerTransportMarkup(message.text)
   return text === "" ? undefined : { text }
-}
-
-export function dotSteerReceipt(pending: boolean | undefined, delivery: "steer" | "queue" | undefined, processing = false) {
-  if (pending) return delivery === "queue"
-    ? { label: "Dot steer prompt queued for processing", text: "Queued · Dot steer", mark: "◷" }
-    : { label: "Processing Dot steer prompt", text: "Processing · steer", mark: "◷" }
-  if (processing) return { label: "Processing Dot steer prompt", text: "Processing · Dot steer", mark: "◷" }
-  return { label: "Dot steer prompt", text: "Dot steer", mark: "✓" }
 }
 
 export function classifyDesktopSynthetic(message: Messages[number]): SyntheticCard | undefined {
@@ -660,7 +675,7 @@ export function composerSlash(text: string, backend: readonly string[]): SlashAc
 }
 
 export function desktopSlashCommand(text: string, backendCommands: readonly string[]): DesktopSlashCommand | undefined {
-  const match = /^\/([A-Za-z0-9][A-Za-z0-9_-]*)(?:[ \t]+([\s\S]*))?$/.exec(text)
+  const match = /^\/([A-Za-z0-9][A-Za-z0-9_.:-]*)(?:[ \t]+([\s\S]*))?$/.exec(text)
   if (!match) return undefined
   const typed = match[1]!.toLowerCase()
   const rest = (match[2] ?? "").trim()

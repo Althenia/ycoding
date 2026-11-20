@@ -44,17 +44,17 @@ describe("transcript activity and queued input", () => {
   test("shows activity in the transcript, never in the composer, and labels queued input once", async () => {
     const page = await open("light", "&requests=form&queued=1")
     try {
-      await until(page, `document.querySelector('.transcript-activity__status') !== null && document.querySelector('.transcript-message:has([data-delivery-state="queued"])') !== null`)
+      await until(page, `document.querySelector('.transcript-activity__status') !== null && document.querySelector('.transcript-message:has(.delivery-status[data-state="queued"])') !== null`)
       const state = await page.evaluate(`(() => {
         const activity = document.querySelector('.transcript-activity')
-        const queued = [...document.querySelectorAll('.transcript-message:has([data-delivery-state="queued"])')]
+        const queued = [...document.querySelectorAll('.transcript-message:has(.delivery-status[data-state="queued"])')]
         return {
           slots: document.querySelectorAll('.session-status__slot').length,
           activityInScroll: !!activity?.closest('.workspace__scroll'),
           activity: activity?.textContent.trim() ?? '',
           composerStatus: document.querySelectorAll('.composer [role="status"]:not(.transcript-message__receipt):not(.session-status__announce)').length,
           queued: queued.length,
-          queuedLabels: queued.reduce((count, row) => count + [...row.querySelectorAll('*')].filter((element) => [...element.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim() === 'Queued')).length, 0),
+          queuedLabels: queued.reduce((count, row) => count + [...row.querySelectorAll('.transcript-message__receipt')].filter((element) => element.getAttribute('title')?.startsWith('Queued for processing')).length, 0),
         }
       })()`)
       expect(state).toEqual({ slots: 0, activityInScroll: true, activity: "Waiting for your decision", composerStatus: 0, queued: 1, queuedLabels: 1 })
@@ -131,7 +131,7 @@ for (const theme of ["light", "dark"] as const) {
               insetStart: Math.round(card.left - content),
               insetEnd: Math.round(content + scroller.clientWidth - card.right),
               scrollerBelowCard: box.bottom >= card.bottom - 1,
-              clear: [named('Send answer', button('Send answer')), named('Cancel', button('Cancel')), named('queued bubble', document.querySelector('.transcript-message:has([data-delivery-state="queued"]) .transcript-message__bubble')), named('activity row', document.querySelector('.transcript-activity'))],
+              clear: [named('Send answer', button('Send answer')), named('Cancel', button('Cancel')), named('queued bubble', document.querySelector('.transcript-message:has(.delivery-status[data-state="queued"]) .transcript-message__bubble')), named('activity row', document.querySelector('.transcript-activity'))],
               cardTop: Math.round(card.top),
             }
           })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, placeholder: (decodeString)(record["placeholder"]), radius: (decodeNumber)(record["radius"]), shadow: (decodeString)(record["shadow"]), fieldBorder: (decodeString)(record["fieldBorder"]), insetStart: (decodeNumber)(record["insetStart"]), insetEnd: (decodeNumber)(record["insetEnd"]), scrollerBelowCard: (decodeBoolean)(record["scrollerBelowCard"]), clear: (decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, name: (decodeString)(record["name"]), bottom: (decodeNumber)(record["bottom"]) } }))(record["clear"]), cardTop: (decodeNumber)(record["cardTop"]) } })
@@ -155,7 +155,7 @@ for (const theme of ["light", "dark"] as const) {
           await Bun.sleep(600)
           const layout = await page.evaluate(`(() => {
             const card = document.querySelector('.composer .composer__row').getBoundingClientRect()
-            return { queued: Math.round(document.querySelector('.transcript-message:has([data-delivery-state="queued"]) .transcript-message__bubble').getBoundingClientRect().bottom), cardTop: Math.round(card.top), scrollerVisible: card.top > document.querySelector('.workspace__scroll').getBoundingClientRect().top }
+            return { queued: Math.round(document.querySelector('.transcript-message:has(.delivery-status[data-state="queued"]) .transcript-message__bubble').getBoundingClientRect().bottom), cardTop: Math.round(card.top), scrollerVisible: card.top > document.querySelector('.workspace__scroll').getBoundingClientRect().top }
           })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, queued: (decodeNumber)(record["queued"]), cardTop: (decodeNumber)(record["cardTop"]), scrollerVisible: (decodeBoolean)(record["scrollerVisible"]) } })
           expect(layout.scrollerVisible).toBe(true)
           expect(layout.queued).toBeLessThanOrEqual(layout.cardTop)

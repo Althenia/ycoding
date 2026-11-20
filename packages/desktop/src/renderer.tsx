@@ -2,7 +2,7 @@ import { createRootRoute, createRoute, createRouter, createHashHistory, Link, Ou
 import { QueryClient, QueryObserver } from "@tanstack/solid-query"
 import type { YCodingEvent } from "@ycoding-ai/client"
 import { dotsPeerLabel } from "@ycoding-ai/client/dots-peer"
-import { createContext, createEffect, createMemo, createSignal, createUniqueId, For, on, onCleanup, onMount, Show, useContext, type JSX } from "solid-js"
+import { batch, createContext, createEffect, createMemo, createSignal, createUniqueId, For, on, onCleanup, onMount, Show, useContext, type JSX } from "solid-js"
 import { render } from "solid-js/web"
 import type { ConnectionState, FormAnswer, FormRequest, Messages, PendingRequests, PermissionRequest, ComposerCatalog, PromptAgent, PromptFile, RequestReply, SessionItem, ModelSelection, ShellOutput, UsageRange, RevertInput, SetAutonomyInput, SettingsMutationInput, ProjectMutationInput, WorkspaceMutationInput, PinRequest } from "./contract"
 import { desktop as api } from "./bridge"
@@ -29,11 +29,12 @@ import { schemeStylesheet } from "../../../apps/web/src/theme/schemes"
 import { Icon as WebIcon, type IconName as WebIconName } from "../../../apps/web/src/ui/icon"
 import { ordinarySession } from "./sessions"
 import { Markdown, MarkdownClipboard } from "../../../apps/web/src/remote/ui/markdown"
-import { WORKSPACE_DESTINATIONS, SharedActivityBar, SharedStatusBar, SharedTrace, SharedListColumn, SharedSessionGroups, clampListWidth, type SharedActivityItem, type SharedStatusItem, type SharedSessionGroup, SharedCompanionSurface, SharedCompanionTabs, SharedConversationHeader, SharedMessageTurn, SharedContextRingButton, SharedContextBreakdownPanel, SharedTurnHead, SharedRadioGroup, SharedCompactionDivider, SharedEditedFilesCard, SharedActivitySurface, SharedPageSurface, SharedSessionsSurface, SharedWorkspacesSurface, SharedUsageSurface, SharedSettingsSurface, SharedLoadingSkeleton } from "../../../apps/web/src/remote/ui/shared-workspace"
-import { DESKTOP_THEMES, isDesktopThemeID, resolveDesktopTheme, DESKTOP_BUILT_IN_SLASH_COMMANDS, desktopSlashCommand, validateFolderSegment, parsePromptStashes, pushPromptStash, formatQuotaProviders, formatCount, formatCompactCount, formatDurationMs, formatUsd, type DesktopThemeID, activeFields, appendPage, buildAnswer, chooseModel, chooseProfile, choiceFor, choiceProblem, composerTrigger, initialValues, insertCompletion, invalidIndexes, restoredPrompt, modelLabel, pagedItems, pagingFor, problemOf, profileLabel, railGroups, restoresFocus, sameSelection, samePaging, searchTerm, selectionFor, composerSlash, valueFor, variantsFor, visibleModels, withValue, workspaceBase, classifyDesktopSynthetic, dotSteerDisplay, dotSteerReceipt, visibleDesktopMessages, turnEditPlacements, groupAssistantParts, toolDisplaySummary, effortStopsFor, effortStopIndex, effortStopFraction, insertTextAtSelection, isEditableKeyboardTarget, isStandardEditShortcut, sessionState, type PastedText, type StashedPrompt, type Activity, type Field, type FocusAt, type MentionPick, type ModelChoice, type SlashAction, type Paging, type Value, railGroupLabels, railGroupOrder } from "./form-rules"
+import { WORKSPACE_DESTINATIONS, SharedActivityBar, SharedTrace, SharedListColumn, SharedSessionGroups, clampListWidth, type SharedActivityItem, type SharedSessionGroup, SharedCompanionSurface, SharedCompanionTabs, SharedConversationHeader, SharedMessageTurn, SharedContextRingButton, SharedContextBreakdownPanel, SharedTurnHead, SharedRadioGroup, SharedCompactionDivider, SharedEditedFilesCard, SharedActivitySurface, SharedPageSurface, SharedSessionsSurface, SharedWorkspacesSurface, SharedUsageSurface, SharedSettingsSurface, SharedLoadingSkeleton } from "../../../apps/web/src/remote/ui/shared-workspace"
+import { DESKTOP_THEMES, isDesktopThemeID, resolveDesktopTheme, DESKTOP_BUILT_IN_SLASH_COMMANDS, desktopSlashCommand, userDeliveryStates, userPendingInputs, assistantReplyText, validateFolderSegment, parsePromptStashes, pushPromptStash, formatQuotaProviders, formatCount, formatCompactCount, formatDurationMs, formatUsd, type DesktopThemeID, activeFields, appendPage, buildAnswer, chooseModel, chooseProfile, choiceFor, choiceProblem, composerTrigger, initialValues, insertCompletion, invalidIndexes, restoredPrompt, modelLabel, pagedItems, pagingFor, problemOf, profileLabel, railGroups, restoresFocus, sameSelection, samePaging, searchTerm, selectionFor, composerSlash, valueFor, variantsFor, visibleModels, withValue, workspaceBase, classifyDesktopSynthetic, dotSteerDisplay, visibleDesktopMessages, turnEditPlacements, groupAssistantParts, toolDisplaySummary, effortStopsFor, effortStopIndex, effortStopFraction, insertTextAtSelection, isEditableKeyboardTarget, isStandardEditShortcut, sessionState, type PastedText, type StashedPrompt, type Activity, type Field, type FocusAt, type MentionPick, type ModelChoice, type SlashAction, type Paging, type Value, railGroupLabels, railGroupOrder } from "./form-rules"
 import { JumpControls, PromptRail, followState, jumpBehavior, navigationTargets, pillClearance, promptTicks, type PromptTick } from "../../../apps/web/src/remote/ui/transcript-rail"
 import { orderedModelOptions } from "../../../apps/web/src/remote/ui/composer-logic"
 import { readRecentModels, rememberRecentModel } from "../../../apps/web/src/remote/preferences"
+import openaiMark from "../../../apps/web/src/assets/providers/openai.svg"
 import "../../../apps/web/src/styles/tokens.css"
 import "../../../apps/web/src/styles/workspace-shell.css"
 import "./tokens.css"
@@ -162,12 +163,16 @@ const sessionsQuery = (search = "") => ({ queryKey: ["sessions", ...scope(), sea
 const refresh = (queryKey: readonly unknown[]) => void queries.invalidateQueries({ queryKey }, { cancelRefetch: false })
 const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform)
 const costLabel = (cost: number | undefined) => cost === undefined ? "Cost unknown" : formatUsd(cost)
-const [railCollapsed, setRailCollapsed] = createSignal(false)
+const LIST_COLLAPSED_KEY = "ycoding.desktop.list-collapsed"
+const [railCollapsed, showRail] = createSignal((() => { try { return localStorage.getItem(LIST_COLLAPSED_KEY) === "true" } catch { return false } })())
+const setRailCollapsed = (collapsed: boolean) => {
+  showRail(collapsed)
+  try { localStorage.setItem(LIST_COLLAPSED_KEY, String(collapsed)) } catch { setDesktopNotice("The Session list state applies to this window but could not be saved.") }
+}
 const [teamOpen, setTeamOpen] = createSignal(false)
 let teamRequested = false
-type SessionGauge = { readonly sessionID: string; readonly autonomy: string; readonly context?: { readonly used: number; readonly limit: number }; readonly tokens: number; readonly running: boolean; readonly children: number }
+type SessionGauge = { readonly sessionID: string; readonly children: number }
 const [sessionGauge, setSessionGauge] = createSignal<SessionGauge>()
-const [sessionModel, setSessionModel] = createSignal<{ readonly sessionID: string; readonly name?: string; readonly effort?: string }>()
 const [lastSession, setLastSession] = createSignal<string>()
 const LIST_WIDTH_KEY = "ycoding.desktop.list-width"
 const [listWidth, setListWidth] = createSignal<number>()
@@ -1558,20 +1563,18 @@ function Workspace() {
   const groupItems = createMemo(() => new Map(grouped().groups.map((group) => [group.key, group.rows.flatMap((session) => { const entry = railEntries().get(session.id); return entry && railMatches(railFilter(), entry.state) ? [session.id] : [] })] as const)))
   const visibleGroups: readonly SharedSessionGroup<string>[] = railGroupOrder.map((key) => ({ id: key, label: railGroupLabels[key], icon: railGroupIcons[key], hue: railGroupHues[key], get items() { return groupItems().get(key) ?? [] } }))
   const conversationRoute = () => { const path = location().pathname; return path === "/chat" || path === "/sessions" || path.startsWith("/sessions/") }
-  const activityItems = (): SharedActivityItem[] => {
-    const session = selected() ?? lastSession()
-    const needs = groupRows("needs")
-    const children = sessionGauge()?.children ?? 0
-    const path = location().pathname
-    return [
-      { id: "chat", label: "Chat", icon: "chat", href: session ? `#/sessions/${session}` : "#/chat", current: conversationRoute() && !(selected() && teamOpen()), badge: { count: needs, hue: "amber", label: `${needs} ${needs === 1 ? "Session needs" : "Sessions need"} action` } },
-      { id: "team", label: "Team", icon: "team", href: session ? `#/sessions/${session}` : "#/sessions", current: !!selected() && teamOpen(), description: session ? undefined : "Open a Session to see its Team", badge: { count: children, hue: "mint", label: `${children} active ${children === 1 ? "subagent" : "subagents"}` } },
-      { id: "projects", label: "Projects", icon: "folder", href: "#/projects", current: path === "/projects" },
-      { id: "workspaces", label: "Workspaces", icon: "monitor", href: "#/workspaces", current: path === "/workspaces" },
-      { id: "usage", label: "Usage", icon: "usage", href: "#/usage", current: path === "/usage" },
-      { id: "settings", label: "Settings", icon: "settings", href: "#/settings", current: path === "/settings", placement: "end" },
-    ]
-  }
+  const activeSession = () => selected() ?? lastSession()
+  const needsCount = () => groupRows("needs")
+  const childCount = () => sessionGauge()?.children ?? 0
+  const pathname = () => location().pathname
+  const activityItems: readonly SharedActivityItem[] = [
+    { id: "chat", label: "Chat", icon: "chat", get href() { const session = activeSession(); return session ? `#/sessions/${session}` : "#/chat" }, get current() { return conversationRoute() && !(selected() && teamOpen()) }, get badge() { const needs = needsCount(); return { count: needs, hue: "amber" as const, label: `${needs} ${needs === 1 ? "Session needs" : "Sessions need"} action` } } },
+    { id: "team", label: "Team", icon: "team", get href() { const session = activeSession(); return session ? `#/sessions/${session}` : "#/sessions" }, get current() { return !!selected() && teamOpen() }, get description() { return activeSession() ? undefined : "Open a Session to see its Team" }, get badge() { const children = childCount(); return { count: children, hue: "mint" as const, label: `${children} active ${children === 1 ? "subagent" : "subagents"}` } } },
+    { id: "projects", label: "Projects", icon: "folder", href: "#/projects", get current() { return pathname() === "/projects" } },
+    { id: "workspaces", label: "Workspaces", icon: "monitor", href: "#/workspaces", get current() { return pathname() === "/workspaces" } },
+    { id: "usage", label: "Usage", icon: "usage", href: "#/usage", get current() { return pathname() === "/usage" } },
+    { id: "settings", label: "Settings", icon: "settings", href: "#/settings", get current() { return pathname() === "/settings" }, placement: "end" },
+  ]
   const openDestination = (item: SharedActivityItem) => {
     const session = selected() ?? lastSession()
     if (item.id === "team") {
@@ -1590,32 +1593,8 @@ function Workspace() {
     const route = Object.entries({ projects: "/projects", workspaces: "/workspaces", usage: "/usage", settings: "/settings" } as const).find(([id]) => id === item.id)?.[1]
     if (route) void navigate({ to: route })
   }
-  const activate = (selector: string) => document.querySelector<HTMLElement>(selector)?.click()
-  const statusItems = (): SharedStatusItem[] => {
-    const gauge = sessionGauge()
-    const model = sessionModel()?.sessionID === gauge?.sessionID ? sessionModel() : undefined
-    const running = groupRows("running")
-    const branch = (gauge?.children ?? 0) > 0
-    const connected = connection().status === "connected"
-    const ownership = connection().mode === "own" ? "Private backend" : "Shared backend"
-    const settings = () => void navigate({ to: "/settings" })
-    const context = gauge?.context
-    return [
-      { id: "list", label: railCollapsed() ? "Show list" : "Hide list", icon: "panel-left", ariaLabel: railCollapsed() ? "Show Session list" : "Hide Session list", onActivate: () => setRailCollapsed(!railCollapsed()) },
-      { id: "connection", label: connectionStatusLabel(), icon: connected ? "check" : "plug", tone: connected ? "mint" : connection().status === "error" ? "coral" : "amber", ariaLabel: `${connectionStatusLabel()}. Open Settings`, onActivate: settings },
-      { id: "machine", name: "This Mac", label: ownership, short: connection().mode === "own" ? "Private" : "Shared", icon: "server", ariaLabel: `This Mac, ${ownership}. Open Settings`, onActivate: settings },
-      ...(gauge ? [
-        { id: "model", name: "Model", label: model?.name ?? "Not reported", icon: "cpu", tone: "sky", ariaLabel: `Model ${model?.name ?? "not reported"}. Change model`, onActivate: () => activate(".composer-chip--model") },
-        { id: "effort", name: "Effort", label: model?.effort ?? "Default", icon: "sparkles", tone: "violet", ariaLabel: `Reasoning effort ${model?.effort ?? "default"}. Change model and effort`, onActivate: () => activate(".composer-chip--model") },
-        { id: "autonomy", name: "Autonomy", label: gauge.autonomy.replace("Autonomy · ", ""), icon: "shield", ariaLabel: `${gauge.autonomy}. Open Goal and autonomy`, onActivate: () => activate(".composer-policy-chip") },
-        { id: "context", name: "Context", label: context ? `${percent(context.used, context.limit)}%` : "Unknown", ring: context ? context.used / context.limit : 0, ariaLabel: context ? `Context ${percent(context.used, context.limit)}% used. Open Session context` : "Context not reported. Open Session context", onActivate: () => { setTeamOpen(false); setCompanionTab("Context"); setCompanionOpen(true) } },
-        { id: "tokens", name: "Tokens", label: formatCompactCount(gauge.tokens), icon: "hash", ariaLabel: `${formatCount(gauge.tokens)} Session tokens` },
-      ] satisfies SharedStatusItem[] : []),
-      { id: "running", push: true, live: true, label: `${running} running`, short: String(running), icon: branch ? "git-fork" : "zap", tone: running ? "mint" : undefined, ariaLabel: branch ? `${running} ${running === 1 ? "Session" : "Sessions"} running, a child task started` : `${running} ${running === 1 ? "Session" : "Sessions"} running. Show running Sessions`, onActivate: () => setRailFilter("running") },
-    ]
-  }
   return <div class="rl-shell"><div class="workspace rl-app" data-companion-open={companionOpen() ? "true" : undefined} data-collapsed={railCollapsed() ? "true" : undefined}>
-    <SharedActivityBar label="Destinations" brand={<Brand />} items={activityItems()} onNavigate={openDestination} />
+    <SharedActivityBar label="Destinations" brand={<Brand />} items={activityItems} onNavigate={openDestination} />
     <Show when={!railCollapsed()}><SharedListColumn id="session-rail" class="list-column rl-nav" label="Sessions" resize={{ width: listWidth() ?? (narrow() ? 256 : 280), min: LIST_MIN_WIDTH, max: LIST_MAX_WIDTH, label: "Resize Session list", onWidth: saveListWidth }}
       head={<div class="rl-list-head"><button type="button" class="rl-new-chat" aria-label="New chat" aria-keyshortcuts={keyboardAria("new")} onClick={() => void navigate({ to: "/chat" })}><Icon name="plus" /><span>New chat</span></button><Link to="/sessions" class="rl-icon-button" aria-label="Open Sessions overview" data-tooltip="Sessions overview"><Icon name="sessions" /></Link></div>}
       tools={<div class="rl-session-switcher"><label class="workspace__search rl-nav-search"><Icon name="search" /><input type="search" aria-label="Search sessions" value={railQuery()} placeholder="Search sessions" aria-invalid={term().error ? "true" : undefined} aria-describedby={term().error ? "rail-search-error" : undefined} onInput={(event) => setRailQuery(event.currentTarget.value)} /></label>
@@ -1647,13 +1626,13 @@ function Workspace() {
       }</Show>
       <Outlet />
     </main></div>
-  </div><SharedStatusBar label="Status" items={statusItems()} trace={{ running: groupRows("running") > 0, branch: (sessionGauge()?.children ?? 0) > 0 }} /></div>
+  </div></div>
 }
 
 const LIST_MIN_WIDTH = 232
 const LIST_MAX_WIDTH = 360
 const railGroupIcons = { needs: "hand", running: "zap", pinned: "pin", recent: "sessions" } as const
-const railGroupHues = { needs: "amber", running: "mint", pinned: "cobalt", recent: undefined } as const
+const railGroupHues = { needs: "amber", running: "mint", pinned: "green", recent: undefined } as const
 
 type RailState = "waiting" | "running" | "failed" | "idle" | "unknown"
 const railFilters = [{ value: "all", label: "All", shortLabel: "All" }, { value: "waiting", label: "Waiting", shortLabel: "Wait" }, { value: "running", label: "Running", shortLabel: "Run" }, { value: "idle", label: "Idle", shortLabel: "Idle" }] as const
@@ -1661,6 +1640,9 @@ type RailFilter = (typeof railFilters)[number]["value"]
 const railStatusLabels = { waiting: "Waiting", running: "Running", failed: "Failed", idle: "Idle", unknown: "Status unknown" } as const
 const railStateOf = (key: string, sessionID: string, snapshot?: Parameters<typeof sessionState>[2]): RailState => key === "needs" ? "waiting" : key === "running" ? "running" : sessionState(sessionID, activity(), snapshot, executionStates())
 const railMatches = (filter: RailFilter, state: RailState) => filter === "all" || (filter === "idle" ? state === "idle" || state === "failed" : filter === state)
+function ListToggle() {
+  return <button type="button" class="rl-icon-button rl-list-toggle" aria-label={railCollapsed() ? "Show session list" : "Hide session list"} data-tooltip={railCollapsed() ? "Show session list" : "Hide session list"} aria-expanded={!railCollapsed()} aria-controls="session-rail" onClick={() => setRailCollapsed(!railCollapsed())}><Icon name="panel-left" /></button>
+}
 function RailStatusIcon(props: { state: RailState }) { return <span class="rl-rail-status" data-state={props.state} aria-hidden="true"><DesktopStateIndicator state={props.state} /></span> }
 
 let selectIDs = 0
@@ -1717,30 +1699,6 @@ function ComposerField(props: { label: string; value: string; locked: boolean; o
   const [entries, setEntries] = createSignal<readonly { readonly path: string; readonly type: "file" | "directory" }[]>([])
   const [filesError, setFilesError] = createSignal(false)
   let area: HTMLTextAreaElement | undefined
-  let resizeFrame: number | undefined
-  const resize = () => {
-    if (resizeFrame !== undefined) return
-    resizeFrame = requestAnimationFrame(() => {
-      resizeFrame = undefined
-      if (!area?.isConnected) return
-      area.style.height = "auto"
-      area.style.height = `${Math.min(168, Math.max(44, area.scrollHeight))}px`
-    })
-  }
-  createEffect(() => {
-    void props.value
-    resize()
-  })
-  onMount(() => {
-    let width = 0
-    const observer = new ResizeObserver(([entry]) => {
-      if (!entry || entry.contentRect.width === width) return
-      width = entry.contentRect.width
-      resize()
-    })
-    if (area?.parentElement) observer.observe(area.parentElement)
-    onCleanup(() => { observer.disconnect(); if (resizeFrame !== undefined) cancelAnimationFrame(resizeFrame) })
-  })
   let fileRequest = 0
   let fileTimer: ReturnType<typeof setTimeout> | undefined
   const sourceKey = () => typeof props.source === "string" ? props.source : props.source?.directory ?? ""
@@ -1904,7 +1862,7 @@ function ComposerField(props: { label: string; value: string; locked: boolean; o
     setCaret(next.caret)
     queueMicrotask(() => { area?.focus(); area?.setSelectionRange(next.caret, next.caret) })
   }
-  return <div class="composer-field"><label class="desktop__field"><span class="desktop__sr">{props.label}</span><textarea ref={area} rows={1} value={props.value} readOnly={props.locked} role="combobox" aria-expanded={open()} aria-controls={open() ? listID : undefined} aria-activedescendant={open() && items()[active()] ? `${listID}-${active()}` : undefined} aria-autocomplete="list" aria-describedby="message-hint" placeholder="Message YCoding" onInput={(event) => { const value = event.currentTarget.value; if (props.pasted.length) props.onPasted(livePasted(value, props.pasted)); props.onInput(value); at(event) }} onKeyUp={at} onClick={at} onPaste={paste} onCopy={copy} onCut={copy}
+  return <div class="composer-field"><label class="desktop__field"><span class="desktop__sr">{props.label}</span><textarea ref={area} rows={1} wrap="off" value={props.value} readOnly={props.locked} role="combobox" aria-expanded={open()} aria-controls={open() ? listID : undefined} aria-activedescendant={open() && items()[active()] ? `${listID}-${active()}` : undefined} aria-autocomplete="list" aria-describedby="message-hint" placeholder="Message YCoding" onInput={(event) => { const value = event.currentTarget.value; if (props.pasted.length) props.onPasted(livePasted(value, props.pasted)); props.onInput(value); at(event) }} onKeyUp={at} onClick={at} onPaste={paste} onCopy={copy} onCut={copy}
     onKeyDown={(event) => {
       if (isStandardEditShortcut(event)) return
       if (open() && items().length && (event.key === "ArrowDown" || event.key === "ArrowUp")) { event.preventDefault(); setActive((index) => (index + (event.key === "ArrowDown" ? 1 : items().length - 1)) % items().length); return }
@@ -2017,8 +1975,20 @@ function mergeTransferredFiles(current: readonly PromptFile[], added: readonly P
   return files
 }
 
+const imageName = /\.(png|jpe?g|webp|gif)$/i
+const isImageFile = (file: PromptFile) => /^data:image\//i.test(file.uri) || imageName.test(file.name ?? file.uri)
+
+function AttachmentTile(props: { file: PromptFile; locked?: boolean; onRemove: () => void }) {
+  const [broken, setBroken] = createSignal(false)
+  const label = () => props.file.name ?? props.file.uri
+  const remove = () => <button type="button" class="rl-icon" aria-label={`Remove ${label()}`} disabled={props.locked} onClick={props.onRemove}><Icon name="close" /></button>
+  return <Show when={isImageFile(props.file) && !broken()} fallback={<span class="composer-attachments__chip"><Icon name="file" /><span>{label()}</span>{remove()}</span>}>
+    <span class="composer-attachments__thumb"><img src={props.file.uri} alt={label()} title={label()} draggable={false} onError={() => setBroken(true)} />{remove()}</span>
+  </Show>
+}
+
 function AttachButton(props: { directory?: string; files?: readonly PromptFile[]; onChange?: (files: PromptFile[]) => void; locked?: boolean }) {
-  return <><button type="button" class="rl-attach" aria-label="Attach files" disabled={props.locked || !props.onChange || !reading()} onClick={() => openFolderPicker({ title: "Attach workspace file", mode: "file", initialDirectory: props.directory, onPick: (path) => { const name = path.split("/").at(-1) ?? path; props.onChange?.(promptFilesFor(props.files ?? [], [{ uri: `file://${path}`, name }])) } })}><Icon name="clip" /></button><Show when={props.files?.length}><div class="composer-attachments" aria-label="Attached workspace files"><For each={props.files}>{(file) => <span class="composer-attachments__chip"><Icon name="file" /><span>{file.name ?? file.uri}</span><button type="button" class="rl-icon" aria-label={`Remove ${file.name ?? file.uri}`} disabled={props.locked} onClick={() => props.onChange?.((props.files ?? []).filter((item) => item !== file))}><Icon name="close" /></button></span>}</For></div></Show></>
+  return <><button type="button" class="rl-attach" aria-label="Attach files" disabled={props.locked || !props.onChange || !reading()} onClick={() => openFolderPicker({ title: "Attach workspace file", mode: "file", initialDirectory: props.directory, onPick: (path) => { const name = path.split("/").at(-1) ?? path; props.onChange?.(promptFilesFor(props.files ?? [], [{ uri: `file://${path}`, name }])) } })}><Icon name="clip" /></button><Show when={props.files?.length}><div class="composer-attachments" aria-label="Attached workspace files"><For each={props.files}>{(file) => <AttachmentTile file={file} locked={props.locked} onRemove={() => props.onChange?.((props.files ?? []).filter((item) => item !== file))} />}</For></div></Show></>
 }
 function NewChat() {
   const telemetry = useDesktopTelemetry()
@@ -2159,7 +2129,7 @@ function NewChat() {
     } catch (cause) { if (connection().generation === generation) setError(failure(cause, "The chat was not confirmed. Check Recent Sessions, then retry.")) }
     finally { setBusy(false) }
   }
-  return <section class="conversation" data-new-chat aria-labelledby="new-chat-title"><SharedConversationHeader class="rl-top" actions={<div class="rl-top-actions"><SharedContextRingButton class="rl-context-ring" ariaLabel="Open Session context" expanded={companionOpen() && companionTab() === "Context"} label={<><strong>Unknown</strong><small>—</small></>} onClick={() => { setCompanionTab("Context"); setCompanionOpen(true) }} /><button type="button" class="rl-icon rl-companion-toggle" aria-label={companionOpen() ? "Close Session companion" : "Open Session companion"} aria-expanded={companionOpen()} onClick={() => setCompanionOpen(!companionOpen())}><Icon name="team" /></button><CommandMenuButton /></div>}><div class="rl-ident"><h1 id="new-chat-title" class="rl-title" tabindex="-1" ref={focusHeading}>New chat</h1><p class="rl-presence" data-tone="idle"><span>This Mac · {newDirectory() || "No workspace selected"} · {connectionOwnership()}</span></p></div></SharedConversationHeader><div class="rl-scroll"><div class="rl-col rl-thread"><div class="rl-intro"><Brand /><p class="rl-intro-title">Start a conversation.</p>
+  return <section class="conversation" data-new-chat aria-labelledby="new-chat-title"><SharedConversationHeader class="rl-top" menu={<ListToggle />} actions={<div class="rl-top-actions"><SharedContextRingButton class="rl-context-ring" ariaLabel="Open Session context" expanded={companionOpen() && companionTab() === "Context"} label={<><strong>Unknown</strong><small>—</small></>} onClick={() => { setCompanionTab("Context"); setCompanionOpen(true) }} /><button type="button" class="rl-icon rl-companion-toggle" aria-label={companionOpen() ? "Close Session companion" : "Open Session companion"} aria-expanded={companionOpen()} onClick={() => setCompanionOpen(!companionOpen())}><Icon name="team" /></button><CommandMenuButton /></div>}><div class="rl-ident"><h1 id="new-chat-title" class="rl-title" tabindex="-1" ref={focusHeading}>New chat</h1><p class="rl-presence" data-tone="idle"><span>This Mac · {newDirectory() || "No workspace selected"} · {connectionOwnership()}</span></p></div></SharedConversationHeader><div class="rl-scroll"><div class="rl-col rl-thread"><div class="rl-intro"><Brand /><p class="rl-intro-title">Start a conversation.</p>
     <div class="rl-starter-commands" aria-label="Starter commands"><For each={newSlash.filter(command => ["help", "connect", "mcp"].includes(command.name))}>{command => <button type="button" class="rl-btn" aria-label={`Draft /${command.name}`} disabled={!!newPending() || busy() || !!newText()} onClick={() => { setNewText(`/${command.name} `); document.querySelector<HTMLTextAreaElement>('[data-new-chat] .rl-capsule textarea')?.focus() }}>/{command.name}</button>}</For></div>
     <p class="desktop__muted">No Project or filesystem Workspace is required. Start standalone, or explicitly add a workspace for context.</p><Show when={!available().length}><div class="desktop__actions"><button type="button" class="rl-btn" disabled={!!newPending() || busy()} onClick={() => pickFolder("directory")}><Icon name="folder" />Open folder…</button><button type="button" class="rl-btn" disabled={!!newPending() || busy()} onClick={() => pickFolder("create-directory")}><Icon name="folder-plus" />New folder…</button></div></Show><div class="rl-menu-anchor" onKeyDown={(event) => { if (event.key === "Escape") { setWorkspaceMenuOpen(false); event.currentTarget.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')?.focus() } else if (event.key === "ArrowDown" || event.key === "ArrowUp") { const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]; if (items.length) { event.preventDefault(); const index = items.indexOf(document.activeElement as HTMLButtonElement); items[(index + (event.key === "ArrowDown" ? 1 : items.length - 1) + items.length) % items.length]?.focus() } } }}><button type="button" class="rl-btn" aria-haspopup="menu" aria-expanded={workspaceMenuOpen()} disabled={!!newPending()} onClick={() => setWorkspaceMenuOpen(!workspaceMenuOpen())}><Icon name="folder" />{newDirectory().trim() ? `Context · ${selectedWorkspaceName()}` : "Context · No workspace"}</button><Show when={workspaceMenuOpen()}><ResponsiveLayer class="rl-owned-menu" role="menu" label="Workspace context" onClose={() => setWorkspaceMenuOpen(false)}><button type="button" role="menuitem" onClick={() => pickFolder("directory")}><Icon name="folder" />Open folder…</button><button type="button" role="menuitem" onClick={() => pickFolder("create-directory")}><Icon name="folder-plus" />New folder…</button><button type="button" role="menuitem" onClick={() => setDirectory("")}><span><strong>Standalone · no filesystem context</strong><small>Start without a repository</small></span></button><For each={available()}>{(item) => <button type="button" role="menuitem" onClick={() => setDirectory(item.directory)}><span><strong>{item.name && item.name !== item.directory ? item.name : workspaceBase(item.directory)}</strong><small>{item.directory}</small></span></button>}</For><button type="button" role="menuitem" class="rl-textlink" onClick={workspaces.refetch} disabled={workspaces.result().isFetching || !reading()}>Refresh repositories</button></ResponsiveLayer></Show></div><p class="rl-prototype-note">{newDirectory().trim() ? `Selected workspace · ${selectedWorkspaceName() === newDirectory() ? newDirectory() : `${selectedWorkspaceName()} (${newDirectory()})`}.` : "No filesystem workspace is selected unless you choose one. Server-default placement applies until you pick a repository."}</p></div></div></div>
     <div class="rl-dock"><div class="rl-col"><DesktopComposerSurface formClass="composer" busy={busy()} onSubmit={(event) => { event.preventDefault(); void start() }} feedback={null} field={<div class="rl-capsule">
@@ -2328,8 +2298,19 @@ export function desktopPromptTicks(messages: readonly Messages[number][]): reado
   })
 }
 
-function DesktopComposerSurface(props: { readonly formClass: string; readonly busy: boolean; readonly onSubmit: (event: SubmitEvent) => void; readonly field: JSX.Element; readonly feedback: JSX.Element }) {
-  return <form class={props.formClass} aria-busy={props.busy} onSubmit={props.onSubmit}>{props.field}<div class="composer__feedback">{props.feedback}</div></form>
+function DesktopComposerSurface(props: { readonly formClass: string; readonly busy: boolean; readonly hasFeedback?: boolean; readonly onSubmit: (event: SubmitEvent) => void; readonly field: JSX.Element; readonly feedback: JSX.Element }) {
+  return <form class={props.formClass} aria-busy={props.busy} onSubmit={props.onSubmit}><Show when={props.hasFeedback}><div class="composer__feedback">{props.feedback}</div></Show>{props.field}</form>
+}
+
+function PendingTray(props: { readonly items: readonly { readonly id: string; readonly text: string; readonly delivery: "steer" | "queue" }[]; readonly busy?: string; readonly note?: string; readonly onRemove: (id: string) => void; readonly onSteer: (id: string) => void }) {
+  const [expanded, setExpanded] = createSignal(false)
+  return <Show when={props.items.length}><section class="pending-tray" aria-label="Pending messages" data-expanded={expanded() ? "true" : undefined}>
+    <button type="button" class="pending-tray__toggle" aria-expanded={expanded()} aria-controls="pending-tray-list" onClick={() => setExpanded(!expanded())}><Icon name="queue" /><strong>{props.items.length} pending</strong><Show when={!expanded()}><span class="pending-tray__preview">{props.items[0]!.text}</span></Show><Icon name={expanded() ? "chevron-down" : "chevron-up"} /></button>
+    <Show when={expanded()}><ol id="pending-tray-list" class="pending-tray__list"><For each={props.items}>{(item) => <li class="pending-tray__item"><span class="pending-tray__text">{item.text}</span>
+      <button type="button" class="rl-icon-button" aria-label="Steer now" data-tooltip="Steer now" disabled={props.busy !== undefined || item.delivery === "steer"} onClick={() => props.onSteer(item.id)}><Icon name="steer" /></button>
+      <button type="button" class="rl-icon-button" aria-label="Remove pending message" data-tooltip="Remove pending message" disabled={props.busy !== undefined} onClick={() => props.onRemove(item.id)}><Icon name="close" /></button></li>}</For></ol></Show>
+    <Show when={props.note}>{(note) => <p role="status" class="pending-tray__note">{note()}</p>}</Show>
+  </section></Show>
 }
 
 function desktopContentMotion(element: HTMLElement, closing = false) {
@@ -2407,20 +2388,56 @@ function DesktopReasoningDisclosure(props: { readonly defaultOpen: boolean; read
   return <details class="transcript-reasoning rl-reason" data-desktop-activity="reasoning" open={disclosure.present()}><summary class="rl-disclosure-head" aria-expanded={disclosure.expanded()} aria-controls={id} onClick={event => { event.preventDefault(); disclosure.toggle(event.currentTarget) }}><span class="rl-disclosure-icon"><Icon name="sparkles" /></span><span class="rl-disclosure-label">{props.streaming ? "Thinking" : "Thought"}</span><span class="rl-disclosure-time">{props.durationLabel}</span><span class="rl-disclosure-chev"><Icon name="chevron-right" /></span></summary><Show when={disclosure.present()}><div id={id} ref={disclosure.ref} class="transcript-reasoning__body rl-disclosure-body" inert={!disclosure.expanded()} aria-hidden={!disclosure.expanded()}><Markdown text={props.text} /></div></Show></details>
 }
 
+async function copyMessage(text: string) {
+  if (typeof navigator !== "undefined" && typeof navigator.clipboard?.writeText === "function") {
+    try { await navigator.clipboard.writeText(text); return } catch { /* the native clipboard below handles denied page access */ }
+  }
+  await copyTextToClipboard(text)
+}
+
+function CopyMessageButton(props: { readonly text: string }) {
+  const [copied, setCopied] = createSignal(false)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  onCleanup(() => clearTimeout(timer))
+  const copy = async () => {
+    try { await copyMessage(props.text) } catch { setDesktopNotice("The message could not be copied."); return }
+    setCopied(true)
+    clearTimeout(timer)
+    timer = setTimeout(() => setCopied(false), 1500)
+  }
+  return <button type="button" class="rl-icon-button transcript-message__copy" aria-label="Copy message" data-copied={copied() ? "true" : undefined} data-tooltip={copied() ? "Copied" : "Copy message"} onClick={() => void copy()}><Icon name={copied() ? "check" : "copy"} /><span class="desktop__sr" role="status">{copied() ? "Copied" : ""}</span></button>
+}
+
+const deliveryLabels = { sending: "Sending", sent: "Sent", read: "Read by YCoding" } as const
+
+function DeliveryStatus(props: { readonly state: keyof typeof deliveryLabels; readonly time: number }) {
+  const time = () => new Date(props.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+  return <span class="transcript-message__delivery" role="img" data-state={props.state} aria-label={deliveryLabels[props.state]} title={`${deliveryLabels[props.state]} · ${time()}`}>
+    <Show when={props.state === "sending"}><span class="delivery-dots" aria-hidden="true"><i /><i /><i /></span></Show>
+    <Show when={props.state === "sent"}><Icon name="check" /></Show>
+    <Show when={props.state === "read"}><Icon name="check-all" /></Show>
+  </span>
+}
+
+function SentImage(props: { readonly sessionID: string; readonly file: { readonly name?: string; readonly content: { readonly digest: string } } }) {
+  const attachment = observe(() => ({ queryKey: ["attachment", ...scope(), props.sessionID, props.file.content.digest] as const, queryFn: () => api.sessionAttachment({ sessionID: props.sessionID, digest: props.file.content.digest }), enabled: reading() }))
+  const source = () => { const file = attachment.result().data; return file ? `data:${file.mime};base64,${file.data}` : undefined }
+  return <Show when={source()} fallback={<span class="conversation__chip">{props.file.name ?? "Image attachment"}</span>}>{(url) => <img class="transcript-message__image" src={url()} alt={props.file.name ?? "Image attachment"} title={props.file.name} draggable={false} />}</Show>
+}
+
 function intermediateAssistant(message: Messages[number] | undefined): message is Extract<Messages[number], { type: "assistant" }> {
   if (message?.type !== "assistant" || message.error || message.retry || message.content.length === 0) return false
   if (message.finish === "stop" || message.finish === "length" || message.finish === "content-filter" || message.finish === "error") return false
   return !message.content.some(part => part.type === "text" && part.text.length > 0)
 }
 
-function TurnView(props: { message: Messages[number]; continuation?: boolean }) {
+function TurnView(props: { sessionID: string; message: Messages[number]; continuation?: boolean; delivery?: keyof typeof deliveryLabels }) {
   const duration = (start: number, end?: number) => end === undefined ? undefined : `${Math.max(0, Math.round((end - start) / 1000))}s`
   const role = () => props.message.type
   const externalPeer = () => dotsPeerLabel(props.message.metadata)
   const peerInput = () => externalPeer() && (props.message.type === "user" || props.message.type === "synthetic") ? props.message : undefined
   const syntheticCard = () => props.message.type === "synthetic" && !peerInput() ? classifyDesktopSynthetic(props.message) : undefined
   const steer = () => { const card = syntheticCard(); return card?.kind === "dot-steer" ? card : undefined }
-  const steerReceipt = () => dotSteerReceipt(false, undefined, false)
   const layout = () => {
     if (peerInput()) return "activity"
     const type = role()
@@ -2434,8 +2451,14 @@ function TurnView(props: { message: Messages[number]; continuation?: boolean }) 
       return <><span class="transcript-message__author desktop__sr">External peer</span><NativeActivityRow label={dotsPeerLabel({ dots: field(props.message.metadata, "dots") }) ? "Dots" : "Remote MCP"} identity={externalPeer()} time={message().time.created}><Markdown text={message().text} /><For each={files()}>{file => <span class="conversation__chip">{file.name ?? "Attachment"}</span>}</For></NativeActivityRow></>
     }}</Show>
     <Show when={!peerInput() && externalPeer()}>{value => <NativeActivityRow label="External peer" identity={value()}>{value()}</NativeActivityRow>}</Show>
-    <Show when={props.message.type === "user" && !peerInput() ? props.message : undefined}>{(message) => <SharedMessageTurn kind="user" markdownText={message().text} attachments={<For each={message().files}>{(file) => <span class="conversation__chip">{file.name ?? "Attachment"}</span>}</For>} receipt={new Date(message().time.created).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} receiptLabel="Message created" />}</Show>
-    <Show when={steer()}>{(entry) => <SharedMessageTurn kind="synthetic" content={<div class="transcript-message--user" aria-label="Dot steer prompt"><div class="transcript-message__bubble"><div class="transcript-message__bubble-text"><Markdown text={entry().text} /></div></div><span class="transcript-message__receipt" role="status" aria-label={steerReceipt().label}>{steerReceipt().text}</span></div>} />}</Show>
+    <Show when={props.message.type === "user" && !peerInput() ? props.message : undefined}>{(message) => {
+      const images = () => message().files?.filter((file) => file.mime.startsWith("image/")) ?? []
+      return <SharedMessageTurn kind="user" markdownText={message().text} bubbleAttachments={images().length ? <div class="transcript-message__images"><For each={images()}>{(file) => <SentImage sessionID={props.sessionID} file={file} />}</For></div> : undefined} attachments={<>
+        <For each={message().files?.filter((file) => !file.mime.startsWith("image/"))}>{(file) => <span class="conversation__chip">{file.name ?? "Attachment"}</span>}</For>
+        <div class="transcript-message__meta"><CopyMessageButton text={message().text} /><DeliveryStatus state={props.delivery ?? "sent"} time={message().time.created} /></div>
+      </>} />
+    }}</Show>
+    <Show when={steer()}>{(entry) => <SharedMessageTurn kind="synthetic" content={<div class="transcript-message--user" aria-label="Dot steer prompt"><div class="transcript-message__bubble" data-origin="chatgpt"><span class="transcript-message__origin" role="img" aria-label="ChatGPT" title="Sent via ChatGPT" style={{ "--origin-mark": `url("${openaiMark}")` }} /><div class="transcript-message__bubble-text"><Markdown text={entry().text} /></div></div><div class="transcript-message__meta"><CopyMessageButton text={entry().text} /></div></div>} />}</Show>
     <Show when={props.message.type === "assistant" ? props.message : undefined}>{(message) => {
       const groups = createMemo(() => groupAssistantParts(message().content))
       const identity = () => <SharedTurnHead class="transcript-message__head" mark={<span class="rl-avatar transcript-message__mark"><Icon name="sparkles" /></span>}>{message().agent} · {message().model.providerID}/{message().model.id}{message().model.variant ? ` · ${message().model.variant}` : ""}{message().model.profile === undefined ? "" : ` · Profile ${message().model.profile}`}{duration(message().time.created, message().time.completed) ? ` · ${duration(message().time.created, message().time.completed)}` : ""}</SharedTurnHead>
@@ -2450,6 +2473,7 @@ function TurnView(props: { message: Messages[number]; continuation?: boolean }) 
             <Keyed each={tools()} by={(parts) => parts[0]!.id}>{(parts) => <DesktopToolDisclosure tools={toolSteps(parts())} lastSummary={parts().at(-1) ? toolDisplaySummary(parts().at(-1)!.name, parts().at(-1)!.state.input) : undefined} streaming={parts().some((part) => part.state.status === "running" || part.state.status === "streaming")} durationLabel={presentation().grouping === "auto" ? duration(message().time.created, message().time.completed) : undefined} />}</Keyed>
           </>
         }}</Keyed>
+        <Show when={message().time.completed !== undefined ? assistantReplyText(message().content) : undefined}>{(reply) => <div class="transcript-message__meta"><CopyMessageButton text={reply()} /></div>}</Show>
         <Show when={groups().length === 0 && !message().error && message().time.completed !== undefined}><p class="transcript__notice">{message().content.some((part) => part.type === "reasoning") ? "Reasoning is not shown for this response." : "No visible content in this response."}</p></Show>
       </>} error={<Show when={message().error}>{(error) => <p role="alert" class="desktop__error">{error().message}</p>}</Show>} />
     }}</Show>
@@ -2781,8 +2805,6 @@ function ModelPicker(props: { sessionID: string; model?: ModelId; running: boole
     pickChoice({ ...current, variant: stops[(effortStopIndex(stops, current.variant) + 1) % stops.length]!.value })
   }, { defer: true }))
   const currentName = () => { const current = data()?.current; const option = current ? list().find((item) => item.id === current.id && item.providerID === current.providerID) : undefined; return option?.name ?? current?.id ?? props.model?.id }
-  createEffect(() => setSessionModel({ sessionID: props.sessionID, name: currentName(), effort: data()?.current?.variant || undefined }))
-  onCleanup(() => setSessionModel(undefined))
   return <>
     <Show when={data()} fallback={<button type="button" class="composer-chip" disabled><span>{props.agent ? `${props.agent} · ` : ""}{currentName() ?? "Model not set"}</span></button>}>
       <ModelPopover chipLabel={currentName() ?? "Choose a model"} effortLabel={staged() ? `${pendingChoice()!.variant || "Default"} · pending` : data()?.current?.variant || undefined} busy={switching() || !reading()} modelBusy={blocked() || switching() || !reading()} models={list()} choice={pendingChoice() ?? choice()} openTick={props.openTick} onPick={pickChoice} onRefresh={catalog.refetch} refreshing={catalog.result().isFetching}>
@@ -2994,11 +3016,7 @@ function Conversation(props: { sessionID: string }) {
   })
   const running = () => activity().busy.has(props.sessionID) || responding(history()?.messages ?? [])
   const runningChildren = () => children().filter((entry) => entry.status === "Running").length
-  createEffect(() => {
-    const item = session()
-    const value = context()
-    setSessionGauge({ sessionID: props.sessionID, autonomy: policyLabels().autonomy, context: value && !value.stale ? { used: value.used, limit: value.limit } : undefined, tokens: item ? item.tokens.input + item.tokens.output + item.tokens.reasoning + item.tokens.cache.read + item.tokens.cache.write : 0, running: running(), children: runningChildren() })
-  })
+  createEffect(() => setSessionGauge({ sessionID: props.sessionID, children: runningChildren() }))
   const stop = async () => {
     if (stopping() || !reading()) return
     const generation = connection().generation
@@ -3357,15 +3375,18 @@ function Conversation(props: { sessionID: string }) {
     setRevertNotice(undefined)
     const result = await promptGuard.run(props.sessionID, revision, activeRevert(), captured)
     if (result.status === "completed") {
-      hold(undefined)
-      setPicks([])
-      setFiles([])
-      setRestoredAgents([])
-      update("")
-      setStagedRevert(undefined)
+      batch(() => {
+        hold(undefined)
+        setPicks([])
+        setFiles([])
+        setRestoredAgents([])
+        update("")
+        setStagedRevert(undefined)
+        setFollowing(true)
+      })
       sessionRead.refetch()
-      setFollowing(true)
       refresh(["messages", ...scope(), props.sessionID])
+      queueMicrotask(() => { if (!document.activeElement || document.activeElement === document.body || document.activeElement.closest(".rl-send")) document.querySelector<HTMLTextAreaElement>(".rl-capsule textarea")?.focus() })
     } else if (result.status === "declined") {
       hold(undefined)
       setRevertNotice("Message not sent. Review or restore the staged revert in Changes.")
@@ -3378,6 +3399,18 @@ function Conversation(props: { sessionID: string }) {
     }
     setSending(false)
   }
+  const deliveries = createMemo(() => userDeliveryStates(history()?.messages ?? [], sending() ? pending()?.promptID : undefined))
+  const [pendingBusy, setPendingBusy] = createSignal<string>()
+  const [pendingNote, setPendingNote] = createSignal<string>()
+  const actOnPending = async (kind: "remove" | "steer", messageID: string) => {
+    if (pendingBusy() || !reading()) return
+    setPendingBusy(messageID)
+    setPendingNote(undefined)
+    try { await (kind === "remove" ? api.removePending({ sessionID: props.sessionID, messageID }) : api.steerPending({ sessionID: props.sessionID, messageID })) }
+    catch (cause) { setPendingNote(failure(cause, "The pending message could not be changed. The list was refreshed.")) }
+    finally { setPendingBusy(undefined); pendingRead.refetch() }
+  }
+  const feedbackVisible = () => !!(error() || slashNote() || revertUncertain() || !reading() || (stagedModel() && running()) || (unsure() && !sending()) || (pending() && !sending() && !unsure()) || stopNote())
   const transientActivity = () => desktopTransientActivity({ active: reading() && !executionStates().has(props.sessionID) && running(), sending: sending(), messages: history()?.messages ?? [], shells: activityView()?.shells.filter(shell => shell.ownerSessionID === props.sessionID) ?? [] })
   return <section class="conversation" aria-labelledby="conversation-title" data-team-open={teamOpen()}>
     <Show when={exportOpen()}><SessionExportDialog sessionID={props.sessionID} onClose={() => setExportOpen(false)} /></Show>
@@ -3403,7 +3436,7 @@ function Conversation(props: { sessionID: string }) {
         <Show when={activityMoreError()}><p role="alert">{activityMoreError()}</p></Show>
       </Show><Show when={slashNote()}><p role="status">{slashNote()}</p></Show>
     </DesktopDialog>}</Show>
-    <SharedConversationHeader class="conversation__head rl-top" actions={<div class="rl-top-actions"><button type="button" class="rl-icon-button" aria-label={teamOpen() ? "Show conversation" : "Show Team"} data-tooltip={teamOpen() ? "Show conversation" : "Show Team"} aria-pressed={teamOpen()} onClick={() => { setTeamOpen(!teamOpen()); setCompanionOpen(false) }}><Icon name="team" /><span class="desktop__sr">{teamOpen() ? "Conversation" : "Team"}</span></button><SharedContextRingButton class="rl-context-ring" ariaLabel="Toggle session context" expanded={companionOpen() && companionTab() === "Context"} fraction={!context() || context()?.stale ? 0 : context()!.used / context()!.limit} label={<Show when={context()?.stale ? undefined : context()} fallback="Unknown">{(value) => <><strong>{formatCompactCount(value().used)}</strong><small>{percent(value().used, value().limit)}%</small></>}</Show>} onClick={() => { const closing = companionOpen() && companionTab() === "Context"; setTeamOpen(false); setCompanionTab("Context"); setCompanionOpen(!closing) }} /><button type="button" class="rl-icon rl-companion-toggle" aria-label={companionOpen() ? "Close Session companion" : "Open Session companion"} aria-expanded={companionOpen()} onClick={() => { setTeamOpen(false); setCompanionOpen(!companionOpen()) }}><Icon name="panel-left" /></button><CommandMenuButton /></div>}><SharedTrace running={running()} branch={runningChildren() > 0} /><div class="rl-ident">
+    <SharedConversationHeader class="conversation__head rl-top" menu={<ListToggle />} actions={<div class="rl-top-actions"><button type="button" class="rl-icon-button" aria-label={teamOpen() ? "Show conversation" : "Show Team"} data-tooltip={teamOpen() ? "Show conversation" : "Show Team"} aria-pressed={teamOpen()} onClick={() => { setTeamOpen(!teamOpen()); setCompanionOpen(false) }}><Icon name="team" /><span class="desktop__sr">{teamOpen() ? "Conversation" : "Team"}</span></button><SharedContextRingButton class="rl-context-ring" ariaLabel="Toggle session context" expanded={companionOpen() && companionTab() === "Context"} fraction={!context() || context()?.stale ? 0 : context()!.used / context()!.limit} label={<Show when={context()?.stale ? undefined : context()} fallback="Unknown">{(value) => <><strong>{formatCompactCount(value().used)}</strong><small>{percent(value().used, value().limit)}%</small></>}</Show>} onClick={() => { const closing = companionOpen() && companionTab() === "Context"; setTeamOpen(false); setCompanionTab("Context"); setCompanionOpen(!closing) }} /><button type="button" class="rl-icon rl-companion-toggle" aria-label={companionOpen() ? "Close Session companion" : "Open Session companion"} aria-expanded={companionOpen()} onClick={() => { setTeamOpen(false); setCompanionOpen(!companionOpen()) }}><Icon name="panel-left" /></button><CommandMenuButton /></div>}><SharedTrace running={running()} branch={runningChildren() > 0} /><div class="rl-ident">
       <h1 id="conversation-title" class="rl-title" tabindex="-1" ref={focusHeading}>{session()?.title ?? "Session"}</h1>
       <Show when={sessionRead.result().isError}><div role="alert" class="desktop__error"><p>{failure(sessionRead.result().error, "The Session could not be read. Refresh to retry.")}</p><button type="button" onClick={sessionRead.refetch} disabled={!reading()}>Refresh Session</button></div></Show>
       <Show when={session()}>{(item) => <>
@@ -3425,20 +3458,20 @@ function Conversation(props: { sessionID: string }) {
       <Show when={historyError()}><p role="alert">{historyError()}</p></Show>
       <Show when={!messages.result().isPending} fallback={<SharedLoadingSkeleton kind="conversation" label="Loading the transcript…" />}><Show when={!messages.result().isError} fallback={<div role="alert" class="desktop__error"><p>{failure(messages.result().error, "The transcript could not be read. Check the connection and refresh.")}</p><button type="button" onClick={messages.refetch} disabled={!reading()}>Refresh transcript</button></div>}>
         <Show when={turns().length} fallback={<div class="desktop-empty-transcript" role="status" aria-label="Empty transcript"><Icon name="chat" /><p>No messages in this Session yet.</p></div>}><ol class="transcript rl-thread" aria-label="Transcript"><Keyed each={turns()} by={(item) => item.id}>{(item) => <>
-          <TurnView message={item()} continuation={!findQuery().trim() && continuations().has(item().id)} />
+          <TurnView sessionID={props.sessionID} message={item()} continuation={!findQuery().trim() && continuations().has(item().id)} delivery={deliveries().get(item().id)} />
           <Show when={editPlacements().get(item().id)}>{(edit) => <li class="transcript__turn transcript__edits"><SharedEditedFilesCard files={edit().files} onViewChanges={(path) => { setSelectedTurn(edit().turnID); openChanges(path) }} onUndo={() => { setSelectedTurn(edit().turnID); openChanges(); void doRevert("stage") }} undoDisabled={revertBusy() || revertUncertain() || running()} footerNote={activeRevert() ? "Staged revert · preview and confirmation required" : undefined} /></li>}</Show></>}</Keyed></ol></Show>
       </Show></Show>
       <Show when={requests.result().isError}><div role="alert" class="desktop__error"><p>Pending requests could not be read. Refresh to retry.</p><button type="button" onClick={requests.refetch} disabled={!reading()}>Refresh requests</button></div></Show>
       <Show when={requests.result().data && !pendingRequests()}><p role="status">Refreshing requests after a connection change…</p></Show>
       <Show when={pendingRead.result().isPending && reading()}><SharedLoadingSkeleton kind="list" label="Reading pending inputs…" /></Show>
       <Show when={pendingRead.result().isError}><p role="alert">{failure(pendingRead.result().error, "Pending inputs could not be read.")}<button type="button" class="rl-btn" disabled={!reading()} onClick={pendingRead.refetch}>Refresh pending inputs</button></p></Show>
-      <Show when={pendingInputs()?.items.length}><section class="request" aria-label="Pending Session inputs"><h2>Pending inputs</h2><ol class="desktop-dialog__entries"><For each={pendingInputs()?.items}>{(item) => <li><strong>{item.type === "compaction" ? "Compaction" : item.delivery === "steer" ? "Steer" : "Queued input"}</strong><Show when={item.type !== "compaction" ? item : undefined}>{(input) => <><p>{input().text}</p><Show when={input().description}><small>{input().description}</small></Show></>}</Show><small>Admitted {new Date(item.timeCreated).toLocaleString()} · sequence {formatCount(item.admittedSeq)}</small></li>}</For></ol></section></Show>
       <Show when={pendingRequests()}>{(data) => <Requests data={data()} updatedAt={requests.result().dataUpdatedAt} refetch={requests.refetch} />}</Show>
       <GlobalRequests directory={session()?.location.directory} workspace={session()?.location.workspaceID} />
       <Show when={transientActivity()}>{label => <div class="desktop-transient-activity" role="status" aria-label="Current activity"><NativeActivityRow label="YCoding" active>{label()}</NativeActivityRow></div>}</Show>
     </div></div></div>
     <div class="rl-dock"><div class="conversation__jump-slot" ref={jumpSlot}><JumpControls clearance={clearance()} onTop={!teamOpen() && targets().top ? jumpToTop : undefined} onBottom={!teamOpen() && targets().bottom ? jumpToLatest : undefined} /></div><div class="rl-col"><Show when={teamOpen()}><div class="desktop-master-composer"><span>Master Session Direct Prompting · Target: {props.sessionID}</span><button type="button" class="rl-icon-button" aria-label="Scroll Team to top" data-tooltip="Scroll Team to top" onClick={() => { const position = { top: 0, behavior: jumpBehavior() }; teamView?.scrollTo(position); teamView?.querySelector(".desktop-team-main")?.scrollTo(position) }}><Icon name="arrow-up" /></button></div></Show>
-    <DesktopComposerSurface formClass="composer" busy={sending()} onSubmit={(event) => { event.preventDefault(); void send() }} field={<div class="rl-capsule">
+    <PendingTray items={userPendingInputs(pendingInputs()?.items ?? [])} busy={pendingBusy()} note={pendingNote()} onRemove={(id) => void actOnPending("remove", id)} onSteer={(id) => void actOnPending("steer", id)} />
+    <DesktopComposerSurface formClass="composer" busy={sending()} hasFeedback={feedbackVisible()} onSubmit={(event) => { event.preventDefault(); void send() }} field={<div class="rl-capsule">
       <ComposerField label="Message" value={pending()?.text ?? text()} locked={!!pending() || sending()} source={props.sessionID} directory={session()?.location.directory ?? ""} localCommands={localSlash} picks={picks()} onPicks={setPicks} pasted={pasted()} onPasted={setPasted} onInput={update} onSubmit={() => void send()} onAttachFiles={(added) => setFiles((current) => mergeTransferredFiles(current, added))} />
       <EditorContextControl context={editorContext} disabled={!!pending() || sending()} />
       <Show when={restoredAgents().length}><div class="composer-attachments" aria-label="Restored agent attachments"><For each={restoredAgents()}>{(agent) => <span class="composer-attachments__chip"><Icon name="user" /><span>{agent.name}</span><button type="button" class="rl-icon" aria-label={`Remove agent ${agent.name}`} disabled={!!pending() || sending()} onClick={() => setRestoredAgents((agents) => agents.filter((item) => item !== agent))}><Icon name="close" /></button></span>}</For></div></Show>
@@ -3451,10 +3484,10 @@ function Conversation(props: { sessionID: string }) {
         </div>
       </div></div>} feedback={<>
       <Show when={stagedModel() && running()}><p role="status">Stop the running turn before applying the staged reasoning effort to the next message.</p></Show>
-      <div class="desktop__feedback"><Show when={error()}>{(message) => <p role="alert" class="desktop__error">{message()}</p>}</Show><Show when={sending()}><p role="status">Sending…</p></Show><Show when={slashNote()}>{(note) => <p role="status">{note()}</p>}</Show><Show when={revertUncertain()}><p role="status">Review the Session and staged revert before continuing.</p></Show><Show when={!reading()}><p role="status">Reconnecting. Sending resumes when the backend is connected.</p></Show></div>
-      <div class="desktop__actions">
+      <Show when={error()}>{(message) => <p role="alert" class="desktop__error">{message()}</p>}</Show><Show when={slashNote()}>{(note) => <p role="status">{note()}</p>}</Show><Show when={revertUncertain()}><p role="status">Review the Session and staged revert before continuing.</p></Show><Show when={!reading()}><p role="status">Reconnecting. Sending resumes when the backend is connected.</p></Show>
+      <Show when={(unsure() && !sending()) || (pending() && !sending() && !unsure()) || stopNote()}><div class="desktop__actions">
         <Show when={unsure() && !sending()}><button type="button" onClick={() => { update(pending()?.text ?? text()); hold(undefined); promptGuard.reset(); unconfirmed.delete(props.sessionID); setUnsure(false); setRevertUncertain(false); setError(undefined); sessionRead.refetch() }}>I reviewed the Session</button></Show><Show when={pending() && !sending() && !unsure()}><button type="button" onClick={() => { update(pending()?.text ?? ""); hold(undefined); setError(undefined) }}>Edit as a new message</button></Show>
-        <Show when={stopNote()}>{(note) => <span role="status" class="desktop__muted">{note()}</span>}</Show></div></>} />
+        <Show when={stopNote()}>{(note) => <span role="status" class="desktop__muted">{note()}</span>}</Show></div></Show></>} />
     <Show when={policyOpen()}><ResponsiveLayer class="desktop-popover rl-policy-panel" role="dialog" label="Goal and autonomy" onClose={() => closePolicy(true)} onKeyDown={(event) => { if (event.key === "Escape" && !event.defaultPrevented && !event.isComposing && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); closePolicy(true) } }}><div class="rl-pane-section-heading"><strong>Goal and autonomy</strong><button type="button" class="rl-btn" onClick={() => closePolicy(true)}>Close</button></div><Show when={!autonomy()}><p role="status">Goal and autonomy are unavailable until the Session state is read.</p><Show when={autonomyRead.result().isError}><button type="button" class="rl-btn" onClick={autonomyRead.refetch}>Refresh</button></Show></Show><Show when={autonomy()}><p class="model-popover__label">Permissions</p><SharedRadioGroup label="Permissions" options={decisionModes} value={permissions()} disabled={policyBusy() || policyUncertain()} onChange={(value) => setPermissions(value as "manual" | "auto" | "yolo")} /><p class="model-popover__label">Guardrails</p><SharedRadioGroup label="Guardrails" options={decisionModes} value={guardrails()} disabled={policyBusy() || policyUncertain()} onChange={(value) => setGuardrails(value as "manual" | "auto" | "yolo")} /><p class="model-popover__label">Answers</p><SharedRadioGroup label="Answers" options={decisionModes} value={answers()} disabled={policyBusy() || policyUncertain()} onChange={(value) => setAnswers(value as "manual" | "auto" | "yolo")} /><div class="rl-policy-actions"><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading()} onClick={() => void setPolicy({ permissions: permissions(), guardrails: guardrails(), answers: answers() }, `Change autonomy decisions to ${permissions()}/${guardrails()}/${answers()}?`)}>Apply autonomy</button><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading()} aria-pressed={!!autonomy()?.effective.deferred} onClick={() => void setPolicy({ defer: !autonomy()?.effective.deferred }, autonomy()?.effective.deferred ? "Disable deferral of unresolved decisions?" : "Enable persistent deferral of unresolved decisions?")}>{autonomy()?.effective.deferred ? "Defer on" : "Defer off"}</button></div><label class="desktop__field">Goal<textarea value={policyGoal()} disabled={policyBusy() || policyUncertain()} onInput={(event) => setPolicyGoal(event.currentTarget.value)} /></label><div class="rl-policy-actions"><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading() || !policyGoal().trim()} onClick={() => void setPolicy({ goal: policyGoal().trim() }, "Replace the Session goal with this text?")}>Set goal</button><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading() || (!autonomy()?.goal || autonomy()?.goal?.status === "stopped")} onClick={() => void setPolicy({ goal: null }, "Stop the Session goal? Its text will be retained.")}>Stop goal</button></div></Show><Show when={policyError()}>{(error) => <p role="alert">{error()}</p>}</Show></ResponsiveLayer></Show></div></div>
     <Show when={companionOpen()}><aside class="rl-companion" aria-label="Session companion" data-full={fullChangesOpen() && companionTab() === "Changes" ? "true" : undefined}>
       <DesktopCompanion

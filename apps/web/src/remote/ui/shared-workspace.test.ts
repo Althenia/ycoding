@@ -6,7 +6,7 @@ import { SharedActivitySurface, SharedChangesSurface, SharedEditedFilesCard, Sha
 import { SharedPageSurface, SharedProjectsSurface, SharedSessionsSurface, SharedWorkspacesSurface, SharedUsageSurface, SharedSettingsSurface } from "./shared-workspace"
 import { createSharedProjectForm, type SharedProjectDirectoryInput, type SharedProjectCreateInput } from "./shared-workspace"
 import { SharedRadioGroup, SharedLoadingSkeleton } from "./shared-workspace"
-import { SharedActivityBar, SharedListColumn, SharedSessionGroups, SharedStatusBar, SharedTrace, clampListWidth, listWidthForKey } from "./shared-workspace"
+import { SharedActivityBar, SharedDeliveryStatus, SharedListColumn, SharedSessionGroups, SharedTrace, clampListWidth, listWidthForKey } from "./shared-workspace"
 import { readStylesheet } from "../../styles/css-rules"
 import { Icon, type IconName } from "../../ui/icon"
 
@@ -649,7 +649,7 @@ test("shared surfaces expose semantic hooks: page surface, project split, ring l
     const ring = renderToString(() => createComponent(SharedContextRingButton, { fraction, label: "x", ariaLabel: "Open context", expanded: false, onClick: () => {} }))
     expect(ring).toContain(`data-level="${level}"`)
     expect(ring).toContain('class="rl-ring-value"')
-    expect(ring).not.toContain('stroke="var(--yc-cobalt-ink)"')
+    expect(ring).not.toContain('stroke="var(--yc-green-ink)"')
   }
   const sessions = renderToString(() => createComponent(SharedSessionsSurface, { search: "", filters: [{ value: "all", label: "All", count: 1250 }], filter: "all", pinning: false, items: [{ id: "a", title: "A", hint: "Waiting for input", meta: "now", pinned: false }, { id: "b", title: "B", hint: "Running", meta: "now", pinned: false }, { id: "c", title: "C", hint: "Idle", meta: "now", pinned: false }], totalLoaded: 1250, pinnedCount: 0, onNewSession: () => {}, onSearch: () => {}, onFilter: () => {}, onTogglePinMode: () => {}, onSelect: () => {} }))
   expect(sessions).toContain("All 1,250")
@@ -780,26 +780,55 @@ test("the activity bar names every destination with a visible label, current sta
   expect(html.indexOf('class="activity-bar__spacer"')).toBeGreaterThan(html.indexOf('data-destination="projects"'))
 })
 
-test("the status bar renders actionable items as buttons, static readouts as text, and announces the running count", () => {
-  const html = renderToString(() => createComponent(SharedStatusBar, {
-    label: "Session status",
-    trace: { running: true, branch: false },
-    items: [
-      { id: "connection", label: "Connected", icon: "plug", tone: "mint", ariaLabel: "Connection: Connected", onActivate: () => {} },
-      { id: "model", name: "Model", label: "claude-opus-5-5", short: "opus", ariaLabel: "Model: claude-opus-5-5", onActivate: () => {} },
-      { id: "context", label: "42%", ring: 0.42, ariaLabel: "Context 42% used", onActivate: () => {} },
-      { id: "tokens", label: "18.2k tokens", ariaLabel: "Session tokens 18.2k", push: true },
-      { id: "running", label: "2 running", icon: "zap", tone: "mint", ariaLabel: "2 Sessions running", live: true, onActivate: () => {} },
-    ],
+test("the shared workspace exports no bottom status bar", async () => {
+  const exports = await import("./shared-workspace")
+  expect("SharedStatusBar" in exports).toBe(false)
+  expect("SharedStatusItem" in exports).toBe(false)
+})
+
+test("delivery status renders three bouncing dots while sending, one check once sent and a green double check once read", () => {
+  const render = (state: "sending" | "queued" | "processing" | "sent" | "read" | "failed" | "unknown", label: string) => renderToString(() => createComponent(SharedDeliveryStatus, { state, label }))
+  const sending = render("sending", "Sending")
+  expect(sending).toContain('class="delivery-status" data-state="sending" aria-hidden="true"')
+  expect(sending.match(/<i>/g)?.length ?? sending.match(/<i\b/g)?.length).toBe(3)
+  expect(sending).not.toContain("<svg")
+  for (const state of ["sent", "queued", "processing"] as const) {
+    const html = render(state, "Sent")
+    expect(html).toContain(`data-state="${state}"`)
+    expect(html.match(/<svg/g)?.length).toBe(1)
+    expect(html).not.toContain("delivery-status__double")
+    expect(html).not.toContain("delivery-status__dots")
+  }
+  const read = render("read", "Read by YCoding")
+  expect(read).toContain('data-state="read"')
+  expect(read).toContain("delivery-status__double")
+  expect(read.match(/<path/g)?.length).toBe(2)
+  expect(render("failed", "Send failed")).toContain("Send failed")
+})
+
+test("a user turn shows the delivery icon under the bubble with its title and no visible clock time, and the copy button is a labelled control", () => {
+  const html = renderToString(() => createComponent(SharedMessageTurn, {
+    kind: "user", markdownText: "hello", copyText: "hello", receiptLabel: "Read by YCoding", receiptTitle: "Read by YCoding · 10:42 AM",
+    receipt: createComponent(SharedDeliveryStatus, { state: "read", label: "Read by YCoding" }),
   }))
-  expect(html).toMatch(/^<div class="status-bar" role="region" aria-label="Session status">/)
-  expect(html).toContain('<div class="trace" aria-hidden="true" data-run="true" data-branch="false"')
-  expect(html).toMatch(/<button type="button" class="status-bar__item" data-item="connection" data-tone="mint" aria-label="Connection: Connected">/)
-  expect(html).toContain('<span class="status-bar__name">Model</span>')
-  expect(html).toContain('<span class="status-bar__full">claude-opus-5-5</span><span class="status-bar__short" aria-hidden="true">opus</span>')
-  expect(html).toMatch(/<span class="status-bar__item status-bar__item--push" data-item="tokens" role="note" aria-label="Session tokens 18.2k">/)
-  expect(html).toMatch(/<span class="status-bar__live" aria-live="polite"><button type="button" class="status-bar__item" data-item="running"/)
-  expect(html).toContain('<svg class="status-bar__ring" viewBox="0 0 16 16" aria-hidden="true">')
+  expect(html).toContain('class="transcript-message__receipt" role="status" aria-label="Read by YCoding" title="Read by YCoding · 10:42 AM"')
+  expect(html).toContain('aria-label="Copy message"')
+  expect(html).not.toMatch(/>\s*\d{1,2}:\d{2}/)
+  expect(html).not.toContain("transcript-message__origin")
+})
+
+test("a Dot-steered turn carries the ChatGPT corner badge and no Dot text", () => {
+  const html = renderToString(() => createComponent(SharedMessageTurn, { kind: "synthetic", bubble: true, origin: "chatgpt", markdownText: "Inspect Work config", articleLabel: "Dot steer prompt" }))
+  expect(html).toContain('class="transcript-message__origin" role="img" aria-label="ChatGPT" title="Sent via ChatGPT"')
+  expect(html).toContain("provider-logo")
+  expect(html.replace(/aria-label="[^"]*"/g, "")).not.toContain("Dot steer")
+})
+
+test("assistant turns carry one copy control that is absent when there is nothing to copy", () => {
+  const withText = renderToString(() => createComponent(SharedMessageTurn, { kind: "assistant", copyText: "Reply text", body: "x" }))
+  expect(withText.match(/aria-label="Copy message"/g)?.length).toBe(1)
+  expect(withText).toContain("transcript-message__copy--assistant")
+  expect(renderToString(() => createComponent(SharedMessageTurn, { kind: "assistant", body: "x" }))).not.toContain("Copy message")
 })
 
 test("the trace states its run and branch poses and hides itself from assistive technology", () => {

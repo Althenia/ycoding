@@ -67,7 +67,7 @@ describe("web color schemes", () => {
 
       await selectScheme(page, "High contrast")
       await waitFor(page, `document.documentElement.dataset.scheme === 'high-contrast'`)
-      expect(await page.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--yc-cobalt-ink').trim()`)).toBe("#003193")
+      expect(await page.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--yc-green-ink').trim()`)).toBe("#024428")
     } finally {
       await page.close()
     }
@@ -139,9 +139,9 @@ describe("web color schemes", () => {
       await waitFor(page, `document.documentElement.dataset.scheme === 'high-contrast' && document.documentElement.dataset.theme === 'light'`)
       expect(await page.evaluate(`({
         background: getComputedStyle(document.documentElement).getPropertyValue('--yc-plane-canvas').trim(),
-        accent: getComputedStyle(document.documentElement).getPropertyValue('--yc-cobalt-ink').trim(),
+        accent: getComputedStyle(document.documentElement).getPropertyValue('--yc-green-ink').trim(),
         preference: document.documentElement.dataset.themePreference ?? '',
-      })`)).toEqual({ background: "#fefeff", accent: "#003193", preference: "system" })
+      })`)).toEqual({ background: "#fefeff", accent: "#024428", preference: "system" })
 
       await page.navigate(`${url()}/verify/remote.html?view=settings&noSelection=1`)
       await waitFor(page, `document.documentElement.dataset.scheme === 'high-contrast'`)
@@ -152,7 +152,7 @@ describe("web color schemes", () => {
       await selectScheme(page, "Default")
       await page.evaluate(`[...document.querySelectorAll('section[aria-labelledby="appearance-settings"] [role="radio"]')].find(option => option.textContent?.trim() === 'Light')?.click()`)
       await waitFor(page, `document.documentElement.dataset.scheme === 'default' && document.documentElement.dataset.themePreference === 'light'`)
-      expect(await page.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--yc-cobalt-ink').trim()`)).toBe("#0045c6")
+      expect(await page.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--yc-green-ink').trim()`)).toBe("#045e39")
     } finally {
       await page.close()
     }

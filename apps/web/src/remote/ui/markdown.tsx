@@ -1,6 +1,8 @@
-import { For, Show, createContext, createMemo, createSignal, useContext, type JSX } from "solid-js"
+import { For, Show, createContext, createMemo, createSignal, onCleanup, useContext, type JSX } from "solid-js"
 import { marked, type Token } from "marked"
 import { Icon } from "../../ui/icon"
+import { copyText } from "./clipboard"
+import { codeLanguage, codeLanguageLabel, highlightCode } from "./code-highlight"
 
 export const MarkdownClipboard = createContext<(text: string) => Promise<void>>()
 
@@ -78,32 +80,42 @@ function tokenKey(token: Token, index: number): string {
 
 function FencedCode(props: { readonly text: string; readonly language?: string }) {
   const nativeCopy = useContext(MarkdownClipboard)
+  const [wrapped, setWrapped] = createSignal(false)
   const [result, setResult] = createSignal<{ text: string; label: string }>()
   const [copying, setCopying] = createSignal(false)
+  const tokens = createMemo(() => highlightCode(props.text, props.language))
   const label = () => {
     const value = result()
-    return copying() ? "Copying…" : value?.text === props.text ? value.label : "Copy"
+    return copying() ? "Copying…" : value?.text === props.text ? value.label : "Copy code"
   }
+  let reset: ReturnType<typeof setTimeout> | undefined
+  onCleanup(() => clearTimeout(reset))
   const copy = async () => {
     if (copying()) return
     const text = props.text
-    const clipboard = nativeCopy ? undefined : navigator.clipboard
-    const write = nativeCopy ?? clipboard?.writeText?.bind(clipboard)
-    if (!write) {
-      setResult({ text, label: "Clipboard unavailable" })
-      return
-    }
     setCopying(true)
+    clearTimeout(reset)
     try {
-      await write(text)
+      if (nativeCopy) await nativeCopy(text)
+      else if (!await copyText(text)) throw new Error("Clipboard unavailable")
       setResult({ text, label: "Copied" })
+      reset = setTimeout(() => setResult(undefined), 1600)
     } catch {
       setResult({ text, label: "Copy failed" })
     } finally {
       setCopying(false)
     }
   }
-  return <div class="transcript-md__code"><div class="transcript-md__code-head"><span>{props.language?.trim() || "text"}</span><button type="button" aria-live="polite" aria-busy={copying()} onClick={() => void copy()}><Icon name={label() === "Copied" ? "check" : "copy"} size={16} /><span>{label()}</span></button></div><pre tabindex="0"><code>{props.text}</code></pre></div>
+  return <div class="transcript-md__code" data-language={codeLanguage(props.language) ?? "code"}>
+    <div class="transcript-md__code-head">
+      <span class="transcript-md__code-lang"><Icon name="code" size={16} /><span>{codeLanguageLabel(props.language)}</span></span>
+      <span class="transcript-md__code-actions">
+        <button type="button" class="transcript-md__code-button" data-action="wrap" aria-pressed={wrapped()} onClick={() => setWrapped(!wrapped())}><Icon name="wrap" size={16} /><span>Wrap lines</span></button>
+        <button type="button" class="transcript-md__code-button" data-action="copy" aria-live="polite" aria-busy={copying()} aria-label={label()} onClick={() => void copy()}><Icon name={label() === "Copied" ? "check" : "copy"} size={16} /><span>{label()}</span></button>
+      </span>
+    </div>
+    <pre tabindex="0" data-wrap={wrapped() ? "true" : undefined}><code><For each={tokens()}>{(token) => token.kind ? <span class={`code-token code-token--${token.kind}`}>{token.text}</span> : <>{token.text}</>}</For></code></pre>
+  </div>
 }
 
 export function Markdown(props: { readonly text: string }): JSX.Element {

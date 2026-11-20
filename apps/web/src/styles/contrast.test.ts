@@ -85,9 +85,9 @@ describe("text contrast", () => {
       expect(result).toEqual([])
     })
 
-    test(`${theme} keeps primary and secondary ink readable on the selected cobalt tonal and inverse ink on the inverse plane`, async () => {
+    test(`${theme} keeps primary and secondary ink readable on the selected green tonal and inverse ink on the inverse plane`, async () => {
       const tokens = themeOf((await stylesheets()).themes, theme)
-      expect(failures(tokens, ["--yc-ink", "--yc-ink-secondary"], ["--yc-cobalt-tonal"], textFloor(theme))).toEqual([])
+      expect(failures(tokens, ["--yc-ink", "--yc-ink-secondary"], ["--yc-green-tonal"], textFloor(theme))).toEqual([])
       expect(failures(tokens, ["--yc-ink-inverse"], ["--yc-plane-inverse"], textFloor(theme))).toEqual([])
     })
   }
@@ -110,9 +110,9 @@ describe("primary button contrast", () => {
     }
   }
 
-  test("paints the cobalt solid and keeps the disabled button dimmed and not clickable", async () => {
+  test("paints the green solid and keeps the disabled button dimmed and not clickable", async () => {
     const { base } = await stylesheets()
-    expect(value(declarations(base, ".button--primary"), "background")).toBe("var(--yc-cobalt-solid)")
+    expect(value(declarations(base, ".button--primary"), "background")).toBe("var(--yc-green-solid)")
     const disabled = declarations(base, ".button[disabled]")
     expect(Number(value(disabled, "opacity"))).toBeLessThan(1)
     expect(Number(value(disabled, "opacity"))).toBeGreaterThan(0)
@@ -169,6 +169,29 @@ describe("terminal plate contrast", () => {
   }
 })
 
+const CODE_TOKENS = ["ink", "keyword", "string", "number", "comment", "function", "type", "property", "meta"] as const
+
+describe("code card syntax contrast", () => {
+  for (const theme of THEME_NAMES) {
+    test(`${theme} keeps every syntax color at 4.5:1 on the card and header planes`, async () => {
+      const tokens = themeOf((await stylesheets()).themes, theme)
+      for (const name of CODE_TOKENS) {
+        const color = resolveColor(`var(--yc-code-${name})`, tokens)
+        for (const plane of ["--yc-plane-raised", "--yc-plane-hover"]) {
+          expect(contrastRatio(color, required(tokens, plane)), `${theme} --yc-code-${name} on ${plane}`).toBeGreaterThanOrEqual(AA_NORMAL_TEXT)
+        }
+      }
+    })
+  }
+
+  test("each span kind paints its own syntax role", async () => {
+    const transcript = await stylesheet("../remote/ui/transcript.css")
+    const roles = { keyword: "keyword", string: "string", comment: "comment", function: "function", type: "type", property: "property", meta: "meta" } as const
+    for (const [kind, role] of Object.entries(roles)) expect(value(declarations(transcript, `.code-token--${kind}`), "color")).toBe(`var(--yc-code-${role})`)
+    expect(value(declarations(transcript, ".code-token--number, .code-token--literal"), "color")).toBe("var(--yc-code-number)")
+  })
+})
+
 describe("translucent navigation contrast (W94)", () => {
   const MIX = /^color-mix\(in srgb, var\((--[a-z0-9-]+)\) (\d+)%, transparent\)$/
 
@@ -205,12 +228,13 @@ test("transcript accents stay readable on the surfaces that carry them", async (
       const background = required(tokens, surface)
       for (const selector of [".transcript-md a", ".transcript-md__heading"]) {
         expect(contrastRatio(foreground(selector), background), `${theme} ${selector} on ${surface}`).toBeGreaterThanOrEqual(textFloor(theme))
-        expect(contrastRatio(foreground(selector), required(tokens, "--yc-cobalt-tonal")), `${theme} ${selector} on the user bubble`).toBeGreaterThanOrEqual(textFloor(theme))
+        expect(contrastRatio(foreground(selector), required(tokens, "--yc-green-tonal")), `${theme} ${selector} on the user bubble`).toBeGreaterThanOrEqual(textFloor(theme))
       }
       for (const selector of [".transcript-tool__tag", ".transcript-reasoning__tag"]) expect(contrastRatio(foreground(selector), background), `${theme} ${selector}`).toBeGreaterThanOrEqual(BOUNDARY)
     }
     expect(contrastRatio(foreground(".transcript-md :not(pre)>code"), required(tokens, "--yc-plane-hover")), `${theme} inline code`).toBeGreaterThanOrEqual(AA_NORMAL_TEXT)
-    for (const selector of [".transcript-md__code-head", ".transcript-md__code-head button"]) expect(contrastRatio(foreground(selector), required(tokens, "--yc-terminal-bg")), `${theme} ${selector}`).toBeGreaterThanOrEqual(AA_NORMAL_TEXT)
+    for (const selector of [".transcript-md__code-head", ".transcript-md__code-button"]) expect(contrastRatio(foreground(selector), required(tokens, "--yc-plane-hover")), `${theme} ${selector}`).toBeGreaterThanOrEqual(textFloor(theme))
+    expect(contrastRatio(foreground(".transcript-md__code code"), required(tokens, "--yc-plane-raised")), `${theme} code ink on the code card`).toBeGreaterThanOrEqual(textFloor(theme))
   }
 })
 

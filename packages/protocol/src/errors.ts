@@ -102,6 +102,16 @@ export class MessageNotFoundError extends Schema.TaggedErrorClass<MessageNotFoun
   { httpApiStatus: 404 },
 ) {}
 
+export class PendingInputNotFoundError extends Schema.TaggedErrorClass<PendingInputNotFoundError>()(
+  "PendingInputNotFoundError",
+  {
+    sessionID: Schema.String,
+    messageID: Schema.String,
+    message: Schema.String,
+  },
+  { httpApiStatus: 404 },
+) {}
+
 export class HistoryPrunedError extends Schema.TaggedErrorClass<HistoryPrunedError>()(
   "HistoryPrunedError",
   {

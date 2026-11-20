@@ -53,6 +53,8 @@ export const remoteOperations = [
   "session.compact",
   "session.snapshot",
   "session.pending.list",
+  "session.pending.remove",
+  "session.pending.steer",
   "session.attachment.read",
   "session.message.stream",
   "session.todo.list",
@@ -144,6 +146,8 @@ export const remoteSessionOperations = [
   "session.compact",
   "session.snapshot",
   "session.pending.list",
+  "session.pending.remove",
+  "session.pending.steer",
   "session.attachment.read",
   "session.message.stream",
   "session.todo.list",
@@ -318,6 +322,8 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "session.compact": "mutation",
   "session.snapshot": "read",
   "session.pending.list": "read",
+  "session.pending.remove": "mutation",
+  "session.pending.steer": "mutation",
   "session.attachment.read": "read",
   "session.message.stream": "read",
   "session.todo.list": "read",
@@ -1023,6 +1029,8 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
     Object.keys(input).every((key) => key === "limit" || key === "before"))
   if (operation === "session.attachment.read") return isRecord(input) && typeof input.digest === "string" &&
     /^[0-9a-f]{64}$/.test(input.digest) && Object.keys(input).length === 1
+  if (operation === "session.pending.remove" || operation === "session.pending.steer") return isRecord(input) && typeof input.messageID === "string" &&
+    /^msg_[A-Za-z0-9_-]+$/.test(input.messageID) && input.messageID.length <= 128 && Object.keys(input).length === 1
   if (operation === "session.message.stream") return isRecord(input) && typeof input.messageID === "string" &&
     /^msg_[A-Za-z0-9_-]+$/.test(input.messageID) && input.messageID.length <= 128 && Object.keys(input).length === 1
   if (operation === "session.attachment.upload")

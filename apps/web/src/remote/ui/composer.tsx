@@ -13,12 +13,13 @@ import { nextMessagePrediction, acceptNextMessagePrediction } from "../view-mode
 import type { ModelRefView } from "../projection"
 import { applyMention, autocompleteBound, effortLabel, effortLevel, modelSelection, orderedVariants, variantsForModel, modelSelectionKey, modelSpeeds, needsCatalogRead, optionsForTrigger, promptGenerateModes, queuedDraftDelivery, queuedPromptIndicator, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, type MentionPart, type PromptGenerateMode } from "./composer-logic"
 import { ComposerPicker } from "./composer-picker"
-import { attachmentCapacitySummary, attachmentLimit, encodeAttachment, type ComposerAttachment } from "./composer-attachment"
+import { attachmentCapacitySummary, attachmentIsImage, attachmentLimit, encodeAttachment, type ComposerAttachment } from "./composer-attachment"
 import { ModelControl, ReasoningEffort } from "./model-control"
 import { requestAutonomousDialog } from "./autonomous-dialog"
 import { ComposerStatus } from "./status-bar"
 import { composerDockCollapsed, composerReserve, type ComposerDockEvent } from "./composer-dock"
 import { SharedComposerSurface } from "./shared-workspace"
+import { PendingTray } from "./pending-tray"
 import type { PaletteModelBinding } from "./command-palette-model"
 import "./composer.css"
 
@@ -365,13 +366,6 @@ export function MiniComposer(props: {
       const children = [...main.children]
       const scroll = children.findIndex((child) => child.classList.contains("workspace__scroll"))
       const tops = children.slice(scroll + 1).filter((child) => child.getClientRects().length > 0).map((child) => child.getBoundingClientRect().top)
-      if (input && scroll >= 0 && tops.length > 0 && input.getClientRects().length > 0 && window.matchMedia("(max-width: 767px)").matches) {
-        const viewport = window.visualViewport?.height ?? window.innerHeight
-        const readingHeight = Math.min(...tops) - children[scroll]!.getBoundingClientRect().top
-        const minimum = Number.parseFloat(getComputedStyle(input).minHeight)
-        const limit = Math.max(minimum, Math.floor(input.getBoundingClientRect().height + readingHeight - viewport * 0.3))
-        main.style.setProperty("--yc-composer-input-max", `${limit}px`)
-      } else main.style.removeProperty("--yc-composer-input-max")
       const next = scroll < 0 || resident.getClientRects().length === 0 || resident.classList.contains("route-panel--idle") || tops.length === 0 ? 0 : composerReserve(Math.min(...tops), main.getBoundingClientRect().bottom)
       if (next === reserve) return
       reserve = next
@@ -395,7 +389,6 @@ export function MiniComposer(props: {
       rows.disconnect()
       idle.disconnect()
       main.style.removeProperty("--yc-composer-reserve")
-      main.style.removeProperty("--yc-composer-input-max")
     })
   })
   onMount(() => {
@@ -590,9 +583,9 @@ export function MiniComposer(props: {
         </section>
         </Modal>
     </Portal></Show>
-    <SharedComposerSurface classList={{ "composer--collapsed": collapsed(), "composer--phone-summary": props.phoneSummary === true, "composer--metadata-in-transcript": props.metadataMount !== undefined }} collapsed={collapsed()} dragging={dragging()} onSubmit={(event) => event.preventDefault()} onDragOver={(event) => { if (event.dataTransfer?.types.includes("Files")) { event.preventDefault(); setDragging(true) } }} onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragging(false) }} onDrop={(event) => { setDragging(false); if (!event.dataTransfer?.files.length) return; event.preventDefault(); void addFiles(Array.from(event.dataTransfer.files)) }} fieldRef={(element) => { inputWrap = element }} field={<>
+    <SharedComposerSurface classList={{ "composer--collapsed": collapsed(), "composer--phone-summary": props.phoneSummary === true, "composer--metadata-in-transcript": props.metadataMount !== undefined }} collapsed={collapsed()} dragging={dragging()} onSubmit={(event) => event.preventDefault()} onDragOver={(event) => { if (event.dataTransfer?.types.includes("Files")) { event.preventDefault(); setDragging(true) } }} onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragging(false) }} onDrop={(event) => { setDragging(false); if (!event.dataTransfer?.files.length) return; event.preventDefault(); void addFiles(Array.from(event.dataTransfer.files)) }} fieldRef={(element) => { inputWrap = element }} accessories={<Show when={!props.allowEmpty}><PendingTray /></Show>} field={<>
         <input ref={fileInput} class="composer__file-input" type="file" multiple aria-label="Choose files" onChange={(event) => { void addFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = "" }} />
-        <textarea ref={input} class="composer__input" rows={1} aria-label="Message your agent" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded={suggesting()} aria-controls={suggesting() ? "composer-autocomplete" : undefined} aria-activedescendant={options().length ? `composer-option-${active()}` : undefined}
+        <textarea ref={input} class="composer__input" rows={1} wrap="off" aria-label="Message your agent" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded={suggesting()} aria-controls={suggesting() ? "composer-autocomplete" : undefined} aria-activedescendant={options().length ? `composer-option-${active()}` : undefined}
           placeholder={prediction()?.text ?? "Ask YCoding…"} disabled={props.disabled} value={props.text}
           onInput={(event) => edit(event.currentTarget.value, event.currentTarget.selectionStart)}
           onPaste={(event) => { const files = Array.from(event.clipboardData?.files ?? []); if (!files.length) return; event.preventDefault(); void addFiles(files) }}
@@ -612,7 +605,7 @@ export function MiniComposer(props: {
         </div></Show>
       </>} feedback={<>
       <p class="composer__attachment-disclosure visually-hidden">Device files only · browser cannot read host paths</p>
-      <Show when={attachments().length}><div class="composer__attachments" aria-label="Attachments"><For each={attachments()}>{(item) => <div class="composer__attachment"><Show when={item.mime.startsWith("image/")}><img src={item.uri} alt="" /></Show><span class="composer__attachment-name">{item.name}</span><span class="composer__attachment-size">{item.size < 1024 ? `${item.size} B` : `${(item.size / 1024).toFixed(1)} KiB`}</span><button type="button" aria-label={`Remove ${item.name}`} onClick={() => { setAttachments((items) => items.filter((entry) => entry.id !== item.id)); setAttachmentError(undefined) }}><Icon name="close" /></button></div>}</For><span class="composer__attachments-summary">{attachmentCapacitySummary(attachments())}</span></div></Show>
+      <Show when={attachments().length}><div class="composer__attachments" aria-label="Attachments"><For each={attachments()}>{(item) => <div class="composer__attachment" classList={{ "composer__attachment--image": attachmentIsImage(item) }}><Show when={attachmentIsImage(item)}><img src={item.uri} alt={`${item.name} preview`} draggable={false} /></Show><span class="composer__attachment-name">{item.name}</span><span class="composer__attachment-size">{item.size < 1024 ? `${item.size} B` : `${(item.size / 1024).toFixed(1)} KiB`}</span><button type="button" aria-label={`Remove ${item.name}`} onClick={() => { setAttachments((items) => items.filter((entry) => entry.id !== item.id)); setAttachmentError(undefined) }}><Icon name="close" /></button></div>}</For><span class="composer__attachments-summary">{attachmentCapacitySummary(attachments())}</span></div></Show>
       <Show when={attachmentError()}><p class="composer__attachment-error" role="alert">{attachmentError()}</p></Show>
       <Show when={catalog()?.status === "error" || catalog()?.status === "unsupported"}>
         <div class="composer__catalog-status" role="status"><p class="field__hint">{catalog()?.status === "unsupported" ? "Update YCoding on the connected machine to load agents and models." : catalog()?.message ?? "The agent and model catalog could not be loaded."}</p><button type="button" class="button button--secondary button--small" aria-label="Retry agent and model catalog" disabled={props.disabled} onClick={() => { if (props.target) void remote.store.loadCatalog(props.target, { refresh: true }) }}>Retry catalog</button></div>

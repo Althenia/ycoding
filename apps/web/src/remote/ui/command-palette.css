@@ -83,8 +83,8 @@
 }
 
 .command-palette__option[data-active] {
-  background: var(--yc-cobalt-tonal);
-  border-inline-start-color: var(--yc-cobalt-ink);
+  background: var(--yc-green-tonal);
+  border-inline-start-color: var(--yc-green-ink);
 }
 
 @media (hover: hover) { .command-palette__option:not([data-active]):hover { background: var(--yc-plane-hover); } }

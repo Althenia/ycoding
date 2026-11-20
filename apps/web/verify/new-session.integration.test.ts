@@ -505,7 +505,7 @@ test("phone Sessions sheet returns focus to its opener and opens Conversation fr
   }
 }, 90_000)
 
-test("repository picker keeps a compact neutral layout and cobalt focus-visible ring across viewports and themes", async () => {
+test("repository picker keeps a compact neutral layout and green focus-visible ring across viewports and themes", async () => {
   const luminance = (rgb: string) => {
     const channels = rgb.match(/\d+(?:\.\d+)?/g)?.slice(0, 3).map(Number)
     if (!channels || channels.length !== 3) throw new Error(`Expected RGB color, got ${rgb}`)

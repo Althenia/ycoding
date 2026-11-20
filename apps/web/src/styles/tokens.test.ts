@@ -100,7 +100,6 @@ const COMPOSITIONAL_LAYOUT = {
   "--yc-rail-min-w": "232px",
   "--yc-rail-max-w": "360px",
   "--yc-activity-w": "80px",
-  "--yc-status-h": "28px",
   "--yc-companion-w": "448px",
   "--yc-docs-nav-w": "248px",
   "--yc-docs-toc-w": "200px",

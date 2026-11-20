@@ -1,8 +1,10 @@
-import { createMemo, createSignal, createUniqueId, For, Show, type JSX } from "solid-js"
+import { createMemo, createSignal, createUniqueId, For, onCleanup, Show, type JSX } from "solid-js"
 import { parseUnifiedPatch, summarizeFileChanges } from "../file-change-diff"
 import { CustomSelect } from "../../ui/custom-select"
 import { Icon, type IconName } from "../../ui/icon"
 import { Markdown } from "./markdown"
+import { ProviderLogo } from "./provider-logo"
+import { copyText } from "./clipboard"
 import "../../styles/workspace-shell.css"
 
 type CompanionTab = "activity" | "running" | "changes" | "context"
@@ -77,7 +79,7 @@ export function SharedChangesSurface(props: { readonly files: readonly SharedFil
 
 export function SharedContextRingButton(props: { readonly fraction?: number; readonly stale?: boolean; readonly label: JSX.Element; readonly ariaLabel: string; readonly ariaDescription?: string; readonly ariaControls?: string; readonly expanded: boolean; readonly class?: string; readonly onClick: () => void }): JSX.Element {
   return <button type="button" class={props.class} aria-label={props.ariaLabel} aria-description={props.ariaDescription} aria-controls={props.ariaControls} aria-expanded={props.expanded} data-level={(props.fraction ?? 0) >= 0.9 ? "danger" : (props.fraction ?? 0) >= 0.7 ? "warn" : "ok"} data-stale={props.stale ? "true" : undefined} onClick={props.onClick}>
-    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" pathLength="100" fill="none" stroke="var(--yc-line-field)" stroke-width="2" /><circle class="rl-ring-value" cx="12" cy="12" r="9" pathLength="100" fill="none" stroke="var(--rl-ring-stroke, var(--yc-cobalt-ink))" stroke-width="2" stroke-dasharray={`${Math.min(100, Math.max(0, (props.fraction ?? 0) * 100))} 100`} /></svg><span>{props.label}</span>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" pathLength="100" fill="none" stroke="var(--yc-line-field)" stroke-width="2" /><circle class="rl-ring-value" cx="12" cy="12" r="9" pathLength="100" fill="none" stroke="var(--rl-ring-stroke, var(--yc-green-ink))" stroke-width="2" stroke-dasharray={`${Math.min(100, Math.max(0, (props.fraction ?? 0) * 100))} 100`} /></svg><span>{props.label}</span>
   </button>
 }
 
@@ -139,15 +141,15 @@ export const WORKSPACE_DESTINATIONS = [
   { id: "settings", label: "Settings", icon: "settings", route: "/remote/settings", desktopRoute: "/settings" },
 ] as const
 
-export function SharedWorkspaceFrame(props: { readonly activityBar?: JSX.Element; readonly statusBar?: JSX.Element; readonly railClass?: string; readonly railLabel?: string; readonly railHeader: JSX.Element; readonly newChat: JSX.Element; readonly railBody: JSX.Element; readonly railBodyRef?: (element: HTMLDivElement) => void; readonly railBodyInert?: boolean; readonly railNavigation?: JSX.Element; readonly machineName?: JSX.Element; readonly machineMeta?: JSX.Element; readonly machineAction?: JSX.Element; readonly topHeader?: JSX.Element; readonly connectionStrip?: JSX.Element; readonly workspaceClass?: string; readonly mainID?: string; readonly mainClass?: string; readonly mainRef?: (element: HTMLElement) => void; readonly workspaceAside?: JSX.Element; readonly companion?: JSX.Element; readonly children: JSX.Element }): JSX.Element {
+export function SharedWorkspaceFrame(props: { readonly activityBar?: JSX.Element; readonly railClass?: string; readonly railLabel?: string; readonly railHeader: JSX.Element; readonly newChat: JSX.Element; readonly railBody: JSX.Element; readonly railBodyRef?: (element: HTMLDivElement) => void; readonly railBodyInert?: boolean; readonly railNavigation?: JSX.Element; readonly machineName?: JSX.Element; readonly machineMeta?: JSX.Element; readonly machineAction?: JSX.Element; readonly topHeader?: JSX.Element; readonly connectionStrip?: JSX.Element; readonly workspaceClass?: string; readonly mainID?: string; readonly mainClass?: string; readonly mainRef?: (element: HTMLElement) => void; readonly workspaceAside?: JSX.Element; readonly companion?: JSX.Element; readonly children: JSX.Element }): JSX.Element {
   return <>{props.activityBar}<aside id="session-rail" class={props.railClass ?? "workspace__rail"} aria-label={props.railLabel ?? "Workspace navigation"}>
     <div class="workspace__rail-head">{props.railHeader}{props.newChat}</div>
     <div ref={props.railBodyRef} class="workspace__rail-body" inert={props.railBodyInert}>{props.railBody}</div>
     <Show when={props.railNavigation !== undefined}><div class="workspace__rail-navigation">{props.railNavigation}</div></Show><Show when={props.machineName !== undefined}><div class="workspace__rail-footer"><span class="workspace-select__label">Selected machine</span><strong>{props.machineName}</strong>{props.machineMeta}{props.machineAction}</div></Show>
-  </aside>{props.topHeader}{props.connectionStrip}<div class={props.workspaceClass ?? "workspace"}><main id={props.mainID ?? "remote-main"} tabindex="-1" class={props.mainClass ?? "workspace__main"} ref={props.mainRef}>{props.children}</main>{props.workspaceAside}</div>{props.companion}{props.statusBar}</>
+  </aside>{props.topHeader}{props.connectionStrip}<div class={props.workspaceClass ?? "workspace"}><main id={props.mainID ?? "remote-main"} tabindex="-1" class={props.mainClass ?? "workspace__main"} ref={props.mainRef}>{props.children}</main>{props.workspaceAside}</div>{props.companion}</>
 }
 
-export type SharedHue = "cobalt" | "mint" | "violet" | "teal" | "sky" | "amber" | "coral"
+export type SharedHue = "green" | "mint" | "violet" | "teal" | "sky" | "amber" | "coral"
 
 export type SharedActivityItem = {
   readonly id: string
@@ -183,40 +185,6 @@ export function SharedTrace(props: SharedTraceState): JSX.Element {
     <span class="trace__rail" /><span class="trace__run" />
     <span class="trace__branch"><svg viewBox="0 0 100 16" preserveAspectRatio="none" aria-hidden="true"><path d="M0 0 C6 0 10 9 16 9 L100 9" /></svg><span class="trace__branch-run" /></span>
     <span class="trace__junction" />
-  </div>
-}
-
-export type SharedStatusItem = {
-  readonly id: string
-  readonly label: string
-  readonly ariaLabel: string
-  readonly name?: string
-  readonly short?: string
-  readonly icon?: IconName
-  readonly tone?: "mint" | "amber" | "coral" | "sky" | "violet"
-  readonly ring?: number
-  readonly push?: boolean
-  readonly live?: boolean
-  readonly onActivate?: () => void
-}
-
-export function SharedStatusBar(props: { readonly label: string; readonly items: readonly SharedStatusItem[]; readonly trace?: SharedTraceState; readonly class?: string }): JSX.Element {
-  const content = (entry: SharedStatusItem) => <>
-    <Show when={entry.ring !== undefined}><svg class="status-bar__ring" viewBox="0 0 16 16" aria-hidden="true"><circle class="status-bar__ring-track" cx="8" cy="8" r="6" /><circle class="status-bar__ring-value" cx="8" cy="8" r="6" pathLength="100" stroke-dasharray={`${Math.round(Math.min(Math.max(entry.ring!, 0), 1) * 100)} 100`} /></svg></Show>
-    <Show when={entry.icon !== undefined && entry.ring === undefined}><Icon name={entry.icon!} size={14} /></Show>
-    <Show when={entry.name !== undefined}><span class="status-bar__name">{entry.name}</span></Show>
-    <span class="status-bar__full">{entry.label}</span><Show when={entry.short !== undefined}><span class="status-bar__short" aria-hidden="true">{entry.short}</span></Show>
-  </>
-  const item = (entry: SharedStatusItem) => {
-    const className = entry.push ? "status-bar__item status-bar__item--push" : "status-bar__item"
-    const element = entry.onActivate
-      ? <button type="button" class={className} data-item={entry.id} data-tone={entry.tone} aria-label={entry.ariaLabel} onClick={() => entry.onActivate?.()}>{content(entry)}</button>
-      : <span class={className} data-item={entry.id} data-tone={entry.tone} role="note" aria-label={entry.ariaLabel}>{content(entry)}</span>
-    return entry.live ? <span class="status-bar__live" aria-live="polite">{element}</span> : element
-  }
-  return <div class={props.class ?? "status-bar"} role="region" aria-label={props.label}>
-    <Show when={props.trace !== undefined}><SharedTrace running={props.trace!.running} branch={props.trace!.branch} junction={props.trace!.junction} /></Show>
-    <For each={props.items}>{item}</For>
   </div>
 }
 
@@ -308,14 +276,37 @@ export function SharedLoadingSkeleton(props: { readonly kind?: "page" | "convers
   return <div class="rl-skeleton" data-kind={kind()} role="status" aria-live="polite"><span class="rl-skeleton__label">{props.label}</span><div class="rl-skeleton__grid" aria-hidden="true"><Show when={kind() === "conversation"}><div class="rl-skeleton__card"><span class="rl-skeleton__bar" data-width="short" /><span class="rl-skeleton__bar" /><span class="rl-skeleton__bar" data-width="medium" /></div><div class="rl-skeleton__card"><span class="rl-skeleton__bar" data-width="short" /><span class="rl-skeleton__bar" /></div></Show><Show when={kind() === "companion" || kind() === "list"}><For each={[0, 1, 2, 3]}>{() => <div class="rl-skeleton__row"><span class="rl-skeleton__bar" data-width="short" /><span class="rl-skeleton__bar" /></div>}</For></Show><Show when={kind() === "page"}><span class="rl-skeleton__bar" data-width="short" /><div class="rl-skeleton__card"><span class="rl-skeleton__bar" /><span class="rl-skeleton__bar" data-width="medium" /></div><div class="rl-skeleton__card"><span class="rl-skeleton__bar" /><span class="rl-skeleton__bar" data-width="medium" /></div></Show></div></div>
 }
 
-export function SharedMessageTurn(props: { readonly kind: string; readonly bubble?: boolean; readonly articleLabel?: string; readonly deliveryState?: string; readonly markdownText?: string; readonly bubbleAttachments?: JSX.Element; readonly attachments?: JSX.Element; readonly receipt?: JSX.Element; readonly receiptLabel?: string; readonly sendError?: JSX.Element; readonly head?: JSX.Element; readonly agent?: JSX.Element; readonly body?: JSX.Element; readonly error?: JSX.Element; readonly fileChanges?: JSX.Element; readonly shellHeader?: JSX.Element; readonly shellOutput?: JSX.Element; readonly unavailable?: JSX.Element; readonly onRetry?: () => void; readonly peerLabel?: string; readonly peerText?: string; readonly content?: JSX.Element; readonly compaction?: JSX.Element }): JSX.Element {
+export type SharedDeliveryState = "sending" | "queued" | "processing" | "sent" | "read" | "failed" | "unknown"
+
+export function SharedDeliveryStatus(props: { readonly state: SharedDeliveryState; readonly label: string }): JSX.Element {
+  return <span class="delivery-status" data-state={props.state} aria-hidden="true">
+    <Show when={props.state === "sending"}><span class="delivery-status__dots"><i /><i /><i /></span></Show>
+    <Show when={props.state === "read"}><svg class="delivery-status__double" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8.5 5 12l6-7" /><path d="M8.5 11.5 9 12l8.5-7" /></svg></Show>
+    <Show when={props.state === "sent" || props.state === "queued" || props.state === "processing"}><Icon name="check" size={16} /></Show>
+    <Show when={props.state === "failed" || props.state === "unknown"}><Icon name="alert" size={16} /><span>{props.label}</span></Show>
+  </span>
+}
+
+export function SharedCopyButton(props: { readonly text: string; readonly class?: string }): JSX.Element {
+  const [state, setState] = createSignal<"idle" | "copied" | "failed">("idle")
+  let timer: ReturnType<typeof setTimeout> | undefined
+  onCleanup(() => clearTimeout(timer))
+  const copy = async () => {
+    setState(await copyText(props.text) ? "copied" : "failed")
+    clearTimeout(timer)
+    timer = setTimeout(() => setState("idle"), 1600)
+  }
+  return <button type="button" class={props.class ? `transcript-message__copy ${props.class}` : "transcript-message__copy"} aria-label={state() === "copied" ? "Copied" : state() === "failed" ? "Copy failed" : "Copy message"} aria-live="polite" data-state={state()} onClick={() => void copy()}><Icon name={state() === "copied" ? "check" : state() === "failed" ? "alert" : "copy"} size={14} /></button>
+}
+
+export function SharedMessageTurn(props: { readonly kind: string; readonly bubble?: boolean; readonly articleLabel?: string; readonly deliveryState?: string; readonly markdownText?: string; readonly origin?: "chatgpt"; readonly copyText?: string; readonly bubbleAttachments?: JSX.Element; readonly attachments?: JSX.Element; readonly receipt?: JSX.Element; readonly receiptLabel?: string; readonly receiptTitle?: string; readonly sendError?: JSX.Element; readonly head?: JSX.Element; readonly agent?: JSX.Element; readonly body?: JSX.Element; readonly error?: JSX.Element; readonly fileChanges?: JSX.Element; readonly shellHeader?: JSX.Element; readonly shellOutput?: JSX.Element; readonly unavailable?: JSX.Element; readonly onRetry?: () => void; readonly peerLabel?: string; readonly peerText?: string; readonly content?: JSX.Element; readonly compaction?: JSX.Element }): JSX.Element {
   const promptBubble = () => props.kind === "user" || props.bubble === true
   return <article class={`transcript-message transcript-message--${props.kind}${props.bubble && props.kind !== "user" ? " transcript-message--user" : ""}`} aria-label={props.articleLabel} data-delivery-state={props.deliveryState}>
     <Show when={promptBubble()}>
-      <Show when={props.markdownText !== undefined || props.bubbleAttachments !== undefined}><div class="transcript-message__bubble"><Show when={props.markdownText}>{(text) => <div class="transcript-message__bubble-text"><Markdown text={text()} /></div>}</Show>{props.bubbleAttachments}</div></Show>
-      {props.attachments}<Show when={props.receipt !== undefined}><span class="transcript-message__receipt" role="status" aria-label={props.receiptLabel}>{props.receipt}</span></Show>{props.sendError}
+      <Show when={props.markdownText !== undefined || props.bubbleAttachments !== undefined}><div class="transcript-message__bubble"><Show when={props.origin === "chatgpt"}><span class="transcript-message__origin" role="img" aria-label="ChatGPT" title="Sent via ChatGPT"><ProviderLogo providerID="openai" /></span></Show><Show when={props.markdownText}>{(text) => <div class="transcript-message__bubble-text"><Markdown text={text()} /></div>}</Show>{props.bubbleAttachments}</div></Show>
+      {props.attachments}<Show when={props.receipt !== undefined || props.copyText !== undefined}><div class="transcript-message__meta"><Show when={props.copyText !== undefined}><SharedCopyButton text={props.copyText!} /></Show><Show when={props.receipt !== undefined}><span class="transcript-message__receipt" role="status" aria-label={props.receiptLabel} title={props.receiptTitle}>{props.receipt}</span></Show></div></Show>{props.sendError}
     </Show>
-    <Show when={props.kind === "assistant"}>{props.head}<Show when={props.agent}><h3 class="transcript-message__agent">{props.agent}</h3></Show>{props.body}{props.error}{props.fileChanges}</Show>
+    <Show when={props.kind === "assistant"}>{props.head}<Show when={props.agent}><h3 class="transcript-message__agent">{props.agent}</h3></Show>{props.body}{props.error}{props.fileChanges}<span class="transcript-message__copy-slot"><Show when={props.copyText}>{(text) => <SharedCopyButton class="transcript-message__copy--assistant" text={text()} />}</Show></span></Show>
     <Show when={props.kind === "shell"}><div class="shell"><div class="shell__header">{props.shellHeader}</div>{props.shellOutput}</div></Show>
     <Show when={props.kind === "oversized"}><p class="transcript-message__unavailable" role="status">{props.unavailable}</p><Show when={props.onRetry}><button type="button" class="button button--ghost button--small" onClick={props.onRetry}>Retry full content</button></Show></Show>
     <Show when={props.peerLabel}>{(label) => <section aria-label={label()}><h3 class="transcript-message__agent">{label()}</h3><div class="transcript-message__system"><Markdown text={props.peerText ?? ""} /></div></section>}</Show>

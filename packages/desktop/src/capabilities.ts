@@ -229,7 +229,8 @@ export function pendingInput(value: unknown, sessionID: string): PendingInput {
   if (value.type === "compaction") return { ...base, type: "compaction" }
   const data = value.data
   if ((value.type !== "user" && value.type !== "synthetic") || (value.delivery !== "steer" && value.delivery !== "queue") || !record(data) || typeof data.text !== "string" || !maybe((item) => typeof item === "string")(data.description)) throw invalid()
-  return { ...base, type: value.type === "user" ? "user" : "synthetic", delivery: value.delivery === "steer" ? "steer" : "queue", text: String(data.text), ...(typeof data.description === "string" ? { description: data.description } : {}) }
+  const source = record(data.metadata) && typeof data.metadata.source === "string" ? data.metadata.source : undefined
+  return { ...base, type: value.type === "user" ? "user" : "synthetic", delivery: value.delivery === "steer" ? "steer" : "queue", text: String(data.text), ...(typeof data.description === "string" ? { description: data.description } : {}), ...(source === undefined ? {} : { source }) }
 }
 
 export function todoItems(value: unknown): SessionTodo[] {

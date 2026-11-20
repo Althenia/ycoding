@@ -283,6 +283,8 @@ describe("public event manifest", () => {
         "session.forked.2",
         "session.input.promoted.1",
         "session.input.admitted.1",
+        "session.input.withdrawn.1",
+        "session.input.steered.1",
         "session.input.consumed.1",
         "session.execution.started.1",
         "session.execution.succeeded.1",
@@ -435,6 +437,24 @@ describe("public event manifest", () => {
 
     expect(SessionEvent.Deleted.data.make({ sessionID })).toEqual({ sessionID })
     expect(SessionEvent.Deleted.durable?.version).toBe(2)
+  })
+
+  test("defines minimal durable pending input withdrawal and steer events", () => {
+    const sessionID = SessionID.make("ses_pending_controls")
+    const inputID = SessionMessage.ID.make("msg_pending_controls")
+
+    for (const [definition, type] of [
+      [SessionEvent.InputWithdrawn, "session.input.withdrawn"],
+      [SessionEvent.InputSteered, "session.input.steered"],
+    ] as const) {
+      expect(definition.type).toBe(type)
+      expect(definition.durable?.aggregate).toBe("sessionID")
+      expect(Schema.decodeUnknownSync(definition.data)({ sessionID, inputID })).toEqual({ sessionID, inputID })
+      expect(Schema.decodeUnknownOption(definition.data)({ sessionID })._tag).toBe("None")
+      expect(EventManifest.Latest.get(type)).toBe(definition)
+      expect(EventManifest.Durable.has(`${type}.1`)).toBe(true)
+      expect(SessionEvent.PublicDurableDefinitions).toContain(definition)
+    }
   })
 
   test("decodes exact consumed input IDs and keeps historical user messages compatible", () => {

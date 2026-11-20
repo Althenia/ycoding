@@ -32,7 +32,7 @@ export function ModelControl(props: { readonly models: readonly ModelOption[]; r
   const [query, setQuery] = createSignal("")
   const [active, setActive] = createSignal(0)
   const [compact, setCompact] = createSignal(false)
-  const [position, setPosition] = createSignal({ left: 8, top: 8, width: 340 })
+  const [position, setPosition] = createSignal({ left: 8, top: 8, width: 380 })
   const [drag, setDrag] = createSignal<{ pointerID: number; fraction: number }>()
   const open = () => view() !== undefined
   const listing = () => view() === "models" || view() === "settings-models"
@@ -149,7 +149,7 @@ export function ModelControl(props: { readonly models: readonly ModelOption[]; r
   const reposition = () => {
     if (!open() || compact() || !trigger || !surface) return
     const rect = trigger.getBoundingClientRect()
-    const width = Math.min(340, window.innerWidth - 16)
+    const width = Math.min(380, window.innerWidth - 16)
     setPosition({ left: Math.min(Math.max(8, rect.left), window.innerWidth - width - 8), top: rect.top - surface.offsetHeight >= 8 ? rect.top - surface.offsetHeight - 8 : Math.min(rect.bottom + 8, window.innerHeight - surface.offsetHeight - 8), width })
   }
   const pointerFraction = (event: PointerEvent & { currentTarget: HTMLDivElement }) => {

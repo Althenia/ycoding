@@ -39,7 +39,7 @@ function ChildMessage(props: { readonly message: () => RemoteMessageView; readon
     <Show when={assistant()}>{(message) => <><For each={[...parts().keys()]}>{(key) => <ChildPart part={() => parts().get(key)!} />}</For><Show when={message().error}>{(error) => <p role="status">{error()}</p>}</Show></>}</Show>
     <Show when={text()}>{(value) => <Markdown text={value()} />}</Show>
     <Show when={props.message().kind === "user" && (display().text !== "" || display().images.length > 0)}><div class="team-conversation__prompt">
-      <Show when={display().text !== ""}><span class="transcript-message__bubble-text">{display().text}</span></Show>
+      <Show when={display().text !== ""}><div class="transcript-message__bubble-text"><Markdown text={display().text} /></div></Show>
       <Show when={display().images.length > 0}><span class="transcript-message__images" role="group" aria-label={`${display().images.length} attached images`}><For each={display().images.map(attachmentKey)}>{(key) => {
         const image = () => display().images[Number(key.slice(0, key.indexOf(":")))]!
         return <UserImage name={image().name} mime={image().mime} digest={image().digest} deviceID={remote.state().activeDeviceID ?? ""} sessionID={props.sessionID} />

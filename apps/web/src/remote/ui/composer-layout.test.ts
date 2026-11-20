@@ -54,7 +54,7 @@ test("the composer is one flat rounded card whose borderless draft sits above a 
     "box-shadow": "none",
   })
   expect(composer.rules.some((rule) => rule.header.includes('[data-theme="dark"] .composer .composer__row'))).toBe(false)
-  expect(base(".composer .composer__row:has(.composer__input:focus)")["border-color"]).toBe("var(--yc-sky-ink)")
+  expect(base(".composer .composer__row:has(.composer__input:focus)")["border-color"]).toBe("var(--yc-focus)")
   expect(base(".mini-composer__input-wrap")).toMatchObject({ border: "0", "border-radius": "0", background: "transparent", padding: "0" })
   expect(composer.rules.some((rule) => rule.header.includes(".mini-composer__input-wrap:focus-within"))).toBe(false)
   expect(base(".composer__input, .composer__input:focus-visible")).toMatchObject({ border: "0", background: "transparent", "box-shadow": "none" })
@@ -80,8 +80,8 @@ test("wide chip bar reads attach, agent, model and effort as six-pixel mono chip
   expect(wide(chips)["padding-inline"]).toBe("6px")
   expect(wide(".composer .composer__controls .mini-picker__trigger > svg:first-child:not(:last-child)").display).toBe("none")
   expect(composer.rules.some((rule) => rule.header === ".composer .composer__row" && Object.keys(rule.declarations).some((property) => property.startsWith("transition")))).toBe(false)
-  expect(base(".composer__attach")).toMatchObject({ background: "transparent", color: "var(--yc-sky-ink)" })
-  expect(base(".mini-composer__send")).toMatchObject({ background: "var(--yc-cobalt-solid)", color: "var(--yc-on-cobalt)" })
+  expect(base(".composer__attach")).toMatchObject({ background: "transparent", color: "var(--yc-green-ink)" })
+  expect(base(".mini-composer__send")).toMatchObject({ background: "var(--yc-green-solid)", color: "var(--yc-on-green)" })
   expect(base(".mini-composer__send:disabled").opacity).toBe(".45")
   expect(wide(".composer__spacer").flex).toBe("1 1 0")
   expect(base(".composer__effort-panel .reasoning-effort")["max-inline-size"]).toBe("20rem")
@@ -97,7 +97,7 @@ test("at fine-pointer desktop widths the expanded dock takes no row: the transpa
   expect(hidden).toMatchObject({ position: "absolute", "inset-block-start": "0", "inset-inline-end": "0", "z-index": "3", "inline-size": "24px", "block-size": "24px", "min-inline-size": "24px", "min-block-size": "24px", opacity: "0", margin: "0", padding: "0", border: "0" })
   expect(hidden["pointer-events"]).toBeUndefined()
   expect(hidden["clip-path"]).toBeUndefined()
-  expect(desk(".composer:not(.composer--collapsed) .composer__prediction-slot:not(:has(.composer__use-prediction))").display).toBe("none")
+  expect(base(".composer__prediction-slot:not(:has(.composer__use-prediction))").display).toBe("none")
 })
 
 test("content-level light-mode pickers keep their strong outline while attach stays borderless", () => {
@@ -136,7 +136,7 @@ test("a coarse landscape phone puts the capsule and the dock toggle on one row a
   expect(landscapeRule(".composer:not(.composer--collapsed) .composer__dock")).toMatchObject({ "grid-column": "2", order: "0" })
   expect(landscapeRule(".composer:not(.composer--collapsed) .composer__prediction-slot, .composer:not(.composer--collapsed) .composer__speed").display).toBe("none")
   expect(landscapeRule(".composer:not(.composer--collapsed) .composer__dock-toggle > span").display).toBe("none")
-  expect(landscapeRule(".composer:not(.composer--collapsed) .composer__input")["max-block-size"]).toBe("25dvh")
+  expect(composer.rules.some((rule) => rule.header === ".composer:not(.composer--collapsed) .composer__input")).toBe(false)
 })
 
 test("an open keyboard lifts the composer by the shell inset and drops the safe-area pad", () => {
@@ -184,4 +184,30 @@ test("tablet widths narrow the identity pickers so the action buttons stay on th
   const pick = (header: string) => declarationsWhere(composer, (rule) => rule.header === header && rule.conditions.includes(band))
   expect(pick(".mini-composer__mount .composer__controls .mini-picker__trigger")["max-inline-size"]).toBe("7rem")
   expect(pick(".mini-composer__mount .composer__controls .model-control__trigger")["max-inline-size"]).toBe("10rem")
+})
+
+test("the draft field is one fixed-height non-wrapping line: typing or pasting never changes the composer height", async () => {
+  const field = base(".composer__input, .composer__input:focus-visible")
+  expect(field).toMatchObject({ "block-size": "44px", "min-block-size": "44px", "max-block-size": "44px", "field-sizing": "fixed", resize: "none", "white-space": "pre", overflow: "hidden" })
+  expect(composer.rules.some((rule) => JSON.stringify(rule.declarations).includes("field-sizing:content") || "field-sizing" in rule.declarations && rule.declarations["field-sizing"] === "content")).toBe(false)
+  expect(source).toContain('wrap="off"')
+  expect(source).not.toContain("--yc-composer-input-max")
+  expect(composer.rules.some((rule) => JSON.stringify(rule.declarations).includes("--yc-composer-input-max"))).toBe(false)
+  const keyboard = declarationsWhere(composer, (rule) => rule.header === ":is(:root, .app)[data-keyboard-open] :is(.composer__input, .composer__input:focus-visible)")
+  expect(keyboard).toMatchObject({ "block-size": "var(--yc-hit-min)", "min-block-size": "var(--yc-hit-min)", "max-block-size": "var(--yc-hit-min)" })
+})
+
+test("attachment thumbnails are fixed 40px cover images and an empty prediction slot never reserves a row", () => {
+  expect(base(".composer__attachment img")).toMatchObject({ "inline-size": "40px", "block-size": "40px", "object-fit": "cover" })
+  expect(base(".composer__attachment--image")["border-radius"]).toBe("var(--yc-radius-card)")
+  expect(source).toContain('alt={`${item.name} preview`}')
+  expect(source).toContain("attachmentIsImage(item)")
+})
+
+test("the model picker opens at a comfortable size with a green search focus ring", () => {
+  expect(base(".mini-picker__surface.model-control__surface")["max-block-size"]).toBe("min(640px, calc(100dvh - var(--yc-space-4)))")
+  expect(base(".model-control__surface > .mini-picker__list")).toMatchObject({ flex: "0 1 min(480px, 60vh)", "min-block-size": "0" })
+  expect(base(".mini-picker__search:focus-visible")).toMatchObject({ outline: "2px solid var(--yc-focus)", "border-color": "var(--yc-focus)" })
+  const control = Bun.file(new URL("./model-control.tsx", import.meta.url)).text()
+  return control.then((text) => { expect(text).toContain("Math.min(380, window.innerWidth - 16)") })
 })

@@ -262,7 +262,7 @@ describe("web design contract inventory", () => {
       const raised = getComputedStyle(document.querySelector('.composer-resident .composer__row') ?? document.querySelector('.composer__row')).backgroundColor
       const edge = rail.boxShadow.match(/rgba?\\([^)]*\\)/)[0]
       const box = (selector) => document.querySelector(selector).getBoundingClientRect()
-      return { canvasToRaised: ratio(canvas, raised), chromeToRaised: ratio(rail.backgroundColor, raised), edgeOnChrome: ratio(edge, rail.backgroundColor), edgeOnCanvas: ratio(edge, canvas), edgeOnRaised: ratio(edge, raised), headerTraceOffset: box('.workspace__topbar .trace').bottom - box('.workspace__topbar').bottom, statusTraceOffset: box('.status-bar .trace').top - box('.status-bar').top }
+      return { canvasToRaised: ratio(canvas, raised), chromeToRaised: ratio(rail.backgroundColor, raised), edgeOnChrome: ratio(edge, rail.backgroundColor), edgeOnCanvas: ratio(edge, canvas), edgeOnRaised: ratio(edge, raised), headerTraceOffset: box('.workspace__topbar .trace').bottom - box('.workspace__topbar').bottom }
     })()`
     const animations = `document.getAnimations().filter((animation) => animation.playState === 'running').map((animation) => {
       const timing = animation.effect.getComputedTiming()
@@ -279,19 +279,18 @@ describe("web design contract inventory", () => {
           await page.navigate(url(`/verify/remote.html?scenario=conversation-tool-terminal-output-1440&theme=${theme}`))
           for (let attempt = 0; attempt < 100 && !await page.evaluate(`document.body.innerText.includes('Test Suite Execution Output')`); attempt += 1) await Bun.sleep(50)
           await page.evaluate(`[...document.querySelectorAll('.fixture__controls button')].find((button) => button.textContent.trim() === 'Simulate streaming step').click()`)
-          for (let attempt = 0; attempt < 100 && !await page.evaluate(`document.querySelector('.status-bar .trace[data-run="true"]') !== null && document.querySelector('.workspace__topbar .trace[data-run="true"]') !== null`); attempt += 1) await Bun.sleep(50)
+          for (let attempt = 0; attempt < 100 && !await page.evaluate(`document.querySelector('.workspace__topbar .trace[data-run="true"]') !== null && document.querySelector('.status-bar') === null`); attempt += 1) await Bun.sleep(50)
           await Bun.sleep(400)
-          const planes = await page.evaluate(measure, (value: unknown) => { const record = decodeRecord(value); return { canvasToRaised: decodeNumber(record["canvasToRaised"]), chromeToRaised: decodeNumber(record["chromeToRaised"]), edgeOnChrome: decodeNumber(record["edgeOnChrome"]), edgeOnCanvas: decodeNumber(record["edgeOnCanvas"]), edgeOnRaised: decodeNumber(record["edgeOnRaised"]), headerTraceOffset: decodeNumber(record["headerTraceOffset"]), statusTraceOffset: decodeNumber(record["statusTraceOffset"]) } })
+          const planes = await page.evaluate(measure, (value: unknown) => { const record = decodeRecord(value); return { canvasToRaised: decodeNumber(record["canvasToRaised"]), chromeToRaised: decodeNumber(record["chromeToRaised"]), edgeOnChrome: decodeNumber(record["edgeOnChrome"]), edgeOnCanvas: decodeNumber(record["edgeOnCanvas"]), edgeOnRaised: decodeNumber(record["edgeOnRaised"]), headerTraceOffset: decodeNumber(record["headerTraceOffset"]) } })
           if (theme === "light") {
             expect(planes.canvasToRaised, theme).toBeGreaterThanOrEqual(1.15)
             expect(planes.chromeToRaised, theme).toBeGreaterThanOrEqual(1.1)
           }
           for (const key of ["edgeOnChrome", "edgeOnCanvas", "edgeOnRaised"] as const) expect(planes[key], `${theme} ${key}`).toBeGreaterThanOrEqual(3)
           expect(Math.abs(planes.headerTraceOffset), `${theme} header trace on the bottom boundary`).toBeLessThanOrEqual(2)
-          expect(Math.abs(planes.statusTraceOffset), `${theme} status trace on the top edge`).toBeLessThanOrEqual(2)
           const running = await page.evaluate(animations, decodeAnimations)
           if (!reduced) {
-            expect(running.filter((animation) => animation.name === "trace-run" && animation.loop).length, theme).toBeGreaterThanOrEqual(2)
+            expect(running.filter((animation) => animation.name === "trace-run" && animation.loop).length, theme).toBeGreaterThanOrEqual(1)
             continue
           }
           expect(running.filter((animation) => animation.loop || animation.travel), `${theme} reduced`).toEqual([])

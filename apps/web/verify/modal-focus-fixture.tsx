@@ -17,7 +17,7 @@ render(() => {
   const [value, setValue] = createSignal("one")
   return <main style={{ padding: "var(--yc-space-4)" }}>
     <span hidden data-focus-role style={{ color: "var(--yc-focus)" }} />
-    <span hidden data-hue-border style={{ color: "var(--yc-cobalt-ink)" }} />
+    <span hidden data-hue-border style={{ color: "var(--yc-green-ink)" }} />
     <section aria-label="Icon focus variants">
       <button type="button" class="button button--ghost button--icon" aria-label="Close fixture"><Icon name="close" /></button>
       <button type="button" class="button button--ghost app-header__team" aria-label="Open Team" aria-expanded="true"><Icon name="team" /><span>0</span></button>

@@ -104,7 +104,7 @@
 .usage-toggle[aria-label="Usage range"]::before { width: calc((100% - 8px) / 3); }
 .usage-toggle[aria-label="Usage range"]:has(button:nth-child(2)[aria-pressed="true"])::before { transform: translateX(100%); }
 .usage-toggle[aria-label="Usage range"]:has(button:nth-child(3)[aria-pressed="true"])::before { transform: translateX(200%); }
-.usage-toggle::before { content: ""; position: absolute; top: var(--yc-space-1); bottom: var(--yc-space-1); left: var(--yc-space-1); width: calc((100% - 8px) / 2); border-radius: var(--yc-radius-pill); background: var(--yc-cobalt-tonal); transform: translateX(0); transition: transform var(--yc-dur-base) var(--yc-ease-standard); }
+.usage-toggle::before { content: ""; position: absolute; top: var(--yc-space-1); bottom: var(--yc-space-1); left: var(--yc-space-1); width: calc((100% - 8px) / 2); border-radius: var(--yc-radius-pill); background: var(--yc-green-tonal); transform: translateX(0); transition: transform var(--yc-dur-base) var(--yc-ease-standard); }
 .usage-toggle--tokens::before { transform: translateX(100%); }
 .usage-zone--local::before { transform: translateX(100%); }
 .usage-toggle button { position: relative; min-height: var(--yc-hit-min); padding: 0 var(--yc-space-2); border: 0; border-radius: var(--yc-radius-pill); background: none; color: var(--yc-ink-secondary); font-size: var(--yc-size-xs); }

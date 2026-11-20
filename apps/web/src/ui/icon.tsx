@@ -69,6 +69,8 @@ export type IconName =
   | "paperclip"
   | "hand"
   | "arrow-up-right"
+  | "code"
+  | "wrap"
 
 const paths: Record<IconName, readonly string[]> = {
   terminal: ["M4 7l4 5-4 5", "M12 17h8"],
@@ -139,6 +141,8 @@ const paths: Record<IconName, readonly string[]> = {
   paperclip: ["M20 11.5l-7.8 7.8a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8"],
   hand: ["M8 12V6a1.5 1.5 0 0 1 3 0v5", "M11 11V4.5a1.5 1.5 0 0 1 3 0V11", "M14 11V6a1.5 1.5 0 0 1 3 0v8a7 7 0 0 1-7 7h-.5a6 6 0 0 1-5-2.7L3 14.5a1.5 1.5 0 0 1 2.4-1.7L8 15.5"],
   "arrow-up-right": ["M7 17L17 7", "M7 7h10v10"],
+  code: ["M8 7l-5 5 5 5", "M16 7l5 5-5 5", "M14 4l-4 16"],
+  wrap: ["M4 6h16", "M4 12h12a3 3 0 0 1 0 6h-4", "M14 15.5l-2 2.5 2 2.5", "M4 18h4"],
 }
 
 export function Icon(props: { readonly name: IconName; readonly size?: number; readonly class?: string }): JSX.Element {

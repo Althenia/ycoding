@@ -60,7 +60,7 @@ async function closeReport(page: Awaited<ReturnType<NonNullable<typeof browser>[
 
 describe("one close control per modal", () => {
   for (const theme of ["light", "dark"] as const) {
-    test(`icon controls use the cobalt focus ring without hue borders in ${theme}`, async () => {
+    test(`icon controls use the green focus ring without hue borders in ${theme}`, async () => {
       const page = await browser!.openPage()
       try {
         await page.setMobileViewport(390, 844)
@@ -150,7 +150,7 @@ describe("one close control per modal", () => {
           await page.pressEscape()
         }
         expect(await page.evaluate(`document.activeElement?.getAttribute('aria-label') === 'Open Team' && document.querySelector('dialog.team-view__sheet[open]') === null`)).toBe(true)
-        expect(await page.evaluate(`getComputedStyle(document.activeElement).getPropertyValue('--yc-focus').trim() === getComputedStyle(document.documentElement).getPropertyValue('--yc-cobalt-graphic').trim()`)).toBe(true)
+        expect(await page.evaluate(`getComputedStyle(document.activeElement).getPropertyValue('--yc-focus').trim() === getComputedStyle(document.documentElement).getPropertyValue('--yc-green-graphic').trim()`)).toBe(true)
       } finally { await page.close() }
     }, 30_000)
   }

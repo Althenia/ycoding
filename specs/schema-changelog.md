@@ -2,6 +2,12 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-11-20: Pending input withdrawal and steer
+
+- Add durable `session.input.withdrawn.1` and `session.input.steered.1` (`{ sessionID, inputID }`). Withdrawal deletes the unconsumed user `session_pending` row; steering sets its delivery to `steer`.
+- Add `session.pending.remove` (`DELETE /api/session/:sessionID/pending/:messageID`) and `session.pending.steer` (`POST /api/session/:sessionID/pending/:messageID/steer`), both `204`, with `404 PendingInputNotFoundError` and `400 InvalidRequestError` for non-user pending work. Add both to the relay operations and `Telemetry.Operation`.
+- Additive only. Regenerate the Promise and Effect clients from Protocol.
+
 ## 2026-11-17: Persistent defer and unrestricted YOLO categories
 
 - Autonomy state uses `defer: {}`, updates accept `{ defer: boolean }`, and effective responses expose `deferred: boolean`. Keep-awake family holds expose `deferHold`. User input preserves defer until an explicit toggle.

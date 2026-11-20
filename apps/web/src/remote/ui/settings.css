@@ -67,7 +67,7 @@
 
 .settings__section[data-category="Appearance"], .settings__section[data-category="Office"] { --settings-icon-ink: var(--yc-violet-ink); }
 .settings__section[data-category="Notifications"], .settings__section[data-category="Diagnostics"] { --settings-icon-ink: var(--yc-amber-ink); }
-.settings__section[data-category="Permissions"] { --settings-icon-ink: var(--yc-cobalt-ink); }
+.settings__section[data-category="Permissions"] { --settings-icon-ink: var(--yc-green-ink); }
 .settings__section[data-category="Devices"], .settings__section[data-category="Account"] { --settings-icon-ink: var(--yc-teal-ink); }
 
 .settings .settings__hint {
@@ -164,7 +164,7 @@
 
 .machine-selected__status svg {
   flex: none;
-  color: var(--yc-cobalt-ink);
+  color: var(--yc-green-ink);
 }
 
 .machine-selected__status[data-tone="pending"],
@@ -199,13 +199,13 @@
 }
 
 .machine-awake .switch input:checked {
-  border-color: var(--yc-cobalt-ink);
-  background: var(--yc-cobalt-tonal);
+  border-color: var(--yc-green-ink);
+  background: var(--yc-green-tonal);
 }
 
 .machine-awake .switch input:checked::after {
   translate: 14px 0;
-  background: var(--yc-cobalt-ink);
+  background: var(--yc-green-ink);
 }
 
 .machine-awake .switch input:focus-visible {

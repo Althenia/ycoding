@@ -58,6 +58,16 @@ export class LifecycleConflict extends Schema.TaggedErrorClass<LifecycleConflict
   },
 ) {}
 
+export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Session.PendingInputNotFoundError", {
+  sessionID: SessionSchema.ID,
+  inputID: SessionMessage.ID,
+}) {}
+
+export class InvalidError extends Schema.TaggedErrorClass<InvalidError>()("Session.PendingInputInvalidError", {
+  sessionID: SessionSchema.ID,
+  inputID: SessionMessage.ID,
+}) {}
+
 const fromRow = (row: typeof SessionPendingTable.$inferSelect): LegacyInfo => {
   const base = {
     admittedSeq: row.admitted_seq,
@@ -404,6 +414,102 @@ export const projectPromoted = Effect.fn("SessionPending.projectPromoted")(funct
   const stored = fromRow(deleted)
   if (stored.type === "compaction") return yield* Effect.die(new LifecycleConflict({ id: input.id }))
   return stored
+})
+
+/** Consumes the unconsumed user row of a withdrawn input; the input never becomes a message. */
+export const projectWithdrawn = Effect.fn("SessionPending.projectWithdrawn")(function* (
+  db: DatabaseService,
+  input: { readonly id: SessionMessage.ID; readonly sessionID: SessionSchema.ID },
+) {
+  const deleted = yield* db
+    .delete(SessionPendingTable)
+    .where(
+      and(
+        eq(SessionPendingTable.id, input.id),
+        eq(SessionPendingTable.session_id, input.sessionID),
+        eq(SessionPendingTable.type, "user"),
+      ),
+    )
+    .returning({ id: SessionPendingTable.id })
+    .get()
+    .pipe(Effect.orDie)
+  if (!deleted) return yield* Effect.die(new LifecycleConflict({ id: input.id }))
+})
+
+export const projectSteered = Effect.fn("SessionPending.projectSteered")(function* (
+  db: DatabaseService,
+  input: { readonly id: SessionMessage.ID; readonly sessionID: SessionSchema.ID },
+) {
+  const updated = yield* db
+    .update(SessionPendingTable)
+    .set({ delivery: "steer" })
+    .where(
+      and(
+        eq(SessionPendingTable.id, input.id),
+        eq(SessionPendingTable.session_id, input.sessionID),
+        eq(SessionPendingTable.type, "user"),
+      ),
+    )
+    .returning({ id: SessionPendingTable.id })
+    .get()
+    .pipe(Effect.orDie)
+  if (!updated) return yield* Effect.die(new LifecycleConflict({ id: input.id }))
+})
+
+const requireUser = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  inputID: SessionMessage.ID,
+) {
+  const row = yield* db
+    .select()
+    .from(SessionPendingTable)
+    .where(and(eq(SessionPendingTable.id, inputID), eq(SessionPendingTable.session_id, sessionID)))
+    .get()
+    .pipe(Effect.orDie)
+  if (!row) return yield* new NotFoundError({ sessionID, inputID })
+  if (row.type !== "user") return yield* new InvalidError({ sessionID, inputID })
+  return row
+})
+
+/**
+ * Removes one unconsumed user input before promotion. Runs under the inbox lock
+ * that promotion holds, so a row is either withdrawn or promoted, never both.
+ */
+export const withdraw = Effect.fn("SessionPending.withdraw")(function* (
+  db: DatabaseService,
+  events: EventRuntime.Interface,
+  sessionID: SessionSchema.ID,
+  inputID: SessionMessage.ID,
+) {
+  return yield* inboxLocks.withLock(sessionID)(
+    Effect.gen(function* () {
+      yield* requireUser(db, sessionID, inputID)
+      const published = yield* events.publishBatch([{ definition: SessionEvent.InputWithdrawn, data: { sessionID, inputID } }], {
+        when: requireUser(db, sessionID, inputID).pipe(Effect.as(true), Effect.orElseSucceed(() => false)),
+      })
+      if (!published.length) return yield* new NotFoundError({ sessionID, inputID })
+    }),
+  )
+})
+
+/** Makes one unconsumed user input a steer. Resolves without an event when it already steers. */
+export const steer = Effect.fn("SessionPending.steer")(function* (
+  db: DatabaseService,
+  events: EventRuntime.Interface,
+  sessionID: SessionSchema.ID,
+  inputID: SessionMessage.ID,
+) {
+  return yield* inboxLocks.withLock(sessionID)(
+    Effect.gen(function* () {
+      const row = yield* requireUser(db, sessionID, inputID)
+      if (row.delivery === "steer") return
+      const published = yield* events.publishBatch([{ definition: SessionEvent.InputSteered, data: { sessionID, inputID } }], {
+        when: requireUser(db, sessionID, inputID).pipe(Effect.as(true), Effect.orElseSucceed(() => false)),
+      })
+      if (!published.length) return yield* new NotFoundError({ sessionID, inputID })
+    }),
+  )
 })
 
 export const settleCompaction = Effect.fn("SessionPending.settleCompaction")(function* (

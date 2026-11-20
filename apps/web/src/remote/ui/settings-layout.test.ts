@@ -107,7 +107,7 @@ describe("open Settings surfaces", () => {
     }
     const active = declared(css, ".appearance-segments .filters__option--active")
     expect(active["border-block-end-color"]).toBeUndefined()
-    expect(active.background).toBe("var(--yc-cobalt-tonal)")
+    expect(active.background).toBe("var(--yc-green-tonal)")
   })
 })
 

@@ -15,7 +15,7 @@ test("Desktop owns its typography and brand tokens and no palette role overrides
   expect(css).toContain('font-family: "JetBrains Mono"')
   expect(css).toContain('--yc-font-mono: "JetBrains Mono", monospace')
   expect(Object.keys(colorsOf(block(css, ":root")))).toEqual(["brand-trace", "brand-frost", "brand-attention", "brand-tile", "brand-rule"])
-  expect(css).not.toMatch(/--yc-(plane|ink|line|cobalt|mint|violet|teal|sky|amber|coral|focus|radius)-?[\w-]*:/)
+  expect(css).not.toMatch(/--yc-(plane|ink|line|green|mint|violet|teal|sky|amber|coral|focus|radius)-?[\w-]*:/)
   expect(design).toContain("JetBrains Mono")
 })
 
@@ -75,7 +75,7 @@ test("Desktop documents the icon-led conversation and Companion as binding rules
     ["D27", ["leading edge", "neutral ink", ":focus-visible", "2px offset"]],
     ["D51", ["80px", "72×56px", "Chat", "Team", "Projects", "Workspaces", "Usage", "Settings", "aria-current"]],
     ["D52", ["280px", "256px", "232px", "360px", "separator", "8px steps", "Home/End"]],
-    ["D53", ["28px", "running count", "token readout", "D32"]],
+    ["D53", ["No Desktop screen MUST have a status bar", "composer bar", "header ring", "visually-hidden", "D32"]],
     ["D54", ["2px mint trace", "aria-hidden", "child task started", "static 50%"]],
     ["D55", ["Needs action", "Running", "Pinned", "Recent", "workspace name"]],
   ] as const) {
@@ -125,10 +125,13 @@ test("Every Desktop theme keeps ink, boundary, plane and state-graphic contrast 
   const floor = (role: string, planes: readonly string[], colors: Record<string, string>) => Math.min(...planes.map(plane => contrast(colors[role]!, colors[plane]!)))
   const planes = ["plane-chrome", "plane-canvas", "plane-raised"]
   const themes = { dark: spec.colors, ...Object.fromEntries(Object.entries(spec.themes).map(([name, theme]) => [name, theme.colors])) }
-  const failures = Object.entries(themes).flatMap(([name, colors]) => [
+  const code = ["code-ink", "code-keyword", "code-string", "code-number", "code-comment", "code-function", "code-type", "code-property", "code-meta"]
+  const inheritedCode = (name: string, colors: Record<string, string>) => ({ ...Object.fromEntries(code.map(role => [role, (name === "light" || name.endsWith("-light") ? spec.themes.light!.colors : spec.colors)[role]!])), ...colors })
+  const failures = Object.entries(themes).map(([name, colors]) => [name, inheritedCode(name, colors)] as const).flatMap(([name, colors]) => [
+    ...code.filter(role => floor(role, ["plane-raised", "plane-hover"], colors) < 4.5).map(role => `${name} ${role}`),
     ...["ink", "ink-secondary", "ink-tertiary"].filter(role => floor(role, [...planes, "plane-hover", "plane-selected"], colors) < 4.5).map(role => `${name} ${role}`),
-    ...["line-field", "line-subtle", "focus", "cobalt-graphic", "mint-graphic", "amber-graphic", "coral-graphic"].filter(role => floor(role, planes, colors) < 3).map(role => `${name} ${role}`),
-    ...(contrast(colors["on-cobalt"]!, colors["cobalt-solid"]!) < 4.5 ? [`${name} on-cobalt`] : []),
+    ...["line-field", "line-subtle", "focus", "green-graphic", "mint-graphic", "amber-graphic", "coral-graphic"].filter(role => floor(role, planes, colors) < 3).map(role => `${name} ${role}`),
+    ...(contrast(colors["on-green"]!, colors["green-solid"]!) < 4.5 ? [`${name} on-green`] : []),
     ...(new Set(["ink", "ink-secondary", "ink-tertiary"].map(role => colors[role])).size < 3 ? [`${name} ink tiers`] : []),
     ...(new Set(planes.map(role => colors[role])).size < 3 ? [`${name} planes`] : []),
   ])

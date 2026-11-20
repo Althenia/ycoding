@@ -2,7 +2,7 @@
 .transcript-attachment { min-inline-size:0; max-inline-size:100%; }
 .transcript-image img { display:block; max-inline-size:min(100%,480px); max-block-size:360px; object-fit:contain; }
 .transcript-image__unavailable { display:flex; align-items:center; flex-wrap:wrap; gap:var(--yc-space-2); color:var(--yc-ink-secondary); font-size:var(--yc-size-xs); }
-.transcript-image__unavailable button { min-block-size:44px; border:0; background:none; color:var(--yc-cobalt-ink); }
+.transcript-image__unavailable button { min-block-size:44px; border:0; background:none; color:var(--yc-green-ink); }
 /* The dialog is a UA scroll container; keep it from scrolling so the fixed sheet geometry alone places the header and image. */
 .transcript-lightbox { overflow:hidden; }
 .transcript-lightbox .overlay__surface { inline-size:min(96vw,1200px); max-block-size:96dvh; }

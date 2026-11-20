@@ -26,7 +26,7 @@ import {
   type ShellOutputView,
   type ToolContentBlock,
 } from "../projection"
-import { capturedChangesVisible, dotSteerReceipt, familyTaskActivity, latestPromptProcessing, promptReceipt, reasoningSummary, shellOutputPaging, transcriptActivity, userMessageDisplay } from "../view-model"
+import { assistantCopyText, capturedChangesVisible, dotSteerReceipt, familyTaskActivity, latestPromptProcessing, promptReceipt, reasoningSummary, shellOutputPaging, transcriptActivity, userMessageDisplay } from "../view-model"
 import { parentAnswer, questionAnswerState, questionHistory } from "../question-history"
 import { FormAssessment } from "./form-request"
 import { FormRequest } from "./form-request"
@@ -36,7 +36,7 @@ import { ProjectEscalationNote } from "./project-escalation"
 import { guardrailHeading } from "./guardrail-label"
 import { Markdown } from "./markdown"
 import { DotTrail } from "./dot-trail"
-import { SharedCompactionDivider, SharedMessageTurn, SharedTurnHead } from "./shared-workspace"
+import { SharedCompactionDivider, SharedDeliveryStatus, SharedMessageTurn, SharedTurnHead } from "./shared-workspace"
 import { FileChangeCard } from "./file-change-card"
 import { ImagePreview, UserImage } from "./image"
 import { LoadingPlaceholder } from "./loading"
@@ -384,6 +384,16 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
     if (steer() !== undefined && message.kind === "synthetic") return dotSteerReceipt(message.pending, message.delivery, processing)
     return promptReceipt(userState(message), userDelivery(message), sendMutation(), processing)
   }
+  const receiptTitle = () => {
+    const message = props.message()
+    const time = "created" in message && typeof message.created === "number" ? new Date(message.created).toLocaleTimeString(undefined, { timeStyle: "short" }) : undefined
+    return time === undefined ? receipt()?.detail : `${receipt()?.detail} · ${time}`
+  }
+  const copyText = () => {
+    const message = props.message()
+    const text = message.kind === "user" ? message.text : message.kind === "assistant" ? assistantCopyText(message) : steer()?.text ?? ""
+    return text.trim() === "" ? undefined : text
+  }
   const turnDetail = () => {
     const message = assistantOf(props.message())
     if (!message) return ""
@@ -403,7 +413,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
   return (
     <Show when={kind() !== "notice"} fallback={<p class="notice">{noticeText(props.message())}</p>}>
       <Show when={!hiddenEmptySteer()}>
-      <SharedMessageTurn kind={kind()} bubble={steer() !== undefined} articleLabel={steer() !== undefined ? "Dot steer prompt" : undefined} deliveryState={steerDeliveryState()} markdownText={steer()?.text ?? (display().text || undefined)} bubbleAttachments={display().images.length > 0 || display().files.length > 0 ? <>
+      <SharedMessageTurn kind={kind()} bubble={steer() !== undefined} origin={steer() !== undefined ? "chatgpt" : undefined} copyText={copyText()} articleLabel={steer() !== undefined ? "Dot steer prompt" : undefined} deliveryState={steerDeliveryState()} markdownText={steer()?.text ?? (display().text || undefined)} bubbleAttachments={display().images.length > 0 || display().files.length > 0 ? <>
             <Show when={display().images.length > 0}><span class="transcript-message__images" aria-label={`${display().images.length} attached image${display().images.length === 1 ? "" : "s"}`} role="group">
               <For each={imageKeys()}>{(key) => {
                 const image = () => display().images[Number(key.slice(0, key.indexOf(":")))]!
@@ -415,7 +425,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
               const size = () => file().bytes < 1_024 ? `${file().bytes} B` : `${(file().bytes / 1_024).toFixed(1)} KB`
               return <span class="transcript-file"><Icon name="paperclip" size={16} />{file().name} · {size()}</span>
             }}</For>
-          </> : undefined} receiptLabel={receipt().label} receipt={<span class="transcript-message__receipt-content" data-delivery-state={receipt().text === "Queued" ? "queued" : undefined}><Show when={receipt().mark === "✓"} fallback={<span aria-hidden="true">{receipt().mark}</span>}><Icon name="check" size={16} /></Show>{receipt().text}</span>} sendError={<Show when={promptMutation()}>{(mutation) => <div class="transcript-message__send-error" role={mutation().state === "failed" ? "alert" : "status"}>
+          </> : undefined} receiptLabel={receipt()?.label} receiptTitle={receiptTitle()} receipt={receipt() === undefined ? undefined : <SharedDeliveryStatus state={receipt()!.state} label={receipt()!.label} />} sendError={<Show when={promptMutation()}>{(mutation) => <div class="transcript-message__send-error" role={mutation().state === "failed" ? "alert" : "status"}>
             <span>{mutation().state === "unknown" ? "Outcome unknown" : "Send failed"}: {mutation().detail}</span><button type="button" class="button button--secondary button--small" onClick={() => void remote.store.retryMutation(mutation().id)}>Retry send</button></div>}</Show>} head={<Show when={props.head !== false}><TurnHead><span class="transcript-message__speaker">{agent()}</span><span class="transcript-message__footer">{turnDetail()}</span></TurnHead></Show>} agent={assistantOf(props.message())?.parts.some((part) => part.kind === "text" && part.text.trim() !== "") ? agent() : undefined} body={<AssistantParts parts={() => assistantOf(props.message())?.parts ?? []} />} error={<Show when={!props.continued && assistantOf(props.message())?.error}><p class="transcript-message__error" role="status">{assistantOf(props.message())?.error}</p></Show>} fileChanges={<Show when={!props.continued && showFileChanges()}><FileChangeCard files={fileChanges} /></Show>} shellHeader={<><Icon name="terminal" size={16} /><code>{shellOf(props.message())?.command ?? ""}</code><span class="shell__status">{shellStatus(props.message())}</span></>} shellOutput={<ShellOutputSection shellID={shellOf(props.message())?.shellID ?? ""} output={shellOf(props.message())?.output} fetch={shellOf(props.message())?.outputFetch} status={shellOf(props.message())?.status} />} content={<>
         <Show when={(kind() === "system" || kind() === "synthetic") && !peer()}>
           <Show when={guardrail()} fallback={

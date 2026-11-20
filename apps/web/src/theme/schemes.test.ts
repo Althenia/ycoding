@@ -44,11 +44,11 @@ describe("scheme palettes", () => {
     expect(Object.keys(schemeTokens(palette)).filter((property) => declared[property] === undefined)).toEqual([])
   })
 
-  test("keeps cobalt as the interaction hue in every palette", () => {
+  test("keeps green as the interaction hue in every palette", () => {
     for (const { scheme, mode, palette } of palettes) {
-      const [red, green, blue] = [1, 3, 5].map((offset) => Number.parseInt(palette["cobalt-solid"].slice(offset, offset + 2), 16))
-      expect({ scheme, mode, blueLeads: blue! > red! && blue! > green! }).toEqual({ scheme, mode, blueLeads: true })
-      expect(palette.focus).toBe(palette["cobalt-graphic"])
+      const [red, green, blue] = [1, 3, 5].map((offset) => Number.parseInt(palette["green-solid"].slice(offset, offset + 2), 16))
+      expect({ scheme, mode, greenLeads: green! > red! && green! > blue! }).toEqual({ scheme, mode, greenLeads: true })
+      expect(palette.focus).toBe(palette["green-graphic"])
     }
   })
 })

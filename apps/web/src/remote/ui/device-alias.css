@@ -22,8 +22,8 @@
 }
 
 .machine-row__item[aria-current="true"] {
-  border-color: var(--yc-cobalt-ink);
-  background: var(--yc-cobalt-tonal);
+  border-color: var(--yc-green-ink);
+  background: var(--yc-green-tonal);
 }
 
 @media (min-width: 768px) {

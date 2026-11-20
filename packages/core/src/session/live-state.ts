@@ -145,6 +145,8 @@ const instructionEventTypes = [
 const pendingEventTypes = [
   EventRuntime.versionedType(SessionEvent.InputAdmitted.type, SessionEvent.InputAdmitted.durable.version),
   EventRuntime.versionedType(SessionEvent.InputPromoted.type, SessionEvent.InputPromoted.durable.version),
+  EventRuntime.versionedType(SessionEvent.InputWithdrawn.type, SessionEvent.InputWithdrawn.durable.version),
+  EventRuntime.versionedType(SessionEvent.InputSteered.type, SessionEvent.InputSteered.durable.version),
   EventRuntime.versionedType(SessionEvent.Compaction.AdmittedV1.type, SessionEvent.Compaction.AdmittedV1.durable.version),
   EventRuntime.versionedType(SessionEvent.Compaction.EndedV1.type, SessionEvent.Compaction.EndedV1.durable.version),
   EventRuntime.versionedType(SessionEvent.Compaction.FailedV1.type, SessionEvent.Compaction.FailedV1.durable.version),

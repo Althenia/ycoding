@@ -66,17 +66,17 @@
   --yc-ink-secondary: #404449;
   --yc-ink-tertiary: #565b62;
   --yc-ink-inverse: #f3f6fb;
-  --yc-focus: #2f70f2;
+  --yc-focus: #088955;
   --yc-scrim: rgba(243, 246, 251, 0.5);
   --yc-selection: rgba(47, 112, 242, 0.32);
-  --yc-cobalt-tonal: #e4edfe;
-  --yc-cobalt-tonal-hover: #d5e4fe;
-  --yc-cobalt-line: #87b1fe;
-  --yc-cobalt-graphic: #2f70f2;
-  --yc-cobalt-solid: #165be2;
-  --yc-cobalt-solid-hover: #024bd0;
-  --yc-cobalt-ink: #0045c6;
-  --yc-on-cobalt: #fafcfe;
+  --yc-green-tonal: #e4efe8;
+  --yc-green-tonal-hover: #d6e7dc;
+  --yc-green-line: #85bd9c;
+  --yc-green-graphic: #088955;
+  --yc-green-solid: #007547;
+  --yc-green-solid-hover: #00653d;
+  --yc-green-ink: #045e39;
+  --yc-on-green: #fbfcfb;
   --yc-mint-tonal: #d1f8e1;
   --yc-mint-tonal-hover: #bef1d4;
   --yc-mint-line: #5fc995;
@@ -131,6 +131,17 @@
   --yc-terminal-fg: #d8e6de;
   --yc-terminal-dim: #8fa79b;
   --yc-terminal-accent: #5fe3a1;
+
+  /* syntax colors for fenced code on the raised and hover planes */
+  --yc-code-ink: #151618;
+  --yc-code-keyword: #642bb4;
+  --yc-code-string: #045e39;
+  --yc-code-number: #a2001b;
+  --yc-code-comment: #565b62;
+  --yc-code-function: #025c83;
+  --yc-code-type: #744c00;
+  --yc-code-property: #026263;
+  --yc-code-meta: #404449;
 
   /* type scale — fixed sizes, fixed line heights */
   --yc-font-sans: "Geist", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
@@ -228,7 +239,6 @@
   --yc-rail-min-w: 232px;
   --yc-rail-max-w: 360px;
   --yc-activity-w: 80px;
-  --yc-status-h: 28px;
   --yc-companion-w: 448px;
   --yc-docs-nav-w: 248px;
   --yc-docs-toc-w: 200px;
@@ -277,17 +287,17 @@
   --yc-ink-secondary: #bfc5cd;
   --yc-ink-tertiary: #a1a8b2;
   --yc-ink-inverse: #0e1116;
-  --yc-focus: #5d94ff;
+  --yc-focus: #55a67a;
   --yc-scrim: rgba(14, 17, 22, 0.72);
   --yc-selection: rgba(93, 148, 255, 0.32);
-  --yc-cobalt-tonal: #162a4f;
-  --yc-cobalt-tonal-hover: #1a3363;
-  --yc-cobalt-line: #2e5eba;
-  --yc-cobalt-graphic: #5d94ff;
-  --yc-cobalt-solid: #2064eb;
-  --yc-cobalt-solid-hover: #0e52d5;
-  --yc-cobalt-ink: #9bbeff;
-  --yc-on-cobalt: #f1f4f8;
+  --yc-green-tonal: #143021;
+  --yc-green-tonal-hover: #163b28;
+  --yc-green-line: #226f49;
+  --yc-green-graphic: #55a67a;
+  --yc-green-solid: #027e4d;
+  --yc-green-solid-hover: #056b41;
+  --yc-green-ink: #9ac8ac;
+  --yc-on-green: #f2f4f3;
   --yc-mint-tonal: #0b3421;
   --yc-mint-tonal-hover: #094029;
   --yc-mint-line: #00764c;
@@ -336,6 +346,16 @@
   --yc-coral-solid-hover: #ffa09a;
   --yc-coral-ink: #fea09a;
   --yc-on-coral: #0e1116;
+
+  --yc-code-ink: #f1f4f8;
+  --yc-code-keyword: #c4afff;
+  --yc-code-string: #9ac8ac;
+  --yc-code-number: #fea09a;
+  --yc-code-comment: #a1a8b2;
+  --yc-code-function: #6cc9ff;
+  --yc-code-type: #f9ac30;
+  --yc-code-property: #56d4d5;
+  --yc-code-meta: #bfc5cd;
 
   --yc-elevation-float: 0 1px 2px rgba(0, 0, 0, 0.35), 0 12px 32px -8px rgba(0, 0, 0, 0.5);
 }

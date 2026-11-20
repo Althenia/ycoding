@@ -202,6 +202,8 @@ export type LocalServer = {
   readonly dotsRemove: (input: Dots.ComputerRemove) => Promise<Dots.NativeStatus>
   readonly skill: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly skill: string; readonly resume?: boolean }) => Promise<void>
   readonly interrupt: (sessionID: string, location: LocalLocation) => Promise<void>
+  readonly pendingRemove: (sessionID: string, location: LocalLocation, messageID: string) => Promise<void>
+  readonly pendingSteer: (sessionID: string, location: LocalLocation, messageID: string) => Promise<void>
   readonly deleteSession: (sessionID: string, location: LocalLocation) => Promise<void>
   readonly prediction: (
     sessionID: string,
@@ -462,6 +464,14 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       call(async () => {
         await client.session.interrupt({ sessionID }, request(location, timeoutMs))
       }),
+    pendingRemove: (sessionID, location, messageID) =>
+      call(async () => {
+        await client.session.pending.remove({ sessionID, messageID }, request(location, timeoutMs))
+      }),
+    pendingSteer: (sessionID, location, messageID) =>
+      call(async () => {
+        await client.session.pending.steer({ sessionID, messageID }, request(location, timeoutMs))
+      }),
     prediction: (sessionID, location, input) =>
       call(() => client.session.prediction({
         sessionID,
@@ -584,6 +594,7 @@ function classify(cause: unknown, timeoutMs: number): LocalFailure {
   if (
     tag === "SessionNotFoundError" ||
     tag === "MessageNotFoundError" ||
+    tag === "PendingInputNotFoundError" ||
     tag === "PermissionNotFoundError" ||
     tag === "GuardrailRequestNotFoundError" ||
     tag === "QuestionNotFoundError" ||

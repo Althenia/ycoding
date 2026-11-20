@@ -18,6 +18,17 @@ export function attachmentLimit(files: readonly { readonly size: number; readonl
   return undefined
 }
 
+const imageExtensions: Readonly<Record<string, string>> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" }
+
+export function attachmentMime(name: string, reported: string): string {
+  if (reported !== "" && reported !== "application/octet-stream") return reported
+  return imageExtensions[name.slice(name.lastIndexOf(".") + 1).toLowerCase()] ?? "application/octet-stream"
+}
+
+export function attachmentIsImage(item: { readonly name: string; readonly mime: string }): boolean {
+  return attachmentMime(item.name, item.mime).startsWith("image/")
+}
+
 export async function encodeAttachment(file: File): Promise<ComposerAttachment> {
   const error = attachmentLimit([file])
   if (error) throw new Error(error)
@@ -25,6 +36,6 @@ export async function encodeAttachment(file: File): Promise<ComposerAttachment> 
   const parts: string[] = []
   for (let offset = 0; offset < bytes.length; offset += 24_576)
     parts.push(btoa(String.fromCharCode(...bytes.subarray(offset, offset + 24_576))))
-  const mime = file.type || "application/octet-stream"
+  const mime = attachmentMime(file.name, file.type)
   return { id: crypto.randomUUID(), name: file.name, size: file.size, mime, uri: `data:${mime};base64,${parts.join("")}` }
 }

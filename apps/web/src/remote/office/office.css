@@ -30,27 +30,27 @@
 .office-roster__head { display:flex; align-items:center; justify-content:space-between; gap:var(--yc-space-2); }
 .office-roster__title { margin:0; color:var(--yc-ink); font-size:var(--yc-size-sm); font-weight:var(--yc-weight-semibold); }
 .office-roster__title span { color:var(--yc-ink-secondary); font:var(--yc-weight-medium) var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono); font-variant-numeric:tabular-nums; }
-.office-roster__toggle { min-block-size:var(--yc-hit-min); padding-inline:var(--yc-space-3); border:0; background:transparent; color:var(--yc-cobalt-ink); font-weight:var(--yc-weight-semibold); }
+.office-roster__toggle { min-block-size:var(--yc-hit-min); padding-inline:var(--yc-space-3); border:0; background:transparent; color:var(--yc-green-ink); font-weight:var(--yc-weight-semibold); }
 .office-roster__more { min-block-size:var(--yc-hit-min); }
 .office-roster__list { display:grid; gap:var(--yc-space-2); min-inline-size:0; margin:0; padding:0; list-style:none; }
 .office-roster--collapsed .office-roster__list { display:none; }
 .office-roster__row { display:flex; align-items:center; gap:var(--yc-space-2); inline-size:100%; min-block-size:var(--yc-hit-min); min-inline-size:0; padding:var(--yc-space-2) var(--yc-space-1); border:0; border-radius:var(--yc-radius-card); background:transparent; color:var(--yc-ink); font:inherit; text-align:start; }
 .office-roster__row:has(.office-roster__indicator--attention) { background:var(--yc-amber-tonal); }
 .office-roster__row:has(.office-roster__indicator--failed) { background:var(--yc-coral-tonal); }
-.office-roster__row--selected { background:var(--yc-cobalt-tonal); }
+.office-roster__row--selected { background:var(--yc-green-tonal); }
 .office-roster__sprite { flex:none; inline-size:32px; block-size:48px; image-rendering:pixelated; }
 .office-roster__content { display:grid; min-inline-size:0; flex:1; gap:2px; }
 .office-roster__name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--yc-size-sm); font-weight:var(--yc-weight-semibold); }
 .office-roster__status,.office-roster__note,.office-roster__empty { color:var(--yc-ink-secondary); font-size:var(--yc-size-xs); }
 .office-roster__status { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--yc-font-mono); font-size:var(--yc-size-2xs); line-height:var(--yc-leading-2xs); }
 .office-roster__indicator { flex:none; inline-size:8px; block-size:8px; border-radius:var(--yc-radius-pill); background:var(--yc-ink-secondary); }
-.office-roster__indicator--working,.office-roster__indicator--tool,.office-roster__indicator--thinking,.office-roster__indicator--compacting { background:var(--yc-cobalt-ink); }
+.office-roster__indicator--working,.office-roster__indicator--tool,.office-roster__indicator--thinking,.office-roster__indicator--compacting { background:var(--yc-green-ink); }
 .office-roster__indicator--attention { background:var(--yc-amber-ink); }
 .office-roster__indicator--failed { background:var(--yc-coral-ink); }
 .office-roster__note,.office-roster__empty { margin:0; }
 .office-roster__more { align-self:start; padding-inline:var(--yc-space-3); }
 @keyframes office-card-enter { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
-@media (hover:hover) { .office-camera-controls button:hover::after { opacity:1; transform:translateY(0); } .office-roster__row:hover { background:var(--yc-plane-hover); } .office-roster__row--selected:hover { background:var(--yc-cobalt-tonal); } }
+@media (hover:hover) { .office-camera-controls button:hover::after { opacity:1; transform:translateY(0); } .office-roster__row:hover { background:var(--yc-plane-hover); } .office-roster__row--selected:hover { background:var(--yc-green-tonal); } }
 @media (width < 768px) { .app--office .workspace__scroll { overflow-y:auto; } .office-workspace { min-block-size:460px; } .office-workspace__stage { grid-template-rows:auto minmax(220px,1fr) auto; } .office-roster { padding:var(--yc-space-2); overflow:hidden; } .office-roster__toggle { display:none; } .office-roster__list,.office-roster--collapsed .office-roster__list { display:flex; overflow-x:auto; scroll-snap-type:x proximity; } .office-roster__list li { flex:0 0 min(220px,72vw); scroll-snap-align:start; } .office-camera-controls { justify-content:center; gap:var(--yc-space-1); } }
 @media (min-width:1024px) { .office-workspace__stage { grid-template-columns:minmax(0,1fr) minmax(240px,280px); grid-template-rows:auto minmax(0,1fr); } .office-attention { grid-column:1 / -1; } .office-workspace__canvas { grid-column:1; grid-row:2; } .office-roster { grid-column:2; grid-row:2; max-block-size:none; } .office-roster__toggle { display:none; } .office-roster--collapsed .office-roster__list { display:grid; } }
 @media (prefers-reduced-motion:no-preference) { .office-roster__row { animation:office-card-enter var(--yc-dur-base) var(--yc-ease-entrance) both; } }

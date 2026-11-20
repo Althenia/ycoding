@@ -9,7 +9,7 @@
 .incidents__controls .usage-toggle { min-inline-size: calc(var(--yc-device-max) / 2); }
 .incidents__range { display: flex; flex-wrap: wrap; gap: var(--yc-space-1); padding: var(--yc-space-1); border: 1px solid var(--yc-line-subtle); border-radius: var(--yc-radius-pill); background: var(--yc-plane-hover); }
 .incidents__range button { display: inline-flex; align-items: center; justify-content: center; gap: var(--yc-space-2); min-height: var(--yc-hit-min); padding: 0 var(--yc-space-3); border: 0; border-radius: var(--yc-radius-pill); background: none; color: var(--yc-ink-secondary); font-size: var(--yc-size-xs); white-space: nowrap; }
-.incidents__range button[aria-pressed="true"] { background: var(--yc-cobalt-tonal); color: var(--yc-ink); font-weight: var(--yc-weight-semibold); }
+.incidents__range button[aria-pressed="true"] { background: var(--yc-green-tonal); color: var(--yc-ink); font-weight: var(--yc-weight-semibold); }
 .incidents__range-form { display: flex; flex-wrap: wrap; align-items: end; gap: var(--yc-space-3); margin-bottom: var(--yc-space-4); }
 .incidents__range-form [role="alert"] { flex-basis: 100%; color: var(--yc-coral-ink); font-size: var(--yc-size-xs); }
 .incidents button { font: inherit; }
@@ -21,7 +21,7 @@
 .incidents__table-wrap table { min-inline-size: 760px; }
 .incidents__table tbody th { font-weight: var(--yc-weight-medium); }
 .incidents__table tbody td { font-variant-numeric: tabular-nums; }
-.incidents__table tbody tr.is-selected { background: var(--yc-cobalt-tonal); }
+.incidents__table tbody tr.is-selected { background: var(--yc-green-tonal); }
 .incidents__details { display: inline-flex; align-items: center; justify-content: center; gap: var(--yc-space-2); min-height: var(--yc-hit-min); padding: 0 var(--yc-space-3); border: 1px solid var(--yc-line-subtle); border-radius: var(--yc-radius-pill); background: var(--yc-plane-raised); color: var(--yc-ink); font-size: var(--yc-size-xs); white-space: nowrap; }
 @media (hover: hover) { .incidents__details:hover:not(:disabled) { background: var(--yc-plane-hover); } }
 .incidents__details[aria-expanded="true"] { border-color: var(--yc-line-field); background: var(--yc-plane-hover); }

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import type { Messages, ModelOption, SessionItem, Sessions } from "../src/contract"
 import { DESKTOP_BUILT_IN_SLASH_COMMANDS, DESKTOP_THEMES, desktopSlashCommand, formatSessionExportMarkdown, isDesktopThemeID, parsePromptStashes, pushPromptStash, resolveDesktopTheme, validateFolderSegment, type DesktopThemeID } from "../src/form-rules"
-import { classifyDesktopSynthetic, desktopMessageVisible, desktopPartVisible, dotSteerDisplay, dotSteerReceipt, effortStopFraction, effortStopIndex, effortStopsFor, groupAssistantParts, isDotSteerSynthetic, isInternalTranscriptEnvelope, stripSteerTransportMarkup, toolDisplaySummary, visibleDesktopMessages, type AssistantContentPart, activeFields, answerOf, appendPage, buildAnswer, choiceProblem, composerTrigger, insertCompletion, invalidIndexes, mentionPayload, restoresFocus, samePaging, slashAction, visibleModels, workspaceBase, mergeItems, pagedItems, pagingFor, railGroups, searchLimit, searchTerm, chooseModel, chooseProfile, choiceFor, initialValues, matches, modelLabel, problemOf, profileLabel, sameSelection, selectionFor, valueFor, variantsFor, withValue, type Field } from "../src/form-rules"
+import { classifyDesktopSynthetic, desktopMessageVisible, desktopPartVisible, dotSteerDisplay, userDeliveryStates, assistantReplyText, userPendingInputs, effortStopFraction, effortStopIndex, effortStopsFor, groupAssistantParts, isDotSteerSynthetic, isInternalTranscriptEnvelope, stripSteerTransportMarkup, toolDisplaySummary, visibleDesktopMessages, type AssistantContentPart, activeFields, answerOf, appendPage, buildAnswer, choiceProblem, composerTrigger, insertCompletion, invalidIndexes, mentionPayload, restoresFocus, samePaging, slashAction, visibleModels, workspaceBase, mergeItems, pagedItems, pagingFor, railGroups, searchLimit, searchTerm, chooseModel, chooseProfile, choiceFor, initialValues, matches, modelLabel, problemOf, profileLabel, sameSelection, selectionFor, valueFor, variantsFor, withValue, type Field } from "../src/form-rules"
 
 import { formatCompactCount, formatCount, formatDurationMs, formatPercent, formatQuotaProviders, formatQuotaWindow, formatUsd } from "../src/form-rules"
 
@@ -338,6 +338,10 @@ test("composer triggers open only at token boundaries", () => {
   expect(composerTrigger("mail a@b.co", 11)).toBeUndefined()
   expect(composerTrigger("open @src/ap", 12)).toEqual({ kind: "mention", start: 5, query: "src/ap" })
   expect(composerTrigger("@", 1)).toEqual({ kind: "mention", start: 0, query: "" })
+  expect(composerTrigger("/ui:", 4)).toEqual({ kind: "command", start: 0, query: "ui:" })
+  expect(composerTrigger("/ui:foo", 7)).toEqual({ kind: "command", start: 0, query: "ui:foo" })
+  expect(composerTrigger("/ns:sub:cmd", 11)).toEqual({ kind: "command", start: 0, query: "ns:sub:cmd" })
+  expect(composerTrigger("/ui: foo", 8)).toBeUndefined()
   expect(composerTrigger("plain text", 5)).toBeUndefined()
   expect(composerTrigger("/mo", 2)).toEqual({ kind: "command", start: 0, query: "m" })
   expect(composerTrigger("", 0)).toBeUndefined()
@@ -508,11 +512,6 @@ test("genuine Dot steers strip transport markup, hide empty steers, format Dot s
   expect(isDotSteerSynthetic(synthetic("m7", "No description internal steer"))).toBe(false)
   expect(isDotSteerSynthetic({ ...synthetic("m8", "Later", { description: "Queued" }), delivery: "queue" })).toBe(false)
   expect(isDotSteerSynthetic({ ...synthetic("m9", "Sourced", { description: "Sourced" }), source: "session-state" })).toBe(false)
-
-  expect(dotSteerReceipt(false, undefined, false)).toEqual({ label: "Dot steer prompt", text: "Dot steer", mark: "✓" })
-  expect(dotSteerReceipt(true, "steer", false)).toEqual({ label: "Processing Dot steer prompt", text: "Processing · steer", mark: "◷" })
-  expect(dotSteerReceipt(true, "queue", false)).toEqual({ label: "Dot steer prompt queued for processing", text: "Queued · Dot steer", mark: "◷" })
-  expect(dotSteerReceipt(false, undefined, true)).toEqual({ label: "Processing Dot steer prompt", text: "Processing · Dot steer", mark: "◷" })
 })
 
 test("parent answers combine text and data only for the matching question", () => {
@@ -999,4 +998,40 @@ test("isStandardEditShortcut allows clipboard, selection and undo-redo chords wh
   expect(isStandardEditShortcut(chord("v", { metaKey: true, altKey: true }))).toBe(false)
   expect(isStandardEditShortcut(chord("c", { ctrlKey: true, altKey: true }))).toBe(false)
   expect(isStandardEditShortcut(chord("z", { metaKey: true, shiftKey: true, altKey: true }))).toBe(false)
+})
+
+test("namespaced slash commands resolve to their backend command", () => {
+  expect(desktopSlashCommand("/ui:foo bar", ["ui:foo"])).toEqual({ kind: "backend", command: "ui:foo", arguments: "bar" })
+  expect(desktopSlashCommand("/ns:sub:cmd", ["ns:sub:cmd"])).toEqual({ kind: "backend", command: "ns:sub:cmd", arguments: "" })
+  expect(slashAction("/ui:foo go", [], ["ui:foo"])).toEqual({ kind: "backend", name: "ui:foo", args: "go" })
+})
+
+test("user delivery shows sending while in flight, sent until an assistant starts after it, then read", () => {
+  const user = (id: string) => ({ id, type: "user", text: id }) as never
+  const assistant = (id: string) => ({ id, type: "assistant", content: [] }) as never
+  const states = userDeliveryStates([user("a"), assistant("x"), user("b"), user("c")], "c")
+  expect(states.get("a")).toBe("read")
+  expect(states.get("b")).toBe("sent")
+  expect(states.get("c")).toBe("sending")
+  expect(userDeliveryStates([user("only")]).get("only")).toBe("sent")
+  expect(userDeliveryStates([user("first"), assistant("x")]).get("first")).toBe("read")
+})
+
+test("assistant reply text copies only text parts in order", () => {
+  expect(assistantReplyText([{ type: "reasoning", text: "thinking" }, { type: "text", text: "One" }, { type: "tool", name: "x" }, { type: "text", text: "Two" }] as never)).toBe("One\n\nTwo")
+  expect(assistantReplyText([{ type: "reasoning", text: "thinking" }] as never)).toBeUndefined()
+})
+
+test("pending inputs list only real user messages and hide internal notifications", () => {
+  const item = (id: string, type: "user" | "synthetic", text: string, extra: object = {}) => ({ id, sessionID: "ses_a", admittedSeq: 1, timeCreated: 1, type, delivery: "queue", text, ...extra }) as never
+  const items = [
+    item("msg_1", "user", "Ask a question"),
+    item("msg_2", "synthetic", 'Subagent notification:\n{"source":"subagent_notification"}', { source: "subagent_notification" }),
+    item("msg_3", "user", "Project notification: member finished"),
+    item("msg_4", "user", "System queued", { source: "project_notification" }),
+    item("msg_5", "synthetic", "Dot steer text", { description: "Dot" }),
+    { id: "msg_6", sessionID: "ses_a", admittedSeq: 2, timeCreated: 2, type: "compaction" } as never,
+  ]
+  expect(userPendingInputs(items).map((entry) => entry.id)).toEqual(["msg_1"])
+  expect(userPendingInputs([items[1]!, items[2]!])).toEqual([])
 })

@@ -352,6 +352,7 @@ export type RemoteStore = {
   readonly loadMoreNotifications: () => Promise<void>
   readonly reloadNotifications: () => Promise<void>
   readonly interrupt: () => Promise<void>
+  readonly settlePendingInput: (kind: "remove" | "steer", messageID: string) => Promise<string | undefined>
   readonly dismissPrediction: (sessionID: string, scope: string, source: string) => void
   readonly requestPrediction: (input: { readonly memory: readonly ("repository" | "knowledge")[]; readonly hint?: string }) => Promise<boolean>
   readonly requestPromptGenerate: (input: { readonly mode: "start" | "steer" | "queue" | "goal"; readonly intent: string; readonly memory: readonly ("repository" | "knowledge")[]; readonly workspaceID?: string; readonly agent?: string; readonly model?: ModelRefView }) => Promise<boolean>
@@ -3867,6 +3868,20 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     reloadNotifications: async () => {
       const owner = transport
       if (owner !== undefined) await loadNotices(owner)
+    },
+    settlePendingInput: async (kind, messageID) => {
+      const owner = transport
+      const sessionID = container.state.activeSessionID
+      if (owner === undefined || sessionID === undefined) return "Pending messages are unavailable while the relay connection is closed."
+      const token = selectionToken
+      const outcome = await owner.request(kind === "remove" ? "session.pending.remove" : "session.pending.steer", { sessionID, input: { messageID } })
+      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID) return undefined
+      await loadPendingInputs(owner, sessionID, token)
+      if (outcome.status === "ok") return undefined
+      if (outcome.status === "unavailable") return describeOutcome(outcome, kind === "remove" ? "Remove" : "Steer now")
+      if (outcome.error.code === "not_found") return "That input is no longer pending."
+      if (outcome.error.code === "subagent_read_only") return "Subagent Sessions are read-only."
+      return describeOutcome(outcome, kind === "remove" ? "Remove" : "Steer now")
     },
     interrupt: async () => {
       const sessionID = container.state.activeSessionID

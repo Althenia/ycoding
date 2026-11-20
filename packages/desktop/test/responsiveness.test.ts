@@ -74,6 +74,19 @@ test("Session completion reconciles durable pending inputs and observed diagnost
   } finally { owned.close() }
 })
 
+test("withdrawn and steered inputs reconcile the pending list and transcript of their Session", async () => {
+  for (const type of ["session.input.withdrawn", "session.input.steered"] as const) {
+    const owned = fixture()
+    try {
+      owned.watch("pendingInputs")
+      owned.watch("messages")
+      owned.emit({ id: `evt_${type}`, created: 4, durable: { aggregateID: data.sessionID, seq: 4, version: 1 }, type, data: { sessionID: data.sessionID, inputID: "msg_synthetic_pending" } })
+      await owned.flush()
+      expect(owned.calls.toSorted()).toEqual(["messages:ses_synthetic", "pendingInputs:ses_synthetic"])
+    } finally { owned.close() }
+  }
+})
+
 test("family decisions: child review settlement refreshes the active root inbox once", async () => {
   const owned = fixture()
   try {

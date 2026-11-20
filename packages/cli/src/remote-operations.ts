@@ -931,6 +931,7 @@ async function run(input: OperationInput) {
     throw new OperationError("session_not_allowed", "Session is not available at its recorded location")
   if (verified.parentID !== undefined && verified.agent !== "btw" && [
     "session.prompt", "session.command", "session.compact", "session.skill", "session.attachment.upload", "session.fork",
+    "session.pending.remove", "session.pending.steer",
     "session.switchModel", "session.switchAgent", "session.autonomy.set", "session.goal.set", "session.goal.stop",
     "incident.guidance.clear",
   ].includes(request.operation))
@@ -1164,6 +1165,12 @@ async function run(input: OperationInput) {
     case "interrupt":
       await input.local.interrupt(sessionID, location)
       return null
+    case "pending.remove":
+      await input.local.pendingRemove(sessionID, location, validated.messageID)
+      return null
+    case "pending.steer":
+      await input.local.pendingSteer(sessionID, location, validated.messageID)
+      return null
     case "prediction":
       return input.local.prediction(sessionID, location, {
         memory: validated.memory,
@@ -1283,6 +1290,8 @@ type Validated =
   | { readonly kind: "unsubscribe" }
   | { readonly kind: "prompt"; readonly input: LocalPrompt }
   | { readonly kind: "interrupt" }
+  | { readonly kind: "pending.remove"; readonly messageID: string }
+  | { readonly kind: "pending.steer"; readonly messageID: string }
   | { readonly kind: "prediction"; readonly memory: readonly ("repository" | "knowledge")[]; readonly hint?: string }
   | { readonly kind: "promptGenerate"; readonly mode: "start" | "steer" | "queue" | "goal"; readonly intent: string; readonly memory: readonly ("repository" | "knowledge")[] }
   | { readonly kind: "permission.reply"; readonly requestID: string; readonly reply: Reply; readonly message?: string }
@@ -1523,6 +1532,8 @@ function validate(request: RemoteRequest): Validated {
     return { kind: "attachment.read", digest: fields.digest }
   }
   if (request.operation === "session.message.stream") return { kind: "message.stream", messageID: messageID(fields.messageID) }
+  if (request.operation === "session.pending.remove") return { kind: "pending.remove", messageID: messageID(fields.messageID) }
+  if (request.operation === "session.pending.steer") return { kind: "pending.steer", messageID: messageID(fields.messageID) }
   if (request.operation === "session.fork") return { kind: "fork", ...(fields.messageID === undefined ? {} : { messageID: messageID(fields.messageID) }) }
   if (request.operation === "workspace.list") return { kind: "workspace.list", sessionsOnly: fields.sessionsOnly === true }
   if (request.operation === "session.list") return { kind: "list", query: parseListQuery(fields) }
@@ -2313,6 +2324,8 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.get": [],
   "session.snapshot": ["limit", "before"],
   "session.pending.list": [],
+  "session.pending.remove": ["messageID"],
+  "session.pending.steer": ["messageID"],
   "session.attachment.read": ["digest"],
   "session.message.stream": ["messageID"],
   "session.subagent.list": ["cursor"],
@@ -2397,6 +2410,8 @@ const mutations: ReadonlySet<string> = new Set([
   "session.skill",
   "session.prompt",
   "session.interrupt",
+  "session.pending.remove",
+  "session.pending.steer",
   "session.prediction",
   "session.promptGenerate",
   "session.permission.reply",
@@ -2426,6 +2441,9 @@ function localError(cause: LocalFailure, request: RemoteRequest): readonly [Remo
     case "location_unavailable":
       return ["invalid_message", "The recorded directory is unavailable on this device; restore it before retrying"]
     case "not_found":
+      if ((request.operation === "session.pending.remove" || request.operation === "session.pending.steer") &&
+        typeof cause.cause === "object" && cause.cause !== null && Reflect.get(cause.cause, "_tag") === "PendingInputNotFoundError")
+        return ["not_found", "That input is no longer pending"]
       if (request.operation === "session.attachment.read" || request.operation === "session.message.stream")
         return ["not_found", "The requested Session content is unavailable"]
       if (reviewReplies.has(request.operation))

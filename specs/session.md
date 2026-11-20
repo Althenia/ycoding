@@ -72,6 +72,16 @@ Delivery is explicit:
 
 Promoting new user input resets the selected agent's step allowance. A batch of steers resets it once.
 
+### Pending input controls
+
+An unconsumed user input can be withdrawn or promoted to an immediate steer before the runner promotes it.
+
+- `DELETE /api/session/:sessionID/pending/:messageID` (`session.pending.remove`; client `session.pending.remove({ sessionID, messageID })`) appends `session.input.withdrawn` with `{ sessionID, inputID }`. The projection deletes the `session_pending` row, so the input never becomes a visible message and nothing is woken or interrupted.
+- `POST /api/session/:sessionID/pending/:messageID/steer` (`session.pending.steer`; client `session.pending.steer({ sessionID, messageID })`) appends `session.input.steered` with `{ sessionID, inputID }`; the projection sets the row's delivery to `steer`. Core then schedules the advisory wake, so the input promotes at the next Safe Step Boundary, or immediately when the Session is idle. Steering an input that already steers appends no event and still wakes.
+- Both operations answer `204` with no body and use the Session Location middleware. Core re-reads the row under the inbox lock that promotion holds, so an input is either promoted or changed, never both.
+- Errors: `404 SessionNotFoundError` for an unknown Session; `404 PendingInputNotFoundError` (`{ sessionID, messageID, message }`) when the input is already promoted, already withdrawn, unknown, or belongs to another Session; `400 InvalidRequestError` with `kind: "pending_input_not_user"` for synthetic or compaction pending work, which stays pending.
+- Both events are public durable Session events (`session.input.withdrawn.1`, `session.input.steered.1`). The browser relay carries both operations as mutations that require `sessionID` and `input: { messageID }`; managed subagent Sessions reject them from remote callers.
+
 Manual compaction does not use the prompt pending store. `POST /api/session/:sessionID/compact` accepts an optional `cmp_` idempotency ID, admits compaction, starts or joins the process-global worker for that job, and returns the settled `SessionCompaction.Result`: `{ id, sessionID, trigger, status: "ended" | "failed", requestedThrough, timeCreated, failure?: <FailureCode> }`.
 
 ## Causal usage attribution

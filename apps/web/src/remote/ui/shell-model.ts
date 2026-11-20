@@ -6,7 +6,6 @@ import type { IconName } from "../../ui/icon"
 import { WORKSPACE_DESTINATIONS } from "./shared-workspace"
 import {
   connectionBanner,
-  connectionLabel,
   lostResultLabel,
   sessionActivityGroup,
   sessionProjectLabel,
@@ -59,55 +58,6 @@ export function remoteActivityDestinations(input: { readonly view: RemoteView; r
     }
   })
   return [chat, ...destinations]
-}
-
-export type RemoteStatusEntry = {
-  readonly id: "connection" | "machine" | "model" | "autonomy" | "context" | "running"
-  readonly label: string
-  readonly short?: string
-  readonly name?: string
-  readonly ariaLabel: string
-  readonly icon?: IconName
-  readonly tone?: "mint" | "amber" | "coral"
-  readonly ring?: number
-  readonly push?: boolean
-  readonly live?: boolean
-}
-
-export function runningSessionCount(reported: ReadonlySet<string> | undefined, sessions: readonly SessionInfoView[], view: SessionView | undefined): number {
-  const running = new Set(reported ?? sessions.filter((session) => session.running === true).map((session) => session.id))
-  if (view?.status === "running") running.add(view.id)
-  return running.size
-}
-
-export function remoteStatusEntries(input: {
-  readonly connection: RemoteConnectionState
-  readonly transport: RemoteTransportStatus
-  readonly machine: string
-  readonly running: number
-  readonly session?: { readonly model?: string; readonly autonomy?: string; readonly context?: { readonly fraction: number; readonly percent: number; readonly tokens: string }; readonly childRunning: boolean }
-}): readonly RemoteStatusEntry[] {
-  const connection = summarizeConnection(input.connection)
-  const label = connectionLabel(input.connection, input.transport)
-  const session = input.session
-  const tone = connection.tone === "online" ? "mint" : connection.tone === "offline" ? "coral" : "amber"
-  const runningName = input.running === 1 ? "1 Session running" : `${input.running} Sessions running`
-  return [
-    { id: "connection", label, short: connection.label, ariaLabel: `Connection: ${label}`, icon: connection.tone === "online" ? "check" : connection.tone === "offline" ? "alert" : "refresh", tone },
-    { id: "machine", label: input.machine, name: "machine", ariaLabel: `Machine: ${input.machine}`, icon: "monitor" },
-    ...(session?.model === undefined ? [] : [{ id: "model" as const, label: session.model, name: "model", ariaLabel: `Model: ${session.model}`, icon: "cpu" as const }]),
-    ...(session?.autonomy === undefined ? [] : [{ id: "autonomy" as const, label: session.autonomy, ariaLabel: `Autonomy: ${session.autonomy}`, icon: "shield" as const }]),
-    ...(session?.context === undefined ? [] : [{ id: "context" as const, label: `${session.context.tokens} · ${session.context.percent}%`, short: `${session.context.percent}%`, name: "context", ariaLabel: `Context: ${session.context.percent}% used, ${session.context.tokens}`, ring: session.context.fraction }]),
-    {
-      id: "running",
-      label: `${input.running} running`,
-      ariaLabel: session?.childRunning === true ? `${runningName}, a child task started` : runningName,
-      icon: session?.childRunning === true ? "git-fork" : "zap",
-      ...(input.running > 0 ? { tone: "mint" as const } : {}),
-      push: true,
-      live: true,
-    },
-  ]
 }
 
 export function remoteSurfaceComposition(path: RemoteView, hasSession: boolean) {

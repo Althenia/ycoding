@@ -16,11 +16,11 @@ import { TerminalRelay, terminalSocketUrl, type TerminalSocketFactory } from "./
 import { validateSelection } from "./preferences"
 import { questionAnswerError } from "./question-rules"
 import { composerByteLimit, composerFileLimit, inlineFileSize } from "./composer-files"
-import { activityInput, directoriesInput, isRevision, pageInput, requestReply, revertInput, session, setAutonomyInput, shellOutputInput, usageInput } from "./requests"
+import { activityInput, attachmentRead, directoriesInput, pendingAction, isRevision, pageInput, requestReply, revertInput, session, setAutonomyInput, shellOutputInput, usageInput } from "./requests"
 import { bundledBackend } from "./resources"
 import { describeError, redactSecrets } from "./app-log"
 import { pinRequest, projectSessionRecord, projectSessions, sessionsQuery, sessionTarget } from "./sessions"
-import { DesktopError, utf8Length, type ConnectionState, type Selection, type SessionFileChanges, type DirectoryListing, type OpenedDirectory, type IntegrationsSnapshot, type IntegrationMutationInput, type IntegrationMutationResult, type IntegrationAttempt, type McpResource, type McpMutationInput, type McpSnapshot, type SessionManageInput, type SessionManageResult, type VcsDiffSnapshot, type SystemInput, type SystemManageInput, type SystemSnapshot, type DisplayValue, type RequestReply, type SessionSnapshot, type PendingInput, type PendingInputs, type SessionInsights, type SideChat, type Prediction, type GeneratedPrompt, type SessionTerminals, type SessionTerminalRead, type TerminalFrames, type TerminalStream, type TranscriptExport, type ArtifactScope, type ArtifactKind, type ArtifactStage, type ArtifactIdentity, type ArtifactsSnapshot, type ArtifactDetail, type ArtifactMutationResult, type ArtifactPreviewKind, type DotsTarget, type Admission, type PendingRequests, type UsageDashboard, type Incidents, type ShellSummary, type ModelSelection, type TelemetryConsentSnapshot } from "./contract"
+import { DesktopError, utf8Length, type SessionAttachment, type ConnectionState, type Selection, type SessionFileChanges, type DirectoryListing, type OpenedDirectory, type IntegrationsSnapshot, type IntegrationMutationInput, type IntegrationMutationResult, type IntegrationAttempt, type McpResource, type McpMutationInput, type McpSnapshot, type SessionManageInput, type SessionManageResult, type VcsDiffSnapshot, type SystemInput, type SystemManageInput, type SystemSnapshot, type DisplayValue, type RequestReply, type SessionSnapshot, type PendingInput, type PendingInputs, type SessionInsights, type SideChat, type Prediction, type GeneratedPrompt, type SessionTerminals, type SessionTerminalRead, type TerminalFrames, type TerminalStream, type TranscriptExport, type ArtifactScope, type ArtifactKind, type ArtifactStage, type ArtifactIdentity, type ArtifactsSnapshot, type ArtifactDetail, type ArtifactMutationResult, type ArtifactPreviewKind, type DotsTarget, type Admission, type PendingRequests, type UsageDashboard, type Incidents, type ShellSummary, type ModelSelection, type TelemetryConsentSnapshot } from "./contract"
 
 type Native = Awaited<ReturnType<typeof connectNative>>
 type Control = ReturnType<typeof openControl>
@@ -1868,6 +1868,25 @@ export class BackendController {
       const items = await api.session.pending.list({ sessionID }, { signal })
       if (!Array.isArray(items)) throw new DesktopError("The backend returned invalid pending inputs. Refresh to retry.")
       return { revision, sessionID, items: items.map((item) => pendingInput(item, sessionID)) }
+    })
+  }
+
+  async removePending(input: unknown) {
+    const request = pendingAction(input)
+    await this.use("The pending message could not be removed. It may no longer be pending.", (api, signal) => api.session.pending.remove(request, { signal }))
+  }
+
+  async steerPending(input: unknown) {
+    const request = pendingAction(input)
+    await this.use("The pending message could not be steered. It may no longer be pending.", (api, signal) => api.session.pending.steer(request, { signal }))
+  }
+
+  async sessionAttachment(input: unknown): Promise<SessionAttachment> {
+    const request = attachmentRead(input)
+    return this.use("The attachment could not be read.", async (api, signal, revision) => {
+      const file = await api.session.attachment.read(request, { signal })
+      if (!object(file) || !nonempty(file.mime) || !count(file.bytes) || typeof file.data !== "string") throw new DesktopError("The backend returned an invalid attachment.")
+      return { revision, sessionID: request.sessionID, digest: request.digest, mime: file.mime, bytes: file.bytes, data: file.data }
     })
   }
 

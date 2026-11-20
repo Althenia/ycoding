@@ -24,7 +24,7 @@ test.each(["pending", "promoted", "consumed"] as const)("%s user messages keep t
         expect(html).toContain("Review the change")
         expect(html).toContain("notes.md")
         expect(html).toContain("transcript-message__receipt")
-        expect(html).toContain(state === "pending" ? "Queued" : status === "running" ? "Processing" : state === "consumed" ? "Read by YCoding" : "Sent, not yet read")
+        expect(html).toContain(state === "pending" ? 'data-state="queued"' : status === "running" ? 'data-state="processing"' : state === "consumed" ? 'data-state="read"' : 'data-state="sent"')
         expect(html).not.toContain("Prompt cost")
         expect(html).not.toContain("Cost breakdown")
         expect(html).not.toContain("usage-unit-cost")

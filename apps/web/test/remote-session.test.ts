@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { isRemoteLatencySample, type RemoteNoticeFrame } from "@ycoding-ai/remote"
 import { canReplyToRequest, hasCompactionCheckpoint, sessionExecutionLabel, visibleTranscriptMessages } from "../src/remote/projection"
 import { createRemoteHttp } from "../src/remote/http"
-import { latestPromptProcessing, promptReceipt } from "../src/remote/view-model"
+import { latestPromptProcessing, pendingTrayItems, promptReceipt } from "../src/remote/view-model"
 import { createRemoteStore, readSessionInfo, type RemoteStore } from "../src/remote/store"
 import { createRemoteTransport, type RemoteRequestTiming, type RemoteTransport, type RemoteTransportStatus } from "../src/remote/transport"
 import { startRelayDouble, waitFor, type RelayDouble, type RelayHandlerOutcome, type RelayHandlerResult } from "./relay-double"
@@ -2773,6 +2773,46 @@ describe("remote store integration", () => {
     } finally { await test.stop() }
   })
 
+  test("pending inputs show only user-authored rows and Remove and Steer now call the relay then refresh the list", async () => {
+    const row = (id: string, text: string, delivery: "steer" | "queue") => ({ id, sessionID: "ses_a", admittedSeq: 2, timeCreated: 2, type: "user", data: { text }, delivery })
+    let rows: readonly Record<string, unknown>[] = [
+      row("msg_p1", "First queued", "queue"),
+      { id: "msg_sys", sessionID: "ses_a", admittedSeq: 3, timeCreated: 3, type: "synthetic", delivery: "queue", data: { text: "{\"internal\":true}", description: "Internal", metadata: { contextSource: "session-state" } } },
+      { id: "msg_compact", sessionID: "ses_a", admittedSeq: 4, timeCreated: 4, type: "compaction", delivery: "queue" },
+      row("msg_p2", "Second queued", "queue"),
+    ]
+    const test = await harness({ handler: (request) => {
+      if (request.operation === "session.pending.list") return { ok: true, value: { data: rows } }
+      if (request.operation !== "session.pending.remove" && request.operation !== "session.pending.steer") return "default"
+      const id = request.input?.messageID
+      if (!rows.some((entry) => entry.id === id)) return { ok: false, code: "not_found", message: "That input is no longer pending" }
+      rows = request.operation === "session.pending.remove" ? rows.filter((entry) => entry.id !== id) : rows.map((entry) => entry.id === id ? { ...entry, delivery: "steer" } : entry)
+      return { ok: true, value: null }
+    } })
+    const tray = () => pendingTrayItems(test.store.state().view?.messages ?? []).map((item) => item.id)
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => tray().length === 2)
+      expect(tray()).toEqual(["msg_p1", "msg_p2"])
+
+      expect(await test.store.settlePendingInput("steer", "msg_p1")).toBeUndefined()
+      expect(tray()).toEqual(["msg_p2"])
+      expect(test.store.state().view?.messages.find((message) => message.id === "msg_p1")).toMatchObject({ kind: "user", delivery: "steer" })
+      expect(await test.store.settlePendingInput("remove", "msg_p2")).toBeUndefined()
+      expect(tray()).toEqual([])
+      const calls = test.relay.requests.filter((request) => request.operation === "session.pending.remove" || request.operation === "session.pending.steer")
+      expect(calls.map((request) => [request.operation, request.sessionID, request.input])).toEqual([
+        ["session.pending.steer", "ses_a", { messageID: "msg_p1" }],
+        ["session.pending.remove", "ses_a", { messageID: "msg_p2" }],
+      ])
+
+      expect(await test.store.settlePendingInput("remove", "msg_p2")).toBe("That input is no longer pending.")
+      expect(tray()).toEqual([])
+    } finally { await test.stop() }
+  })
+
   test("replies to permission, guardrail, and native form requests with protocol payloads", async () => {
     const test = await harness()
     try {
@@ -3884,7 +3924,7 @@ describe("prompt receipt after missed execution events", () => {
     const view = store.state().view!
     const message = view.messages.findLast((item) => item.kind === "user")!
     if (message.kind !== "user") throw new Error("no user message")
-    return promptReceipt(message.state, message.delivery, undefined, latestPromptProcessing(view.status, view.messages, message.id)).text
+    return promptReceipt(message.state, message.delivery, undefined, latestPromptProcessing(view.status, view.messages, message.id)).state
   }
   const sessionHandler = (options: { sessionID: string; parentFamilyRunning: boolean; log: () => readonly unknown[]; snapshotWatermark: () => number; failStatus?: () => boolean }) => (request: { operation: string; input?: Readonly<Record<string, unknown>>; sessionID?: string }): RelayHandlerResult => {
     const info = options.sessionID === child.id ? child : { id: "ses_a", title: "Session A", projectID: "prj_default", location: { directory: "/work" }, time: { created: 1, updated: 2 } }
@@ -3910,12 +3950,12 @@ describe("prompt receipt after missed execution events", () => {
       await test.store.selectSession("ses_a")
       test.relay.pushEvent("ses_a", executionEvent("session.execution.started", "ses_a", 2))
       await test.flush()
-      expect(receiptOf(test.store)).toBe("Processing")
+      expect(receiptOf(test.store)).toBe("processing")
       failStatus = true
       test.relay.dropConnections(1006, "")
       await test.runUntil(() => test.relay.requests.filter((request) => request.operation === "session.status").length >= 3 && test.store.state().sessionStatus !== undefined)
       expect(test.store.state().view?.status).toBe("idle")
-      expect(receiptOf(test.store)).toBe("Read")
+      expect(receiptOf(test.store)).toBe("read")
     } finally { await test.stop() }
   })
 
@@ -3931,14 +3971,14 @@ describe("prompt receipt after missed execution events", () => {
         test.relay.pushEvent(child.id, executionEvent("session.execution.started", child.id, 2))
         await test.flush()
         expect(test.store.state().view?.status).toBe("running")
-        expect(receiptOf(test.store)).toBe("Processing")
+        expect(receiptOf(test.store)).toBe("processing")
         logged = [executionEvent(type, child.id, 3)]
         watermark = 3
         test.relay.dropConnections(1006, "")
         await test.runUntil(() => test.store.state().transport.kind === "open" && test.store.state().view?.watermark === 3 && test.store.state().sessionStatus !== undefined)
         await test.runUntil(() => test.store.state().view?.status !== "running")
         expect(test.store.state().view?.status).toBe(status)
-        expect(receiptOf(test.store)).toBe("Read")
+        expect(receiptOf(test.store)).toBe("read")
         expect(test.relay.requests.some((request) => request.operation === "session.log" && request.input?.after === 2)).toBe(true)
       } finally { await test.stop() }
     })
@@ -3960,7 +4000,7 @@ describe("prompt receipt after missed execution events", () => {
       await test.runUntil(() => test.store.state().transport.kind === "open" && test.store.state().view?.watermark === 3 && test.store.state().sessionStatus?.running.size === 0)
       await test.runUntil(() => test.store.state().view?.status !== "running")
       expect(test.store.state().view?.status).toBe("interrupted")
-      expect(receiptOf(test.store)).toBe("Read")
+      expect(receiptOf(test.store)).toBe("read")
     } finally { await test.stop() }
   })
 
@@ -3982,7 +4022,7 @@ describe("prompt receipt after missed execution events", () => {
       await test.flush()
       expect(test.relay.requests.some((request) => request.operation === "session.log")).toBe(true)
       expect(test.store.state().view?.status).toBe("running")
-      expect(receiptOf(test.store)).toBe("Processing")
+      expect(receiptOf(test.store)).toBe("processing")
     } finally { await test.stop() }
   })
 
@@ -4000,7 +4040,7 @@ describe("prompt receipt after missed execution events", () => {
       test.relay.pushSessions([child.id])
       await test.runUntil(() => test.store.state().view?.status !== "running")
       expect(test.store.state().view?.status).toBe("interrupted")
-      expect(receiptOf(test.store)).toBe("Read")
+      expect(receiptOf(test.store)).toBe("read")
     } finally { await test.stop() }
   })
 })

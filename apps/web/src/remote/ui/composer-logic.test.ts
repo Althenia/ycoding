@@ -297,3 +297,22 @@ describe("catalog reads", () => {
     expect((["loading", "ready", "unsupported", "error"] as const).map((status) => needsCatalogRead(target, entry(status), true))).toEqual([false, false, false, false])
   })
 })
+
+describe("namespaced slash triggers", () => {
+  const namespaced: CatalogView = { ...catalog, commands: [{ name: "ui:review", description: "Review a screen" }, { name: "ns:sub:cmd" }, { name: "plan", description: "Plan work" }], skills: [{ id: "ui-design", name: "UI design", slash: true }, { id: "audit", name: "Audit", slash: true }] }
+  test("keeps the trigger open while a colon-separated namespace is typed", () => {
+    for (const text of ["/ui:", "/ui:rev", "/ns:sub:cmd"]) expect(triggerAt(text, text.length)).toEqual({ trigger: "/", start: 0, query: text.slice(1) })
+    expect(suggestionTrigger("/ui:", 4, undefined)?.query).toBe("ui:")
+  })
+  test("lists every command and skill in the typed namespace, whatever separator they declare", () => {
+    expect(optionsForTrigger("/", "ui:", namespaced, []).map((option) => option.label).sort()).toEqual(["/ui-design", "/ui:review"])
+    expect(optionsForTrigger("/", "ui:rev", namespaced, []).map((option) => option.label)).toEqual(["/ui:review"])
+    expect(optionsForTrigger("/", "ns:sub:", namespaced, []).map((option) => option.label)).toEqual(["/ns:sub:cmd"])
+    expect(optionsForTrigger("/", "ns:sub:cmd", namespaced, []).map((option) => option.label)).toEqual(["/ns:sub:cmd"])
+    expect(optionsForTrigger("/", "zzz:", namespaced, [])).toEqual([])
+  })
+  test("inserts the full namespaced name", () => {
+    const option = optionsForTrigger("/", "ui:rev", namespaced, [])[0]!
+    expect(applyMention("/ui:rev", 0, 7, option, [])).toMatchObject({ text: "/ui:review ", cursor: 11 })
+  })
+})

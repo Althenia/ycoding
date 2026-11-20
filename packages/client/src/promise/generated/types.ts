@@ -34,6 +34,8 @@ export type TelemetryRequestSample = {
     | "session.compact"
     | "session.snapshot"
     | "session.pending.list"
+    | "session.pending.remove"
+    | "session.pending.steer"
     | "session.attachment.read"
     | "session.message.stream"
     | "session.todo.list"
@@ -1216,6 +1218,28 @@ export type SessionInputPromoted = {
   metadata?: { [x: string]: any }
   sourceEpoch?: string
   type: "session.input.promoted"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; inputID: string }
+}
+
+export type SessionInputWithdrawn = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.input.withdrawn"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; inputID: string }
+}
+
+export type SessionInputSteered = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.input.steered"
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
   data: { sessionID: string; inputID: string }
@@ -5049,6 +5073,26 @@ export type SessionLogItem =
       created: number
       metadata?: { [x: string]: any }
       sourceEpoch: string
+      type: "session.input.withdrawn"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: { sessionID: string; inputID: string }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.input.steered"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: { sessionID: string; inputID: string }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
       type: "session.input.consumed"
       durable: { aggregateID: string; seq: number; version: 1 }
       location?: LocationRef
@@ -5721,6 +5765,8 @@ export type ServerEvent =
   | SessionForked
   | SessionInputPromoted
   | SessionInputAdmitted
+  | SessionInputWithdrawn
+  | SessionInputSteered
   | SessionInputConsumed
   | SessionDotsExchangeCreated
   | SessionDotsBindingBound
@@ -5981,6 +6027,15 @@ export type SessionBusyError = {
 export const isSessionBusyError = (value: unknown): value is SessionBusyError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "SessionBusyError"
 
+export type PendingInputNotFoundError = {
+  readonly _tag: "PendingInputNotFoundError"
+  readonly sessionID: string
+  readonly messageID: string
+  readonly message: string
+}
+export const isPendingInputNotFoundError = (value: unknown): value is PendingInputNotFoundError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "PendingInputNotFoundError"
+
 export type InstructionEntryValueTooLargeError = {
   readonly _tag: "InstructionEntryValueTooLargeError"
   readonly actualBytes: number
@@ -6181,6 +6236,8 @@ export type ServerTelemetryAppendInput = {
             | "session.compact"
             | "session.snapshot"
             | "session.pending.list"
+            | "session.pending.remove"
+            | "session.pending.steer"
             | "session.attachment.read"
             | "session.message.stream"
             | "session.todo.list"
@@ -8006,6 +8063,20 @@ export type SessionFileChangeListOutput = { data: Array<SessionEventFileChangeIn
 export type SessionPendingListInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
 export type SessionPendingListOutput = { data: Array<SessionPendingInfo> }["data"]
+
+export type SessionPendingRemoveInput = {
+  readonly sessionID: { readonly sessionID: string; readonly messageID: string }["sessionID"]
+  readonly messageID: { readonly sessionID: string; readonly messageID: string }["messageID"]
+}
+
+export type SessionPendingRemoveOutput = void
+
+export type SessionPendingSteerInput = {
+  readonly sessionID: { readonly sessionID: string; readonly messageID: string }["sessionID"]
+  readonly messageID: { readonly sessionID: string; readonly messageID: string }["messageID"]
+}
+
+export type SessionPendingSteerOutput = void
 
 export type SessionInstructionsEntryListInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 

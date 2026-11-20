@@ -37,7 +37,7 @@ test("status chips and the autonomy and goal controls wrap at every width instea
 
 test("the autonomy icon stays visible at every width and the phone control keeps one word and a 44px target", () => {
   expect(baseRule(".session-status__autonomous-word")).toMatchObject({ display: "none" })
-  expect(baseRule(".session-status__autonomous-icon")).toMatchObject({ display: "inline-flex", color: "var(--yc-cobalt-ink)" })
+  expect(baseRule(".session-status__autonomous-icon")).toMatchObject({ display: "inline-flex", color: "var(--yc-green-ink)" })
   expect(phoneRule(".session-status__autonomous-word")).toMatchObject({ display: "inline" })
   expect(phoneRule(".session-status__autonomous-icon")).toMatchObject({ display: "block" })
   expect(phoneRule(".session-status__autonomous-full")).toMatchObject({ display: "none" })

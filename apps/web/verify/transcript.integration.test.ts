@@ -30,11 +30,11 @@ describe("transcript rendering", () => {
       await page.evaluate(`(() => { for (const selector of ['.transcript-notice__toggle', '.transcript-tool__toggle[aria-expanded="false"]']) document.querySelector(selector)?.click(); })()`)
       expect(await page.evaluate(`Object.fromEntries([...document.querySelectorAll('[data-message-id^="msg_markdown_"]')].map(row => [row.dataset.messageId, row.querySelector('.transcript-md strong')?.textContent ?? '']))`, decodeRecord)).toEqual({ msg_markdown_user: "User emphasis", msg_markdown_system: "System emphasis", msg_markdown_goal: "Goal emphasis", msg_markdown_member: "Member emphasis", msg_markdown_excerpt: "Child emphasis", msg_markdown_tool: "Tool emphasis" })
       const code = `  const line = '${"longCode".repeat(90)}'\n\n    return line`
-      expect(await page.evaluate(`(() => { const block = document.querySelector('.transcript-md__code'), pre = block.querySelector('pre'), code = pre.querySelector('code'), head = block.querySelector('.transcript-md__code-head'), copy = head.querySelector('button'); return { language: head.firstElementChild.textContent, label: copy.textContent.trim(), icon: !!copy.querySelector('svg'), mono: getComputedStyle(code).fontFamily.includes('JetBrains Mono'), text: code.textContent, selectable: [block.closest('.transcript-md'), pre, code].every(el => getComputedStyle(el).userSelect === 'text'), outerFits: [document.documentElement, block, block.closest('.transcript-message__bubble')].every(el => el.scrollWidth <= el.clientWidth), scrollsInside: pre.scrollWidth > pre.clientWidth && getComputedStyle(pre).overflowX === 'auto' }; })()`, decodeRecord)).toEqual({ language: "ts", label: "Copy", icon: true, mono: true, text: code, selectable: true, outerFits: true, scrollsInside: true })
-      await page.evaluate(`document.querySelector('.transcript-md__code-head button').focus()`)
+      expect(await page.evaluate(`(() => { const block = document.querySelector('.transcript-md__code'), pre = block.querySelector('pre'), code = pre.querySelector('code'), head = block.querySelector('.transcript-md__code-head'), copy = head.querySelector('[data-action="copy"]'); return { language: head.firstElementChild.textContent.trim(), label: copy.textContent.trim(), icon: !!copy.querySelector('svg'), mono: getComputedStyle(code).fontFamily.includes('JetBrains Mono'), text: code.textContent, selectable: [block.closest('.transcript-md'), pre, code].every(el => getComputedStyle(el).userSelect === 'text'), outerFits: [document.documentElement, block, block.closest('.transcript-message__bubble')].every(el => el.scrollWidth <= el.clientWidth), scrollsInside: pre.scrollWidth > pre.clientWidth && getComputedStyle(pre).overflowX === 'auto' }; })()`, decodeRecord)).toEqual({ language: "TypeScript", label: "Copy code", icon: true, mono: true, text: code, selectable: true, outerFits: true, scrollsInside: true })
+      await page.evaluate(`document.querySelector('.transcript-md__code-head [data-action="copy"]').focus()`)
       await page.pressKey("Enter", "Enter", 13, "\r")
       expect(await page.evaluate(`window.copiedMarkdown`, decodeString)).toBe(code)
-      expect(await page.evaluate(`document.querySelector('.transcript-md__code-head button').textContent.trim()`, decodeString)).toBe("Copied")
+      expect(await page.evaluate(`document.querySelector('.transcript-md__code-head [data-action="copy"]').textContent.trim()`, decodeString)).toBe("Copied")
     } finally { await page.close() }
   }, 20_000)
 
@@ -77,16 +77,16 @@ describe("transcript rendering", () => {
         await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?costs&theme=${theme}`)
         for (let i = 0; i < 40 && !await page.evaluate(`document.querySelector('[data-message-id="msg_cost_known"] .transcript-message__receipt')`); i++) await Bun.sleep(50)
         for (const id of ["msg_cost_known", "msg_cost_partial", "msg_cost_unreported", "msg_cost_pending"]) {
-          const row = await page.evaluate(`(() => { const row = document.querySelector('[data-message-id="${id}"]'); const article = row.querySelector('article'); const receipt = article.querySelector('.transcript-message__receipt'); return { costBlocks: row.querySelectorAll('.usage-unit-cost, [aria-label="Prompt cost"]').length, text: row.textContent, headCount: article.querySelectorAll(".transcript-message__head").length, receiptParent: receipt.parentElement.className, receiptAfterBubble: !article.querySelector(".transcript-message__bubble") || !!(article.querySelector(".transcript-message__bubble").compareDocumentPosition(receipt) & Node.DOCUMENT_POSITION_FOLLOWING), receiptRole: receipt.getAttribute('role'), receiptLabel: receipt.getAttribute('aria-label') ?? '' } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, costBlocks: (decodeNumber)(record["costBlocks"]), text: (decodeString)(record["text"]), headCount: (decodeNumber)(record["headCount"]), receiptParent: (decodeString)(record["receiptParent"]), receiptAfterBubble: (decodeBoolean)(record["receiptAfterBubble"]), receiptRole: (decodeNullable(decodeString))(record["receiptRole"]), receiptLabel: (decodeString)(record["receiptLabel"]) } })
+          const row = await page.evaluate(`(() => { const row = document.querySelector('[data-message-id="${id}"]'); const article = row.querySelector('article'); const receipt = article.querySelector('.transcript-message__receipt'); return { costBlocks: row.querySelectorAll('.usage-unit-cost, [aria-label="Prompt cost"]').length, text: row.textContent, headCount: article.querySelectorAll(".transcript-message__head").length, receiptParent: receipt.closest('.transcript-message__meta').className, metaParent: receipt.closest('.transcript-message__meta').parentElement === article, receiptAfterBubble: !article.querySelector(".transcript-message__bubble") || !!(article.querySelector(".transcript-message__bubble").compareDocumentPosition(receipt) & Node.DOCUMENT_POSITION_FOLLOWING), receiptRole: receipt.getAttribute('role'), receiptLabel: receipt.getAttribute('aria-label') ?? '' } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, costBlocks: (decodeNumber)(record["costBlocks"]), text: (decodeString)(record["text"]), headCount: (decodeNumber)(record["headCount"]), receiptParent: (decodeString)(record["receiptParent"]), metaParent: (decodeBoolean)(record["metaParent"]), receiptAfterBubble: (decodeBoolean)(record["receiptAfterBubble"]), receiptRole: (decodeNullable(decodeString))(record["receiptRole"]), receiptLabel: (decodeString)(record["receiptLabel"]) } })
           expect(row.costBlocks).toBe(0)
           expect(row.text).not.toContain("Prompt cost")
           expect(row.text).not.toContain("Cost breakdown")
           expect(row.headCount).toBe(0)
-          expect(row.receiptParent).toBe("transcript-message transcript-message--user")
+          expect(row.receiptParent).toBe("transcript-message__meta")
+          expect(row.metaParent).toBe(true)
           expect(row.receiptAfterBubble).toBe(true)
           expect(row.receiptRole).toBe("status")
-          expect(row.receiptLabel).not.toBe("")
-          expect(row.text).toContain(id === "msg_cost_pending" ? "Queued" : id === "msg_cost_unreported" ? "Sent" : "Read")
+          expect(row.receiptLabel).toBe(id === "msg_cost_pending" || id === "msg_cost_unreported" ? "Sent" : "Read by YCoding")
         }
         expect(await page.evaluate(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
       }
@@ -519,13 +519,13 @@ describe("transcript rendering", () => {
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=light`)
         for (let i = 0; i < 80 && !await page.evaluate(`document.querySelector('.composer__input') && document.querySelector('.mini-composer__send')`); i++) await Bun.sleep(50)
         await page.evaluate(`(() => { const input = document.querySelector('.composer__input'); input.value = 'Inspect the running Session and keep this prompt pending while I review the transcript.'; input.dispatchEvent(new InputEvent('input', { bubbles: true })); document.querySelector('.mini-composer__send').click() })()`)
-        for (let i = 0; i < 40 && !await page.evaluate(`document.querySelector('.transcript-message--user .transcript-message__receipt[aria-label="Processing prompt"]')`); i++) await Bun.sleep(50)
-        const geometry = await page.evaluate(`(() => { const row = document.querySelector('.transcript-message--user:has(.transcript-message__receipt[aria-label="Processing prompt"])'); return { processing: document.querySelectorAll('.transcript-message__receipt[aria-label="Processing prompt"]').length, right: row?.getBoundingClientRect().right ?? 0, columnRight: document.querySelector('.transcript-navigation').getBoundingClientRect().right } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, processing: (decodeNumber)(record["processing"]), right: (decodeNumber)(record["right"]), columnRight: (decodeNumber)(record["columnRight"]) } })
+        for (let i = 0; i < 40 && !await page.evaluate(`document.querySelector('.transcript-message--user .transcript-message__receipt[aria-label="Sent"]')`); i++) await Bun.sleep(50)
+        const geometry = await page.evaluate(`(() => { const row = document.querySelector('.transcript-message--user:has(.transcript-message__receipt[aria-label="Sent"])'); return { processing: document.querySelectorAll('.transcript-message__receipt[aria-label="Sent"]').length, right: row?.getBoundingClientRect().right ?? 0, columnRight: document.querySelector('.transcript-navigation').getBoundingClientRect().right } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, processing: (decodeNumber)(record["processing"]), right: (decodeNumber)(record["right"]), columnRight: (decodeNumber)(record["columnRight"]) } })
         expect(geometry.processing).toBeGreaterThan(0)
         expect(Math.abs(geometry.right - geometry.columnRight)).toBeLessThanOrEqual(1)
         await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); if (fixture) { fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden' } const root = document.querySelector('.workspace__scroll'); root.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -200 })); root.scrollTop = 0 })()`)
         await Bun.sleep(60)
-        await page.evaluate(`document.querySelector('.transcript-message--user:has(.transcript-message__receipt[aria-label="Processing prompt"])')?.scrollIntoView({ block: 'center' })`)
+        await page.evaluate(`document.querySelector('.transcript-message--user:has(.transcript-message__receipt[aria-label="Sent"])')?.scrollIntoView({ block: 'center' })`)
         await Bun.sleep(120)
         await Bun.write(new URL(`../../../.cache/tmp/pending-prompt-${width}x${height}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
       }
@@ -782,17 +782,17 @@ describe("transcript rendering", () => {
         expect(Math.abs(geometry.quote - geometry.column)).toBeLessThanOrEqual(1)
         expect(Math.abs(geometry.heading - geometry.column)).toBeLessThanOrEqual(1)
         expect(geometry.user).toBeLessThan(geometry.column)
-        expect(geometry.receipt).toBe("Queued for processing")
+        expect(geometry.receipt).toBe("Sent")
         expect(geometry.role).toBe("status")
         expect(geometry.animation).toBe("none")
       }
       await page.setReducedMotion(true)
       await page.evaluate(`document.querySelector('#admit').click()`)
-      expect(await page.evaluate(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') ?? ''`)).toBe("Processing prompt")
-      expect(await page.evaluate(`document.querySelector('.transcript-message__receipt')?.textContent ?? ''`)).toContain("Processing")
+      expect(await page.evaluate(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') ?? ''`)).toBe("Sent")
+      expect(await page.evaluate(`document.querySelector('.transcript-message__receipt .delivery-status')?.dataset.state ?? ''`)).toBe("processing")
       expect(await page.evaluate(`getComputedStyle(document.querySelector('.transcript-message__receipt')).animationName`)).toBe("none")
       await page.evaluate(`document.querySelector('#consume').click()`)
-      expect(await page.evaluate(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') ?? ''`)).toBe("Processing prompt")
+      expect(await page.evaluate(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') ?? ''`)).toBe("Sent")
     } finally { await page.close() }
   })
 
@@ -802,22 +802,22 @@ describe("transcript rendering", () => {
     try {
       await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html`)
       for (let i = 0; i < 40 && !await page.evaluate(`document.querySelector('.transcript-message--user') !== null`); i++) await Bun.sleep(50)
-      const inspect = () => page.evaluate(`(() => { const user = document.querySelector('.transcript-message--user'); const assistant = document.querySelector('.transcript-message--assistant'); const u = user.getBoundingClientRect(); const a = assistant.getBoundingClientRect(); const p = document.querySelector('.transcript').getBoundingClientRect(); return { user: u.right, assistant: a.left, parentLeft: p.left, parentRight: p.right, width: u.width, overflow: document.documentElement.scrollWidth > innerWidth, receipt: user.querySelector('.transcript-message__receipt')?.textContent?.trim() ?? '', identity: assistant.querySelector('.transcript-message__agent')?.textContent?.trim() ?? '', bubble: user.querySelector('.transcript-message__bubble')?.textContent ?? '', outside: user.querySelector('.transcript-message__receipt').getBoundingClientRect().top >= user.querySelector('.transcript-message__bubble').getBoundingClientRect().bottom, inHead: user.querySelector('.transcript-message__head') !== null } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, user: (decodeNumber)(record["user"]), assistant: (decodeNumber)(record["assistant"]), parentLeft: (decodeNumber)(record["parentLeft"]), parentRight: (decodeNumber)(record["parentRight"]), width: (decodeNumber)(record["width"]), overflow: (decodeBoolean)(record["overflow"]), receipt: (decodeString)(record["receipt"]), identity: (decodeString)(record["identity"]), bubble: (decodeString)(record["bubble"]), outside: (decodeBoolean)(record["outside"]), inHead: (decodeBoolean)(record["inHead"]) } })
+      const inspect = () => page.evaluate(`(() => { const user = document.querySelector('.transcript-message--user'); const assistant = document.querySelector('.transcript-message--assistant'); const u = user.getBoundingClientRect(); const a = assistant.getBoundingClientRect(); const p = document.querySelector('.transcript').getBoundingClientRect(); return { user: u.right, assistant: a.left, parentLeft: p.left, parentRight: p.right, width: u.width, overflow: document.documentElement.scrollWidth > innerWidth, receipt: user.querySelector('.transcript-message__receipt .delivery-status')?.dataset.state ?? '', identity: assistant.querySelector('.transcript-message__agent')?.textContent?.trim() ?? '', bubble: user.querySelector('.transcript-message__bubble')?.textContent ?? '', outside: user.querySelector('.transcript-message__receipt').getBoundingClientRect().top >= user.querySelector('.transcript-message__bubble').getBoundingClientRect().bottom, inHead: user.querySelector('.transcript-message__head') !== null } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, user: (decodeNumber)(record["user"]), assistant: (decodeNumber)(record["assistant"]), parentLeft: (decodeNumber)(record["parentLeft"]), parentRight: (decodeNumber)(record["parentRight"]), width: (decodeNumber)(record["width"]), overflow: (decodeBoolean)(record["overflow"]), receipt: (decodeString)(record["receipt"]), identity: (decodeString)(record["identity"]), bubble: (decodeString)(record["bubble"]), outside: (decodeBoolean)(record["outside"]), inHead: (decodeBoolean)(record["inHead"]) } })
       const pending = await inspect()
       expect(pending.user).toBeGreaterThan(pending.assistant)
       expect(pending.user).toBeCloseTo(pending.parentRight, 0)
       expect(pending.assistant).toBeCloseTo(pending.parentLeft, 0)
       expect(pending.width).toBeLessThan(350)
       expect(pending.overflow).toBe(false)
-      expect(pending.receipt).toContain("Queued")
+      expect(pending.receipt).toBe("queued")
       expect(pending.identity).toContain("God")
       expect(pending.bubble).not.toContain("You")
       expect(pending.outside).toBe(true)
       expect(pending.inHead).toBe(false)
       await page.evaluate(`document.querySelector('#admit').click()`)
-      expect((await inspect()).receipt).toContain("Sent")
+      expect((await inspect()).receipt).toBe("sent")
       await page.evaluate(`document.querySelector('#consume').click()`)
-      expect((await inspect()).receipt).toContain("Read")
+      expect((await inspect()).receipt).toBe("read")
       await page.setViewport(320, 740)
       expect((await inspect()).overflow).toBe(false)
     } finally { await page.close() }
@@ -901,6 +901,8 @@ describe("transcript rendering", () => {
               steerLabel: steer.getAttribute('aria-label'),
               steerText: steerBubble.textContent.trim(),
               steerReceipt: steer.querySelector('.transcript-message__receipt')?.textContent?.trim() ?? '',
+              steerOrigin: steer.querySelector('.transcript-message__bubble > .transcript-message__origin')?.getAttribute('aria-label') ?? '',
+              steerVisibleText: steer.innerText.includes('Dot steer'),
               steerBg: getComputedStyle(steerBubble).backgroundColor,
               humanBg: getComputedStyle(humanBubble).backgroundColor,
               steerRightDelta: Math.abs(sRect.right - hRect.right),
@@ -919,7 +921,9 @@ describe("transcript rendering", () => {
           expect(state["steerClasses"]).toContain("transcript-message--user")
           expect(state["steerLabel"]).toBe("Dot steer prompt")
           expect(state["steerText"]).toBe("Install and verify the pinned official Argo CD MCP in Work project config by checking the project settings and docs first.")
-          expect(state["steerReceipt"]).toBe("Dot steer")
+          expect(state["steerReceipt"]).toBe("")
+          expect(state["steerOrigin"]).toBe("ChatGPT")
+          expect(state["steerVisibleText"]).toBe(false)
           expect(state["steerBg"]).toBe(state["humanBg"])
           expect(decodeNumber(state["steerRightDelta"])).toBeLessThanOrEqual(1)
           expect(decodeNumber(state["trackRightDelta"])).toBeLessThanOrEqual(1)

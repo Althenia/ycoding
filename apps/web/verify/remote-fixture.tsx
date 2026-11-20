@@ -488,6 +488,8 @@ const guardrails = requestMode === "form" || ledger ? [] : remoteScenarioData?.g
 let pendingInputs: readonly unknown[] = accountParams.get("queued") === "1" || ledger && accountParams.get("queued") !== "0"
   ? [{ id: "msg_queued", sessionID, type: "user", delivery: "queue", timeCreated: Date.now(), data: { text: ledger ? "Also check the light theme at 1800px." : "After that, also run the remote integration suite and report anything flaky." } }]
   : []
+const pendingOperations: { readonly operation: string; readonly sessionID: string; readonly input?: Readonly<Record<string, unknown>> }[] = []
+const staleInputs = new Set<string>()
 const imageDigests = ["a", "b", "c"].map((letter) => `${letter}${"0".repeat(63)}`)
 if (accountParams.get("images") === "1") messages = [...messages,
   { id: "msg_images", type: "user", text: "Compare [Image 1] with [Image 2] and keep the spacing from the second one.", files: imageDigests.slice(0, 2).map((digest, index) => ({ name: `layout-${index + 1}.png`, mime: "image/png", content: { type: "managed", digest, bytes: 2_048 } })), time: { created: ago(1), consumed: ago(1) } },
@@ -1506,13 +1508,23 @@ function createFixtureStore(): Fixture {
       })
     }
     if (operation === "session.goal.stop") return autonomyResponse({ mode: "normal" })
-    if (operation === "session.pending.list" && pendingInputs.length > 0) return { status: "ok", value: { data: pendingInputs } }
+    if (operation === "session.pending.remove" || operation === "session.pending.steer") {
+      pendingOperations.push({ operation, sessionID: targetSessionID, input })
+      const row = pendingInputs.find((entry) => typeof entry === "object" && entry !== null && Reflect.get(entry, "id") === input?.messageID)
+      if (row === undefined || staleInputs.has(String(input?.messageID))) {
+        pendingInputs = pendingInputs.filter((entry) => entry !== row)
+        return { status: "failed", error: { code: "not_found", message: "That input is no longer pending" } }
+      }
+      pendingInputs = operation === "session.pending.remove" ? pendingInputs.filter((entry) => entry !== row) : pendingInputs.map((entry) => entry === row ? { ...Object(entry), delivery: "steer" } : entry)
+      return { status: "ok", value: null }
+    }
+    if (operation === "session.pending.list" && (pendingInputs.length > 0 || pendingOperations.length > 0)) return { status: "ok", value: { data: pendingInputs } }
     if (operation === "session.log") return { status: "ok", value: { data: [] } }
     return { status: "ok", value: null }
   }
 
   const emitEvent = (sessionID: string, event: unknown) => handlers?.onEvents?.(sessionID, [event])
-  Object.assign(window, { remoteEmit: (event: unknown) => emitEvent(sessionID, event), remoteSetPendingInputs: (rows: readonly unknown[]) => { pendingInputs = rows; return store.reloadMessages() } })
+  Object.assign(window, { remotePendingOperations: pendingOperations, remoteStaleInput: (id: string) => staleInputs.add(id), remoteEmit: (event: unknown) => emitEvent(sessionID, event), remoteSetPendingInputs: (rows: readonly unknown[]) => { pendingInputs = rows; return store.reloadMessages() } })
 
   const laptopSession = { id: "ses_laptop", title: "Laptop release check", projectID: "prj_laptop", location: { directory: "/workspace/laptop" }, agent: "god", model, time: { created: ago(20), updated: ago(2) } }
   const laptopGroup = { id: "workspace_laptop", projectID: "prj_laptop", directory: "/workspace/laptop", name: "Laptop repository" }

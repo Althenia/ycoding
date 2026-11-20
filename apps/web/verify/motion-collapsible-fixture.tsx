@@ -11,7 +11,7 @@ Object.defineProperty(window, "__mounts", { get: () => mounts })
 function Body() {
   mounts += 1
   return (
-    <div id="body" style={{ "block-size": "120px", background: "var(--yc-cobalt-tonal)", padding: "var(--yc-space-3)" }}>
+    <div id="body" style={{ "block-size": "120px", background: "var(--yc-green-tonal)", padding: "var(--yc-space-3)" }}>
       <button class="button" id="inside">Inside control</button>
     </div>
   )

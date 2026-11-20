@@ -96,8 +96,8 @@ describe("DESIGN.md scheme drift", () => {
   test("detects changed, dropped, undocumented, and stale scheme tokens on scratch copies", async () => {
     const document = await Bun.file(new URL("../../DESIGN.md", import.meta.url)).text()
     const start = document.indexOf("\n  onedark-light:\n")
-    const changed = document.slice(0, start) + document.slice(start).replace(/^ {6}cobalt-solid: .*$/m, '      cobalt-solid: "#000000"')
-    expect(schemeDrift(changed).some((issue) => issue.startsWith("onedark-light --yc-cobalt-solid:"))).toBe(true)
+    const changed = document.slice(0, start) + document.slice(start).replace(/^ {6}green-solid: .*$/m, '      green-solid: "#000000"')
+    expect(schemeDrift(changed).some((issue) => issue.startsWith("onedark-light --yc-green-solid:"))).toBe(true)
     const dropped = document.slice(0, start) + document.slice(start).replace(/^ {6}line-field: .*\n/m, "")
     expect(schemeDrift(dropped).some((issue) => issue.startsWith("onedark-light --yc-line-field: DESIGN=missing"))).toBe(true)
     const stale = document.replace("\n  onedark-light:\n", "\n  solarized-dark:\n")
@@ -132,10 +132,10 @@ describe("DESIGN.md token drift", () => {
     const css = await Bun.file(new URL("./tokens.css", import.meta.url)).text()
     try {
       const probes = [
-        [document, css.replace(/--yc-cobalt-solid: #[0-9a-f]{6};/, "--yc-cobalt-solid: #000000;"), ":root --yc-cobalt-solid"],
+        [document, css.replace(/--yc-green-solid: #[0-9a-f]{6};/, "--yc-green-solid: #000000;"), ":root --yc-green-solid"],
         [document, css.replace("--yc-scrollbar-size: 12px;", ""), ":root --yc-scrollbar-size"],
         [document.replace(/^  plane-canvas: (.*)$/m, "  plane-canvas: $1\n  stale: \"#000000\""), css, ":root --yc-stale"],
-        [document.replace(/^  cobalt-solid: .*\n/m, ""), css, ":root --yc-cobalt-solid"],
+        [document.replace(/^  green-solid: .*\n/m, ""), css, ":root --yc-green-solid"],
         [document, css.replace("  --yc-scrollbar-size: 12px;", "  --yc-scrollbar-size: 12px;\n  --yc-undocumented: 1px;"), ":root --yc-undocumented"],
         [document.replace(/^      plane-canvas: .*$/m, '      plane-canvas: "#000000"'), css, '[data-theme="dark"] --yc-plane-canvas'],
         [document, css.replace(/(\[data-theme="dark"\] \{[\s\S]*?)  --yc-plane-canvas: #[0-9a-f]{6};\n/, "$1"), '[data-theme="dark"] --yc-plane-canvas'],

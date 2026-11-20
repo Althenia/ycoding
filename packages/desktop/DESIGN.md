@@ -17,18 +17,27 @@ colors:
   ink: "#f1f4f8"
   ink-secondary: "#bfc5cd"
   ink-tertiary: "#a1a8b2"
+  code-comment: "#a1a8b2"
+  code-function: "#6cc9ff"
+  code-ink: "#f1f4f8"
+  code-keyword: "#c4afff"
+  code-meta: "#bfc5cd"
+  code-number: "#fea09a"
+  code-property: "#56d4d5"
+  code-string: "#9ac8ac"
+  code-type: "#f9ac30"
   ink-inverse: "#0e1116"
-  focus: "#5d94ff"
+  focus: "#55a67a"
   scrim: "rgba(14, 17, 22, 0.72)"
   selection: "rgba(93, 148, 255, 0.32)"
-  cobalt-tonal: "#162a4f"
-  cobalt-tonal-hover: "#1a3363"
-  cobalt-line: "#2e5eba"
-  cobalt-graphic: "#5d94ff"
-  cobalt-solid: "#2064eb"
-  cobalt-solid-hover: "#0e52d5"
-  cobalt-ink: "#9bbeff"
-  on-cobalt: "#f1f4f8"
+  green-tonal: "#143021"
+  green-tonal-hover: "#163b28"
+  green-line: "#226f49"
+  green-graphic: "#55a67a"
+  green-solid: "#027e4d"
+  green-solid-hover: "#056b41"
+  green-ink: "#9ac8ac"
+  on-green: "#f2f4f3"
   mint-tonal: "#0b3421"
   mint-tonal-hover: "#094029"
   mint-line: "#00764c"
@@ -101,18 +110,27 @@ themes:
       ink: "#151618"
       ink-secondary: "#404449"
       ink-tertiary: "#565b62"
+      code-comment: "#565b62"
+      code-function: "#025c83"
+      code-ink: "#151618"
+      code-keyword: "#642bb4"
+      code-meta: "#404449"
+      code-number: "#a2001b"
+      code-property: "#026263"
+      code-string: "#045e39"
+      code-type: "#744c00"
       ink-inverse: "#f3f6fb"
-      focus: "#2f70f2"
+      focus: "#088955"
       scrim: "rgba(243, 246, 251, 0.5)"
       selection: "rgba(47, 112, 242, 0.32)"
-      cobalt-tonal: "#e4edfe"
-      cobalt-tonal-hover: "#d5e4fe"
-      cobalt-line: "#87b1fe"
-      cobalt-graphic: "#2f70f2"
-      cobalt-solid: "#165be2"
-      cobalt-solid-hover: "#024bd0"
-      cobalt-ink: "#0045c6"
-      on-cobalt: "#fafcfe"
+      green-tonal: "#e4efe8"
+      green-tonal-hover: "#d6e7dc"
+      green-line: "#85bd9c"
+      green-graphic: "#088955"
+      green-solid: "#007547"
+      green-solid-hover: "#00653d"
+      green-ink: "#045e39"
+      on-green: "#fbfcfb"
       mint-tonal: "#d1f8e1"
       mint-tonal-hover: "#bef1d4"
       mint-line: "#5fc995"
@@ -185,17 +203,17 @@ themes:
       ink-secondary: "#414447"
       ink-tertiary: "#55585c"
       ink-inverse: "#f3f6f9"
-      focus: "#2f70f2"
+      focus: "#088955"
       scrim: "rgba(243, 246, 249, 0.5)"
       selection: "rgba(47, 112, 242, 0.32)"
-      cobalt-tonal: "#e4edfe"
-      cobalt-tonal-hover: "#d5e4fe"
-      cobalt-line: "#87b1fe"
-      cobalt-graphic: "#2f70f2"
-      cobalt-solid: "#165be2"
-      cobalt-solid-hover: "#024bd0"
-      cobalt-ink: "#0045c6"
-      on-cobalt: "#fafcfe"
+      green-tonal: "#e4efe8"
+      green-tonal-hover: "#d6e7dc"
+      green-line: "#85bd9c"
+      green-graphic: "#088955"
+      green-solid: "#007547"
+      green-solid-hover: "#00653d"
+      green-ink: "#045e39"
+      on-green: "#fbfcfb"
       mint-tonal: "#d1f8e1"
       mint-tonal-hover: "#bef1d4"
       mint-line: "#5fc995"
@@ -264,17 +282,17 @@ themes:
       ink-secondary: "#c5cbd7"
       ink-tertiary: "#a4abb9"
       ink-inverse: "#1c1f26"
-      focus: "#679cff"
+      focus: "#63ac83"
       scrim: "rgba(28, 31, 38, 0.72)"
       selection: "rgba(103, 156, 255, 0.32)"
-      cobalt-tonal: "#24385f"
-      cobalt-tonal-hover: "#274172"
-      cobalt-line: "#3767c4"
-      cobalt-graphic: "#679cff"
-      cobalt-solid: "#2064eb"
-      cobalt-solid-hover: "#0e52d5"
-      cobalt-ink: "#b9d2ff"
-      on-cobalt: "#f0f3fa"
+      green-tonal: "#223e2e"
+      green-tonal-hover: "#254935"
+      green-line: "#2d7852"
+      green-graphic: "#63ac83"
+      green-solid: "#027e4d"
+      green-solid-hover: "#056b41"
+      green-ink: "#b9d8c5"
+      on-green: "#f0f4f1"
       mint-tonal: "#1b422f"
       mint-tonal-hover: "#1a4d35"
       mint-line: "#038053"
@@ -343,17 +361,17 @@ themes:
       ink-secondary: "#c1c7d5"
       ink-tertiary: "#a1a8b9"
       ink-inverse: "#14171f"
-      focus: "#5d94ff"
+      focus: "#55a67a"
       scrim: "rgba(20, 23, 31, 0.72)"
       selection: "rgba(93, 148, 255, 0.32)"
-      cobalt-tonal: "#1c3056"
-      cobalt-tonal-hover: "#1f3969"
-      cobalt-line: "#3161bd"
-      cobalt-graphic: "#5d94ff"
-      cobalt-solid: "#2064eb"
-      cobalt-solid-hover: "#0e52d5"
-      cobalt-ink: "#b4cfff"
-      on-cobalt: "#eff2f9"
+      green-tonal: "#1a3627"
+      green-tonal-hover: "#1d412e"
+      green-line: "#26724c"
+      green-graphic: "#55a67a"
+      green-solid: "#027e4d"
+      green-solid-hover: "#056b41"
+      green-ink: "#b4d6c1"
+      on-green: "#eff3f0"
       mint-tonal: "#133a28"
       mint-tonal-hover: "#10452e"
       mint-line: "#017a4f"
@@ -422,17 +440,17 @@ themes:
       ink-secondary: "#26292d"
       ink-tertiary: "#3f4348"
       ink-inverse: "#f6f9fd"
-      focus: "#003eb5"
+      focus: "#045534"
       scrim: "rgba(246, 249, 253, 0.5)"
       selection: "rgba(0, 62, 181, 0.32)"
-      cobalt-tonal: "#e7effe"
-      cobalt-tonal-hover: "#d7e5ff"
-      cobalt-line: "#396ccf"
-      cobalt-graphic: "#003eb5"
-      cobalt-solid: "#0039aa"
-      cobalt-solid-hover: "#003193"
-      cobalt-ink: "#003193"
-      on-cobalt: "#fefeff"
+      green-tonal: "#e7f1eb"
+      green-tonal-hover: "#d7e9dd"
+      green-line: "#2d7e55"
+      green-graphic: "#045534"
+      green-solid: "#034f2f"
+      green-solid-hover: "#024428"
+      green-ink: "#024428"
+      on-green: "#fefefe"
       mint-tonal: "#d3f9e3"
       mint-tonal-hover: "#bff3d6"
       mint-line: "#068758"
@@ -505,17 +523,17 @@ themes:
       ink-secondary: "#dbdee3"
       ink-tertiary: "#c0c4cb"
       ink-inverse: "#020204"
-      focus: "#a5c5fe"
+      focus: "#a5cdb5"
       scrim: "rgba(2, 2, 4, 0.72)"
       selection: "rgba(165, 197, 254, 0.32)"
-      cobalt-tonal: "#06183c"
-      cobalt-tonal-hover: "#09214f"
-      cobalt-line: "#4a7cdc"
-      cobalt-graphic: "#a5c5fe"
-      cobalt-solid: "#afcbff"
-      cobalt-solid-hover: "#c3d8fe"
-      cobalt-ink: "#cddfff"
-      on-cobalt: "#020204"
+      green-tonal: "#021f10"
+      green-tonal-hover: "#022a17"
+      green-line: "#428d65"
+      green-graphic: "#a5cdb5"
+      green-solid: "#aed3bc"
+      green-solid-hover: "#c3ddcd"
+      green-ink: "#cee3d6"
+      on-green: "#010202"
       mint-tonal: "#002212"
       mint-tonal-hover: "#002c1a"
       mint-line: "#2c9667"
@@ -631,7 +649,7 @@ motion:
 
 ## Overview
 
-YCoding Desktop centers a readable conversation between the activity bar and Session list on the leading side and an optional Companion on the trailing side, above one status bar that spans the window. Project coordination and Settings use the same navigation rhythm, ink, and spacing as chat, with wider work areas for rosters and forms. Management dialogs keep their title and actions separate from scrollable detail. Nothing in these surfaces changes where a Session runs or how its data is stored.
+YCoding Desktop centers a readable conversation between the activity bar and Session list on the leading side and an optional Companion on the trailing side. Project coordination and Settings use the same navigation rhythm, ink, and spacing as chat, with wider work areas for rosters and forms. Management dialogs keep their title and actions separate from scrollable detail. Nothing in these surfaces changes where a Session runs or how its data is stored.
 
 The parent `DESIGN.md` owns brand and cross-surface accessibility. Desktop paints the shared `--yc-` palette, radius, motion and shell components from `apps/web/src/styles/tokens.css`, `apps/web/src/theme/schemes.ts` and `apps/web/src/styles/workspace-shell.css`; it owns its brand tokens, fonts and component geometry in `src/tokens.css`, and this document records every value it paints. Approved rules govern behavior and appearance. `Implemented` rules describe local geometry, not a new brand requirement. The inspected Settings, Keyboard Shortcuts, Connect Providers, and Master-Session Team Stitch screens inform grouping and alignment. Their illustrative runtime states and actions are not product capabilities. A `proposal` does not bind the implementation.
 
@@ -655,7 +673,7 @@ The parent `DESIGN.md` owns brand and cross-surface accessibility. Desktop paint
 | D6 | approved | Compact tool/thought groups MUST retain every output, status, error, provenance field, timing, copy/expand control and user action through reachable disclosure; changes of actor/model and errors MUST remain identifiable without color. | `test/renderer.integration.test.ts`; `test/renderer.test.tsx` |
 | D7 | approved | Disclosure and navigation MUST retain accessible names, expanded state, keyboard order, visible focus, focus return and screen-reader announcements; collapsed content MUST NOT remain an invisible keyboard target. | `test/renderer.integration.test.ts` |
 | D8 | approved | Streaming and refresh MUST preserve stable message/disclosure identities and the reader's attached or detached scroll position; motion MUST NEVER remount unchanged rows, move a detached reader or delay input. | `test/renderer.integration.test.ts` |
-| D9 | approved | Use owned SVG icons at 14px in the status bar and dense chips, 16px in rows, buttons and disclosures, and 20px in the activity bar, with typography and spacing to lead rows. Normal content MUST use the `plane-chrome`, `plane-canvas` and `plane-raised` planes instead of nested outlines, with `plane-hover` and `plane-selected` for interaction. `elevation-float` belongs only to popovers, dialogs, sheets, toasts, tooltips and the overlaid Companion. Preserve useful boundaries for fields and the composer, floating layers, pending decisions, and destructive and error states, as well as focus rings and functional pane separators. | `test/ledger-design.test.ts`; `test/renderer.integration.test.ts` |
+| D9 | approved | Use owned SVG icons at 14px in dense chips, 16px in rows, buttons and disclosures, and 20px in the activity bar, with typography and spacing to lead rows. Normal content MUST use the `plane-chrome`, `plane-canvas` and `plane-raised` planes instead of nested outlines, with `plane-hover` and `plane-selected` for interaction. `elevation-float` belongs only to popovers, dialogs, sheets, toasts, tooltips and the overlaid Companion. Preserve useful boundaries for fields and the composer, floating layers, pending decisions, and destructive and error states, as well as focus rings and functional pane separators. | `test/ledger-design.test.ts`; `test/renderer.integration.test.ts` |
 | D10 | approved | Action controls MUST use consistent comfortable icon-led size, spacing and alignment, owned non-native hover/focus hints and meaningful semantic ink; needed visible labels and values MUST remain at least 12px. | `test/renderer.integration.test.ts`; `test/ledger-design.test.ts` |
 | D11 | approved | The composer MUST sit flat on the canvas without a shadow, footer fill, divider or redundant Working label. The right-hand action MUST show Send at rest and a red Stop generation control during generation; the toolbar MUST NOT contain a second stop control. Keep keyboard submission, Steer now, attachment handling and draft recovery distinct from Stop. Preserve model, effort, autonomy and delivery controls, the 8–10px Auto-to-action gap and symmetric 10–12px card insets. Reflow at the 1000px floor and coarse hit targets MUST remain intact. Unsent and unconfirmed content MUST survive failure and MUST NEVER be resent automatically. | `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
 | D12 | approved | Coordination's Add-existing/New-member sidebar background and left border MUST span the full pane height. Its left main pane MUST be a full-height min-height:0 flex column, with a flex:1 min-height:0 overflow-y:auto member-list region and a concurrency/delegated-decisions footer docked flush to the pane bottom behind a clean top border. Rows MUST retain natural height; sparse lists MUST NOT stretch rows or place the footer immediately below the last row. At the 1000px floor the list region MUST retain contained scrolling and reachable footer controls. | `test/renderer.integration.test.ts`; `test/project-members.test.tsx` |
@@ -678,9 +696,9 @@ The parent `DESIGN.md` owns brand and cross-surface accessibility. Desktop paint
 | D29 | approved | Guardrail and decision history MUST remain structured, read-only and faithful to recorded fields; missing evidence MUST remain unrecorded. | `test/renderer.integration.test.ts` |
 | D30 | approved | Native/transient activity MUST retain actual execution, validated peers and reported bridges; queued input MUST NOT create false execution activity. | `test/renderer.integration.test.ts` |
 | D31 | approved | System, browser, incident and context views MUST present returned facts as labelled information with explicit missing fields; secrets MUST remain masked until explicit reveal. | `test/renderer.integration.test.ts` |
-| D32 | approved | Component-specific chrome MUST keep the source ownership table's independent toolbar and inspector geometry at every supported window size; a shared header, companion or the status bar MUST NOT substitute for those owners. | `test/ledger-design.test.ts`; `test/renderer.integration.test.ts` |
+| D32 | approved | Component-specific chrome MUST keep the source ownership table's independent toolbar and inspector geometry at every supported window size; a shared header or companion MUST NOT substitute for those owners. | `test/ledger-design.test.ts`; `test/renderer.integration.test.ts` |
 | D33 | approved | The activity bar, Session list and list/detail inspectors MUST stay persistent beside their content at every supported window size. Under a coarse pointer, pickers and menus MUST open as dismissible sheets with Close, Escape, preserved drafts and focus return; coarse controls MUST retain 44px reach and coarse inputs at least 16px. | `test/renderer.integration.test.ts` coarse journeys |
-| D34 | approved | A local user message MUST use a borderless tonal bubble at the trailing edge, sized to its text up to the smaller of 78% of the track and 42rem. Keep the turn anchor, attachments and timestamp receipt; align attachments and receipts to the same edge. Omit the visible author label for local user turns. Wrap prose, unbroken text and code without horizontal overflow. | `test/renderer.integration.test.ts` |
+| D34 | approved | A local user message MUST use a borderless tonal bubble at the trailing edge, sized to its text up to the smaller of 78% of the track and 42rem. Keep the turn anchor and attachments; show image attachments as 160×120px thumbnails inside the bubble and other files as chips; end the turn with a Copy message button and a delivery status icon (D58), and align both to the same edge. Omit the visible author label for local user turns. Wrap prose, unbroken text and code without horizontal overflow. | `test/renderer.integration.test.ts` |
 | D35 | approved | The transcript MUST omit repeated `subagent_notification` events, Project `started` and `progress`, and undescribed synthetic task noise. Preserve parent answers, goal steers, described completions and notes, and actionable described Project member notifications with an Open action. Filtering MUST NOT change retained history or Activity. | `test/form-rules.test.ts`; `test/renderer.integration.test.ts` |
 | D36 | approved | Companion Context MUST give the category breakdown the full inner width, with readable labels, counts and shares. Keep usage and Session tasks readable; put Diagnostics, Loaded child task costs and Compaction history behind named keyboard-operable disclosures. Nested snapshot values MUST stack below their keys. Activity and Running MUST wrap both headings and metadata without truncation, with `scrollWidth <= clientWidth` throughout. | `test/renderer.integration.test.ts` |
 | D37 | approved | The mint Working arc MUST spin continuously through 360° at a constant speed around its center. The YCoding label and strip stay still. Keep the arc static with reduced motion or when animations are off. | `test/renderer.integration.test.ts` |
@@ -690,23 +708,30 @@ The parent `DESIGN.md` owns brand and cross-surface accessibility. Desktop paint
 | D41 | approved | Use the control, card and composer corner roles consistently across navigation, views and overlays. Use the canvas for the reading track, raised cards for coherent control/inspector groups, and semantic ink for state. Keep existing pane boundaries, routes and named actions. Provider profiles MUST show labelled default and connection state rather than raw booleans. System tool notices MUST appear only on their owning tab. | `test/ledger-design.test.ts`; `test/renderer.integration.test.ts` |
 | D42 | approved | A composer MUST paste text and attach clipboard or drop files through the existing prompt file contract. Show a visible file drop target, removable attachment chips, and recoverable limits or read errors before submission. Drop outside the composer MUST NOT navigate the window. No asynchronous transfer may change a locked or replaced draft. | `test/renderer.integration.test.ts` |
 | D43 | approved | Project titles and roster actions MUST use the available main pane up to its normal inspector gutter. Align concurrency and delegated decisions in the footer and folder inputs with chooser buttons; wrap controls rather than crowding them. | `test/renderer.integration.test.ts` |
-| D44 | approved | The context ring, token count and percentage MUST remain visible in one named header control; the status bar repeats the ring and percentage. Settings section buttons share icon geometry, label insets and current-state treatment. Settings cards MUST use `--yc-space-5` insets and a 1px `--yc-line-subtle` frame. Align Machine and Updates at the top; let each frame follow its content. The Keep machine awake switch retains a centered 32×18px pill and 12px thumb in its interaction box; its coarse target MUST be at least 44×44px. Shortcut actions MUST stay beside the field within their own grouped track, with distinct focus, selection, hover and unassigned states. | `test/renderer.integration.test.ts` |
+| D44 | approved | The context ring, token count and percentage MUST remain visible in one named header control; Settings section buttons share icon geometry, label insets and current-state treatment. Settings cards MUST use `--yc-space-5` insets and a 1px `--yc-line-subtle` frame. Align Machine and Updates at the top; let each frame follow its content. The Keep machine awake switch retains a centered 32×18px pill and 12px thumb in its interaction box; its coarse target MUST be at least 44×44px. Shortcut actions MUST stay beside the field within their own grouped track, with distinct focus, selection, hover and unassigned states. | `test/renderer.integration.test.ts` |
 | D45 | approved | Management dialogs MUST share Desktop headings, spacing, close/focus behavior and scroll boundaries. MCP moves refresh into its header and nests resources beneath their server. Connect providers MUST keep search and refresh inline when they fit; wrap names and identifiers, keep the two columns side by side, and keep `scrollWidth <= clientWidth` in both. Pad the provider, credential, authorization and custom URL surfaces and separate Add provider from the input. | `test/renderer.integration.test.ts` |
 | D46 | approved | Escape MUST dismiss the focused layer without minimizing the window. Restore focus to that layer's invoking control, unless it leaves the screen or is unavailable. The native Window menu and window button retain explicit minimize. | `test/renderer.integration.test.ts`, `test/host-contract.test.ts`, `SCENARIOS.md` |
 | D47 | implemented | Regular-width provider dialogs MUST cap their width at 880px and place the registry beside the connection form. The header meter MUST use the compact 24px control step for the ring and retain 12px visible values. | `test/renderer.integration.test.ts` |
 | D48 | approved | Team MUST reserve space for the floating Master composer while the table and inspector scroll. At the list boundary the final row and its action remain visible. The Team scroll-to-top control and its side tooltip MUST NOT cover the composer or progress card on hover or keyboard focus. The action never targets the hidden transcript. Align table headers with their cells and use `--yc-space-4` insets in the blocker summary and inspector cards. | `test/renderer.integration.test.ts` |
 | D49 | approved | Native desktop windows MUST enforce a minimum content size of 1000×600px (`window-min-width` and `window-min-height`) through AppKit `setContentMinSize:`, clamping any smaller initial or programmatic bounds to at least 1000×600px while allowing free resizing at or above that floor and preserving traffic lights, explicit Minimize/Restore, focus return, Escape and reduced motion. | `test/window-bounds.test.ts`; `test/isolated-mode.test.ts`; `SCENARIOS.md` |
-| D50 | implemented | Genuine Dot-originated synthetic steer prompts (excluding internal envelopes, system/review/instruction/history/peer/audit metadata and notices) MUST render as right-aligned trailing prompt bubbles via `SharedMessageTurn` with transport markup stripped, `transcript-message--synthetic` and `Dot steer prompt` accessible labeling, `Dot steer` provenance rather than human authorship, and prompt-rail ticks. Empty steers after transport stripping MUST remain hidden without inventing text; non-steer synthetic notices, `Dots.peer` and `Goal · steer` MUST remain unchanged. | `test/form-rules.test.ts`; `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
+| D50 | implemented | Genuine Dot-originated synthetic steer prompts (excluding internal envelopes, system/review/instruction/history/peer/audit metadata and notices) MUST render as right-aligned trailing prompt bubbles via `SharedMessageTurn` with transport markup stripped, `transcript-message--synthetic` and `Dot steer prompt` accessible labeling, ChatGPT provenance rather than human authorship, and prompt-rail ticks. The bubble carries no visible Dot steer or Dot text; a 22px circular ChatGPT mark badge (`openai.svg` as a `currentColor` mask on `plane-raised` with a `line-field` border, `aria-label="ChatGPT"`, `title="Sent via ChatGPT"`) sits on its top-leading corner. Ordinary manual user messages carry no badge. Empty steers after transport stripping MUST remain hidden without inventing text; non-steer synthetic notices, `Dots.peer` and `Goal · steer` MUST remain unchanged. | `test/form-rules.test.ts`; `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
 | D51 | approved | An 80px activity bar MUST lead every Desktop screen with Chat, Team, Projects, Workspaces and Usage at the top and Settings at the bottom. Each destination is a 72×56px link with a 20px glyph, a visible 12/16 label, an accessible name and `aria-current="page"` on its current route. Chat carries the needs-action count and Team the active-subagent count as glyph-corner badges with visually hidden names. Plain primary clicks navigate in place; modifier and middle clicks keep native link behavior. | `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
-| D52 | approved | The Session list column MUST sit beside the activity bar at 280px, or 256px in windows up to 1180px wide, and resize from 232px to 360px through an end-edge `role="separator"` with pointer drag, ArrowLeft/ArrowRight in 8px steps, Home/End for the bounds and a current `aria-valuenow`. The chosen width persists in local storage; a failed read or save keeps the window's width and reports a notice. Hide list and the sidebar shortcut hide and restore the column without losing its search, filter or paging state. | `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
-| D53 | approved | One 28px status bar MUST span the bottom of every Desktop screen: the Session-list toggle, connection and machine, then for a selected Session its model, effort, autonomy, context meter and Session tokens, and the running count at the trailing edge. Every item except the token readout is a button to its owning setting or view, and every item fills the bar's full height without growing it. When the bar is 1100px wide or narrower, items with a short label show it. The bar reports existing Session fields only and replaces no component toolbar (D32). | `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
-| D54 | approved | While a Session executes, a 2px mint trace MUST run along the top edge of the conversation header and of the status bar. When a child task starts, a junction branches off the trace and the running count switches to the branch glyph with the name "N Sessions running, a child task started". The trace is `aria-hidden`; the running count carries the announcement. With reduced motion or animations off the trace is a static 50% mint line. | `test/renderer.integration.test.ts` |
+| D52 | approved | The Session list column MUST sit beside the activity bar at 280px, or 256px in windows up to 1180px wide, and resize from 232px to 360px through an end-edge `role="separator"` with pointer drag, ArrowLeft/ArrowRight in 8px steps, Home/End for the bounds and a current `aria-valuenow`. The chosen width persists in local storage; a failed read or save keeps the window's width and reports a notice. A toggle at the leading edge of the conversation header (`aria-label` "Hide session list" or "Show session list", `aria-expanded`, `aria-controls="session-rail"`) and the sidebar shortcut hide and restore the column without losing its search, filter or paging state. The collapsed state persists in local storage under `ycoding.desktop.list-collapsed`; a failed save keeps the window state and reports a notice. | `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
+| D53 | approved | No Desktop screen MUST have a status bar; the bottom edge is the composer dock or page content with no reserved strip. Model, reasoning effort, autonomy, delivery and the Session token readout live in the composer bar, the context meter in the header ring (D44), connection and ownership in the header presence line, the Session-list toggle at the header's leading edge (D52), and running and needs-action counts in the activity-bar and Session-list badges. A connected backend is silent; reconnecting, error and pending states appear as banners or notes above the composer. Screen-reader-only text uses the owned `.visually-hidden` and `.desktop__sr` classes so it never paints (D32). | `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
+| D54 | approved | While a Session executes, a 2px mint trace MUST run along the top edge of the conversation header. When a child task starts, a junction branches off the trace and the activity-bar Team badge counts the child as "N active subagents, a child task started". The trace is `aria-hidden`; the badge carries the announcement. With reduced motion or animations off the trace is a static 50% mint line. | `test/renderer.integration.test.ts` |
 | D55 | approved | The Session list MUST group rows under Needs action, Running, Pinned and Recent headings in that order, each with its glyph, hue and an "N Session" or "N Sessions" count, and omit empty groups. Each row shows its workspace name as metadata below the title. Status filters, search, pins and paging keep their bounded connection-scoped reads. | `test/form-rules.test.ts`; `test/renderer.integration.test.ts` |
-| D56 | approved | In every Desktop theme, `ink`, `ink-secondary` and `ink-tertiary` MUST be distinct and reach 4.5:1 on the chrome, canvas, raised, hover and selected planes. Field, composer and control boundaries (`line-field`) and pane separators and card frames (`line-subtle`) MUST reach 3:1 against the chrome, canvas and raised planes; `line-divider` separates rows only inside a component that already has such a boundary or a plane step. The chrome, canvas and raised planes MUST NOT share a value. State graphics (rings, meters, progress, trace, focus) MUST reach 3:1 on those planes, and `on-cobalt` text 4.5:1 on `cobalt-solid`. | `test/ledger-design.test.ts`; review-only divider placement |
+| D56 | approved | In every Desktop theme, `ink`, `ink-secondary` and `ink-tertiary` MUST be distinct and reach 4.5:1 on the chrome, canvas, raised, hover and selected planes. Field, composer and control boundaries (`line-field`) and pane separators and card frames (`line-subtle`) MUST reach 3:1 against the chrome, canvas and raised planes; `line-divider` separates rows only inside a component that already has such a boundary or a plane step. The chrome, canvas and raised planes MUST NOT share a value. State graphics (rings, meters, progress, trace, focus) MUST reach 3:1 on those planes, and `on-green` text 4.5:1 on `green-solid`. | `test/ledger-design.test.ts`; review-only divider placement |
+| D57 | approved | The composer input MUST be one fixed 44px line: a `wrap="off"` textarea with `resize: none`, hidden scrollbars and horizontal scroll, whose height never changes while typing, pasting or sending. Code MUST NOT measure `scrollHeight`, write an inline `height`, or observe the field's size. Sending or locking the field MUST NOT change its background, border, padding, line-height or height. The dock keeps 8px below the capsule and no status strip: transient text such as "Sending…" or "Working" is not rendered under the composer, and errors and notes render above the capsule only while present. | `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
+| D58 | approved | Under a right-aligned user bubble, MUST replace the visible time with one 24px delivery status icon, and put the time in its `title`. Sending (three dots bouncing in sequence, static under reduced motion or animations off, `aria-label="Sending"`) applies while the message is in flight, Sent (one check, `aria-label="Sent"`) once it is persisted and no assistant message follows it, and Read (a double check in `green-ink`, `aria-label="Read by YCoding"`) once an assistant message started after it. Every user and assistant message ends with a 24px Copy message icon button (`aria-label="Copy message"`) in a reserved row that reveals on hover and keyboard focus without shifting layout, copies the exact message text (assistant: reply text only) through `navigator.clipboard.writeText` with the native clipboard as fallback, and shows a check with "Copied" for 1.5 seconds. This is the one documented exception to native `title` tooltips, together with the ChatGPT badge (D50). | `test/form-rules.test.ts`; `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
+| D59 | approved | Image attachments (`image/*`, png, jpg, jpeg, webp, gif) MUST render as real `<img>` thumbnails: 56×56px, `object-fit: cover`, named by the file name, with a 20px remove button on the corner, in the composer tray, and as 160×120px images inside sent user bubbles. Pasted, dropped and picked files that are not images keep file chips. Sent images load through the Desktop `sessionAttachment` read and show a name chip until the bytes arrive. | `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
+| D60 | approved | Navigation rows and activity-bar items MUST keep their DOM nodes while Session state changes, so a click that starts on one node ends on it: the destination list is a stable set of objects with reactive fields, never rebuilt per update. Activity-bar and rail hover states keep `ink` on `plane-hover` at 4.5:1 in every theme, and a badge's accessible text never paints. | `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
+| D61 | approved | The slash trigger MUST accept namespaced commands: after `/` the query may contain letters, digits, `_`, `-`, `.` and `:` (`/ui:`, `/ui:foo`, `/ns:sub:cmd`), and it filters and inserts the full name. The suggestion popover keeps 8px padding, 36px rows and at most 22rem. The model popover is 340–400px wide with a list of at least 260px and at most the smaller of 440px and 60dvh, unclipped by its parents, and its search field shows the `focus` ring. | `test/form-rules.test.ts`; `test/renderer.integration.test.ts` |
+| D62 | approved | Pending messages MUST dock in one compact tray directly above the composer input and list only real user messages; internal subagent and project notifications and other synthetic rows never appear, and the tray is absent when nothing user-authored is pending. Collapsed, it stacks behind its count and shows a preview of the first message; one toggle expands the full ordered list. Each row has Remove pending message and Steer now buttons that call the Session pending remove and steer operations and then re-read the list. | `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
+| D63 | approved | Every user, assistant, agent and system message body MUST render through the shared Markdown component, and the Desktop root MUST provide its native clipboard to it. A fenced code block MUST render as one card: a `plane-raised` body framed by `line-subtle` with the card radius, a `plane-hover` header carrying the language label (Markdown, TypeScript, JavaScript, Rust, Python, JSON, Bash or Code) with its `</>` icon, and two 32px header buttons, "Wrap lines" (`aria-pressed`, `green-tonal` when on, `data-wrap` on the `pre`) and "Copy code" (the exact raw code, with Copied feedback). The body is `JetBrains Mono` at the small size, scrolls horizontally with wrapping off, and wraps when on. Tokens are the `code-*` roles in every theme: each MUST reach 4.5:1 on `plane-raised` and `plane-hover`, painted as `code-token--keyword`, `string`, `number` (also `literal`), `comment` (italic), `function`, `type`, `property` and `meta` spans without `innerHTML`. The header buttons show the `focus` ring. | `test/renderer.test.tsx`; `test/ledger-design.test.ts`; `test/renderer.integration.test.ts` |
 
 ## Colors
 
-Paint the activity bar, Session list, Companion, inspectors and status bar on `plane-chrome`, and the reading track and page on `plane-canvas`. Use `plane-raised` for cards, the composer field, request cards, settings sections and floating bodies, `plane-hover` for hover, and `plane-selected` for selected rows. Cobalt is the interaction color: primary buttons (`cobalt-solid` with `on-cobalt`), focus, links in controls, selection (`cobalt-tonal`) and the current destination. The local user bubble uses `cobalt-tonal`. Mint marks running and completed work only; violet marks reasoning and Projects, teal terminal and tools, sky files, models and Markdown links, amber attention, usage and goals, and coral failures and destructive actions. Each hue offers `tonal`, `tonal-hover`, `line`, `graphic`, `solid`, `solid-hover`, `ink` and `on-<hue>` roles; text uses `-ink`, fills and glyphs use `-graphic` or `-solid`. Effort icons follow their variant hues. Pair every state color with a name or distinct icon. The default dark palette is listed under `colors`; Light, One Dark light and dark, One Dark Pro and High contrast light and dark are listed under `themes`. Keep raw color values in tokens, never in component styles.
+Paint the activity bar, Session list, Companion and inspectors on `plane-chrome`, and the reading track and page on `plane-canvas`. Use `plane-raised` for cards, the composer field, request cards, settings sections and floating bodies, `plane-hover` for hover, and `plane-selected` for selected rows. Green is the interaction color: primary buttons (`green-solid` with `on-green`), focus, links in controls, selection (`green-tonal`) and the current destination. The local user bubble uses `green-tonal`. Code blocks paint `code-ink` and the `code-keyword`, `code-string`, `code-number`, `code-function`, `code-type`, `code-property`, `code-comment` and `code-meta` roles on `plane-raised`. Mint marks running and completed work only; violet marks reasoning and Projects, teal terminal and tools, sky files, models and Markdown links, amber attention, usage and goals, and coral failures and destructive actions. Each hue offers `tonal`, `tonal-hover`, `line`, `graphic`, `solid`, `solid-hover`, `ink` and `on-<hue>` roles; text uses `-ink`, fills and glyphs use `-graphic` or `-solid`. Effort icons follow their variant hues. Pair every state color with a name or distinct icon. The default dark palette is listed under `colors`; Light, One Dark light and dark, One Dark Pro and High contrast light and dark are listed under `themes`. Keep raw color values in tokens, never in component styles.
 
 ## Typography
 
@@ -714,7 +739,7 @@ Use self-hosted Geist for interface prose and JetBrains Mono Regular, Medium and
 
 ## Layout
 
-The 80px activity bar, the 280px Session list (256px in windows up to 1180px wide, resizable from 232px to 360px) and the optional 320px Companion bound the conversation pane, and the 28px status bar spans the window below them. Center transcript and composer in one track with equal inline gutters and a 1024px cap. Use 48px gutters, which keep the floating scroll and zoom controls outside the track. Assistant prose and tool detail use the full track. Local user bubbles, attachments and timestamp receipts align at the trailing edge. Keep the title and workspace or connection status together at the leading edge of the 40px conversation header. Group the trailing Team, context, Companion and menu controls; show the context values beside the ring, not in a second control or a tooltip alone.
+The 80px activity bar, the 280px Session list (256px in windows up to 1180px wide, resizable from 232px to 360px) and the optional 320px Companion bound the conversation pane. Center transcript and composer in one track with equal inline gutters and a 1024px cap. Use 48px gutters, which keep the floating scroll and zoom controls outside the track. Assistant prose and tool detail use the full track. Local user bubbles, attachments, Copy message and delivery status align at the trailing edge. Keep the title and workspace or connection status together at the leading edge of the 40px conversation header. Group the trailing Team, context, Companion and menu controls; show the context values beside the ring, not in a second control or a tooltip alone.
 
 Keep the composer footer compact. Place the flexible spacer before the metrics/autonomy/send cluster, not between Auto and Send. Keep their control-box gap at 8–10px and Send's trailing and bottom card insets at 10–12px, matching the left attachment/model treatment. Reflow controls at the window floor without losing any control or shrinking coarse targets. Tighten turn, activity-step and composer spacing together without removing content or reducing text sizes.
 
@@ -776,7 +801,7 @@ The Working strip shows a mint partial circle immediately before YCoding. Rotate
 
 ## Icons
 
-Use the owned 24-unit SVG registry and 1.6-unit rounded currentColor strokes, rendered at 14px in the status bar and dense chips, 16px in rows and buttons, and 20px in the activity bar. Model, effort, policy, delivery, attachment and execution controls keep meaningful symbols, consistent alignment and readable values. Running, waiting, failed, idle and unknown states keep distinct glyphs and names. Dense actions expose owned non-native hover/focus hints; a trigger hides its hint while its popover, menu or dialog is open. Coarse actions keep 44px reach. Do not replace user-facing names with unexplained icons or native title tooltips.
+Use the owned 24-unit SVG registry and 1.6-unit rounded currentColor strokes, rendered at 14px in dense chips, 16px in rows and buttons, and 20px in the activity bar. Model, effort, policy, delivery, attachment and execution controls keep meaningful symbols, consistent alignment and readable values. Running, waiting, failed, idle and unknown states keep distinct glyphs and names. Dense actions expose owned non-native hover/focus hints; a trigger hides its hint while its popover, menu or dialog is open. Coarse actions keep 44px reach. Do not replace user-facing names with unexplained icons or native title tooltips.
 
 ## Components
 
@@ -794,7 +819,7 @@ Place the context ring beside the window summary, above a full-width category br
 
 Align the composer with the transcript axis, with one input boundary and open icon-led controls. Model, reasoning, autonomy and delivery retain their menus, values and validation. Metrics remain labelled and distinct from Send/Stop. Attachments and context chips wrap without pushing the pane wider. Sidebar titles retain full accessible names; grouping, status filters, paging and pinning keep bounded connection-scoped reads.
 
-The activity bar holds the destinations; the Session list holds New chat, the Sessions overview link, search, status filters and the grouped rows. Group the list as Needs action, Running, Pinned, Recent, with the workspace name as row metadata. On startup, use the saved connection and open the last available Session or New chat. Machine & Backend owns configuration and reconnect actions. Activity-bar destinations use `aria-current="page"` and a cobalt tonal current state; Settings section buttons share 16px icons, the control inset and tonal selection with `aria-current="location"`. Machine and Updates share equal-width tracks and a top edge, with content-height frames. Settings switches to one content column below 1280px. Session display, Keyboard shortcuts, Permissions, Models & Providers, and MCP retain the same raised card, inset and frame. Provider and MCP cards open the existing management dialogs. Keep Command, Shortcut and its action group on one baseline. Show chords in mono pills. The selected row has a tonal surface and inset marker; keyboard focus is distinct from selection.
+The activity bar holds the destinations; the Session list holds New chat, the Sessions overview link, search, status filters and the grouped rows. Group the list as Needs action, Running, Pinned, Recent, with the workspace name as row metadata. On startup, use the saved connection and open the last available Session or New chat. Machine & Backend owns configuration and reconnect actions. Activity-bar destinations use `aria-current="page"` and a green tonal current state; Settings section buttons share 16px icons, the control inset and tonal selection with `aria-current="location"`. Machine and Updates share equal-width tracks and a top edge, with content-height frames. Settings switches to one content column below 1280px. Session display, Keyboard shortcuts, Permissions, Models & Providers, and MCP retain the same raised card, inset and frame. Provider and MCP cards open the existing management dialogs. Keep Command, Shortcut and its action group on one baseline. Show chords in mono pills. The selected row has a tonal surface and inset marker; keyboard focus is distinct from selection.
 
 ### Projects and management
 

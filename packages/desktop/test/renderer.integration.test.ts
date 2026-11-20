@@ -293,6 +293,7 @@ async function command(page: Page, label: string, capture?: string) {
 }
 
 async function message(page: Page, text: string) {
+  await wait(page, `document.querySelector('.rl-capsule textarea') && !document.querySelector('.rl-capsule textarea').readOnly`)
   await page.evaluate(`(() => { const input = document.querySelector('.rl-capsule textarea'); input.value = ${JSON.stringify(text)}; input.dispatchEvent(new InputEvent('input', { bubbles: true })); })()`)
 }
 
@@ -378,10 +379,10 @@ test("Stitch reference geometry preserves the rail, transcript, dock and inspect
     const geometry = await page.evaluate(`(() => {
       const rect = selector => document.querySelector(selector).getBoundingClientRect();
       const rail = rect('.rl-nav'), brand = rect('.activity-bar'), newChat = rect('.rl-new-chat'), head = rect('.rl-top'), companion = rect('.rl-companion'), capsule = rect('.rl-capsule'), column = rect('.conversation__column'), user = rect('.rl-me .transcript-message__bubble'), assistant = rect('.rl-them');
-      return { rail: rail.width, separateNewChat: newChat.left >= brand.right, header: head.height, companion: companion.width, fullColumnComposer: Math.abs(capsule.width - column.width) <= 1, flatDock: getComputedStyle(document.querySelector('.rl-dock')).backgroundColor === 'rgba(0, 0, 0, 0)', trailingBubble: Math.abs(user.right - assistant.right) <= 1 && user.left > assistant.left, metadataVisible: getComputedStyle(document.querySelector('.rl-session-row-meta')).visibility === 'visible', connectionStatus: !!document.querySelector('.status-bar [data-item="connection"]')?.textContent.includes('Connected') && !document.querySelector('.workspace__rail-footer') };
+      return { rail: rail.width, separateNewChat: newChat.left >= brand.right, header: head.height, companion: companion.width, fullColumnComposer: Math.abs(capsule.width - column.width) <= 1, flatDock: getComputedStyle(document.querySelector('.rl-dock')).backgroundColor === 'rgba(0, 0, 0, 0)', trailingBubble: Math.abs(user.right - assistant.right) <= 1 && user.left > assistant.left, metadataVisible: getComputedStyle(document.querySelector('.rl-session-row-meta')).visibility === 'visible', noStatusBar: !document.querySelector('.status-bar') && !document.querySelector('.workspace__rail-footer') };
     })()`)
     console.log("Stitch geometry", JSON.stringify(geometry))
-    expect(geometry).toEqual({ rail: 280, separateNewChat: true, header: 40, companion: 320, fullColumnComposer: true, flatDock: true, trailingBubble: true, metadataVisible: true, connectionStatus: true })
+    expect(geometry).toEqual({ rail: 280, separateNewChat: true, header: 40, companion: 320, fullColumnComposer: true, flatDock: true, trailingBubble: true, metadataVisible: true, noStatusBar: true })
     expect(await page.evaluate(`['.rl-top', '.desktop-companion-head'].map(selector => document.querySelector(selector).getBoundingClientRect().height)`, decodeArray(decodeNumber))).toEqual([40, 40])
     expect(await page.evaluate(`(() => { const pane = document.querySelector('.rl-companion').getBoundingClientRect(); return [...document.querySelectorAll('.rl-companion .companion__header button, .rl-companion [role="tab"]')].every(element => { const bounds = element.getBoundingClientRect(); return bounds.left >= pane.left && bounds.right <= pane.right; }); })()`, decodeBoolean)).toBe(true)
     expect(await page.evaluate(`window.__desktopFixture.errors`, decodeArray((value: unknown) => value))).toEqual([])
@@ -540,6 +541,44 @@ test("Desktop shows the full Companion breakdown and wraps long Activity rows", 
   } finally { await page.close() }
 }, 30_000)
 
+test("pending tray removes and steers real user messages and refreshes after a stale input", async () => {
+  pending = false
+  const input = (id: string, text: string, type = "user") => ({ id, sessionID: "ses_test", type, delivery: "queue", admittedSeq: 1, timeCreated: 1, data: { text } })
+  let items = [input("msg_pend_one", "Synthetic first pending"), input("msg_pend_two", "Synthetic second pending"), input("msg_pend_gone", "Synthetic stale pending"), input("msg_pend_three", "Synthetic third pending"), input("msg_pend_notice", "Subagent notification: done", "synthetic")]
+  const withdrawn = (id: string) => { items = items.filter(item => item.id !== id) }
+  sceneRead = call => {
+    if (call.method === "GET" && call.route === "/api/session/ses_test/pending") return { data: items }
+    const action = call.route.match(/^\/api\/session\/ses_test\/pending\/(msg_[a-z_]+)(\/steer)?$/)
+    if (!action) return undefined
+    withdrawn(action[1]!)
+    if (action[1] === "msg_pend_gone") return new Response(JSON.stringify({ _tag: "PendingInputNotFoundError", sessionID: "ses_test", messageID: action[1], message: "Synthetic backend detail" }), { status: 404, headers: { "content-type": "application/json" } })
+    return new Response(null, { status: 204 })
+  }
+  const page = await open()
+  const rows = `[...document.querySelectorAll('.pending-tray__text')].map(element => element.textContent)`
+  try {
+    await wait(page, `document.querySelector('.pending-tray')?.textContent.includes('4 pending')`)
+    await page.evaluate(`document.querySelector('.pending-tray__toggle').click()`)
+    expect(await page.evaluate(rows, decodeArray(decodeString))).toEqual(["Synthetic first pending", "Synthetic second pending", "Synthetic stale pending", "Synthetic third pending"])
+    await page.evaluate(`document.querySelector('.pending-tray__item [aria-label="Remove pending message"]').click()`)
+    await wait(page, `document.querySelector('.pending-tray')?.textContent.includes('3 pending')`)
+    await page.evaluate(`document.querySelector('.pending-tray__item [aria-label="Steer now"]').click()`)
+    await wait(page, `document.querySelector('.pending-tray')?.textContent.includes('2 pending')`)
+    expect(owned!.calls.filter(call => call.method !== "GET").map(call => `${call.method} ${call.route}`)).toEqual(["DELETE /api/session/ses_test/pending/msg_pend_one", "POST /api/session/ses_test/pending/msg_pend_two/steer"])
+    items = [input("msg_pend_gone", "Synthetic stale pending"), input("msg_pend_three", "Synthetic third pending")]
+    await page.evaluate(`window.__desktopFixture.emit({ type: 'session.input.admitted', data: { sessionID: 'ses_test', inputID: 'msg_pend_gone' } })`)
+    await wait(page, `document.querySelector('.pending-tray')?.textContent.includes('2 pending') && document.querySelector('.pending-tray__item')`)
+    await page.evaluate(`document.querySelector('.pending-tray__item [aria-label="Steer now"]').click()`)
+    await wait(page, `document.querySelector('.pending-tray__note')?.textContent.includes('may no longer be pending') && document.querySelector('.pending-tray')?.textContent.includes('1 pending')`)
+    expect(await page.evaluate(`document.body.textContent.includes('Synthetic backend detail')`, decodeBoolean)).toBe(false)
+    expect(await page.evaluate(rows, decodeArray(decodeString))).toEqual(["Synthetic third pending"])
+    items = []
+    await page.evaluate(`window.__desktopFixture.emit({ type: 'session.input.withdrawn', data: { sessionID: 'ses_test', inputID: 'msg_pend_three' } })`)
+    await wait(page, `!document.querySelector('.pending-tray')`)
+    expect(await page.evaluate(`window.__desktopFixture.errors`, decodeArray((value: unknown) => value))).toEqual([])
+  } finally { await page.close() }
+}, 30_000)
+
 test("Desktop transcript omits routine notices and keeps actionable messages and trailing prompts", async () => {
   referenceScene = true
   pending = false
@@ -560,8 +599,8 @@ test("Desktop transcript omits routine notices and keeps actionable messages and
     await wait(page, `document.querySelector('#turn-msg_goal_steer')`)
     expect(await page.evaluate(`!document.querySelector('#turn-msg_repeated_child, #turn-msg_project_progress') && document.querySelector('#turn-msg_project_review a')?.getAttribute('href').endsWith('/sessions/ses_other') && document.querySelector('#turn-msg_parent_answer').textContent.includes('Use the retained cursor') && document.querySelector('#turn-msg_goal_steer').textContent.includes('Verify the new cursor')`, decodeBoolean)).toBe(true)
     expect(await page.evaluate(`(() => {
-      const turn = document.querySelector('#turn-msg_prompt_239[data-speaker="user"]'), bubble = turn.querySelector('.transcript-message__bubble'), attachment = turn.querySelector('.conversation__chip'), receipt = turn.querySelector('[aria-label="Message created"]'), right = element => element.getBoundingClientRect().right;
-      return { noAuthor: !turn.querySelector('.transcript-message__author'), sized: bubble.clientWidth <= turn.clientWidth * .78 + 1, trailing: [bubble, attachment, receipt].map(el => Math.abs(right(el) - right(turn)) <= 1), fits: [turn, bubble, bubble.querySelector('pre')].map(el => el.scrollWidth <= el.clientWidth), attachment: attachment.textContent, border: getComputedStyle(bubble).borderTopWidth };
+      const turn = document.querySelector('#turn-msg_prompt_239[data-speaker="user"]'), bubble = turn.querySelector('.transcript-message__bubble'), attachment = turn.querySelector('.conversation__chip'), receipt = turn.querySelector('.transcript-message__delivery'), right = element => element.getBoundingClientRect().right;
+      return { noAuthor: !turn.querySelector('.transcript-message__author'), sized: bubble.clientWidth <= turn.clientWidth * .78 + 1, trailing: [bubble, attachment, receipt].map(el => Math.abs(right(el) - right(turn)) <= 1), fits: [turn, bubble].map(el => el.scrollWidth <= el.clientWidth).concat(bubble.querySelector('pre').getBoundingClientRect().right <= bubble.getBoundingClientRect().right + 1 && getComputedStyle(bubble.querySelector('pre')).overflowX === 'auto'), attachment: attachment.textContent, border: getComputedStyle(bubble).borderTopWidth };
     })()`, decodeRecord)).toEqual({ noAuthor: true, sized: true, trailing: [true, true, true], fits: [true, true, true], attachment: "restored-notes.txt", border: "0px" })
     const header = await page.evaluate(`(() => { const title = document.querySelector('.rl-top .rl-title'), status = document.querySelector('.rl-presence'), actions = document.querySelector('.rl-top-actions'), head = document.querySelector('.rl-top'); const range = document.createRange(); range.selectNodeContents(status); const ink = range.getBoundingClientRect(), bounds = status.getBoundingClientRect(); return { connected: status.textContent.includes('Connected · Shared backend'), gap: Math.round(bounds.left - title.getBoundingClientRect().right), overflow: ink.right - bounds.right, rendered: bounds.width, scroll: status.scrollWidth, trailing: Math.round(head.getBoundingClientRect().right - actions.getBoundingClientRect().right - parseFloat(getComputedStyle(head).paddingRight)) }; })()`, decodeRecord)
     expect(header).toMatchObject({ connected: true, gap: 12, trailing: 0 })
@@ -593,24 +632,34 @@ test("Desktop rotates only the Working arc and keeps it static when motion is di
   } finally { await page.close() }
 }, 30_000)
 
-test("Desktop copies fenced code through native clipboard without a browser clipboard", async () => {
+test("Desktop renders Markdown and fenced code cards with wrap, highlighting and native copy", async () => {
   referenceScene = true
   pending = false
-  const code = "  function cursor() {\n\n    return retained\n  }"
-  replyText = `# Safe sample\n\n\`\`\`typescript\n${code}\n\`\`\``
+  const code = "const answer: number = 42 // note\n\nfunction cursor() {\n  return \"retained\"\n}"
+  replyText = `# Sample heading\n\n- first item\n- second \`inline\` item\n\n\`\`\`ts\n${code}\n\`\`\``
   const page = await open()
   try {
-    const button = `document.querySelector('#turn-msg_response .transcript-md__code-head button')`
+    const turn = `document.querySelector('#turn-msg_response')`
+    const card = `${turn}.querySelector('.transcript-md__code')`
+    const wrap = `${card}.querySelector('[data-action="wrap"]')`
+    const copy = `${card}.querySelector('[data-action="copy"]')`
     await page.evaluate(`Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })`)
-    expect(await page.evaluate(`(() => { const pre = document.querySelector('#turn-msg_response .transcript-md__code pre'); return pre.textContent === ${JSON.stringify(code)} && [pre, pre.querySelector('code'), pre.closest('.transcript-md')].every(el => getComputedStyle(el).userSelect === 'text') && ${button}.querySelector('svg') !== null; })()`, decodeBoolean)).toBe(true)
+    expect(await page.evaluate(`(() => { const root = ${turn}.querySelector('.transcript-md'); return { heading: root.querySelector('.transcript-md__heading--1')?.textContent, items: [...root.querySelectorAll('li')].map(item => item.textContent), inline: root.querySelector('li code')?.textContent, label: ${card}.querySelector('.transcript-md__code-lang').textContent.trim(), icon: ${card}.querySelector('.transcript-md__code-lang svg') !== null, buttons: [...${card}.querySelectorAll('.transcript-md__code-button')].map(button => button.textContent.trim()) }; })()`, decodeRecord)).toEqual({ heading: "Sample heading", items: ["first item", "second inline item"], inline: "inline", label: "TypeScript", icon: true, buttons: ["Wrap lines", "Copy code"] })
+    expect(await page.evaluate(`(() => { const pre = ${card}.querySelector('pre'); const kinds = [...new Set([...pre.querySelectorAll('span.code-token')].map(span => [...span.classList].find(name => name.startsWith('code-token--'))))].sort(); return { raw: pre.textContent === ${JSON.stringify(code)}, kinds, selectable: [pre, pre.querySelector('code'), pre.closest('.transcript-md')].every(el => getComputedStyle(el).userSelect === 'text'), html: pre.querySelectorAll('script, style').length }; })()`, decodeRecord)).toEqual({ raw: true, kinds: ["code-token--comment", "code-token--function", "code-token--keyword", "code-token--number", "code-token--string"], selectable: true, html: 0 })
+    expect(await page.evaluate(`(() => { const parse = value => value.match(/\\d+(\\.\\d+)?/g).slice(0, 3).map(Number); const light = value => parse(value).map(channel => channel / 255).map(channel => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4).reduce((total, channel, index) => total + channel * [0.2126, 0.7152, 0.0722][index], 0); const ratio = (a, b) => (Math.max(light(a), light(b)) + 0.05) / (Math.min(light(a), light(b)) + 0.05); const background = getComputedStyle(${card}).backgroundColor; return [...${card}.querySelectorAll('pre span.code-token')].filter(span => ratio(getComputedStyle(span).color, background) < 4.5).length; })()`, decodeNumber)).toBe(0)
+    expect(await page.evaluate(`(() => { const pre = ${card}.querySelector('pre'); return [${wrap}.getAttribute('aria-pressed'), pre.getAttribute('data-wrap'), getComputedStyle(pre).whiteSpace]; })()`, decodeArray(decodeNullable(decodeString)))).toEqual(["false", null, "pre"])
+    await page.evaluate(`${wrap}.click()`)
+    expect(await page.evaluate(`(() => { const pre = ${card}.querySelector('pre'); return [${wrap}.getAttribute('aria-pressed'), pre.getAttribute('data-wrap'), getComputedStyle(pre).whiteSpace]; })()`, decodeArray(decodeNullable(decodeString)))).toEqual(["true", "true", "pre-wrap"])
+    await page.evaluate(`${wrap}.click()`)
+    expect(await page.evaluate(`[${wrap}.getAttribute('aria-pressed'), ${card}.querySelector('pre').getAttribute('data-wrap')]`, decodeArray(decodeNullable(decodeString)))).toEqual(["false", null])
     clipboardFailure = true
-    await page.evaluate(`${button}.focus()`)
+    await page.evaluate(`${copy}.focus()`)
     await page.pressKey("Enter", "Enter", 13, "\r")
-    await wait(page, `${button}.textContent.trim() === 'Copy failed'`)
+    await wait(page, `${copy}.textContent.trim() === 'Copy failed'`)
     expect(clipboard).toEqual([])
     clipboardFailure = false
     await page.pressKey("Enter", "Enter", 13, "\r")
-    await wait(page, `${button}.textContent.trim() === 'Copied'`)
+    await wait(page, `${copy}.textContent.trim() === 'Copied'`)
     expect(clipboard).toEqual([code])
   } finally { await page.close() }
 }, 30_000)
@@ -1562,7 +1611,7 @@ async function captureR7(page: Page, name: string) {
       columns: pane && column && composer ? { left: rect(column).x - rect(pane).x - pane.clientLeft, right: pane.clientWidth - (rect(column).right - rect(pane).x - pane.clientLeft), ratio: rect(column).width / pane.clientWidth, composerLeft: rect(composer).x - rect(column).x, composerRight: rect(composer).right - rect(column).right } : null,
       readingTrack: card && column && pane ? { outer: rect(card), viewport: rect(pane), rows: trackSelectors.flatMap(([kind, selector]) => [...document.querySelectorAll(selector)].filter(visible).map(element => ({ kind, turn: element.closest('.transcript__turn')?.id ?? '', bounds: rect(element) }))), controls: [...document.querySelectorAll('.rl-disclosure-head .rl-disclosure-chev, .rl-disclosure-head .rl-disclosure-time')].filter(visible).map(element => ({ kind: label(element), bounds: rect(element), row: rect(element.closest('summary, button')) })), floating: [...document.querySelectorAll('.transcript-navigation__rail, .transcript-navigation__controls')].filter(visible).map(element => ({ label: label(element), bounds: rect(element) })), turnGaps: turns.slice(1).map((element, index) => rect(element).y - rect(turns[index]).bottom) } : null,
       composerCluster: card && send && delivery && metrics && leading ? { card: rect(card), send: rect(send), delivery: rect(delivery), metrics: rect(metrics), leading: rect(leading), leftInset: rect(leading).x - rect(card).x, rightInset: rect(card).right - rect(send).right, bottomInset: rect(card).bottom - rect(send).bottom, autoSendGap: rect(send).x - rect(delivery).right, targets: [...card.querySelectorAll('.composer-bar button')].filter(visible).map(element => ({ label: label(element), bounds: rect(element) })) } : null,
-      coordination: projectPane && projectMain && projectFooter && projectList && visible(projectMain) ? { pane: rect(projectPane), viewportBottom: document.querySelector('.status-bar').getBoundingClientRect().top, main: rect(projectMain), mainFlexColumn: getComputedStyle(projectMain).display === 'flex' && getComputedStyle(projectMain).flexDirection === 'column' && getComputedStyle(projectMain).minHeight === '0px', sidebar: projectSidebar && visible(projectSidebar) ? rect(projectSidebar) : null, sidebarBackground: projectSidebar && visible(projectSidebar) ? getComputedStyle(projectSidebar).backgroundColor : null, sidebarBorder: projectSidebar && visible(projectSidebar) ? parseFloat(getComputedStyle(projectSidebar).borderLeftWidth) : null, footer: rect(projectFooter), footerBorder: parseFloat(getComputedStyle(projectFooter).borderTopWidth), list: rect(projectList), listClientHeight: projectList.clientHeight, listScrollHeight: projectList.scrollHeight, listOverflow: getComputedStyle(projectList).overflowY, listFlex: parseFloat(getComputedStyle(projectList).flexGrow) > 0 && getComputedStyle(projectList).minHeight === '0px' } : null,
+      coordination: projectPane && projectMain && projectFooter && projectList && visible(projectMain) ? { pane: rect(projectPane), viewportBottom: innerHeight, main: rect(projectMain), mainFlexColumn: getComputedStyle(projectMain).display === 'flex' && getComputedStyle(projectMain).flexDirection === 'column' && getComputedStyle(projectMain).minHeight === '0px', sidebar: projectSidebar && visible(projectSidebar) ? rect(projectSidebar) : null, sidebarBackground: projectSidebar && visible(projectSidebar) ? getComputedStyle(projectSidebar).backgroundColor : null, sidebarBorder: projectSidebar && visible(projectSidebar) ? parseFloat(getComputedStyle(projectSidebar).borderLeftWidth) : null, footer: rect(projectFooter), footerBorder: parseFloat(getComputedStyle(projectFooter).borderTopWidth), list: rect(projectList), listClientHeight: projectList.clientHeight, listScrollHeight: projectList.scrollHeight, listOverflow: getComputedStyle(projectList).overflowY, listFlex: parseFloat(getComputedStyle(projectList).flexGrow) > 0 && getComputedStyle(projectList).minHeight === '0px' } : null,
       roster: roster && visible(roster) ? { height: rect(roster).height, rowHeights: [...roster.children].map(element => rect(element).height), gap: parseFloat(getComputedStyle(roster).rowGap) || 0, padding: parseFloat(getComputedStyle(roster).paddingTop) + parseFloat(getComputedStyle(roster).paddingBottom) } : null,
       prose: [...document.querySelectorAll('.transcript-message__text .transcript-md > p')].map(element => ({ rect: rect(element), textLength: element.textContent.length })),
       errors: window.__desktopFixture.errors,
@@ -2687,8 +2736,8 @@ test("Desktop polish renders genuine Dot steer events as right-aligned prompt bu
       expect(state.steerText).not.toContain("<shared-context>")
       expect(state.steerText).not.toContain("<system-update>")
       expect(state.steerText).not.toContain("hidden:trace")
-      expect(state.steerReceipt).toBe("Dot steer")
-      expect(state.steerReceiptLabel).toBe("Dot steer prompt")
+      expect(state.steerReceipt).toBe("")
+      expect(state.steerReceiptLabel).toBe("")
       expect(state.steerBg).toBe(state.humanBg)
       expect(decodeNumber(state.steerRightDelta)).toBeLessThanOrEqual(1)
       expect(decodeNumber(state.trackRightDelta)).toBeLessThanOrEqual(1)
@@ -3108,7 +3157,7 @@ test("Ledger Dark owns its palette and keeps the unified composer usable through
     await message(page, "Retained Ledger draft")
     await wait(page, `document.querySelector('.rl-capsule textarea').getBoundingClientRect().height === 44`)
     if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "ledger-desktop.png"), Buffer.from(await page.screenshot(), "base64"))
-    const roles = ['plane-chrome', 'plane-canvas', 'plane-raised', 'plane-hover', 'plane-selected', 'ink', 'ink-secondary', 'ink-tertiary', 'line-subtle', 'line-field', 'cobalt-solid', 'on-cobalt', 'focus', 'mint-graphic']
+    const roles = ['plane-chrome', 'plane-canvas', 'plane-raised', 'plane-hover', 'plane-selected', 'ink', 'ink-secondary', 'ink-tertiary', 'line-subtle', 'line-field', 'green-solid', 'on-green', 'focus', 'mint-graphic']
     const palette = await page.evaluate(`(() => { const style = getComputedStyle(document.documentElement); return Object.fromEntries(${JSON.stringify(roles)}.map(name => [name, style.getPropertyValue('--yc-' + name).trim().toLowerCase()])); })()`, decodeDictionary(decodeString))
     const design = Bun.YAML.parse((await Bun.file(path.join(import.meta.dir, "../DESIGN.md")).text()).split("---")[1]!) as { colors: Record<string, string>; typography: { body: { fontFamily: string }; mono: { fontFamily: string } } }
     expect(palette).toEqual(Object.fromEntries(roles.map(name => [name, design.colors[name]!.toLowerCase()])))
@@ -3135,32 +3184,27 @@ test("Ledger Dark owns its palette and keeps the unified composer usable through
   } finally { await page.close() }
 }, 30_000)
 
-test("R9-SHELL activity bar, resizable Session list, status bar and trace follow the reported Session", async () => {
+test("R9-SHELL activity bar, resizable Session list, header toggle and trace follow the reported Session", async () => {
   pending = false
   const page = await open()
   const handle = `document.querySelector('#session-rail .list-column__resize')`
   const listWidth = `Math.round(document.querySelector('#session-rail').getBoundingClientRect().width)`
   try {
-    for (const [width, height, list, short] of [[1440, 900, 280, false], [1000, 600, 256, true]] as const) {
+    for (const [width, height, list] of [[1440, 900, 280], [1000, 600, 256]] as const) {
       await page.setViewport(width, height)
-      await wait(page, `${listWidth} === ${list} && document.querySelector('.status-bar [data-item="tokens"]')`)
+      await wait(page, `${listWidth} === ${list} && document.querySelector('.rl-list-toggle')`)
       expect(await page.evaluate(`(() => {
-        const bar = document.querySelector('.activity-bar'), items = [...bar.querySelectorAll('.activity-bar__item')], status = document.querySelector('.status-bar'), rail = document.querySelector('#session-rail');
+        const bar = document.querySelector('.activity-bar'), items = [...bar.querySelectorAll('.activity-bar__item')], rail = document.querySelector('#session-rail');
         const labels = items.map(item => item.querySelector('.activity-bar__label').textContent);
-        const usage = items[4].getBoundingClientRect(), settings = items[5].getBoundingClientRect(), frame = status.getBoundingClientRect();
-        const buttons = [...status.querySelectorAll('button.status-bar__item')].map(item => item.dataset.item);
-        const running = status.querySelector('[data-item="running"]'), shortLabel = running.querySelector('.status-bar__short');
+        const usage = items[4].getBoundingClientRect(), settings = items[5].getBoundingClientRect();
         return JSON.stringify(labels) === JSON.stringify(["Chat", "Team", "Projects", "Workspaces", "Usage", "Settings"])
           && Math.round(bar.getBoundingClientRect().width) === 80
           && items.every(item => { const rect = item.getBoundingClientRect(); return Math.round(rect.width) === 72 && Math.round(rect.height) === 56 && item.textContent.trim().length > 0; })
           && settings.top > usage.bottom + 8 && items[0].getAttribute('aria-current') === 'page' && items.slice(1).every(item => !item.hasAttribute('aria-current'))
           && Math.abs(rail.getBoundingClientRect().left - bar.getBoundingClientRect().right) <= 1
-          && Math.round(frame.height) === 28 && Math.round(frame.bottom) === innerHeight && Math.round(frame.width) === innerWidth
-          && [...status.querySelectorAll('.status-bar__item')].every(item => { const rect = item.getBoundingClientRect(); return Math.round(rect.top) === Math.round(frame.top) && Math.round(rect.bottom) === Math.round(frame.bottom); })
+          && !document.querySelector('.status-bar') && Math.round(rail.getBoundingClientRect().bottom) === innerHeight
           && Math.round(document.querySelector('.rl-main').getBoundingClientRect().width) === innerWidth - 80 - ${list}
-          && JSON.stringify(buttons) === JSON.stringify(["list", "connection", "machine", "model", "effort", "autonomy", "context", "running"])
-          && status.querySelector('span.status-bar__item[data-item="tokens"]') !== null
-          && (getComputedStyle(shortLabel).display !== 'none') === ${short}
+          && document.querySelector('.conversation__head .rl-list-toggle, [data-new-chat] .rl-list-toggle') !== null
           && document.documentElement.scrollWidth <= innerWidth;
       })()`, decodeBoolean)).toBe(true)
     }
@@ -3174,14 +3218,14 @@ test("R9-SHELL activity bar, resizable Session list, status bar and trace follow
     await wait(page, `${handle}.getAttribute('aria-valuenow') === '232' && ${listWidth} === 232 && localStorage.getItem('ycoding.desktop.list-width') === '232'`)
     await page.evaluate(`document.querySelectorAll('.rl-rail-filter')[1].click()`)
     await wait(page, `document.querySelectorAll('.rl-rail-filter')[1].getAttribute('aria-pressed') === 'true'`)
-    await page.evaluate(`document.querySelector('.status-bar [aria-label="Hide Session list"]').click()`)
-    await wait(page, `!document.querySelector('#session-rail') && document.querySelector('.status-bar [aria-label="Show Session list"]')`)
-    await page.evaluate(`document.querySelector('.status-bar [aria-label="Show Session list"]').click()`)
+    await page.evaluate(`document.querySelector('.rl-list-toggle[aria-label="Hide session list"]').click()`)
+    await wait(page, `!document.querySelector('#session-rail') && document.querySelector('.rl-list-toggle[aria-label="Show session list"]')`)
+    await page.evaluate(`document.querySelector('.rl-list-toggle[aria-label="Show session list"]').click()`)
     await wait(page, `document.querySelectorAll('.rl-rail-filter')[1]?.getAttribute('aria-pressed') === 'true' && ${listWidth} === 232`)
     await page.evaluate(`document.querySelectorAll('.rl-rail-filter')[0].click()`)
     running = true
     await page.evaluate(`window.__desktopFixture.resync(); window.__desktopFixture.emit({ type: 'session.execution.started', data: { sessionID: 'ses_test' } })`)
-    await wait(page, `document.querySelector('.conversation__head .trace')?.dataset.run === 'true' && document.querySelector('.status-bar .trace')?.dataset.run === 'true' && document.querySelector('.conversation__head .trace').getAttribute('aria-hidden') === 'true'`)
+    await wait(page, `document.querySelector('.conversation__head .trace')?.dataset.run === 'true' && document.querySelector('.conversation__head .trace').getAttribute('aria-hidden') === 'true'`)
     await page.evaluate(`document.documentElement.dataset.animations = 'on'`)
     expect(await page.evaluate(`getComputedStyle(document.querySelector('.conversation__head .trace__run')).animationName`, decodeString)).toBe("trace-run")
     await page.setReducedMotion(true)
@@ -3270,24 +3314,24 @@ test("layout stability bounds live counters and waiting badges without moving ad
   } finally { await page.close() }
 }, 30_000)
 
-test("layout stability coalesces composer growth and preserves bottom anchoring on shrink", async () => {
+test("layout stability keeps the composer one fixed line while typing and pasting", async () => {
   pending = false
   const page = await open()
   try {
+    const bottom = await page.evaluate(`document.querySelector('.rl-capsule').getBoundingClientRect().bottom`)
     const reads = await page.evaluate(`(() => {
       const input = document.querySelector('.rl-capsule textarea');
       const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollHeight');
       let reads = 0;
       Object.defineProperty(input, 'scrollHeight', { configurable: true, get() { reads++; return descriptor.get.call(this); } });
       for (let index = 0; index < 30; index++) { input.value = ('Synthetic line ' + index + '\\n').repeat(index + 1); input.dispatchEvent(new InputEvent('input', { bubbles: true })); }
-      delete input.scrollHeight;
-      return reads;
+      return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => { delete input.scrollHeight; resolve(reads); })));
     })()`)
-    expect(reads).toBeLessThanOrEqual(1)
-    await wait(page, `document.querySelector('.rl-capsule textarea').getBoundingClientRect().height >= 160`)
-    const bottom = await page.evaluate(`document.querySelector('.rl-capsule').getBoundingClientRect().bottom`)
+    expect(reads).toBe(0)
+    expect(await page.evaluate(`(() => { const input = document.querySelector('.rl-capsule textarea'); return [input.getBoundingClientRect().height, input.style.height, input.getAttribute('wrap'), getComputedStyle(input).resize]; })()`)).toEqual([44, "", "off", "none"])
+    expect(await page.evaluate(`document.querySelector('.rl-capsule').getBoundingClientRect().bottom`)).toBe(bottom)
     await message(page, "Short draft")
-    await wait(page, `document.querySelector('.rl-capsule textarea').getBoundingClientRect().height === 44`)
+    expect(await page.evaluate(`document.querySelector('.rl-capsule textarea').getBoundingClientRect().height`)).toBe(44)
     expect(await page.evaluate(`document.querySelector('.rl-capsule').getBoundingClientRect().bottom`)).toBe(bottom)
     expect(await page.evaluate(`(() => { const scroller = document.querySelector('.conversation__scroll'); return scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop; })()`)).toBe(0)
   } finally { await page.close() }
@@ -3306,13 +3350,13 @@ test("layout stability reserves composer actions through live metadata and runni
     expect(await page.evaluate(geometry, decodeArray((value: unknown) => value))).toEqual(original)
     running = true
     await page.evaluate(`window.__desktopFixture.emit({ type: 'session.execution.started', data: { sessionID: 'ses_test' } })`)
-    await wait(page, `document.querySelector('[aria-label="Stop"]')`)
+    await wait(page, `document.querySelector('[aria-label="Stop generation"]')`)
     expect(await page.evaluate(geometry, decodeArray((value: unknown) => value))).toEqual(original)
-    expect(await page.evaluate(`(() => { const stop = document.querySelector('[aria-label="Stop"]').getBoundingClientRect(), send = document.querySelector('.rl-send').getBoundingClientRect(), card = document.querySelector('.rl-capsule').getBoundingClientRect(); return stop.width >= send.width && stop.height >= send.height && stop.left >= card.left && stop.right <= card.right && stop.top >= card.top && stop.bottom <= card.bottom && (stop.right <= send.left || stop.left >= send.right || stop.bottom <= send.top || stop.top >= send.bottom); })()`, decodeBoolean)).toBe(true)
+    expect(await page.evaluate(`(() => { const stop = document.querySelector('[aria-label="Stop generation"]').getBoundingClientRect(), send = document.querySelector('.rl-send').getBoundingClientRect(), card = document.querySelector('.rl-capsule').getBoundingClientRect(); return stop.width >= send.width && stop.height >= send.height && stop.left >= card.left && stop.right <= card.right && stop.top >= card.top && stop.bottom <= card.bottom && (stop.right <= send.left || stop.left >= send.right || stop.bottom <= send.top || stop.top >= send.bottom); })()`, decodeBoolean)).toBe(true)
     expect(await page.evaluate(`document.querySelector('.rl-capsule textarea').value`, decodeString)).toBe("Retained synthetic draft")
     running = false
     await page.evaluate(`window.__desktopFixture.emit({ type: 'session.idle', data: { sessionID: 'ses_test' } })`)
-    await wait(page, `!document.querySelector('[aria-label="Stop"]')`)
+    await wait(page, `!document.querySelector('[aria-label="Stop generation"]')`)
     expect(await page.evaluate(geometry)).toEqual(original)
     expect(await page.evaluate(`window.__desktopFixture.errors`)).toEqual([])
   } finally { await page.close() }
@@ -4117,7 +4161,7 @@ test("rendered parity stages reasoning while running and applies it before admit
     await page.pressKey("Escape", "Escape", 27)
     running = false
     await page.evaluate(`window.__desktopFixture.emit({ type: 'session.execution.succeeded', data: { sessionID: 'ses_test' } })`)
-    await wait(page, `!document.querySelector('[aria-label="Stop"]')`)
+    await wait(page, `!document.querySelector('[aria-label="Stop generation"]')`)
     await message(page, "Use the staged synthetic effort")
     await page.evaluate(`document.querySelector('.rl-send').click()`)
     await wait(page, `document.querySelector('.rl-capsule textarea').value === ''`)

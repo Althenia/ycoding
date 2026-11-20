@@ -39,7 +39,7 @@
   border: var(--yc-border-width) solid var(--yc-line-field); border-radius: var(--yc-radius-card); background: var(--yc-plane-raised); color: var(--yc-ink); font: inherit; font-size: var(--yc-size-xs); white-space: nowrap;
 }
 .usage-filter-sheet__range > svg { flex: none; visibility: hidden; }
-.usage-filter-sheet__range[aria-pressed="true"] { background: var(--yc-cobalt-tonal); color: var(--yc-ink); font-weight: var(--yc-weight-semibold); }
+.usage-filter-sheet__range[aria-pressed="true"] { background: var(--yc-green-tonal); color: var(--yc-ink); font-weight: var(--yc-weight-semibold); }
 .usage-filter-sheet__range[aria-pressed="true"] > svg { visibility: visible; }
 .usage-filter-sheet__error { color: var(--yc-coral-ink); }
 .usage-filter-sheet__actions {

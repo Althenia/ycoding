@@ -62,6 +62,8 @@ export const Operation = Schema.Literals([
   "session.compact",
   "session.snapshot",
   "session.pending.list",
+  "session.pending.remove",
+  "session.pending.steer",
   "session.attachment.read",
   "session.message.stream",
   "session.todo.list",

@@ -187,12 +187,12 @@ progress::-webkit-progress-bar {
 
 progress::-webkit-progress-value {
   border-radius: var(--yc-radius-pill);
-  background: var(--yc-cobalt-ink);
+  background: var(--yc-green-ink);
 }
 
 progress::-moz-progress-bar {
   border-radius: var(--yc-radius-pill);
-  background: var(--yc-cobalt-ink);
+  background: var(--yc-green-ink);
 }
 
 h1 {
@@ -234,7 +234,7 @@ kbd {
 }
 
 ::selection {
-  background: var(--yc-cobalt-tonal);
+  background: var(--yc-green-tonal);
   color: var(--yc-ink);
 }
 
@@ -396,7 +396,7 @@ kbd {
   /* A link that lays out as a box is a control, so it carries a 44px target rather
      than claiming the inline-text exception. */
   min-block-size: var(--yc-hit-min);
-  color: var(--yc-cobalt-ink);
+  color: var(--yc-green-ink);
   font-weight: var(--yc-weight-semibold);
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -421,9 +421,9 @@ kbd {
 }
 
 .chip--success {
-  border-color: color-mix(in srgb, var(--yc-cobalt-ink) 40%, transparent);
-  background: var(--yc-cobalt-tonal);
-  color: var(--yc-cobalt-ink);
+  border-color: color-mix(in srgb, var(--yc-green-ink) 40%, transparent);
+  background: var(--yc-green-tonal);
+  color: var(--yc-green-ink);
 }
 
 .chip--attention {
@@ -448,7 +448,7 @@ kbd {
 }
 
 .status-dot--online {
-  background: var(--yc-cobalt-ink);
+  background: var(--yc-green-ink);
 }
 
 .status-dot--pending {
@@ -476,8 +476,8 @@ kbd {
 }
 
 .tag--added {
-  background: var(--yc-cobalt-tonal);
-  color: var(--yc-cobalt-ink);
+  background: var(--yc-green-tonal);
+  color: var(--yc-green-ink);
 }
 
 .tag--changed {
@@ -613,7 +613,7 @@ kbd {
   inline-size: 10px;
   block-size: 10px;
   scale: 0;
-  background: var(--yc-cobalt-solid);
+  background: var(--yc-green-solid);
   border-radius: 2px;
 }
 
@@ -624,7 +624,7 @@ kbd {
 }
 
 .check input:checked {
-  border-color: var(--yc-cobalt-solid);
+  border-color: var(--yc-green-solid);
 }
 
 .check input:checked::after {
@@ -674,12 +674,12 @@ kbd {
 }
 
 .switch input:checked {
-  background: var(--yc-cobalt-solid);
+  background: var(--yc-green-solid);
 }
 
 .switch input:checked::after {
   translate: 16px 0;
-  background: var(--yc-on-cobalt);
+  background: var(--yc-on-green);
 }
 
 /* --- surfaces ----------------------------------------------------------- */
@@ -1129,7 +1129,7 @@ kbd {
   }
 
   to {
-    background-color: var(--yc-cobalt-tonal);
+    background-color: var(--yc-green-tonal);
   }
 }
 

@@ -17,6 +17,7 @@ import {
   HistoryPrunedError,
   MessageNotFoundError,
   ModelSwitchBlockedError,
+  PendingInputNotFoundError,
   ServiceUnavailableError,
   SessionBusyError,
   SessionNotFoundError,
@@ -60,6 +61,34 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       yield* project.recordOpened(directory)
       return directory
     })
+
+    const mapPendingInputErrors = (
+      effect: Effect.Effect<void, Session.NotFoundError | Session.PendingInputNotFoundError | Session.PendingInputInvalidError>,
+    ) =>
+      effect.pipe(
+        Effect.catchTags({
+          "Session.NotFoundError": (error) =>
+            Effect.fail(
+              new SessionNotFoundError({ sessionID: error.sessionID, message: `Session not found: ${error.sessionID}` }),
+            ),
+          "Session.PendingInputNotFoundError": (error) =>
+            Effect.fail(
+              new PendingInputNotFoundError({
+                sessionID: error.sessionID,
+                messageID: error.inputID,
+                message: `Pending input not found: ${error.inputID}`,
+              }),
+            ),
+          "Session.PendingInputInvalidError": (error) =>
+            Effect.fail(
+              new InvalidRequestError({
+                message: `Only user input can be changed while pending: ${error.inputID}`,
+                kind: "pending_input_not_user",
+                field: "messageID",
+              }),
+            ),
+        }),
+      )
 
     return handlers
       .handle(
@@ -1121,6 +1150,20 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               ),
             ),
           }
+        }),
+      )
+      .handle(
+        "session.pending.remove",
+        Effect.fn(function* (ctx) {
+          yield* mapPendingInputErrors(session.withdrawPending({ sessionID: ctx.params.sessionID, inputID: ctx.params.messageID }))
+          return HttpApiSchema.NoContent.make()
+        }),
+      )
+      .handle(
+        "session.pending.steer",
+        Effect.fn(function* (ctx) {
+          yield* mapPendingInputErrors(session.steerPending({ sessionID: ctx.params.sessionID, inputID: ctx.params.messageID }))
+          return HttpApiSchema.NoContent.make()
         }),
       )
       .handle(

@@ -24,6 +24,7 @@ import {
   InvalidRequestError,
   MessageNotFoundError,
   ModelSwitchBlockedError,
+  PendingInputNotFoundError,
   ServiceUnavailableError,
   SessionBusyError,
   SessionNotFoundError,
@@ -1111,6 +1112,38 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             summary: "List pending session work",
             description:
               "List durable admitted session work not yet visible in projected history, ordered by admission. Includes unpromoted user and synthetic inputs and unhandled compaction barriers. The runner owns consumption; items disappear once promoted or handled.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.delete("session.pending.remove", "/api/session/:sessionID/pending/:messageID", {
+        params: { sessionID: Session.ID, messageID: SessionMessage.ID },
+        success: HttpApiSchema.NoContent,
+        error: [SessionNotFoundError, PendingInputNotFoundError, InvalidRequestError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.pending.remove",
+            summary: "Remove a pending user input",
+            description:
+              "Withdraw one unconsumed user input before promotion. The input never becomes a message and the running execution is neither woken nor interrupted. Fails with 404 when the input is already promoted, withdrawn or unknown, and with 400 for synthetic or compaction work.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.pending.steer", "/api/session/:sessionID/pending/:messageID/steer", {
+        params: { sessionID: Session.ID, messageID: SessionMessage.ID },
+        success: HttpApiSchema.NoContent,
+        error: [SessionNotFoundError, PendingInputNotFoundError, InvalidRequestError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.pending.steer",
+            summary: "Promote a pending user input to a steer",
+            description:
+              "Make one unconsumed user input a steer and wake the Session so it promotes at the next safe step boundary, immediately when idle. Steering an input that already steers appends no event and still wakes. Fails with 404 when the input is already promoted, withdrawn or unknown, and with 400 for synthetic or compaction work.",
           }),
         ),
     )

@@ -703,6 +703,33 @@ async function connected(handle: (route: string, request: Request) => Promise<Re
   finally { await controller.disconnect(); await fs.rm(resources, { recursive: true, force: true }) }
 }
 
+test("pending messages are removed and steered through their Session routes and report a stale input", async () => {
+  const writes: string[] = []
+  let gone = false
+  await connected(async (route, request) => {
+    if (!route.startsWith(`/api/session/${id}/pending/`)) return undefined
+    writes.push(`${request.method} ${route}`)
+    if (route.includes("msg_synthetic_gone")) return Response.json({ _tag: "PendingInputNotFoundError", sessionID: id, messageID: "msg_synthetic_gone", message: "Hidden backend detail" }, { status: 404 })
+    if (route.includes("msg_synthetic_system")) return Response.json({ _tag: "InvalidRequestError", kind: "pending_input_not_user", message: "Hidden backend detail" }, { status: 400 })
+    gone = true
+    return new Response(null, { status: 204 })
+  }, async (controller) => {
+    await controller.removePending({ sessionID: id, messageID: "msg_synthetic_one" })
+    await controller.steerPending({ sessionID: id, messageID: "msg_synthetic_two" })
+    expect(writes).toEqual([`DELETE /api/session/${id}/pending/msg_synthetic_one`, `POST /api/session/${id}/pending/msg_synthetic_two/steer`])
+    expect(gone).toBe(true)
+    await expect(controller.removePending({ sessionID: id, messageID: "msg_synthetic_gone" })).rejects.toThrow("The pending message could not be removed. It may no longer be pending.")
+    await expect(controller.steerPending({ sessionID: id, messageID: "msg_synthetic_gone" })).rejects.toThrow("The pending message could not be steered. It may no longer be pending.")
+    await expect(controller.removePending({ sessionID: id, messageID: "msg_synthetic_system" })).rejects.not.toThrow("Hidden backend detail")
+    const before = writes.length
+    for (const input of [{ sessionID: id, messageID: "not-a-message" }, { sessionID: "bad", messageID: "msg_synthetic_one" }, { sessionID: id, messageID: "msg_synthetic_one", extra: true }, "msg_synthetic_one"]) {
+      await expect(controller.removePending(input)).rejects.toThrow()
+      await expect(controller.steerPending(input)).rejects.toThrow()
+    }
+    expect(writes).toHaveLength(before)
+  })
+})
+
 test("surface reads use session and project endpoints with their current revision", async () => {
   let standalone = false
   const urls: URL[] = []

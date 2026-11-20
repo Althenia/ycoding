@@ -104,7 +104,9 @@ test("genuine Dot-originated steer prompts render as user-styled bubbles with cl
   expect(html).not.toContain("<system-update>")
   expect(html).not.toContain("hidden:trace")
   expect(html).not.toContain("transcript-message__system")
-  expect(html).toContain("Dot steer")
+  expect(html.replace(/aria-label="[^"]*"/g, "")).not.toContain("Dot steer")
+  expect(html).toContain('class="transcript-message__origin" role="img" aria-label="ChatGPT" title="Sent via ChatGPT"')
+  expect(html).not.toContain("transcript-message__receipt")
   expect(html).not.toContain("Read by YCoding")
 
   const pendingSteer: RemoteMessageView = {
@@ -118,7 +120,9 @@ test("genuine Dot-originated steer prompts render as user-styled bubbles with cl
   const pendingHtml = render(() => <MessageRow message={() => pendingSteer} />)
   expect(pendingHtml).toContain('class="transcript-message__bubble"')
   expect(pendingHtml).toContain("Run the targeted suite now.")
-  expect(pendingHtml).toContain("Processing · steer")
+  expect(pendingHtml).toContain('aria-label="Sent"')
+  expect(pendingHtml).toContain('data-state="processing"')
+  expect(pendingHtml.replace(/aria-label="[^"]*"/g, "")).not.toContain("Dot steer")
   expect(pendingHtml).not.toContain("Read by YCoding")
 
   const emptySteer: RemoteMessageView = {

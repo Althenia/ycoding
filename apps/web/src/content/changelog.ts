@@ -22,6 +22,29 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.12.2",
+    date: "2026-11-20",
+    title: "Queued message tray, Markdown code cards and a steadier composer",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Queued messages appear in a compact tray directly above the composer on Web and Desktop. Collapsed, it shows the count and the first message; expanded, it lists every queued message in order with Remove and Steer now buttons. Only messages you wrote appear there." },
+      { tag: "Added", text: "Messages render Markdown, and fenced code blocks show as cards with a language label, a Wrap lines toggle, a Copy code button and syntax highlighting for Markdown, TypeScript, JavaScript, Rust, Python, JSON and Bash." },
+      { tag: "Added", text: "User and assistant messages have a Copy message button that copies the exact message text." },
+      { tag: "Added", text: "Sent messages show delivery state in place of the time: bouncing dots while sending, a check once sent and a green double check once YCoding has read it." },
+      { tag: "Added", text: "The HTTP API and the browser relay remove a queued input with `session.pending.remove` and promote it to a steer with `session.pending.steer`." },
+      { tag: "Changed", text: "The interaction accent is green again across Web and Desktop, at the same contrast as the blue it replaces." },
+      { tag: "Changed", text: "The composer keeps a fixed height while you type or paste, so the screen no longer flickers or reflows, and it sits at the bottom of the window with no status strip below it." },
+      { tag: "Changed", text: "The bottom status bar is gone. A Hide session list button in the conversation header collapses the Session list to a full-width conversation and remembers the choice." },
+      { tag: "Changed", text: "The model picker opens as a tall, scrollable list across providers." },
+      { tag: "Changed", text: "Prompts steered through Dots carry a small ChatGPT badge on the message instead of a \"Dot steer\" label." },
+      { tag: "Fixed", text: "Pasted or attached screenshots show real thumbnails in the composer tray and in the sent message." },
+      { tag: "Fixed", text: "A disabled composer keeps its normal field styling while a message sends." },
+      { tag: "Fixed", text: "Slash-command suggestions stay open after typing a namespace such as `/ui:`." },
+      { tag: "Fixed", text: "The Session list and rail items respond to the first click, and rail items stay legible on hover in both themes." },
+      { tag: "Fixed", text: "The pending list no longer shows raw internal rows." },
+    ],
+  },
+  {
     version: "0.12.1",
     date: "2026-11-20",
     title: "Instrument redesign for Web and Desktop",

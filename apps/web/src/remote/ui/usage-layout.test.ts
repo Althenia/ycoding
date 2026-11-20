@@ -233,7 +233,7 @@ test("data values, meters, bars and status marks use neutral ink; green is limit
   const speed = await Bun.file(new URL("./usage-speed.css", import.meta.url)).text()
   const incidents = await Bun.file(new URL("./model-incidents.css", import.meta.url)).text()
   const filters = await Bun.file(new URL("./usage-filters.css", import.meta.url)).text()
-  for (const sheet of [css, speed, incidents, filters]) expect(sheet).not.toMatch(/(?:^|[;{\s])(?:color|fill|stroke|border-color):\s*var\(--yc-cobalt-ink\)/m)
+  for (const sheet of [css, speed, incidents, filters]) expect(sheet).not.toMatch(/(?:^|[;{\s])(?:color|fill|stroke|border-color):\s*var\(--yc-green-ink\)/m)
   expect(rule(".usage-chart__bar--today")).toContain("fill: var(--yc-ink)")
   expect(rule(".usage-table__cost")).toContain("color: var(--yc-ink)")
   expect(rule(".usage-status")).toContain("background: var(--yc-ink-secondary)")

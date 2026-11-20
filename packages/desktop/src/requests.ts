@@ -19,6 +19,16 @@ export function session(value: unknown) {
   return value
 }
 
+export function pendingAction(value: unknown) {
+  if (!record(value) || Object.keys(value).some((key) => key !== "sessionID" && key !== "messageID") || typeof value.messageID !== "string" || !/^msg_[A-Za-z0-9_-]{1,124}$/.test(value.messageID)) throw new DesktopError("Choose a pending message.")
+  return { sessionID: session(value.sessionID), messageID: value.messageID }
+}
+
+export function attachmentRead(value: unknown) {
+  if (!record(value) || Object.keys(value).some((key) => key !== "sessionID" && key !== "digest") || typeof value.digest !== "string" || !/^[0-9a-f]{64}$/.test(value.digest)) throw new DesktopError("Choose an attachment.")
+  return { sessionID: session(value.sessionID), digest: value.digest }
+}
+
 const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value)
 const decision = (value: unknown): value is "manual" | "auto" | "yolo" => value === "manual" || value === "auto" || value === "yolo"
 export function setAutonomyInput(value: unknown): SetAutonomyInput {

@@ -3493,6 +3493,100 @@ test("renders admitted prompts immediately and tracks them until promoted", asyn
   }
 })
 
+async function pendingControlFixture(sessionID: string) {
+  const events = createEventStream()
+  const calls = createFetch((url) => {
+    if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [])
+  }, events)
+  let sync!: ReturnType<typeof useData>
+  let ready!: () => void
+  const mounted = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+
+  function Probe() {
+    sync = useData()
+    onMount(ready)
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+  await mounted
+  await sync.session.message.sync(sessionID)
+  const admit = (inputID: string, delivery: "steer" | "queue", seq: number) =>
+    emitEvent(events, {
+      id: `evt_admitted_${inputID}`,
+      created: seq,
+      type: "session.input.admitted",
+      durable: durable(sessionID, seq),
+      data: { sessionID, inputID, input: { type: "user", data: { text: inputID }, delivery } },
+    })
+  return { app, events, sync, admit }
+}
+
+test("a withdrawn pending input leaves the pending list, input tracking and transcript", async () => {
+  const sessionID = "session-withdrawn"
+  const { app, events, sync, admit } = await pendingControlFixture(sessionID)
+  try {
+    admit("msg_withdrawn", "queue", 0)
+    admit("msg_kept", "queue", 1)
+    await wait(() => sync.session.pending.list(sessionID).length === 2)
+
+    emitEvent(events, {
+      id: "evt_withdrawn",
+      created: 2,
+      type: "session.input.withdrawn",
+      durable: durable(sessionID, 2),
+      data: { sessionID, inputID: "msg_withdrawn" },
+    })
+
+    await wait(() => sync.session.pending.list(sessionID).length === 1)
+    expect(sync.session.pending.list(sessionID).map((item) => item.id)).toEqual(["msg_kept"])
+    expect(sync.session.input.list(sessionID)).toEqual(["msg_kept"])
+    expect(sync.session.message.list(sessionID).map((message) => message.id)).toEqual(["msg_kept"])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a steered pending input stays pending and becomes a steer", async () => {
+  const sessionID = "session-steered"
+  const { app, events, sync, admit } = await pendingControlFixture(sessionID)
+  try {
+    admit("msg_queued", "queue", 0)
+    admit("msg_other", "queue", 1)
+    await wait(() => sync.session.pending.list(sessionID).length === 2)
+
+    emitEvent(events, {
+      id: "evt_steered",
+      created: 2,
+      type: "session.input.steered",
+      durable: durable(sessionID, 2),
+      data: { sessionID, inputID: "msg_queued" },
+    })
+
+    await wait(() => sync.session.pending.list(sessionID).find((item) => item.id === "msg_queued")?.delivery === "steer")
+    expect(sync.session.pending.list(sessionID).map((item) => [item.id, item.delivery])).toEqual([
+      ["msg_queued", "steer"],
+      ["msg_other", "queue"],
+    ])
+    expect(sync.session.input.list(sessionID)).toEqual(["msg_queued", "msg_other"])
+    expect(sync.session.message.list(sessionID).map((message) => message.id)).toEqual(["msg_queued", "msg_other"])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("does not remove a resident promoted user message when canonical projection is stale", async () => {
   const events = createEventStream()
   const sessionID = "session-race"

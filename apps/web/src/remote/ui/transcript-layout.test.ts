@@ -22,7 +22,7 @@ test("a user prompt is a borderless mint capsule that stays right aligned and ke
   expect(bubble.border).toBe("0")
   expect(bubble["border-inline-end"]).toBeUndefined()
   expect(bubble["border-radius"]).toBe("var(--yc-radius-composer) var(--yc-radius-composer) var(--yc-radius-control) var(--yc-radius-composer)")
-  expect(bubble.background).toBe("var(--yc-cobalt-tonal)")
+  expect(bubble.background).toBe("var(--yc-green-tonal)")
   expect(bubble.color).toBe("var(--yc-ink)")
   expect(bubble.padding).toBe("var(--yc-space-3) var(--yc-space-4)")
   expect(rulesFor(sheet, ".transcript-file")).toMatchObject({ "border-radius": "var(--yc-radius-control)", font: "var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono)" })

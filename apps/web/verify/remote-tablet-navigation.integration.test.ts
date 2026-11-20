@@ -34,15 +34,15 @@ describe("tablet remote navigation", () => {
       const url = `http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-1440`
       await page.navigate(url)
       for (let attempt = 0; attempt < 40 && !await page.evaluate(`document.querySelector('.workspace__rail') !== null`); attempt += 1) await Bun.sleep(50)
-      const collapse = `.workspace__rail .session-panel__collapse`
-      const expand = `.workspace__rail-expand`
+      const collapse = `.workspace__topbar .session-list-toggle`
+      const expand = `.workspace__topbar .session-list-toggle`
       expect(await page.evaluate(`document.querySelector('.app-header .app-header__menu') === null || getComputedStyle(document.querySelector('.app-header .app-header__menu')).display === 'none'`)).toBe(true)
-      expect(await page.evaluate(`(() => { const button = document.querySelector(${JSON.stringify(collapse)}); return { label: button?.getAttribute('aria-label') ?? null, expanded: button?.getAttribute('aria-expanded') ?? null }; })()`)).toEqual({ label: "Hide workspace sidebar", expanded: "true" })
+      expect(await page.evaluate(`(() => { const button = document.querySelector(${JSON.stringify(collapse)}); return { label: button?.getAttribute('aria-label') ?? null, expanded: button?.getAttribute('aria-expanded') ?? null }; })()`)).toEqual({ label: "Hide session list", expanded: "true" })
       expect(await page.evaluate(`document.querySelector(${JSON.stringify(collapse)})?.getBoundingClientRect().width >= 44 && document.querySelector(${JSON.stringify(collapse)})?.getBoundingClientRect().height >= 44`)).toBe(true)
-      await page.evaluate(`document.querySelector(${JSON.stringify(collapse)})?.click()`)
-      for (let attempt = 0; attempt < 30 && !await page.evaluate(`document.querySelector('.workspace__rail').getBoundingClientRect().width <= 72`); attempt += 1) await Bun.sleep(20)
-      expect(await page.evaluate(`document.querySelector('.workspace__rail').getBoundingClientRect().width <= 72 && document.querySelector('.workspace__rail-body').getClientRects().length === 0 && document.querySelector('.workspace__main').getBoundingClientRect().width > innerWidth * .85`)).toBe(true)
-      expect(await page.evaluate(`(() => { const button = document.querySelector(${JSON.stringify(expand)}); return { label: button?.getAttribute('aria-label') ?? null, expanded: button?.getAttribute('aria-expanded') ?? null, focused: button !== null && document.activeElement === button }; })()`)).toEqual({ label: "Show workspace sidebar", expanded: "false", focused: true })
+      await page.evaluate(`document.querySelector(${JSON.stringify(collapse)})?.focus(); document.querySelector(${JSON.stringify(collapse)})?.click()`)
+      for (let attempt = 0; attempt < 30 && !await page.evaluate(`document.querySelector('.workspace__rail').getBoundingClientRect().width === 0`); attempt += 1) await Bun.sleep(20)
+      expect(await page.evaluate(`document.querySelector('.workspace__rail').getBoundingClientRect().width === 0 && document.querySelector('.workspace__rail-body').getClientRects().length === 0 && document.querySelector('.workspace__main').getBoundingClientRect().width > innerWidth * .85`)).toBe(true)
+      expect(await page.evaluate(`(() => { const button = document.querySelector(${JSON.stringify(expand)}); return { label: button?.getAttribute('aria-label') ?? null, expanded: button?.getAttribute('aria-expanded') ?? null, focused: button !== null && document.activeElement === button }; })()`)).toEqual({ label: "Show session list", expanded: "false", focused: true })
       expect(await page.evaluate(`[...document.querySelectorAll(".activity-bar a")].filter(link => link.getBoundingClientRect().width >= 44 && link.getBoundingClientRect().height >= parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-control-h-dense'))).map(link => new URL(link.href).pathname)`)).toEqual(["/remote/session", "/remote/sessions", "/remote/projects", "/remote/workspaces", "/remote/usage", "/remote/settings"])
       expect(await page.evaluate(`parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-control-h-dense')) >= 36`)).toBe(true)
       expect(await page.evaluate(`(() => {
@@ -50,7 +50,7 @@ describe("tablet remote navigation", () => {
         const active = getComputedStyle(document.querySelector('.activity-bar__item[aria-current="page"]'));
         const root = getComputedStyle(document.documentElement);
         const probe = document.createElement('span'); document.body.append(probe);
-        probe.style.background = root.getPropertyValue('--yc-cobalt-tonal');
+        probe.style.background = root.getPropertyValue('--yc-green-tonal');
         const fill = getComputedStyle(probe).backgroundColor; probe.remove();
         return rail.borderInlineEndWidth === '0px' && active.backgroundColor === fill && active.boxShadow === 'none' && parseFloat(active.borderRadius) > 44;
       })()`)).toBe(true)
@@ -97,14 +97,14 @@ describe("tablet remote navigation", () => {
 
       for (const width of [768, 1024] as const) {
         await page.setViewport(width, 900)
-        expect(await page.evaluate(`document.querySelector(".workspace__rail .session-panel__collapse")?.getAttribute("aria-label") ?? ""`)).toBe("Hide workspace sidebar")
-        await page.evaluate(`document.querySelector(".workspace__rail .session-panel__collapse")?.click()`)
-        for (let attempt = 0; attempt < 30 && !await page.evaluate(`document.querySelector('.workspace__rail').getBoundingClientRect().width <= 72`); attempt += 1) await Bun.sleep(20)
-        expect(await page.evaluate(`document.querySelector('.workspace__rail').getBoundingClientRect().width <= 72 && document.querySelector('.workspace__rail-body').getClientRects().length === 0 && document.querySelector('.workspace__rail-expand')?.getAttribute('aria-label') === 'Show workspace sidebar'`)).toBe(true)
+        expect(await page.evaluate(`document.querySelector(".workspace__topbar .session-list-toggle")?.getAttribute("aria-label") ?? ""`)).toBe("Hide session list")
+        await page.evaluate(`document.querySelector(".workspace__topbar .session-list-toggle")?.click()`)
+        for (let attempt = 0; attempt < 30 && !await page.evaluate(`document.querySelector('.workspace__rail').getBoundingClientRect().width === 0`); attempt += 1) await Bun.sleep(20)
+        expect(await page.evaluate(`document.querySelector('.workspace__rail').getBoundingClientRect().width === 0 && document.querySelector('.workspace__rail-body').getClientRects().length === 0 && document.querySelector('.workspace__topbar .session-list-toggle')?.getAttribute('aria-label') === 'Show session list'`)).toBe(true)
         expect(await page.evaluate(`document.querySelector(".conversation-breadcrumb strong")?.textContent?.trim() ?? ""`)).toBe("Token expiry refactor")
         expect(await page.evaluate(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
 
-        await page.evaluate(`document.querySelector(".workspace__rail-expand")?.click()`)
+        await page.evaluate(`document.querySelector(".workspace__topbar .session-list-toggle")?.click()`)
         for (let attempt = 0; attempt < 30 && !await page.evaluate(`document.querySelector('.workspace__rail').getBoundingClientRect().width >= 220`); attempt += 1) await Bun.sleep(20)
         expect(await page.evaluate(`document.querySelector('.workspace__rail').getBoundingClientRect().width >= 220 && document.querySelector('.workspace__rail-body').getClientRects().length > 0`)).toBe(true)
       }

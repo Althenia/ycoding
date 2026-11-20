@@ -79,7 +79,7 @@ describe("responsive contract", () => {
     expect(base(base_, ".status-strip")["border-radius"]).toBe("var(--yc-radius-card)")
     expect(base(base_, ".app-header")["border-block-end"]).toBeUndefined()
     expect(frameless(site, ".feature").background).toBe("transparent")
-    expect(frameless(site, ".feature__icon")).toMatchObject({ background: "var(--yc-cobalt-tonal)", color: "var(--yc-cobalt-ink)" })
+    expect(frameless(site, ".feature__icon")).toMatchObject({ background: "var(--yc-green-tonal)", color: "var(--yc-green-ink)" })
     expect(frameless(site, ".trust__item").background).toBe("var(--yc-plane-raised)")
     expect(base(site, ".callout-bar").border).toBeUndefined()
     expect(frameless(docs, ".releases--timeline .release").background).toBe("transparent")

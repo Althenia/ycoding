@@ -444,6 +444,26 @@ export const InputAdmitted = Event.durable({
 })
 export type InputAdmitted = typeof InputAdmitted.Type
 
+export const InputWithdrawn = Event.durable({
+  type: "session.input.withdrawn",
+  ...options,
+  schema: {
+    sessionID: SessionID,
+    inputID: SessionMessage.ID,
+  },
+})
+export type InputWithdrawn = typeof InputWithdrawn.Type
+
+export const InputSteered = Event.durable({
+  type: "session.input.steered",
+  ...options,
+  schema: {
+    sessionID: SessionID,
+    inputID: SessionMessage.ID,
+  },
+})
+export type InputSteered = typeof InputSteered.Type
+
 export const InputConsumed = Event.durable({
   type: "session.input.consumed",
   ...options,
@@ -1077,6 +1097,8 @@ export const Definitions = Event.inventory(
   Forked,
   InputPromoted,
   InputAdmitted,
+  InputWithdrawn,
+  InputSteered,
   InputConsumed,
   DotsExchangeCreated,
   Dots.BindingBound,

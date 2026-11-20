@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { RemoteLimits } from "@ycoding-ai/remote"
-import { encodeAttachment, attachmentLimit, attachmentCapacitySummary } from "./composer-attachment"
+import { encodeAttachment, attachmentLimit, attachmentCapacitySummary, attachmentIsImage, attachmentMime } from "./composer-attachment"
 
 test("summarizes attachment capacity", () => {
   expect(attachmentCapacitySummary([{ size: RemoteLimits.maxAttachmentBytes }, { size: RemoteLimits.maxAttachmentBytes }])).toBe("2/64 files · 40 MiB / 40 MiB · 20 MiB per-file limit")
@@ -20,4 +20,16 @@ test("bounds each file and aggregate decoded bytes before reading or sending", a
   expect(attachmentLimit([{ size: 1, name: "x".repeat(257) }])).toContain("256")
   const text = new File(["hello"], "readme.txt", { type: "text/plain" })
   expect(await encodeAttachment(text)).toMatchObject({ uri: `data:${text.type};base64,aGVsbG8=` })
+})
+
+test("a pasted screenshot without a reported type is still sent and previewed as an image", async () => {
+  const file = new File([new Uint8Array([137, 80, 78, 71])], "image.png", { type: "" })
+  expect(await encodeAttachment(file)).toMatchObject({ name: "image.png", mime: "image/png", uri: expect.stringMatching(/^data:image\/png;base64,/) })
+  expect(attachmentMime("shot.JPG", "application/octet-stream")).toBe("image/jpeg")
+  expect(attachmentMime("clip.webp", "")).toBe("image/webp")
+  expect(attachmentMime("notes.txt", "")).toBe("application/octet-stream")
+  expect(attachmentMime("image.png", "image/avif")).toBe("image/avif")
+  expect(attachmentIsImage({ name: "a.gif", mime: "application/octet-stream" })).toBe(true)
+  expect(attachmentIsImage({ name: "a.pdf", mime: "application/pdf" })).toBe(false)
+  expect(attachmentIsImage({ name: "photo", mime: "image/heic" })).toBe(true)
 })

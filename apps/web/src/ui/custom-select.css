@@ -96,11 +96,11 @@
 
 .custom-select__option--active {
   background: var(--yc-plane-hover);
-  box-shadow: inset 2px 0 var(--yc-cobalt-ink);
+  box-shadow: inset 2px 0 var(--yc-green-ink);
 }
 
 .custom-select__check {
-  color: var(--yc-cobalt-ink);
+  color: var(--yc-green-ink);
   font-weight: var(--yc-weight-bold);
 }
 
@@ -225,7 +225,7 @@
   }
 
   .custom-select__option[aria-selected="true"] {
-    background: var(--yc-cobalt-tonal);
+    background: var(--yc-green-tonal);
   }
 
   .custom-select__confirm-footer {

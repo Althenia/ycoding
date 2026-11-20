@@ -886,6 +886,26 @@ test("session.pending.list uses the public HTTP contract", async () => {
   expect(requests).toEqual([{ method: "GET", url: "http://localhost:3000/api/session/ses_test/pending" }])
 })
 
+test("session.pending.remove and session.pending.steer use the public HTTP contract", async () => {
+  const requests: Array<{ method: string; url: string }> = []
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push({ method: request.method, url: request.url })
+      return new Response(null, { status: 204 })
+    },
+  })
+
+  expect(await client.session.pending.remove({ sessionID: "ses_test", messageID: "msg_pending" })).toBeUndefined()
+  expect(await client.session.pending.steer({ sessionID: "ses_test", messageID: "msg_pending" })).toBeUndefined()
+
+  expect(requests).toEqual([
+    { method: "DELETE", url: "http://localhost:3000/api/session/ses_test/pending/msg_pending" },
+    { method: "POST", url: "http://localhost:3000/api/session/ses_test/pending/msg_pending/steer" },
+  ])
+})
+
 test("session todo methods use the public HTTP contract", async () => {
   const requests: Array<{ method: string; url: string; body?: unknown }> = []
   const todos = [{ content: "Run tests", status: "in_progress" as const, priority: "high" as const }]

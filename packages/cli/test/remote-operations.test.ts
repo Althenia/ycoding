@@ -1906,8 +1906,9 @@ describe("operation mapping", () => {
       ["session.autonomy.set", { permissions: "yolo" }], ["session.autonomy.set", { guardrails: "auto" }], ["session.autonomy.set", { defer: true }],
       ["session.autonomy.set", { answers: "manual" }],
       ["session.goal.set", { goal: "Write code" }], ["session.goal.stop", { goal: null }],
+      ["session.pending.remove", { messageID: "msg_1" }], ["session.pending.steer", { messageID: "msg_1" }],
     ] as const) expect(errorOf(await send(operation, fields)).code).toBe("subagent_read_only")
-    expect(test.calls.some((call) => ["prompt", "command", "compact", "skill", "switchModel", "switchAgent", "autonomySet"].includes(call.method))).toBe(false)
+    expect(test.calls.some((call) => ["prompt", "command", "compact", "skill", "switchModel", "switchAgent", "autonomySet", "pendingRemove", "pendingSteer"].includes(call.method))).toBe(false)
     expect(valueOf(await send("session.get"))).toMatchObject({ data: { id: "ses_child" } })
     expect(valueOf(await send("session.interrupt"))).toBeNull()
     expect(valueOf(await send("session.prompt", { text: "Side chat" }, "ses_btw"))).toEqual({ data: { id: "msg_1" } })
@@ -1977,6 +1978,43 @@ describe("operation mapping", () => {
     expect(output).toMatchObject({ data: [{ sessionID: "ses_root", executing: false }, { sessionID: "ses_child", activity: { text: "Searching" } }] })
     expect(JSON.stringify(output)).not.toContain("sensitive-value")
   })
+  test("pending input controls call the local server for the verified Session and report a gone input as not_found", async () => {
+    const { local, registry, subscriptions, calls } = await harness({
+      results: { pendingRemove: async () => undefined, pendingSteer: async () => undefined },
+    })
+    const send = (operation: RemoteRequest["operation"], fields?: Readonly<Record<string, unknown>>) =>
+      executeRemoteOperation({ request: request(operation, fields), sessions: registry, subscriptions, local })
+
+    expect(valueOf(await send("session.pending.remove", { messageID: "msg_1" }))).toBeNull()
+    expect(calls.at(-1)).toEqual({ method: "pendingRemove", args: ["ses_1", { directory: "/work" }, "msg_1"] })
+    expect(valueOf(await send("session.pending.steer", { messageID: "msg_2" }))).toBeNull()
+    expect(calls.at(-1)).toEqual({ method: "pendingSteer", args: ["ses_1", { directory: "/work" }, "msg_2"] })
+
+    calls.length = 0
+    for (const fields of [undefined, {}, { messageID: "ses_1" }, { messageID: "msg_1", delivery: "steer" }])
+      expect(errorOf(await send("session.pending.remove", fields)).code).toBe("invalid_message")
+    expect(calls.some((call) => call.method === "pendingRemove")).toBe(false)
+
+    const gone = new LocalFailureClass("not_found", "gone", { cause: { _tag: "PendingInputNotFoundError" } })
+    const missing = await harness({ results: { pendingSteer: gone } })
+    const outcome = await executeRemoteOperation({
+      request: request("session.pending.steer", { messageID: "msg_3" }),
+      sessions: missing.registry,
+      subscriptions: missing.subscriptions,
+      local: missing.local,
+    })
+    expect(errorOf(outcome).code).toBe("not_found")
+
+    const foreign = await executeRemoteOperation({
+      request: { ...request("session.pending.remove", { messageID: "msg_1" }), sessionID: "ses_foreign" },
+      sessions: registry,
+      subscriptions,
+      local,
+    })
+    expect(errorOf(foreign).code).toBe("session_not_allowed")
+    expect(calls.some((call) => call.method === "pendingRemove")).toBe(false)
+  })
+
   test("maps each mutation onto its exact Protocol call and payload", async () => {
     const { local, registry, subscriptions, calls } = await harness({
       results: {
