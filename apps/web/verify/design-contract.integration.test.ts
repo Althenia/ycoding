@@ -79,8 +79,8 @@ describe("web design contract inventory", () => {
       for (let attempt = 0; attempt < 50 && !await page.evaluate(`document.documentElement.dataset.theme === ${JSON.stringify(scenario.theme)} && (document.querySelector('.app') !== null || document.querySelector('main.sign-in') !== null)`); attempt += 1) await Bun.sleep(50)
       const state = await page.evaluate(`(() => ({
         theme: document.documentElement.dataset.theme ?? "",
-        background: getComputedStyle(document.documentElement).getPropertyValue("--yc-bg").trim(),
-        ink: getComputedStyle(document.documentElement).getPropertyValue("--yc-text").trim(),
+        background: getComputedStyle(document.documentElement).getPropertyValue("--yc-plane-canvas").trim(),
+        ink: getComputedStyle(document.documentElement).getPropertyValue("--yc-ink").trim(),
         overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
         path: document.querySelector(".app")?.className ?? "",
         pathname: location.pathname,
@@ -98,8 +98,8 @@ describe("web design contract inventory", () => {
       if (!state.signIn) expect(state.path).toContain(`app--${scenario.view === "chat" ? scenario.noSelection ? "conversation" : "selected" : scenario.view}`)
       if (!state.signIn && scenario.view === "chat" && !scenario.noSelection) expect({ sessionID: state.sessionID, deviceID: state.deviceID }).toEqual({ sessionID: "ses_fixture", deviceID: "dev_studio" })
       if (!state.signIn) {
-        const current = scenario.view === "usage" ? "Usage" : scenario.view === "settings" ? "Settings" : scenario.view === "projects" ? "Projects" : scenario.view === "workspaces" ? "Workspaces" : "Sessions"
-        expect(await page.evaluate(`[...document.querySelectorAll('.remote-nav a[aria-current="page"], .bottom-nav a[aria-current="page"]')].filter(link => getComputedStyle(link).display !== "none" && link.getBoundingClientRect().width > 0).map(link => link.textContent?.trim() ?? "")`)).toEqual([current])
+        const current = scenario.view === "usage" ? "Usage" : scenario.view === "settings" ? "Settings" : scenario.view === "projects" ? "Projects" : scenario.view === "workspaces" ? "Workspaces" : scenario.view === "chat" && scenario.viewport >= 768 ? "Chat" : "Sessions"
+        expect(await page.evaluate(`[...document.querySelectorAll('.activity-bar a[aria-current="page"], .bottom-nav a[aria-current="page"]')].filter(link => getComputedStyle(link).display !== "none" && link.getBoundingClientRect().width > 0).map(link => (link.querySelector(".activity-bar__label, .bottom-nav__label") ?? link).textContent?.trim() ?? "")`)).toEqual([current])
       }
       const settled = `${JSON.stringify(scenario.expectedText)}.every((text) => document.body.innerText.includes(text))`
       for (let attempt = 0; attempt < 50 && !(await page.evaluate(settled)); attempt += 1) await Bun.sleep(100)
@@ -132,8 +132,8 @@ describe("web design contract inventory", () => {
           const box = (element) => { const rect = element.getBoundingClientRect(); return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom } }
           return {
             theme: document.documentElement.dataset.theme ?? "",
-            background: getComputedStyle(document.documentElement).getPropertyValue("--yc-bg").trim(),
-            ink: getComputedStyle(document.documentElement).getPropertyValue("--yc-text").trim(),
+            background: getComputedStyle(document.documentElement).getPropertyValue("--yc-plane-canvas").trim(),
+            ink: getComputedStyle(document.documentElement).getPropertyValue("--yc-ink").trim(),
             overflow: document.documentElement.scrollWidth > innerWidth,
             content: box(content),
             footer: box(footerContent),
@@ -252,6 +252,66 @@ describe("web design contract inventory", () => {
     await page.close()
   }, 60_000)
 
+  test("renders Instrument plane steps, 3:1 pane separators and a running trace that stops under reduced motion", async () => {
+    const page = await requireBrowser().openPage()
+    const measure = `(() => {
+      const lum = (value) => value.match(/[\\d.]+/g).slice(0, 3).map(Number).map((c) => c / 255).map((c) => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4).reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0)
+      const ratio = (a, b) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05) }
+      const rail = getComputedStyle(document.querySelector('.workspace__rail'))
+      const canvas = getComputedStyle(document.querySelector('.workspace__topbar')).backgroundColor
+      const raised = getComputedStyle(document.querySelector('.composer-resident .composer__row') ?? document.querySelector('.composer__row')).backgroundColor
+      const edge = rail.boxShadow.match(/rgba?\\([^)]*\\)/)[0]
+      const box = (selector) => document.querySelector(selector).getBoundingClientRect()
+      return { canvasToRaised: ratio(canvas, raised), chromeToRaised: ratio(rail.backgroundColor, raised), edgeOnChrome: ratio(edge, rail.backgroundColor), edgeOnCanvas: ratio(edge, canvas), edgeOnRaised: ratio(edge, raised), headerTraceOffset: box('.workspace__topbar .trace').bottom - box('.workspace__topbar').bottom, statusTraceOffset: box('.status-bar .trace').top - box('.status-bar').top }
+    })()`
+    const animations = `document.getAnimations().filter((animation) => animation.playState === 'running').map((animation) => {
+      const timing = animation.effect.getComputedTiming()
+      const frames = animation.effect.getKeyframes()
+      return { name: animation.animationName ?? animation.transitionProperty ?? '', loop: timing.iterations === Infinity, duration: Number(timing.duration) || 0, travel: frames.some((frame) => (frame.transform && frame.transform !== 'none') || (frame.translate && frame.translate !== 'none')) }
+    })`
+    const decodeAnimations = decodeArray((value: unknown) => { const record = decodeRecord(value); return { name: decodeString(record["name"]), loop: decodeBoolean(record["loop"]), duration: decodeNumber(record["duration"]), travel: decodeBoolean(record["travel"]) } })
+    try {
+      for (const theme of ["light", "dark"] as const) {
+        for (const reduced of [false, true]) {
+          await page.setViewport(1440, 900)
+          await page.setColorScheme(theme)
+          await page.setReducedMotion(reduced)
+          await page.navigate(url(`/verify/remote.html?scenario=conversation-tool-terminal-output-1440&theme=${theme}`))
+          for (let attempt = 0; attempt < 100 && !await page.evaluate(`document.body.innerText.includes('Test Suite Execution Output')`); attempt += 1) await Bun.sleep(50)
+          await page.evaluate(`[...document.querySelectorAll('.fixture__controls button')].find((button) => button.textContent.trim() === 'Simulate streaming step').click()`)
+          for (let attempt = 0; attempt < 100 && !await page.evaluate(`document.querySelector('.status-bar .trace[data-run="true"]') !== null && document.querySelector('.workspace__topbar .trace[data-run="true"]') !== null`); attempt += 1) await Bun.sleep(50)
+          await Bun.sleep(400)
+          const planes = await page.evaluate(measure, (value: unknown) => { const record = decodeRecord(value); return { canvasToRaised: decodeNumber(record["canvasToRaised"]), chromeToRaised: decodeNumber(record["chromeToRaised"]), edgeOnChrome: decodeNumber(record["edgeOnChrome"]), edgeOnCanvas: decodeNumber(record["edgeOnCanvas"]), edgeOnRaised: decodeNumber(record["edgeOnRaised"]), headerTraceOffset: decodeNumber(record["headerTraceOffset"]), statusTraceOffset: decodeNumber(record["statusTraceOffset"]) } })
+          if (theme === "light") {
+            expect(planes.canvasToRaised, theme).toBeGreaterThanOrEqual(1.15)
+            expect(planes.chromeToRaised, theme).toBeGreaterThanOrEqual(1.1)
+          }
+          for (const key of ["edgeOnChrome", "edgeOnCanvas", "edgeOnRaised"] as const) expect(planes[key], `${theme} ${key}`).toBeGreaterThanOrEqual(3)
+          expect(Math.abs(planes.headerTraceOffset), `${theme} header trace on the bottom boundary`).toBeLessThanOrEqual(2)
+          expect(Math.abs(planes.statusTraceOffset), `${theme} status trace on the top edge`).toBeLessThanOrEqual(2)
+          const running = await page.evaluate(animations, decodeAnimations)
+          if (!reduced) {
+            expect(running.filter((animation) => animation.name === "trace-run" && animation.loop).length, theme).toBeGreaterThanOrEqual(2)
+            continue
+          }
+          expect(running.filter((animation) => animation.loop || animation.travel), `${theme} reduced`).toEqual([])
+          expect(running.filter((animation) => animation.duration > 150), `${theme} reduced`).toEqual([])
+          const exit = await page.evaluate(`new Promise((resolve) => {
+            const start = performance.now()
+            document.querySelector('.activity-bar a[data-destination="sessions"]').click()
+            const check = () => !document.querySelector('.route-panel--exiting') && location.pathname === '/remote/sessions' ? resolve(performance.now() - start) : performance.now() - start > 2000 ? resolve(-1) : requestAnimationFrame(check)
+            check()
+          })`, decodeNumber)
+          expect(exit, `${theme} reduced exit`).toBeGreaterThanOrEqual(0)
+          expect(exit, `${theme} reduced exit`).toBeLessThan(140)
+        }
+      }
+    } finally {
+      await page.setReducedMotion(false)
+      await page.close()
+    }
+  }, 60_000)
+
   test("keeps the handoff viewport matrix usable on public and remote surfaces", async () => {
     const page = await requireBrowser().openPage()
     for (const [width, height] of [[320, 568], [360, 740], [430, 932], [1024, 1366], [1280, 800], [1920, 1080]] as const) {
@@ -263,11 +323,11 @@ describe("web design contract inventory", () => {
           const layout = await page.evaluate(`(() => {
             document.documentElement.dataset.theme = ${JSON.stringify(theme)}
             const visible = (element) => element instanceof HTMLElement && getComputedStyle(element).visibility !== 'hidden' && getComputedStyle(element).display !== 'none' && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0
-            const controls = [...document.querySelectorAll('.app-header button, .app-header a, .remote-nav a, .bottom-nav a, .site-header button, .site-header a')].filter(visible)
+            const controls = [...document.querySelectorAll('.app-header button, .app-header a, .activity-bar a, .bottom-nav a, .site-header button, .site-header a')].filter(visible)
             return {
               overflow: document.documentElement.scrollWidth > innerWidth,
               escaped: controls.filter(element => { const box = element.getBoundingClientRect(); return box.left < -1 || box.right > innerWidth + 1 }).map(element => element.getAttribute('aria-label') ?? element.textContent?.trim() ?? element.tagName),
-              undersizedTabs: [...document.querySelectorAll('.remote-nav a')].filter(visible).filter(element => { const box = element.getBoundingClientRect(); return box.width < 44 || box.height < 44 }).map(element => element.textContent?.trim() ?? ''),
+              undersizedTabs: [...document.querySelectorAll('.activity-bar a')].filter(visible).filter(element => { const box = element.getBoundingClientRect(); return box.width < 44 || box.height < 44 }).map(element => element.textContent?.trim() ?? ''),
               composer: visible(document.querySelector('.composer')),
             }
           })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, overflow: (decodeBoolean)(record["overflow"]), escaped: (decodeArray(decodeString))(record["escaped"]), undersizedTabs: (decodeArray(decodeString))(record["undersizedTabs"]), composer: (decodeBoolean)(record["composer"]) } })

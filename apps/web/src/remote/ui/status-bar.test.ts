@@ -37,7 +37,7 @@ test("status chips and the autonomy and goal controls wrap at every width instea
 
 test("the autonomy icon stays visible at every width and the phone control keeps one word and a 44px target", () => {
   expect(baseRule(".session-status__autonomous-word")).toMatchObject({ display: "none" })
-  expect(baseRule(".session-status__autonomous-icon")).toMatchObject({ display: "inline-flex", color: "var(--yc-green-strong)" })
+  expect(baseRule(".session-status__autonomous-icon")).toMatchObject({ display: "inline-flex", color: "var(--yc-cobalt-ink)" })
   expect(phoneRule(".session-status__autonomous-word")).toMatchObject({ display: "inline" })
   expect(phoneRule(".session-status__autonomous-icon")).toMatchObject({ display: "block" })
   expect(phoneRule(".session-status__autonomous-full")).toMatchObject({ display: "none" })
@@ -100,7 +100,7 @@ test("the Autonomous and Goal controls are pills without an inline-start bar or 
 })
 
 test("the Autonomous control keeps a neutral pill and an active or setting Goal uses the amber goal accent", () => {
-  expect(baseRule(".session-status__autonomous-trigger,.session-status__goal-trigger")).toMatchObject({ background: "var(--yc-surface-sunken)", color: "var(--yc-text)" })
-  expect(baseRule(".session-status__goal-trigger--active")).toMatchObject({ background: "var(--yc-surface-sunken)", color: "var(--yc-yellow-strong)" })
+  expect(baseRule(".session-status__autonomous-trigger,.session-status__goal-trigger")).toMatchObject({ background: "var(--yc-plane-hover)", color: "var(--yc-ink)" })
+  expect(baseRule(".session-status__goal-trigger--active")).toMatchObject({ background: "var(--yc-plane-hover)", color: "var(--yc-amber-ink)" })
   expect(baseRule(":is(.session-status__goal-popover,.session-status__goal-sheet) button")).toBeDefined()
 })

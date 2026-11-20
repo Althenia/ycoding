@@ -11,7 +11,7 @@ test("selected Session prose fills the same track as tools while user bubbles st
   expect(declarationsWhere(sheet, (rule) => rule.header.includes(".transcript-message--user") && rule.conditions.some((condition) => condition.includes("max-width:767px")))["max-inline-size"]).toBe("90%")
   const receipt = declarationsWhere(sheet, (rule) => rule.header === ".transcript-message__receipt")
   expect(receipt.animation).toBeUndefined()
-  expect(receipt.color).toBe("var(--yc-text-muted)")
+  expect(receipt.color).toBe("var(--yc-ink-secondary)")
 })
 
 const rulesFor = (sheet: ReturnType<typeof parseStylesheet>, header: string) => declarationsWhere(sheet, (rule) => rule.header === header && rule.conditions.length === 0)
@@ -21,23 +21,23 @@ test("a user prompt is a borderless mint capsule that stays right aligned and ke
   const bubble = rulesFor(sheet, ".transcript-message__bubble")
   expect(bubble.border).toBe("0")
   expect(bubble["border-inline-end"]).toBeUndefined()
-  expect(bubble["border-radius"]).toBe("var(--yc-radius-xl) var(--yc-radius-xl) var(--yc-radius-sm) var(--yc-radius-xl)")
-  expect(bubble.background).toBe("var(--yc-green-soft)")
-  expect(bubble.color).toBe("var(--yc-text)")
+  expect(bubble["border-radius"]).toBe("var(--yc-radius-composer) var(--yc-radius-composer) var(--yc-radius-control) var(--yc-radius-composer)")
+  expect(bubble.background).toBe("var(--yc-cobalt-tonal)")
+  expect(bubble.color).toBe("var(--yc-ink)")
   expect(bubble.padding).toBe("var(--yc-space-3) var(--yc-space-4)")
-  expect(rulesFor(sheet, ".transcript-file")).toMatchObject({ "border-radius": "var(--yc-radius-sm)", font: "var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono)" })
+  expect(rulesFor(sheet, ".transcript-file")).toMatchObject({ "border-radius": "var(--yc-radius-control)", font: "var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono)" })
   const conversation = await Bun.file(new URL("./conversation.tsx", import.meta.url)).text()
   expect(conversation).not.toContain("attachments={<For each={fileKeys()}>")
   expect(conversation).not.toMatch(/\stitle=/)
   expect(rulesFor(sheet, ".transcript-message--user")["justify-self"]).toBe("end")
-  expect(rulesFor(sheet, ".transcript-message__receipt").background).toBe("var(--yc-bg)")
+  expect(rulesFor(sheet, ".transcript-message__receipt").background).toBe("var(--yc-plane-canvas)")
 })
 
 test("turn heads use a mono type step with a fixed sunken mark badge and a medium agent name, no ordinal, and annotations stay inline in the one column", async () => {
   const sheet = parseStylesheet("transcript.css", await Bun.file(new URL("./transcript.css", import.meta.url)).text())
   expect(rulesFor(sheet, ".transcript-message__head").font).toBe("var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono)")
-  expect(rulesFor(sheet, ".transcript-message__mark")).toMatchObject({ "inline-size": "20px", "block-size": "20px", "border-radius": "4px", background: "var(--yc-surface-sunken)" })
-  expect(rulesFor(sheet, ".transcript-message__speaker")).toMatchObject({ color: "var(--yc-text)", font: "var(--yc-weight-medium) var(--yc-size-sm)/var(--yc-leading-2xs) var(--yc-font-sans)" })
+  expect(rulesFor(sheet, ".transcript-message__mark")).toMatchObject({ "inline-size": "20px", "block-size": "20px", "border-radius": "4px", background: "var(--yc-plane-hover)" })
+  expect(rulesFor(sheet, ".transcript-message__speaker")).toMatchObject({ color: "var(--yc-ink)", font: "var(--yc-weight-medium) var(--yc-size-sm)/var(--yc-leading-2xs) var(--yc-font-sans)" })
   expect(rulesFor(sheet, ".transcript-message__head ~ .transcript-message__agent")).toMatchObject({ position: "absolute", "clip-path": "inset(50%)" })
   expect(sheet.rules.some((rule) => /__ordinal|__role/.test(rule.header))).toBe(false)
   const nav = parseStylesheet("transcript-nav.css", await Bun.file(new URL("./transcript-nav.css", import.meta.url)).text())
@@ -48,27 +48,28 @@ test("turn heads use a mono type step with a fixed sunken mark badge and a mediu
   }
 })
 
-test("tool and reasoning rows sit flat on the canvas until opened, notices stay borderless tonal planes, and no part keeps a block rule", async () => {
+test("tool and reasoning rows sit flat on the canvas until opened, notices stay borderless tonal planes, and only request cards rule their head and actions with the in-component divider", async () => {
   const sheet = parseStylesheet("transcript.css", await Bun.file(new URL("./transcript.css", import.meta.url)).text())
   expect(rulesFor(sheet, ".transcript-reasoning, .transcript-tool")).toMatchObject({ border: "0", background: "transparent", "padding-inline": "0" })
-  expect(rulesFor(sheet, '.transcript-reasoning[data-open], .transcript-tool:has(> .transcript-tool__header [aria-expanded="true"])')).toMatchObject({ background: "var(--yc-surface)", "padding-inline": "var(--yc-space-3)" })
+  expect(rulesFor(sheet, '.transcript-reasoning[data-open], .transcript-tool:has(> .transcript-tool__header [aria-expanded="true"])')).toMatchObject({ background: "var(--yc-plane-raised)", "padding-inline": "var(--yc-space-3)" })
   for (const header of [".transcript-notice", ".transcript-message__observation", ".transcript-message__system"]) {
     const plane = rulesFor(sheet, header)
     expect(plane.border).toBe("0")
-    expect(plane.background).toBe("var(--yc-surface)")
-    expect(plane["border-radius"]).toBe("var(--yc-radius-lg)")
+    expect(plane.background).toBe("var(--yc-plane-raised)")
+    expect(plane["border-radius"]).toBe("var(--yc-radius-card)")
   }
   for (const name of ["transcript.css", "transcript-nav.css", "file-change-card.css", "todo-panel.css", "subagent-bar.css"]) {
     const parsed = parseStylesheet(name, await Bun.file(new URL(`./${name}`, import.meta.url)).text())
     const ruled = parsed.rules.filter((rule) => Object.entries(rule.declarations).some(([property, value]) => /^border-block-(start|end)$/.test(property) && value !== "0" && value !== "none"))
-    expect(ruled.map((rule) => rule.header)).toEqual([])
+    expect(ruled.map((rule) => rule.header)).toEqual(name === "transcript.css" ? [".conversation-pane .request:not(.request--hard) .request__header", ".conversation-pane .request:not(.request--hard) .request__actions"] : [])
+    expect(ruled.flatMap((rule) => Object.entries(rule.declarations).filter(([property]) => /^border-block-(start|end)$/.test(property)).map(([, value]) => value))).toEqual(ruled.map(() => "var(--yc-border-width) solid var(--yc-line-divider)"))
   }
   const card = parseStylesheet("file-change-card.css", await Bun.file(new URL("./file-change-card.css", import.meta.url)).text())
-  expect(rulesFor(card, ".file-change-card")).toMatchObject({ border: "0", background: "var(--yc-surface)", "border-radius": "var(--yc-radius-lg)" })
+  expect(rulesFor(card, ".file-change-card")).toMatchObject({ border: "0", background: "var(--yc-plane-raised)", "border-radius": "var(--yc-radius-card)" })
   expect(rulesFor(card, ".file-change-card.file-change-card--transcript")).toMatchObject({ border: "0", "border-radius": "0", background: "transparent", font: "var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono)" })
   expect(rulesFor(card, ".file-change-card.file-change-card--transcript > .file-change-card__summary")).toMatchObject({ padding: "var(--yc-space-1) 0" })
   const opened = rulesFor(card, ".file-change-card.file-change-card--transcript[data-open]")
-  expect(opened).toMatchObject({ background: "var(--yc-surface)", "border-radius": "var(--yc-radius-lg)" })
+  expect(opened).toMatchObject({ background: "var(--yc-plane-raised)", "border-radius": "var(--yc-radius-card)" })
   expect(opened.border).toBeUndefined()
   const nav = parseStylesheet("transcript-nav.css", await Bun.file(new URL("./transcript-nav.css", import.meta.url)).text())
   expect(rulesFor(nav, ".transcript-navigation__rail")["inline-size"]).toBe("28px")
@@ -78,24 +79,26 @@ test("tool and reasoning rows sit flat on the canvas until opened, notices stay 
 
 test("the todo panel and subagent bar are borderless tonal planes", async () => {
   const todo = parseStylesheet("todo-panel.css", await Bun.file(new URL("./todo-panel.css", import.meta.url)).text())
-  expect(rulesFor(todo, ".todo-panel__inner")).toMatchObject({ border: "0", background: "var(--yc-surface)", "border-radius": "var(--yc-radius-lg)" })
+  expect(rulesFor(todo, ".todo-panel__inner")).toMatchObject({ border: "0", background: "var(--yc-plane-raised)", "border-radius": "var(--yc-radius-card)" })
   const bar = parseStylesheet("subagent-bar.css", await Bun.file(new URL("./subagent-bar.css", import.meta.url)).text())
-  expect(rulesFor(bar, ".subagent-bar")).toMatchObject({ border: "0", background: "var(--yc-surface)", "border-radius": "var(--yc-radius-lg)" })
+  expect(rulesFor(bar, ".subagent-bar")).toMatchObject({ border: "0", background: "var(--yc-plane-raised)", "border-radius": "var(--yc-radius-card)" })
 })
 
-test("pending requests float as raised planes while hard review keeps its danger outline and halo", async () => {
+test("pending requests are framed raised cards with a tonal head by kind while hard review keeps its danger outline and halo", async () => {
   const sheet = parseStylesheet("transcript.css", await Bun.file(new URL("./transcript.css", import.meta.url)).text())
   const plane = rulesFor(sheet, ".conversation-pane .request:not(.request--hard)")
-  expect(plane).toMatchObject({ background: "var(--yc-surface-raised)", border: "1px solid var(--yc-border)", "border-radius": "var(--yc-radius-lg)", "box-shadow": "var(--yc-shadow-sm)", padding: "var(--yc-space-4)" })
+  expect(plane).toMatchObject({ background: "var(--yc-plane-raised)", border: "var(--yc-border-width) solid var(--request-line)", "--request-line": "var(--yc-line-subtle)", "border-radius": "var(--yc-radius-card)", "box-shadow": "none", padding: "0" })
+  expect(rulesFor(sheet, ".conversation-pane :is(.request--permission, .request--guardrail):not(.request--hard)")).toMatchObject({ "--request-line": "var(--yc-amber-graphic)", "--request-tonal": "var(--yc-amber-tonal)", "--request-ink": "var(--yc-amber-ink)" })
+  expect(rulesFor(sheet, ".conversation-pane :is(.request--form, .request--question, .request--subagent_question):not(.request--hard)")).toMatchObject({ "--request-line": "var(--yc-sky-graphic)", "--request-tonal": "var(--yc-sky-tonal)", "--request-ink": "var(--yc-sky-ink)" })
+  expect(rulesFor(sheet, ".conversation-pane .request:not(.request--hard) .request__header")).toMatchObject({ background: "var(--request-tonal)", color: "var(--request-ink)", "border-block-end": "var(--yc-border-width) solid var(--yc-line-divider)" })
   const recorded = rulesFor(sheet, ".conversation-pane .transcript .request:not(.request--hard)")
-  expect(recorded).toMatchObject({ border: "0", "box-shadow": "none", background: "var(--yc-surface)", "border-radius": "var(--yc-radius-lg)" })
-  expect(plane.border).toBe("1px solid var(--yc-border)")
-  expect(plane["box-shadow"]).toBe("var(--yc-shadow-sm)")
+  expect(recorded).toMatchObject({ border: "0", "box-shadow": "none", background: "var(--yc-plane-raised)", "border-radius": "var(--yc-radius-card)" })
+  expect(plane["box-shadow"]).toBe("none")
   expect(sheet.rules.filter((rule) => rule.header.includes(".request--hard") && !rule.header.includes(":not(.request--hard)"))).toEqual([])
   const remote = parseStylesheet("remote.css", await Bun.file(new URL("../../styles/remote.css", import.meta.url)).text())
   const hard = rulesFor(remote, ".request--hard")
-  expect(hard.border).toBe("2px solid var(--yc-danger)")
-  expect(hard["box-shadow"]).toContain("var(--yc-danger)")
+  expect(hard.border).toBe("2px solid var(--yc-coral-ink)")
+  expect(hard["box-shadow"]).toContain("var(--yc-coral-ink)")
 })
 
 test("the transcript adds no cursor, container query or screen-reader utility and its head, mark and bubble add no motion", async () => {
@@ -111,9 +114,9 @@ test("the transcript adds no cursor, container query or screen-reader utility an
 
 test("Markdown and notice icons use semantic accents while the agent name remains neutral", async () => {
   const sheet = parseStylesheet("transcript.css", await Bun.file(new URL("./transcript.css", import.meta.url)).text())
-  expect(rulesFor(sheet, ".transcript-md a").color).toBe("var(--yc-signal)")
-  expect(rulesFor(sheet, ".transcript-md :not(pre)>code")).toMatchObject({ background: "var(--yc-surface-sunken)", color: "var(--yc-context-tools)" })
-  expect(rulesFor(sheet, ".transcript-message__agent").color).toBe("var(--yc-text)")
-  expect(rulesFor(sheet, ".transcript-notice__mark").color).toBe("var(--yc-context-reasoning)")
+  expect(rulesFor(sheet, ".transcript-md a").color).toBe("var(--yc-sky-ink)")
+  expect(rulesFor(sheet, ".transcript-md :not(pre)>code")).toMatchObject({ background: "var(--yc-plane-hover)", color: "var(--yc-teal-ink)" })
+  expect(rulesFor(sheet, ".transcript-message__agent").color).toBe("var(--yc-ink)")
+  expect(rulesFor(sheet, ".transcript-notice__mark").color).toBe("var(--yc-violet-ink)")
   expect(rulesFor(sheet, ".transcript-md :is(th,td)").border).toBe("0")
 })

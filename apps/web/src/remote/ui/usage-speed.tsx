@@ -61,12 +61,12 @@ function SeriesChart(props: {
   </div>
 }
 
-const green = "var(--yc-green-strong)"
-const yellow = "var(--yc-yellow-strong)"
-const muted = "var(--yc-text-muted)"
-const danger = "var(--yc-danger)"
-const soft = "var(--yc-green)"
-const border = "var(--yc-border-strong)"
+const green = "var(--yc-cobalt-ink)"
+const yellow = "var(--yc-amber-ink)"
+const muted = "var(--yc-ink-secondary)"
+const danger = "var(--yc-coral-ink)"
+const soft = "var(--yc-mint-graphic)"
+const border = "var(--yc-line-field)"
 
 export function GenerationOverview(props: { readonly live: UsageLive; readonly monthly: UsageReport | undefined }) {
   const figures = createMemo(() => generationFigures(props.live, props.monthly))

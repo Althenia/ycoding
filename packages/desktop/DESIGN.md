@@ -5,79 +5,570 @@ description: Icon-led conversation, Session activity, and management for the YCo
 surface: web
 extends: ../../DESIGN.md
 colors:
-  primary: "#67D7A4"
+  plane-chrome: "#0e1116"
+  plane-canvas: "#15181d"
+  plane-raised: "#1d2228"
+  plane-hover: "#242930"
+  plane-selected: "#2b3138"
+  plane-inverse: "#f1f4f8"
+  line-divider: "#363c44"
+  line-subtle: "#676e77"
+  line-field: "#848b95"
+  ink: "#f1f4f8"
+  ink-secondary: "#bfc5cd"
+  ink-tertiary: "#a1a8b2"
+  ink-inverse: "#0e1116"
+  focus: "#5d94ff"
+  scrim: "rgba(14, 17, 22, 0.72)"
+  selection: "rgba(93, 148, 255, 0.32)"
+  cobalt-tonal: "#162a4f"
+  cobalt-tonal-hover: "#1a3363"
+  cobalt-line: "#2e5eba"
+  cobalt-graphic: "#5d94ff"
+  cobalt-solid: "#2064eb"
+  cobalt-solid-hover: "#0e52d5"
+  cobalt-ink: "#9bbeff"
+  on-cobalt: "#f1f4f8"
+  mint-tonal: "#0b3421"
+  mint-tonal-hover: "#094029"
+  mint-line: "#00764c"
+  mint-graphic: "#0cb477"
+  mint-solid: "#23d08c"
+  mint-solid-hover: "#40dd99"
+  mint-ink: "#4fdb9b"
+  on-mint: "#0e1116"
+  violet-tonal: "#2f2349"
+  violet-tonal-hover: "#3a2a5b"
+  violet-line: "#6c4dab"
+  violet-graphic: "#a47bfb"
+  violet-solid: "#b99efe"
+  violet-solid-hover: "#c4afff"
+  violet-ink: "#c4afff"
+  on-violet: "#0e1116"
+  teal-tonal: "#0d3232"
+  teal-tonal-hover: "#0c3d3e"
+  teal-line: "#057273"
+  teal-graphic: "#21adae"
+  teal-solid: "#31c8ca"
+  teal-solid-hover: "#48d5d6"
+  teal-ink: "#56d4d5"
+  on-teal: "#0e1116"
+  sky-tonal: "#102f40"
+  sky-tonal-hover: "#113a4f"
+  sky-line: "#136b95"
+  sky-graphic: "#33a3dd"
+  sky-solid: "#43befd"
+  sky-solid-hover: "#6cc9ff"
+  sky-ink: "#6cc9ff"
+  on-sky: "#0e1116"
+  amber-tonal: "#3c2603"
+  amber-tonal-hover: "#4a2f01"
+  amber-line: "#875800"
+  amber-graphic: "#cc8801"
+  amber-solid: "#ec9f07"
+  amber-solid-hover: "#fcab11"
+  amber-ink: "#f9ac30"
+  on-amber: "#0e1116"
+  coral-tonal: "#461c1b"
+  coral-tonal-hover: "#572220"
+  coral-line: "#a33c3b"
+  coral-graphic: "#f16461"
+  coral-solid: "#ff8a84"
+  coral-solid-hover: "#ffa09a"
+  coral-ink: "#fea09a"
+  on-coral: "#0e1116"
+  terminal-bg: "#0c1413"
+  terminal-fg: "#d8e6de"
+  terminal-dim: "#8fa79b"
+  terminal-accent: "#5fe3a1"
   brand-trace: "#67D7A4"
   brand-frost: "#F2F3F5"
   brand-attention: "#F0BE62"
   brand-tile: "#24282F"
   brand-rule: "#3A404A"
-  bg: "#0B1115"
-  surface: "#11181D"
-  surface-raised: "#151E24"
-  surface-sunken: "#0E151A"
-  surface-overlay: "#151E24"
-  text: "#F4F7F6"
-  text-muted: "#99A2AD"
-  text-subtle: "#99A2AD"
-  border: "#263039"
-  border-strong: "#3A4652"
-  green: "#67D7A4"
-  primary-bg: "#67D7A4"
-  primary-fg: "#0B1115"
-  focus: "#67D7A4"
-  yellow: "#F0BE62"
-  yellow-strong: "#F0BE62"
-  danger: "#EF6F6F"
-  info: "#79B8FF"
-  info-strong: "#79B8FF"
-  violet-strong: "#C4B5FD"
-  teal-strong: "#67E3F9"
-  meter-warn: "#F0BE62"
 themes:
   light:
     colors:
-      primary: "#0A7B47"
+      plane-chrome: "#f3f6fb"
+      plane-canvas: "#fafcfe"
+      plane-raised: "#e5eaf0"
+      plane-hover: "#dde2e9"
+      plane-selected: "#d3d8df"
+      plane-inverse: "#151618"
+      line-divider: "#c4c9d1"
+      line-subtle: "#80858c"
+      line-field: "#70757c"
+      ink: "#151618"
+      ink-secondary: "#404449"
+      ink-tertiary: "#565b62"
+      ink-inverse: "#f3f6fb"
+      focus: "#2f70f2"
+      scrim: "rgba(243, 246, 251, 0.5)"
+      selection: "rgba(47, 112, 242, 0.32)"
+      cobalt-tonal: "#e4edfe"
+      cobalt-tonal-hover: "#d5e4fe"
+      cobalt-line: "#87b1fe"
+      cobalt-graphic: "#2f70f2"
+      cobalt-solid: "#165be2"
+      cobalt-solid-hover: "#024bd0"
+      cobalt-ink: "#0045c6"
+      on-cobalt: "#fafcfe"
+      mint-tonal: "#d1f8e1"
+      mint-tonal-hover: "#bef1d4"
+      mint-line: "#5fc995"
+      mint-graphic: "#06915f"
+      mint-solid: "#027d51"
+      mint-solid-hover: "#046c46"
+      mint-ink: "#026641"
+      on-mint: "#fafcfe"
+      violet-tonal: "#eee9fe"
+      violet-tonal-hover: "#e5ddff"
+      violet-line: "#b99efe"
+      violet-graphic: "#8759dd"
+      violet-solid: "#7743cc"
+      violet-solid-hover: "#6932bb"
+      violet-ink: "#642bb4"
+      on-violet: "#fafcfe"
+      teal-tonal: "#d2f5f5"
+      teal-tonal-hover: "#bfeeed"
+      teal-line: "#63c3c4"
+      teal-graphic: "#0b8c8d"
+      teal-solid: "#037879"
+      teal-solid-hover: "#006869"
+      teal-ink: "#026263"
+      on-teal: "#fafcfe"
+      sky-tonal: "#dbf1ff"
+      sky-tonal-hover: "#c7e8fe"
+      sky-line: "#69bbeb"
+      sky-graphic: "#0484b9"
+      sky-solid: "#0071a0"
+      sky-solid-hover: "#03628b"
+      sky-ink: "#025c83"
+      on-sky: "#fafcfe"
+      amber-tonal: "#ffe9ce"
+      amber-tonal-hover: "#ffddb1"
+      amber-line: "#e2a449"
+      amber-graphic: "#a56d00"
+      amber-solid: "#f9a80a"
+      amber-solid-hover: "#e49905"
+      amber-ink: "#744c00"
+      on-amber: "#151618"
+      coral-tonal: "#ffe6e4"
+      coral-tonal-hover: "#fed9d5"
+      coral-line: "#ff8a84"
+      coral-graphic: "#d03f41"
+      coral-solid: "#be222d"
+      coral-solid-hover: "#ac001e"
+      coral-ink: "#a2001b"
+      on-coral: "#fafcfe"
+      terminal-bg: "#0c1413"
+      terminal-fg: "#d8e6de"
+      terminal-dim: "#8fa79b"
+      terminal-accent: "#5fe3a1"
       brand-trace: "#67D7A4"
       brand-frost: "#F2F3F5"
       brand-attention: "#F0BE62"
       brand-tile: "#24282F"
       brand-rule: "#3A404A"
-      bg: "#FFFFFF"
-      surface: "#F7F9F8"
-      surface-raised: "#FFFFFF"
-      surface-sunken: "#EFF3F1"
-      surface-overlay: "#FFFFFF"
-      text: "#0B0F14"
-      text-muted: "#5C6672"
-      text-subtle: "#646D78"
-      border: "#E4E8E6"
-      border-strong: "#78847E"
-      green: "#27D17F"
-      primary-bg: "#0B8550"
-      primary-fg: "#FFFFFF"
-      focus: "#0B8B50"
-      yellow: "#F4BD3D"
-      yellow-strong: "#946200"
-      danger: "#C53A3A"
-      info: "#175CD3"
-      info-strong: "#175CD3"
-      violet-strong: "#6938EF"
-      teal-strong: "#0E7090"
-      meter-warn: "#D97706"
+  onedark-light:
+    colors:
+      plane-chrome: "#f3f6f9"
+      plane-canvas: "#fafcfe"
+      plane-raised: "#e6eaee"
+      plane-hover: "#dee2e6"
+      plane-selected: "#d4d8dd"
+      plane-inverse: "#1a1b1c"
+      line-divider: "#c5c9ce"
+      line-subtle: "#818589"
+      line-field: "#6e7276"
+      ink: "#1a1b1c"
+      ink-secondary: "#414447"
+      ink-tertiary: "#55585c"
+      ink-inverse: "#f3f6f9"
+      focus: "#2f70f2"
+      scrim: "rgba(243, 246, 249, 0.5)"
+      selection: "rgba(47, 112, 242, 0.32)"
+      cobalt-tonal: "#e4edfe"
+      cobalt-tonal-hover: "#d5e4fe"
+      cobalt-line: "#87b1fe"
+      cobalt-graphic: "#2f70f2"
+      cobalt-solid: "#165be2"
+      cobalt-solid-hover: "#024bd0"
+      cobalt-ink: "#0045c6"
+      on-cobalt: "#fafcfe"
+      mint-tonal: "#d1f8e1"
+      mint-tonal-hover: "#bef1d4"
+      mint-line: "#5fc995"
+      mint-graphic: "#06915f"
+      mint-solid: "#027d51"
+      mint-solid-hover: "#046c46"
+      mint-ink: "#026641"
+      on-mint: "#fafcfe"
+      violet-tonal: "#eee9fe"
+      violet-tonal-hover: "#e5ddff"
+      violet-line: "#b99efe"
+      violet-graphic: "#8759dd"
+      violet-solid: "#7743cc"
+      violet-solid-hover: "#6932bb"
+      violet-ink: "#642bb4"
+      on-violet: "#fafcfe"
+      teal-tonal: "#d2f5f5"
+      teal-tonal-hover: "#bfeeed"
+      teal-line: "#63c3c4"
+      teal-graphic: "#0b8c8d"
+      teal-solid: "#037879"
+      teal-solid-hover: "#006869"
+      teal-ink: "#026263"
+      on-teal: "#fafcfe"
+      sky-tonal: "#dbf1ff"
+      sky-tonal-hover: "#c7e8fe"
+      sky-line: "#69bbeb"
+      sky-graphic: "#0484b9"
+      sky-solid: "#0071a0"
+      sky-solid-hover: "#03628b"
+      sky-ink: "#025c83"
+      on-sky: "#fafcfe"
+      amber-tonal: "#ffe9ce"
+      amber-tonal-hover: "#ffddb1"
+      amber-line: "#e2a449"
+      amber-graphic: "#a56d00"
+      amber-solid: "#f9a80a"
+      amber-solid-hover: "#e49905"
+      amber-ink: "#744c00"
+      on-amber: "#1a1b1c"
+      coral-tonal: "#ffe6e4"
+      coral-tonal-hover: "#fed9d5"
+      coral-line: "#ff8a84"
+      coral-graphic: "#d03f41"
+      coral-solid: "#be222d"
+      coral-solid-hover: "#ac001e"
+      coral-ink: "#a2001b"
+      on-coral: "#fafcfe"
+      brand-trace: "#67D7A4"
+      brand-frost: "#F2F3F5"
+      brand-attention: "#F0BE62"
+      brand-tile: "#24282F"
+      brand-rule: "#3A404A"
+  onedark-dark:
+    colors:
+      plane-chrome: "#1c1f26"
+      plane-canvas: "#23262e"
+      plane-raised: "#2a2f39"
+      plane-hover: "#313741"
+      plane-selected: "#393f4a"
+      plane-inverse: "#f0f3fa"
+      line-divider: "#444a57"
+      line-subtle: "#727986"
+      line-field: "#8b92a0"
+      ink: "#f0f3fa"
+      ink-secondary: "#c5cbd7"
+      ink-tertiary: "#a4abb9"
+      ink-inverse: "#1c1f26"
+      focus: "#679cff"
+      scrim: "rgba(28, 31, 38, 0.72)"
+      selection: "rgba(103, 156, 255, 0.32)"
+      cobalt-tonal: "#24385f"
+      cobalt-tonal-hover: "#274172"
+      cobalt-line: "#3767c4"
+      cobalt-graphic: "#679cff"
+      cobalt-solid: "#2064eb"
+      cobalt-solid-hover: "#0e52d5"
+      cobalt-ink: "#b9d2ff"
+      on-cobalt: "#f0f3fa"
+      mint-tonal: "#1b422f"
+      mint-tonal-hover: "#1a4d35"
+      mint-line: "#038053"
+      mint-graphic: "#1eba7d"
+      mint-solid: "#23d08c"
+      mint-solid-hover: "#40dd99"
+      mint-ink: "#66efae"
+      on-mint: "#1c1f26"
+      violet-tonal: "#3d3158"
+      violet-tonal-hover: "#47386a"
+      violet-line: "#7556b4"
+      violet-graphic: "#aa83ff"
+      violet-solid: "#b99efe"
+      violet-solid-hover: "#c4afff"
+      violet-ink: "#d5c7fe"
+      on-violet: "#1c1f26"
+      teal-tonal: "#1c4040"
+      teal-tonal-hover: "#1c4b4b"
+      teal-line: "#137b7c"
+      teal-graphic: "#2cb3b5"
+      teal-solid: "#31c8ca"
+      teal-solid-hover: "#48d5d6"
+      teal-ink: "#6ce7e8"
+      on-teal: "#1c1f26"
+      sky-tonal: "#1e3d4f"
+      sky-tonal-hover: "#1f475e"
+      sky-line: "#21749e"
+      sky-graphic: "#3baae3"
+      sky-solid: "#43befd"
+      sky-solid-hover: "#6cc9ff"
+      sky-ink: "#9fdafe"
+      on-sky: "#1c1f26"
+      amber-tonal: "#4b3413"
+      amber-tonal-hover: "#593c0f"
+      amber-line: "#926001"
+      amber-graphic: "#d48e02"
+      amber-solid: "#ec9f07"
+      amber-solid-hover: "#fcab11"
+      amber-ink: "#ffc577"
+      on-amber: "#1c1f26"
+      coral-tonal: "#562b28"
+      coral-tonal-hover: "#662f2d"
+      coral-line: "#ad4543"
+      coral-graphic: "#f86a67"
+      coral-solid: "#ff8a84"
+      coral-solid-hover: "#ffa09a"
+      coral-ink: "#ffbeb9"
+      on-coral: "#1c1f26"
+      brand-trace: "#67D7A4"
+      brand-frost: "#F2F3F5"
+      brand-attention: "#F0BE62"
+      brand-tile: "#24282F"
+      brand-rule: "#3A404A"
+  onedark-pro-dark:
+    colors:
+      plane-chrome: "#14171f"
+      plane-canvas: "#1a1e27"
+      plane-raised: "#222631"
+      plane-hover: "#292e3a"
+      plane-selected: "#303543"
+      plane-inverse: "#eff2f9"
+      line-divider: "#3b414f"
+      line-subtle: "#6b7181"
+      line-field: "#858c9d"
+      ink: "#eff2f9"
+      ink-secondary: "#c1c7d5"
+      ink-tertiary: "#a1a8b9"
+      ink-inverse: "#14171f"
+      focus: "#5d94ff"
+      scrim: "rgba(20, 23, 31, 0.72)"
+      selection: "rgba(93, 148, 255, 0.32)"
+      cobalt-tonal: "#1c3056"
+      cobalt-tonal-hover: "#1f3969"
+      cobalt-line: "#3161bd"
+      cobalt-graphic: "#5d94ff"
+      cobalt-solid: "#2064eb"
+      cobalt-solid-hover: "#0e52d5"
+      cobalt-ink: "#b4cfff"
+      on-cobalt: "#eff2f9"
+      mint-tonal: "#133a28"
+      mint-tonal-hover: "#10452e"
+      mint-line: "#017a4f"
+      mint-graphic: "#0cb477"
+      mint-solid: "#1bcd89"
+      mint-solid-hover: "#3bda96"
+      mint-ink: "#62ecab"
+      on-mint: "#14171f"
+      violet-tonal: "#352950"
+      violet-tonal-hover: "#3f3061"
+      violet-line: "#6f50ae"
+      violet-graphic: "#a47bfb"
+      violet-solid: "#b699fe"
+      violet-solid-hover: "#c1aaff"
+      violet-ink: "#d2c3fe"
+      on-violet: "#14171f"
+      teal-tonal: "#143838"
+      teal-tonal-hover: "#134343"
+      teal-line: "#047576"
+      teal-graphic: "#21adae"
+      teal-solid: "#2bc5c7"
+      teal-solid-hover: "#44d2d3"
+      teal-ink: "#69e4e5"
+      on-teal: "#14171f"
+      sky-tonal: "#173547"
+      sky-tonal-hover: "#173f55"
+      sky-line: "#186e98"
+      sky-graphic: "#33a3dd"
+      sky-solid: "#3fbafa"
+      sky-solid-hover: "#63c6ff"
+      sky-ink: "#97d7fe"
+      on-sky: "#14171f"
+      amber-tonal: "#432d0a"
+      amber-tonal-hover: "#503404"
+      amber-line: "#8a5b00"
+      amber-graphic: "#cc8801"
+      amber-solid: "#e89c06"
+      amber-solid-hover: "#f9a703"
+      amber-ink: "#ffc16a"
+      on-amber: "#14171f"
+      coral-tonal: "#4e2321"
+      coral-tonal-hover: "#5d2725"
+      coral-line: "#a63f3e"
+      coral-graphic: "#f16461"
+      coral-solid: "#ff847f"
+      coral-solid-hover: "#fe9b95"
+      coral-ink: "#ffbab4"
+      on-coral: "#14171f"
+      brand-trace: "#67D7A4"
+      brand-frost: "#F2F3F5"
+      brand-attention: "#F0BE62"
+      brand-tile: "#24282F"
+      brand-rule: "#3A404A"
   high-contrast-light:
     colors:
-      info: "#0A3D91"
-      info-strong: "#0A3D91"
-      violet-strong: "#4A1FB8"
-      teal-strong: "#0B4F66"
-      meter-warn: "#8A4B00"
+      plane-chrome: "#f6f9fd"
+      plane-canvas: "#fefeff"
+      plane-raised: "#e9edf3"
+      plane-hover: "#dfe3e9"
+      plane-selected: "#d5d9df"
+      plane-inverse: "#050607"
+      line-divider: "#6a6d73"
+      line-subtle: "#4a4d53"
+      line-field: "#32363b"
+      ink: "#050607"
+      ink-secondary: "#26292d"
+      ink-tertiary: "#3f4348"
+      ink-inverse: "#f6f9fd"
+      focus: "#003eb5"
+      scrim: "rgba(246, 249, 253, 0.5)"
+      selection: "rgba(0, 62, 181, 0.32)"
+      cobalt-tonal: "#e7effe"
+      cobalt-tonal-hover: "#d7e5ff"
+      cobalt-line: "#396ccf"
+      cobalt-graphic: "#003eb5"
+      cobalt-solid: "#0039aa"
+      cobalt-solid-hover: "#003193"
+      cobalt-ink: "#003193"
+      on-cobalt: "#fefeff"
+      mint-tonal: "#d3f9e3"
+      mint-tonal-hover: "#bff3d6"
+      mint-line: "#068758"
+      mint-graphic: "#025c3b"
+      mint-solid: "#005636"
+      mint-solid-hover: "#014a2e"
+      mint-ink: "#014a2e"
+      on-mint: "#fefeff"
+      violet-tonal: "#f0ebff"
+      violet-tonal-hover: "#e6dffe"
+      violet-line: "#7b5abf"
+      violet-graphic: "#5b24a7"
+      violet-solid: "#5616a4"
+      violet-solid-hover: "#4c0195"
+      violet-ink: "#4c0195"
+      on-violet: "#fefeff"
+      teal-tonal: "#d4f7f6"
+      teal-tonal-hover: "#c0efef"
+      teal-line: "#0e8283"
+      teal-graphic: "#02595a"
+      teal-solid: "#005354"
+      teal-solid-hover: "#004748"
+      teal-ink: "#004748"
+      on-teal: "#fefeff"
+      sky-tonal: "#dff2fe"
+      sky-tonal-hover: "#caeafe"
+      sky-line: "#217aa7"
+      sky-graphic: "#015477"
+      sky-solid: "#004e6f"
+      sky-solid-hover: "#004260"
+      sky-ink: "#004260"
+      on-sky: "#fefeff"
+      amber-tonal: "#ffebd2"
+      amber-tonal-hover: "#ffdfb6"
+      amber-line: "#996605"
+      amber-graphic: "#694400"
+      amber-solid: "#624001"
+      amber-solid-hover: "#543600"
+      amber-ink: "#543600"
+      on-amber: "#fefeff"
+      coral-tonal: "#fee9e7"
+      coral-tonal-hover: "#ffdbd8"
+      coral-line: "#b74846"
+      coral-graphic: "#940018"
+      coral-solid: "#8a0016"
+      coral-solid-hover: "#780011"
+      coral-ink: "#780011"
+      on-coral: "#fefeff"
+      terminal-bg: "#f5f5f5"
+      terminal-fg: "#000000"
+      terminal-dim: "#404040"
+      terminal-accent: "#00632f"
+      brand-trace: "#67D7A4"
+      brand-frost: "#F2F3F5"
+      brand-attention: "#F0BE62"
+      brand-tile: "#24282F"
+      brand-rule: "#3A404A"
   high-contrast-dark:
     colors:
-      info: "#A5E0FF"
-      info-strong: "#A5E0FF"
-      violet-strong: "#DDD2FF"
-      teal-strong: "#A5F0FC"
-      meter-warn: "#FFB74D"
+      plane-chrome: "#020204"
+      plane-canvas: "#050608"
+      plane-raised: "#0b0d11"
+      plane-hover: "#14161a"
+      plane-selected: "#1d1f24"
+      plane-inverse: "#fdfdff"
+      line-divider: "#606369"
+      line-subtle: "#9b9fa5"
+      line-field: "#b3b8be"
+      ink: "#fdfdff"
+      ink-secondary: "#dbdee3"
+      ink-tertiary: "#c0c4cb"
+      ink-inverse: "#020204"
+      focus: "#a5c5fe"
+      scrim: "rgba(2, 2, 4, 0.72)"
+      selection: "rgba(165, 197, 254, 0.32)"
+      cobalt-tonal: "#06183c"
+      cobalt-tonal-hover: "#09214f"
+      cobalt-line: "#4a7cdc"
+      cobalt-graphic: "#a5c5fe"
+      cobalt-solid: "#afcbff"
+      cobalt-solid-hover: "#c3d8fe"
+      cobalt-ink: "#cddfff"
+      on-cobalt: "#020204"
+      mint-tonal: "#002212"
+      mint-tonal-hover: "#002c1a"
+      mint-line: "#2c9667"
+      mint-graphic: "#57e2a2"
+      mint-solid: "#4deba5"
+      mint-solid-hover: "#62f8b2"
+      mint-ink: "#75fdbb"
+      on-mint: "#020204"
+      violet-tonal: "#1e1236"
+      violet-tonal-hover: "#291847"
+      violet-line: "#896bcb"
+      violet-graphic: "#c9b7fe"
+      violet-solid: "#cfbffe"
+      violet-solid-hover: "#dbcfff"
+      violet-ink: "#e1d7ff"
+      on-violet: "#020204"
+      teal-tonal: "#002020"
+      teal-tonal-hover: "#002a2b"
+      teal-line: "#329091"
+      teal-graphic: "#5edadb"
+      teal-solid: "#55e3e4"
+      teal-solid-hover: "#68f0f1"
+      teal-ink: "#7bf5f6"
+      on-teal: "#020204"
+      sky-tonal: "#001d2e"
+      sky-tonal-hover: "#00283c"
+      sky-line: "#3a89b4"
+      sky-graphic: "#7fcffe"
+      sky-solid: "#8ed4ff"
+      sky-solid-hover: "#aedffe"
+      sky-ink: "#bce5fe"
+      on-sky: "#020204"
+      amber-tonal: "#281700"
+      amber-tonal-hover: "#341f00"
+      amber-line: "#ab7312"
+      amber-graphic: "#ffb33c"
+      amber-solid: "#febd5e"
+      amber-solid-hover: "#ffce8d"
+      amber-ink: "#fed7a3"
+      on-amber: "#020204"
+      coral-tonal: "#330b0b"
+      coral-tonal-hover: "#430f10"
+      coral-line: "#c55a57"
+      coral-graphic: "#feaba5"
+      coral-solid: "#feb5af"
+      coral-solid-hover: "#fec8c4"
+      coral-ink: "#fed2ce"
+      on-coral: "#020204"
+      brand-trace: "#67D7A4"
+      brand-frost: "#F2F3F5"
+      brand-attention: "#F0BE62"
+      brand-tile: "#24282F"
+      brand-rule: "#3A404A"
 typography:
   body:
     fontFamily: "Geist"
@@ -95,18 +586,14 @@ controls:
   height-touch: "44px"
   height-lg: "48px"
 rounded:
-  sm: "3px"
-  md: "4px"
-  lg: "4px"
-  xl: "6px"
-  2xl: "8px"
-  control: "8px"
-  card: "12px"
-  composer: "16px"
+  detail: "4px"
+  control: "6px"
+  card: "8px"
+  composer: "12px"
+  pill: "999px"
 layout:
   conversation-max: "1024px"
-  rail: "256px"
-  rail-compact: "64px"
+  rail: "280px"
   companion: "320px"
   header: "40px"
   system-header: "48px"
@@ -123,27 +610,30 @@ layout:
   workspace-toolbar: "48px"
   coordination-toolbar: "56px"
   dialog-header: "40px"
-  window-min-width: "800px"
+  window-min-width: "1000px"
   window-min-height: "600px"
 motion:
   duration:
     instant: "80ms"
     quick: "140ms"
     base: "220ms"
-    slow: "320ms"
+    trace: "1760ms"
+    spin: "660ms"
   easing:
     standard: "cubic-bezier(0.2, 0, 0, 1)"
     entrance: "cubic-bezier(0, 0, 0.2, 1)"
     exit: "cubic-bezier(0.4, 0, 1, 1)"
+    linear: "linear"
+    caret: "steps(2, jump-none)"
 ---
 
 # YCoding Desktop design
 
 ## Overview
 
-YCoding Desktop centers a readable conversation between the Session rail and an optional Companion. Project coordination and Settings use the same navigation rhythm, ink, and spacing as chat, with wider work areas for rosters and forms. Management dialogs keep their title and actions separate from scrollable detail. Nothing in these surfaces changes where a Session runs or how its data is stored.
+YCoding Desktop centers a readable conversation between the activity bar and Session list on the leading side and an optional Companion on the trailing side, above one status bar that spans the window. Project coordination and Settings use the same navigation rhythm, ink, and spacing as chat, with wider work areas for rosters and forms. Management dialogs keep their title and actions separate from scrollable detail. Nothing in these surfaces changes where a Session runs or how its data is stored.
 
-The parent `DESIGN.md` owns brand and cross-surface accessibility. Desktop owns its palette and geometry in `src/tokens.css` and this document. Approved rules govern behavior and appearance. `Implemented` rules describe local geometry, not a new brand requirement. The inspected Settings, Keyboard Shortcuts, Connect Providers, and Master-Session Team Stitch screens inform grouping and alignment. Their illustrative runtime states and actions are not product capabilities. A `proposal` does not bind the implementation.
+The parent `DESIGN.md` owns brand and cross-surface accessibility. Desktop paints the shared `--yc-` palette, radius, motion and shell components from `apps/web/src/styles/tokens.css`, `apps/web/src/theme/schemes.ts` and `apps/web/src/styles/workspace-shell.css`; it owns its brand tokens, fonts and component geometry in `src/tokens.css`, and this document records every value it paints. Approved rules govern behavior and appearance. `Implemented` rules describe local geometry, not a new brand requirement. The inspected Settings, Keyboard Shortcuts, Connect Providers, and Master-Session Team Stitch screens inform grouping and alignment. Their illustrative runtime states and actions are not product capabilities. A `proposal` does not bind the implementation.
 
 ## Principles
 
@@ -165,17 +655,17 @@ The parent `DESIGN.md` owns brand and cross-surface accessibility. Desktop owns 
 | D6 | approved | Compact tool/thought groups MUST retain every output, status, error, provenance field, timing, copy/expand control and user action through reachable disclosure; changes of actor/model and errors MUST remain identifiable without color. | `test/renderer.integration.test.ts`; `test/renderer.test.tsx` |
 | D7 | approved | Disclosure and navigation MUST retain accessible names, expanded state, keyboard order, visible focus, focus return and screen-reader announcements; collapsed content MUST NOT remain an invisible keyboard target. | `test/renderer.integration.test.ts` |
 | D8 | approved | Streaming and refresh MUST preserve stable message/disclosure identities and the reader's attached or detached scroll position; motion MUST NEVER remount unchanged rows, move a detached reader or delay input. | `test/renderer.integration.test.ts` |
-| D9 | approved | Use owned 16px SVG icons, typography and spacing to lead rows and disclosures. Normal content MUST use `surface`, `surface-raised` or `surface-sunken` instead of nested outlines. Preserve useful boundaries for fields and the composer, floating layers, pending decisions, and destructive and error states, as well as focus rings and functional pane separators. | `test/ledger-design.test.ts`; `test/renderer.integration.test.ts` |
+| D9 | approved | Use owned SVG icons at 14px in the status bar and dense chips, 16px in rows, buttons and disclosures, and 20px in the activity bar, with typography and spacing to lead rows. Normal content MUST use the `plane-chrome`, `plane-canvas` and `plane-raised` planes instead of nested outlines, with `plane-hover` and `plane-selected` for interaction. `elevation-float` belongs only to popovers, dialogs, sheets, toasts, tooltips and the overlaid Companion. Preserve useful boundaries for fields and the composer, floating layers, pending decisions, and destructive and error states, as well as focus rings and functional pane separators. | `test/ledger-design.test.ts`; `test/renderer.integration.test.ts` |
 | D10 | approved | Action controls MUST use consistent comfortable icon-led size, spacing and alignment, owned non-native hover/focus hints and meaningful semantic ink; needed visible labels and values MUST remain at least 12px. | `test/renderer.integration.test.ts`; `test/ledger-design.test.ts` |
-| D11 | approved | The composer MUST float on the canvas without a footer fill, divider or redundant Working label. The right-hand action MUST show Send at rest and a red Stop generation control during generation; the toolbar MUST NOT contain a second stop control. Keep keyboard submission, Steer now, attachment handling and draft recovery distinct from Stop. Preserve model, effort, autonomy and delivery controls, the 8–10px Auto-to-action gap and symmetric 10–12px card insets. Compact reflow and coarse hit targets MUST remain intact. Unsent and unconfirmed content MUST survive failure and MUST NEVER be resent automatically. | `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
-| D12 | approved | Coordination's Add-existing/New-member sidebar background and left border MUST span the full pane height. Its left main pane MUST be a full-height min-height:0 flex column, with a flex:1 min-height:0 overflow-y:auto member-list region and a concurrency/delegated-decisions footer docked flush to the pane bottom behind a clean top border. Rows MUST retain natural height; sparse lists MUST NOT stretch rows or place the footer immediately below the last row. Compact drill-in MUST retain contained scrolling and reachable footer controls. | `test/renderer.integration.test.ts`; `test/project-members.test.tsx` |
+| D11 | approved | The composer MUST sit flat on the canvas without a shadow, footer fill, divider or redundant Working label. The right-hand action MUST show Send at rest and a red Stop generation control during generation; the toolbar MUST NOT contain a second stop control. Keep keyboard submission, Steer now, attachment handling and draft recovery distinct from Stop. Preserve model, effort, autonomy and delivery controls, the 8–10px Auto-to-action gap and symmetric 10–12px card insets. Reflow at the 1000px floor and coarse hit targets MUST remain intact. Unsent and unconfirmed content MUST survive failure and MUST NEVER be resent automatically. | `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
+| D12 | approved | Coordination's Add-existing/New-member sidebar background and left border MUST span the full pane height. Its left main pane MUST be a full-height min-height:0 flex column, with a flex:1 min-height:0 overflow-y:auto member-list region and a concurrency/delegated-decisions footer docked flush to the pane bottom behind a clean top border. Rows MUST retain natural height; sparse lists MUST NOT stretch rows or place the footer immediately below the last row. At the 1000px floor the list region MUST retain contained scrolling and reachable footer controls. | `test/renderer.integration.test.ts`; `test/project-members.test.tsx` |
 | D13 | approved | Projects MUST retain one Master/member roster, real selection and detail, inline concurrency and distinct Open, Remove from project and Delete Session actions; create/add workflows MUST NOT duplicate that roster. Add MUST attach a running root Session from any directory without restarting it, and Remove from project MUST detach it, through the named attach and detach operations and never a member-list rewrite. The Session and its history survive Remove. | `test/project-members.test.tsx`; `test/renderer.integration.test.ts` |
 | D14 | approved | Motion MUST consume the canonical duration/easing tokens for feedback, transient layers, panel/detail changes and screen/Session continuity; frequent streaming updates MUST remain still and input MUST remain responsive. | `test/ledger-design.test.ts`; `test/renderer.integration.test.ts` |
 | D15 | approved | Reduced motion MUST remove spatial travel and smooth scrolling, keep effects at most 150ms and exits immediate, and preserve focus, state and announcements; motion MUST NEVER conceal essential content or cause flicker or a reflow storm. | `test/renderer.integration.test.ts` |
 | D16 | approved | Ordinary rail, directory, recent lists and counters MUST show only noncompaction roots; the bounded paginated index MUST retain descendants for real child, fork, BTW and grandchild discovery without promoting off-page children to roots. | `test/root-sessions.test.ts`; `test/renderer.integration.test.ts` |
 | D17 | approved | Sidebar Session rows MUST show state through distinct semantic glyphs rather than visible status words. Preserve accessible status names, unknown state, filters, counters, pins and paging. Animate active glyphs only when motion is allowed. Counters, metrics and durations MUST NOT invent activity, capacity, allowance or verification. | `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
 | D18 | approved | Settings MUST retain pane-filling section navigation, current values, one labelled keep-awake switch, every keyboard action and chord, and the existing presentation handlers and paste threshold. | `test/keyboard.test.ts`; `test/renderer.integration.test.ts` |
-| D19 | approved | Owned palette, fonts, corner sizes, component geometry and motion MUST agree with their documented tokens in both directions, including theme overrides; components MUST consume semantic roles. | `test/ledger-design.test.ts` |
+| D19 | approved | Owned brand tokens, fonts, corner sizes, component geometry and motion, and the shared palette of every Desktop theme, MUST agree with their documented tokens in both directions; components MUST consume semantic roles. | `test/ledger-design.test.ts` |
 | D20 | approved | Loading, empty, pending, disabled, failure and recovery states MUST retain owned presentation and actual controls; skeletons and compaction progress MUST retain static reduced-motion states. | `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
 | D21 | approved | Dialogs, menus and pickers MUST keep named controls, contained scrolling, genuine errors, confirmation gates and focus return; commands MUST retain modal combobox/listbox behavior and supported actions only. | `test/renderer.integration.test.ts` |
 | D22 | approved | Native menus, clipboard, update verification and rollback MUST retain their existing contracts; Enter sends and Shift+Enter inserts a newline only in the existing composer context. | `test/host-contract.test.ts`; `test/updater.test.ts` |
@@ -183,34 +673,40 @@ The parent `DESIGN.md` owns brand and cross-surface accessibility. Desktop owns 
 | D24 | approved | Browser fixture results MUST NOT stand in for native-window rendering, saved-endpoint readback, crash-free operation or existing populated family navigation. | `SCENARIOS.md`; review-only native verification |
 | D25 | approved | Team MUST offer Table and Grid over the same reported children, blockers and shared selection. Pointer or keyboard activation MUST reveal the selected child with lineage, status, assignment, model, effort, profile, elapsed time, tokens, full progress and pending requests. Open Dedicated Child Session MUST use the selected child identity; answers keep confirmation. | `test/renderer.integration.test.ts` |
 | D26 | approved | Coordination MUST distinguish Master, member, owner and driver state without fabricating branches, commits, external-message ingestion or verification. | `test/renderer.integration.test.ts` |
-| D27 | approved | The New-chat target chooser MUST overlay its entry, retain registered directory selection, Escape focus return and unsent text, and MUST NOT create or execute a Session from a starter command. | `test/renderer.integration.test.ts` |
+| D27 | approved | The New-chat target chooser MUST overlay its entry, retain registered directory selection, refresh, Escape focus return and unsent text, and MUST NOT create or execute a Session from a starter command. Its trigger MUST share the composer's track and leading edge, use neutral ink and stay visually subordinate to the composer, which remains the primary element. Keyboard focus MUST show a 2px `focus` `:focus-visible` ring with a 2px offset, distinct from the hover plane and the open state. | `test/renderer.integration.test.ts`; `test/renderer.test.tsx` |
 | D28 | approved | Usage MUST distinguish available, stale, unauthorized, unavailable and failed reads, with each provider's labelled windows and no invented unlimited quota. | `test/renderer.integration.test.ts` |
 | D29 | approved | Guardrail and decision history MUST remain structured, read-only and faithful to recorded fields; missing evidence MUST remain unrecorded. | `test/renderer.integration.test.ts` |
 | D30 | approved | Native/transient activity MUST retain actual execution, validated peers and reported bridges; queued input MUST NOT create false execution activity. | `test/renderer.integration.test.ts` |
 | D31 | approved | System, browser, incident and context views MUST present returned facts as labelled information with explicit missing fields; secrets MUST remain masked until explicit reveal. | `test/renderer.integration.test.ts` |
-| D32 | approved | Component-specific chrome MUST keep the source ownership table's independent toolbar and inspector geometry above the compact boundary; a shared header or companion MUST NOT substitute for those owners. | `test/ledger-design.test.ts`; `test/renderer.integration.test.ts` |
-| D33 | approved | Compact navigation and list/detail views MUST use dismissible drawers, overlays or single-pane drill-ins with Back/Close, Escape, preserved drafts/scroll and focus return; coarse controls MUST retain 44px reach and compact/coarse inputs at least 16px. | `test/renderer.integration.test.ts` compact journeys |
+| D32 | approved | Component-specific chrome MUST keep the source ownership table's independent toolbar and inspector geometry at every supported window size; a shared header, companion or the status bar MUST NOT substitute for those owners. | `test/ledger-design.test.ts`; `test/renderer.integration.test.ts` |
+| D33 | approved | The activity bar, Session list and list/detail inspectors MUST stay persistent beside their content at every supported window size. Under a coarse pointer, pickers and menus MUST open as dismissible sheets with Close, Escape, preserved drafts and focus return; coarse controls MUST retain 44px reach and coarse inputs at least 16px. | `test/renderer.integration.test.ts` coarse journeys |
 | D34 | approved | A local user message MUST use a borderless tonal bubble at the trailing edge, sized to its text up to the smaller of 78% of the track and 42rem. Keep the turn anchor, attachments and timestamp receipt; align attachments and receipts to the same edge. Omit the visible author label for local user turns. Wrap prose, unbroken text and code without horizontal overflow. | `test/renderer.integration.test.ts` |
 | D35 | approved | The transcript MUST omit repeated `subagent_notification` events, Project `started` and `progress`, and undescribed synthetic task noise. Preserve parent answers, goal steers, described completions and notes, and actionable described Project member notifications with an Open action. Filtering MUST NOT change retained history or Activity. | `test/form-rules.test.ts`; `test/renderer.integration.test.ts` |
 | D36 | approved | Companion Context MUST give the category breakdown the full inner width, with readable labels, counts and shares. Keep usage and Session tasks readable; put Diagnostics, Loaded child task costs and Compaction history behind named keyboard-operable disclosures. Nested snapshot values MUST stack below their keys. Activity and Running MUST wrap both headings and metadata without truncation, with `scrollWidth <= clientWidth` throughout. | `test/renderer.integration.test.ts` |
 | D37 | approved | The mint Working arc MUST spin continuously through 360° at a constant speed around its center. The YCoding label and strip stay still. Keep the arc static with reduced motion or when animations are off. | `test/renderer.integration.test.ts` |
-| D38 | approved | At widths above 700px, connection status MUST sit beside the session title with one spacing step between them. Truncate text only when width is constrained; the header actions remain at the trailing edge. | `test/renderer.integration.test.ts` |
+| D38 | approved | At every supported window width, connection status MUST sit beside the session title with one spacing step between them. Truncate text only when width is constrained: the connection status keeps its natural width while the title keeps at least `--yc-space-20`, so the title truncates first and the status truncates only once the title is at that floor. The header actions remain at the trailing edge. The status bar repeats connection status as its first state item. | `test/renderer.integration.test.ts` |
 | D39 | approved | The model and effort chips MUST open the same searchable catalog without blocking interaction, including when 600 models are offered. Keep provider grouping, recent models, profile and effort selection, and focus return to the invoking control. | `test/renderer.integration.test.ts`; `test/model-switch.test.ts` |
 | D40 | approved | User and assistant turns, reasoning, substantive notices and narrative tool output MUST use Markdown. Fenced code MUST preserve indentation and line breaks; show its language or `text` and an icon-led Copy action that writes the rendered code text through the native clipboard. Text must remain selectable and any code scrollbar must stay inside the code viewport. | `test/renderer.integration.test.ts` |
 | D41 | approved | Use the control, card and composer corner roles consistently across navigation, views and overlays. Use the canvas for the reading track, raised cards for coherent control/inspector groups, and semantic ink for state. Keep existing pane boundaries, routes and named actions. Provider profiles MUST show labelled default and connection state rather than raw booleans. System tool notices MUST appear only on their owning tab. | `test/ledger-design.test.ts`; `test/renderer.integration.test.ts` |
 | D42 | approved | A composer MUST paste text and attach clipboard or drop files through the existing prompt file contract. Show a visible file drop target, removable attachment chips, and recoverable limits or read errors before submission. Drop outside the composer MUST NOT navigate the window. No asynchronous transfer may change a locked or replaced draft. | `test/renderer.integration.test.ts` |
 | D43 | approved | Project titles and roster actions MUST use the available main pane up to its normal inspector gutter. Align concurrency and delegated decisions in the footer and folder inputs with chooser buttons; wrap controls rather than crowding them. | `test/renderer.integration.test.ts` |
-| D44 | approved | The context ring, token count and percentage MUST remain visible in one named header control. Rail links and Settings section buttons retain distinct roles and share icon geometry, label insets and current-state treatment. Settings cards MUST use `--yc-space-5` insets, `--yc-space-4` at or below 700px, and a 1px `--yc-border` frame. Align Machine and Updates at the top; let each frame follow its content. Below 701px the Keep machine awake switch retains a centered 32×18px pill and 12px thumb in its interaction box; the coarse target MUST be at least 44×44px. Shortcut actions MUST stay beside the field within their own grouped track, with distinct focus, selection, hover and unassigned states. | `test/renderer.integration.test.ts` |
-| D45 | approved | Management dialogs MUST share Desktop headings, spacing, close/focus behavior and scroll boundaries. MCP moves refresh into its header and nests resources beneath their server. Connect providers MUST keep search and refresh inline when they fit; wrap names and identifiers, stack the two columns at or below 700px, and keep `scrollWidth <= clientWidth` in both. Pad the provider, credential, authorization and custom URL surfaces and separate Add provider from the input. | `test/renderer.integration.test.ts` |
+| D44 | approved | The context ring, token count and percentage MUST remain visible in one named header control; the status bar repeats the ring and percentage. Settings section buttons share icon geometry, label insets and current-state treatment. Settings cards MUST use `--yc-space-5` insets and a 1px `--yc-line-subtle` frame. Align Machine and Updates at the top; let each frame follow its content. The Keep machine awake switch retains a centered 32×18px pill and 12px thumb in its interaction box; its coarse target MUST be at least 44×44px. Shortcut actions MUST stay beside the field within their own grouped track, with distinct focus, selection, hover and unassigned states. | `test/renderer.integration.test.ts` |
+| D45 | approved | Management dialogs MUST share Desktop headings, spacing, close/focus behavior and scroll boundaries. MCP moves refresh into its header and nests resources beneath their server. Connect providers MUST keep search and refresh inline when they fit; wrap names and identifiers, keep the two columns side by side, and keep `scrollWidth <= clientWidth` in both. Pad the provider, credential, authorization and custom URL surfaces and separate Add provider from the input. | `test/renderer.integration.test.ts` |
 | D46 | approved | Escape MUST dismiss the focused layer without minimizing the window. Restore focus to that layer's invoking control, unless it leaves the screen or is unavailable. The native Window menu and window button retain explicit minimize. | `test/renderer.integration.test.ts`, `test/host-contract.test.ts`, `SCENARIOS.md` |
-| D47 | implemented | Regular-width provider dialogs MUST cap their width at 880px and place the registry beside the connection form. Compact windows stack those regions within the same dialog. The header meter MUST use the compact 24px control step for the ring and retain 12px visible values. | `test/renderer.integration.test.ts` |
+| D47 | implemented | Regular-width provider dialogs MUST cap their width at 880px and place the registry beside the connection form. The header meter MUST use the compact 24px control step for the ring and retain 12px visible values. | `test/renderer.integration.test.ts` |
 | D48 | approved | Team MUST reserve space for the floating Master composer while the table and inspector scroll. At the list boundary the final row and its action remain visible. The Team scroll-to-top control and its side tooltip MUST NOT cover the composer or progress card on hover or keyboard focus. The action never targets the hidden transcript. Align table headers with their cells and use `--yc-space-4` insets in the blocker summary and inspector cards. | `test/renderer.integration.test.ts` |
-| D49 | approved | Native desktop windows MUST enforce a minimum content size of 800×600px (`window-min-width` and `window-min-height`), clamping any smaller initial or programmatic bounds to at least 800×600px while allowing free resizing at or above that floor and preserving traffic lights, explicit Minimize/Restore, focus return, Escape and reduced motion. | `test/window-bounds.test.ts`; `test/isolated-mode.test.ts`; `SCENARIOS.md` |
+| D49 | approved | Native desktop windows MUST enforce a minimum content size of 1000×600px (`window-min-width` and `window-min-height`) through AppKit `setContentMinSize:`, clamping any smaller initial or programmatic bounds to at least 1000×600px while allowing free resizing at or above that floor and preserving traffic lights, explicit Minimize/Restore, focus return, Escape and reduced motion. | `test/window-bounds.test.ts`; `test/isolated-mode.test.ts`; `SCENARIOS.md` |
 | D50 | implemented | Genuine Dot-originated synthetic steer prompts (excluding internal envelopes, system/review/instruction/history/peer/audit metadata and notices) MUST render as right-aligned trailing prompt bubbles via `SharedMessageTurn` with transport markup stripped, `transcript-message--synthetic` and `Dot steer prompt` accessible labeling, `Dot steer` provenance rather than human authorship, and prompt-rail ticks. Empty steers after transport stripping MUST remain hidden without inventing text; non-steer synthetic notices, `Dots.peer` and `Goal · steer` MUST remain unchanged. | `test/form-rules.test.ts`; `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
+| D51 | approved | An 80px activity bar MUST lead every Desktop screen with Chat, Team, Projects, Workspaces and Usage at the top and Settings at the bottom. Each destination is a 72×56px link with a 20px glyph, a visible 12/16 label, an accessible name and `aria-current="page"` on its current route. Chat carries the needs-action count and Team the active-subagent count as glyph-corner badges with visually hidden names. Plain primary clicks navigate in place; modifier and middle clicks keep native link behavior. | `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
+| D52 | approved | The Session list column MUST sit beside the activity bar at 280px, or 256px in windows up to 1180px wide, and resize from 232px to 360px through an end-edge `role="separator"` with pointer drag, ArrowLeft/ArrowRight in 8px steps, Home/End for the bounds and a current `aria-valuenow`. The chosen width persists in local storage; a failed read or save keeps the window's width and reports a notice. Hide list and the sidebar shortcut hide and restore the column without losing its search, filter or paging state. | `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
+| D53 | approved | One 28px status bar MUST span the bottom of every Desktop screen: the Session-list toggle, connection and machine, then for a selected Session its model, effort, autonomy, context meter and Session tokens, and the running count at the trailing edge. Every item except the token readout is a button to its owning setting or view, and every item fills the bar's full height without growing it. When the bar is 1100px wide or narrower, items with a short label show it. The bar reports existing Session fields only and replaces no component toolbar (D32). | `test/renderer.test.tsx`; `test/renderer.integration.test.ts` |
+| D54 | approved | While a Session executes, a 2px mint trace MUST run along the top edge of the conversation header and of the status bar. When a child task starts, a junction branches off the trace and the running count switches to the branch glyph with the name "N Sessions running, a child task started". The trace is `aria-hidden`; the running count carries the announcement. With reduced motion or animations off the trace is a static 50% mint line. | `test/renderer.integration.test.ts` |
+| D55 | approved | The Session list MUST group rows under Needs action, Running, Pinned and Recent headings in that order, each with its glyph, hue and an "N Session" or "N Sessions" count, and omit empty groups. Each row shows its workspace name as metadata below the title. Status filters, search, pins and paging keep their bounded connection-scoped reads. | `test/form-rules.test.ts`; `test/renderer.integration.test.ts` |
+| D56 | approved | In every Desktop theme, `ink`, `ink-secondary` and `ink-tertiary` MUST be distinct and reach 4.5:1 on the chrome, canvas, raised, hover and selected planes. Field, composer and control boundaries (`line-field`) and pane separators and card frames (`line-subtle`) MUST reach 3:1 against the chrome, canvas and raised planes; `line-divider` separates rows only inside a component that already has such a boundary or a plane step. The chrome, canvas and raised planes MUST NOT share a value. State graphics (rings, meters, progress, trace, focus) MUST reach 3:1 on those planes, and `on-cobalt` text 4.5:1 on `cobalt-solid`. | `test/ledger-design.test.ts`; review-only divider placement |
 
 ## Colors
 
-Use `surface` for quiet rows, `surface-raised` for active or floating surfaces, and `surface-sunken` for recessed readouts and compact metadata. Tint user bubbles lightly with mint over `surface-raised`. Use violet for reasoning and Projects, teal for terminal and tools, sky blue for files, models and Markdown links, mint for active or completed work, amber for usage and goals, and the danger role for failures and destructive actions. Effort icons follow their variant hues. Pair every state color with a name or distinct icon. Resolve these roles through the documented light, dark and high-contrast schemes; keep raw color values in tokens, not component styles.
+Paint the activity bar, Session list, Companion, inspectors and status bar on `plane-chrome`, and the reading track and page on `plane-canvas`. Use `plane-raised` for cards, the composer field, request cards, settings sections and floating bodies, `plane-hover` for hover, and `plane-selected` for selected rows. Cobalt is the interaction color: primary buttons (`cobalt-solid` with `on-cobalt`), focus, links in controls, selection (`cobalt-tonal`) and the current destination. The local user bubble uses `cobalt-tonal`. Mint marks running and completed work only; violet marks reasoning and Projects, teal terminal and tools, sky files, models and Markdown links, amber attention, usage and goals, and coral failures and destructive actions. Each hue offers `tonal`, `tonal-hover`, `line`, `graphic`, `solid`, `solid-hover`, `ink` and `on-<hue>` roles; text uses `-ink`, fills and glyphs use `-graphic` or `-solid`. Effort icons follow their variant hues. Pair every state color with a name or distinct icon. The default dark palette is listed under `colors`; Light, One Dark light and dark, One Dark Pro and High contrast light and dark are listed under `themes`. Keep raw color values in tokens, never in component styles.
 
 ## Typography
 
@@ -218,9 +714,9 @@ Use self-hosted Geist for interface prose and JetBrains Mono Regular, Medium and
 
 ## Layout
 
-The 256px rail and optional 320px Companion bound the conversation pane. Center transcript and composer in one track with equal inline gutters and a 1024px cap. Use 24px wide gutters and 12px compact gutters. Assistant prose and tool detail use the full track. Local user bubbles, attachments and timestamp receipts align at the trailing edge. Keep the title and workspace or connection status together at the leading edge of the 40px conversation header. Group the trailing Team, context, Companion and menu controls; show the context values beside the ring, not in a second control or a tooltip alone.
+The 80px activity bar, the 280px Session list (256px in windows up to 1180px wide, resizable from 232px to 360px) and the optional 320px Companion bound the conversation pane, and the 28px status bar spans the window below them. Center transcript and composer in one track with equal inline gutters and a 1024px cap. Use 48px gutters, which keep the floating scroll and zoom controls outside the track. Assistant prose and tool detail use the full track. Local user bubbles, attachments and timestamp receipts align at the trailing edge. Keep the title and workspace or connection status together at the leading edge of the 40px conversation header. Group the trailing Team, context, Companion and menu controls; show the context values beside the ring, not in a second control or a tooltip alone.
 
-Keep the composer footer compact. Place the flexible spacer before the metrics/autonomy/send cluster, not between Auto and Send. Keep their control-box gap at 8–10px and Send's trailing and bottom card insets at 10–12px, matching the left attachment/model treatment. Reflow controls on compact windows without losing any control or shrinking coarse targets. Tighten turn, activity-step and composer spacing together without removing content or reducing text sizes.
+Keep the composer footer compact. Place the flexible spacer before the metrics/autonomy/send cluster, not between Auto and Send. Keep their control-box gap at 8–10px and Send's trailing and bottom card insets at 10–12px, matching the left attachment/model treatment. Reflow controls at the window floor without losing any control or shrinking coarse targets. Tighten turn, activity-step and composer spacing together without removing content or reducing text sizes.
 
 Give every flex/grid child that contains long content a shrinkable track. Wrap paths, labels, tool output and code without destroying their text; keep controls at their readable size and reflow the action row when needed. Neither the composer nor its surrounding dock owns a horizontal scroller. Give each pane one deliberate vertical scroll owner and retain the established attached-reader behavior.
 
@@ -248,7 +744,7 @@ Coordination uses a project inventory, one Master/member roster and a separate A
 | Appearance / command palette | 560px / 640px widths; palette search 48px |
 | Captured-file confirmation | 460px width |
 
-Desktop enforces a native minimum window content size of `800×600px` (`window-min-width: 800px`, `window-min-height: 600px`) and opens new windows at `1360×860px` with no persisted window-bounds file (`preferences.ts` stores only backend `mode` and `sharedEndpoint`). Baseline evidence for `800×600px`: `800px` remains above the `700px` compact drawer breakpoint so the `256px` persistent navigation rail (`layout.rail`) sits beside a `544px` main pane (`448px` centered track with `24px` gutters), side-by-side title/status header (`D38`), `--yc-space-5` Settings card insets (`D44`), `min(320px, 100%)` overlay Companion leaving main-pane context visible, 2-column Connect providers (`D45`/`D47`), and the `752px` (`100dvw - 48px`) modal track for `640px` palette, `680px` editor, `740px` stashes and `768px` default dialogs; `600px` exceeds the `36rem` (`576px`) compact-height dialog rule in `src/style.css` (`552px` modal height, `560px` body below the `40px` header) and aligns with Electrobun's `BrowserWindow` `800×600` baseline.
+Desktop enforces a native minimum window content size of `1000×600px` (`window-min-width: 1000px`, `window-min-height: 600px`) and opens new windows at `1360×860px` with no persisted window-bounds file (`preferences.ts` stores only backend `mode` and `sharedEndpoint`). At `1000×600px` the `80px` activity bar and the `256px` Session list sit beside a `664px` main pane, whose centered track keeps `48px` gutters, above the `28px` status bar, the title and status share one header row (`D38`), Settings cards keep `--yc-space-5` insets (`D44`), Companion overlays at `min(320px, 100%)` below the `1180px` docking boundary, Connect providers keeps two columns (`D45`/`D47`), Team stacks into one scrolling track at `1000px` and below, and modal dialogs use the `952px` (`100dvw - 48px`) track. `600px` exceeds the `36rem` (`576px`) short-height dialog rule in `src/style.css`. Desktop styles own no width rule below `1000px`.
 
 The composer recognizes `/btw`, `/btw-send`, `/suggest`, `/prompt`, `/cd`, `/editor`, `/docs`, `/exit` and `/defer` as local commands. Side-chat and prompt-assistance commands open a reviewable dialog with the supplied text; they do not submit that text as an ordinary prompt. `/btw-send` is restricted to a BTW side chat with a parent. `/prompt` from New chat creates a Session only after confirmation and opens prompt assistance without sending a prompt. `/editor` opens the draft through `VISUAL`, then `EDITOR`, using a private temporary file and argument parsing without a shell. Missing or unsuccessful external editors open the owned draft dialog instead. Saving preserves file and agent attachments; an empty edited draft is valid. `/docs` opens the documentation in the external browser. `/exit` confirms before disconnecting and quitting; a failed disconnect prevents quitting.
 
@@ -258,29 +754,29 @@ Full Session diffs use independent 240px unified and 220px split file tracks. Ke
 
 ## Responsive
 
-Keep the existing 700px compact navigation/drill-in boundary and 1180px companion overlay boundary. At compact widths, put selectors on another composer row rather than shrinking their text. Use contained, content-sized picker sheets, visual viewport geometry and safe-area insets. Keep a named Close/Back action, scrim dismissal and Escape behavior. At 320px the whole page and all named conversation/composer containers still fit horizontally. Native compact checks concern the Desktop renderer in a resized window, not a claim of physical-phone verification.
+Desktop renders only at `1000px` and wider. The `1180px` boundary docks Companion beside the conversation above it and overlays it at or below it. Workspaces and Projects add their side-by-side list/detail tracks at `1100px` and `1280px`, and Settings navigation stacks above its cards below `1280px`. Coarse pointers keep 44px targets, grow the conversation and Companion headers to 52px so those targets stay inside them, and keep 16px inputs and content-sized picker sheets with visual viewport geometry, safe-area insets, a named Close, scrim dismissal and Escape.
 
 ## Elevation & Depth
 
-Use single-level tonal planes in normal flow and restrained depth for floating layers. Keep useful pane separators, field boundaries and destructive/pending treatments. Remove a redundant wrapper at its owner; never apply blanket border-removal CSS. A disclosure is an interaction, not a reason to put another card around every nested row.
+Use single-level tonal planes in normal flow: chrome, canvas and raised steps carry the hierarchy, and the composer and cards stay flat. `elevation-float` belongs only to popovers, dialogs, sheets, toasts, tooltips and the Companion while it overlays the conversation below the 1180px docking boundary. Keep useful pane separators, field boundaries and destructive/pending treatments. Remove a redundant wrapper at its owner; never apply blanket border-removal CSS. A disclosure is an interaction, not a reason to put another card around every nested row.
 
 ## Shapes
 
-Use 8px for interactive controls, 12px for raised cards and dialogs, and 16px for the single composer boundary. Preserve smaller detail radii and circular status geometry. Group controls without enclosing each field in another card; keep repeated conversation activity open and aligned.
+Use 6px (`radius-control`) for interactive controls, 8px (`radius-card`) for raised cards and dialogs, 12px (`radius-composer`) for the single composer boundary, 4px (`radius-detail`) for keycaps and code chips, and 999px (`radius-pill`) for pills and badges. Keep circular status geometry. Group controls without enclosing each field in another card; keep repeated conversation activity open and aligned.
 
 ## Motion
 
-Reuse the canonical shared `--yc-dur-*`, `--yc-ease-*` and `--yc-motion-*` tokens: 80ms feedback, 140ms small changes/exits, 220ms entrances and 320ms slow effects where appropriate. Screen/Session navigation stays within 300ms. Use standard easing for state feedback, entrance easing for entering layers and exit easing for closing layers. Animate transform and opacity; do not tween transcript height, every streaming token, large grids or permanent layout widths.
+Reuse the canonical shared `--yc-dur-*`, `--yc-ease-*` and `--yc-motion-*` tokens: 80ms feedback, 140ms small changes and exits, and 220ms entrances, with no spring overshoot. Loops use linear easing: the trace runs on `dur-trace` (1760ms) and the Working arc on `dur-spin` (660ms); the streaming caret steps on `ease-caret`. Screen/Session navigation stays within 300ms. Use standard easing for state feedback, entrance easing for entering layers and exit easing for closing layers. Animate transform and opacity; do not tween transcript height, every streaming token, large grids or permanent layout widths.
 
 Keep the shell, composer and stable message rows mounted through navigation and refresh. Panel and disclosure state changes retain focus and the reading anchor. Start closing behavior immediately and remove a floating layer when its actual exit finishes; interruption must leave a usable final state. Essential content remains visible at rest. No new motion framework or dependency is needed.
 
-One global reduced-motion mapping removes spatial travel and smooth scroll, limits effect fades to 150ms or less and makes exits immediate. Reduced motion preserves feedback, expanded state, focus visibility and announcements. Verify normal and reduced motion during streaming, disclosure, navigation and member selection; a stationary screenshot alone proves none of those transitions.
+One global reduced-motion mapping sets `motion-spatial-dur` and `motion-exit-dur` to 0s, `motion-effect-dur` to 80ms and `motion-travel` to 0, which removes spatial travel and smooth scroll and makes exits immediate. The Desktop animations-off preference (`data-animations="off"`) sets every motion duration to 0s. Both stop the trace on a static 50% mint line. Reduced motion preserves feedback, expanded state, focus visibility and announcements. Verify normal and reduced motion during streaming, disclosure, navigation and member selection; a stationary screenshot alone proves none of those transitions.
 
-The Working strip shows a mint partial circle immediately before YCoding. Rotate only the arc on its center at a constant speed, using three slow-duration steps per revolution. Keep its label and neighbors still. Reduced motion and the Desktop animation preference both stop the spin.
+The Working strip shows a mint partial circle immediately before YCoding. Rotate only the arc on its center at a constant speed, one `dur-spin` revolution at a time. Keep its label and neighbors still. Reduced motion and the Desktop animation preference both stop the spin.
 
 ## Icons
 
-Use the owned 24-unit SVG registry, 1.6-unit rounded currentColor strokes and 16px inline icons. Model, effort, policy, delivery, attachment and execution controls keep meaningful symbols, consistent alignment and readable values. Running, waiting, failed, idle and unknown states keep distinct glyphs and names. Dense actions expose owned non-native hover/focus hints; coarse actions keep 44px reach. Do not replace user-facing names with unexplained icons or native title tooltips.
+Use the owned 24-unit SVG registry and 1.6-unit rounded currentColor strokes, rendered at 14px in the status bar and dense chips, 16px in rows and buttons, and 20px in the activity bar. Model, effort, policy, delivery, attachment and execution controls keep meaningful symbols, consistent alignment and readable values. Running, waiting, failed, idle and unknown states keep distinct glyphs and names. Dense actions expose owned non-native hover/focus hints; a trigger hides its hint while its popover, menu or dialog is open. Coarse actions keep 44px reach. Do not replace user-facing names with unexplained icons or native title tooltips.
 
 ## Components
 
@@ -298,15 +794,15 @@ Place the context ring beside the window summary, above a full-width category br
 
 Align the composer with the transcript axis, with one input boundary and open icon-led controls. Model, reasoning, autonomy and delivery retain their menus, values and validation. Metrics remain labelled and distinct from Send/Stop. Attachments and context chips wrap without pushing the pane wider. Sidebar titles retain full accessible names; grouping, status filters, paging and pinning keep bounded connection-scoped reads.
 
-Group the rail as Needs action, Running, Pinned, Recent. On startup, use the saved connection and open the last available Session or New chat. Machine & Backend owns configuration and reconnect actions. Route links and section buttons share 16px icons, the control inset and tonal selection, with `aria-current="page"` for routes and `aria-current="location"` for sections. Machine and Updates share equal-width tracks and a top edge, with content-height frames. Settings switches to one content column below 1280px. Session display, Keyboard shortcuts, Permissions, Models & Providers, and MCP retain the same raised card, inset and frame. Provider and MCP cards open the existing management dialogs. At 700px, keep Command, Shortcut and its action group on one baseline; below 520px, Command takes a full row and actions stay beside Shortcut. Show chords in mono pills. The selected row has a tonal surface and inset marker; keyboard focus is distinct from selection.
+The activity bar holds the destinations; the Session list holds New chat, the Sessions overview link, search, status filters and the grouped rows. Group the list as Needs action, Running, Pinned, Recent, with the workspace name as row metadata. On startup, use the saved connection and open the last available Session or New chat. Machine & Backend owns configuration and reconnect actions. Activity-bar destinations use `aria-current="page"` and a cobalt tonal current state; Settings section buttons share 16px icons, the control inset and tonal selection with `aria-current="location"`. Machine and Updates share equal-width tracks and a top edge, with content-height frames. Settings switches to one content column below 1280px. Session display, Keyboard shortcuts, Permissions, Models & Providers, and MCP retain the same raised card, inset and frame. Provider and MCP cards open the existing management dialogs. Keep Command, Shortcut and its action group on one baseline. Show chords in mono pills. The selected row has a tonal surface and inset marker; keyboard focus is distinct from selection.
 
 ### Projects and management
 
-Keep the Project Master/member roster singular. Master and member creation accept an absolute POSIX, drive or UNC path, `~`, `~/…` or `~\…`. Send it to the backend as typed without probing this machine's filesystem; create a missing folder after confirmation. Back and Escape preserve selection and return focus in compact views. Remove from project retains the Session; Delete Session and Delete project keep their distinct confirmations.
+Keep the Project Master/member roster singular. Master and member creation accept an absolute POSIX, drive or UNC path, `~`, `~/…` or `~\…`. Send it to the backend as typed without probing this machine's filesystem; create a missing folder after confirmation. Escape preserves selection and returns focus. Remove from project retains the Session; Delete Session and Delete project keep their distinct confirmations.
 
-Team uses separate roster and selected-child scrollports above the composer at regular widths. In stacked mode the Team view owns their scroll; at 700px the selected-child inspector uses the compact panel. The scroll-to-top action lives on the composer caption row. Its tooltip opens toward the caption, within a reserved inline slot and outside both scrollports and the composer field. Hover and keyboard focus use the same geometry without moving the caption. The blocker summary and inspector cards share a 16px content inset. Preserve long progress text, row selection, the keyboard path to the last member, and the selected child's request boundary.
+Team uses separate roster and selected-child scrollports above the composer at regular widths. In stacked mode the Team view owns their scroll. The scroll-to-top action lives on the composer caption row. Its tooltip opens toward the caption, within a reserved inline slot and outside both scrollports and the composer field. Hover and keyboard focus use the same geometry without moving the caption. The blocker summary and inspector cards share a 16px content inset. Preserve long progress text, row selection, the keyboard path to the last member, and the selected child's request boundary.
 
-Use the Desktop modal shell for a named title, compact header actions, visible Close, scrollable content and, where needed, a footer. Keep inner navigation and confirmation actions keyboard reachable. MCP shows state beside the server name, groups actions at the trailing edge or below, and nests the resource cards within that server. Connect providers uses a bounded vertical registry with separate wrapping name and identifier lines. At regular widths the registry stays visible while the dialog scrolls through authorization details; at compact widths it returns to flow above the detail. Use 16px card insets and an 8px minimum input-to-action gap for Add provider. Keep focus visible and restore it on dismissal; reduced motion preserves that interaction without travel.
+Use the Desktop modal shell for a named title, compact header actions, visible Close, scrollable content and, where needed, a footer. Keep inner navigation and confirmation actions keyboard reachable. MCP shows state beside the server name, groups actions at the trailing edge or below, and nests the resource cards within that server. Connect providers uses a bounded vertical registry with separate wrapping name and identifier lines. The registry stays visible while the dialog scrolls through authorization details. Use 16px card insets and an 8px minimum input-to-action gap for Add provider. Keep focus visible and restore it on dismissal; reduced motion preserves that interaction without travel.
 
 ### Bridge gaps
 
@@ -318,7 +814,7 @@ Keep semantic landmarks, names, visible focus and keyboard operation. Normal tex
 
 ## Verification
 
-`SCENARIOS.md` maps populated layout, execution hierarchy, long-content containment, Project sizing and motion to selected local tests and separate native observations. Record before/after wide and compact screenshots plus relevant DOM widths, gutters, centers and scrollbar geometry. Use existing synthetic sessions and managed data for isolated QA; do not mutate a live backend or use real provider accounts to populate validation states.
+`SCENARIOS.md` maps populated layout, execution hierarchy, long-content containment, Project sizing and motion to selected local tests and separate native observations. Record before/after `1000×600` and `1440×900` screenshots plus relevant DOM widths, gutters, centers and scrollbar geometry. Use existing synthetic sessions and managed data for isolated QA; do not mutate a live backend or use real provider accounts to populate validation states.
 
 Run strict `design_md.py lint` on this file and its brand parent. Use `test/ledger-design.test.ts` for token drift and binding rules, `test/form-rules.test.ts` for transcript visibility, and `test/renderer.integration.test.ts` for rendered geometry, keyboard controls, motion and model selection. Keep native acceptance separate: browser fixtures do not establish native-window behavior, saved-endpoint readback or a crash-free packaged app.
 
@@ -337,6 +833,6 @@ Read this contract and its brand parent before visual changes. Obtain approval f
 
 Root R9, Desktop code/metadata only: self-hosted JetBrains Mono follows the explicit Desktop font directive and approved source declarations. Geist remains the interface family; Web and other surfaces keep their font contract. Approval: Desktop-only directive of 2026-11-16; review date 2026-11-17.
 
-Root R4, compact/coarse Desktop pickers only: content-sized bottom sheets replace beside-control anchoring. Fine-pointer Desktop anchoring is unchanged. Approval: compact-renderer directive of 2026-11-16; review date 2026-11-17.
+Root R4, coarse-pointer Desktop pickers only: content-sized bottom sheets replace beside-control anchoring. Fine-pointer Desktop anchoring is unchanged. Approval: compact-renderer directive of 2026-11-16; review date 2026-11-17.
 
 Root Ledger Settings composition, Desktop only: pane-filling responsive tracks and icon-led section navigation retain all Settings behavior. Approval: Desktop directive of 2026-11-17; review date 2026-11-17.

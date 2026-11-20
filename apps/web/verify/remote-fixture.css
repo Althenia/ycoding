@@ -8,9 +8,9 @@
 .fixture__banner {
   margin: 0;
   padding: var(--yc-space-2) var(--yc-space-4);
-  background: var(--yc-yellow-soft);
-  color: var(--yc-yellow-strong);
-  border-bottom: 1px solid var(--yc-yellow);
+  background: var(--yc-amber-tonal);
+  color: var(--yc-amber-ink);
+  border-bottom: 1px solid var(--yc-amber-graphic);
   font-size: 0.8125rem;
   font-weight: 600;
 }
@@ -20,6 +20,6 @@
   flex-wrap: wrap;
   gap: var(--yc-space-2);
   padding: var(--yc-space-2) var(--yc-space-4);
-  border-bottom: 1px solid var(--yc-border);
-  background: var(--yc-surface);
+  border-bottom: 1px solid var(--yc-line-subtle);
+  background: var(--yc-plane-raised);
 }

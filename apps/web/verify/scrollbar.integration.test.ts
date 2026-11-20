@@ -87,20 +87,20 @@ test("expanded Team inspector draws the owned thumb at rest, under the pointer, 
     const y = box.top + 16
     const points = [[box.right - size / 2, y], [box.right - 9, y], [box.right - 1, y], [box.right - size - 3, y]] as const
     const [restCenter, restOuter, restEdge, reference] = await pixels(page, await page.screenshot(), points)
-    expect(restCenter).toBe(await tokenColor(page, "--yc-border-strong"))
+    expect(restCenter).toBe(await tokenColor(page, "--yc-line-field"))
     expect(restOuter).toBe(reference)
     expect(restEdge).toBe(reference)
     await page.mouse("mouseMoved", box.right - size / 2, y)
     await frames(page)
     const [hoverCenter, hoverOuter, hoverEdge] = await pixels(page, await page.screenshot(), points.slice(0, 3))
-    expect(hoverCenter).toBe(await tokenColor(page, "--yc-text-muted"))
-    expect(hoverOuter).toBe(await tokenColor(page, "--yc-text-muted"))
+    expect(hoverCenter).toBe(await tokenColor(page, "--yc-line-field"))
+    expect(hoverOuter).toBe(await tokenColor(page, "--yc-line-field"))
     expect(hoverEdge).toBe(reference)
     await page.mouse("mousePressed", box.right - size / 2, y)
     await frames(page)
     const [dragOuter] = await pixels(page, await page.screenshot(), [points[1]])
     await page.mouse("mouseReleased", box.right - size / 2, y)
-    expect(dragOuter).toBe(await tokenColor(page, "--yc-green-strong"))
+    expect(dragOuter).toBe(await tokenColor(page, "--yc-focus"))
   } finally { await page.close() }
 }, 20_000)
 
@@ -116,21 +116,21 @@ test("remote scroll regions draw the owned thumb at rest, under the pointer, and
       const low = Math.round(box.bottom - 4)
       const points = [[box.right - size / 2, y], [box.right - 9, y], [box.right - 1, y], [box.right - size - 3, y], [box.right - size / 2, low], [box.right - size - 3, low]] as const
       const [restCenter, restOuter, restEdge, reference, trackEnd, referenceLow] = await pixels(page, await page.screenshot(), points)
-      expect(restCenter).toBe(await tokenColor(page, "--yc-border-strong"))
+      expect(restCenter).toBe(await tokenColor(page, "--yc-line-field"))
       expect(restOuter).toBe(reference)
       expect(restEdge).toBe(reference)
       expect(trackEnd).toBe(referenceLow)
       await page.mouse("mouseMoved", box.right - size / 2, y)
       await frames(page)
       const [hoverCenter, hoverOuter, hoverEdge] = await pixels(page, await page.screenshot(), points.slice(0, 3))
-      expect(hoverCenter).toBe(await tokenColor(page, "--yc-text-muted"))
-      expect(hoverOuter).toBe(await tokenColor(page, "--yc-text-muted"))
+      expect(hoverCenter).toBe(await tokenColor(page, "--yc-line-field"))
+      expect(hoverOuter).toBe(await tokenColor(page, "--yc-line-field"))
       expect(hoverEdge).toBe(reference)
       await page.mouse("mousePressed", box.right - size / 2, y)
       await frames(page)
       const [dragOuter] = await pixels(page, await page.screenshot(), [points[1]])
       await page.mouse("mouseReleased", box.right - size / 2, y)
-      expect(dragOuter).toBe(await tokenColor(page, "--yc-green-strong"))
+      expect(dragOuter).toBe(await tokenColor(page, "--yc-focus"))
     } finally { await page.close() }
   }
 }, 60_000)
@@ -174,10 +174,10 @@ test("the public page and horizontal scroll regions use the same owned scrollbar
     expect(viewport.scrollable).toBe(true)
     expect(viewport.width - viewport.client).toBe(size)
     const [documentThumb] = await pixels(page, await page.screenshot(), [[viewport.width - size / 2, 16]])
-    expect(documentThumb).toBe(await tokenColor(page, "--yc-border-strong"))
+    expect(documentThumb).toBe(await tokenColor(page, "--yc-line-field"))
     const probe = await page.evaluate(`(() => {
       const probe = document.createElement('div')
-      probe.style.cssText = 'position:fixed;left:40px;top:160px;width:240px;height:80px;overflow:auto;background:var(--yc-bg);z-index:2147483647'
+      probe.style.cssText = 'position:fixed;left:40px;top:160px;width:240px;height:80px;overflow:auto;background:var(--yc-plane-canvas);z-index:2147483647'
       probe.innerHTML = '<div style="width:960px;height:24px"></div>'
       document.body.append(probe)
       const rect = probe.getBoundingClientRect()
@@ -186,7 +186,7 @@ test("the public page and horizontal scroll regions use the same owned scrollbar
     expect(probe.thickness).toBe(size)
     await frames(page)
     const [horizontalThumb] = await pixels(page, await page.screenshot(), [[probe.left + 16, probe.bottom - size / 2]])
-    expect(horizontalThumb).toBe(await tokenColor(page, "--yc-border-strong"))
+    expect(horizontalThumb).toBe(await tokenColor(page, "--yc-line-field"))
     await page.setReducedMotion(true)
     await page.evaluate(`document.querySelector('.docs-search-trigger').click()`)
     await page.evaluate(`(()=>{const input=document.querySelector('#docs-search-field');input.value='autonom';input.dispatchEvent(new InputEvent('input',{bubbles:true}));})()`)
@@ -195,7 +195,7 @@ test("the public page and horizontal scroll regions use the same owned scrollbar
     expect(results.scrollable).toBe(true)
     expect(results.thickness).toBe(size)
     const [resultThumb] = await pixels(page, await page.screenshot(), [[results.right - size / 2, results.top + 16]])
-    expect(resultThumb).toBe(await tokenColor(page, "--yc-border-strong"))
+    expect(resultThumb).toBe(await tokenColor(page, "--yc-line-field"))
   } finally { await page.close() }
 }, 30_000)
 
@@ -282,7 +282,7 @@ test("composer autocomplete, pickers and selection sheets inherit owned fine-poi
     for (let attempt = 0; attempt < 80 && !await page.evaluate(`!!document.querySelector(${JSON.stringify(selector)})`); attempt++) await Bun.sleep(25)
     const result = await page.evaluate(`(()=>{const element=document.querySelector(${JSON.stringify(selector)});return{width:getComputedStyle(element,'::-webkit-scrollbar').width,thumb:getComputedStyle(element,'::-webkit-scrollbar-thumb').backgroundColor.match(/\\d+/g).slice(0,3).join(','),track:getComputedStyle(element,'::-webkit-scrollbar-track').backgroundColor}})()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, width: (decodeString)(record["width"]), thumb: (decodeString)(record["thumb"]), track: (decodeString)(record["track"]) } })
     expect(result.width).toBe(`${await scrollbarSize(page)}px`)
-    expect(result.thumb).toBe(await tokenColor(page, "--yc-border-strong"))
+    expect(result.thumb).toBe(await tokenColor(page, "--yc-line-field"))
     expect(result.track).toBe("rgba(0, 0, 0, 0)")
   }
   try {

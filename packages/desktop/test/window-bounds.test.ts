@@ -12,23 +12,25 @@ import {
   enforceNativeWindowMinimumSize,
 } from "../src/window-bounds"
 
-test("desktop window minimum constants reflect the non-compact desktop geometry", () => {
-  expect(DESKTOP_MIN_WINDOW_WIDTH).toBe(800)
+test("desktop window minimum constants hold the 1000x600 native floor", () => {
+  expect(DESKTOP_MIN_WINDOW_WIDTH).toBe(1000)
   expect(DESKTOP_MIN_WINDOW_HEIGHT).toBe(600)
-  expect(DESKTOP_MIN_WINDOW_SIZE).toEqual({ width: 800, height: 600 })
+  expect(DESKTOP_MIN_WINDOW_SIZE).toEqual({ width: 1000, height: 600 })
   expect(DESKTOP_DEFAULT_WINDOW_WIDTH).toBe(1360)
   expect(DESKTOP_DEFAULT_WINDOW_HEIGHT).toBe(860)
 })
 
 test("clampDesktopWindowFrame clamps sizes below minimum while preserving larger bounds", () => {
-  expect(clampDesktopWindowSize({ width: 360, height: 480 })).toEqual({ width: 800, height: 600 })
-  expect(clampDesktopWindowSize({ width: 799, height: 900 })).toEqual({ width: 800, height: 900 })
+  expect(clampDesktopWindowSize({ width: 360, height: 480 })).toEqual({ width: 1000, height: 600 })
+  expect(clampDesktopWindowSize({ width: 800, height: 600 })).toEqual({ width: 1000, height: 600 })
+  expect(clampDesktopWindowSize({ width: 999, height: 900 })).toEqual({ width: 1000, height: 900 })
+  expect(clampDesktopWindowSize({ width: 1000, height: 600 })).toEqual({ width: 1000, height: 600 })
   expect(clampDesktopWindowSize({ width: 1200, height: 599 })).toEqual({ width: 1200, height: 600 })
   expect(clampDesktopWindowSize({ width: 1440, height: 900 })).toEqual({ width: 1440, height: 900 })
   expect(clampDesktopWindowFrame({ x: 80, y: 80, width: 640, height: 480 })).toEqual({
     x: 80,
     y: 80,
-    width: 800,
+    width: 1000,
     height: 600,
   })
   expect(clampDesktopWindowFrame({ x: 120, y: 40, width: 1440, height: 900 })).toEqual({
@@ -56,17 +58,17 @@ test("enforceNativeWindowMinimumSize clamps resize events below minimum without 
   const resize = listeners.get("resize")
   expect(resize).toBeDefined()
 
-  resize!({ data: { width: 800, height: 600 } })
+  resize!({ data: { width: 1000, height: 600 } })
   resize!({ data: { width: 1440, height: 900 } })
   expect(setSizeCalls).toEqual([])
 
-  resize!({ data: { width: 640, height: 720 } })
-  resize!({ data: { width: 960, height: 420 } })
+  resize!({ data: { width: 800, height: 720 } })
+  resize!({ data: { width: 1200, height: 420 } })
   resize!({ data: { width: 360, height: 480 } })
   expect(setSizeCalls).toEqual([
-    { width: 800, height: 720 },
-    { width: 960, height: 600 },
-    { width: 800, height: 600 },
+    { width: 1000, height: 720 },
+    { width: 1200, height: 600 },
+    { width: 1000, height: 600 },
   ])
 })
 

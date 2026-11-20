@@ -306,7 +306,7 @@ describe("remote responsive state behavior", () => {
             bottomNavigationVisible: visible(document.querySelector('.bottom-nav')),
           };
         })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, columns: (decodeNumber)(record["columns"]), railVisible: (decodeBoolean)(record["railVisible"]), activityControl: (decodeNumber)(record["activityControl"]), activityNavigation: (decodeNumber)(record["activityNavigation"]), bottomNavigationVisible: (decodeBoolean)(record["bottomNavigationVisible"]) } })
-        expect(state.columns).toBe(width >= 768 ? 2 : 1)
+        expect(state.columns).toBe(width >= 768 ? 3 : 1)
         expect(state.railVisible).toBe(width >= 768)
         expect(state.activityControl).toBe(0)
         expect(state.activityNavigation).toBe(0)
@@ -526,7 +526,7 @@ describe("remote responsive state behavior", () => {
         expect(state.otherMarkScale).toBe(0)
         expect(state.selectedFill).toBe("rgba(0, 0, 0, 0)")
         expect(state.otherFill).toBe("rgba(0, 0, 0, 0)")
-        expect(state.selectedFrame).toBe("14px0px")
+        expect(state.selectedFrame).toBe("8px0px")
         expect(state.checked).toBeGreaterThan(0)
         expect(state.actions).toBeGreaterThanOrEqual(actionCount)
         expect(state.overflowing).toBe(false)
@@ -847,7 +847,7 @@ async function scenario(scenarioName: string, width: number, expected: string, t
 
 async function selectSessionWorkspace(page: Awaited<ReturnType<NonNullable<typeof browser>["openPage"]>>, directory: string, expected: string, scope = ".app", row = ".sessions-table__row") {
   if (scope === ".workspace__rail") {
-    await page.evaluate(`document.querySelector('.remote-nav a[href="/remote/sessions"]').click()`)
+    await page.evaluate(`document.querySelector('.activity-bar a[href="/remote/sessions"]').click()`)
     for (let attempt = 0; attempt < 40 && !await page.evaluate(`document.querySelector('.sessions-page__workspace-select [aria-label=Workspace]') !== null`); attempt += 1) await Bun.sleep(50)
     await selectSessionWorkspace(page, directory, expected)
     await page.evaluate(`[...document.querySelectorAll('.sessions-table__select')].find(button => button.textContent.includes(${JSON.stringify(expected)}))?.click()`)

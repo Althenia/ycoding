@@ -255,17 +255,32 @@ describe("session summary", () => {
     expect(sessionChips(pinned, active, { role: "member", name: "Atlas" })).toContainEqual({ label: "Member · Atlas", tone: "neutral" })
     expect(sessionChips(pinned, active).map((chip) => chip.label)).toEqual(["Pinned", "Autonomous Manual"])
   })
-    test("new-session composer trims the floating hero brand stack, highlights required repository triggers, and aligns picker text", async () => {
+    test("new-session composer uses a compact neutral repository picker, preserves accessible required state, and draws a cobalt focus ring", async () => {
     const newSessionSource = await Bun.file(new URL("./new-session.tsx", import.meta.url)).text()
     expect(newSessionSource).not.toContain("new-session-composer__brand")
     expect(newSessionSource).not.toContain("A LITTLE CONTEXT. A CLEAR NEXT STEP.")
     expect(newSessionSource).not.toContain("Start a standalone draft")
     expect(newSessionSource).toContain("phoneSummary")
+    expect(newSessionSource).toContain("required={repositoryRequired()}")
+    expect(newSessionSource).toContain("describedBy={helperId}")
+    expect(newSessionSource).toContain('badge={display().repositoryHighlight ? "Required" : undefined}')
 
     const composerCss = parseStylesheet("composer.css", await Bun.file(new URL("./composer.css", import.meta.url)).text())
+    const slot = declarationsWhere(composerCss, (rule) => rule.header === ".new-session-composer__repository > :is(.mini-picker, .loading-placeholder--repository)")
+    expect(slot.flex).toBe("0 1 18rem")
+    const trigger = declarationsWhere(composerCss, (rule) => rule.header === ".new-session-composer__repository .mini-picker__trigger")
+    expect(trigger).toMatchObject({ "border-radius": "var(--yc-radius-control)", border: "var(--yc-border-width) solid var(--yc-line-field)", background: "var(--yc-plane-raised)", color: "var(--yc-ink)" })
     const requiredButton = declarationsWhere(composerCss, (rule) => rule.header === ".new-session-composer__repository--required .mini-picker__trigger")
-    expect(requiredButton.background).toBe("var(--yc-primary-bg)")
-    expect(requiredButton.color).toBe("var(--yc-primary-fg)")
+    expect(requiredButton.background).toBeUndefined()
+    expect(requiredButton.color).toBeUndefined()
+    expect(requiredButton["border-color"]).toBe("var(--yc-line-field)")
+    expect(requiredButton["font-weight"]).toBe("var(--yc-weight-semibold)")
+    const refreshPrimary = declarationsWhere(composerCss, (rule) => rule.header === ".new-session-composer__refresh--primary")
+    expect(refreshPrimary).toMatchObject({ "border-color": "var(--yc-line-field)", background: "var(--yc-plane-hover)", color: "var(--yc-ink)" })
+    const focusRule = declarationsWhere(composerCss, (rule) => rule.header === ".new-session-composer__repository :is(.mini-picker__trigger, .new-session-composer__refresh):focus-visible")
+    expect(focusRule.outline).toBe("2px solid var(--yc-focus)")
+    expect(focusRule["outline-offset"]).toBe("2px")
+    expect(composerCss.rules.filter((rule) => rule.header.includes("new-session-composer__repository") || rule.header.includes("new-session-composer__refresh")).flatMap((rule) => Object.values(rule.declarations)).filter((value) => /--yc-(cobalt|mint)-solid/.test(value))).toEqual([])
     const labelAlign = declarationsWhere(composerCss, (rule) => rule.header === ".new-session-composer__repository .mini-picker__trigger span")
     expect(labelAlign["text-align"]).toBe("start")
   })
@@ -460,29 +475,29 @@ const boundaryFree = (declarations: Declarations) => {
 }
 
 describe("tonal sidebar and phone navigation", () => {
-  test("uses a borderless sidebar and a soft active destination pill", async () => {
+  test("puts the Session list on the chrome plane behind a 3:1 pane separator and labels every activity destination", async () => {
     const css = await readStylesheet("remote.css")
-    expect(declared(css, ".workspace__rail").background).toBe("var(--yc-surface-sunken)")
+    expect(declared(css, ".workspace__rail").background).toBe("var(--yc-plane-chrome)")
     expect(declared(css, ".workspace__rail")["border-inline-end"]).toBe("0")
+    expect(declared(css, ".workspace__rail")["box-shadow"]).toBe("inset calc(var(--yc-border-width) * -1) 0 0 var(--yc-line-subtle)")
     expect(declared(css, ".workspace__rail-body > .pane")["border-block-start"]).toBeUndefined()
-    const active = declared(css, ".remote-nav__link--active")
-    expect(active["box-shadow"]).toBe("none")
-    expect(active.background).toBe("var(--yc-surface-sunken)")
-    expect(active.color).toBe("var(--yc-text)")
-    expect(active["font-weight"]).toBe("var(--yc-weight-medium)")
-    expect(declared(css, ".remote-nav__link--active > svg").color).toBe("var(--yc-signal)")
-    const settings = declared(css, ".remote-nav__link--settings.remote-nav__link--active")
-    expect(settings).toMatchObject({ background: "var(--yc-green-soft)", color: "var(--yc-green-strong)", "font-weight": "var(--yc-weight-semibold)" })
-    expect(declared(css, ".remote-nav__link--settings.remote-nav__link--active > svg").color).toBe("var(--yc-green-strong)")
-    expect(declared(css, ".remote-nav__link")["min-block-size"]).toBe("var(--yc-hit-min)")
-    expect(declarationsWhere(css, (rule) => rule.header === ".remote-nav__link" && rule.conditions.length > 0)["min-block-size"]).toBeUndefined()
-    expect(declared(css, ".remote-nav__link")["min-inline-size"]).toBe("var(--yc-hit-min)")
-    expect(declared(css, ".remote-nav__link")["border-radius"]).toBe("var(--yc-radius-sm)")
-    expect(declared(css, ".workspace__rail-navigation")["border-block-start"]).toBe("1px solid var(--yc-border)")
+    const tablet = "@media (min-width: 768px)"
+    const phone = "@media (max-width: 767px), (max-height: 599px) and (pointer: coarse)"
+    expect(declared(css, ".app > .activity-bar")).toMatchObject({ "grid-area": "activity", display: "none" })
+    expect(declared(css, ".app > .status-bar")).toMatchObject({ "grid-area": "status", display: "none" })
+    expect(declarationsWhere(css, (rule) => rule.header === ".app" && rule.conditions.includes(tablet))).toMatchObject({
+      "grid-template-columns": "var(--yc-activity-w) var(--yc-rail-w) minmax(0, 1fr)",
+      "grid-template-rows": "auto minmax(0, 1fr) var(--yc-status-h)",
+      "grid-template-areas": '"activity rail header" "activity rail workspace" "status status status"',
+    })
+    expect(declarationsWhere(css, (rule) => rule.header === ".app > .activity-bar, .app > .status-bar" && rule.conditions.includes(tablet)).display).toBe("flex")
+    expect(declarationsWhere(css, (rule) => rule.header.split(",").map((part) => part.trim()).includes(".app > .activity-bar") && rule.conditions.includes(phone)).display).toBe("none")
+    expect(declared(css, ".session-row--active").background).toBe("var(--yc-plane-selected)")
+    expect(declared(css, ".workspace__rail-navigation")["border-block-start"]).toBe("1px solid var(--yc-line-subtle)")
     const source = await shell()
-    const nav = source.slice(source.indexOf("function PrimaryNav"), source.indexOf("function ResumeSession"))
-    expect(nav).toContain("remote-nav__link--${item.id}")
-    expect(nav).not.toContain("title=")
+    expect(source).not.toContain("function PrimaryNav")
+    expect(source).toContain('<SharedActivityBar label="Remote workspace" items={activityItems()}')
+    expect(source).toContain('<SharedStatusBar label="Session status" items={statusItems()} trace={trace()} />')
   })
 
   test("keeps five labeled phone targets with owned leading under the icon and a heavier active label", async () => {
@@ -503,7 +518,7 @@ describe("tonal sidebar and phone navigation", () => {
     expect(at(":root", phone)["--yc-phone-layout"]).toBe("1")
     expect(at(".app", phone)["grid-template-columns"]).toBe("minmax(0, 1fr)")
     expect(at(".app", phone)["grid-template-areas"]).toBe('"header" "workspace" "navigation"')
-    expect(at(".workspace__rail", phone).display).toBe("none")
+    expect(declarationsWhere(css, (rule) => rule.header.split(",").map((part) => part.trim()).includes(".workspace__rail") && rule.conditions.includes(phone)).display).toBe("none")
     expect(at(".bottom-nav", phone).display).toBe("grid")
     expect(css.rules.findIndex((rule) => rule.header === ".app" && rule.conditions.includes(phone))).toBeGreaterThan(css.rules.findIndex((rule) => rule.header === ".app" && rule.conditions.includes("@media (min-width: 768px)")))
     expect(at(".app", landscape)["grid-template-areas"]).toBe('"navigation header" "navigation workspace"')
@@ -517,20 +532,22 @@ describe("tonal sidebar and phone navigation", () => {
 
   test("keeps translucent portrait navigation legible and provides all opaque fallbacks", async () => {
     const css = await readStylesheet("remote.css")
-    expect(declared(css, ".bottom-nav").background).toBe("var(--yc-surface)")
+    expect(declared(css, ".bottom-nav").background).toBe("var(--yc-plane-chrome)")
+    expect(declared(css, ".bottom-nav")["border-block-start"]).toBeUndefined()
+    expect(declared(css, ".bottom-nav")["box-shadow"]).toBe("inset 0 var(--yc-border-width) 0 var(--yc-line-subtle)")
     expect(declared(css, ".bottom-nav")["backdrop-filter"]).toBeUndefined()
     expect(declared(css, ".bottom-nav")["-webkit-backdrop-filter"]).toBeUndefined()
     const support = "@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))"
     const enhanced = declarationsWhere(css, (rule) => rule.header === ".bottom-nav" && rule.conditions.includes(support))
     expect(enhanced).toMatchObject({
-      background: "color-mix(in srgb, var(--yc-surface) 92%, transparent)",
-      "backdrop-filter": "blur(16px) saturate(1.4)",
-      "-webkit-backdrop-filter": "blur(16px) saturate(1.4)",
+      background: "color-mix(in srgb, var(--yc-plane-chrome) 94%, transparent)",
+      "backdrop-filter": "blur(12px)",
+      "-webkit-backdrop-filter": "blur(12px)",
     })
     expect(css.rules.some((rule) => rule.header === ".bottom-nav" && rule.conditions.includes("@supports not (backdrop-filter: blur(1px))"))).toBe(false)
     for (const condition of ["@media (prefers-reduced-transparency: reduce)", "@media (forced-colors: active)"]) {
       const fallback = declarationsWhere(css, (rule) => rule.header === ".bottom-nav" && rule.conditions.includes(condition))
-      expect(fallback.background).toBe("var(--yc-surface)")
+      expect(fallback.background).toBe("var(--yc-plane-chrome)")
       expect(fallback["backdrop-filter"]).toBe("none")
       expect(fallback["-webkit-backdrop-filter"]).toBe("none")
       expect(css.rules.findIndex((rule) => rule.header === ".bottom-nav" && rule.conditions.includes(condition))).toBeGreaterThan(css.rules.findIndex((rule) => rule.header === ".bottom-nav" && rule.conditions.includes(support)))
@@ -539,11 +556,11 @@ describe("tonal sidebar and phone navigation", () => {
 
   test("retains distinct header borders and the existing focus and toast handoffs", async () => {
     const css = await readStylesheet("remote.css")
-    for (const [selector, background] of [[".app > .app-header", "var(--yc-bg)"], [".workspace__topbar", "var(--yc-surface)"]] as const) {
+    for (const [selector, background] of [[".app > .app-header", "var(--yc-plane-canvas)"], [".workspace__topbar", "var(--yc-plane-canvas)"]] as const) {
       expect(declared(css, selector).background).toBe(background)
     }
     expect(declared(css, ".app > .app-header")["border-block-end"]).toBeUndefined()
-    expect(declared(css, ".workspace__topbar")["border-block-end"]).toBe("1px solid var(--yc-border)")
+    expect(declared(css, ".workspace__topbar")["border-block-end"]).toBe("1px solid var(--yc-line-subtle)")
     const source = await shell()
     expect(source).toContain('<header class="app-header" data-toast-clearance>')
     expect(source).toContain(".workspace__topbar:not([inert]) .conversation-breadcrumb")
@@ -563,14 +580,14 @@ describe("tonal status strips", () => {
   test("presents connection, notice and consent strips without rules or inline bars", async () => {
     const [css, shared] = await Promise.all([readStylesheet("remote.css"), readStylesheet("base.css")])
     for (const strip of [declared(css, ".app .status-strip"), declared(css, ".telemetry-consent"), declared(shared, ".notice-strip")]) {
-      expect(strip["border-radius"]).toBe("var(--yc-radius-lg)")
+      expect(strip["border-radius"]).toBe("var(--yc-radius-card)")
       expect(strip["border-inline-start"]).toBeUndefined()
       expect(strip["border-block-end"]).toBeUndefined()
     }
-    expect(declared(css, ".app .status-strip--attention").background).toBe("var(--yc-yellow-soft)")
-    expect(declared(css, ".app .status-strip--offline").background).toBe("var(--yc-danger-soft)")
-    expect(declared(shared, ".notice-strip").background).toBe("var(--yc-surface)")
-    expect(declared(shared, ".notice-strip--warning").background).toBe("var(--yc-yellow-soft)")
+    expect(declared(css, ".app .status-strip--attention").background).toBe("var(--yc-amber-tonal)")
+    expect(declared(css, ".app .status-strip--offline").background).toBe("var(--yc-coral-tonal)")
+    expect(declared(shared, ".notice-strip").background).toBe("var(--yc-plane-raised)")
+    expect(declared(shared, ".notice-strip--warning").background).toBe("var(--yc-amber-tonal)")
   })
 
   test("leaves notice and empty planes to the shared stylesheet without re-adding a boundary", async () => {
@@ -613,9 +630,9 @@ describe("W89 flat sign-in and invitation column", () => {
     expect(panel["inline-size"]).toContain("420px")
     expect(declared(css, ".sign-in__bar")["border-block-end"]).toBeUndefined()
     const error = declared(css, ".sign-in__error")
-    expect(error["border-radius"]).toBe("var(--yc-radius-lg)")
+    expect(error["border-radius"]).toBe("var(--yc-radius-card)")
     expect(error["border-inline-start"]).toBeUndefined()
-    expect(error.background).toBe("var(--yc-danger-soft)")
+    expect(error.background).toBe("var(--yc-coral-tonal)")
     expect(await invite()).toContain('<Icon name="alert" size={16} />')
   })
 })
@@ -629,9 +646,9 @@ describe("open Sessions rows", () => {
     expect(head.background).toBe("transparent")
     expect(head["border-block-end"]).toBeUndefined()
     expect(declared(css, ".sessions-table__row")["border-block-end"]).toBeUndefined()
-    expect(declared(css, ".sessions-table__row")["border-radius"]).toBe("var(--yc-radius-lg)")
-    expect(declared(css, ".session-row--active").background).toBe("var(--yc-surface-sunken)")
-    expect(declared(css, ".session-row--active")["border-radius"]).toBe("var(--yc-radius-sm)")
+    expect(declared(css, ".sessions-table__row")["border-radius"]).toBe("var(--yc-radius-card)")
+    expect(declared(css, ".session-row--active").background).toBe("var(--yc-plane-selected)")
+    expect(declared(css, ".session-row--active")["border-radius"]).toBe("var(--yc-radius-control)")
   })
 
   test("keeps windowed rows keyed and measured so they grow with their content", async () => {
@@ -650,7 +667,7 @@ describe("open Sessions rows", () => {
     expect(option["border-block-end"]).toBeUndefined()
     const active = declared(css, ".session-filters__option--active")
     expect(active["border-block-end-color"]).toBeUndefined()
-    expect(active.background).toBe("var(--yc-green-soft)")
+    expect(active.background).toBe("var(--yc-cobalt-tonal)")
   })
 })
 
@@ -667,13 +684,13 @@ describe("Ledger rail, conversation header and companion wiring", () => {
     expect(rail).toContain("estimate: () => 36")
     expect(rail).toContain("groupRailSessions(props.sessions)")
     const css = await readStylesheet("remote.css")
-    expect(declared(css, ".session-row")).toMatchObject({ "min-block-size": "var(--yc-control-h-dense)", border: "1px solid transparent", "border-radius": "var(--yc-radius-sm)" })
+    expect(declared(css, ".session-row")).toMatchObject({ "min-block-size": "var(--yc-control-h-dense)", border: "1px solid transparent", "border-radius": "var(--yc-radius-control)" })
     expect(declared(css, ".session-row")["block-size"]).toBeUndefined()
     expect(declared(css, ".session-row__name")).toMatchObject({ "white-space": "normal", "overflow-wrap": "anywhere" })
     expect(rail).not.toContain("typicalSize: true")
-    expect(declared(css, ".session-row--active")).toMatchObject({ color: "var(--yc-text)", "border-color": "transparent" })
-    expect(declared(css, ".session-row__state").color).toBe("var(--yc-yellow-strong)")
-    expect(declared(css, ".session-row__signal-mark")).toMatchObject({ "inline-size": "6px", "block-size": "6px", background: "var(--yc-text-subtle)" })
+    expect(declared(css, ".session-row--active")).toMatchObject({ color: "var(--yc-ink)", "border-color": "transparent" })
+    expect(declared(css, ".session-row__state").color).toBe("var(--yc-amber-ink)")
+    expect(declared(css, ".session-row__signal-mark")).toMatchObject({ "inline-size": "6px", "block-size": "6px", background: "var(--yc-ink-tertiary)" })
   })
 
   test("drops the rail workspace block, summary line, loaded-count footer and machine footer", async () => {
@@ -689,10 +706,10 @@ describe("Ledger rail, conversation header and companion wiring", () => {
     expect(source).not.toContain('title="YCoding home"><BrandMark compact /></Link>')
     const css = await readStylesheet("remote.css")
     expect(declared(css, ".workspace__rail-head")).toMatchObject({ display: "flex", "align-items": "center", "justify-content": "space-between", "block-size": "var(--yc-header-public-h)", "padding-inline": "var(--yc-space-3)" })
-    expect(declared(css, ".workspace__new-chat")).toMatchObject({ "min-block-size": "28px", "padding-inline": "10px", "border-radius": "var(--yc-radius-sm)", border: "1px solid var(--yc-border)", background: "var(--yc-surface-sunken)" })
-    expect(declared(css, ".session-search .input")).toMatchObject({ "block-size": "var(--yc-space-8)", background: "var(--yc-bg)", border: "1px solid var(--yc-border)", "border-radius": "var(--yc-radius-md)" })
+    expect(declared(css, ".workspace__new-chat")).toMatchObject({ "min-block-size": "28px", "padding-inline": "10px", "border-radius": "var(--yc-radius-control)", border: "1px solid var(--yc-line-subtle)", background: "var(--yc-plane-hover)" })
+    expect(declared(css, ".session-search .input")).toMatchObject({ "block-size": "var(--yc-space-8)", background: "var(--yc-plane-canvas)", border: "1px solid var(--yc-line-subtle)", "border-radius": "var(--yc-radius-card)" })
     expect(declared(css, ".session-panel .session-filters")["flex-wrap"]).toBe("nowrap")
-    expect(declared(css, ".session-panel .session-filters__option--active")).toMatchObject({ background: "var(--yc-surface-sunken)", color: "var(--yc-text)", "border-color": "var(--yc-border-strong)" })
+    expect(declared(css, ".session-panel .session-filters__option--active")).toMatchObject({ background: "var(--yc-plane-hover)", color: "var(--yc-ink)", "border-color": "var(--yc-line-field)" })
     expect(css.rules.some((rule) => rule.header.includes("workspace__rail-footer"))).toBe(false)
   })
 
@@ -723,7 +740,7 @@ describe("Ledger rail, conversation header and companion wiring", () => {
     expect(companion).not.toContain("contextActions=")
     expect(companion).toContain('class="companion__close" aria-label="Close Session companion"')
     const css = await readStylesheet("remote.css")
-    expect(declared(css, ".team-control__panel")["border-inline-start"]).toBe("1px solid var(--yc-border)")
+    expect(declared(css, ".team-control__panel")["border-inline-start"]).toBe("1px solid var(--yc-line-subtle)")
   })
 })
 
@@ -731,10 +748,10 @@ describe("W90 new-session outcome strip", () => {
   test("states failed or unknown creation on a rounded semantic plane", async () => {
     const css = await readStylesheet("remote.css")
     const outcome = declared(css, ".new-session__outcome")
-    expect(outcome["border-radius"]).toBe("var(--yc-radius-lg)")
+    expect(outcome["border-radius"]).toBe("var(--yc-radius-card)")
     expect(outcome["border-inline-start"]).toBeUndefined()
-    expect(declared(css, '.new-session__outcome[role="alert"]').background).toBe("var(--yc-danger-soft)")
-    expect(declared(css, ".new-session__outcome.new-session__outcome--unknown[role=\"alert\"]").background).toBe("var(--yc-yellow-soft)")
+    expect(declared(css, '.new-session__outcome[role="alert"]').background).toBe("var(--yc-coral-tonal)")
+    expect(declared(css, ".new-session__outcome.new-session__outcome--unknown[role=\"alert\"]").background).toBe("var(--yc-amber-tonal)")
   })
 })
 
@@ -743,7 +760,7 @@ describe("W83 flat request forms", () => {
     const css = await readStylesheet("remote.css")
     const option = declared(css, ".question__option")
     expect(option.border).toBe("0")
-    expect(option["border-radius"]).toBe("var(--yc-radius-lg)")
+    expect(option["border-radius"]).toBe("var(--yc-radius-card)")
     expect(option["border-block-end"]).toBeUndefined()
     expect(option["min-block-size"]).toBe("var(--yc-hit-min)")
     expect(declared(css, ".question__option + .question__option")["margin-block-start"]).toBeUndefined()
@@ -753,7 +770,7 @@ describe("W83 flat request forms", () => {
     expect(checked.background).toBeUndefined()
     expect(checked["box-shadow"]).toBeUndefined()
     expect(checked["border-inline-start-color"]).toBeUndefined()
-    expect(checked.color).toBe("var(--yc-text)")
+    expect(checked.color).toBe("var(--yc-ink)")
     for (const selector of ['.question__option input[type="radio"]', '.question__option input[type="checkbox"]']) {
       expect(declared(css, selector)).toMatchObject({ appearance: "none", "-webkit-appearance": "none" })
     }
@@ -767,7 +784,7 @@ describe("W83 flat request forms", () => {
     boundaryFree(declared(css, ".fieldset"))
     expect(declared(css, ".question + .question")["border-block-start"]).toBeUndefined()
     const field = declared(css, ".question__custom input")
-    expect(field.border).toBe("var(--yc-border-width) solid var(--yc-border-strong)")
+    expect(field.border).toBe("var(--yc-border-width) solid var(--yc-line-field)")
     expect(field["min-block-size"]).toBe("var(--yc-control-h)")
   })
 
@@ -775,12 +792,12 @@ describe("W83 flat request forms", () => {
     const css = await readStylesheet("remote.css")
     const grade = declared(css, ".decision-grades li")
     expect(grade.border).toBe("0")
-    expect(grade["border-radius"]).toBe("var(--yc-radius-lg)")
+    expect(grade["border-radius"]).toBe("var(--yc-radius-card)")
     expect(grade["border-block-end"]).toBeUndefined()
-    expect(declared(css, '.decision-grades li[data-selected="true"]').background).toBe("var(--yc-green-soft)")
+    expect(declared(css, '.decision-grades li[data-selected="true"]').background).toBe("var(--yc-cobalt-tonal)")
     const hard = declared(css, ".request--hard")
-    expect(hard.border).toBe("2px solid var(--yc-danger)")
-    expect(hard["box-shadow"]).toBe("0 0 0 3px color-mix(in srgb, var(--yc-danger) 18%, transparent)")
+    expect(hard.border).toBe("2px solid var(--yc-coral-ink)")
+    expect(hard["box-shadow"]).toBe("0 0 0 3px color-mix(in srgb, var(--yc-coral-ink) 18%, transparent)")
   })
 })
 
@@ -788,22 +805,22 @@ describe("Ledger accents and floating request cards", () => {
   test("raises pending request cards as one bounded layer with an open answer row", async () => {
     const css = await readStylesheet("remote.css")
     expect(declared(css, ".request")).toMatchObject({
-      border: "var(--yc-border-width) solid var(--yc-border)",
-      "border-radius": "var(--yc-radius-lg)",
-      background: "var(--yc-surface-raised)",
-      "box-shadow": "var(--yc-shadow-sm)",
+      border: "var(--yc-border-width) solid var(--yc-line-subtle)",
+      "border-radius": "var(--yc-radius-card)",
+      background: "var(--yc-plane-raised)",
+      "box-shadow": "none",
     })
     expect(declared(css, ".request__actions").background).toBeUndefined()
-    expect(declared(css, ".request__badge")).toMatchObject({ border: "0", background: "var(--yc-surface-raised)" })
+    expect(declared(css, ".request__badge")).toMatchObject({ border: "0", background: "var(--yc-plane-raised)" })
   })
 
   test("keeps companion header pills neutral and prose strips and filters in the sans face", async () => {
     const css = await readStylesheet("remote.css")
-    expect(declared(css, ".companion__pill")).toMatchObject({ background: "var(--yc-surface-sunken)", color: "var(--yc-text-muted)", "min-block-size": "var(--yc-space-6)", "padding-inline": "var(--yc-space-1)", border: "0" })
+    expect(declared(css, ".companion__pill")).toMatchObject({ background: "var(--yc-plane-hover)", color: "var(--yc-ink-secondary)", "min-block-size": "var(--yc-space-6)", "padding-inline": "var(--yc-space-1)", border: "0" })
     expect(declared(css, ".companion__close")).toMatchObject({ "inline-size": "28px", "block-size": "28px", background: "transparent" })
     expect(declared(css, ".app .status-strip")["font-family"]).toBe("var(--yc-font-sans)")
     expect(declared(css, ".session-filters__option")["font-family"]).toBe("var(--yc-font-sans)")
-    for (const selector of [".settings__head > svg", ".telemetry-consent > svg"]) expect(declared(css, selector).color).toBe("var(--yc-text-muted)")
+    for (const selector of [".settings__head > svg", ".telemetry-consent > svg"]) expect(declared(css, selector).color).toBe("var(--yc-ink-secondary)")
   })
 })
 
@@ -814,7 +831,7 @@ describe("tonal Sessions status labels", () => {
       const chip = declared(css, selector)
       expect(chip.border).toBe("0")
       expect(chip["border-radius"]).toBe("var(--yc-radius-pill)")
-      expect(chip.background).toBe("var(--yc-surface)")
+      expect(chip.background).toBe("var(--yc-plane-raised)")
       expect(chip.padding).toBe("var(--yc-space-1) var(--yc-space-2)")
       expect(chip["font-weight"]).toBe("var(--yc-weight-semibold)")
     }
@@ -848,8 +865,8 @@ describe("borderless remote component planes", () => {
       }
       if (file === "running-sessions.css") {
         expect(declared(css, ".running-sessions__list").gap).toBe("var(--yc-space-3)")
-        expect(declared(css, ".running-sessions__item").background).toBe("var(--yc-surface)")
-        expect(declared(css, ".running-sessions__item")["border-radius"]).toBe("var(--yc-radius-lg)")
+        expect(declared(css, ".running-sessions__item").background).toBe("var(--yc-plane-raised)")
+        expect(declared(css, ".running-sessions__item")["border-radius"]).toBe("var(--yc-radius-card)")
       }
     }
   })

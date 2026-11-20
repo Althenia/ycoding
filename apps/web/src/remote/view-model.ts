@@ -454,8 +454,12 @@ export function connectionLabel(state: RemoteConnectionState, transport: RemoteT
   return state.kind === "connected" && transport.kind === "open" && transport.rttMs !== undefined ? `${label} · ${transport.rttMs} ms` : label
 }
 
-export function hasWaitingSession(status: { readonly attention: ReadonlySet<string>; readonly failed: ReadonlySet<string>; readonly lost: ReadonlySet<string> } | undefined): boolean {
-  return status !== undefined && [...status.attention].some((id) => !status.failed.has(id) && !status.lost.has(id))
+export function waitingSessionCount(status: { readonly attention: ReadonlySet<string>; readonly failed: ReadonlySet<string>; readonly lost: ReadonlySet<string> } | undefined): number {
+  return status === undefined ? 0 : [...status.attention].filter((id) => !status.failed.has(id) && !status.lost.has(id)).length
+}
+
+export function hasWaitingSession(status: Parameters<typeof waitingSessionCount>[0]): boolean {
+  return waitingSessionCount(status) > 0
 }
 
 export function sessionListRefreshNotice(outcome: Exclude<RemoteRequestOutcome, { status: "ok" }>): string {

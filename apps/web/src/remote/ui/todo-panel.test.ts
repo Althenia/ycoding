@@ -53,8 +53,8 @@ test("below 768px the summary keeps a 44px target and the expanded list stays sh
 test("progress is neutral data and only the in-progress marker carries the live signal", async () => {
   const sheet = await readStylesheet("../remote/ui/todo-panel.css")
   const base = (header: string) => declarationsWhere(sheet, (rule) => rule.header === header && rule.conditions.length === 0)
-  expect(base(".todo-panel__progress").color).toBe("var(--yc-text)")
-  expect(base(".todo-panel__item--in_progress .todo-panel__marker").color).toBe("var(--yc-signal)")
+  expect(base(".todo-panel__progress").color).toBe("var(--yc-ink)")
+  expect(base(".todo-panel__item--in_progress .todo-panel__marker").color).toBe("var(--yc-sky-ink)")
   expect(base(".todo-panel__item--completed .todo-panel__marker").color).toBeUndefined()
-  expect(sheet.rules.some((rule) => rule.declarations.color?.includes("--yc-green"))).toBe(false)
+  expect(sheet.rules.some((rule) => rule.declarations.color?.includes("--yc-mint-graphic"))).toBe(false)
 })

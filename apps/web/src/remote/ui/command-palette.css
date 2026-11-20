@@ -16,8 +16,8 @@
   gap: var(--yc-space-3);
   padding-inline: var(--yc-space-4);
   min-block-size: var(--yc-hit-min);
-  border-block-end: var(--yc-border-width) solid var(--yc-border);
-  color: var(--yc-text-muted);
+  border-block-end: var(--yc-border-width) solid var(--yc-line-subtle);
+  color: var(--yc-ink-secondary);
 }
 
 .command-palette__input {
@@ -27,12 +27,12 @@
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--yc-text);
+  color: var(--yc-ink);
   font-size: var(--yc-size-sm);
 }
 
 .command-palette__input::placeholder {
-  color: var(--yc-text-subtle);
+  color: var(--yc-ink-tertiary);
 }
 
 .command-palette__input:focus-visible {
@@ -67,7 +67,7 @@
   font-family: var(--yc-font-mono);
   letter-spacing: var(--yc-tracking-wide);
   text-transform: uppercase;
-  color: var(--yc-text-muted);
+  color: var(--yc-ink-secondary);
 }
 
 .command-palette__option {
@@ -78,16 +78,16 @@
   min-inline-size: 0;
   padding: var(--yc-space-3) var(--yc-space-4);
   border-inline-start: 3px solid transparent;
-  border-radius: var(--yc-radius-lg);
+  border-radius: var(--yc-radius-card);
   font-size: var(--yc-size-sm);
 }
 
 .command-palette__option[data-active] {
-  background: var(--yc-green-soft);
-  border-inline-start-color: var(--yc-green-strong);
+  background: var(--yc-cobalt-tonal);
+  border-inline-start-color: var(--yc-cobalt-ink);
 }
 
-@media (hover: hover) { .command-palette__option:not([data-active]):hover { background: var(--yc-surface-sunken); } }
+@media (hover: hover) { .command-palette__option:not([data-active]):hover { background: var(--yc-plane-hover); } }
 
 .command-palette__title {
   flex: 0 1 auto;
@@ -106,7 +106,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--yc-size-xs);
-  color: var(--yc-text-muted);
+  color: var(--yc-ink-secondary);
 }
 
 .command-palette__group-tag {
@@ -114,13 +114,13 @@
   margin-inline-start: auto;
   font-family: var(--yc-font-mono);
   font-size: var(--yc-size-2xs);
-  color: var(--yc-text-muted);
+  color: var(--yc-ink-secondary);
 }
 
 .command-palette__empty {
   padding: var(--yc-space-4);
   font-size: var(--yc-size-sm);
-  color: var(--yc-text-muted);
+  color: var(--yc-ink-secondary);
 }
 
 .command-palette--models {
@@ -143,7 +143,7 @@
   align-items: stretch;
   gap: var(--yc-space-1);
   background: transparent;
-  color: var(--yc-text);
+  color: var(--yc-ink);
 }
 
 @media (min-width: 768px) {

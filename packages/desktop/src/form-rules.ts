@@ -184,8 +184,8 @@ export function sessionState(id: string, live: Activity, snapshot?: Pick<Session
 }
 
 export type GroupKey = "needs" | "running" | "pinned" | "recent"
-const groupLabels: Record<GroupKey, string> = { needs: "Needs action", running: "Running", pinned: "Pinned", recent: "Recent" }
-const groupOrder: readonly GroupKey[] = ["needs", "running", "pinned", "recent"]
+export const railGroupLabels: Record<GroupKey, string> = { needs: "Needs action", running: "Running", pinned: "Pinned", recent: "Recent" }
+export const railGroupOrder: readonly GroupKey[] = ["needs", "running", "pinned", "recent"]
 
 function rootOf(rows: ReadonlyMap<string, SessionItem>, id: string) {
   let current = rows.get(id)
@@ -212,7 +212,7 @@ export function railGroups(rows: readonly SessionItem[], state: Activity, snapsh
     groups[key].push(row)
   }
   const newest = (a: SessionItem, b: SessionItem) => (b.time.active ?? b.time.updated) - (a.time.active ?? a.time.updated) || a.id.localeCompare(b.id)
-  return { groups: groupOrder.flatMap((key) => groups[key].length ? [{ key, label: groupLabels[key], rows: groups[key].sort(newest) }] : []), archived }
+  return { groups: railGroupOrder.flatMap((key) => groups[key].length ? [{ key, label: railGroupLabels[key], rows: groups[key].sort(newest) }] : []), archived }
 }
 
 export function visibleModels(models: readonly ModelOption[], current: ModelSelection | null | undefined): ModelOption[] {

@@ -68,8 +68,8 @@ test("machine status sizes to its content and owns error tones", async () => {
   const css = await Bun.file(new URL("../styles/remote.css", import.meta.url)).text()
   expect(css).toMatch(/\.machine-awake__status\s*\{[^}]*line-height:\s*var\(--yc-leading-xs\)/)
   expect(css).not.toMatch(/\.machine-awake__status\s*\{[^}]*min-block-size:/)
-  expect(css).toMatch(/\.machine-awake__status\[data-tone="danger"\]\s*\{[^}]*color:\s*var\(--yc-danger\)/)
-  expect(css).toMatch(/\.machine-awake__status\[data-tone="attention"\]\s*\{[^}]*color:\s*var\(--yc-yellow-strong\)/)
+  expect(css).toMatch(/\.machine-awake__status\[data-tone="danger"\]\s*\{[^}]*color:\s*var\(--yc-coral-ink\)/)
+  expect(css).toMatch(/\.machine-awake__status\[data-tone="attention"\]\s*\{[^}]*color:\s*var\(--yc-amber-ink\)/)
 })
 
 test("a machine that is not reachable or not read yet never shows Off", () => {

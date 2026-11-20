@@ -5,15 +5,12 @@ import { CustomSelect } from "../../../apps/web/src/ui/custom-select"
 import { parseUnifiedPatch } from "../../../apps/web/src/remote/file-change-diff"
 import { defaultDiffPreferences, diffFileTree, parseDiffPreferences, type DiffFileNode, type DiffPreferences } from "./diff-preferences"
 import "./diff-view.css"
-import { createCompactInspector, useCompact } from "./responsive-layer"
 
 const [preferences, setPreferences] = createSignal(defaultDiffPreferences)
 let hydrated = false
 
 export function DesktopDiffView(props: ComponentProps<typeof SharedChangesSurface> & { readonly variant?: "session" | "git" }) {
   let surface!: HTMLElement
-  const compact = useCompact()
-  const inspector = createCompactInspector()
   const [localPath, setLocalPath] = createSignal<string>()
   const [error, setError] = createSignal<string>()
   onMount(() => {
@@ -32,15 +29,11 @@ export function DesktopDiffView(props: ComponentProps<typeof SharedChangesSurfac
   const [reviewed, setReviewed] = createSignal<ReadonlySet<string>>(new Set())
   createEffect(on(() => JSON.stringify([props.scopeLabel, props.selectedTurnID, files().map((file) => [file.path, file.patch, file.additions, file.deletions])]), () => setReviewed(new Set<string>())))
   const selected = () => files().find((file) => file.path === (props.selectedPath ?? localPath())) ?? files()[0]
-  const visible = () => preferences().single || compact() ? files().filter((file) => file === selected()) : files()
+  const visible = () => preferences().single ? files().filter((file) => file === selected()) : files()
   const select = (path: string) => {
-    inspector.show()
     setLocalPath(path)
     props.onSelectFile?.(path)
-    queueMicrotask(() => {
-      surface.querySelector(`#${CSS.escape(`desktop-diff-${encodeURIComponent(path)}`)}`)?.scrollIntoView({ block: "start" })
-      if (compact()) surface.querySelector<HTMLButtonElement>('.compact-inspector-back')?.focus({ preventScroll: true })
-    })
+    queueMicrotask(() => surface.querySelector(`#${CSS.escape(`desktop-diff-${encodeURIComponent(path)}`)}`)?.scrollIntoView({ block: "start" }))
   }
   const tree = createMemo(() => diffFileTree(files().map((file) => file.path)))
   const FileChoice = (input: { readonly path: string; readonly label: string }): JSX.Element => {
@@ -56,7 +49,7 @@ export function DesktopDiffView(props: ComponentProps<typeof SharedChangesSurfac
       <label class="request__choice"><input type="checkbox" checked={preferences().single} onChange={(event) => change({ single: event.currentTarget.checked })} /><span>Show selected file only</span></label>
     </div>
   const Reviewed = () => <><p class="desktop-diff__reviewed" role="status" aria-label="Reviewed files">{reviewed().size} reviewed</p><span class="desktop__sr">Review marks stay in this view and reset when the diff or scope changes or closes. They do not change files.</span></>
-  return <section ref={surface} class="desktop-diff" data-variant={props.variant ?? "session"} data-view={preferences().view} data-wrap={preferences().wrap} data-inspecting={inspector.open() ? "true" : undefined} aria-label="File changes" onKeyDown={event => { if (event.key === "Escape" && compact() && inspector.open()) { event.preventDefault(); event.stopPropagation(); inspector.close() } }}>
+  return <section ref={surface} class="desktop-diff" data-variant={props.variant ?? "session"} data-view={preferences().view} data-wrap={preferences().wrap} aria-label="File changes">
     <Show when={props.variant !== "git"}><header class="desktop-diff__toolbar">
       <DisplayControls />
       <div class="desktop-diff__controls"><strong>{props.scopeLabel ?? "Session changes"}</strong><span>{files().length} files · +{files().reduce((total, file) => total + file.additions, 0)} / −{files().reduce((total, file) => total + file.deletions, 0)}</span><Reviewed /><Show when={props.onRefresh}><button type="button" class="rl-btn" disabled={props.refreshing} onClick={props.onRefresh}>Refresh</button></Show><Show when={props.onOpenFullChanges}><button type="button" class="rl-btn" onClick={props.onOpenFullChanges}>{props.fullChangesLabel ?? "Open full changes page"}</button></Show>
@@ -67,13 +60,11 @@ export function DesktopDiffView(props: ComponentProps<typeof SharedChangesSurfac
     <Show when={error()}>{(message) => <p class="desktop-diff__error" role="alert">{message()}</p>}</Show>
     <nav aria-label="Changed files">
       <div class="desktop-diff__nav-head"><h3 class="desktop-diff__heading">Changed files</h3><span>{files().length} total</span></div>
-      <Show when={compact() && props.variant === "git"}><Reviewed /></Show>
       <Show when={files().length} fallback={<p>{props.selectedTurnID === undefined ? "No captured file changes for this Session." : props.turns?.some((turn) => turn.id === props.selectedTurnID) ? "No captured file changes in this turn." : "This turn is no longer available."}</p>}>
         <Show when={preferences().tree} fallback={<div class="desktop-diff__choices"><For each={files()}>{(file) => <FileChoice path={file.path} label={file.path} />}</For></div>}><Tree nodes={tree()} /></Show>
       </Show>
     </nav>
     <div class="desktop-diff__files" role="region" aria-label="File patches">
-      <button type="button" class="rl-btn compact-inspector-back" aria-label="Back to changed files" onClick={inspector.close}>Back to changed files</button>
       <Show when={props.variant === "git"}><div class="desktop-diff__patch-tools"><DisplayControls /><Reviewed /></div></Show>
       <For each={visible()}>{(file) => {
         const parsed = createMemo(() => parseUnifiedPatch(file.patch))

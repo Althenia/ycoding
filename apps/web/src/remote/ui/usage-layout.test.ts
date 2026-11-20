@@ -10,8 +10,8 @@ function rule(selector: string) {
 
 test("summary metrics share one borderless tonal plane separated by space", () => {
   const strip = rule(".usage-tiles")
-  expect(strip).toContain("background: var(--yc-surface)")
-  expect(strip).toContain("border-radius: var(--yc-radius-xl)")
+  expect(strip).toContain("background: var(--yc-plane-raised)")
+  expect(strip).toContain("border-radius: var(--yc-radius-composer)")
   expect(strip).toContain("gap: var(--yc-space-5)")
   expect(strip).not.toContain("border-block")
   expect(strip).not.toContain("border:")
@@ -47,12 +47,12 @@ test("quota windows and legend entries carry no nested decorative borders", () =
 
 test("quota providers use inline dividers and the chart pair owns one quiet surface", () => {
   const provider = rule(".usage-provider")
-  expect(provider).toContain("border-inline-start: 2px solid var(--yc-border)")
+  expect(provider).toContain("border-inline-start: 2px solid var(--yc-line-subtle)")
   expect(provider).toContain("padding-inline-start: var(--yc-space-4)")
   for (const property of ["background:", "border:", "border-radius:"]) expect(provider).not.toContain(property)
   const visuals = rule(".usage-visuals")
-  expect(visuals).toContain("background: var(--yc-surface)")
-  expect(visuals).toContain("border-radius: var(--yc-radius-lg)")
+  expect(visuals).toContain("background: var(--yc-plane-raised)")
+  expect(visuals).toContain("border-radius: var(--yc-radius-card)")
   expect(visuals).toContain("padding: var(--yc-space-5)")
   expect(visuals).not.toContain("border:")
   const chart = rule(".usage-distribution, .usage-chart")
@@ -101,19 +101,19 @@ test("quota refresh keeps a content-sized target and a reduced-motion busy indic
   expect(rule(".usage-refresh")).toContain("flex: 0 0 auto")
   expect(rule(".usage-refresh")).not.toContain("width: 100%")
   expect(css).toContain(".usage-refresh[aria-busy=\"true\"] svg")
-  expect(css).toContain("animation: usage-refresh-spin var(--yc-dur-slow) linear infinite")
-  expect(css).toContain(".usage-refresh[aria-busy=\"true\"] { border-color: var(--yc-signal); }")
-  expect(css).toContain("color: var(--yc-signal); animation: usage-refresh-spin")
+  expect(css).toContain("animation: usage-refresh-spin var(--yc-dur-base) linear infinite")
+  expect(css).toContain(".usage-refresh[aria-busy=\"true\"] { border-color: var(--yc-sky-ink); }")
+  expect(css).toContain("color: var(--yc-sky-ink); animation: usage-refresh-spin")
   expect(css).toContain(".usage-refresh[aria-busy=\"true\"] svg { animation: none; }")
 })
 
 const cost = await Bun.file(new URL("./usage-cost.css", import.meta.url)).text()
 
 test("an exhausted window takes the danger role on its meter, figures and pill without extra motion", () => {
-  expect(css).toContain(".usage-window--exhausted .usage-meter > span { background: var(--yc-danger); }")
-  expect(css).toContain(".usage-window--exhausted .usage-window__top b { color: var(--yc-danger); }")
-  expect(rule(".usage-pace--exhausted")).toContain("var(--yc-danger)")
-  expect(rule(".usage-pace--exhausted")).toContain("var(--yc-danger-soft)")
+  expect(css).toContain(".usage-window--exhausted .usage-meter > span { background: var(--yc-coral-ink); }")
+  expect(css).toContain(".usage-window--exhausted .usage-window__top b { color: var(--yc-coral-ink); }")
+  expect(rule(".usage-pace--exhausted")).toContain("var(--yc-coral-ink)")
+  expect(rule(".usage-pace--exhausted")).toContain("var(--yc-coral-tonal)")
 })
 
 test("recorded consumption rows share aligned tracks on wide layouts and stack on narrow ones without clipping", () => {
@@ -166,7 +166,7 @@ test("disclosure details wrap long values and add no animation", () => {
 
 test("quota group headings reuse the mono text role without a rule or a nested surface", () => {
   const heading = rule(".usage-window-group")
-  expect(heading).toContain("color: var(--yc-text)")
+  expect(heading).toContain("color: var(--yc-ink)")
   for (const property of ["border", "background", "border-radius", "animation"]) expect(heading).not.toContain(property)
 })
 
@@ -222,9 +222,9 @@ test("Usage record rows keep a titled grid with mono metadata and open hover pla
   expect(rule(".usage-breakdown tbody th")).toContain("var(--yc-font-sans)")
   expect(rule(".usage-page th, .usage-page td")).not.toContain("border")
   expect(rule(".usage-consumption__row")).not.toContain("border-top")
-  expect(rule(".usage-consumption__row")).toContain("border-radius: var(--yc-radius-md)")
-  expect(css).toMatch(/@media \(hover: hover\) \{ \.usage-consumption__row:hover \{[^}]*background: var\(--yc-surface\)/)
-  expect(css).toMatch(/\.usage-mobile-row \{[^}]*border-radius: var\(--yc-radius-md\)/)
+  expect(rule(".usage-consumption__row")).toContain("border-radius: var(--yc-radius-card)")
+  expect(css).toMatch(/@media \(hover: hover\) \{ \.usage-consumption__row:hover \{[^}]*background: var\(--yc-plane-raised\)/)
+  expect(css).toMatch(/\.usage-mobile-row \{[^}]*border-radius: var\(--yc-radius-card\)/)
   expect(css).not.toMatch(/\.usage-mobile-row \{[^}]*border-top/)
   expect(css).not.toMatch(/border-(?:top|bottom|block-start|block-end): 1px/)
 })
@@ -233,13 +233,13 @@ test("data values, meters, bars and status marks use neutral ink; green is limit
   const speed = await Bun.file(new URL("./usage-speed.css", import.meta.url)).text()
   const incidents = await Bun.file(new URL("./model-incidents.css", import.meta.url)).text()
   const filters = await Bun.file(new URL("./usage-filters.css", import.meta.url)).text()
-  for (const sheet of [css, speed, incidents, filters]) expect(sheet).not.toMatch(/(?:^|[;{\s])(?:color|fill|stroke|border-color):\s*var\(--yc-green-strong\)/m)
-  expect(rule(".usage-chart__bar--today")).toContain("fill: var(--yc-text)")
-  expect(rule(".usage-table__cost")).toContain("color: var(--yc-text)")
-  expect(rule(".usage-status")).toContain("background: var(--yc-text-muted)")
-  expect(rule(".usage-pace")).not.toContain("var(--yc-green")
-  expect(rule(".usage-meter > span")).toContain("background: var(--yc-text-muted)")
+  for (const sheet of [css, speed, incidents, filters]) expect(sheet).not.toMatch(/(?:^|[;{\s])(?:color|fill|stroke|border-color):\s*var\(--yc-cobalt-ink\)/m)
+  expect(rule(".usage-chart__bar--today")).toContain("fill: var(--yc-ink)")
+  expect(rule(".usage-table__cost")).toContain("color: var(--yc-ink)")
+  expect(rule(".usage-status")).toContain("background: var(--yc-ink-secondary)")
+  expect(rule(".usage-pace")).not.toContain("var(--yc-mint-graphic")
+  expect(rule(".usage-meter > span")).toContain("background: var(--yc-ink-secondary)")
   for (const block of [rule(".usage-toggle button[aria-pressed=\"true\"]"), incidents.match(/\.incidents__range button\[aria-pressed="true"\] \{[^}]*\}/)?.[0] ?? ""]) {
-    expect(block).toContain("color: var(--yc-text)")
+    expect(block).toContain("color: var(--yc-ink)")
   }
 })

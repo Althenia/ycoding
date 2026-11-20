@@ -51,10 +51,10 @@ describe("remote navigation", () => {
     } finally { await page.close() }
   }, 30_000)
 
-  test("offers five global destinations without Activity and shows the connection strip only when it has something to say", async () => {
+  test("offers Chat and five global destinations without Activity and shows the connection strip only when it has something to say", async () => {
     const page = await requireBrowser().openPage()
     const links = `(() => ({
-      header: [...document.querySelectorAll('.remote-nav a')].map((link) => link.getAttribute('href')),
+      header: [...document.querySelectorAll('.activity-bar a')].map((link) => link.getAttribute('href')),
       bottom: [...document.querySelectorAll('.bottom-nav__item')].map((link) => link.getAttribute('href')),
       activityButton: document.querySelector('[aria-label="Open activity"]') !== null,
       pill: document.querySelector('.remote-connection-label')?.textContent?.trim() ?? null,
@@ -69,7 +69,8 @@ describe("remote navigation", () => {
           await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}`)
           await until(page, `document.querySelector('.remote-connection-label')?.textContent.trim() === 'Connected' && document.querySelector('.composer') !== null`)
           const healthy = await page.evaluate(links, (value: unknown) => { const record = decodeRecord(value); return { ...record, header: (decodeArray(decodeString))(record["header"]), bottom: (decodeArray(decodeString))(record["bottom"]), activityButton: (decodeBoolean)(record["activityButton"]), pill: (decodeNullable(decodeString))(record["pill"]), strip: (decodeBoolean)(record["strip"]), overflow: (decodeBoolean)(record["overflow"]) } })
-          expect(healthy.header).toEqual(destinations)
+          expect(healthy.header[0]?.startsWith("/remote")).toBe(true)
+          expect(healthy.header.slice(1)).toEqual(["/remote/sessions", "/remote/projects", "/remote/workspaces", "/remote/usage", "/remote/settings"])
           expect(healthy.bottom).toEqual(destinations)
           expect(healthy.activityButton).toBe(false)
           expect(healthy.pill).toBe("Connected")
@@ -102,7 +103,7 @@ describe("remote navigation", () => {
             const visible = (element) => element instanceof HTMLElement && getComputedStyle(element).display !== "none" && element.getBoundingClientRect().width > 0
             return {
               bar: (() => { const bar = document.querySelector('.workspace__topbar'); const team = document.querySelector('.app-header [aria-label="Open Team"]'); return Boolean(team) && bar?.querySelector('[aria-label="Open Team"]') == null && bar?.parentElement === document.querySelector('.workspace__main') && bar.querySelector('.presentation-switch') === null && bar.querySelector('.conversation-breadcrumb') !== null })(),
-              navDot: visible(document.querySelector('.remote-nav a[href="/remote/sessions"] .attention-dot')),
+              navDot: visible(document.querySelector('.activity-bar a[href="/remote/sessions"] .activity-bar__badge')),
               bottomDot: visible(document.querySelector('.bottom-nav a[href="/remote/sessions"] .attention-dot')),
               rowDot: document.querySelector('.session-row--active .session-row__signal[data-signal="waiting"]') !== null,
               rows: [...document.querySelectorAll(".session-row__name")].map((name) => name.textContent.trim()),
@@ -139,8 +140,8 @@ describe("remote navigation", () => {
       return {
         chips: [...row.querySelectorAll('.sessions-table__status .chip')].map((chip) => chip.textContent.trim()),
         rowDot: row.querySelector('.attention-dot') !== null,
-        navDot: visible(document.querySelector('.remote-nav a[href="/remote/sessions"] .attention-dot')) || visible(document.querySelector('.bottom-nav a[href="/remote/sessions"] .attention-dot')),
-        navLabel: [...document.querySelectorAll('.remote-nav a[href="/remote/sessions"], .bottom-nav a[href="/remote/sessions"]')].find(visible)?.getAttribute('aria-label') ?? null,
+        navDot: visible(document.querySelector('.activity-bar a[href="/remote/sessions"] .activity-bar__badge')) || visible(document.querySelector('.bottom-nav a[href="/remote/sessions"] .attention-dot')),
+        navLabel: [...document.querySelectorAll('.activity-bar a[href="/remote/sessions"], .bottom-nav a[href="/remote/sessions"]')].find(visible)?.getAttribute('aria-label') ?? null,
         overflow: document.documentElement.scrollWidth > innerWidth,
       }
     })()`
@@ -185,8 +186,8 @@ describe("remote navigation", () => {
         rowDot: row?.querySelector('.attention-dot') != null,
         card: card?.querySelector('.running-sessions__status')?.textContent.trim() ?? null,
         cardColor: card ? getComputedStyle(card.querySelector('.running-sessions__status')).color : null,
-        navDot: visible(document.querySelector('.remote-nav a[href="/remote/sessions"] .attention-dot')) || visible(document.querySelector('.bottom-nav a[href="/remote/sessions"] .attention-dot')),
-        navLabel: [...document.querySelectorAll('.remote-nav a[href="/remote/sessions"], .bottom-nav a[href="/remote/sessions"]')].find(visible)?.getAttribute('aria-label') ?? null,
+        navDot: visible(document.querySelector('.activity-bar a[href="/remote/sessions"] .activity-bar__badge')) || visible(document.querySelector('.bottom-nav a[href="/remote/sessions"] .attention-dot')),
+        navLabel: [...document.querySelectorAll('.activity-bar a[href="/remote/sessions"], .bottom-nav a[href="/remote/sessions"]')].find(visible)?.getAttribute('aria-label') ?? null,
         overflow: document.documentElement.scrollWidth > innerWidth,
       }
     })()`
@@ -304,7 +305,7 @@ describe("remote navigation", () => {
               providers: [...document.querySelectorAll(".usage-provider h3")].map((item) => item.textContent.trim()),
               openRouter: card("OpenRouter"),
               copilot: card("GitHub Copilot"),
-              activeNav: [...document.querySelectorAll('.remote-nav a[aria-current="page"], .bottom-nav a[aria-current="page"]')].filter(visible).map((link) => link.textContent.trim()),
+              activeNav: [...document.querySelectorAll('.activity-bar a[aria-current="page"], .bottom-nav a[aria-current="page"]')].filter(visible).map((link) => link.textContent.trim()),
               placeholders: [...document.querySelectorAll(".usage-page *")].filter((element) => element.children.length === 0 && ["-", "_", "—", "–"].includes(element.textContent.trim())).map((element) => element.outerHTML),
               overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
               operations: window.remoteOperationReport().operations,
@@ -417,7 +418,7 @@ describe("remote navigation", () => {
         await page.evaluate(`([...document.querySelectorAll('.new-session__trigger')].find(button => button.getBoundingClientRect().width > 0))?.click()`)
         await until(page, `document.querySelector('.new-session-composer') !== null`)
         expect(await page.evaluate(`(() => { const old=document.querySelector('.remote-conversation-view'); const composer=document.querySelector('.composer-resident'); return old?.inert===true && old?.getAttribute('aria-hidden')==='true' && getComputedStyle(composer).display==='none' && window.draftProbe===document.querySelector('.mini-composer__mount textarea') && window.draftProbe.value==='Keep this draft' })()`)).toBe(true)
-        await page.evaluate(`document.querySelector('${width >= 768 ? ".remote-nav" : ".bottom-nav"} a[href="/remote/sessions"]')?.click()`)
+        await page.evaluate(`document.querySelector('${width >= 768 ? ".activity-bar" : ".bottom-nav"} a[href="/remote/sessions"]')?.click()`)
         await until(page, `location.pathname === '/remote/sessions'`)
         expect(await page.evaluate(`(() => { const old=[...document.querySelectorAll('.route-panel--exiting')].find(panel=>panel.querySelector('.new-session-composer')); return old?.inert===true && old?.getAttribute('aria-hidden')==='true' && window.draftProbe===document.querySelector('.mini-composer__mount textarea') && window.draftProbe.value==='Keep this draft' })()`)).toBe(true)
         await page.evaluate(`document.querySelector('.workspace-resume[href^="/remote/session?"]')?.click()`)

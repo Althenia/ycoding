@@ -456,7 +456,7 @@ test("completed output and snapshot refresh leave trusted typing, agent/model co
     await click('.composer-resident [aria-label="Model"]')
     await wait(page, `!!document.querySelector('[role="dialog"][aria-label="Choose model"]')`)
     await click('[aria-label="Close model picker"]')
-    await click('.remote-nav [href="/remote/sessions"]')
+    await click('.activity-bar [href="/remote/sessions"]')
     await wait(page, `!!document.querySelector('.route-panel--active .sessions-page')`)
     await click('.workspace-resume[href^="/remote/session?"]')
     await wait(page, `!!document.querySelector('.remote-conversation-view.route-panel--active')`)
@@ -487,7 +487,7 @@ test("Connected Sessions paints named loading content in the carousel and worksp
 function entryControl(width: number, href: string) {
   if (href === "/remote") return width < 768 ? ".sessions-page > .page-head .new-session__trigger" : ".workspace__new-chat"
   if (href.startsWith("/remote/session?")) return `.workspace-resume[href="${href}"]`
-  return `${width < 768 ? ".bottom-nav" : ".remote-nav"} a[href="${href}"]`
+  return `${width < 768 ? ".bottom-nav" : ".activity-bar"} a[href="${href}"]`
 }
 
 async function openNewSession(page: Awaited<ReturnType<typeof browser.openPage>>, width: number) {

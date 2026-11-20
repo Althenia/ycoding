@@ -2,7 +2,7 @@ import { isSessionID, noticeSequence } from "@ycoding-ai/remote"
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack, type JSX } from "solid-js"
 import { Portal } from "solid-js/web"
 import { createThrottler } from "@tanstack/solid-pacer"
-import { useLocation, useNavigate } from "@tanstack/solid-router"
+import { useLocation, useNavigate, useRouter } from "@tanstack/solid-router"
 import { Link } from "../../ui/link"
 import { browserStorage, readStored, writeStored } from "../../lib/storage"
 import { Chip } from "../../ui/chip"
@@ -32,6 +32,7 @@ import {
   deviceAvailabilityView,
   hasWaitingSession,
   remoteEntryView,
+  waitingSessionCount,
   sessionAvailabilityView,
   sessionProjectLabel,
   summarizeConnection,
@@ -82,12 +83,15 @@ import { LoadingPlaceholder } from "./loading"
 import { SubagentBar, TeamAnswerForm } from "./subagent-bar"
 import { createRowVirtualizer, sameKeys, scrollParent } from "./virtual-rows"
 import { RunningExecution, TeamView } from "./team-view"
-import { SharedCompanionSurface, SharedContextBreakdownPanel, SharedContextRingButton, SharedConversationHeader, SharedWorkspaceFrame, WORKSPACE_DESTINATIONS } from "./shared-workspace"
+import { SharedActivityBar, SharedCompanionSurface, SharedContextBreakdownPanel, SharedContextRingButton, SharedConversationHeader, SharedStatusBar, SharedTrace, SharedWorkspaceFrame, WORKSPACE_DESTINATIONS, type SharedActivityItem, type SharedStatusItem } from "./shared-workspace"
 import { requestAutonomousDialog } from "./autonomous-dialog"
 import { SessionStatusDetails } from "./status-bar"
 import { isManagedSubagent, siblingTargets, teamActiveCount, teamActivityLabel } from "./team-model"
 import {
+  remoteActivityDestinations,
+  remoteStatusEntries,
   remoteSurfaceComposition,
+  runningSessionCount,
   connectionStripView,
   sessionChips,
   sessionNeedsAttention,
@@ -100,6 +104,7 @@ import {
   sessionCompanionSummary,
   summarizeSession,
   views,
+  type RemoteStatusEntry,
   type RemoteView,
 } from "./shell-model"
 
@@ -109,6 +114,7 @@ const projectContextKey = "ycoding.remote.projectContextCollapsed"
 export function RemoteShell(props: { readonly path: () => string }): JSX.Element {
   const remote = useRemote()
   const navigate = useNavigate()
+  const router = useRouter()
   const search = useLocation({ select: (location): Readonly<Record<string, unknown>> => location.search })
   const originWorkspaceID = () => {
     const workspaceID = search().workspace_id
@@ -531,6 +537,34 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     </aside>
   </Show>
 
+  const activityItems = (): readonly SharedActivityItem[] => remoteActivityDestinations({
+    view: view(),
+    sessionID: state().activeSessionID,
+    requests: state().view?.requests.length ?? 0,
+    waiting: waitingSessionCount(state().sessionStatus),
+  }).map((item) => ({ ...item, href: router.buildLocation(item.route === "/remote/session" && state().activeSessionID !== undefined ? { to: item.route, search: sessionSearch(state().activeSessionID!, state().activeDeviceID) } : { to: item.route }).href }))
+  const sessionStatusShown = () => view() === "/remote/session" && selected() && ownsSessionDevice()
+  const childRunning = () => (state().team === undefined ? 0 : teamActiveCount(state().team!) ?? 0) > 0
+  const trace = () => ({ running: sessionStatusShown() && state().view?.status === "running", branch: sessionStatusShown() && state().view?.status === "running" && childRunning() })
+  const statusContext = () => {
+    const display = contextWindowDisplay(state().view, activeSession()?.model)
+    return display === undefined ? undefined : { fraction: display.fraction, percent: display.usedPercent, tokens: `${display.usedTokens} / ${display.capacityTokens}` }
+  }
+  const statusActions: Partial<Record<RemoteStatusEntry["id"], () => void>> = {
+    connection: () => void navigate({ to: "/remote/settings" }),
+    machine: () => void navigate({ to: "/remote/settings" }),
+    autonomy: requestAutonomousDialog,
+    context: () => { setCompanionTab("context"); openTeam() },
+    running: () => void navigate({ to: "/remote/sessions" }),
+  }
+  const statusItems = (): readonly SharedStatusItem[] => remoteStatusEntries({
+    connection: state().connection,
+    transport: state().transport,
+    machine: activeDeviceName(),
+    running: runningSessionCount(state().sessionStatus?.running, state().sessions, state().view),
+    ...(sessionStatusShown() ? { session: { model: activeSession()?.modelLabel, autonomy: companionSummary()?.autonomyLabel, context: statusContext(), childRunning: trace().branch } } : {}),
+  }).map((entry) => ({ ...entry, ...(statusActions[entry.id] === undefined ? {} : { onActivate: statusActions[entry.id] }) }))
+
   return (
     <Show when={entry() === "workspace"} fallback={<SignInScreen />}>
       <div ref={bindKeyboardChrome} class={`app app--${viewClass()}${view() === "/remote/session" && selected() && ownsSessionDevice() ? " app--selected" : view() === "/remote" ? " app--empty" : ""}${view() === "/remote/session" && managedChild() ? " app--managed-child" : ""}${view() === "/remote/session" && selectedLoading() ? " app--selected-loading" : ""}${railCollapsed() ? " app--rail-collapsed" : ""}${officeShown() ? " app--office" : ""}${showNewSession() ? " app--new-session" : ""}${teamVisible() && !phoneLayout() && view() === "/remote/session" && selected() ? " app--team-open" : ""}`}>
@@ -542,7 +576,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
             </Show>
           </div>} railBodyRef={(element) => { rail = element }} railBodyInert={railCollapsed()} railBody={<>
             <SessionPanel onSelectSession={openSession} />
-          </>} railNavigation={<><PrimaryNav view={view()} /><ResumeSession view={view()} /></>} topHeader={<><Show when={view() !== "/remote/session"}><RemoteHeader
+          </>} activityBar={<SharedActivityBar label="Remote workspace" items={activityItems()} onNavigate={(item) => void navigate({ href: item.href })} />} statusBar={<SharedStatusBar label="Session status" items={statusItems()} trace={trace()} />} railNavigation={view() !== "/remote/session" && state().activeSessionID !== undefined ? <ResumeSession view={view()} /> : undefined} topHeader={<><Show when={view() !== "/remote/session"}><RemoteHeader
           navExpanded={navOpen() && !navClosing()}
           onOpenNav={openSessionsNavigation}
           onOpenSession={openSession}
@@ -560,7 +594,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
           view={view()}
         /></Show>
             <Show when={view() === "/remote/session" && selected() && ownsSessionDevice()}>
-              <SharedConversationHeader class={`workspace__topbar${projectContext() ? " project-topbar" : ""}`} hidden={selectedLoading()} title={<strong>{activeSession()?.title ?? noSessionTitle}</strong>} subtitle={<>{activeSession()?.directory ? sessionProjectLabel(activeSession() ?? {}) : "No workspace selected"} · {activeDeviceName()}</>} breadcrumb={<Link to="/remote/sessions" class="conversation-back button button--ghost button--icon" ariaLabel="Back to Sessions"><Icon name="arrow-left" /></Link>} middle={<><Show when={!phoneLayout() && office.presentation() === "office"}><PresentationSwitch value={office.presentation()} attention={(state().view?.requests.length ?? 0) > 0} onChange={office.present} /></Show><KeepAwakeIndicator /></>} menu={<button type="button" class="button button--ghost button--icon app-header__menu" aria-label="Open sessions" aria-expanded={navOpen() && !navClosing()} onClick={(event) => openSessionsNavigation(event.currentTarget)}><Icon name="menu" /></button>} actions={<><Show when={!projectContext()}><SharedContextRingButton class="companion-context-trigger" ariaLabel="Open Session context" ariaDescription={contextWindowDisplay(state().view, activeSession()?.model)?.tokens} ariaControls="session-companion-panel" expanded={teamOpen() && companionTab() === "context"} fraction={contextWindowDisplay(state().view, activeSession()?.model)?.fraction} label={contextWindowDisplay(state().view, activeSession()?.model) ? `${Math.round(contextWindowDisplay(state().view, activeSession()?.model)!.fraction * 100)}%` : "—"} onClick={() => { setCompanionTab("context"); openTeam() }} /></Show><span class="remote-connection"><span class={`status-dot status-dot--${summarizeConnection(state().connection).tone}`} aria-hidden="true" /><span class="remote-connection-label">{connectionLabel(state().connection, state().transport)}</span></span><NewSessionButton newChat disabled={!canCreateSession()} onClick={() => openNewSession()} /><button ref={teamTrigger} type="button" class="button button--ghost button--icon app-header__team" aria-label="Open Team" aria-controls="session-companion-panel" aria-expanded={teamOpen() && !teamClosing()} onClick={openTeam}><Icon name="team" /></button><CommandPalette view={view()} canCreateSession={canCreateSession()} sessionSelected={paletteSessionSelected()} managedChild={managedChild()} workspaceID={newSessionWorkspaceID()} modelBinding={paletteModel()} hasTeam={true} handlers={{ ...paletteHandlers, openTeam }} /><NotificationCenter onOpenSession={openSession} onOpenUsage={openUsage} /></>}>
+              <SharedConversationHeader class={`workspace__topbar${projectContext() ? " project-topbar" : ""}`} hidden={selectedLoading()} title={<strong>{activeSession()?.title ?? noSessionTitle}</strong>} subtitle={<>{activeSession()?.directory ? sessionProjectLabel(activeSession() ?? {}) : "No workspace selected"} · {activeDeviceName()}</>} breadcrumb={<Link to="/remote/sessions" class="conversation-back button button--ghost button--icon" ariaLabel="Back to Sessions"><Icon name="arrow-left" /></Link>} middle={<><Show when={trace().running}><SharedTrace running branch={trace().branch} /></Show><Show when={!phoneLayout() && office.presentation() === "office"}><PresentationSwitch value={office.presentation()} attention={(state().view?.requests.length ?? 0) > 0} onChange={office.present} /></Show><KeepAwakeIndicator /></>} menu={<button type="button" class="button button--ghost button--icon app-header__menu" aria-label="Open sessions" aria-expanded={navOpen() && !navClosing()} onClick={(event) => openSessionsNavigation(event.currentTarget)}><Icon name="menu" /></button>} actions={<><Show when={!projectContext()}><SharedContextRingButton class="companion-context-trigger" ariaLabel="Open Session context" ariaDescription={contextWindowDisplay(state().view, activeSession()?.model)?.tokens} ariaControls="session-companion-panel" expanded={teamOpen() && companionTab() === "context"} fraction={contextWindowDisplay(state().view, activeSession()?.model)?.fraction} label={contextWindowDisplay(state().view, activeSession()?.model) ? `${Math.round(contextWindowDisplay(state().view, activeSession()?.model)!.fraction * 100)}%` : "—"} onClick={() => { setCompanionTab("context"); openTeam() }} /></Show><span class="remote-connection"><span class={`status-dot status-dot--${summarizeConnection(state().connection).tone}`} aria-hidden="true" /><span class="remote-connection-label">{connectionLabel(state().connection, state().transport)}</span></span><NewSessionButton newChat disabled={!canCreateSession()} onClick={() => openNewSession()} /><button ref={teamTrigger} type="button" class="button button--ghost button--icon app-header__team" aria-label="Open Team" aria-controls="session-companion-panel" aria-expanded={teamOpen() && !teamClosing()} onClick={openTeam}><Icon name="team" /></button><CommandPalette view={view()} canCreateSession={canCreateSession()} sessionSelected={paletteSessionSelected()} managedChild={managedChild()} workspaceID={newSessionWorkspaceID()} modelBinding={paletteModel()} hasTeam={true} handlers={{ ...paletteHandlers, openTeam }} /><NotificationCenter onOpenSession={openSession} onOpenUsage={openUsage} /></>}>
                 {projectContext() ? <Show when={projectContext()}>{(context) => <For each={[state().activeSessionID]}>{() => {
                   const [identityOpen, setIdentityOpen] = createSignal(true)
                   const master = () => context().role === "master"
@@ -727,7 +761,7 @@ function RoutePanel(props: { readonly active: boolean; readonly preserve?: boole
       return
     }
     if (!mounted()) return
-    if (host?.contains(document.activeElement)) [...document.querySelectorAll<HTMLElement>('.remote-nav__link[aria-current="page"], .bottom-nav__item[aria-current="page"]')].find((link) => link.getClientRects().length > 0)?.focus({ preventScroll: true })
+    if (host?.contains(document.activeElement)) [...document.querySelectorAll<HTMLElement>('.activity-bar__item[aria-current="page"], .bottom-nav__item[aria-current="page"]')].find((link) => link.getClientRects().length > 0)?.focus({ preventScroll: true })
     setPhase("exiting")
     exitTimer = setTimeout(() => {
       if (!props.preserve) setMounted(false)
@@ -1813,16 +1847,6 @@ function SettingsPage(props: { readonly office: OfficeSettingsStore; readonly ph
       </div>
     </>
   )
-}
-
-function PrimaryNav(props: { readonly view: RemoteView }): JSX.Element {
-  const attention = useNavigationAttention()
-  return <nav class="remote-nav" aria-label="Remote workspace"><For each={WORKSPACE_DESTINATIONS}>{(item) => <Link
-    to={item.route} class={`remote-nav__link remote-nav__link--${item.id}${workspaceDestination(props.view) === item.route ? " remote-nav__link--active" : ""}`}
-    ariaCurrent={workspaceDestination(props.view) === item.route ? "page" : undefined} data-destination={item.id}
-    ariaLabel={item.id === "sessions" && attention().sessions ? "Sessions, waiting for your decision" : item.label}>
-    <Icon name={item.icon} size={16} /><span class="remote-nav__label">{item.label}</span><AttentionMark show={item.id === "sessions" && attention().sessions} />
-  </Link>}</For></nav>
 }
 
 function ResumeSession(props: { readonly view: RemoteView }): JSX.Element {

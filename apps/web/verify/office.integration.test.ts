@@ -555,7 +555,7 @@ describe("remote Office presentation", () => {
       await page.evaluate(`(() => {window.__entrances=[];const tick=()=>{for(const frame of window.__officeGame?.scene.getScene('office')?.latestFrames??[]){const y=Math.floor(frame.position.y/32);if(frame.moving||y>=37)window.__entrances.push({id:frame.actor.sessionID,moving:frame.moving,y})}requestAnimationFrame(tick)};tick()})()`)
       for (const [away, back] of [["/remote/settings", "/remote/session?session_id=ses_fixture&device_id=dev_studio"], ["/remote/usage", "/remote/session?session_id=ses_fixture&device_id=dev_studio"]] as const) {
         const mounts = await page.evaluate(`window.__officeMounts`, decodeNumber)
-        await page.evaluate(`document.querySelector('.remote-nav a[href=${JSON.stringify(away)}]').click()`)
+        await page.evaluate(`document.querySelector('.activity-bar a[href=${JSON.stringify(away)}]').click()`)
         expect(await until(page, `document.querySelectorAll('.office-canvas-host canvas').length===0`, 100)).toBe(true)
         await page.evaluate(`document.querySelector('.workspace-resume[href=${JSON.stringify(back)}]').click()`)
         expect(await until(page, `window.__officeMounts===${mounts + 1}&&window.__officeGame.scene.getScene('office').latestFrames.length===3`, 150)).toBe(true)
@@ -654,7 +654,7 @@ async function choosePresentation(page: Page, label: "Conversation" | "Office") 
     return
   }
   expect(await page.evaluate(`document.querySelector('.presentation-switch') === null`)).toBe(true)
-  await page.evaluate(`document.querySelector('.workspace__rail .remote-nav a[href="/remote/settings"]').click()`)
+  await page.evaluate(`document.querySelector('.activity-bar a[href="/remote/settings"]').click()`)
   expect(await until(page, `document.querySelector('[aria-labelledby="office-view-label"] [role="radio"]') !== null`)).toBe(true)
   await chooseSetting(page, "office-view", "Office")
   await page.evaluate(`document.querySelector('.workspace__rail .workspace-resume').click()`)

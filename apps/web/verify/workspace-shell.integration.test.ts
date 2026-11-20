@@ -363,6 +363,7 @@ describe("quiet workspace", () => {
       await page.evaluate(`document.querySelector('[role="tab"][aria-selected="true"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))`)
       expect(await page.evaluate(`document.querySelector('[role="tab"][aria-selected="true"]').textContent.trim()`)).toBe("Changes")
       expect(await page.evaluate(`document.activeElement === document.querySelector('[role="tab"][aria-selected="true"]')`)).toBe(true)
+      await until(page, `document.querySelector('#session-companion-panel').getAnimations().length === 0`)
       if (width === 1440) expect(await page.evaluate(`document.querySelector('#session-companion-panel').getBoundingClientRect().width`)).toBe(448)
       await page.pressEscape()
       await until(page, `document.querySelector('[aria-label="Open Team"]').getAttribute('aria-expanded') === 'false'`)
@@ -472,31 +473,31 @@ describe("quiet workspace", () => {
       expect(await page.evaluate(`window.requestLog.filter(item => item.operation === 'session.pin' || item.operation === 'session.unpin').map(item => item.operation)`)).toEqual(["session.pin"])
     } finally { await page.close() }
   }, 30_000)
-  test("five workspace destinations have distinct routes, current-page state and working history", async () => {
+  test("workspace destinations have distinct routes, current-page state and working history", async () => {
     const page = await requireBrowser().openPage()
     try {
       await page.setViewport(1440, 900)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two`)
-      await until(page, `document.querySelector('.remote-nav') !== null`)
+      await until(page, `document.querySelector('.activity-bar') !== null`)
       for (const [label, path] of [["Projects", "/remote/projects"], ["Sessions", "/remote/sessions"], ["Workspaces", "/remote/workspaces"], ["Usage", "/remote/usage"], ["Settings", "/remote/settings"]] as const) {
         const previous = await page.evaluate(`location.pathname`, decodeString)
-        await page.evaluate(`document.querySelector('.remote-nav a.remote-nav__link--${label.toLowerCase()}').click()`)
-        await until(page, `location.pathname === ${JSON.stringify(path)} && document.querySelector('.remote-nav a.remote-nav__link--${label.toLowerCase()}')?.getAttribute('aria-current') === 'page'`)
-        expect(await page.evaluate(`document.querySelectorAll('.remote-nav [aria-current="page"]').length`)).toBe(1)
+        await page.evaluate(`document.querySelector('.activity-bar a[data-destination="${label.toLowerCase()}"]').click()`)
+        await until(page, `location.pathname === ${JSON.stringify(path)} && document.querySelector('.activity-bar a[data-destination="${label.toLowerCase()}"]')?.getAttribute('aria-current') === 'page'`)
+        expect(await page.evaluate(`document.querySelectorAll('.activity-bar [aria-current="page"]').length`)).toBe(1)
         if (label === "Workspaces") {
           await until(page, `document.querySelector('.workspaces-page')?.innerText.includes('Other repository')`)
           expect(await page.evaluate(`document.querySelectorAll('.workspace__rail').length === 1 && document.querySelectorAll('.workspaces-page h1').length === 1`)).toBe(true)
         }
         await page.evaluate(`history.back()`)
-        const previousLabel = previous === "/remote/session" ? "Sessions" : previous.split("/").at(-1)!.replace(/^./, (first) => first.toUpperCase())
-        await until(page, `location.pathname === ${JSON.stringify(previous)} && document.querySelector('.remote-nav a.remote-nav__link--${previousLabel.toLowerCase()}')?.getAttribute('aria-current') === 'page'`)
+        const previousLabel = previous === "/remote/session" ? "Chat" : previous.split("/").at(-1)!.replace(/^./, (first) => first.toUpperCase())
+        await until(page, `location.pathname === ${JSON.stringify(previous)} && document.querySelector('.activity-bar a[data-destination="${previousLabel.toLowerCase()}"]')?.getAttribute('aria-current') === 'page'`)
         await page.evaluate(`history.forward()`)
-        await until(page, `location.pathname === ${JSON.stringify(path)} && document.querySelector('.remote-nav a.remote-nav__link--${label.toLowerCase()}')?.getAttribute('aria-current') === 'page'`)
+        await until(page, `location.pathname === ${JSON.stringify(path)} && document.querySelector('.activity-bar a[data-destination="${label.toLowerCase()}"]')?.getAttribute('aria-current') === 'page'`)
       }
       await page.evaluate(`history.back()`)
-      await until(page, `location.pathname === '/remote/usage' && document.querySelector('.remote-nav a.remote-nav__link--usage')?.getAttribute('aria-current') === 'page'`)
+      await until(page, `location.pathname === '/remote/usage' && document.querySelector('.activity-bar a[data-destination="usage"]')?.getAttribute('aria-current') === 'page'`)
       await page.evaluate(`history.forward()`)
-      await until(page, `location.pathname === '/remote/settings' && document.querySelector('.remote-nav a.remote-nav__link--settings')?.getAttribute('aria-current') === 'page'`)
+      await until(page, `location.pathname === '/remote/settings' && document.querySelector('.activity-bar a[data-destination="settings"]')?.getAttribute('aria-current') === 'page'`)
       expect(await page.evaluate(`location.pathname`)).toBe("/remote/settings")
     } finally { await page.close() }
   }, 30_000)
@@ -669,20 +670,21 @@ describe("quiet workspace", () => {
           await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=${view}&theme=light`)
           await until(page, `document.querySelector('.remote-connection-label')?.textContent.includes('Connected') && document.querySelector('.bottom-nav') !== null`)
           const state = await page.evaluate(`(() => {
-            const nav = document.querySelector(innerWidth < 768 ? '.bottom-nav' : '.workspace__rail .remote-nav')
-            const links = [...(nav?.querySelectorAll('.remote-nav__link, .bottom-nav__item') ?? [])]
+            const nav = document.querySelector(innerWidth < 768 ? '.bottom-nav' : '.activity-bar')
+            const links = [...(nav?.querySelectorAll('.activity-bar__item, .bottom-nav__item') ?? [])]
             return {
               links: links.map(link => new URL(link.href).pathname),
               current: nav?.querySelector('[aria-current="page"]')?.textContent.trim() ?? '',
               rail: document.querySelector('.workspace__rail')?.getBoundingClientRect().width ?? 0,
-              headerLinks: document.querySelectorAll('.app-header .remote-nav a').length,
+              headerLinks: document.querySelectorAll('.app-header .activity-bar a').length,
               overflow: document.documentElement.scrollWidth > innerWidth,
               minHeight: innerWidth < 768 ? 44 : parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-space-8')),
               undersized: links.filter(link => { const box=link.getBoundingClientRect();return box.width < 44 || box.height < (innerWidth < 768 ? 44 : parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-space-8'))) }).length,
             }
           })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, links: (decodeArray(decodeString))(record["links"]), current: (decodeString)(record["current"]), rail: (decodeNumber)(record["rail"]), headerLinks: (decodeNumber)(record["headerLinks"]), overflow: (decodeBoolean)(record["overflow"]), undersized: (decodeNumber)(record["undersized"]), minHeight: (decodeNumber)(record["minHeight"]) } })
-          expect(state.links).toEqual(width < 768 ? ["/remote/sessions", "/remote/usage", "/remote/settings"] : ["/remote/projects", "/remote/sessions", "/remote/workspaces", "/remote/usage", "/remote/settings"])
-          expect(state.current).toBe(view === "usage" ? "Usage" : view === "settings" ? "Settings" : "Sessions")
+          expect(width < 768 ? state.links : state.links.slice(1)).toEqual(width < 768 ? ["/remote/sessions", "/remote/usage", "/remote/settings"] : ["/remote/sessions", "/remote/projects", "/remote/workspaces", "/remote/usage", "/remote/settings"])
+          if (width >= 768) expect(["/remote", "/remote/session"]).toContain(state.links[0] ?? "")
+          expect(state.current).toBe(view === "usage" ? "Usage" : view === "settings" ? "Settings" : view === "chat" && width >= 768 ? "Chat" : "Sessions")
           expect(state.rail).toBe(width < 768 ? 0 : 256)
           expect(state.headerLinks).toBe(0)
           expect(state.overflow).toBe(false)
@@ -701,7 +703,7 @@ describe("quiet workspace", () => {
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=dark`)
         await until(page, `document.querySelector('.composer-resident textarea') !== null`)
         await page.evaluate(`(() => { const field=document.querySelector('.composer-resident textarea');field.value='Keep this Session draft';field.dispatchEvent(new InputEvent('input',{bubbles:true})); })()`)
-        await page.evaluate(`document.querySelector(innerWidth < 768 ? '.bottom-nav a[href="/remote/settings"]' : '.workspace__rail .remote-nav a[href="/remote/settings"]').click()`)
+        await page.evaluate(`document.querySelector(innerWidth < 768 ? '.bottom-nav a[href="/remote/settings"]' : '.activity-bar a[href="/remote/settings"]').click()`)
         await until(page, `document.querySelector('.app--settings') !== null`)
         const resume = width < 768 ? ".app-header .workspace-resume" : ".workspace__rail .workspace-resume"
         expect(await page.evaluate(`document.querySelector(${JSON.stringify(resume)})?.getAttribute('href') ?? ''`)).toBe("/remote/session?session_id=ses_fixture&device_id=dev_studio")
@@ -728,12 +730,12 @@ describe("quiet workspace", () => {
       await until(page, `document.querySelector('.app--rail-collapsed') !== null`)
       expect(await page.evaluate(`(() => {
         const rail=document.querySelector('.workspace__rail');const body=rail.querySelector('.workspace__rail-body');
-        return {width:rail.getBoundingClientRect().width,links:rail.querySelectorAll('.remote-nav a').length,focus:document.activeElement?.getAttribute('aria-label') ?? '',picker:document.querySelector('.sessions-page__workspace-select').getBoundingClientRect().height>0,bodyHidden:body.inert && body.getClientRects().length===0}
-      })()`)).toEqual({ width: 60, links: 5, focus: "Show workspace sidebar", picker: true, bodyHidden: true })
-      expect(await page.evaluate(`[...document.querySelectorAll('.workspace__rail .remote-nav a')].every(link => { const box=link.getBoundingClientRect();return box.width>=44&&box.height>=32 })`)).toBe(true)
-      await page.evaluate(`document.querySelector('.workspace__rail .remote-nav a[href="/remote/settings"]').click()`)
+        return {width:rail.getBoundingClientRect().width,links:document.querySelectorAll('.activity-bar a').length,focus:document.activeElement?.getAttribute('aria-label') ?? '',picker:document.querySelector('.sessions-page__workspace-select').getBoundingClientRect().height>0,bodyHidden:body.inert && body.getClientRects().length===0}
+      })()`)).toEqual({ width: 60, links: 6, focus: "Show workspace sidebar", picker: true, bodyHidden: true })
+      expect(await page.evaluate(`[...document.querySelectorAll('.activity-bar a')].every(link => { const box=link.getBoundingClientRect();return box.width>=44&&box.height>=32 })`)).toBe(true)
+      await page.evaluate(`document.querySelector('.activity-bar a[href="/remote/settings"]').click()`)
       await until(page, `document.querySelector('.app--settings') !== null`)
-      expect(await page.evaluate(`['.workspace-resume','.workspace__new-chat'].every(selector => {const element=document.querySelector('.workspace__rail '+selector),box=element.getBoundingClientRect();return box.width>=44&&box.height>=44&&box.right<=60})`)).toBe(true)
+      expect(await page.evaluate(`['.workspace-resume','.workspace__new-chat'].every(selector => {const rail=document.querySelector('.workspace__rail').getBoundingClientRect(),element=document.querySelector('.workspace__rail '+selector),box=element.getBoundingClientRect();return box.width>=44&&box.height>=44&&box.left>=rail.left&&box.right<=rail.right})`)).toBe(true)
       await page.evaluate(`document.querySelector('.workspace__rail button[aria-label="Show workspace sidebar"]').click()`)
       await until(page, `document.querySelector('.workspace__rail').getBoundingClientRect().width === 256`)
       expect(await page.evaluate(`document.activeElement?.getAttribute('aria-label') ?? ''`)).toBe("Hide workspace sidebar")

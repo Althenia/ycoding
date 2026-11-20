@@ -60,7 +60,7 @@ async function closeReport(page: Awaited<ReturnType<NonNullable<typeof browser>[
 
 describe("one close control per modal", () => {
   for (const theme of ["light", "dark"] as const) {
-    test(`icon controls use neutral borders and keyboard focus in ${theme}`, async () => {
+    test(`icon controls use the cobalt focus ring without hue borders in ${theme}`, async () => {
       const page = await browser!.openPage()
       try {
         await page.setMobileViewport(390, 844)
@@ -68,19 +68,18 @@ describe("one close control per modal", () => {
         for (let attempt = 0; attempt < 80 && !await page.evaluate(`document.querySelector('[aria-label="Icon focus variants"]') !== null`); attempt += 1) await Bun.sleep(25)
         await page.pressKey("Tab", "Tab", 9)
         const report = await page.evaluate(`(() => {
-          const neutral = getComputedStyle(document.querySelector('[data-neutral-focus]')).color;
-          const green = getComputedStyle(document.querySelector('[data-green-focus]')).color;
-          const greenBorder = getComputedStyle(document.querySelector('[data-green-border]')).color;
+          const focus = getComputedStyle(document.querySelector('[data-focus-role]')).color;
+          const hueBorder = getComputedStyle(document.querySelector('[data-hue-border]')).color;
           return [...document.querySelectorAll('[aria-label="Icon focus variants"] button')].map(button => {
             button.focus(); const style = getComputedStyle(button);
             const outlined = style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) >= 2;
             return { name: button.getAttribute('aria-label'), visible: outlined || style.boxShadow !== 'none',
-              neutral: outlined ? style.outlineColor === neutral : style.boxShadow.includes(neutral),
-              greenBorder: style.borderTopStyle !== 'none' && parseFloat(style.borderTopWidth) > 0 && [green, greenBorder].includes(style.borderTopColor) };
+              focus: outlined ? style.outlineColor === focus : style.boxShadow.includes(focus),
+              hueBorder: style.borderTopStyle !== 'none' && parseFloat(style.borderTopWidth) > 0 && [focus, hueBorder].includes(style.borderTopColor) };
           });
-        })()`, decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, name: (decodeString)(record["name"]), visible: (decodeBoolean)(record["visible"]), neutral: (decodeBoolean)(record["neutral"]), greenBorder: (decodeBoolean)(record["greenBorder"]) } }))
+        })()`, decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, name: (decodeString)(record["name"]), visible: (decodeBoolean)(record["visible"]), focus: (decodeBoolean)(record["focus"]), hueBorder: (decodeBoolean)(record["hueBorder"]) } }))
         expect(report.map((item) => item.name)).toEqual(["Close fixture", "Open Team", "Zoom in", "Main session", "Jump to latest", "Open task", "Answer task", "Pending model", "Pending agent"])
-        expect(report.filter((item) => !item.visible || !item.neutral || item.greenBorder)).toEqual([])
+        expect(report.filter((item) => !item.visible || !item.focus || item.hueBorder)).toEqual([])
       } finally { await page.close() }
     }, 30_000)
   }
@@ -151,7 +150,7 @@ describe("one close control per modal", () => {
           await page.pressEscape()
         }
         expect(await page.evaluate(`document.activeElement?.getAttribute('aria-label') === 'Open Team' && document.querySelector('dialog.team-view__sheet[open]') === null`)).toBe(true)
-        expect(await page.evaluate(`getComputedStyle(document.activeElement).getPropertyValue('--yc-focus').trim() === getComputedStyle(document.documentElement).getPropertyValue('--yc-border-strong').trim()`)).toBe(true)
+        expect(await page.evaluate(`getComputedStyle(document.activeElement).getPropertyValue('--yc-focus').trim() === getComputedStyle(document.documentElement).getPropertyValue('--yc-cobalt-graphic').trim()`)).toBe(true)
       } finally { await page.close() }
     }, 30_000)
   }

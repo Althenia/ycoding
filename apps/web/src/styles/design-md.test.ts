@@ -10,7 +10,7 @@ const GROUP_TO_PROPERTY = {
   typography: (name: string) => `--yc-${name}`,
   spacing: (name: string) => `--yc-space-${name}`,
   rounded: (name: string) => `--yc-radius-${name}`,
-  elevation: (name: string) => name === "focus-ring" ? "--yc-focus-ring" : `--yc-shadow-${name}`,
+  elevation: (name: string) => name === "focus-ring" ? "--yc-focus-ring" : `--yc-elevation-${name}`,
   controls: (name: string) => `--yc-${name}`,
   cursors: (name: string) => `--yc-cursor-${name}`,
   layout: (name: string) => `--yc-${name}`,
@@ -71,7 +71,7 @@ function schemeDrift(document: string): string[] {
     SCHEME_IDS.flatMap((scheme) =>
       SCHEME_MODES.flatMap((mode) => {
         const palette = SCHEMES[scheme].palettes[mode]
-        return palette ? [[`${scheme}-${mode}`, schemeTokens(palette, mode)] as const] : []
+        return palette ? [[`${scheme}-${mode}`, schemeTokens(palette)] as const] : []
       }),
     ),
   )
@@ -95,11 +95,11 @@ describe("DESIGN.md scheme drift", () => {
 
   test("detects changed, dropped, undocumented, and stale scheme tokens on scratch copies", async () => {
     const document = await Bun.file(new URL("../../DESIGN.md", import.meta.url)).text()
-    const changed = document.replace('green: "#50a14f"', 'green: "#000000"')
-    expect(schemeDrift(changed).some((issue) => issue.startsWith("onedark-light --yc-green:"))).toBe(true)
     const start = document.indexOf("\n  onedark-light:\n")
-    const dropped = document.slice(0, start) + document.slice(start).replace(/^ {6}border-strong: .*\n/m, "")
-    expect(schemeDrift(dropped).some((issue) => issue.startsWith("onedark-light --yc-border-strong: DESIGN=missing"))).toBe(true)
+    const changed = document.slice(0, start) + document.slice(start).replace(/^ {6}cobalt-solid: .*$/m, '      cobalt-solid: "#000000"')
+    expect(schemeDrift(changed).some((issue) => issue.startsWith("onedark-light --yc-cobalt-solid:"))).toBe(true)
+    const dropped = document.slice(0, start) + document.slice(start).replace(/^ {6}line-field: .*\n/m, "")
+    expect(schemeDrift(dropped).some((issue) => issue.startsWith("onedark-light --yc-line-field: DESIGN=missing"))).toBe(true)
     const stale = document.replace("\n  onedark-light:\n", "\n  solarized-dark:\n")
     expect(schemeDrift(stale)).toContain("solarized-dark: stale scheme")
     expect(schemeDrift(stale)).toContain("onedark-light: undocumented scheme")
@@ -132,13 +132,13 @@ describe("DESIGN.md token drift", () => {
     const css = await Bun.file(new URL("./tokens.css", import.meta.url)).text()
     try {
       const probes = [
-        [document, css.replace("--yc-primary-bg: #0b8550;", "--yc-primary-bg: #000000;"), ":root --yc-primary-bg"],
+        [document, css.replace(/--yc-cobalt-solid: #[0-9a-f]{6};/, "--yc-cobalt-solid: #000000;"), ":root --yc-cobalt-solid"],
         [document, css.replace("--yc-scrollbar-size: 12px;", ""), ":root --yc-scrollbar-size"],
-        [document.replace("  green: \"#27d17f\"", "  green: \"#27d17f\"\n  stale: \"#000000\""), css, ":root --yc-stale"],
-        [document.replace('  primary-bg: "#0b8550"\n', ""), css, ":root --yc-primary-bg"],
-        [document, css.replace("  --yc-primary-fg: #ffffff;", "  --yc-primary-fg: #ffffff;\n  --yc-undocumented: 1px;"), ":root --yc-undocumented"],
-        [document.replace('      bg: "#0b1115"', '      bg: "#000000"'), css, '[data-theme="dark"] --yc-bg'],
-        [document, css.replace("  --yc-bg: #0b1115;", ""), '[data-theme="dark"] --yc-bg'],
+        [document.replace(/^  plane-canvas: (.*)$/m, "  plane-canvas: $1\n  stale: \"#000000\""), css, ":root --yc-stale"],
+        [document.replace(/^  cobalt-solid: .*\n/m, ""), css, ":root --yc-cobalt-solid"],
+        [document, css.replace("  --yc-scrollbar-size: 12px;", "  --yc-scrollbar-size: 12px;\n  --yc-undocumented: 1px;"), ":root --yc-undocumented"],
+        [document.replace(/^      plane-canvas: .*$/m, '      plane-canvas: "#000000"'), css, '[data-theme="dark"] --yc-plane-canvas'],
+        [document, css.replace(/(\[data-theme="dark"\] \{[\s\S]*?)  --yc-plane-canvas: #[0-9a-f]{6};\n/, "$1"), '[data-theme="dark"] --yc-plane-canvas'],
       ] as const
       for (const [specimen, stylesheet, expected] of probes) {
         await Bun.write(path.join(directory, "DESIGN.md"), specimen)
@@ -165,11 +165,11 @@ describe("Web design authority", () => {
   test("public rules own one header boundary, open releases and component-specific radii", async () => {
     const document = await Bun.file(new URL("../../DESIGN.md", import.meta.url)).text()
     const rule = document.split("\n").find(line => line.startsWith("| W93 |")) ?? ""
-    expect(rule).toContain("1px solid var(--yc-border)")
+    expect(rule).toContain("1px solid var(--yc-line-subtle)")
     expect(rule).toContain("one public header")
     expect(rule).toContain("transparent")
     expect(rule).toContain("zero radius")
-    expect(rule).toContain("--yc-radius-sm")
+    expect(rule).toContain("--yc-radius-control")
     expect(rule).toContain("open text links")
     expect(rule).toContain("bare currentColor icons")
     expect(rule).not.toMatch(/pill-shaped|soft icon wells/)

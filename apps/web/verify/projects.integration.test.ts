@@ -276,7 +276,7 @@ describe("Projects", () => {
       expect(await page.evaluate(`window.projectDraft===document.querySelector('.project-desktop .project-settings input')`)).toBe(true)
       expect(await page.evaluate(`window.projectDraft.value`)).toBe("Unsaved project title")
       expect(await page.evaluate(`window.remoteMutationReport().length`)).toBe(0)
-      await page.evaluate(`document.querySelector('.remote-nav a[href="/remote/projects"]').click()`)
+      await page.evaluate(`document.querySelector('.activity-bar a[href="/remote/projects"]').click()`)
       await until(page, `${button("Open project Docs sweep")} !== undefined`)
       await click(page, "Open project Docs sweep")
       await until(page, `document.querySelector('.project-context')?.textContent.includes('Master of Docs sweep')`)

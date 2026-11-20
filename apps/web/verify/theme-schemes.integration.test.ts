@@ -38,36 +38,36 @@ describe("web color schemes", () => {
       const light = await page.evaluate(`(() => ({
         scheme: document.documentElement.dataset.scheme ?? '',
         mode: document.documentElement.dataset.theme ?? '',
-        background: getComputedStyle(document.documentElement).getPropertyValue('--yc-bg').trim(),
+        background: getComputedStyle(document.documentElement).getPropertyValue('--yc-plane-canvas').trim(),
         overflow: document.documentElement.scrollWidth > innerWidth,
       }))()`)
-      expect(light).toEqual({ scheme: "onedark", mode: "light", background: "#fafafa", overflow: false })
+      expect(light).toEqual({ scheme: "onedark", mode: "light", background: "#fafcfe", overflow: false })
 
       await page.evaluate(`[...document.querySelectorAll('section[aria-labelledby="appearance-settings"] [role="radio"]')].find(option => option.textContent?.trim() === 'Dark')?.click()`)
       await waitFor(page, `document.documentElement.dataset.theme === 'dark'`)
       const dark = await page.evaluate(`(() => ({
         scheme: document.documentElement.dataset.scheme ?? '',
         mode: document.documentElement.dataset.theme ?? '',
-        background: getComputedStyle(document.documentElement).getPropertyValue('--yc-bg').trim(),
-        text: getComputedStyle(document.documentElement).getPropertyValue('--yc-text').trim(),
+        background: getComputedStyle(document.documentElement).getPropertyValue('--yc-plane-canvas').trim(),
+        text: getComputedStyle(document.documentElement).getPropertyValue('--yc-ink').trim(),
         persistedScheme: localStorage.getItem('ycoding.theme-scheme') ?? '',
         persistedMode: localStorage.getItem('ycoding.theme') ?? '',
       }))()`)
-      expect(dark).toEqual({ scheme: "onedark", mode: "dark", background: "#282c34", text: "#b6bdca", persistedScheme: "onedark", persistedMode: "dark" })
+      expect(dark).toEqual({ scheme: "onedark", mode: "dark", background: "#23262e", text: "#f0f3fa", persistedScheme: "onedark", persistedMode: "dark" })
 
       await page.navigate(`${url()}/verify/remote.html?view=settings&noSelection=1`)
       await waitFor(page, `document.documentElement.dataset.scheme === 'onedark' && document.documentElement.dataset.theme === 'dark'`)
-      expect(await page.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--yc-bg').trim()`)).toBe("#282c34")
+      expect(await page.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--yc-plane-canvas').trim()`)).toBe("#23262e")
 
       await selectScheme(page, "One Dark Pro")
       await waitFor(page, `document.documentElement.dataset.scheme === 'onedark-pro'`)
       await page.evaluate(`[...document.querySelectorAll('section[aria-labelledby="appearance-settings"] [role="radio"]')].find(option => option.textContent?.trim() === 'Light')?.click()`)
       await waitFor(page, `document.documentElement.dataset.theme === 'light'`)
-      expect(await page.evaluate(`({ scheme: document.documentElement.dataset.scheme, background: getComputedStyle(document.documentElement).getPropertyValue('--yc-bg').trim() })`)).toEqual({ scheme: "onedark-pro", background: "#ffffff" })
+      expect(await page.evaluate(`({ scheme: document.documentElement.dataset.scheme, background: getComputedStyle(document.documentElement).getPropertyValue('--yc-plane-canvas').trim() })`)).toEqual({ scheme: "onedark-pro", background: "#fafcfe" })
 
       await selectScheme(page, "High contrast")
       await waitFor(page, `document.documentElement.dataset.scheme === 'high-contrast'`)
-      expect(await page.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--yc-green-strong').trim()`)).toBe("#004521")
+      expect(await page.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--yc-cobalt-ink').trim()`)).toBe("#003193")
     } finally {
       await page.close()
     }
@@ -90,10 +90,10 @@ describe("web color schemes", () => {
       await waitFor(first, `document.documentElement.dataset.scheme === 'high-contrast'`)
       const rendered = await first.evaluate(`(() => ({
         scheme: document.documentElement.dataset.scheme ?? '',
-        background: getComputedStyle(document.documentElement).getPropertyValue('--yc-bg').trim(),
+        background: getComputedStyle(document.documentElement).getPropertyValue('--yc-plane-canvas').trim(),
         overflow: document.documentElement.scrollWidth > innerWidth,
       }))()`)
-      expect(rendered).toEqual({ scheme: "high-contrast", background: "#ffffff", overflow: false })
+      expect(rendered).toEqual({ scheme: "high-contrast", background: "#fefeff", overflow: false })
     } finally {
       await first.close()
       await second.close()
@@ -110,8 +110,8 @@ describe("web color schemes", () => {
       expect(await page.evaluate(`({
         colors: [...document.querySelectorAll('meta[name="theme-color"]')].map(tag => tag.getAttribute('content') ?? ''),
         media: [...document.querySelectorAll('meta[name="theme-color"]')].map(tag => tag.getAttribute('media') ?? ''),
-        background: getComputedStyle(document.documentElement).getPropertyValue('--yc-bg').trim(),
-      })`)).toEqual({ colors: ["#282c34", "#282c34"], media: ["", ""], background: "#282c34" })
+        background: getComputedStyle(document.documentElement).getPropertyValue('--yc-plane-canvas').trim(),
+      })`)).toEqual({ colors: ["#1a1e27", "#1a1e27"], media: ["", ""], background: "#1a1e27" })
     } finally {
       await page.close()
     }
@@ -138,21 +138,21 @@ describe("web color schemes", () => {
       await page.navigate(url())
       await waitFor(page, `document.documentElement.dataset.scheme === 'high-contrast' && document.documentElement.dataset.theme === 'light'`)
       expect(await page.evaluate(`({
-        background: getComputedStyle(document.documentElement).getPropertyValue('--yc-bg').trim(),
-        accent: getComputedStyle(document.documentElement).getPropertyValue('--yc-green-strong').trim(),
+        background: getComputedStyle(document.documentElement).getPropertyValue('--yc-plane-canvas').trim(),
+        accent: getComputedStyle(document.documentElement).getPropertyValue('--yc-cobalt-ink').trim(),
         preference: document.documentElement.dataset.themePreference ?? '',
-      })`)).toEqual({ background: "#ffffff", accent: "#004521", preference: "system" })
+      })`)).toEqual({ background: "#fefeff", accent: "#003193", preference: "system" })
 
       await page.navigate(`${url()}/verify/remote.html?view=settings&noSelection=1`)
       await waitFor(page, `document.documentElement.dataset.scheme === 'high-contrast'`)
       await selectScheme(page, "One Dark")
       await waitFor(page, `document.documentElement.dataset.scheme === 'onedark'`)
-      expect(await page.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--yc-bg').trim()`)).toBe("#fafafa")
+      expect(await page.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--yc-plane-canvas').trim()`)).toBe("#fafcfe")
 
       await selectScheme(page, "Default")
       await page.evaluate(`[...document.querySelectorAll('section[aria-labelledby="appearance-settings"] [role="radio"]')].find(option => option.textContent?.trim() === 'Light')?.click()`)
       await waitFor(page, `document.documentElement.dataset.scheme === 'default' && document.documentElement.dataset.themePreference === 'light'`)
-      expect(await page.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--yc-green-strong').trim()`)).toBe("#0a7b47")
+      expect(await page.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--yc-cobalt-ink').trim()`)).toBe("#0045c6")
     } finally {
       await page.close()
     }

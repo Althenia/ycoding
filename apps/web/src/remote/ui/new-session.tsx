@@ -16,6 +16,7 @@ export function NewSessionButton(props: { readonly disabled: boolean; readonly o
 
 export function NewSessionComposer(props: { readonly workspaceID?: string; readonly repositoryRequired?: boolean; readonly onCreated: (sessionID: string) => void; readonly onWorkspaceChange?: (workspaceID: string | undefined) => void; readonly registerPaletteModel?: (binding: PaletteModelBinding) => () => void }): JSX.Element {
   const remote = useRemote()
+  const helperId = `new-session-helper-${crypto.randomUUID()}`
   const [workspaceID, setWorkspaceID] = createSignal("")
   const [text, setText] = createSignal("")
   let mounted = true
@@ -91,14 +92,14 @@ export function NewSessionComposer(props: { readonly workspaceID?: string; reado
     </div>
     <div class="new-session-composer__surface">
       <div class="new-session-composer__repository" classList={{ "new-session-composer__repository--required": display().repositoryHighlight, "new-session-composer__repository--selected": Boolean(workspace()) }}>
-        <Show when={workspaceStatus() === "loading"} fallback={<ComposerPicker label="Repository" icon="folder" placeholder={display().repositoryPlaceholder} value={workspaceID()} options={workspaces().map((item) => ({ value: item.id, label: labels().get(item.id) ?? item.name ?? "Repository" }))} disabled={!connected() || props.workspaceID !== undefined || workspaces().length === 0} onChange={setWorkspaceID} />}>
+        <Show when={workspaceStatus() === "loading"} fallback={<ComposerPicker label="Repository" icon="folder" placeholder={display().repositoryPlaceholder} value={workspaceID()} options={workspaces().map((item) => ({ value: item.id, label: labels().get(item.id) ?? item.name ?? "Repository" }))} disabled={!connected() || props.workspaceID !== undefined || workspaces().length === 0} required={repositoryRequired()} describedBy={helperId} badge={display().repositoryHighlight ? "Required" : undefined} onChange={setWorkspaceID} />}>
           <LoadingPlaceholder kind="repository" label="Loading previously opened repositories…" />
         </Show>
         <button type="button" class="new-session-composer__refresh" classList={{ "new-session-composer__refresh--primary": display().refreshHighlight }} aria-label="Refresh repositories" data-tooltip="Refresh repositories" disabled={!connected() || workspaceStatus() === "loading"} onClick={() => void listed().refetch()}><Icon name="refresh" /></button>
       </div>
       <MiniComposer phoneSummary registerPaletteModel={props.registerPaletteModel} target={workspace() ? { workspaceID: workspaceID() } : undefined} text={text()} onText={setText} disabled={!!creation()} sendDisabled={disabled()} sendDescription={display().sendBlockedReason} allowEmpty onSubmit={create} />
     </div>
-    <p class="field__hint new-session-composer__helper" classList={{ "new-session-composer__helper--blocked": display().repositoryHighlight || display().refreshHighlight }} role={display().messageTone}>
+    <p id={helperId} class="field__hint new-session-composer__helper" classList={{ "new-session-composer__helper--blocked": display().repositoryHighlight || display().refreshHighlight }} role={display().messageTone}>
       {display().message}<Show when={originUnavailable()}> <Link to="/remote" class="text-link">Choose another repository</Link>.</Show>
     </p>
     <Show when={creation()?.status === "creating"}><p role="status">Creating session…</p></Show>

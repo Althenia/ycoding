@@ -58,7 +58,7 @@ describe("remote session lifecycle", () => {
   test("keeps a Session draft when visiting Settings and returning through the resume link", async () => {
     const page = await open("chat")
     try {
-      await page.evaluate(`(() => { const input = document.querySelector('.composer__input'); input.value = 'Keep this unsent prompt'; input.dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('.remote-nav a[href="/remote/settings"]')?.click(); })()`)
+      await page.evaluate(`(() => { const input = document.querySelector('.composer__input'); input.value = 'Keep this unsent prompt'; input.dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('.activity-bar a[href="/remote/settings"]')?.click(); })()`)
       expect(await page.evaluate(`document.querySelector('.app--settings') !== null`)).toBe(true)
       await page.evaluate(`document.querySelector('.workspace-resume[href^="/remote/session?"]')?.click()`)
       expect(await page.evaluate(`location.pathname`)).toBe("/remote/session")

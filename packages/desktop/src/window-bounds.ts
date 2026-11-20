@@ -1,6 +1,6 @@
 import type { Pointer } from "bun:ffi"
 
-export const DESKTOP_MIN_WINDOW_WIDTH = 800
+export const DESKTOP_MIN_WINDOW_WIDTH = 1000
 export const DESKTOP_MIN_WINDOW_HEIGHT = 600
 export const DESKTOP_DEFAULT_WINDOW_WIDTH = 1360
 export const DESKTOP_DEFAULT_WINDOW_HEIGHT = 860

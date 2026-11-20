@@ -95,7 +95,7 @@ describe("open Settings surfaces", () => {
       expect(declared(css, selector)["border-block-start"]).toBeUndefined()
       expect(declared(css, selector)["border-block-end"]).toBeUndefined()
     }
-    expect(declared(css, ".device-table .device")["border-radius"]).toBe("var(--yc-radius-lg)")
+    expect(declared(css, ".device-table .device")["border-radius"]).toBe("var(--yc-radius-card)")
   })
 
   test("shows Appearance and Office choices as tonal segmented pills", async () => {
@@ -107,7 +107,7 @@ describe("open Settings surfaces", () => {
     }
     const active = declared(css, ".appearance-segments .filters__option--active")
     expect(active["border-block-end-color"]).toBeUndefined()
-    expect(active.background).toBe("var(--yc-green-soft)")
+    expect(active.background).toBe("var(--yc-cobalt-tonal)")
   })
 })
 
@@ -148,7 +148,7 @@ describe("Ledger Settings composition", () => {
     expect(css).not.toContain("520px")
     expect(css).toContain("grid-template-columns: minmax(0, 1fr)")
     const toggle = rule(css, ".machine-awake .switch input")
-    expect(toggle).toContain("border: 1px solid var(--yc-border-strong)")
+    expect(toggle).toContain("border: 1px solid var(--yc-line-field)")
     expect(toggle).toContain("background: transparent")
     expect(rule(css, ".machine-awake .switch")).toContain("flex-direction: row-reverse")
     expect(tsx).toContain('<input type="checkbox" role="switch" aria-labelledby="machine-awake-label"')

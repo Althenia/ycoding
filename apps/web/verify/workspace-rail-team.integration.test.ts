@@ -137,8 +137,8 @@ for (const [name, query, ready] of [
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?${query}`)
     await page.evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+8000;const check=()=>{if(document.querySelector(${JSON.stringify(ready)}))return resolve(true);if(performance.now()>end)return reject(new Error('Route did not settle'));requestAnimationFrame(check)};check()})`)
-    const rail = await page.evaluate(`(()=>{const rail=document.querySelector('.workspace__rail');return{search:rail.querySelectorAll('input[aria-label="Search sessions"]').length,list:rail.querySelectorAll('.session-list').length,destinations:[...rail.querySelectorAll('.remote-nav__label')].map(e=>e.textContent),current:[...rail.querySelectorAll('.remote-nav [aria-current="page"]')].map(e=>e.textContent.trim()),replacements:rail.querySelectorAll('.project-rail,.workspace-nav').length}})()`)
-    expect(rail).toEqual({ search: 1, list: 1, destinations: ["Projects", "Sessions", "Workspaces", "Usage", "Settings"], current: [name], replacements: 0 })
+    const rail = await page.evaluate(`(()=>{const rail=document.querySelector('.workspace__rail');return{search:rail.querySelectorAll('input[aria-label="Search sessions"]').length,list:rail.querySelectorAll('.session-list').length,destinations:[...document.querySelectorAll('.activity-bar__label')].map(e=>e.textContent),current:[...document.querySelectorAll('.activity-bar [aria-current="page"]')].map(e=>e.textContent.trim()),replacements:rail.querySelectorAll('.project-rail,.workspace-nav').length}})()`)
+    expect(rail).toEqual({ search: 1, list: 1, destinations: ["Chat", "Sessions", "Projects", "Workspaces", "Usage", "Settings"], current: [name], replacements: 0 })
   } finally { await page.close() }
 }, 15000)
 
@@ -161,9 +161,9 @@ test("project context keeps the shared Session rail and its search draft through
     for (let attempt = 0; attempt < 80 && !await page.evaluate(`!!document.querySelector('[aria-label="Open project Release train"]')`); attempt++) await Bun.sleep(25)
     await page.evaluate(`document.querySelector('[aria-label="Open project Release train"]').click()`)
     for (let attempt = 0; attempt < 80 && !await page.evaluate(`!!document.querySelector('.project-context')`); attempt++) await Bun.sleep(25)
-    expect(await page.evaluate(`document.querySelector('.remote-nav [aria-current="page"]').textContent.trim()`)).toBe("Sessions")
+    expect(await page.evaluate(`document.querySelector('.activity-bar [aria-current="page"]').textContent.trim()`)).toBe("Chat")
     expect(await page.evaluate(`document.querySelectorAll('.workspace__rail .session-list').length`)).toBe(1)
-    await page.evaluate(`(()=>{const input=document.querySelector('.workspace__rail [aria-label="Search sessions"]');input.value='Stream';input.dispatchEvent(new InputEvent('input',{bubbles:true}));document.querySelector('.remote-nav [href="/remote/sessions"]').click()})()`)
+    await page.evaluate(`(()=>{const input=document.querySelector('.workspace__rail [aria-label="Search sessions"]');input.value='Stream';input.dispatchEvent(new InputEvent('input',{bubbles:true}));document.querySelector('.activity-bar [href="/remote/sessions"]').click()})()`)
     for (let attempt = 0; attempt < 80 && !await page.evaluate(`!!document.querySelector('.sessions-page')`); attempt++) await Bun.sleep(25)
     expect(await page.evaluate(`document.querySelector('.workspace__rail [aria-label="Search sessions"]').value`)).toBe("Stream")
     expect(await page.evaluate(`document.querySelectorAll('.workspace__rail .session-list').length`)).toBe(1)

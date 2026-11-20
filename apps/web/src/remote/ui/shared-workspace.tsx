@@ -77,7 +77,7 @@ export function SharedChangesSurface(props: { readonly files: readonly SharedFil
 
 export function SharedContextRingButton(props: { readonly fraction?: number; readonly stale?: boolean; readonly label: JSX.Element; readonly ariaLabel: string; readonly ariaDescription?: string; readonly ariaControls?: string; readonly expanded: boolean; readonly class?: string; readonly onClick: () => void }): JSX.Element {
   return <button type="button" class={props.class} aria-label={props.ariaLabel} aria-description={props.ariaDescription} aria-controls={props.ariaControls} aria-expanded={props.expanded} data-level={(props.fraction ?? 0) >= 0.9 ? "danger" : (props.fraction ?? 0) >= 0.7 ? "warn" : "ok"} data-stale={props.stale ? "true" : undefined} onClick={props.onClick}>
-    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" pathLength="100" fill="none" stroke="var(--yc-border-strong)" stroke-width="2" /><circle class="rl-ring-value" cx="12" cy="12" r="9" pathLength="100" fill="none" stroke="var(--rl-ring-stroke, var(--yc-green-strong))" stroke-width="2" stroke-dasharray={`${Math.min(100, Math.max(0, (props.fraction ?? 0) * 100))} 100`} /></svg><span>{props.label}</span>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" pathLength="100" fill="none" stroke="var(--yc-line-field)" stroke-width="2" /><circle class="rl-ring-value" cx="12" cy="12" r="9" pathLength="100" fill="none" stroke="var(--rl-ring-stroke, var(--yc-cobalt-ink))" stroke-width="2" stroke-dasharray={`${Math.min(100, Math.max(0, (props.fraction ?? 0) * 100))} 100`} /></svg><span>{props.label}</span>
   </button>
 }
 
@@ -139,12 +139,151 @@ export const WORKSPACE_DESTINATIONS = [
   { id: "settings", label: "Settings", icon: "settings", route: "/remote/settings", desktopRoute: "/settings" },
 ] as const
 
-export function SharedWorkspaceFrame(props: { readonly railClass?: string; readonly railLabel?: string; readonly railHeader: JSX.Element; readonly newChat: JSX.Element; readonly railBody: JSX.Element; readonly railBodyRef?: (element: HTMLDivElement) => void; readonly railBodyInert?: boolean; readonly railNavigation: JSX.Element; readonly machineName?: JSX.Element; readonly machineMeta?: JSX.Element; readonly machineAction?: JSX.Element; readonly topHeader?: JSX.Element; readonly connectionStrip?: JSX.Element; readonly workspaceClass?: string; readonly mainID?: string; readonly mainClass?: string; readonly mainRef?: (element: HTMLElement) => void; readonly workspaceAside?: JSX.Element; readonly companion?: JSX.Element; readonly children: JSX.Element }): JSX.Element {
-  return <><aside id="session-rail" class={props.railClass ?? "workspace__rail"} aria-label={props.railLabel ?? "Workspace navigation"}>
+export function SharedWorkspaceFrame(props: { readonly activityBar?: JSX.Element; readonly statusBar?: JSX.Element; readonly railClass?: string; readonly railLabel?: string; readonly railHeader: JSX.Element; readonly newChat: JSX.Element; readonly railBody: JSX.Element; readonly railBodyRef?: (element: HTMLDivElement) => void; readonly railBodyInert?: boolean; readonly railNavigation?: JSX.Element; readonly machineName?: JSX.Element; readonly machineMeta?: JSX.Element; readonly machineAction?: JSX.Element; readonly topHeader?: JSX.Element; readonly connectionStrip?: JSX.Element; readonly workspaceClass?: string; readonly mainID?: string; readonly mainClass?: string; readonly mainRef?: (element: HTMLElement) => void; readonly workspaceAside?: JSX.Element; readonly companion?: JSX.Element; readonly children: JSX.Element }): JSX.Element {
+  return <>{props.activityBar}<aside id="session-rail" class={props.railClass ?? "workspace__rail"} aria-label={props.railLabel ?? "Workspace navigation"}>
     <div class="workspace__rail-head">{props.railHeader}{props.newChat}</div>
     <div ref={props.railBodyRef} class="workspace__rail-body" inert={props.railBodyInert}>{props.railBody}</div>
-    <div class="workspace__rail-navigation">{props.railNavigation}</div><Show when={props.machineName !== undefined}><div class="workspace__rail-footer"><span class="workspace-select__label">Selected machine</span><strong>{props.machineName}</strong>{props.machineMeta}{props.machineAction}</div></Show>
-  </aside>{props.topHeader}{props.connectionStrip}<div class={props.workspaceClass ?? "workspace"}><main id={props.mainID ?? "remote-main"} tabindex="-1" class={props.mainClass ?? "workspace__main"} ref={props.mainRef}>{props.children}</main>{props.workspaceAside}</div>{props.companion}</>
+    <Show when={props.railNavigation !== undefined}><div class="workspace__rail-navigation">{props.railNavigation}</div></Show><Show when={props.machineName !== undefined}><div class="workspace__rail-footer"><span class="workspace-select__label">Selected machine</span><strong>{props.machineName}</strong>{props.machineMeta}{props.machineAction}</div></Show>
+  </aside>{props.topHeader}{props.connectionStrip}<div class={props.workspaceClass ?? "workspace"}><main id={props.mainID ?? "remote-main"} tabindex="-1" class={props.mainClass ?? "workspace__main"} ref={props.mainRef}>{props.children}</main>{props.workspaceAside}</div>{props.companion}{props.statusBar}</>
+}
+
+export type SharedHue = "cobalt" | "mint" | "violet" | "teal" | "sky" | "amber" | "coral"
+
+export type SharedActivityItem = {
+  readonly id: string
+  readonly label: string
+  readonly icon: IconName
+  readonly href: string
+  readonly current: boolean
+  readonly placement?: "start" | "end"
+  readonly description?: string
+  readonly ariaLabel?: string
+  readonly badge?: { readonly count: number; readonly hue: "amber" | "mint"; readonly label: string }
+}
+
+export function SharedActivityBar(props: { readonly label: string; readonly items: readonly SharedActivityItem[]; readonly brand?: JSX.Element; readonly class?: string; readonly onNavigate?: (item: SharedActivityItem) => void }): JSX.Element {
+  const item = (entry: SharedActivityItem) => <li><a class="activity-bar__item" href={entry.href} data-destination={entry.id} aria-current={entry.current ? "page" : undefined} aria-label={entry.ariaLabel} aria-description={entry.description} onClick={(event) => {
+    if (!props.onNavigate || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+    event.preventDefault()
+    props.onNavigate(entry)
+  }}>
+    <span class="activity-bar__glyph"><Icon name={entry.icon} size={20} /><Show when={entry.badge !== undefined && entry.badge.count > 0}><span class="activity-bar__badge" data-hue={entry.badge!.hue}><span aria-hidden="true">{entry.badge!.count}</span><span class="visually-hidden">{entry.badge!.label}</span></span></Show></span>
+    <span class="activity-bar__label">{entry.label}</span>
+  </a></li>
+  return <nav class={props.class ?? "activity-bar"} aria-label={props.label}>
+    <Show when={props.brand !== undefined}><div class="activity-bar__brand">{props.brand}</div></Show>
+    <ul class="activity-bar__list"><For each={props.items.filter((entry) => entry.placement !== "end")}>{item}</For><li class="activity-bar__spacer" aria-hidden="true" /><For each={props.items.filter((entry) => entry.placement === "end")}>{item}</For></ul>
+  </nav>
+}
+
+export type SharedTraceState = { readonly running: boolean; readonly branch: boolean; readonly junction?: number }
+
+export function SharedTrace(props: SharedTraceState): JSX.Element {
+  return <div class="trace" aria-hidden="true" data-run={String(props.running)} data-branch={String(props.branch)} style={props.junction === undefined ? undefined : { "--trace-junction": `${Math.round(props.junction * 100)}%` }}>
+    <span class="trace__rail" /><span class="trace__run" />
+    <span class="trace__branch"><svg viewBox="0 0 100 16" preserveAspectRatio="none" aria-hidden="true"><path d="M0 0 C6 0 10 9 16 9 L100 9" /></svg><span class="trace__branch-run" /></span>
+    <span class="trace__junction" />
+  </div>
+}
+
+export type SharedStatusItem = {
+  readonly id: string
+  readonly label: string
+  readonly ariaLabel: string
+  readonly name?: string
+  readonly short?: string
+  readonly icon?: IconName
+  readonly tone?: "mint" | "amber" | "coral" | "sky" | "violet"
+  readonly ring?: number
+  readonly push?: boolean
+  readonly live?: boolean
+  readonly onActivate?: () => void
+}
+
+export function SharedStatusBar(props: { readonly label: string; readonly items: readonly SharedStatusItem[]; readonly trace?: SharedTraceState; readonly class?: string }): JSX.Element {
+  const content = (entry: SharedStatusItem) => <>
+    <Show when={entry.ring !== undefined}><svg class="status-bar__ring" viewBox="0 0 16 16" aria-hidden="true"><circle class="status-bar__ring-track" cx="8" cy="8" r="6" /><circle class="status-bar__ring-value" cx="8" cy="8" r="6" pathLength="100" stroke-dasharray={`${Math.round(Math.min(Math.max(entry.ring!, 0), 1) * 100)} 100`} /></svg></Show>
+    <Show when={entry.icon !== undefined && entry.ring === undefined}><Icon name={entry.icon!} size={14} /></Show>
+    <Show when={entry.name !== undefined}><span class="status-bar__name">{entry.name}</span></Show>
+    <span class="status-bar__full">{entry.label}</span><Show when={entry.short !== undefined}><span class="status-bar__short" aria-hidden="true">{entry.short}</span></Show>
+  </>
+  const item = (entry: SharedStatusItem) => {
+    const className = entry.push ? "status-bar__item status-bar__item--push" : "status-bar__item"
+    const element = entry.onActivate
+      ? <button type="button" class={className} data-item={entry.id} data-tone={entry.tone} aria-label={entry.ariaLabel} onClick={() => entry.onActivate?.()}>{content(entry)}</button>
+      : <span class={className} data-item={entry.id} data-tone={entry.tone} role="note" aria-label={entry.ariaLabel}>{content(entry)}</span>
+    return entry.live ? <span class="status-bar__live" aria-live="polite">{element}</span> : element
+  }
+  return <div class={props.class ?? "status-bar"} role="region" aria-label={props.label}>
+    <Show when={props.trace !== undefined}><SharedTrace running={props.trace!.running} branch={props.trace!.branch} junction={props.trace!.junction} /></Show>
+    <For each={props.items}>{item}</For>
+  </div>
+}
+
+export const LIST_WIDTH_STEP = 8
+
+export function clampListWidth(width: number, min: number, max: number): number {
+  return Math.min(Math.max(Math.round(width), min), max)
+}
+
+export function listWidthForKey(width: number, key: string, min: number, max: number): number | undefined {
+  if (key === "ArrowLeft") return clampListWidth(width - LIST_WIDTH_STEP, min, max)
+  if (key === "ArrowRight") return clampListWidth(width + LIST_WIDTH_STEP, min, max)
+  if (key === "Home") return min
+  if (key === "End") return max
+  return undefined
+}
+
+export type SharedListResize = { readonly width: number; readonly min: number; readonly max: number; readonly label: string; readonly onWidth: (width: number) => void }
+
+export function SharedListColumn(props: { readonly id: string; readonly label: string; readonly head?: JSX.Element; readonly tools?: JSX.Element; readonly foot?: JSX.Element; readonly children: JSX.Element; readonly class?: string; readonly bodyRef?: (element: HTMLDivElement) => void; readonly resize?: SharedListResize }): JSX.Element {
+  const [dragging, setDragging] = createSignal(false)
+  const startDrag = (event: PointerEvent & { readonly currentTarget: HTMLDivElement }) => {
+    const resize = props.resize
+    if (!resize || event.button !== 0) return
+    event.preventDefault()
+    const handle = event.currentTarget
+    const origin = event.clientX
+    const width = resize.width
+    const move = (next: PointerEvent) => resize.onWidth(clampListWidth(width + next.clientX - origin, resize.min, resize.max))
+    const end = () => {
+      setDragging(false)
+      handle.removeEventListener("pointermove", move)
+      handle.removeEventListener("pointerup", end)
+      handle.removeEventListener("pointercancel", end)
+    }
+    handle.setPointerCapture(event.pointerId)
+    setDragging(true)
+    handle.addEventListener("pointermove", move)
+    handle.addEventListener("pointerup", end)
+    handle.addEventListener("pointercancel", end)
+  }
+  return <aside id={props.id} class={props.class ?? "list-column"} aria-label={props.label} style={props.resize ? { "--list-column-size": `${props.resize.width}px` } : undefined}>
+    <Show when={props.head !== undefined}><div class="list-column__head">{props.head}</div></Show>
+    <Show when={props.tools !== undefined}><div class="list-column__tools">{props.tools}</div></Show>
+    <div ref={props.bodyRef} class="list-column__body">{props.children}</div>
+    <Show when={props.foot !== undefined}><div class="list-column__foot">{props.foot}</div></Show>
+    <Show when={props.resize}>{(resize) => <div class="list-column__resize" role="separator" aria-orientation="vertical" aria-label={resize().label} aria-controls={props.id} aria-valuenow={resize().width} aria-valuemin={resize().min} aria-valuemax={resize().max} tabindex="0" data-dragging={dragging() ? "true" : undefined} onPointerDown={startDrag} onKeyDown={(event) => {
+      const next = listWidthForKey(resize().width, event.key, resize().min, resize().max)
+      if (next === undefined) return
+      event.preventDefault()
+      resize().onWidth(next)
+    }} />}</Show>
+  </aside>
+}
+
+export type SharedSessionGroup<T> = { readonly id: string; readonly label: string; readonly icon?: IconName; readonly hue?: SharedHue; readonly items: readonly T[] }
+
+export function SharedSessionGroupHeading(props: { readonly id: string; readonly label: string; readonly count: number; readonly icon?: IconName; readonly hue?: SharedHue }): JSX.Element {
+  return <h3 class="session-group__head" id={props.id} data-hue={props.hue}><Show when={props.icon !== undefined}><Icon name={props.icon!} size={14} /></Show><span class="session-group__label">{props.label}</span><span class="session-group__count" aria-label={`${props.count} ${props.count === 1 ? "Session" : "Sessions"}`}>{props.count}</span></h3>
+}
+
+export function SharedSessionGroups<T>(props: { readonly label: string; readonly groups: readonly SharedSessionGroup<T>[]; readonly row: (item: T) => JSX.Element; readonly idPrefix?: string }): JSX.Element {
+  const prefix = () => props.idPrefix ?? "session-group"
+  return <div class="session-groups" role="group" aria-label={props.label}><For each={props.groups.filter((group) => group.items.length > 0)}>{(group) => <section class="session-group" aria-labelledby={`${prefix()}-${group.id}`}>
+    <SharedSessionGroupHeading id={`${prefix()}-${group.id}`} label={group.label} count={group.items.length} icon={group.icon} hue={group.hue} />
+    <ul class="session-group__rows"><For each={group.items}>{(entry) => <li>{props.row(entry)}</li>}</For></ul>
+  </section>}</For></div>
 }
 
 export function SharedCompanionSurface(props: { readonly active: CompanionTab; readonly onSelect: (tab: CompanionTab) => void; readonly headerActions?: JSX.Element; readonly policyActions?: JSX.Element; readonly onCloseTab?: (id: CompanionTab) => void; readonly onAddTab?: () => void; readonly beforeTabs?: JSX.Element; readonly activitySubtitle?: JSX.Element; readonly onRefresh?: () => void; readonly activityContent: JSX.Element; readonly runningContent?: JSX.Element; readonly changesContent: JSX.Element; readonly contextContent?: JSX.Element; readonly contextActions?: JSX.Element }): JSX.Element {

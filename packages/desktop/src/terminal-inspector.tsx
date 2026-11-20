@@ -20,9 +20,9 @@ export function terminalColor(color: TerminalColor) {
 }
 
 export function terminalCss(style: TerminalStyle, selected: boolean): JSX.CSSProperties {
-  const fg = style.fg === undefined ? "var(--yc-text)" : terminalColor(style.fg)
+  const fg = style.fg === undefined ? "var(--yc-ink)" : terminalColor(style.fg)
   const bg = style.bg === undefined ? undefined : terminalColor(style.bg)
-  const [color, background] = style.inverse ? [bg ?? "var(--yc-surface-sunken)", fg] : [fg, bg]
+  const [color, background] = style.inverse ? [bg ?? "var(--yc-plane-hover)", fg] : [fg, bg]
   const decoration = [style.underline ? "underline" : "", style.strike ? "line-through" : ""].filter(Boolean).join(" ")
   return {
     color,

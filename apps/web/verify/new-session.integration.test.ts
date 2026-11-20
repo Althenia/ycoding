@@ -16,9 +16,25 @@ test("new chat retains its draft across navigation and preserves it when choosin
     expect(await page.evaluate(`document.querySelectorAll('.new-session-composer > p').length`)).toBe(1)
     expect(await page.evaluate(`document.querySelector('.new-session-composer__helper').textContent`)).toContain("requires selecting a repository")
     expect(await page.evaluate(`document.querySelector('.new-session-composer__repository').classList.contains('new-session-composer__repository--required')`)).toBe(true)
+    expect(await page.evaluate(`(() => {
+      const repo = document.querySelector('.new-session-composer button[aria-label="Repository"]');
+      const helper = document.querySelector('.new-session-composer__helper');
+      const card = document.querySelector('.new-session-composer .composer__row');
+      const send = document.querySelector('.new-session-composer .mini-composer__send');
+      const repoStyle = getComputedStyle(repo);
+      const sendStyle = getComputedStyle(send);
+      return {
+        ariaRequired: repo.getAttribute('aria-required'),
+        describedByMatches: repo.getAttribute('aria-describedby') === helper.id && helper.id.length > 0,
+        badge: repo.querySelector('.mini-picker__badge')?.textContent?.trim() ?? null,
+        compact: repo.getBoundingClientRect().width < card.getBoundingClientRect().width / 2,
+        neutralFill: repoStyle.backgroundColor !== sendStyle.backgroundColor && repoStyle.borderColor !== sendStyle.backgroundColor,
+      };
+    })()`)).toEqual({ ariaRequired: "true", describedByMatches: true, badge: "Required", compact: true, neutralFill: true })
     expect(await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="New chat"]').disabled`)).toBe(true)
     await type(page, ".new-session-composer textarea", "Separate draft")
     await pickLandingRepository(page, "YCoding")
+    expect(await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Repository"] .mini-picker__badge') === null`)).toBe(true)
     expect(await page.evaluate(`document.querySelector('.new-session-composer textarea').value`)).toBe("Separate draft")
     expect(await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="New chat"]').disabled`)).toBe(false)
     expect(await page.evaluate(`document.querySelector('.new-session-composer__helper').textContent`)).toContain("Starting in YCoding")
@@ -488,6 +504,94 @@ test("phone Sessions sheet returns focus to its opener and opens Conversation fr
     } finally { await page.close() }
   }
 }, 90_000)
+
+test("repository picker keeps a compact neutral layout and cobalt focus-visible ring across viewports and themes", async () => {
+  const luminance = (rgb: string) => {
+    const channels = rgb.match(/\d+(?:\.\d+)?/g)?.slice(0, 3).map(Number)
+    if (!channels || channels.length !== 3) throw new Error(`Expected RGB color, got ${rgb}`)
+    return channels.map((c) => c / 255).map((c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)).reduce((sum, c, idx) => sum + c * [0.2126, 0.7152, 0.0722][idx]!, 0)
+  }
+  const contrast = (fg: string, bg: string) => {
+    const [hi, lo] = [luminance(fg), luminance(bg)].sort((a, b) => b - a)
+    return (hi! + 0.05) / (lo! + 0.05)
+  }
+  for (const theme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [1000, 600], [390, 844]] as const) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, height)
+      await page.setColorScheme(theme)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&noSelection=1&theme=${theme}`)
+      await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]:not([disabled])') !== null`)
+      await page.evaluate(`(() => {
+        const repo = document.querySelector('.new-session-composer button[aria-label="Repository"]');
+        const all = [...document.querySelectorAll('a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])')]
+          .filter(el => el.getClientRects().length > 0 && !el.closest('[inert],[aria-hidden="true"]'));
+        const idx = all.indexOf(repo);
+        if (idx > 0) all[idx - 1].focus();
+      })()`)
+      await page.pressKey("Tab", "Tab", 9)
+      const report = await page.evaluate(`(() => {
+        const repo = document.querySelector('.new-session-composer button[aria-label="Repository"]');
+        const refresh = document.querySelector('.new-session-composer__refresh');
+        const card = document.querySelector('.new-session-composer .composer__row');
+        const send = document.querySelector('.new-session-composer .mini-composer__send');
+        const repoRect = repo.getBoundingClientRect();
+        const refreshRect = refresh.getBoundingClientRect();
+        const cardRect = card.getBoundingClientRect();
+        const repoStyle = getComputedStyle(repo);
+        const sendStyle = getComputedStyle(send);
+        const pageBg = getComputedStyle(document.body).backgroundColor;
+        return {
+          focused: document.activeElement === repo,
+          focusVisible: repo.matches(':focus-visible'),
+          outlineStyle: repoStyle.outlineStyle,
+          outlineWidth: parseFloat(repoStyle.outlineWidth),
+          outlineColor: repoStyle.outlineColor,
+          pageBg,
+          repoBg: repoStyle.backgroundColor,
+          repoBorder: repoStyle.borderColor,
+          sendBg: sendStyle.backgroundColor,
+          repoWidth: repoRect.width,
+          cardWidth: cardRect.width,
+          alignedLeft: Math.abs(repoRect.left - cardRect.left) <= 1,
+          refreshBeside: refreshRect.left >= repoRect.right && Math.abs(refreshRect.top - repoRect.top) <= 6,
+          overflow: document.documentElement.scrollWidth > window.innerWidth,
+        };
+      })()`, (value: unknown) => {
+        const record = decodeRecord(value)
+        return {
+          focused: decodeBoolean(record["focused"]),
+          focusVisible: decodeBoolean(record["focusVisible"]),
+          outlineStyle: decodeString(record["outlineStyle"]),
+          outlineWidth: decodeNumber(record["outlineWidth"]),
+          outlineColor: decodeString(record["outlineColor"]),
+          pageBg: decodeString(record["pageBg"]),
+          repoBg: decodeString(record["repoBg"]),
+          repoBorder: decodeString(record["repoBorder"]),
+          sendBg: decodeString(record["sendBg"]),
+          repoWidth: decodeNumber(record["repoWidth"]),
+          cardWidth: decodeNumber(record["cardWidth"]),
+          alignedLeft: decodeBoolean(record["alignedLeft"]),
+          refreshBeside: decodeBoolean(record["refreshBeside"]),
+          overflow: decodeBoolean(record["overflow"]),
+        }
+      })
+      expect(report.focused).toBe(true)
+      expect(report.focusVisible).toBe(true)
+      expect(report.outlineStyle).toBe("solid")
+      expect(report.outlineWidth).toBeGreaterThanOrEqual(2)
+      expect(contrast(report.outlineColor, report.pageBg)).toBeGreaterThanOrEqual(3)
+      expect(contrast(report.outlineColor, report.repoBg)).toBeGreaterThanOrEqual(3)
+      expect(report.outlineColor).not.toBe(report.repoBorder)
+      expect(report.repoBg).not.toBe(report.sendBg)
+      expect(report.repoBorder).not.toBe(report.sendBg)
+      expect(report.alignedLeft).toBe(true)
+      expect(report.refreshBeside).toBe(true)
+      expect(report.overflow).toBe(false)
+      if (width >= 768) expect(report.repoWidth).toBeLessThan(report.cardWidth / 2)
+    } finally { await page.close() }
+  }
+}, 30_000)
 
 async function pickLandingRepository(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, label: string) {
   await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]:not([disabled])') !== null`)

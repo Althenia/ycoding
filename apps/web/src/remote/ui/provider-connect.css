@@ -40,8 +40,8 @@
   min-inline-size: 0;
   overflow-wrap: anywhere;
   padding: var(--yc-space-4);
-  border-radius: var(--yc-radius-lg);
-  background: var(--yc-surface);
+  border-radius: var(--yc-radius-card);
+  background: var(--yc-plane-raised);
 }
 
 .provider-profile__identity,
@@ -62,7 +62,7 @@
 }
 
 .provider-profile__kind {
-  color: var(--yc-text-muted);
+  color: var(--yc-ink-secondary);
   font-size: var(--yc-size-2xs);
   letter-spacing: var(--yc-tracking-wide);
   text-transform: uppercase;
@@ -74,11 +74,11 @@
 }
 
 .provider-profile__state--warning {
-  color: var(--yc-yellow-strong);
+  color: var(--yc-amber-ink);
 }
 
 .provider-profile__state--danger {
-  color: var(--yc-danger);
+  color: var(--yc-coral-ink);
 }
 
 .provider-profile__actions {

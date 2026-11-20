@@ -43,14 +43,14 @@ describe("tablet remote navigation", () => {
       for (let attempt = 0; attempt < 30 && !await page.evaluate(`document.querySelector('.workspace__rail').getBoundingClientRect().width <= 72`); attempt += 1) await Bun.sleep(20)
       expect(await page.evaluate(`document.querySelector('.workspace__rail').getBoundingClientRect().width <= 72 && document.querySelector('.workspace__rail-body').getClientRects().length === 0 && document.querySelector('.workspace__main').getBoundingClientRect().width > innerWidth * .85`)).toBe(true)
       expect(await page.evaluate(`(() => { const button = document.querySelector(${JSON.stringify(expand)}); return { label: button?.getAttribute('aria-label') ?? null, expanded: button?.getAttribute('aria-expanded') ?? null, focused: button !== null && document.activeElement === button }; })()`)).toEqual({ label: "Show workspace sidebar", expanded: "false", focused: true })
-      expect(await page.evaluate(`[...document.querySelectorAll(".workspace__rail .remote-nav a")].filter(link => link.getBoundingClientRect().width >= 44 && link.getBoundingClientRect().height >= parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-control-h-dense'))).map(link => link.getAttribute("href"))`)).toEqual(["/remote/sessions", "/remote/usage", "/remote/settings"])
+      expect(await page.evaluate(`[...document.querySelectorAll(".activity-bar a")].filter(link => link.getBoundingClientRect().width >= 44 && link.getBoundingClientRect().height >= parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-control-h-dense'))).map(link => new URL(link.href).pathname)`)).toEqual(["/remote/session", "/remote/sessions", "/remote/projects", "/remote/workspaces", "/remote/usage", "/remote/settings"])
       expect(await page.evaluate(`parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-control-h-dense')) >= 36`)).toBe(true)
       expect(await page.evaluate(`(() => {
         const rail = getComputedStyle(document.querySelector('.workspace__rail'));
-        const active = getComputedStyle(document.querySelector('.remote-nav__link--active'));
+        const active = getComputedStyle(document.querySelector('.activity-bar__item[aria-current="page"]'));
         const root = getComputedStyle(document.documentElement);
         const probe = document.createElement('span'); document.body.append(probe);
-        probe.style.background = root.getPropertyValue('--yc-green-soft');
+        probe.style.background = root.getPropertyValue('--yc-cobalt-tonal');
         const fill = getComputedStyle(probe).backgroundColor; probe.remove();
         return rail.borderInlineEndWidth === '0px' && active.backgroundColor === fill && active.boxShadow === 'none' && parseFloat(active.borderRadius) > 44;
       })()`)).toBe(true)
@@ -67,7 +67,7 @@ describe("tablet remote navigation", () => {
     } finally { await page.close() }
   }, 30_000)
 
-  test("keeps the global rail and its five destinations visible from tablet width and lets it collapse and reopen", async () => {
+  test("keeps the global rail and its six destinations visible from tablet width and lets it collapse and reopen", async () => {
     const page = await requireBrowser().openPage()
     await page.setViewport(768, 900)
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-768`)
@@ -82,14 +82,14 @@ describe("tablet remote navigation", () => {
         const state = await page.evaluate(`(() => {
           const visible = element => element instanceof HTMLElement && getComputedStyle(element).display !== "none" && element.getBoundingClientRect().width > 0;
           return {
-            links: [...document.querySelectorAll(".remote-nav a")].filter(visible).map(link => link.textContent.trim()),
+            links: [...document.querySelectorAll(".activity-bar a")].filter(visible).map(link => link.textContent.trim()),
             railVisible: visible(document.querySelector(".workspace__rail")),
             toggleVisible: visible(document.querySelector(".app-header__menu")),
             brandWidth: document.querySelector('.app-header .brand')?.getBoundingClientRect().width ?? 0,
             overflow: document.documentElement.scrollWidth > innerWidth,
           };
         })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, links: (decodeArray(decodeString))(record["links"]), railVisible: (decodeBoolean)(record["railVisible"]), toggleVisible: (decodeBoolean)(record["toggleVisible"]), brandWidth: (decodeNumber)(record["brandWidth"]), overflow: (decodeBoolean)(record["overflow"]) } })
-        expect(state.links).toEqual(["Projects", "Sessions", "Workspaces", "Usage", "Settings"])
+        expect(state.links).toEqual(["Chat", "Sessions", "Projects", "Workspaces", "Usage", "Settings"])
         expect(state.railVisible).toBe(true)
         expect(state.toggleVisible).toBe(false)
         expect(state.overflow).toBe(false)
@@ -165,7 +165,7 @@ describe("tablet remote navigation", () => {
         return toggle instanceof HTMLElement && getComputedStyle(toggle).display !== "none" && toggle.getBoundingClientRect().width > 0;
       })()`)).toBe(false)
       expect(await page.evaluate(`document.querySelector(".workspace__rail")?.getBoundingClientRect().width > 0`)).toBe(true)
-      expect(await page.evaluate(`[...document.querySelectorAll(".remote-nav a")].filter(link => link.getBoundingClientRect().width > 0).map(link => link.textContent.trim())`)).toEqual(["Projects", "Sessions", "Workspaces", "Usage", "Settings"])
+      expect(await page.evaluate(`[...document.querySelectorAll(".activity-bar a")].filter(link => link.getBoundingClientRect().width > 0).map(link => link.textContent.trim())`)).toEqual(["Chat", "Sessions", "Projects", "Workspaces", "Usage", "Settings"])
     } finally {
       await page.close()
     }

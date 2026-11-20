@@ -14,6 +14,9 @@ export function ComposerPicker(props: {
   readonly searchable?: boolean
   readonly icon?: IconName
   readonly pending?: boolean
+  readonly required?: boolean
+  readonly describedBy?: string
+  readonly badge?: string
   readonly onChange: (value: string) => void
 }): JSX.Element {
   const id = `composer-picker-${crypto.randomUUID()}`
@@ -120,8 +123,8 @@ export function ComposerPicker(props: {
   })
   onCleanup(() => { if (closeTimer !== undefined) clearTimeout(closeTimer) })
   return <div class="mini-picker">
-    <button ref={trigger} type="button" class="mini-picker__trigger" classList={{ "mini-picker__trigger--pending": props.pending }} role="combobox" aria-label={props.label} aria-description={props.pending ? "applies with your next send" : undefined} aria-haspopup="listbox" aria-expanded={open()} aria-controls={`${id}-list`} aria-activedescendant={open() && !compact() && !props.searchable && filtered().length ? `${id}-${active()}` : undefined} disabled={props.disabled} aria-disabled={closing()} onKeyDown={keys} onClick={() => { if (closing()) return; setActive(Math.max(0, filtered().findIndex((option) => option.value === props.value))); if (open()) close(); else setOpen(true) }}>
-      <Show when={props.icon}><Icon name={props.icon!} /></Show><span>{props.options.find((option) => option.value === props.value)?.label ?? props.placeholder}</span><Icon name="chevron-down" />
+    <button ref={trigger} type="button" class="mini-picker__trigger" classList={{ "mini-picker__trigger--pending": props.pending }} role="combobox" aria-label={props.label} aria-required={props.required ? "true" : undefined} aria-describedby={props.describedBy} aria-description={props.pending ? "applies with your next send" : undefined} aria-haspopup="listbox" aria-expanded={open()} aria-controls={`${id}-list`} aria-activedescendant={open() && !compact() && !props.searchable && filtered().length ? `${id}-${active()}` : undefined} disabled={props.disabled} aria-disabled={closing()} onKeyDown={keys} onClick={() => { if (closing()) return; setActive(Math.max(0, filtered().findIndex((option) => option.value === props.value))); if (open()) close(); else setOpen(true) }}>
+      <Show when={props.icon}><Icon name={props.icon!} /></Show><span>{props.options.find((option) => option.value === props.value)?.label ?? props.placeholder}</span><Show when={props.badge}><small class="mini-picker__badge">{props.badge}</small></Show><Icon name="chevron-down" />
     </button>
     <Show when={open() || closing()}><Portal>{(() => {
       const content = <div ref={surface} class={`mini-picker__surface${compact() ? " mini-picker__surface--sheet" : ""}`} classList={{ "mini-picker__surface--closing": closing() }} inert={closing()} aria-hidden={closing() ? "true" : undefined} style={compact() ? undefined : { left: `${position().left}px`, top: `${position().top}px`, width: `${position().width}px` }} onKeyDown={keys}>

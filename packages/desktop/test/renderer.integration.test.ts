@@ -12,6 +12,8 @@ import { populatedDraft, populatedLongLine, populatedToolError, populatedTranscr
 const chrome = process.env.YCODING_WEB_CHROME
 if (!chrome) throw new Error("Set YCODING_WEB_CHROME to the repository-provisioned Chrome for Testing executable.")
 const title = "Synthetic Session with a complete readable title ".repeat(4).trim()
+const darkPalette = (Bun.YAML.parse((await Bun.file(path.join(import.meta.dir, "../DESIGN.md")).text()).split("---")[1]!) as { colors: Record<string, string> }).colors
+const rgb = (role: string) => `rgb(${darkPalette[role]!.match(/[\da-f]{2}/gi)!.map(value => parseInt(value, 16)).join(", ")})`
 const unbroken = "UnbrokenSyntheticSessionTitle".repeat(5)
 const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
 const clipboard: string[] = []
@@ -375,12 +377,12 @@ test("Stitch reference geometry preserves the rail, transcript, dock and inspect
     if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "stitch-streaming.png"), Buffer.from(await page.screenshot(), "base64"))
     const geometry = await page.evaluate(`(() => {
       const rect = selector => document.querySelector(selector).getBoundingClientRect();
-      const rail = rect('.rl-nav'), brand = rect('.rl-nav-brand'), newChat = rect('.rl-new-chat'), head = rect('.rl-top'), companion = rect('.rl-companion'), capsule = rect('.rl-capsule'), column = rect('.conversation__column'), user = rect('.rl-me .transcript-message__bubble'), assistant = rect('.rl-them');
-      return { rail: rail.width, separateNewChat: newChat.top >= brand.bottom, header: head.height, companion: companion.width, fullColumnComposer: Math.abs(capsule.width - column.width) <= 1, dockedSurface: getComputedStyle(document.querySelector('.rl-dock')).backgroundColor !== 'rgba(0, 0, 0, 0)', trailingBubble: Math.abs(user.right - assistant.right) <= 1 && user.left > assistant.left, metadataVisible: getComputedStyle(document.querySelector('.workspace__status')).visibility === 'visible', connectionFooter: !!document.querySelector('.workspace__rail-footer')?.textContent.includes('Connected') };
+      const rail = rect('.rl-nav'), brand = rect('.activity-bar'), newChat = rect('.rl-new-chat'), head = rect('.rl-top'), companion = rect('.rl-companion'), capsule = rect('.rl-capsule'), column = rect('.conversation__column'), user = rect('.rl-me .transcript-message__bubble'), assistant = rect('.rl-them');
+      return { rail: rail.width, separateNewChat: newChat.left >= brand.right, header: head.height, companion: companion.width, fullColumnComposer: Math.abs(capsule.width - column.width) <= 1, flatDock: getComputedStyle(document.querySelector('.rl-dock')).backgroundColor === 'rgba(0, 0, 0, 0)', trailingBubble: Math.abs(user.right - assistant.right) <= 1 && user.left > assistant.left, metadataVisible: getComputedStyle(document.querySelector('.rl-session-row-meta')).visibility === 'visible', connectionStatus: !!document.querySelector('.status-bar [data-item="connection"]')?.textContent.includes('Connected') && !document.querySelector('.workspace__rail-footer') };
     })()`)
     console.log("Stitch geometry", JSON.stringify(geometry))
-    expect(geometry).toEqual({ rail: 256, separateNewChat: true, header: 40, companion: 320, fullColumnComposer: true, dockedSurface: true, trailingBubble: true, metadataVisible: true, connectionFooter: true })
-    expect(await page.evaluate(`['.rl-nav-brand', '.desktop-companion-head'].map(selector => document.querySelector(selector).getBoundingClientRect().height)`, decodeArray(decodeNumber))).toEqual([40, 40])
+    expect(geometry).toEqual({ rail: 280, separateNewChat: true, header: 40, companion: 320, fullColumnComposer: true, flatDock: true, trailingBubble: true, metadataVisible: true, connectionStatus: true })
+    expect(await page.evaluate(`['.rl-top', '.desktop-companion-head'].map(selector => document.querySelector(selector).getBoundingClientRect().height)`, decodeArray(decodeNumber))).toEqual([40, 40])
     expect(await page.evaluate(`(() => { const pane = document.querySelector('.rl-companion').getBoundingClientRect(); return [...document.querySelectorAll('.rl-companion .companion__header button, .rl-companion [role="tab"]')].every(element => { const bounds = element.getBoundingClientRect(); return bounds.left >= pane.left && bounds.right <= pane.right; }); })()`, decodeBoolean)).toBe(true)
     expect(await page.evaluate(`window.__desktopFixture.errors`, decodeArray((value: unknown) => value))).toEqual([])
     expect(owned!.calls.filter(call => call.method !== "GET" && !call.route.endsWith('/web-latency'))).toEqual([])
@@ -676,7 +678,7 @@ async function captureReference(page: Page, id: string, expected: string, writes
     const main = document.querySelector('.rl-main').getBoundingClientRect();
     return { railWidth: rail.width, alignedTop: rail.top === main.top, adjacentColumns: Math.abs(rail.right - main.left) <= 1, conversation: !!document.querySelector('.conversation'), headerHeight: document.querySelector('.rl-top')?.getBoundingClientRect().height ?? null };
   })()`, (value: unknown) => { const result = decodeRecord(value); return { railWidth: (decodeNumber)(result["railWidth"]), alignedTop: (decodeBoolean)(result["alignedTop"]), adjacentColumns: (decodeBoolean)(result["adjacentColumns"]), conversation: (decodeBoolean)(result["conversation"]), headerHeight: (decodeNullable(decodeNumber))(result["headerHeight"]) } })
-  expect({ railWidth: geometry.railWidth, alignedTop: geometry.alignedTop, adjacentColumns: geometry.adjacentColumns }).toEqual({ railWidth: 256, alignedTop: true, adjacentColumns: true })
+  expect({ railWidth: geometry.railWidth, alignedTop: geometry.alignedTop, adjacentColumns: geometry.adjacentColumns }).toEqual({ railWidth: await page.evaluate(`innerWidth`, decodeNumber) <= 1180 ? 256 : 280, alignedTop: true, adjacentColumns: true })
   if (geometry.conversation) expect(geometry.headerHeight).toBe(40)
   expect(await page.evaluate(`[...document.querySelectorAll('dialog[open]')].every(dialog => { const bounds = dialog.getBoundingClientRect(); return bounds.width > 0 && bounds.height > 0 && bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight; })`, decodeBoolean)).toBe(true)
   expect(owned!.calls.filter(call => call.method !== "GET" && !call.route.endsWith("/web-latency")).map(call => `${call.method} ${call.route}`)).toEqual([...writes])
@@ -710,8 +712,8 @@ async function captureReference(page: Page, id: string, expected: string, writes
     "70ca078090f64321b1f264ab4cdc88e2": [[".rl-page-head", "height", 48], [".ws-workspaces-detail", "width", 420]],
     "9121b2a17ffb4d81a7f021e6325329f4": [[".rl-page-head", "height", 44], [".desktop-project-inspector", "width", 400]],
     "825f05dcc7724e0fb83ffb3667c0d627": [[".desktop-diff > nav", "width", 340], [".desktop-dialog", "width", 1080], [".desktop-dialog", "height", 720], [".desktop-dialog__head", "height", 57]],
-    "3028c78f000946fca0c223267169bffd": [[".desktop-diff > nav", "width", 240], [".desktop-diff > nav", "left", 256]],
-    "54caadddf8524b49911de95d58636e7a": [[".desktop-diff > nav", "width", 220], [".desktop-diff > nav", "left", 256]],
+    "3028c78f000946fca0c223267169bffd": [[".desktop-diff > nav", "width", 240], [".desktop-diff > nav", "left", 360]],
+    "54caadddf8524b49911de95d58636e7a": [[".desktop-diff > nav", "width", 220], [".desktop-diff > nav", "left", 360]],
     "9715087f99c9431a938a353cb05ca9a9": [[".rl-page-head", "height", 40]],
     "d870471b750a42df8e17ff0fb5d29e67": [[".rl-top", "height", 40], [".desktop-selected-inspector", "width", 320]],
     "adedc0ab360c471d9996962413cf247d": [[".rl-page-head", "height", 56], [".desktop-selected-inspector", "width", 320]],
@@ -725,7 +727,7 @@ async function captureReference(page: Page, id: string, expected: string, writes
     "6ac6a9dd73b6451fa41dfa46d4d18b8b": [[".desktop-dialog__head", "height", 48], [".desktop-dialog", "width", 920]],
   }
   for (const [selector, dimension, value] of independent[id] ?? []) expect(components[selector]?.[dimension]).toBe(value)
-  if (["825f05dcc7724e0fb83ffb3667c0d627", "3028c78f000946fca0c223267169bffd", "54caadddf8524b49911de95d58636e7a"].includes(id)) expect(await page.evaluate(`['.desktop-diff__file', '.desktop-diff__hunk'].map(selector => getComputedStyle(document.querySelector(selector)).backgroundColor)`, decodeArray(decodeString))).toEqual(["rgb(11, 17, 21)", "rgb(14, 21, 26)"])
+  if (["825f05dcc7724e0fb83ffb3667c0d627", "3028c78f000946fca0c223267169bffd", "54caadddf8524b49911de95d58636e7a"].includes(id)) expect(await page.evaluate(`['.desktop-diff__file', '.desktop-diff__hunk'].map(selector => getComputedStyle(document.querySelector(selector)).backgroundColor)`, decodeArray(decodeString))).toEqual([rgb("plane-canvas"), rgb("plane-hover")])
   if (id === "825f05dcc7724e0fb83ffb3667c0d627") {
     expect(await page.evaluate(`(() => { const head = document.querySelector('dialog[open] header'), box = head.getBoundingClientRect(); return { scope: !!head.querySelector('[role="radiogroup"][aria-label="Diff scope"]'), totals: [...head.querySelectorAll('[aria-label="Diff totals"] > span')].map(span => span.textContent), refresh: [...head.querySelectorAll('button')].some(button => button.textContent.trim() === 'Refresh'), contained: [...head.querySelectorAll('button, [role="radiogroup"], output')].every(element => { const bounds = element.getBoundingClientRect(); return bounds.left >= box.left && bounds.right <= box.right && bounds.top >= box.top && bounds.bottom <= box.bottom; }) }; })()`, decodeRecord)).toEqual({ scope: true, totals: ["2 files", "+2", "−2"], refresh: true, contained: true })
   }
@@ -775,6 +777,12 @@ const referenceCases: readonly ReferenceCase[] = [
     id: "936d17691f6241e3819c91d4870c9aa6", label: "model and reported reasoning variants",
     show: async page => { await wait(page, `document.querySelector('.composer-chip--model')`); await page.evaluate(`document.querySelector('.composer-chip--model').click()`) },
     expected: `!!document.querySelector('.model-popover') && !!document.querySelector('[role="slider"]')`,
+    afterCapture: async page => {
+      const center = await page.evaluate(`(() => { const r = document.querySelector('.composer-chip--model').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`, decodeArray(decodeNumber))
+      await page.mouse("mouseMoved", center[0]!, center[1]!)
+      expect(await page.evaluate(`(() => { const chip = document.querySelector('.composer-chip--model'); return { hovered: chip.matches(':hover'), expanded: chip.getAttribute('aria-expanded'), tooltip: getComputedStyle(chip, '::after').display }; })()`, decodeRecord)).toEqual({ hovered: true, expanded: "true", tooltip: "none" })
+      await page.mouse("mouseMoved", 0, 0)
+    },
   },
   {
     id: "2c66dd75095b4881a87b9a76eb7374b6", label: "reported goal and autonomy without applying changes",
@@ -1056,11 +1064,10 @@ for (const name of ["composer", "settings", "keyboard", "projects", "project-sta
   const failures: string[] = []
   sceneRead = undefined; pending = false; referenceScene = true; captureScene = true; presentationParts = true; currentVariant = "high"
   if (name === "project-states") sceneRead = call => call.route === `/api/coordination/${sceneGroup.id}` ? { data: { ...sceneGroup, master: { ...sceneGroup.master, state: "running" }, members: ["idle", "waiting", "failed", "idle", "running"].map((state, index) => ({ ...sceneParticipant(`ses_state_${index}`), state, title: `Synthetic ${state} member ${index + 1}` })) } } : undefined
-  for (const theme of ["dark", "light"]) for (const width of [390, 768, 1440, 1920]) {
+  for (const theme of ["dark", "light"]) for (const width of [1000, 1440, 1920]) {
     const page = await openReference()
     try {
-      await page.setViewport(width, width <= 768 ? 844 : 900)
-      await page.setCoarsePointer(width <= 768)
+      await page.setViewport(width, width === 1000 ? 600 : 900)
       await page.evaluate(`localStorage.setItem('ycoding.desktop.theme', ${JSON.stringify(theme)}); location.reload()`)
       await wait(page, `document.querySelector('#turn-msg_response') && document.fonts.status === 'loaded'`)
       if (name === "composer") {
@@ -1082,7 +1089,7 @@ for (const name of ["composer", "settings", "keyboard", "projects", "project-sta
             else {
               const pane = document.querySelector('.conversation__scroll');
               const left = transcript.left - main.left - pane.clientLeft, right = pane.clientWidth - left - transcript.width;
-              if (Math.abs(transcript.width - ${maximum}) > 1 || left < 24 || right < 24 || Math.abs(left - right) > 1) findings.push('Conversation maximum or balanced gutters');
+              if (Math.abs(transcript.width - Math.min(${maximum}, pane.clientWidth - 96)) > 1 || left < 48 || right < 48 || Math.abs(left - right) > 1) findings.push('Conversation maximum or balanced gutters');
               if (Math.abs(transcript.left - composer.left) > 1 || Math.abs(transcript.right - composer.right) > 1) findings.push('Transcript/composer track mismatch');
             }
           }
@@ -1140,11 +1147,10 @@ for (const [name, id] of [
     const scene = referenceCases.find(scene => scene.id === id)
     sceneRead = undefined; pending = false; referenceScene = true; captureScene = true; presentationParts = true; familyEnabled = name === "team"; directoryStatus = false
     scene?.prepare?.()
-    for (const theme of ["dark", "light"] as const) for (const width of [320, 390, 700, 768, 1280, 1440, 1920, 2560]) {
+    for (const theme of ["dark", "light"] as const) for (const width of [1000, 1280, 1440, 1920, 2560]) {
       const page = await openReference()
       try {
-        await page.setViewport(width, width <= 700 ? 844 : 900)
-        await page.setCoarsePointer(width <= 768)
+        await page.setViewport(width, width === 1000 ? 600 : 900)
         await page.evaluate(`localStorage.setItem('ycoding.desktop.theme', ${JSON.stringify(theme)}); location.reload()`)
         await wait(page, `document.querySelector('#turn-msg_response') && document.fonts.status === 'loaded'`)
         if (name === "conversation") {
@@ -1206,7 +1212,7 @@ for (const scene of referenceCases) test(`Stitch scene ${scene.id} ${scene.label
   } finally { await page.close() }
 }, 30_000)
 
-const narrowReviewScenes = new Set([
+const floorReviewScenes = new Set([
   "247859938ae742cea7c31d352e62ea80", "2ff9628be7764a1080d725abc44e8591", "fb201f4e896b4fe4be502d02228c6766",
   "309bc47fe0d642a2a9775391b92c1451", "936d17691f6241e3819c91d4870c9aa6", "2c66dd75095b4881a87b9a76eb7374b6",
   "9715087f99c9431a938a353cb05ca9a9", "70ca078090f64321b1f264ab4cdc88e2", "4bff4148cf26491587127a52f9570dcf",
@@ -1215,13 +1221,13 @@ const narrowReviewScenes = new Set([
   "6ac6a9dd73b6451fa41dfa46d4d18b8b", "825f05dcc7724e0fb83ffb3667c0d627", "359f63a0638846f6b5f764c0a9e44c38",
 ])
 
-for (const scene of referenceCases.filter(scene => narrowReviewScenes.has(scene.id))) test(`Desktop compact surface ${scene.id} ${scene.label}`, async () => {
+for (const scene of referenceCases.filter(scene => floorReviewScenes.has(scene.id))) test(`Desktop 1000x600 floor surface ${scene.id} ${scene.label}`, async () => {
   prepareImplementedSurface()
   scene.prepare?.()
   const page = await openReference(scene.ready)
   try {
     await polishTheme(page, "light")
-    await page.setViewport(700, 900)
+    await page.setViewport(1000, 600)
     await page.setReducedMotion(true)
     const opener = '.conversation .desktop__palette'
     const fromConversation = await page.evaluate(`!!document.querySelector(${JSON.stringify(opener)})`, decodeBoolean)
@@ -1233,7 +1239,7 @@ for (const scene of referenceCases.filter(scene => narrowReviewScenes.has(scene.
       const all = [...document.querySelectorAll('.rl-shell, main, dialog:modal, dialog:modal .desktop-dialog__body, dialog:modal .desktop-dialog__head, .model-popover, .rl-policy-panel')].filter(node=>node.getClientRects().length);
       return {regions:all.map(node=>({class:node.className, client:node.clientWidth, scroll:node.scrollWidth, rect:node.getBoundingClientRect().toJSON()})), visibleModal:!!document.querySelector('dialog:modal'), rootOverflow:document.documentElement.scrollWidth - innerWidth, errors:window.__desktopFixture.errors};
     })()`, decodeRecord)
-    await polishGeometry(page, `${scene.id}-light-700`, geometry)
+    await polishGeometry(page, `${scene.id}-light-1000`, geometry)
     const spill = decodeArray(decodeRecord)(geometry.regions).filter(zone => decodeNumber(zone.client) > 0 && decodeNumber(zone.scroll) > decodeNumber(zone.client))
     expect({ spill, rootOverflow: geometry.rootOverflow, errors: geometry.errors }).toEqual({spill: [], rootOverflow: 0, errors: []})
     if (geometry.visibleModal) {
@@ -1293,8 +1299,8 @@ test("Stitch scene 80928cfab4bc4b20b3042c2f089574ef pending authorization stays 
     expect(await page.evaluate(`(() => { const body = document.querySelector('dialog[open] .desktop-dialog__body').getBoundingClientRect(); const provider = document.querySelector('dialog[open] [aria-label="Providers"] button').getBoundingClientRect(); return provider.width > 0 && provider.height > 0 && provider.top >= body.top && provider.bottom <= body.bottom && provider.left >= body.left && provider.right <= body.right; })()`, decodeBoolean)).toBe(true)
     await captureReference(page, "80928cfab4bc4b20b3042c2f089574ef", `document.querySelector('dialog[open]')?.textContent.includes('Authorization · pending') && document.querySelector('dialog[open]')?.textContent.includes('No browser was opened.')`, ["POST /api/integration/synthetic/connect/oauth"])
     expect(await page.evaluate(`window.__desktopFixture.completed.openExternalUrl`)).toBeUndefined()
-    await page.setViewport(650, 900)
-    expect(await page.evaluate(`(() => { const list = document.querySelector('dialog[open] [aria-label="Provider list"]').getBoundingClientRect(); const detail = document.querySelector('dialog[open] [aria-label="Provider connection"]').getBoundingClientRect(); const provider = document.querySelector('dialog[open] [aria-label="Providers"] button').getBoundingClientRect(); return list.height >= 80 && detail.height > 0 && list.bottom <= detail.top && provider.top >= list.top && provider.bottom <= list.bottom && document.documentElement.scrollWidth <= innerWidth; })()`, decodeBoolean)).toBe(true)
+    await page.setViewport(1000, 600)
+    expect(await page.evaluate(`(() => { const list = document.querySelector('dialog[open] [aria-label="Provider list"]').getBoundingClientRect(); const detail = document.querySelector('dialog[open] [aria-label="Provider connection"]').getBoundingClientRect(); const provider = document.querySelector('dialog[open] [aria-label="Providers"] button').getBoundingClientRect(); return list.height >= provider.height && detail.height > 0 && list.right <= detail.left + 1 && provider.top >= list.top && provider.bottom <= list.bottom && document.documentElement.scrollWidth <= innerWidth; })()`, decodeBoolean)).toBe(true)
   } finally { await page.close() }
 }, 30_000)
 
@@ -1361,7 +1367,7 @@ test("Desktop component chrome stacks directory inspectors at their breakpoint a
       await page.setViewport(1100, 900)
       expect(await page.evaluate(`(() => { const list = document.querySelector(${JSON.stringify(list)}).getBoundingClientRect(), pane = document.querySelector(${JSON.stringify(inspector)}).getBoundingClientRect(); return pane.top >= list.bottom && Math.abs(list.left - pane.left) <= 1; })()`, decodeBoolean)).toBe(true)
       if (route === "projects") {
-        await page.setViewport(800, 600)
+        await page.setViewport(1000, 600)
         expect(await page.evaluate(`(() => { const list = document.querySelector(${JSON.stringify(list)}).getBoundingClientRect(), pane = document.querySelector(${JSON.stringify(inspector)}).getBoundingClientRect(); return pane.top >= list.bottom && list.height >= 200 && Math.abs(list.left - pane.left) <= 1; })()`, decodeBoolean)).toBe(true)
       }
     }
@@ -1369,9 +1375,9 @@ test("Desktop component chrome stacks directory inspectors at their breakpoint a
     await wait(page, `document.querySelector('#turn-msg_response')`)
     await command(page, "/agents")
     await wait(page, `document.querySelector('dialog[data-kind="agents"][open]')`)
-    await page.setViewport(701, 900)
+    await page.setViewport(1000, 600)
     expect(await page.evaluate(`document.querySelector('dialog[open]').getBoundingClientRect().right <= innerWidth`, decodeBoolean)).toBe(true)
-    await page.setMobileViewport(700, 900)
+    await page.setMobileViewport(1000, 600)
     expect(await page.evaluate(`matchMedia('(pointer: coarse)').matches && document.querySelector('dialog[open] .desktop-dialog__head').getBoundingClientRect().height >= 44 && [...document.querySelectorAll('dialog[open] .desktop-dialog__head button, dialog[open] [role="tab"]')].every(button => { const box = button.getBoundingClientRect(); return box.width >= 44 && box.height >= 44; })`, decodeBoolean)).toBe(true)
     await page.pressKey("Escape", "Escape", 27)
     await wait(page, `!document.querySelector('dialog[open]')`)
@@ -1385,10 +1391,10 @@ function prepareImplementedSurface() {
   referenceScene = true
 }
 
-async function compactPage() {
+async function coarsePage() {
   prepareImplementedSurface()
   const page = await openReference()
-  await page.setViewport(390, 844)
+  await page.setViewport(1000, 600)
   await page.setCoarsePointer(true)
   await wait(page, `matchMedia('(pointer: coarse)').matches`)
   return page
@@ -1556,7 +1562,7 @@ async function captureR7(page: Page, name: string) {
       columns: pane && column && composer ? { left: rect(column).x - rect(pane).x - pane.clientLeft, right: pane.clientWidth - (rect(column).right - rect(pane).x - pane.clientLeft), ratio: rect(column).width / pane.clientWidth, composerLeft: rect(composer).x - rect(column).x, composerRight: rect(composer).right - rect(column).right } : null,
       readingTrack: card && column && pane ? { outer: rect(card), viewport: rect(pane), rows: trackSelectors.flatMap(([kind, selector]) => [...document.querySelectorAll(selector)].filter(visible).map(element => ({ kind, turn: element.closest('.transcript__turn')?.id ?? '', bounds: rect(element) }))), controls: [...document.querySelectorAll('.rl-disclosure-head .rl-disclosure-chev, .rl-disclosure-head .rl-disclosure-time')].filter(visible).map(element => ({ kind: label(element), bounds: rect(element), row: rect(element.closest('summary, button')) })), floating: [...document.querySelectorAll('.transcript-navigation__rail, .transcript-navigation__controls')].filter(visible).map(element => ({ label: label(element), bounds: rect(element) })), turnGaps: turns.slice(1).map((element, index) => rect(element).y - rect(turns[index]).bottom) } : null,
       composerCluster: card && send && delivery && metrics && leading ? { card: rect(card), send: rect(send), delivery: rect(delivery), metrics: rect(metrics), leading: rect(leading), leftInset: rect(leading).x - rect(card).x, rightInset: rect(card).right - rect(send).right, bottomInset: rect(card).bottom - rect(send).bottom, autoSendGap: rect(send).x - rect(delivery).right, targets: [...card.querySelectorAll('.composer-bar button')].filter(visible).map(element => ({ label: label(element), bounds: rect(element) })) } : null,
-      coordination: projectPane && projectMain && projectFooter && projectList && visible(projectMain) ? { pane: rect(projectPane), viewportBottom: document.documentElement.clientHeight, main: rect(projectMain), mainFlexColumn: getComputedStyle(projectMain).display === 'flex' && getComputedStyle(projectMain).flexDirection === 'column' && getComputedStyle(projectMain).minHeight === '0px', sidebar: projectSidebar && visible(projectSidebar) ? rect(projectSidebar) : null, sidebarBackground: projectSidebar && visible(projectSidebar) ? getComputedStyle(projectSidebar).backgroundColor : null, sidebarBorder: projectSidebar && visible(projectSidebar) ? parseFloat(getComputedStyle(projectSidebar).borderLeftWidth) : null, footer: rect(projectFooter), footerBorder: parseFloat(getComputedStyle(projectFooter).borderTopWidth), list: rect(projectList), listClientHeight: projectList.clientHeight, listScrollHeight: projectList.scrollHeight, listOverflow: getComputedStyle(projectList).overflowY, listFlex: parseFloat(getComputedStyle(projectList).flexGrow) > 0 && getComputedStyle(projectList).minHeight === '0px' } : null,
+      coordination: projectPane && projectMain && projectFooter && projectList && visible(projectMain) ? { pane: rect(projectPane), viewportBottom: document.querySelector('.status-bar').getBoundingClientRect().top, main: rect(projectMain), mainFlexColumn: getComputedStyle(projectMain).display === 'flex' && getComputedStyle(projectMain).flexDirection === 'column' && getComputedStyle(projectMain).minHeight === '0px', sidebar: projectSidebar && visible(projectSidebar) ? rect(projectSidebar) : null, sidebarBackground: projectSidebar && visible(projectSidebar) ? getComputedStyle(projectSidebar).backgroundColor : null, sidebarBorder: projectSidebar && visible(projectSidebar) ? parseFloat(getComputedStyle(projectSidebar).borderLeftWidth) : null, footer: rect(projectFooter), footerBorder: parseFloat(getComputedStyle(projectFooter).borderTopWidth), list: rect(projectList), listClientHeight: projectList.clientHeight, listScrollHeight: projectList.scrollHeight, listOverflow: getComputedStyle(projectList).overflowY, listFlex: parseFloat(getComputedStyle(projectList).flexGrow) > 0 && getComputedStyle(projectList).minHeight === '0px' } : null,
       roster: roster && visible(roster) ? { height: rect(roster).height, rowHeights: [...roster.children].map(element => rect(element).height), gap: parseFloat(getComputedStyle(roster).rowGap) || 0, padding: parseFloat(getComputedStyle(roster).paddingTop) + parseFloat(getComputedStyle(roster).paddingBottom) } : null,
       prose: [...document.querySelectorAll('.transcript-message__text .transcript-md > p')].map(element => ({ rect: rect(element), textLength: element.textContent.length })),
       errors: window.__desktopFixture.errors,
@@ -1576,8 +1582,7 @@ async function captureR7(page: Page, name: string) {
 async function openR7(width: number, reduce = false) {
   const page = await open()
   try {
-    await page.setViewport(width, width === 390 ? 844 : 900)
-    await page.setCoarsePointer(width === 390)
+    await page.setViewport(width, width === 1000 ? 600 : 900)
     await page.setReducedMotion(reduce)
     await page.evaluate(`(() => { localStorage.setItem('ycoding.desktop.theme', 'dark'); localStorage.setItem('ycoding.desktop.animations', 'true'); location.reload(); })()`)
     await wait(page, `document.querySelector('#turn-msg_response') && document.fonts.status === 'loaded'`)
@@ -1606,7 +1611,7 @@ function r8ConversationFailures(geometry: R7Geometry, name: string, width: numbe
   const reading = geometry.readingTrack
   if (!reading) failures.push(`${name}: reading track is missing`)
   else {
-    if (width === 1440 && Math.abs(reading.outer.width - maximum) > 1) failures.push(`${name}: wide outer track is ${reading.outer.width}px, expected the documented ${maximum}px maximum`)
+    if (reading.outer.width > maximum + 1) failures.push(`${name}: outer track is ${reading.outer.width}px, beyond the documented ${maximum}px maximum`)
     for (const kind of ['assistant head', 'Thought', 'Ran tools', 'Step provenance', 'Shell finished', 'user bubble', 'markdown', 'prose']) if (!reading.rows.some(row => row.kind === kind)) failures.push(`${name}: required ${kind} row is missing`)
     for (const row of reading.rows) {
       const leftFits = row.kind === 'user bubble' ? row.bounds.width <= reading.outer.width * .78 + 1 : Math.abs(row.bounds.x - reading.outer.x) <= 1
@@ -1622,7 +1627,6 @@ function r8ConversationFailures(geometry: R7Geometry, name: string, width: numbe
     if (cluster.autoSendGap < 8 || cluster.autoSendGap > 10 || Math.abs(cluster.delivery.bottom - cluster.send.bottom) > 1) failures.push(`${name}: Auto-to-Send gap is ${cluster.autoSendGap}px, expected 8–10px on one baseline`)
     if (cluster.rightInset < 10 || cluster.rightInset > 12 || cluster.bottomInset < 10 || cluster.bottomInset > 12 || Math.abs(cluster.leftInset - cluster.rightInset) > 1) failures.push(`${name}: composer insets are not symmetric 10–12px: ${JSON.stringify({ left: cluster.leftInset, right: cluster.rightInset, bottom: cluster.bottomInset })}`)
     if (cluster.metrics.right > cluster.delivery.x || cluster.delivery.right > cluster.send.x) failures.push(`${name}: metrics/delivery/Send order is not retained`)
-    if (width === 390) for (const target of cluster.targets) if (target.bounds.width < 44 || target.bounds.height < 44) failures.push(`${name}: compact target is below 44px: ${target.label}`)
   }
   return failures
 }
@@ -1631,7 +1635,9 @@ function r8CoordinationFailures(geometry: R7Geometry, name: string, width: numbe
   const layout = geometry.coordination
   if (!layout) return [`${name}: Coordination pane geometry is missing`]
   const failures: string[] = []
-  if (!layout.mainFlexColumn || Math.abs(layout.pane.bottom - layout.viewportBottom) > 1 || Math.abs(layout.main.y - layout.pane.y) > 1 || Math.abs(layout.main.bottom - layout.pane.bottom) > 1 || Math.abs(layout.footer.bottom - layout.pane.bottom) > 1) failures.push(`${name}: Coordination main/footer do not fill the pane: ${JSON.stringify(layout)}`)
+  const stacked = !!layout.sidebar && layout.sidebar.y >= layout.main.bottom - 1
+  if (stacked && (!layout.mainFlexColumn || Math.abs(layout.main.y - layout.pane.y) > 1 || Math.abs(layout.footer.bottom - layout.main.bottom) > 1)) failures.push(`${name}: stacked Coordination main does not own its footer: ${JSON.stringify(layout)}`)
+  if (!stacked && (!layout.mainFlexColumn || Math.abs(layout.pane.bottom - layout.viewportBottom) > 1 || Math.abs(layout.main.y - layout.pane.y) > 1 || Math.abs(layout.main.bottom - layout.pane.bottom) > 1 || Math.abs(layout.footer.bottom - layout.pane.bottom) > 1)) failures.push(`${name}: Coordination main/footer do not fill the pane: ${JSON.stringify(layout)}`)
   if (!layout.listFlex || layout.footerBorder < 1 || layout.list.bottom > layout.footer.y + 1 || !['auto', 'scroll'].includes(layout.listOverflow)) failures.push(`${name}: member list does not own the remaining scroll region above a bordered footer: ${JSON.stringify(layout)}`)
   if (width === 1440 && (!layout.sidebar || Math.abs(layout.sidebar.y - layout.pane.y) > 1 || Math.abs(layout.sidebar.bottom - layout.pane.bottom) > 1 || layout.sidebarBorder === null || layout.sidebarBorder < 1 || !layout.sidebarBackground || layout.sidebarBackground === 'rgba(0, 0, 0, 0)')) failures.push(`${name}: Add-existing/New-member sidebar does not fill the pane with its surface and left border: ${JSON.stringify(layout)}`)
   return failures
@@ -1710,7 +1716,7 @@ test("Desktop r7 populated transcripts retain centered tracks and long evidence"
   expect(maximum).toBeGreaterThanOrEqual(960)
   expect(maximum).toBeLessThanOrEqual(1040)
   const failures: string[] = []
-  for (const kind of ["multiagent", "tool-heavy", "thought-heavy"] as const) for (const width of [1440, 390]) {
+  for (const kind of ["multiagent", "tool-heavy", "thought-heavy"] as const) for (const width of [1440, 1000]) {
     prepareImplementedSurface(); referenceScene = false; populatedKind = kind; sessionCost = 3.21
     replyText = "Selected checks remain read-only. Native execution is not established by this fixture."
     const messages = () => [...transcript(), { id: "r8_shell_finished", sessionID: "ses_test", type: "synthetic", text: "The selected cursor boundary check finished without changing files.", description: "The selected cursor boundary check finished without changing files.", metadata: { source: "shell", state: "completed" }, time: { created: 1600 } }]
@@ -1731,7 +1737,7 @@ test("Desktop r7 populated transcripts retain centered tracks and long evidence"
       failures.push(...r7Failures(collapsed, `${name}-collapsed`))
       failures.push(...r8ConversationFailures(collapsed, `${name}-collapsed`, width, maximum))
       const columns = collapsed.columns
-      if (!columns || Math.abs(columns.left - columns.right) > 1 || columns.left < (width === 390 ? 12 : 24) || columns.right < (width === 390 ? 12 : 24) || columns.ratio < 0.75 || Math.abs(columns.composerLeft) > 1 || Math.abs(columns.composerRight) > 1) failures.push(`${name}: transcript/composer tracks are not balanced and aligned: ${JSON.stringify(columns)}`)
+      if (!columns || Math.abs(columns.left - columns.right) > 1 || columns.left < 24 || columns.right < 24 || columns.ratio < 0.75 || Math.abs(columns.composerLeft) > 1 || Math.abs(columns.composerRight) > 1) failures.push(`${name}: transcript/composer tracks are not balanced and aligned: ${JSON.stringify(columns)}`)
       const metadata = collapsed.visibleMetadata.map(value => value.split(' · ').slice(0, 3).join(' · '))
       if (!metadata.length || (kind === "multiagent" && !["planner", "build", "reviewer"].every(actor => metadata.some(value => value.startsWith(actor + " · "))))) failures.push(`${name}: changed actor/model provenance is missing`)
       expect(await page.evaluate(`document.querySelector('#turn-msg_response .transcript-message__text').textContent.includes('Final result:') && document.querySelectorAll('.transcript-tools__button[aria-expanded="false"]').length > 0`, decodeBoolean)).toBe(true)
@@ -1746,7 +1752,6 @@ test("Desktop r7 populated transcripts retain centered tracks and long evidence"
       if (kind === "tool-heavy") {
         await command(page, "/diff")
         await wait(page, `document.querySelector('dialog[data-kind="diff"] .desktop-diff')`)
-        if (width === 390) await tap(page, '.desktop-diff nav button[aria-label="src/session/cursor-pagination-and-retained-message-boundaries.ts"]')
         await wait(page, `document.querySelector('.desktop-diff__files')?.textContent.includes('created-ascending')`)
         for (const wrap of ["none", "word"] as const) {
           await page.evaluate(`(() => { const input = [...document.querySelectorAll('.desktop-diff label')].find(label => label.textContent.trim() === 'Wrap diff lines').querySelector('input'); if (input.checked !== ${wrap === "word"}) input.click(); })()`)
@@ -1768,7 +1773,6 @@ test("Desktop r7 populated transcripts retain centered tracks and long evidence"
           failures.push(...r7Failures(diff, `${name}-diff-${wrap}`))
         }
         await page.pressEscape()
-        if (width === 390) await page.pressEscape()
         await wait(page, `!document.querySelector('dialog[open]')`)
       }
       expect(owned!.calls.filter(call => call.method !== "GET" && !call.route.endsWith("/web-latency"))).toEqual([])
@@ -1777,9 +1781,9 @@ test("Desktop r7 populated transcripts retain centered tracks and long evidence"
   expect(failures).toEqual([])
 }, 120_000)
 
-test("Desktop r7 sparse and populated Projects keep natural member rows and compact back navigation", async () => {
+test("Desktop r7 sparse and populated Projects keep natural member rows and a persistent inspector", async () => {
   const failures: string[] = []
-  for (const count of [1, 7]) for (const width of [1440, 390]) {
+  for (const count of [1, 7]) for (const width of [1440, 1000]) {
     prepareImplementedSurface(); populatedKind = "multiagent"
     const names = ["Build cursor reconciliation", "Review keyboard focus", "Verify long code wrapping", "Inspect retained history", "Reconcile tool failures", "Check streaming anchors", "Consolidate final findings"]
     const group = { ...sceneGroup, name: "Cursor pagination", master: { ...sceneParticipant("ses_test"), title: "Pagination workstream" }, members: Array.from({ length: count }, (_, index) => ({ ...sceneParticipant(`ses_member_${index}`), title: names[index]!, state: ["running", "waiting", "idle", "failed"][index % 4]! })) }
@@ -1806,17 +1810,8 @@ test("Desktop r7 sparse and populated Projects keep natural member rows and comp
       }
       expect(await page.evaluate(`[...document.querySelectorAll('[data-project-roster] button')].every(button => button.getAttribute('aria-label') && button.querySelector('svg') && button.getAttribute('data-tooltip'))`, decodeBoolean)).toBe(true)
       const button = '.desktop-project-overview .rl-list > button[aria-pressed]'
-      if (width === 390) {
-        await tap(page, button)
-        await wait(page, `document.querySelector('[aria-label="Back to project list"]')?.getClientRects().length`)
-        failures.push(...r7Failures(await captureR7(page, `${name}-inspector`), `${name}-inspector`))
-        await page.pressEscape()
-        await wait(page, `document.querySelector(${JSON.stringify(button)}).getClientRects().length > 0`)
-        expect(await page.evaluate(`document.activeElement === document.querySelector(${JSON.stringify(button)})`, decodeBoolean)).toBe(true)
-      }
       await page.evaluate(`document.querySelectorAll(${JSON.stringify(button)})[1].click()`)
-      await wait(page, `document.querySelector('.desktop-project-detail h3')?.textContent === 'Keyboard accessibility' || (document.querySelector('[aria-label="Back to project list"]')?.getClientRects().length > 0 && document.body.textContent.includes('Keyboard accessibility'))`)
-      if (width === 390) await page.pressEscape()
+      await wait(page, `document.querySelector('.desktop-project-detail h3')?.textContent === 'Keyboard accessibility'`)
       await wait(page, `document.querySelectorAll('[data-project-roster] > li').length === 2`)
       const selected = await captureR7(page, `${name}-selected`)
       failures.push(...r7Failures(selected, `${name}-selected`), ...r8CoordinationFailures(selected, `${name}-selected`, width))
@@ -1828,7 +1823,7 @@ test("Desktop r7 sparse and populated Projects keep natural member rows and comp
 
 test("Desktop r7 disclosure motion retains focus, mounted streaming content and detached reader position", async () => {
   const failures: string[] = []
-  for (const reduce of [false, true]) for (const width of [1440, 390]) {
+  for (const reduce of [false, true]) for (const width of [1440, 1000]) {
     prepareImplementedSurface(); referenceScene = false; populatedKind = "thought-heavy"; running = true
     replyText = "Streaming review checkpoint: retain the reader and the draft."
     const page = await openR7(width, reduce)
@@ -1887,12 +1882,6 @@ test("Desktop r7 disclosure motion retains focus, mounted streaming content and 
       if (!reduce && project.content === 0) failures.push(`${name}: Project selection has no observable content transition`)
       if (reduce && (project.spatial > 0 || project.slowEffects > 0)) failures.push(`${name}: reduced-motion Project selection retains spatial or slow effects`)
       failures.push(...r7Failures(await captureR7(page, `${name}-project-selected`), name))
-      if (width === 390) {
-        await page.pressEscape()
-        await wait(page, `document.querySelector('.desktop-project-overview .rl-list > button[aria-pressed="true"]').getClientRects().length > 0`)
-        expect(await page.evaluate(`document.activeElement === document.querySelector('.desktop-project-overview .rl-list > button[aria-pressed="true"]')`, decodeBoolean)).toBe(true)
-        failures.push(...r7Failures(await captureR7(page, `${name}-project-back`), name))
-      }
       const detail = { motion, exit, project, attachedDistance, ...stable }
       const output = process.env.YCODING_DESKTOP_CAPTURE_DIR
       if (output) { const file = path.join(output, `${name}.motion.json`); if (await Bun.file(file).exists()) throw new Error(`Capture already exists: ${name}`); await Bun.write(file, JSON.stringify(detail, null, 2)) }
@@ -1915,10 +1904,10 @@ async function compactCapture(page: Page, name: string) {
   expect(await page.evaluate(`document.documentElement.scrollWidth <= innerWidth && document.body.scrollWidth <= innerWidth`, decodeBoolean)).toBe(true)
 }
 
-test("compact coarse navigation, model, policy, delivery and companion preserve drafts and dismiss by touch", async () => {
-  const page = await compactPage()
+test("coarse model, policy and delivery sheets preserve drafts and dismiss by touch beside a persistent rail at the 1000x600 floor", async () => {
+  const page = await coarsePage()
   try {
-    await message(page, "Retain this compact draft")
+    await message(page, "Retain this floor draft")
     await page.setCoarsePointer(false); await page.setViewport(1440, 900)
     await wait(page, `innerWidth === 1440 && !matchMedia('(pointer: coarse)').matches`)
     const dialogs: { role: string | null; name: string | null }[] = []
@@ -1935,22 +1924,11 @@ test("compact coarse navigation, model, policy, delivery and companion preserve 
       if (trigger === '.composer-chip--model') expect(await page.evaluate(`document.activeElement === document.querySelector(${JSON.stringify(trigger)})`, decodeBoolean)).toBe(true)
     }
     expect(dialogs).toEqual([{ role: "dialog", name: "Model and reasoning effort" }, { role: "dialog", name: "Goal and autonomy" }])
-    await page.setViewport(390, 844); await page.setCoarsePointer(true)
-    await wait(page, `innerWidth === 390 && matchMedia('(pointer: coarse)').matches`)
+    await page.setViewport(1000, 600); await page.setCoarsePointer(true)
+    await wait(page, `innerWidth === 1000 && matchMedia('(pointer: coarse)').matches`)
     expect(await page.evaluate(`[...document.querySelectorAll('.rl-capsule .composer-bar button')].filter(button => button.getClientRects().length).every(button => { const box = button.getBoundingClientRect(); return box.width >= 44 && box.height >= 44; })`, decodeBoolean)).toBe(true)
     expect(await page.evaluate(`(() => { const header = document.querySelector('.rl-top'); return header.getBoundingClientRect().height <= 64 && [...header.querySelectorAll('button')].filter(button => button.getClientRects().length).every(button => { const box = button.getBoundingClientRect(); return box.width >= 44 && box.height >= 44; }); })()`, decodeBoolean)).toBe(true)
-    await tap(page, '.rl-mobile-menu')
-    await wait(page, `document.querySelector('#session-rail:modal')`)
-    expect(await page.evaluate(`document.querySelector('[aria-label="Close navigation"]').getBoundingClientRect().height >= 44`, decodeBoolean)).toBe(true)
-    await compactCapture(page, "drawer")
-    await page.touch("touchStart", 210, 420); await page.touch("touchMove", 60, 422); await page.touch("touchEnd")
-    await wait(page, `!document.querySelector('#session-rail:modal')`)
-    expect(await page.evaluate(`document.activeElement.matches('.rl-mobile-menu')`, decodeBoolean)).toBe(true)
-    await tap(page, '.rl-mobile-menu'); await wait(page, `document.querySelector('#session-rail:modal')`)
-    await page.touch("touchStart", 380, 420); await page.touch("touchEnd")
-    await wait(page, `!document.querySelector('#session-rail:modal')`)
-    await tap(page, '.rl-mobile-menu'); await wait(page, `document.querySelector('#session-rail:modal')`)
-    await page.pressEscape(); await wait(page, `!document.querySelector('#session-rail:modal')`)
+    expect(await page.evaluate(`(() => { const rail = document.querySelector('#session-rail'); const main = document.querySelector('#remote-main'); return rail.tagName === 'ASIDE' && rail.getClientRects().length > 0 && Math.abs(rail.getBoundingClientRect().right - main.getBoundingClientRect().left) <= 1 && !main.closest('[inert]') && !document.querySelector('[aria-label="Open navigation"], [aria-label="Close navigation"]'); })()`, decodeBoolean)).toBe(true)
     await tap(page, '.composer-chip--model')
     await wait(page, `document.querySelector('.model-popover:modal')`)
     expect(await page.evaluate(`document.querySelector('.model-popover:modal').getAttribute('aria-label')`, decodeString)).toBe("Model and reasoning effort")
@@ -1971,113 +1949,104 @@ test("compact coarse navigation, model, policy, delivery and companion preserve 
     await page.evaluate(`(() => {const field=document.querySelector('.rl-policy-panel textarea');field.value='Retain this staged goal';field.dispatchEvent(new Event('input',{bubbles:true}));})()`)
     await page.setCoarsePointer(false); await page.setViewport(1100, 844)
     await wait(page, `document.querySelector('.rl-policy-panel:not(dialog)')`)
-    await page.setViewport(390, 844); await page.setCoarsePointer(true)
+    await page.setViewport(1000, 600); await page.setCoarsePointer(true)
     await wait(page, `document.querySelector('.rl-policy-panel:modal')`)
     expect(await page.evaluate(`document.querySelector('.rl-policy-panel textarea').value`, decodeString)).toBe("Retain this staged goal")
-    await page.setViewport(390, 480)
-    expect(await page.evaluate(`document.querySelector('.rl-policy-panel').getBoundingClientRect().bottom <= 480 && [...document.querySelectorAll('.rl-policy-panel textarea')].every(e=>parseFloat(getComputedStyle(e).fontSize)>=16)`, decodeBoolean)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.rl-policy-panel').getBoundingClientRect().bottom <= innerHeight && [...document.querySelectorAll('.rl-policy-panel textarea')].every(e=>parseFloat(getComputedStyle(e).fontSize)>=16)`, decodeBoolean)).toBe(true)
     await page.pressEscape(); await wait(page, `!document.querySelector('.rl-policy-panel')`)
-    await page.setViewport(390, 844)
     await tap(page, '[aria-label="Send mode"]')
     await wait(page, `document.querySelector('.desktop-select__list:modal')`)
     expect(await page.evaluate(`[...document.querySelectorAll('.desktop-select__option')].every(e=>e.getBoundingClientRect().height>=44)`, decodeBoolean)).toBe(true)
     await compactCapture(page, "delivery-sheet")
     await page.pressEscape(); await wait(page, `!document.querySelector('.desktop-select__list')`)
     const scroll = await page.evaluate(`document.querySelector('.conversation__scroll').scrollTop`, decodeNumber)
-    await tap(page, '.rl-companion-toggle'); await wait(page, `document.querySelector('.rl-companion:modal')`)
+    await tap(page, '.rl-companion-toggle'); await wait(page, `document.querySelector('aside.rl-companion')?.getClientRects().length`)
+    expect(await page.evaluate(`!document.querySelector('.rl-companion:modal')`, decodeBoolean)).toBe(true)
     await compactCapture(page, "companion")
     await tap(page, '.rl-companion [aria-label="Close companion"]'); await wait(page, `!document.querySelector('.rl-companion')`)
     expect(await page.evaluate(`document.querySelector('.conversation__scroll').scrollTop`, decodeNumber)).toBe(scroll)
-    expect(await page.evaluate(`document.querySelector('.rl-capsule textarea').value`, decodeString)).toBe("Retain this compact draft")
+    expect(await page.evaluate(`document.querySelector('.rl-capsule textarea').value`, decodeString)).toBe("Retain this floor draft")
     expect(owned!.calls.filter(call=>call.method!=="GET"&&!call.route.endsWith("/web-latency"))).toEqual([])
   } finally { await page.close() }
 }, 40_000)
 
-test("compact directory, coordination and diff inspectors use dismissible single-pane drill-ins", async () => {
+test("directory, coordination, Team and diff inspectors stay beside or below their lists without drill-ins at the 1000x600 floor", async () => {
   familyEnabled = true
-  const page = await compactPage()
+  prepareImplementedSurface()
+  const page = await openReference()
   try {
-    for (const [route, option, back] of [["workspaces", '.ws-workspaces-list [role="option"]', '[aria-label="Back to workspace list"]'], ["projects", '.desktop-project-overview .rl-list > button[aria-pressed]', '[aria-label="Back to project list"]']] as const) {
+    await page.setViewport(1000, 600)
+    const persistent = (list: string, inspector: string) => `(() => { const list = document.querySelector(${JSON.stringify(list)}), inspector = document.querySelector(${JSON.stringify(inspector)}); return !!list?.getClientRects().length && !!inspector?.getClientRects().length && !document.querySelector('.compact-inspector-back, dialog:modal'); })()`
+    for (const [route, option, list, inspector] of [["workspaces", '.ws-workspaces-list [role="option"]', '.ws-workspaces-list', '.ws-workspaces-detail'], ["projects", '.desktop-project-overview .rl-list > button[aria-pressed]', '.desktop-project-settings > .relay-settings', '.desktop-project-inspector']] as const) {
       await page.navigate(`${origin}/#/${route}`); await wait(page, `document.querySelector(${JSON.stringify(option)})`)
-      await tap(page, option)
-      await wait(page, `document.querySelector(${JSON.stringify(back)})?.getClientRects().length`)
+      await page.evaluate(`document.querySelector(${JSON.stringify(option)}).click()`)
+      await wait(page, persistent(list, inspector))
       await compactCapture(page, `${route}-inspector`)
-      await tap(page, back)
-      expect(await page.evaluate(`document.querySelector(${JSON.stringify(option)}).getClientRects().length > 0`, decodeBoolean)).toBe(true)
     }
     await clickText(page, 'button', 'Coordination')
-    await tap(page, '.desktop-coordination .desktop-row-select')
-    await wait(page, `document.querySelector('[aria-label="Back to member list"]')?.getClientRects().length`)
+    await page.evaluate(`document.querySelector('.desktop-coordination .desktop-row-select').click()`)
+    await wait(page, persistent('.desktop-coordination-main', '[aria-label="Selected member"]'))
     await compactCapture(page, "coordination-inspector")
-    await page.pressEscape()
-    expect(await page.evaluate(`document.querySelector('.desktop-coordination-main').getClientRects().length > 0`, decodeBoolean)).toBe(true)
     await page.navigate(`${origin}/#/sessions/ses_test`); await wait(page, `document.querySelector('#turn-msg_response')`)
     await clickText(page, '.rl-top button', "Team")
     await wait(page, `document.querySelector('.desktop-team .desktop-row-select')`)
-    await tap(page, '.desktop-team .desktop-row-select')
-    await wait(page, `document.querySelector('[aria-label="Back to child list"]')?.getClientRects().length`)
+    await page.evaluate(`document.querySelector('.desktop-team .desktop-row-select').click()`)
+    await wait(page, persistent('.desktop-team-main', '[aria-label="Selected child"]'))
     await compactCapture(page, "team-inspector")
-    await page.pressEscape()
     await clickText(page, '.rl-top button', "Conversation")
     await command(page, "/diff")
-    await wait(page, `document.querySelector('dialog[data-kind="diff"]')`)
-    await wait(page, `document.querySelector('.desktop-diff nav [aria-label="a.ts"]')`)
-    await tap(page, '.desktop-diff nav [aria-label="a.ts"]')
-    await wait(page, `document.querySelector('[aria-label="Back to changed files"]')?.getClientRects().length`)
+    await wait(page, `document.querySelector('dialog[data-kind="diff"] .desktop-diff nav [aria-label="a.ts"]')`)
+    await page.evaluate(`document.querySelector('.desktop-diff nav [aria-label="a.ts"]').click()`)
     await clickText(page, 'dialog[data-kind="diff"] button[aria-label="Mark reviewed: a.ts"]', 'Mark reviewed')
+    expect(await page.evaluate(`(() => { const nav = document.querySelector('dialog[data-kind="diff"] .desktop-diff nav'), files = document.querySelector('dialog[data-kind="diff"] .desktop-diff__files'); return nav.getClientRects().length > 0 && files.getClientRects().length > 0 && nav.getBoundingClientRect().right <= files.getBoundingClientRect().left + 1 && !document.querySelector('.compact-inspector-back') && document.querySelector('dialog[data-kind="diff"] [aria-label="Reviewed files"]').textContent === "1 reviewed"; })()`, decodeBoolean)).toBe(true)
     await compactCapture(page, "diff-inspector")
-    await tap(page, '[aria-label="Back to changed files"]')
-    expect(await page.evaluate(`document.querySelector('.desktop-diff nav [role="status"]').textContent`, decodeString)).toBe("1 reviewed")
-    await tap(page, '.desktop-diff nav [aria-label="a.ts"]')
-    await wait(page, `document.querySelector('[aria-label="Back to changed files"]')?.getClientRects().length`)
-    await page.pressEscape()
-    expect(await page.evaluate(`document.querySelector('dialog[data-kind="diff"][open] .desktop-diff nav').getClientRects().length > 0`, decodeBoolean)).toBe(true)
     await page.pressEscape(); await wait(page, `!document.querySelector('dialog[open]')`)
     expect(owned!.calls.filter(call=>call.method!=="GET"&&!call.route.endsWith("/web-latency"))).toEqual([])
   } finally { await page.close() }
 }, 40_000)
 
-test("compact 320px boundary contains page, composer, code and sheet overflow", async () => {
-  const page = await compactPage()
+test("the 1000x600 floor contains page, composer, code and coarse sheet overflow", async () => {
+  const page = await coarsePage()
   try {
-    await page.setViewport(320, 844)
-    await compactCapture(page, "boundary-320")
+    await compactCapture(page, "boundary-1000")
     expect(await page.evaluate(`parseFloat(getComputedStyle(document.querySelector('.rl-capsule textarea')).fontSize)>=16`, decodeBoolean)).toBe(true)
     await tap(page, '.composer-chip--model'); await wait(page, `document.querySelector('.model-popover:modal')`)
-    await compactCapture(page, "model-320")
+    await compactCapture(page, "model-1000")
     await page.pressEscape()
     for (const route of ['workspaces','projects']) {
       await page.navigate(`${origin}/#/${route}`); await wait(page, `document.querySelector('main[data-surface="${route}"]')`)
-      await compactCapture(page, `${route}-320`)
+      await compactCapture(page, `${route}-1000`)
     }
   } finally { await page.close() }
 }, 30_000)
 
-test("compact 360px Workspaces, Coordination Manage members, and Settings hit-targets stay inset and bounded", async () => {
+test("coarse Workspaces, Coordination Manage members, and Settings hit-targets stay inset and bounded at the 1000x600 floor", async () => {
   prepareImplementedSurface()
   sceneRead = call => call.route === "/api/server/telemetry/consent" ? { noticeVersion: 1 } : undefined
   const page = await openReference()
   try {
-    await page.setViewport(360, 780)
+    await page.setViewport(1000, 600)
+    await page.setCoarsePointer(true)
     await page.navigate(`${origin}/#/workspaces`)
     await wait(page, `document.querySelector('[data-part="ws-folder-actions"] button')`)
-    expect(await page.evaluate(`(() => { const bar = document.querySelector('[data-part="ws-folder-actions"]').getBoundingClientRect(), btn = document.querySelector('[data-part="ws-folder-actions"] button').getBoundingClientRect(); return { left: Math.round(bar.left), btnLeft: Math.round(btn.left), right: Math.round(bar.right), overflow: document.documentElement.scrollWidth > innerWidth }; })()`, decodeRecord)).toEqual({ left: 12, btnLeft: 12, right: 348, overflow: false })
+    expect(await page.evaluate(`(() => { const pane = document.querySelector('main[data-surface="workspaces"]').getBoundingClientRect(), bar = document.querySelector('[data-part="ws-folder-actions"]').getBoundingClientRect(), btn = document.querySelector('[data-part="ws-folder-actions"] button').getBoundingClientRect(); return bar.left >= pane.left + 12 && btn.left >= bar.left && bar.right <= pane.right - 12 && btn.height >= 44 && document.documentElement.scrollWidth <= innerWidth; })()`, decodeBoolean)).toBe(true)
 
     await page.navigate(`${origin}/#/projects`)
     await wait(page, `document.querySelector('.desktop-coordination-switch button')`)
     await clickText(page, '.desktop-coordination-switch button', "Coordination")
     await wait(page, `document.querySelector('.desktop-coordination')`)
-    const closed = await page.evaluate(`(() => { const details = [...document.querySelectorAll('.rl-page-content > details.st-section')].find(el => el.textContent.includes('Manage members')); const r = details.getBoundingClientRect(), s = details.querySelector('summary').getBoundingClientRect(); return { left: Math.round(r.left), right: Math.round(r.right), summaryHeight: Math.round(s.height), overflow: document.documentElement.scrollWidth > innerWidth }; })()`, decodeRecord)
-    expect(closed).toEqual({ left: 12, right: 348, summaryHeight: 44, overflow: false })
-    await page.evaluate(`([...document.querySelectorAll('.rl-page-content > details.st-section')].find(el => el.textContent.includes('Manage members'))).open = true`)
+    const members = `[...document.querySelectorAll('.rl-page-content > details.st-section')].find(el => el.textContent.includes('Manage members'))`
+    expect(await page.evaluate(`(() => { const pane = document.querySelector('.rl-page-content').getBoundingClientRect(), details = ${members}, r = details.getBoundingClientRect(), s = details.querySelector('summary').getBoundingClientRect(); return r.left >= pane.left + 12 && r.right <= pane.right - 12 && s.height >= 44 && document.documentElement.scrollWidth <= innerWidth; })()`, decodeBoolean)).toBe(true)
+    await page.evaluate(`(${members}).open = true`)
     await wait(page, `document.querySelector('.desktop-project-workflows')`)
-    expect(await page.evaluate(`(() => { const wf = document.querySelector('.desktop-project-workflows').getBoundingClientRect(); return { left: Math.round(wf.left), right: Math.round(wf.right), overflow: document.documentElement.scrollWidth > innerWidth }; })()`, decodeRecord)).toEqual({ left: 12, right: 348, overflow: false })
+    expect(await page.evaluate(`(() => { const pane = document.querySelector('.rl-page-content').getBoundingClientRect(), wf = document.querySelector('.desktop-project-workflows').getBoundingClientRect(); return wf.left >= pane.left + 12 && wf.right <= pane.right - 12 && document.documentElement.scrollWidth <= innerWidth; })()`, decodeBoolean)).toBe(true)
 
     await page.navigate(`${origin}/#/settings`)
     await wait(page, `document.querySelector('[data-action-id="st-open-notifications"]')`)
-    const compactSettings = await page.evaluate(`(() => { const labels = ['Open notifications', 'Review saved rules', 'Close app', "Don't share"]; const nodes = [...document.querySelectorAll('.st-ledger .st-actions > .rl-btn')].filter(el => labels.includes(el.textContent.trim())); return { count: nodes.length, heights: nodes.map(el => Math.round(el.getBoundingClientRect().height)), overflow: document.documentElement.scrollWidth > innerWidth }; })()`, decodeRecord)
-    expect(compactSettings).toEqual({ count: 4, heights: [44, 44, 44, 44], overflow: false })
+    const coarseSettings = await page.evaluate(`(() => { const labels = ['Open notifications', 'Review saved rules', 'Close app', "Don't share"]; const nodes = [...document.querySelectorAll('.st-ledger .st-actions > .rl-btn')].filter(el => labels.includes(el.textContent.trim())); return { count: nodes.length, heights: nodes.map(el => Math.round(el.getBoundingClientRect().height)), overflow: document.documentElement.scrollWidth > innerWidth }; })()`, decodeRecord)
+    expect(coarseSettings).toEqual({ count: 4, heights: [44, 44, 44, 44], overflow: false })
 
+    await page.setCoarsePointer(false)
     await page.setViewport(1440, 900)
     await settleR7(page)
     const desktopSettings = await page.evaluate(`(() => { const labels = ['Open notifications', 'Review saved rules', 'Close app', "Don't share"]; const nodes = [...document.querySelectorAll('.st-ledger .st-actions > .rl-btn')].filter(el => labels.includes(el.textContent.trim())); return { count: nodes.length, heights: nodes.map(el => Math.round(el.getBoundingClientRect().height)) }; })()`, decodeRecord)
@@ -2092,13 +2061,14 @@ test("Stitch approved source typography, palette and dense chrome load from owne
     const actual = await page.evaluate(`(() => {
       const root = getComputedStyle(document.documentElement);
       const style = selector => getComputedStyle(document.querySelector(selector));
-      return { mono: root.getPropertyValue('--yc-font-mono').trim(), border: root.getPropertyValue('--yc-border').trim(), muted: root.getPropertyValue('--yc-text-muted').trim(), sunken: root.getPropertyValue('--yc-surface-sunken').trim(), header: document.querySelector('.rl-top').getBoundingClientRect().height, radius: style('.rl-capsule').borderRadius, loaded: [...document.fonts].some(face => face.family.replaceAll('"', '') === 'JetBrains Mono' && face.status === 'loaded') };
+      return { mono: root.getPropertyValue('--yc-font-mono').trim(), border: root.getPropertyValue('--yc-line-subtle').trim(), muted: root.getPropertyValue('--yc-ink-secondary').trim(), sunken: root.getPropertyValue('--yc-plane-hover').trim(), header: document.querySelector('.rl-top').getBoundingClientRect().height, radius: style('.rl-capsule').borderRadius, loaded: [...document.fonts].some(face => face.family.replaceAll('"', '') === 'JetBrains Mono' && face.status === 'loaded') };
     })()`)
-    expect(actual).toEqual({ mono: '"JetBrains Mono", monospace', border: '#263039', muted: '#99A2AD', sunken: '#0E151A', header: 40, radius: '4px', loaded: true })
+    const design = Bun.YAML.parse((await Bun.file(path.join(import.meta.dir, "../DESIGN.md")).text()).split("---")[1]!) as { colors: Record<string, string>; rounded: Record<string, string> }
+    expect(actual).toEqual({ mono: '"JetBrains Mono", monospace', border: design.colors["line-subtle"], muted: design.colors["ink-secondary"], sunken: design.colors["plane-hover"], header: 40, radius: design.rounded.composer, loaded: true })
     if (!await page.evaluate(`!!document.querySelector('.rl-companion')`, decodeBoolean)) await page.evaluate(`document.querySelector('[aria-label="Open Session companion"]').click()`)
     await wait(page, `document.querySelector('.desktop-companion-head')`)
     expect(await page.evaluate(`(() => { const pane = document.querySelector('.rl-companion').getBoundingClientRect(), header = document.querySelector('.desktop-companion-head').getBoundingClientRect(), tabs = document.querySelector('.desktop-companion-head [role="tablist"]').getBoundingClientRect(), close = document.querySelector('[aria-label="Close companion"]').getBoundingClientRect(); return { width: pane.width, height: header.height, oneRow: tabs.top >= header.top && tabs.bottom <= header.bottom && close.left >= tabs.right && close.bottom <= header.bottom }; })()`, (value: unknown) => { const result = decodeRecord(value); return { width: (decodeNumber)(result["width"]), height: (decodeNumber)(result["height"]), oneRow: (decodeBoolean)(result["oneRow"]) } })).toEqual({ width: 320, height: 40, oneRow: true })
-    expect(await page.evaluate(`getComputedStyle(document.querySelector('.rl-top')).backgroundColor`, decodeString)).toBe("rgb(17, 24, 29)")
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('.rl-top')).backgroundColor`, decodeString)).toBe(rgb("plane-canvas"))
     expect(await page.evaluate(`window.__desktopFixture.errors`, decodeArray((value: unknown) => value))).toEqual([])
     if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "approved-source-foundation.png"), Buffer.from(await page.screenshot(), "base64"))
   } finally { await page.close() }
@@ -2477,7 +2447,7 @@ test("Stitch observed execution status distinguishes unknown, running, idle and 
     await wait(page, `${status}?.endsWith(', Status unknown')`)
     await page.evaluate(`window.__desktopFixture.emit({ type: 'session.execution.started', data: { sessionID: 'ses_test' } })`)
     await wait(page, `${status}?.endsWith(', Running')`)
-    expect(await page.evaluate(`${row}.textContent.trim()`, decodeString)).toBe(title)
+    expect(await page.evaluate(`${row}.querySelector('.rl-session-row-title').textContent.trim()`, decodeString)).toBe(title)
     expect(await page.evaluate(idleCount, decodeString)).toBe("Idle 0")
     expect(await page.evaluate(`!!document.querySelector('.rl-rail-filter[aria-label="Running 1"]')`, decodeBoolean)).toBe(true)
     await page.evaluate(`window.__desktopFixture.emit({ type: 'session.execution.succeeded', data: { sessionID: 'ses_test' } })`)
@@ -2535,8 +2505,8 @@ test("Desktop polish keeps visible context values in a compact meter", async () 
     const meter = '.rl-context-ring'
     await wait(page, `document.querySelector('${meter} small')?.textContent.includes('%')`)
     const cells: unknown[] = []
-    for (const width of [1440, 650]) {
-      await page.setViewport(width, 900)
+    for (const width of [1440, 1000]) {
+      await page.setViewport(width, width === 1000 ? 600 : 900)
       await captureR7(page, `polish-meter-${width}`)
       cells.push(await page.evaluate(`(() => { const meter = document.querySelector('${meter}'), ring = meter.querySelector('svg'), amount = meter.querySelector('strong'), percent = meter.querySelector('small'); return { smallRing: ring.getBoundingClientRect().width <= 24, valuesVisible: [amount, percent].every(node => node?.textContent && node.getBoundingClientRect().width > 0), named: !!meter.getAttribute('aria-label'), overflow: meter.scrollWidth > meter.clientWidth }; })()`))
     }
@@ -2551,13 +2521,13 @@ test("Desktop polish aligns Settings navigation and keeps the shortcut editor co
     await page.navigate(`${origin}/#/settings`)
     await wait(page, `document.querySelector('.desktop-keyboard-editor input')`)
     const cells: unknown[] = []
-    for (const width of [1440, 650]) {
-      await page.setViewport(width, 900)
+    for (const width of [1440, 1000]) {
+      await page.setViewport(width, width === 1000 ? 600 : 900)
       await captureR7(page, `polish-settings-${width}`)
       cells.push(await page.evaluate(`(() => {
-        const route = document.querySelector('.rl-nav-item[data-destination="settings"]'), section = document.querySelector('.st-settings-nav [aria-current="location"]'), editor = document.querySelector('.desktop-keyboard-editor'), card = editor.closest('.st-section'), control = editor.querySelector('button[aria-haspopup]'), input = editor.querySelector('input');
+        const route = document.querySelector('.activity-bar__item[data-destination="settings"][aria-current="page"]'), sections = [...document.querySelectorAll('.st-settings-nav .rl-btn')], section = document.querySelector('.st-settings-nav [aria-current="location"]'), editor = document.querySelector('.desktop-keyboard-editor'), card = editor.closest('.st-section'), control = editor.querySelector('button[aria-haspopup]'), input = editor.querySelector('input');
         const css = getComputedStyle, px = node => node.getBoundingClientRect();
-        return { icons: css(route.querySelector('svg')).width === css(section.querySelector('svg')).width, inset: css(route).paddingInlineStart === css(section).paddingInlineStart, card: parseFloat(css(card).paddingInlineStart) >= 12, compact: px(input).width <= 320 && Math.abs(px(input).bottom - px(control).bottom) <= 1, overflow: editor.scrollWidth > editor.clientWidth };
+        return { icons: !!route && sections.every(item => css(item.querySelector('svg')).width === '16px'), inset: sections.every(item => css(item).paddingInlineStart === css(section).paddingInlineStart), card: parseFloat(css(card).paddingInlineStart) >= 12, compact: px(input).width <= 320 && Math.abs(px(input).bottom - px(control).bottom) <= 1, overflow: editor.scrollWidth > editor.clientWidth };
       })()`))
     }
     expect(cells).toEqual(Array.from({ length: 2 }, () => ({ icons: true, inset: true, card: true, compact: true, overflow: false })))
@@ -2581,12 +2551,12 @@ test("Desktop polish fits provider columns and returns focus from management dia
     await clickContaining(page, '.provider-picker button', "Synthetic Provider")
     await wait(page, `document.querySelector('[aria-label="Provider connection"] input[type="password"]')`)
     const providerCells: unknown[] = []
-    for (const width of [1440, 650]) {
-      await page.setViewport(width, 900)
+    for (const width of [1440, 1000]) {
+      await page.setViewport(width, width === 1000 ? 600 : 900)
       await captureR7(page, `polish-providers-${width}`)
       providerCells.push(await page.evaluate(`(() => {
         const dialog = document.querySelector('dialog[open]'), list = dialog.querySelector('[aria-label="Provider list"]'), detail = dialog.querySelector('[aria-label="Provider connection"]'), bounds = el => el.getBoundingClientRect();
-        return { geometry: innerWidth > 700 ? bounds(dialog).width >= 840 && bounds(list).right <= bounds(detail).left : bounds(list).bottom <= bounds(detail).top, overflow: [list, detail, list.firstElementChild].some(el => el.scrollWidth > el.clientWidth) };
+        return { geometry: bounds(dialog).width >= 840 && bounds(list).right <= bounds(detail).left, overflow: [list, detail, list.firstElementChild].some(el => el.scrollWidth > el.clientWidth) };
       })()`))
     }
     await page.pressEscape()
@@ -2594,9 +2564,9 @@ test("Desktop polish fits provider columns and returns focus from management dia
     await open("MCP")
     await wait(page, `document.querySelector('.desktop-mcp-server li')`)
     const mcp: unknown[] = []
-    for (const width of [1440, 650]) {
-      await page.setViewport(width, 900)
-      await page.setReducedMotion(width === 650)
+    for (const width of [1440, 1000]) {
+      await page.setViewport(width, width === 1000 ? 600 : 900)
+      await page.setReducedMotion(width === 1000)
       await captureR7(page, `polish-mcp-${width}`)
       mcp.push(await page.evaluate(`(() => { const dialog = document.querySelector('dialog[open]'), refresh = dialog.querySelector('header button[aria-label="Refresh servers"]'), rows = Array.from(dialog.querySelectorAll('.desktop-mcp-server > header')); return { header: !!refresh && refresh.getBoundingClientRect().width <= 44, rows: rows.length === 2 && rows.every(row => row.scrollWidth <= row.clientWidth), reduced: !matchMedia('(prefers-reduced-motion: reduce)').matches || getComputedStyle(dialog).transitionDuration.split(', ').every(value => parseFloat(value) <= .15) }; })()`))
     }
@@ -2607,8 +2577,8 @@ test("Desktop polish fits provider columns and returns focus from management dia
     await wait(page, `document.querySelector('dialog[data-kind="mcp"][open]') && !document.querySelector('[role="listbox"][aria-label="Server type"]') && document.activeElement.matches(${JSON.stringify(serverType)})`)
     await page.pressEscape()
     await wait(page, `!document.querySelector('dialog[open]') && document.activeElement.textContent.trim() === 'MCP'`)
-    for (const width of [1440, 700]) {
-      await page.setViewport(width, 900)
+    for (const width of [1440, 1000]) {
+      await page.setViewport(width, width === 1000 ? 600 : 900)
       await open("Appearance")
       const geometry = await captureR7(page, `polish-appearance-${width}`)
       expect(geometry.overflow).toEqual([])
@@ -2621,11 +2591,11 @@ test("Desktop polish fits provider columns and returns focus from management dia
   } finally { await page.close() }
 }, 30_000)
 
-test("Desktop polish closes Goal and autonomy and Commands with Escape and restores focus at 800x600 and 1440x900", async () => {
+test("Desktop polish closes Goal and autonomy and Commands with Escape and restores focus at 1000x600 and 1440x900", async () => {
   prepareImplementedSurface()
   const page = await openReference()
   try {
-    for (const [width, height] of [[800, 600], [1440, 900]] as const) {
+    for (const [width, height] of [[1000, 600], [1440, 900]] as const) {
       await page.setViewport(width, height)
       await settleR7(page)
       await page.evaluate(`document.querySelector('.composer-policy-chip').click()`)
@@ -2660,7 +2630,7 @@ test("Desktop polish renders genuine Dot steer events as right-aligned prompt bu
     : undefined
   const page = await open("document.querySelector('#turn-msg_reply_after')")
   try {
-    for (const [width, height] of [[1440, 900], [800, 600]] as const) {
+    for (const [width, height] of [[1440, 900], [1000, 600]] as const) {
       await page.setViewport(width, height)
       await settleR7(page)
       await wait(page, `document.querySelector('#turn-msg_dot_steer_argo .transcript-message__bubble')`)
@@ -2772,8 +2742,8 @@ test("Desktop v0.11.12 Settings cards share framed insets and align shortcut con
       await polishTheme(page, theme)
       await page.navigate(`${origin}/#/settings`)
       await wait(page, `document.querySelector('[data-part="st-permissions"]') && document.querySelector('.desktop-shortcut-list kbd')`)
-      for (const width of [1440, 700]) {
-        await page.setViewport(width, 900)
+      for (const width of [1440, 1000]) {
+        await page.setViewport(width, width === 1000 ? 600 : 900)
         await page.evaluate(`document.querySelector('.desktop-keyboard-editor input').focus({ preventScroll: true })`)
         await settleR7(page)
         const metrics = await page.evaluate(`(() => {
@@ -2786,12 +2756,11 @@ test("Desktop v0.11.12 Settings cards share framed insets and align shortcut con
         })()`, value => { const obj = decodeRecord(value); return { cards: decodeArray(decodeRecord)(obj.cards), updatesTail: decodeNumber(obj.updatesTail), overflow: decodeNumber(obj.overflow), controlDelta: decodeNumber(obj.controlDelta), focused: decodeBoolean(obj.focused), selectedMark: decodeBoolean(obj.selectedMark), pillRadius: decodeNumber(obj.pillRadius) } })
         const name = `settings-${theme}-${width}`
         await polishGeometry(page, name, metrics)
-        const expected = width === 1440 ? 20 : 16
-        if (metrics.cards.some(card => card.inset !== expected || card.frame !== "1px")) failures.push(`${name}: ${JSON.stringify(metrics.cards.map(({name, inset, frame}) => ({name, inset, frame})))}`)
+        if (metrics.cards.some(card => card.inset !== 20 || card.frame !== "1px")) failures.push(`${name}: ${JSON.stringify(metrics.cards.map(({name, inset, frame}) => ({name, inset, frame})))}`)
         const left = decodeRecord(metrics.cards[0]?.rect), right = decodeRecord(metrics.cards[1]?.rect)
         if (width === 1440 && (left.top !== right.top || left.width !== right.width || metrics.updatesTail !== 21)) failures.push(`${name}: Machine/Updates row ${JSON.stringify([left, right])}; Updates tail ${metrics.updatesTail}px`)
         if (metrics.overflow !== 0 || metrics.controlDelta > 1 || !metrics.focused || !metrics.selectedMark || metrics.pillRadius < 12) failures.push(`${name}: shortcut controls ${JSON.stringify(metrics)}`)
-        if (width === 700) {
+        if (width === 1000) {
           await page.setCoarsePointer(true)
           await page.setReducedMotion(true)
           await page.evaluate(`document.querySelector('.st-switch').focus({preventScroll:true})`)
@@ -2830,8 +2799,8 @@ test("Desktop v0.11.12 providers keep search inline and contain long identity an
       await command(page, "Connect providers")
       await clickContaining(page, '.provider-picker button', "Synthetic Provider")
       await wait(page, `document.querySelector('.desktop-credential-card')`)
-      for (const width of [1440, 700]) {
-        await page.setViewport(width, 900)
+      for (const width of [1440, 1000]) {
+        await page.setViewport(width, width === 1000 ? 600 : 900)
         await page.evaluate(`document.querySelector('dialog[data-kind="providers"] input[type="search"]').focus({ preventScroll:true })`)
         await settleR7(page)
         const metrics = await page.evaluate(`(() => {
@@ -2841,7 +2810,7 @@ test("Desktop v0.11.12 providers keep search inline and contain long identity an
         const name = `providers-${theme}-${width}`
         await polishGeometry(page, name, metrics)
         const overflows = decodeArray(decodeArray(decodeNumber))(metrics.overflow)
-        if ((width === 1440 ? metrics.width !== 880 || metrics.stacks : !metrics.stacks) || !metrics.inline || !metrics.focused || overflows.some(([client, scroll]) => (scroll ?? 0) > (client ?? 0)) || decodeNumber(metrics.addGap) < 8 || decodeArray(decodeNumber)(metrics.pads).some(pad => pad < 16)) failures.push(`${name}: ${JSON.stringify(metrics)}`)
+        if (metrics.width !== 880 || metrics.stacks || !metrics.inline || !metrics.focused || overflows.some(([client, scroll]) => (scroll ?? 0) > (client ?? 0)) || decodeNumber(metrics.addGap) < 8 || decodeArray(decodeNumber)(metrics.pads).some(pad => pad < 16)) failures.push(`${name}: ${JSON.stringify(metrics)}`)
       }
     } finally { await page.close() }
   }
@@ -2863,9 +2832,9 @@ test("Desktop v0.11.12 Team clears the last row and progress card at the scroll 
       await page.evaluate(`(() => { const pane = document.querySelector('.conversation__scroll'); pane.scrollTop = pane.scrollHeight; })()`)
       await clickText(page, '.rl-top button', "Team")
       await wait(page, `document.querySelectorAll('.desktop-team tbody tr').length === 18 && document.querySelector('.desktop-child-progress')`)
-      for (const width of [1440, 900]) {
-        await page.setViewport(width, 900)
-        await page.setReducedMotion(width === 900)
+      for (const width of [1440, 1000]) {
+        await page.setViewport(width, width === 1000 ? 600 : 900)
+        await page.setReducedMotion(width === 1000)
         await page.evaluate(`(() => { const row = document.querySelector('.desktop-team tbody tr:last-child'); row.scrollIntoView({block:'end'}); row.querySelector('button').focus({preventScroll:true}); })()`)
         await page.pressKey("Enter", "Enter", 13, "\r")
         await wait(page, `document.querySelector('.desktop-child-progress')?.textContent.includes('sample 18')`)
@@ -2881,7 +2850,7 @@ test("Desktop v0.11.12 Team clears the last row and progress card at the scroll 
         if (decodeNumber(row.gap) < 16 || decodeArray(decodeNumber)(row.aligned).some(delta => delta > 1) || row.selected !== "true" || !row.focus || progress.button !== "Scroll Team to top" || progress.intersects || decodeArray(decodeNumber)(progress.insets).some(pad => pad !== 16)) failures.push(`${name}: ${JSON.stringify({ row, progress })}`)
         if (progress.button === "Scroll Team to top") {
           const jump = 'button[aria-label="Scroll Team to top"]'
-          if (width === 900) {
+          if (width === 1000) {
             const center = await page.evaluate(`(() => { const r=document.querySelector(${JSON.stringify(jump)}).getBoundingClientRect(); return [r.x+r.width/2,r.y+r.height/2]; })()`, decodeArray(decodeNumber))
             await page.mouse("mouseMoved", center[0]!, center[1]!)
             for (const state of ["hover", "focus"] as const) {
@@ -2902,8 +2871,8 @@ test("Desktop v0.11.12 Team clears the last row and progress card at the scroll 
       }
       await page.navigate(`${origin}/#/projects`)
       await wait(page, `document.querySelector('[data-project-roster] > li')`)
-      for (const width of [1440, 900]) {
-        await page.setViewport(width, 900)
+      for (const width of [1440, 1000]) {
+        await page.setViewport(width, width === 1000 ? 600 : 900)
         await captureR7(page, `projects-${theme}-${width}`)
       }
     } finally { await page.close() }
@@ -3018,11 +2987,11 @@ test("Desktop structured correction dialog textarea owns editable prose and keyb
     await message(page, "Synthetic editable draft")
     await command(page, "Edit the full prompt draft")
     await wait(page, `document.querySelector('dialog[open] textarea')`)
-    expect(await page.evaluate(`(() => { const area = document.querySelector('dialog[open] textarea'), style = getComputedStyle(area); return style.fontFamily.includes('Geist') && !style.fontFamily.includes('Mono') && style.backgroundColor === 'rgb(11, 17, 21)' && style.borderTopWidth === '1px' && Number.parseFloat(style.paddingTop) > 0 && style.resize === 'vertical'; })()`, decodeBoolean)).toBe(true)
+    expect(await page.evaluate(`(() => { const area = document.querySelector('dialog[open] textarea'), style = getComputedStyle(area); return style.fontFamily.includes('Geist') && !style.fontFamily.includes('Mono') && (() => { const probe = document.createElement('span'); probe.style.backgroundColor = 'var(--yc-plane-canvas)'; area.parentElement.append(probe); const canvas = getComputedStyle(probe).backgroundColor; probe.remove(); return style.backgroundColor === canvas; })() && style.borderTopWidth === '1px' && Number.parseFloat(style.paddingTop) > 0 && style.resize === 'vertical'; })()`, decodeBoolean)).toBe(true)
     await page.evaluate(`document.querySelector('dialog[open] textarea').focus()`)
     await page.pressKey("End", "End", 35)
     await page.pressKey("x", "KeyX", 88, "x")
-    expect(await page.evaluate(`(() => { const area = document.querySelector('dialog[open] textarea'); return area === document.activeElement && area.value === 'Synthetic editable draftx' && getComputedStyle(area).borderTopColor === 'rgb(103, 215, 164)' && getComputedStyle(area).boxShadow !== 'none'; })()`, decodeBoolean)).toBe(true)
+    expect(await page.evaluate(`(() => { const area = document.querySelector('dialog[open] textarea'); return area === document.activeElement && area.value === 'Synthetic editable draftx' && getComputedStyle(area).borderTopColor === '${rgb("focus")}' && getComputedStyle(area).boxShadow !== 'none'; })()`, decodeBoolean)).toBe(true)
     if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "dialog-owned-textarea.png"), Buffer.from(await page.screenshot(), "base64"))
     await clickText(page, 'dialog[open] button', "Save draft")
     await wait(page, `!document.querySelector('dialog[open]')`)
@@ -3039,7 +3008,7 @@ test("Desktop visual correction long rail titles retain their names within two v
       const title = [...document.querySelectorAll('.rl-session-row-title')].find(node => node.textContent === ${JSON.stringify(unbroken)}), row = title.closest('.workspace__row'), link = title.closest('a'), status = row.querySelector('.rl-rail-status');
       link.focus();
       const bounds = title.getBoundingClientRect(), metadata = status.getBoundingClientRect(), pin = row.querySelector('.workspace__pin');
-      return title.textContent === ${JSON.stringify(unbroken)} && link.textContent.trim() === ${JSON.stringify(unbroken)} && link.getAttribute('aria-label').startsWith(title.textContent + ', ') && bounds.height <= Number.parseFloat(getComputedStyle(title).lineHeight) * 2 + 1 && metadata.right <= bounds.left + 1 && metadata.height > 0 && getComputedStyle(pin).visibility === 'visible';
+      return title.textContent === ${JSON.stringify(unbroken)} && link.textContent.trim().startsWith(${JSON.stringify(unbroken)}) && link.querySelector('.rl-session-row-meta').textContent.length > 0 && link.getAttribute('aria-label').startsWith(title.textContent + ', ') && bounds.height <= Number.parseFloat(getComputedStyle(title).lineHeight) * 2 + 1 && metadata.right <= bounds.left + 1 && metadata.height > 0 && getComputedStyle(pin).visibility === 'visible';
     })()`, decodeBoolean)).toBe(true)
     await page.evaluate(`[...document.querySelectorAll('.workspace__row')].find(row => row.textContent.includes(${JSON.stringify(unbroken)})).querySelector('.workspace__pin').focus()`)
     expect(await page.evaluate(`document.activeElement.matches('.workspace__pin') && !!document.activeElement.getAttribute('aria-label')`, decodeBoolean)).toBe(true)
@@ -3100,7 +3069,7 @@ test("Desktop floating composer keeps one Send or Stop slot and preserves steeri
   const page = await openReference()
   try {
     expect(await page.evaluate(`(() => { const label = document.querySelector('.composer-bar > .composer-chip[aria-haspopup="dialog"] span'); return label.textContent.includes('Mixed') && label.scrollWidth <= label.clientWidth; })()`, decodeBoolean)).toBe(true)
-    expect(await page.evaluate(`(() => { const dock = document.querySelector('.rl-dock'), style = getComputedStyle(dock); return style.backgroundColor === 'rgba(0, 0, 0, 0)' && parseFloat(style.borderTopWidth) === 0 && !dock.innerText.includes('Working') && parseFloat(getComputedStyle(dock.querySelector('.rl-capsule')).borderTopLeftRadius) === 16 && dock.querySelector('.rl-send').getAttribute('aria-label') === 'Send prompt'; })()`, decodeBoolean)).toBe(true)
+    expect(await page.evaluate(`(() => { const dock = document.querySelector('.rl-dock'), style = getComputedStyle(dock); return style.backgroundColor === 'rgba(0, 0, 0, 0)' && parseFloat(style.borderTopWidth) === 0 && !dock.innerText.includes('Working') && parseFloat(getComputedStyle(dock.querySelector('.rl-capsule')).borderTopLeftRadius) === 12 && dock.querySelector('.rl-send').getAttribute('aria-label') === 'Send prompt'; })()`, decodeBoolean)).toBe(true)
     if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "composer-ready.png"), Buffer.from(await page.screenshot(), "base64"))
     await page.evaluate(`(() => { const capsule = document.querySelector('.rl-capsule').getBoundingClientRect(); window.__fixedExecutionSlots = ['.rl-send', '.composer-bar button[aria-label="Send mode"]'].map(selector => { const rect = document.querySelector(selector).getBoundingClientRect(); return [rect.left - capsule.left, rect.top - capsule.top, rect.width, rect.height]; }); })()`)
     running = true
@@ -3113,7 +3082,7 @@ test("Desktop floating composer keeps one Send or Stop slot and preserves steeri
       const contained = bounds.left >= capsule.left && bounds.right <= capsule.right && bounds.top >= capsule.top && bounds.bottom <= capsule.bottom && bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight;
       const separate = [controls[1], label.getBoundingClientRect()].every(rect => bounds.right <= rect.left || bounds.left >= rect.right || bounds.bottom <= rect.top || bounds.top >= rect.bottom);
       const reachable = bounds.width >= 32 && bounds.height >= 32 && !stop.disabled && document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2)?.closest('.rl-send') === stop;
-      const danger = document.createElement('span'); danger.style.color = 'var(--yc-danger)'; stop.parentElement.append(danger); const red = getComputedStyle(stop).color === getComputedStyle(danger).color; danger.remove();
+      const danger = document.createElement('span'); danger.style.color = 'var(--yc-coral-ink)'; stop.parentElement.append(danger); const red = getComputedStyle(stop).color === getComputedStyle(danger).color; danger.remove();
       return stable && contained && separate && reachable && red && !document.querySelector('.composer-live-action--stop') && !document.querySelector('.rl-dock').innerText.includes('Working') && label.textContent.includes('Mixed') && label.scrollWidth <= label.clientWidth && !!document.querySelector('.composer-bar button[aria-label="Send mode"]') && !!document.querySelector('[aria-label="Send and steer now"]');
     })()`, decodeBoolean)).toBe(true)
     if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "composer-readable-autonomy.png"), Buffer.from(await page.screenshot(), "base64"))
@@ -3139,9 +3108,10 @@ test("Ledger Dark owns its palette and keeps the unified composer usable through
     await message(page, "Retained Ledger draft")
     await wait(page, `document.querySelector('.rl-capsule textarea').getBoundingClientRect().height === 44`)
     if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "ledger-desktop.png"), Buffer.from(await page.screenshot(), "base64"))
-    const palette = await page.evaluate(`(() => { const style = getComputedStyle(document.documentElement); return Object.fromEntries(['--yc-bg', '--yc-surface', '--yc-surface-raised', '--yc-surface-overlay', '--yc-text', '--yc-primary-bg', '--yc-focus'].map(name => [name, style.getPropertyValue(name).trim().toLowerCase()])); })()`, decodeDictionary(decodeString))
+    const roles = ['plane-chrome', 'plane-canvas', 'plane-raised', 'plane-hover', 'plane-selected', 'ink', 'ink-secondary', 'ink-tertiary', 'line-subtle', 'line-field', 'cobalt-solid', 'on-cobalt', 'focus', 'mint-graphic']
+    const palette = await page.evaluate(`(() => { const style = getComputedStyle(document.documentElement); return Object.fromEntries(${JSON.stringify(roles)}.map(name => [name, style.getPropertyValue('--yc-' + name).trim().toLowerCase()])); })()`, decodeDictionary(decodeString))
     const design = Bun.YAML.parse((await Bun.file(path.join(import.meta.dir, "../DESIGN.md")).text()).split("---")[1]!) as { colors: Record<string, string>; typography: { body: { fontFamily: string }; mono: { fontFamily: string } } }
-    expect(palette).toEqual({ "--yc-bg": design.colors.bg!.toLowerCase(), "--yc-surface": design.colors.surface!.toLowerCase(), "--yc-surface-raised": design.colors["surface-raised"]!.toLowerCase(), "--yc-surface-overlay": design.colors["surface-overlay"]!.toLowerCase(), "--yc-text": design.colors.text!.toLowerCase(), "--yc-primary-bg": design.colors["primary-bg"]!.toLowerCase(), "--yc-focus": design.colors.focus!.toLowerCase() })
+    expect(palette).toEqual(Object.fromEntries(roles.map(name => [name, design.colors[name]!.toLowerCase()])))
     expect(await page.evaluate(`getComputedStyle(document.querySelector('.rl')).fontFamily.includes(${JSON.stringify(design.typography.body.fontFamily)}) && getComputedStyle(document.querySelector('.composer-chip')).fontFamily.includes(${JSON.stringify(design.typography.body.fontFamily)})`, decodeBoolean)).toBe(true)
     expect(await page.evaluate(`getComputedStyle(document.querySelector('.rl-capsule')).filter`, decodeString)).toBe("none")
     await page.evaluate(`document.querySelector('.composer-bar button[aria-label="Send mode"]').focus()`)
@@ -3155,14 +3125,89 @@ test("Ledger Dark owns its palette and keeps the unified composer usable through
     await page.pressKey("ArrowDown", "ArrowDown", 40)
     await page.pressKey("Enter", "Enter", 13, "\r")
     expect(await page.evaluate(`document.querySelector('.composer-bar button[aria-label="Send mode"]').textContent.trim()`, decodeString)).toBe("Queue")
-    await page.setViewport(840, 760)
-    await wait(page, `innerWidth === 840`)
+    await page.setViewport(1000, 760)
+    await wait(page, `innerWidth === 1000`)
     const layout = await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => { const capsule = document.querySelector('.rl-capsule').getBoundingClientRect(); const controls = [...document.querySelectorAll('.composer-bar button')].filter(node => node.getClientRects().length && getComputedStyle(node).visibility === 'visible'); resolve({ fits: controls.every(node => { const rect = node.getBoundingClientRect(); return rect.left >= capsule.left && rect.right <= capsule.right && rect.top >= capsule.top && rect.bottom <= capsule.bottom; }), draft: document.querySelector('.rl-capsule textarea').value, send: !document.querySelector('.rl-send').disabled }); })))`, (value: unknown) => { const result = decodeRecord(value); return { fits: (decodeBoolean)(result["fits"]), draft: (decodeString)(result["draft"]), send: (decodeBoolean)(result["send"]) } })
     expect(layout).toEqual({ fits: true, draft: "Retained Ledger draft", send: true })
     if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "ledger-narrow.png"), Buffer.from(await page.screenshot(), "base64"))
     expect(owned?.calls.filter(call => call.method === "POST" && call.route.endsWith("/prompt"))).toHaveLength(0)
     expect(await page.evaluate(`window.__desktopFixture.errors`, decodeArray((value: unknown) => value))).toEqual([])
   } finally { await page.close() }
+}, 30_000)
+
+test("R9-SHELL activity bar, resizable Session list, status bar and trace follow the reported Session", async () => {
+  pending = false
+  const page = await open()
+  const handle = `document.querySelector('#session-rail .list-column__resize')`
+  const listWidth = `Math.round(document.querySelector('#session-rail').getBoundingClientRect().width)`
+  try {
+    for (const [width, height, list, short] of [[1440, 900, 280, false], [1000, 600, 256, true]] as const) {
+      await page.setViewport(width, height)
+      await wait(page, `${listWidth} === ${list} && document.querySelector('.status-bar [data-item="tokens"]')`)
+      expect(await page.evaluate(`(() => {
+        const bar = document.querySelector('.activity-bar'), items = [...bar.querySelectorAll('.activity-bar__item')], status = document.querySelector('.status-bar'), rail = document.querySelector('#session-rail');
+        const labels = items.map(item => item.querySelector('.activity-bar__label').textContent);
+        const usage = items[4].getBoundingClientRect(), settings = items[5].getBoundingClientRect(), frame = status.getBoundingClientRect();
+        const buttons = [...status.querySelectorAll('button.status-bar__item')].map(item => item.dataset.item);
+        const running = status.querySelector('[data-item="running"]'), shortLabel = running.querySelector('.status-bar__short');
+        return JSON.stringify(labels) === JSON.stringify(["Chat", "Team", "Projects", "Workspaces", "Usage", "Settings"])
+          && Math.round(bar.getBoundingClientRect().width) === 80
+          && items.every(item => { const rect = item.getBoundingClientRect(); return Math.round(rect.width) === 72 && Math.round(rect.height) === 56 && item.textContent.trim().length > 0; })
+          && settings.top > usage.bottom + 8 && items[0].getAttribute('aria-current') === 'page' && items.slice(1).every(item => !item.hasAttribute('aria-current'))
+          && Math.abs(rail.getBoundingClientRect().left - bar.getBoundingClientRect().right) <= 1
+          && Math.round(frame.height) === 28 && Math.round(frame.bottom) === innerHeight && Math.round(frame.width) === innerWidth
+          && [...status.querySelectorAll('.status-bar__item')].every(item => { const rect = item.getBoundingClientRect(); return Math.round(rect.top) === Math.round(frame.top) && Math.round(rect.bottom) === Math.round(frame.bottom); })
+          && Math.round(document.querySelector('.rl-main').getBoundingClientRect().width) === innerWidth - 80 - ${list}
+          && JSON.stringify(buttons) === JSON.stringify(["list", "connection", "machine", "model", "effort", "autonomy", "context", "running"])
+          && status.querySelector('span.status-bar__item[data-item="tokens"]') !== null
+          && (getComputedStyle(shortLabel).display !== 'none') === ${short}
+          && document.documentElement.scrollWidth <= innerWidth;
+      })()`, decodeBoolean)).toBe(true)
+    }
+    await page.evaluate(`${handle}.focus()`)
+    expect(await page.evaluate(`(() => { const rail = document.querySelector('#session-rail'); rail.scrollLeft = 8; return rail.scrollLeft; })()`, decodeNumber)).toBe(0)
+    await page.pressKey("ArrowRight", "ArrowRight", 39)
+    await wait(page, `${handle}.getAttribute('aria-valuenow') === '264' && ${listWidth} === 264`)
+    await page.pressKey("End", "End", 35)
+    await wait(page, `${handle}.getAttribute('aria-valuenow') === '360' && ${listWidth} === 360`)
+    await page.pressKey("Home", "Home", 36)
+    await wait(page, `${handle}.getAttribute('aria-valuenow') === '232' && ${listWidth} === 232 && localStorage.getItem('ycoding.desktop.list-width') === '232'`)
+    await page.evaluate(`document.querySelectorAll('.rl-rail-filter')[1].click()`)
+    await wait(page, `document.querySelectorAll('.rl-rail-filter')[1].getAttribute('aria-pressed') === 'true'`)
+    await page.evaluate(`document.querySelector('.status-bar [aria-label="Hide Session list"]').click()`)
+    await wait(page, `!document.querySelector('#session-rail') && document.querySelector('.status-bar [aria-label="Show Session list"]')`)
+    await page.evaluate(`document.querySelector('.status-bar [aria-label="Show Session list"]').click()`)
+    await wait(page, `document.querySelectorAll('.rl-rail-filter')[1]?.getAttribute('aria-pressed') === 'true' && ${listWidth} === 232`)
+    await page.evaluate(`document.querySelectorAll('.rl-rail-filter')[0].click()`)
+    running = true
+    await page.evaluate(`window.__desktopFixture.resync(); window.__desktopFixture.emit({ type: 'session.execution.started', data: { sessionID: 'ses_test' } })`)
+    await wait(page, `document.querySelector('.conversation__head .trace')?.dataset.run === 'true' && document.querySelector('.status-bar .trace')?.dataset.run === 'true' && document.querySelector('.conversation__head .trace').getAttribute('aria-hidden') === 'true'`)
+    await page.evaluate(`document.documentElement.dataset.animations = 'on'`)
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('.conversation__head .trace__run')).animationName`, decodeString)).toBe("trace-run")
+    await page.setReducedMotion(true)
+    await wait(page, `matchMedia('(prefers-reduced-motion: reduce)').matches`)
+    const calm = `document.getAnimations().every(animation => { const timing = animation.effect.getComputedTiming(); return timing.iterations !== Infinity && timing.duration <= 150; })`
+    const still = `[...document.querySelectorAll('.trace__run')].every(run => { const style = getComputedStyle(run); return style.animationName === 'none' && style.opacity === '0.5' && Math.round(run.getBoundingClientRect().width) === Math.round(run.parentElement.getBoundingClientRect().width); })`
+    await wait(page, `${still} && ${calm}`)
+    await page.setReducedMotion(false)
+    await page.evaluate(`document.documentElement.dataset.animations = 'off'`)
+    await wait(page, `!matchMedia('(prefers-reduced-motion: reduce)').matches`)
+    await wait(page, `${still} && ${calm}`)
+    if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "shell-1000.png"), Buffer.from(await page.screenshot(), "base64"))
+    await page.evaluate(`window.__desktopFixture.emit({ type: 'session.execution.interrupted', data: { sessionID: 'ses_test', reason: 'user' } })`)
+    await page.navigate(`${origin}/#/chat`)
+    await wait(page, `document.querySelector('[data-new-chat] .rl-title')`)
+    expect(await page.evaluate(`(() => { const title = document.querySelector('[data-new-chat] .rl-title'), presence = document.querySelector('[data-new-chat] .rl-presence'), ident = presence.parentElement; return { width: innerWidth, title: title.scrollWidth <= title.clientWidth, presence: presence.scrollWidth > presence.clientWidth && presence.getBoundingClientRect().right <= ident.getBoundingClientRect().right + 1 }; })()`, decodeRecord)).toEqual({ width: 1000, title: true, presence: true })
+    for (const destination of ["projects", "workspaces", "usage", "settings"]) {
+      await page.evaluate(`document.querySelector('.activity-bar__item[data-destination="${destination}"]').click()`)
+      await wait(page, `location.hash === '#/${destination}' && document.querySelector('.activity-bar__item[data-destination="${destination}"]')?.getAttribute('aria-current') === 'page'`)
+    }
+    expect(await page.evaluate(`window.__desktopFixture.errors`, decodeArray((value: unknown) => value))).toEqual([])
+  } finally {
+    running = false
+    await page.evaluate(`(() => { localStorage.removeItem('ycoding.desktop.list-width'); delete document.documentElement.dataset.animations; })()`)
+    await page.close()
+  }
 }, 30_000)
 
 test("layout stability keeps streaming disclosures mounted and follows only the attached reader", async () => {
@@ -3608,7 +3653,7 @@ test("rendered rail titles keep two visible lines, complete names and keyboard-o
       const rows = [...document.querySelectorAll('.rl-nav .workspace__row')], rail = document.querySelector('.rl-nav-scroll');
       const titles = rows.map(row => row.querySelector('.rl-session-row-title'));
       const rects = rows.map(row => { const title = row.querySelector('.rl-session-row-title'), status = row.querySelector('.rl-rail-status'), pin = row.querySelector('.workspace__pin'); return { row: row.getBoundingClientRect(), title: title.getBoundingClientRect(), status: status.getBoundingClientRect(), pin: pin.getBoundingClientRect(), line: parseFloat(getComputedStyle(title).lineHeight) }; });
-      return { contained: rects.every(r => r.title.left >= r.row.left && r.title.right <= r.row.right && r.title.bottom <= r.row.bottom && r.status.left >= r.row.left && r.status.right <= r.row.right && r.status.bottom <= r.row.bottom && r.pin.right <= r.row.right), separate: rects.every(r => r.status.right <= r.title.left + 1 && r.status.right <= r.pin.left + 1), clamped: rects.every(r => r.title.height > r.line && r.title.height <= r.line * 2 && r.row.height >= r.title.height), overflow: rail.scrollWidth > rail.clientWidth, fullText: ${JSON.stringify([title, unbroken])}.every(expected => titles.some(node => node.textContent === expected && node.closest('a').getAttribute('aria-label') === expected + ', Waiting')) };
+      return { contained: rects.every(r => r.title.left >= r.row.left && r.title.right <= r.row.right && r.title.bottom <= r.row.bottom && r.status.left >= r.row.left && r.status.right <= r.row.right && r.status.bottom <= r.row.bottom && r.pin.right <= r.row.right), separate: rects.every(r => r.status.right <= r.title.left + 1 && r.status.right <= r.pin.left + 1), clamped: rects.every(r => r.title.height > r.line && r.title.height <= r.line * 2 && r.row.height >= r.title.height), overflow: rail.scrollWidth > rail.clientWidth, fullText: ${JSON.stringify([title, unbroken])}.every(expected => titles.some(node => node.textContent === expected && node.closest('a').getAttribute('aria-label').startsWith(expected + ', ') && node.closest('a').getAttribute('aria-label').endsWith(', Waiting'))) };
     })()`, (value: unknown) => { const result = decodeRecord(value); return { contained: (decodeBoolean)(result["contained"]), separate: (decodeBoolean)(result["separate"]), clamped: (decodeBoolean)(result["clamped"]), overflow: (decodeBoolean)(result["overflow"]), fullText: (decodeBoolean)(result["fullText"]) } })
     expect(geometry).toEqual({ contained: true, separate: true, clamped: true, overflow: false, fullText: true })
     await page.evaluate(`document.querySelector('.rl-session-row[aria-current="page"]').focus()`)

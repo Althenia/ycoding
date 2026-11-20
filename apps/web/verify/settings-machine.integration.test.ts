@@ -74,7 +74,7 @@ describe("selected machine placement", () => {
       expect(rail).not.toContain("Selected machine")
       expect(rail).not.toContain("Manage connection")
       expect(await page.evaluate(`document.querySelectorAll('.workspace__rail-footer').length`)).toBe(0)
-      expect(await page.evaluate(`document.querySelector('.workspace__rail .remote-nav__link--settings')?.getAttribute('href') ?? null`)).toBe("/remote/settings")
+      expect(await page.evaluate(`document.querySelector('.activity-bar a[data-destination="settings"]')?.getAttribute('href') ?? null`)).toBe("/remote/settings")
     } finally { await page.close() }
   })
 })

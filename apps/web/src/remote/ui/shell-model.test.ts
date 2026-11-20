@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { SessionView } from "../projection"
 import type { SessionInfoView } from "../store"
-import { groupRailSessions, reconcilePresence, sessionFilterCounts, sessionRowSignal, settlePresence, transcriptContextMessages } from "./shell-model"
+import { groupRailSessions, reconcilePresence, remoteActivityDestinations, remoteStatusEntries, runningSessionCount, sessionFilterCounts, sessionRowSignal, settlePresence, transcriptContextMessages } from "./shell-model"
 
 const session = (patch: Partial<SessionInfoView> = {}): SessionInfoView => ({
   id: "ses_a",
@@ -112,5 +112,68 @@ describe("request card presence", () => {
     const shown = reconcilePresence([], [item("a", "first")], (entry) => entry.id)
     expect(ids(settlePresence(shown, "a"))).toEqual(["a:open"])
     expect(reconcilePresence(shown, [item("a", "second")], (entry) => entry.id)[0]?.item.text).toBe("second")
+  })
+})
+
+describe("remote activity bar destinations", () => {
+  test("labels Chat, Sessions, Projects, Workspaces, Usage and an end-pinned Settings, marking only the current one", () => {
+    const items = remoteActivityDestinations({ view: "/remote/usage", requests: 0, waiting: 0 })
+    expect(items.map((item) => [item.label, item.route, item.current, item.placement ?? "start"])).toEqual([
+      ["Chat", "/remote", false, "start"],
+      ["Sessions", "/remote/sessions", false, "start"],
+      ["Projects", "/remote/projects", false, "start"],
+      ["Workspaces", "/remote/workspaces", false, "start"],
+      ["Usage", "/remote/usage", true, "start"],
+      ["Settings", "/remote/settings", false, "end"],
+    ])
+    expect(items.every((item) => item.badge === undefined && item.ariaLabel === item.label)).toBe(true)
+  })
+
+  test("routes Chat to the selected Session and keeps it current on the landing and the conversation", () => {
+    expect(remoteActivityDestinations({ view: "/remote/session", sessionID: "ses_a", requests: 0, waiting: 0 })[0]).toMatchObject({ route: "/remote/session", current: true })
+    expect(remoteActivityDestinations({ view: "/remote", requests: 0, waiting: 0 })[0]).toMatchObject({ route: "/remote", current: true })
+    expect(remoteActivityDestinations({ view: "/remote/sessions", sessionID: "ses_a", requests: 0, waiting: 0 }).filter((item) => item.current).map((item) => item.id)).toEqual(["sessions"])
+  })
+
+  test("counts pending requests on Chat and waiting Sessions on Sessions with spoken names", () => {
+    const items = remoteActivityDestinations({ view: "/remote/session", sessionID: "ses_a", requests: 2, waiting: 0 })
+    expect(items[0]).toMatchObject({ ariaLabel: "Chat, waiting for your decision", badge: { count: 2, hue: "amber", label: "2 requests waiting" } })
+    expect(items[1]).toMatchObject({ ariaLabel: "Sessions, waiting for your decision", badge: { count: 1, label: "1 Session waiting" } })
+    expect(remoteActivityDestinations({ view: "/remote", requests: 0, waiting: 3 })[1]?.badge).toEqual({ count: 3, hue: "amber", label: "3 Sessions waiting" })
+  })
+})
+
+describe("remote status bar entries", () => {
+  const connected = { connection: { kind: "connected", deviceName: "Studio Mac" }, transport: { kind: "open", rttMs: 42 }, machine: "Studio Mac" } as const
+
+  test("shows connection, machine and the running count when no Session is open", () => {
+    const items = remoteStatusEntries({ ...connected, running: 0 })
+    expect(items.map((item) => item.id)).toEqual(["connection", "machine", "running"])
+    expect(items[0]).toMatchObject({ label: "Connected · 42 ms", short: "Connected", ariaLabel: "Connection: Connected · 42 ms", icon: "check", tone: "mint" })
+    expect(items[2]).toMatchObject({ label: "0 running", ariaLabel: "0 Sessions running", icon: "zap", push: true, live: true })
+    expect(items[2]?.tone).toBeUndefined()
+  })
+
+  test("adds model, autonomy and context for an open Session and names a child start", () => {
+    const items = remoteStatusEntries({ ...connected, running: 2, session: { model: "Gpt 6", autonomy: "Autonomous Manual", context: { fraction: 0.42, percent: 42, tokens: "84.2K / 200K" }, childRunning: true } })
+    expect(items.map((item) => item.id)).toEqual(["connection", "machine", "model", "autonomy", "context", "running"])
+    expect(items[4]).toMatchObject({ label: "84.2K / 200K · 42%", short: "42%", ring: 0.42, ariaLabel: "Context: 42% used, 84.2K / 200K" })
+    expect(items[5]).toMatchObject({ label: "2 running", ariaLabel: "2 Sessions running, a child task started", icon: "git-fork", tone: "mint" })
+  })
+
+  test("omits unreported Session readouts and tones an offline connection coral", () => {
+    const items = remoteStatusEntries({ connection: { kind: "offline", deviceName: "Studio Mac" }, transport: { kind: "idle" }, machine: "Studio Mac", running: 1, session: { childRunning: false } })
+    expect(items.map((item) => item.id)).toEqual(["connection", "machine", "running"])
+    expect(items[0]).toMatchObject({ tone: "coral", icon: "alert" })
+    expect(items[2]?.ariaLabel).toBe("1 Session running")
+  })
+})
+
+describe("running Session count", () => {
+  test("counts reported running Sessions and the open Session while its view runs, once each", () => {
+    expect(runningSessionCount(new Set(["ses_b"]), [], view({ status: "running" }))).toBe(2)
+    expect(runningSessionCount(new Set(["ses_a"]), [], view({ status: "running" }))).toBe(1)
+    expect(runningSessionCount(undefined, [session({ id: "ses_b", running: true }), session({ id: "ses_c" })], view())).toBe(1)
+    expect(runningSessionCount(new Set(), [session({ running: true })], undefined)).toBe(0)
   })
 })

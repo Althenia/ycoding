@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { runInNewContext } from "node:vm"
 import { declarationsWhere, readStylesheet } from "../styles/css-rules"
 import {
+  COLOR_ROLES,
   DEFAULT_SCHEME,
   SCHEMES,
   SCHEME_IDS,
@@ -11,9 +12,9 @@ import {
   schemeStylesheet,
   schemeTokens,
 } from "./schemes"
-import { themeColor } from "./theme"
+import { DEFAULT_CANVAS, themeColor } from "./theme"
 
-const HEX = /^#[0-9a-f]{6}$/i
+const COLOR = /^(#[0-9a-f]{6}|rgba\(\d+, \d+, \d+, [0-9.]+\))$/
 const palettes = SCHEME_IDS.flatMap((scheme) =>
   (["light", "dark"] as const).flatMap((mode) => {
     const palette = SCHEMES[scheme].palettes[mode]
@@ -33,39 +34,22 @@ describe("scheme palettes", () => {
     expect(SCHEMES[DEFAULT_SCHEME].palettes).toEqual({})
   })
 
-  test("follow the official palettes' anchors", () => {
-    expect(SCHEMES.onedark.palettes.dark).toMatchObject({ base00: "#282c34", base05: "#abb2bf", base0B: "#98c379", base0D: "#61afef" })
-    expect(SCHEMES.onedark.palettes.light).toMatchObject({ base00: "#fafafa", base05: "#383a42", base0B: "#50a14f", base0D: "#4078f2" })
-    expect(SCHEMES["onedark-pro"].palettes.dark).toMatchObject({ base00: "#282c34", base10: "#21252b", base03: "#7f848e", base06: "#d7dae0" })
+  test.each(palettes)("$scheme $mode declares every color role with a valid value", ({ palette }) => {
+    expect(Object.keys(palette).filter((name) => !name.startsWith("terminal-"))).toEqual([...COLOR_ROLES])
+    for (const [name, color] of Object.entries(palette)) expect(color, name).toMatch(COLOR)
   })
 
-  test.each(palettes)("$scheme $mode declares sixteen valid base slots", ({ palette }) => {
-    const slots = Object.entries(palette).filter(([name]) => /^base[0-9A-F]{2}$/.test(name) && name !== "base10")
-    expect(slots).toHaveLength(16)
-    for (const [name, color] of slots) expect(color, name).toMatch(HEX)
-  })
-
-  test.each(palettes)("$scheme $mode maps to color tokens that tokens.css declares", async ({ palette, mode }) => {
+  test.each(palettes)("$scheme $mode maps to color tokens that tokens.css declares", async ({ palette }) => {
     const declared = declarationsWhere(await readStylesheet("../styles/tokens.css"), (rule) => rule.header === ":root" && rule.conditions.length === 0)
-    const tokens = schemeTokens(palette, mode)
-    expect(Object.keys(tokens).filter((property) => declared[property] === undefined)).toEqual([])
-    for (const value of Object.values(tokens)) expect(value).toMatch(/^(#[0-9a-f]{6}|rgba\(\d+, \d+, \d+, [0-9.]+\))$/)
+    expect(Object.keys(schemeTokens(palette)).filter((property) => declared[property] === undefined)).toEqual([])
   })
 
-  test("maps the live-state signal from the palette blue, darkened in light modes and lightened in dark modes", () => {
-    const signals = Object.fromEntries(palettes.map(({ scheme, mode, palette }) => [`${scheme}/${mode}`, schemeTokens(palette, mode)["--yc-signal"]]))
-    expect(signals).toEqual({
-      "onedark/light": "#2d54a9",
-      "onedark/dark": "#90c7f4",
-      "onedark-pro/dark": "#90c7f4",
-      "high-contrast/light": "#002d70",
-      "high-contrast/dark": "#a8d6ff",
-    })
-  })
-
-  test("every palette sets the same tokens except the optional terminal plate", () => {
-    const sets = palettes.map(({ palette, mode }) => Object.keys(schemeTokens(palette, mode)).filter((name) => !name.startsWith("--yc-terminal-")))
-    for (const set of sets) expect(set).toEqual(sets[0]!)
+  test("keeps cobalt as the interaction hue in every palette", () => {
+    for (const { scheme, mode, palette } of palettes) {
+      const [red, green, blue] = [1, 3, 5].map((offset) => Number.parseInt(palette["cobalt-solid"].slice(offset, offset + 2), 16))
+      expect({ scheme, mode, blueLeads: blue! > red! && blue! > green! }).toEqual({ scheme, mode, blueLeads: true })
+      expect(palette.focus).toBe(palette["cobalt-graphic"])
+    }
   })
 })
 
@@ -84,7 +68,7 @@ describe("scheme stylesheet", () => {
       const rule = sheet.match(new RegExp(`:root\\[data-scheme="${scheme}"\\]\\[data-theme="${mode}"\\] \\{\\n([^}]*)\\}`))?.[1]
       expect(rule, `${scheme}/${mode}`).toBeDefined()
       expect(rule!.trim().split("\n").map((line) => line.trim())).toEqual(
-        Object.entries(schemeTokens(palette, mode)).map(([property, value]) => `${property}: ${value};`),
+        Object.entries(schemeTokens(palette)).map(([property, value]) => `${property}: ${value};`),
       )
     }
   })
@@ -105,12 +89,12 @@ describe("scheme selection", () => {
   })
 
   test("browser chrome follows the painted scheme and falls back to the default theme when a mode has no palette", () => {
-    expect(schemeBackground("onedark", "dark")).toBe("#282c34")
+    expect(schemeBackground("onedark", "dark")).toBe(SCHEMES.onedark.palettes.dark!["plane-canvas"])
     expect(schemeBackground("onedark-pro", "light")).toBeUndefined()
-    expect(themeColor("onedark", "dark")).toBe("#282c34")
-    expect(themeColor("high-contrast", "light")).toBe("#ffffff")
-    expect(themeColor("onedark-pro", "light")).toBe("#ffffff")
-    expect(themeColor("default", "dark")).toBe("#0b1115")
+    expect(themeColor("onedark", "dark")).toBe(SCHEMES.onedark.palettes.dark!["plane-canvas"])
+    expect(themeColor("high-contrast", "light")).toBe(SCHEMES["high-contrast"].palettes.light!["plane-canvas"])
+    expect(themeColor("onedark-pro", "light")).toBe(DEFAULT_CANVAS.light)
+    expect(themeColor("default", "dark")).toBe(DEFAULT_CANVAS.dark)
   })
 })
 

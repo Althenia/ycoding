@@ -11,11 +11,11 @@
 }
 
 .machine-awake__status[data-tone="danger"] {
-  color: var(--yc-danger);
+  color: var(--yc-coral-ink);
 }
 
 .machine-awake__status[data-tone="attention"] {
-  color: var(--yc-yellow-strong);
+  color: var(--yc-amber-ink);
 }
 
 .app--settings .page-head__title {
@@ -38,9 +38,9 @@
   gap: var(--yc-space-4);
   min-inline-size: 0;
   padding: var(--yc-space-5);
-  border: var(--yc-border-width) solid var(--yc-border);
-  border-radius: var(--yc-radius-lg);
-  background: var(--yc-surface);
+  border: var(--yc-border-width) solid var(--yc-line-subtle);
+  border-radius: var(--yc-radius-card);
+  background: var(--yc-plane-raised);
 }
 
 @media (max-width: 767px), (max-height: 599px) and (pointer: coarse) {
@@ -62,16 +62,16 @@
 }
 
 .settings .settings__head > svg {
-  color: var(--settings-icon-ink, var(--yc-signal));
+  color: var(--settings-icon-ink, var(--yc-sky-ink));
 }
 
-.settings__section[data-category="Appearance"], .settings__section[data-category="Office"] { --settings-icon-ink: var(--yc-context-reasoning); }
-.settings__section[data-category="Notifications"], .settings__section[data-category="Diagnostics"] { --settings-icon-ink: var(--yc-yellow-strong); }
-.settings__section[data-category="Permissions"] { --settings-icon-ink: var(--yc-green-strong); }
-.settings__section[data-category="Devices"], .settings__section[data-category="Account"] { --settings-icon-ink: var(--yc-context-tools); }
+.settings__section[data-category="Appearance"], .settings__section[data-category="Office"] { --settings-icon-ink: var(--yc-violet-ink); }
+.settings__section[data-category="Notifications"], .settings__section[data-category="Diagnostics"] { --settings-icon-ink: var(--yc-amber-ink); }
+.settings__section[data-category="Permissions"] { --settings-icon-ink: var(--yc-cobalt-ink); }
+.settings__section[data-category="Devices"], .settings__section[data-category="Account"] { --settings-icon-ink: var(--yc-teal-ink); }
 
 .settings .settings__hint {
-  color: var(--yc-text-muted);
+  color: var(--yc-ink-secondary);
   font-size: var(--yc-size-sm);
   line-height: var(--yc-leading-sm);
 }
@@ -82,7 +82,7 @@
 }
 
 .settings .list__label {
-  color: var(--yc-text);
+  color: var(--yc-ink);
 }
 
 .settings .scheme-select .custom-select__trigger {
@@ -95,14 +95,14 @@
   align-items: center;
   min-block-size: var(--yc-space-8);
   padding-inline: 14px;
-  border: 1px solid var(--yc-border-strong);
+  border: 1px solid var(--yc-line-field);
   border-radius: var(--yc-radius-pill);
   background: transparent;
-  color: var(--yc-text);
+  color: var(--yc-ink);
   font: var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-sans);
 }
 
-@media (hover: hover) { .settings__pill:hover { background: var(--yc-surface-sunken); } }
+@media (hover: hover) { .settings__pill:hover { background: var(--yc-plane-hover); } }
 .settings__pill:focus-visible { outline: 2px solid var(--yc-focus); outline-offset: 2px; }
 @media (pointer: coarse) { .settings__pill, .settings .scheme-select .custom-select__trigger { min-block-size: var(--yc-hit-min); } }
 
@@ -129,7 +129,7 @@
   font-family: var(--yc-font-sans);
   font-size: var(--yc-size-md);
   font-weight: var(--yc-weight-medium);
-  color: var(--yc-text);
+  color: var(--yc-ink);
 }
 
 .settings .machine-selected {
@@ -144,12 +144,12 @@
 
 .machine-selected__icon {
   flex: none;
-  color: var(--yc-text-muted);
+  color: var(--yc-ink-secondary);
 }
 
 .machine-selected__name {
   min-inline-size: 0;
-  color: var(--yc-text);
+  color: var(--yc-ink);
   font: var(--yc-weight-medium) var(--yc-size-md)/var(--yc-leading-md) var(--yc-font-sans);
   overflow-wrap: anywhere;
 }
@@ -158,18 +158,18 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: var(--yc-text-muted);
+  color: var(--yc-ink-secondary);
   font: var(--yc-weight-regular) var(--yc-size-sm)/1 var(--yc-font-mono);
 }
 
 .machine-selected__status svg {
   flex: none;
-  color: var(--yc-green-strong);
+  color: var(--yc-cobalt-ink);
 }
 
 .machine-selected__status[data-tone="pending"],
 .machine-selected__status[data-tone="attention"] {
-  color: var(--yc-yellow-strong);
+  color: var(--yc-amber-ink);
 }
 
 .settings .machine-selected__hint {
@@ -179,7 +179,7 @@
 .machine-awake .switch {
   flex-direction: row-reverse;
   gap: var(--yc-space-3);
-  color: var(--yc-text-muted);
+  color: var(--yc-ink-secondary);
 }
 
 .machine-awake .switch input {
@@ -188,24 +188,24 @@
   inline-size: 32px;
   block-size: 18px;
   padding: 2px;
-  border: 1px solid var(--yc-border-strong);
+  border: 1px solid var(--yc-line-field);
   background: transparent;
 }
 
 .machine-awake .switch input::after {
   inline-size: 12px;
   block-size: 12px;
-  background: var(--yc-text-subtle);
+  background: var(--yc-ink-tertiary);
 }
 
 .machine-awake .switch input:checked {
-  border-color: var(--yc-green-strong);
-  background: var(--yc-green-soft);
+  border-color: var(--yc-cobalt-ink);
+  background: var(--yc-cobalt-tonal);
 }
 
 .machine-awake .switch input:checked::after {
   translate: 14px 0;
-  background: var(--yc-green-strong);
+  background: var(--yc-cobalt-ink);
 }
 
 .machine-awake .switch input:focus-visible {
@@ -235,7 +235,7 @@
 .settings .machine-awake__caveat {
   max-inline-size: var(--yc-measure);
   margin: 0;
-  color: var(--yc-text-subtle);
+  color: var(--yc-ink-tertiary);
   font-size: var(--yc-size-xs);
   line-height: var(--yc-leading-xs);
 }
@@ -252,11 +252,11 @@
 }
 
 .settings .machine-awake__status[data-tone="danger"] {
-  color: var(--yc-danger);
+  color: var(--yc-coral-ink);
 }
 
 .settings .machine-awake__status[data-tone="attention"] {
-  color: var(--yc-yellow-strong);
+  color: var(--yc-amber-ink);
 }
 
 .settings .machine-awake .defs__key {

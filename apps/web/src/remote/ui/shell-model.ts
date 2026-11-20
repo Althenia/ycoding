@@ -2,8 +2,11 @@ import { contextWindowDisplay, dotSteerDisplay, modelLabel, type ModelRefView, t
 import { autonomySummary } from "../autonomy"
 import type { SessionInfoView } from "../store"
 import type { RemoteTransportStatus } from "../transport"
+import type { IconName } from "../../ui/icon"
+import { WORKSPACE_DESTINATIONS } from "./shared-workspace"
 import {
   connectionBanner,
+  connectionLabel,
   lostResultLabel,
   sessionActivityGroup,
   sessionProjectLabel,
@@ -19,6 +22,93 @@ import {
 export const views = ["/remote", "/remote/sessions", "/remote/session", "/remote/projects", "/remote/workspaces", "/remote/usage", "/remote/settings"] as const
 
 export type RemoteView = (typeof views)[number]
+
+export type RemoteActivityDestination = {
+  readonly id: "chat" | "sessions" | "projects" | "workspaces" | "usage" | "settings"
+  readonly label: string
+  readonly icon: IconName
+  readonly route: RemoteView
+  readonly current: boolean
+  readonly ariaLabel: string
+  readonly placement?: "end"
+  readonly badge?: { readonly count: number; readonly hue: "amber"; readonly label: string }
+}
+
+export function remoteActivityDestinations(input: { readonly view: RemoteView; readonly sessionID?: string; readonly requests: number; readonly waiting: number }): readonly RemoteActivityDestination[] {
+  const waiting = Math.max(input.waiting, input.requests > 0 ? 1 : 0)
+  const chat: RemoteActivityDestination = {
+    id: "chat",
+    label: "Chat",
+    icon: "chat",
+    route: input.sessionID === undefined ? "/remote" : "/remote/session",
+    current: input.view === "/remote" || input.view === "/remote/session",
+    ariaLabel: input.requests > 0 ? "Chat, waiting for your decision" : "Chat",
+    ...(input.requests > 0 ? { badge: { count: input.requests, hue: "amber" as const, label: input.requests === 1 ? "1 request waiting" : `${input.requests} requests waiting` } } : {}),
+  }
+  const destinations = [...WORKSPACE_DESTINATIONS.filter((item) => item.id === "sessions"), ...WORKSPACE_DESTINATIONS.filter((item) => item.id !== "sessions")].map((item): RemoteActivityDestination => {
+    const flagged = item.id === "sessions" && waiting > 0
+    return {
+      id: item.id,
+      label: item.label,
+      icon: item.icon,
+      route: item.route,
+      current: input.view === item.route,
+      ariaLabel: flagged ? `${item.label}, waiting for your decision` : item.label,
+      ...(item.id === "settings" ? { placement: "end" as const } : {}),
+      ...(flagged ? { badge: { count: waiting, hue: "amber" as const, label: waiting === 1 ? "1 Session waiting" : `${waiting} Sessions waiting` } } : {}),
+    }
+  })
+  return [chat, ...destinations]
+}
+
+export type RemoteStatusEntry = {
+  readonly id: "connection" | "machine" | "model" | "autonomy" | "context" | "running"
+  readonly label: string
+  readonly short?: string
+  readonly name?: string
+  readonly ariaLabel: string
+  readonly icon?: IconName
+  readonly tone?: "mint" | "amber" | "coral"
+  readonly ring?: number
+  readonly push?: boolean
+  readonly live?: boolean
+}
+
+export function runningSessionCount(reported: ReadonlySet<string> | undefined, sessions: readonly SessionInfoView[], view: SessionView | undefined): number {
+  const running = new Set(reported ?? sessions.filter((session) => session.running === true).map((session) => session.id))
+  if (view?.status === "running") running.add(view.id)
+  return running.size
+}
+
+export function remoteStatusEntries(input: {
+  readonly connection: RemoteConnectionState
+  readonly transport: RemoteTransportStatus
+  readonly machine: string
+  readonly running: number
+  readonly session?: { readonly model?: string; readonly autonomy?: string; readonly context?: { readonly fraction: number; readonly percent: number; readonly tokens: string }; readonly childRunning: boolean }
+}): readonly RemoteStatusEntry[] {
+  const connection = summarizeConnection(input.connection)
+  const label = connectionLabel(input.connection, input.transport)
+  const session = input.session
+  const tone = connection.tone === "online" ? "mint" : connection.tone === "offline" ? "coral" : "amber"
+  const runningName = input.running === 1 ? "1 Session running" : `${input.running} Sessions running`
+  return [
+    { id: "connection", label, short: connection.label, ariaLabel: `Connection: ${label}`, icon: connection.tone === "online" ? "check" : connection.tone === "offline" ? "alert" : "refresh", tone },
+    { id: "machine", label: input.machine, name: "machine", ariaLabel: `Machine: ${input.machine}`, icon: "monitor" },
+    ...(session?.model === undefined ? [] : [{ id: "model" as const, label: session.model, name: "model", ariaLabel: `Model: ${session.model}`, icon: "cpu" as const }]),
+    ...(session?.autonomy === undefined ? [] : [{ id: "autonomy" as const, label: session.autonomy, ariaLabel: `Autonomy: ${session.autonomy}`, icon: "shield" as const }]),
+    ...(session?.context === undefined ? [] : [{ id: "context" as const, label: `${session.context.tokens} · ${session.context.percent}%`, short: `${session.context.percent}%`, name: "context", ariaLabel: `Context: ${session.context.percent}% used, ${session.context.tokens}`, ring: session.context.fraction }]),
+    {
+      id: "running",
+      label: `${input.running} running`,
+      ariaLabel: session?.childRunning === true ? `${runningName}, a child task started` : runningName,
+      icon: session?.childRunning === true ? "git-fork" : "zap",
+      ...(input.running > 0 ? { tone: "mint" as const } : {}),
+      push: true,
+      live: true,
+    },
+  ]
+}
 
 export function remoteSurfaceComposition(path: RemoteView, hasSession: boolean) {
   const selectedConversation = path === "/remote/session" && hasSession

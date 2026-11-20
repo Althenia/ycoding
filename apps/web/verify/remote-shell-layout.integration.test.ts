@@ -530,7 +530,7 @@ describe("remote shell layout", () => {
         const container = ".overlay--sessions-sheet[open]"
         for (let attempt = 0; attempt < 60 && !await page.evaluate(`document.querySelector('.app--empty') !== null && document.querySelector('.new-session-composer') !== null`); attempt += 1) await Bun.sleep(50)
         if (width! >= 768) {
-          const tablet = await page.evaluate(`(() => { const main = document.querySelector('.workspace__main').getBoundingClientRect(), empty = document.querySelector('.new-session-composer').getBoundingClientRect(); return { links: [...document.querySelectorAll('.workspace__rail .remote-nav a')].filter(link => link.getBoundingClientRect().width > 0).map(link => link.getAttribute('href')), contextPanel: document.querySelector('.workspace__rail .session-row') !== null, centered: Math.abs((empty.left + empty.right - main.left - main.right) / 2) <= 1, overflow: document.documentElement.scrollWidth > innerWidth } })()`)
+          const tablet = await page.evaluate(`(() => { const main = document.querySelector('.workspace__main').getBoundingClientRect(), empty = document.querySelector('.new-session-composer').getBoundingClientRect(); return { links: [...document.querySelectorAll('.activity-bar a')].filter(link => link.getBoundingClientRect().width > 0).map(link => link.getAttribute('href')), contextPanel: document.querySelector('.workspace__rail .session-row') !== null, centered: Math.abs((empty.left + empty.right - main.left - main.right) / 2) <= 1, overflow: document.documentElement.scrollWidth > innerWidth } })()`)
           expect(tablet).toEqual({ links: ["/remote/sessions", "/remote/usage", "/remote/settings"], contextPanel: false, centered: true, overflow: false })
           await Bun.write(new URL(`../../../.cache/tmp/sessions-no-selection-${theme}-${width}x${height}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
           continue
@@ -1130,7 +1130,7 @@ describe("remote shell layout", () => {
           for (let attempt = 0; attempt < 40 && !await page.evaluate(`document.querySelector('.overlay--sessions-sheet[open] .session-row') !== null`); attempt += 1) await Bun.sleep(50)
           await page.evaluate(`[...document.querySelectorAll('.overlay--sessions-sheet .session-row')].find(row => row.textContent.includes('Archived: release notes'))?.click()`)
         } else {
-          await page.evaluate(`document.querySelector('.remote-nav a[href="/remote/sessions"]')?.click()`)
+          await page.evaluate(`document.querySelector('.activity-bar a[href="/remote/sessions"]')?.click()`)
           for (let attempt = 0; attempt < 40 && !await page.evaluate(`document.querySelector('.route-panel:not([inert]) .sessions-page') !== null`); attempt += 1) await Bun.sleep(50)
           await page.evaluate(`[...document.querySelectorAll('.sessions-table__row')].find(row => row.querySelector('.sessions-table__name')?.textContent.trim() === 'Archived: release notes')?.querySelector('.sessions-table__select')?.click()`)
         }
@@ -1580,15 +1580,15 @@ describe("remote shell layout", () => {
   test("marks the active route in desktop and mobile navigation and follows keyboard activation", async () => {
     for (const [width, path, label] of [[1440, "/remote/sessions", "Sessions"], [390, "/remote/settings", "Settings"]] as const) {
       const page = await fixture(`view=${path.slice("/remote/".length)}&sessions=empty`, width, label)
-      const active = await page.evaluate(`[...document.querySelectorAll('.remote-nav a[aria-current="page"], .bottom-nav a[aria-current="page"]')].find(link => link.getBoundingClientRect().width > 0)?.textContent?.trim() ?? null`)
+      const active = await page.evaluate(`[...document.querySelectorAll('.activity-bar a[aria-current="page"], .bottom-nav a[aria-current="page"]')].find(link => link.getBoundingClientRect().width > 0)?.textContent?.trim() ?? null`)
       expect(active).toBe(label)
       if (width === 390) {
         const material = await page.evaluate(`(()=>{const style=getComputedStyle(document.querySelector('.bottom-nav'));return{supported:CSS.supports('backdrop-filter: blur(1px)')||CSS.supports('-webkit-backdrop-filter: blur(1px)'),filter:style.getPropertyValue('backdrop-filter')||style.getPropertyValue('-webkit-backdrop-filter'),background:style.backgroundColor}})()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, supported: (decodeBoolean)(record["supported"]), filter: (decodeString)(record["filter"]), background: (decodeString)(record["background"]) } })
         expect(material.supported).toBe(true)
-        expect(material.filter).toBe("blur(16px) saturate(1.4)")
-        expect(material.background).toMatch(/\/ 0\.92\)$/)
+        expect(material.filter).toBe("blur(12px)")
+        expect(material.background).toMatch(/\/ 0\.94\)$/)
       }
-      await page.evaluate(`document.querySelector('${width === 1440 ? ".remote-nav" : ".bottom-nav"} a[href="/remote/usage"]')?.focus()`)
+      await page.evaluate(`document.querySelector('${width === 1440 ? ".activity-bar" : ".bottom-nav"} a[href="/remote/usage"]')?.focus()`)
       await page.pressKey("Enter", "Enter", 13, "\r")
       for (let attempt = 0; attempt < 40 && !await page.evaluate(`location.pathname === '/remote/usage'`); attempt += 1) await Bun.sleep(25)
       expect(await page.evaluate(`location.pathname === '/remote/usage'`)).toBe(true)

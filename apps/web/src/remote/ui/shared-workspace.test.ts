@@ -6,6 +6,8 @@ import { SharedActivitySurface, SharedChangesSurface, SharedEditedFilesCard, Sha
 import { SharedPageSurface, SharedProjectsSurface, SharedSessionsSurface, SharedWorkspacesSurface, SharedUsageSurface, SharedSettingsSurface } from "./shared-workspace"
 import { createSharedProjectForm, type SharedProjectDirectoryInput, type SharedProjectCreateInput } from "./shared-workspace"
 import { SharedRadioGroup, SharedLoadingSkeleton } from "./shared-workspace"
+import { SharedActivityBar, SharedListColumn, SharedSessionGroups, SharedStatusBar, SharedTrace, clampListWidth, listWidthForKey } from "./shared-workspace"
+import { readStylesheet } from "../../styles/css-rules"
 import { Icon, type IconName } from "../../ui/icon"
 
 const withWindow = <T>(render: () => T): T => {
@@ -647,7 +649,7 @@ test("shared surfaces expose semantic hooks: page surface, project split, ring l
     const ring = renderToString(() => createComponent(SharedContextRingButton, { fraction, label: "x", ariaLabel: "Open context", expanded: false, onClick: () => {} }))
     expect(ring).toContain(`data-level="${level}"`)
     expect(ring).toContain('class="rl-ring-value"')
-    expect(ring).not.toContain('stroke="var(--yc-green-strong)"')
+    expect(ring).not.toContain('stroke="var(--yc-cobalt-ink)"')
   }
   const sessions = renderToString(() => createComponent(SharedSessionsSurface, { search: "", filters: [{ value: "all", label: "All", count: 1250 }], filter: "all", pinning: false, items: [{ id: "a", title: "A", hint: "Waiting for input", meta: "now", pinned: false }, { id: "b", title: "B", hint: "Running", meta: "now", pinned: false }, { id: "c", title: "C", hint: "Idle", meta: "now", pinned: false }], totalLoaded: 1250, pinnedCount: 0, onNewSession: () => {}, onSearch: () => {}, onFilter: () => {}, onTogglePinMode: () => {}, onSelect: () => {} }))
   expect(sessions).toContain("All 1,250")
@@ -727,11 +729,11 @@ test("collapsed transcript disclosures and edited files stay one quiet row until
   expect(css).not.toContain("rl-page-mark")
   for (const text of [
     ".rl-edited-card.file-change-card:not([data-panel]) .rl-edited-actions .rl-btn { min-block-size:24px; padding-inline:var(--yc-space-2); border-color:transparent; background:transparent;",
-    ".rl-edited-card.file-change-card:not([data-panel]) .rl-edited-actions .rl-btn:hover { background:var(--yc-surface-sunken); }",
+    ".rl-edited-card.file-change-card:not([data-panel]) .rl-edited-actions .rl-btn:hover { background:var(--yc-plane-hover); }",
     ".rl-companion-head .rl-pane-policy button { display:inline-flex; align-items:center; white-space:nowrap; }",
-    ".rl-context-panel .rl-btn { display:inline-flex; align-items:center; justify-content:center; justify-self:start; gap:var(--yc-space-2); min-block-size:30px; padding-inline:var(--yc-space-3); border:1px solid var(--yc-border-strong); border-radius:var(--yc-radius-pill); background:transparent;",
+    ".rl-context-panel .rl-btn { display:inline-flex; align-items:center; justify-content:center; justify-self:start; gap:var(--yc-space-2); min-block-size:30px; padding-inline:var(--yc-space-3); border:1px solid var(--yc-line-field); border-radius:var(--yc-radius-pill); background:transparent;",
     "@media (pointer: coarse) { .rl-context-panel .rl-btn { min-block-size:var(--yc-hit-min); } }",
-    "#companion-context .rl-context-panel .companion__context-eyebrow { color:var(--yc-text-muted); font-family:var(--yc-font-mono);",
+    "#companion-context .rl-context-panel .companion__context-eyebrow { color:var(--yc-ink-secondary); font-family:var(--yc-font-mono);",
     ".rl-page .ws-host .ws-location > svg { display:block; grid-row:1; grid-column:1; align-self:center; }",
     ".rl-page .rl-workspace-search .rl-input-icon input[type=\"search\"] { min-block-size:28px; }",
   ]) expect(css).toContain(text)
@@ -758,4 +760,113 @@ test("pages, sessions and settings render the open Ledger without debug badges o
   const standard = renderToString(() => createComponent(SharedSettingsSurface, { ...base, keepAwakeStatus: "partial" }))
   expect(standard).toContain('data-part="st-keep-awake-state">Off</p>')
   for (const debug of ["rl-capability", "rl-sim", "rl-badge", "title=", "ycoding keep-awake setup"]) expect(standard).not.toContain(debug)
+})
+
+test("the activity bar names every destination with a visible label, current state and badge text", () => {
+  const html = renderToString(() => createComponent(SharedActivityBar, {
+    label: "Primary",
+    items: [
+      { id: "chat", label: "Chat", icon: "chat", href: "/remote", current: true, badge: { count: 2, hue: "amber", label: "2 Sessions need action" } },
+      { id: "projects", label: "Projects", icon: "team", href: "/remote/projects", current: false },
+      { id: "settings", label: "Settings", icon: "settings", href: "/remote/settings", current: false, placement: "end" },
+    ],
+  }))
+  expect(html).toMatch(/^<nav class="activity-bar" aria-label="Primary">/)
+  for (const label of ["Chat", "Projects", "Settings"]) expect(html).toContain(`<span class="activity-bar__label">${label}</span>`)
+  expect(html.match(/aria-current="page"/g)?.length).toBe(1)
+  expect(html).toMatch(/<a class="activity-bar__item" href="\/remote" data-destination="chat" aria-current="page">/)
+  expect(html).toContain('<span class="activity-bar__badge" data-hue="amber"><span aria-hidden="true">2</span><span class="visually-hidden">2 Sessions need action</span></span>')
+  expect(html.indexOf('class="activity-bar__spacer"')).toBeLessThan(html.indexOf('data-destination="settings"'))
+  expect(html.indexOf('class="activity-bar__spacer"')).toBeGreaterThan(html.indexOf('data-destination="projects"'))
+})
+
+test("the status bar renders actionable items as buttons, static readouts as text, and announces the running count", () => {
+  const html = renderToString(() => createComponent(SharedStatusBar, {
+    label: "Session status",
+    trace: { running: true, branch: false },
+    items: [
+      { id: "connection", label: "Connected", icon: "plug", tone: "mint", ariaLabel: "Connection: Connected", onActivate: () => {} },
+      { id: "model", name: "Model", label: "claude-opus-5-5", short: "opus", ariaLabel: "Model: claude-opus-5-5", onActivate: () => {} },
+      { id: "context", label: "42%", ring: 0.42, ariaLabel: "Context 42% used", onActivate: () => {} },
+      { id: "tokens", label: "18.2k tokens", ariaLabel: "Session tokens 18.2k", push: true },
+      { id: "running", label: "2 running", icon: "zap", tone: "mint", ariaLabel: "2 Sessions running", live: true, onActivate: () => {} },
+    ],
+  }))
+  expect(html).toMatch(/^<div class="status-bar" role="region" aria-label="Session status">/)
+  expect(html).toContain('<div class="trace" aria-hidden="true" data-run="true" data-branch="false"')
+  expect(html).toMatch(/<button type="button" class="status-bar__item" data-item="connection" data-tone="mint" aria-label="Connection: Connected">/)
+  expect(html).toContain('<span class="status-bar__name">Model</span>')
+  expect(html).toContain('<span class="status-bar__full">claude-opus-5-5</span><span class="status-bar__short" aria-hidden="true">opus</span>')
+  expect(html).toMatch(/<span class="status-bar__item status-bar__item--push" data-item="tokens" role="note" aria-label="Session tokens 18.2k">/)
+  expect(html).toMatch(/<span class="status-bar__live" aria-live="polite"><button type="button" class="status-bar__item" data-item="running"/)
+  expect(html).toContain('<svg class="status-bar__ring" viewBox="0 0 16 16" aria-hidden="true">')
+})
+
+test("the trace states its run and branch poses and hides itself from assistive technology", () => {
+  const idle = renderToString(() => createComponent(SharedTrace, { running: false, branch: false }))
+  const branching = renderToString(() => createComponent(SharedTrace, { running: true, branch: true, junction: 0.4 }))
+  expect(idle).toContain('aria-hidden="true" data-run="false" data-branch="false"')
+  expect(branching).toContain('data-run="true" data-branch="true" style="--trace-junction:40%"')
+  for (const part of ["trace__rail", "trace__run", "trace__branch", "trace__junction", "trace__branch-run"]) expect(branching).toContain(`class="${part}"`)
+})
+
+test("trace and status motion stop under reduced motion and the Desktop animation-off preference", async () => {
+  const sheet = await readStylesheet("workspace-shell.css")
+  const running = sheet.rules.filter((rule) => rule.header.includes("trace") && rule.declarations.animation?.includes("infinite") && rule.conditions.length === 0)
+  expect(running.map((rule) => rule.header).sort()).toEqual([".trace[data-branch=\"true\"][data-run=\"true\"] .trace__branch-run", ".trace[data-run=\"true\"] .trace__run"].sort())
+  for (const condition of ["@media (prefers-reduced-motion: reduce)"]) {
+    const reduced = sheet.rules.filter((rule) => rule.conditions.includes(condition))
+    for (const selector of [".trace[data-run=\"true\"] .trace__run", ".trace[data-branch=\"true\"][data-run=\"true\"] .trace__branch-run"]) {
+      expect(reduced.find((rule) => rule.header === selector)?.declarations.animation, `${condition} ${selector}`).toBe("none")
+    }
+    expect(reduced.find((rule) => rule.header === ".trace[data-run=\"true\"] .trace__run")?.declarations.transform).toBe("none")
+    expect(reduced.find((rule) => rule.header === ".trace__branch")?.declarations.transition).toBe("none")
+  }
+  for (const selector of [':root[data-animations="off"] .trace[data-run="true"] .trace__run', ':root[data-animations="off"] .trace[data-branch="true"][data-run="true"] .trace__branch-run']) {
+    expect(sheet.rules.find((rule) => rule.header === selector)?.declarations.animation, selector).toBe("none")
+  }
+  const transitions = sheet.rules.filter((rule) => rule.header.includes("trace") && rule.conditions.length === 0).flatMap((rule) => [rule.declarations.transition, rule.declarations.animation].filter((value): value is string => value !== undefined))
+  expect(transitions.length).toBeGreaterThan(0)
+  expect(transitions.filter((value) => /(^|[\s,(])\d+m?s\b/.test(value))).toEqual([])
+})
+
+test("the list column exposes a keyboard and pointer resize separator bounded by its width tokens", () => {
+  const html = renderToString(() => createComponent(SharedListColumn, {
+    id: "session-list",
+    label: "Sessions",
+    head: "Head",
+    children: "Rows",
+    resize: { width: 280, min: 232, max: 360, label: "Resize Session list", onWidth: () => {} },
+  }))
+  expect(html).toMatch(/^<aside id="session-list" class="list-column" aria-label="Sessions" style="--list-column-size:280px">/)
+  expect(html).toContain('role="separator" aria-orientation="vertical" aria-label="Resize Session list" aria-controls="session-list" aria-valuenow="280" aria-valuemin="232" aria-valuemax="360" tabindex="0"')
+  const fixed = renderToString(() => createComponent(SharedListColumn, { id: "rail", label: "Sessions", children: "Rows" }))
+  expect(fixed).not.toContain('role="separator"')
+  expect(listWidthForKey(280, "ArrowRight", 232, 360)).toBe(288)
+  expect(listWidthForKey(280, "ArrowLeft", 232, 360)).toBe(272)
+  expect(listWidthForKey(356, "ArrowRight", 232, 360)).toBe(360)
+  expect(listWidthForKey(236, "ArrowLeft", 232, 360)).toBe(232)
+  expect(listWidthForKey(280, "Home", 232, 360)).toBe(232)
+  expect(listWidthForKey(280, "End", 232, 360)).toBe(360)
+  expect(listWidthForKey(280, "Enter", 232, 360)).toBeUndefined()
+  expect(clampListWidth(500, 232, 360)).toBe(360)
+  expect(clampListWidth(100, 232, 360)).toBe(232)
+})
+
+test("Session groups render the caller's grouping with counts and omit empty groups", () => {
+  const html = renderToString(() => createComponent(SharedSessionGroups<{ readonly id: string; readonly title: string }>, {
+    label: "Sessions",
+    groups: [
+      { id: "needs-action", label: "Needs action", icon: "hand", hue: "amber", items: [{ id: "a", title: "Review migration" }] },
+      { id: "running", label: "Running", icon: "zap", hue: "mint", items: [] },
+      { id: "recent", label: "Recent", items: [{ id: "b", title: "Docs" }, { id: "c", title: "Release" }] },
+    ],
+    row: (item) => `<${item.title}>`,
+  }))
+  expect(html).toContain('aria-label="Sessions"')
+  expect(html).toContain('<h3 class="session-group__head" id="session-group-needs-action" data-hue="amber">')
+  expect(html).toContain('<span class="session-group__label">Needs action</span><span class="session-group__count" aria-label="1 Session">1</span>')
+  expect(html).toContain('<span class="session-group__label">Recent</span><span class="session-group__count" aria-label="2 Sessions">2</span>')
+  expect(html).not.toContain("Running")
+  expect(html.indexOf("Review migration")).toBeLessThan(html.indexOf("Docs"))
 })

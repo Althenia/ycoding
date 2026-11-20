@@ -40,7 +40,7 @@ describe("raw CSS audit", () => {
   })
 
   test("preserves quoted semicolons in selectors", () => {
-    expect(parseStylesheet("synthetic.css", '[data-value=";"] { color:var(--yc-text); }').rules[0]?.header).toBe('[data-value=";"]')
+    expect(parseStylesheet("synthetic.css", '[data-value=";"] { color:var(--yc-ink); }').rules[0]?.header).toBe('[data-value=";"]')
   })
 
   test("loads all thirteen audited owners from the actual application entry", async () => {

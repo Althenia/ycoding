@@ -3,7 +3,7 @@
   flex: none;
   inline-size: var(--yc-space-5);
   block-size: var(--yc-space-5);
-  color: var(--yc-text);
+  color: var(--yc-ink);
   background: transparent;
   border: 0;
   box-shadow: none;

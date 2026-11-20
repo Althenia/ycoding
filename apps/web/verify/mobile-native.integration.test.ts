@@ -56,7 +56,7 @@ async function touchTargets(page:Page,selector:string){
   expect(await page.evaluate(`([...document.querySelectorAll(${JSON.stringify(selector)})].filter(node=>node.getClientRects().length).map(node=>{const box=node.getBoundingClientRect();return {name:node.getAttribute('aria-label')??node.textContent,width:box.width,height:box.height}}).filter(box=>box.width<44||box.height<44))`)).toEqual([])
 }
 
-test("phone header, composer and companion keep every action touch-sized with neutral focus return", async () => {
+test("phone header, composer and companion keep every action touch-sized with cobalt focus return", async () => {
   const page = await open("view=chat&paletteAcceptance=1&team=two&acceptedPreview=1")
   try {
     await until(page, `!!document.querySelector('.companion-context-trigger') && !!document.querySelector('.composer__input')`)
@@ -66,7 +66,7 @@ test("phone header, composer and companion keep every action touch-sized with ne
     }
     await page.pressKey("Tab", "Tab", 9)
     await page.evaluate(`document.querySelector('.companion-context-trigger').focus({preventScroll:true})`)
-    expect(await page.evaluate(`(()=>{const button=document.querySelector('.companion-context-trigger'),style=getComputedStyle(button);return button.matches(':focus-visible')&&parseFloat(style.outlineWidth)>=2&&style.getPropertyValue('--yc-focus').trim()===style.getPropertyValue('--yc-border-strong').trim()})()`)).toBe(true)
+    expect(await page.evaluate(`(()=>{const button=document.querySelector('.companion-context-trigger'),style=getComputedStyle(button);return button.matches(':focus-visible')&&parseFloat(style.outlineWidth)>=2&&style.getPropertyValue('--yc-focus').trim()===style.getPropertyValue('--yc-cobalt-graphic').trim()})()`)).toBe(true)
     await click(page, "Open Session context")
     await until(page, `!!document.querySelector('dialog[open] .companion')`)
     await touchTargets(page, 'dialog[open] .companion button,dialog[open] .overlay__head button')

@@ -54,8 +54,8 @@ Object.assign(window, {
 const root = document.getElementById("app")
 if (!root) throw new Error("Missing notifications fixture root")
 render(() => <RemoteProvider createStore={() => store}>
-  <main style={{ "min-height": "100dvh", background: "var(--yc-bg)", color: "var(--yc-text)" }}>
-    <header data-toast-clearance style={{ display: "flex", "align-items": "center", "justify-content": "space-between", height: "var(--yc-header-h)", padding: "0 var(--yc-gutter)", "border-bottom": "1px solid var(--yc-border)", background: "var(--yc-surface-raised)" }}>
+  <main style={{ "min-height": "100dvh", background: "var(--yc-plane-canvas)", color: "var(--yc-ink)" }}>
+    <header data-toast-clearance style={{ display: "flex", "align-items": "center", "justify-content": "space-between", height: "var(--yc-header-h)", padding: "0 var(--yc-gutter)", "border-bottom": "1px solid var(--yc-line-subtle)", background: "var(--yc-plane-raised)" }}>
       <strong>YCoding</strong>
       <NotificationCenter onOpenSession={(id) => opened.push(id)} onOpenUsage={(id) => openedUsage.push(id)} />
     </header>

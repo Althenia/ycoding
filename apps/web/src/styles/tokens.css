@@ -1,7 +1,8 @@
 /**
  * YCoding design tokens.
  *
- * The executable design-system tokens in `.aphrodite/redesign-audit/specs/tokens.toon`.
+ * The executable Instrument design-system tokens. `src/theme/schemes.ts` owns the
+ * alternate scheme palettes for the same color roles.
  *
  * Two layers, deliberately kept apart:
  *
@@ -52,49 +53,78 @@
 :root {
   color-scheme: light;
 
-  --yc-green: #27d17f;
-  --yc-green-strong: #0a7b47;
-  --yc-green-soft: rgba(39, 209, 127, 0.12);
-  --yc-primary-bg: #0b8550;
-  --yc-primary-fg: #ffffff;
-  --yc-yellow: #f4bd3d;
-  --yc-yellow-strong: #946200;
-  --yc-yellow-soft: rgba(244, 189, 61, 0.16);
-  --yc-danger: #c53a3a;
-  --yc-danger-soft: rgba(197, 58, 58, 0.1);
-  --yc-focus: #0b8b50;
-  --yc-signal: #1962c0;
-  --yc-scrim: rgba(11, 15, 20, 0.45);
-
-  --yc-effort: #554b72;
-  --yc-effort-none: #425466;
-  --yc-effort-minimal: #265c8c;
-  --yc-effort-low: #136673;
-  --yc-effort-medium: #0a7b47;
-  --yc-effort-high: #955711;
-  --yc-effort-xhigh: #88439c;
-  --yc-effort-max: #9d375b;
-  --yc-context-system: #3f6587;
-  --yc-context-tools: #0f6f6b;
-  --yc-context-assistant: #865700;
-  --yc-context-reasoning: #8a3aae;
-  --yc-context-tool-calls: #a5441a;
-
-  /* surfaces */
-  --yc-bg: #ffffff;
-  --yc-surface: #f7f9f8;
-  /* Third surface step so hover and inset rows stop reusing --yc-surface. */
-  --yc-surface-sunken: #eff3f1;
-  --yc-surface-raised: #ffffff;
-  --yc-text: #0b0f14;
-  --yc-text-muted: #5c6672;
-  /* Tertiary ink is held to AA on the darkest surface it lands on
-     (--yc-surface-sunken), which is the binding background. */
-  --yc-text-subtle: #646d78;
-  --yc-border: #e4e8e6;
-  /* Control boundary and dashed empty-state border: raised until an active control
-     boundary reaches 3:1 on every surface it draws on. */
-  --yc-border-strong: #78847e;
+  --yc-plane-chrome: #f3f6fb;
+  --yc-plane-canvas: #fafcfe;
+  --yc-plane-raised: #e5eaf0;
+  --yc-plane-hover: #dde2e9;
+  --yc-plane-selected: #d3d8df;
+  --yc-plane-inverse: #151618;
+  --yc-line-divider: #c4c9d1;
+  --yc-line-subtle: #80858c;
+  --yc-line-field: #70757c;
+  --yc-ink: #151618;
+  --yc-ink-secondary: #404449;
+  --yc-ink-tertiary: #565b62;
+  --yc-ink-inverse: #f3f6fb;
+  --yc-focus: #2f70f2;
+  --yc-scrim: rgba(243, 246, 251, 0.5);
+  --yc-selection: rgba(47, 112, 242, 0.32);
+  --yc-cobalt-tonal: #e4edfe;
+  --yc-cobalt-tonal-hover: #d5e4fe;
+  --yc-cobalt-line: #87b1fe;
+  --yc-cobalt-graphic: #2f70f2;
+  --yc-cobalt-solid: #165be2;
+  --yc-cobalt-solid-hover: #024bd0;
+  --yc-cobalt-ink: #0045c6;
+  --yc-on-cobalt: #fafcfe;
+  --yc-mint-tonal: #d1f8e1;
+  --yc-mint-tonal-hover: #bef1d4;
+  --yc-mint-line: #5fc995;
+  --yc-mint-graphic: #06915f;
+  --yc-mint-solid: #027d51;
+  --yc-mint-solid-hover: #046c46;
+  --yc-mint-ink: #026641;
+  --yc-on-mint: #fafcfe;
+  --yc-violet-tonal: #eee9fe;
+  --yc-violet-tonal-hover: #e5ddff;
+  --yc-violet-line: #b99efe;
+  --yc-violet-graphic: #8759dd;
+  --yc-violet-solid: #7743cc;
+  --yc-violet-solid-hover: #6932bb;
+  --yc-violet-ink: #642bb4;
+  --yc-on-violet: #fafcfe;
+  --yc-teal-tonal: #d2f5f5;
+  --yc-teal-tonal-hover: #bfeeed;
+  --yc-teal-line: #63c3c4;
+  --yc-teal-graphic: #0b8c8d;
+  --yc-teal-solid: #037879;
+  --yc-teal-solid-hover: #006869;
+  --yc-teal-ink: #026263;
+  --yc-on-teal: #fafcfe;
+  --yc-sky-tonal: #dbf1ff;
+  --yc-sky-tonal-hover: #c7e8fe;
+  --yc-sky-line: #69bbeb;
+  --yc-sky-graphic: #0484b9;
+  --yc-sky-solid: #0071a0;
+  --yc-sky-solid-hover: #03628b;
+  --yc-sky-ink: #025c83;
+  --yc-on-sky: #fafcfe;
+  --yc-amber-tonal: #ffe9ce;
+  --yc-amber-tonal-hover: #ffddb1;
+  --yc-amber-line: #e2a449;
+  --yc-amber-graphic: #a56d00;
+  --yc-amber-solid: #f9a80a;
+  --yc-amber-solid-hover: #e49905;
+  --yc-amber-ink: #744c00;
+  --yc-on-amber: #151618;
+  --yc-coral-tonal: #ffe6e4;
+  --yc-coral-tonal-hover: #fed9d5;
+  --yc-coral-line: #ff8a84;
+  --yc-coral-graphic: #d03f41;
+  --yc-coral-solid: #be222d;
+  --yc-coral-solid-hover: #ac001e;
+  --yc-coral-ink: #a2001b;
+  --yc-on-coral: #fafcfe;
 
   /* the ink used on the terminal plates, identical in both themes */
   --yc-terminal-bg: #0c1413;
@@ -164,24 +194,25 @@
   --yc-space-16: 64px;
   --yc-space-20: 80px;
 
-  --yc-radius-sm: 6px;
-  --yc-radius-md: 10px;
-  --yc-radius-lg: 14px;
-  --yc-radius-xl: 20px;
+  --yc-radius-detail: 4px;
+  --yc-radius-control: 6px;
+  --yc-radius-card: 8px;
+  --yc-radius-composer: 12px;
   --yc-radius-pill: 999px;
 
-  --yc-shadow-sm: 0 1px 2px rgba(11, 15, 20, 0.06);
-  --yc-shadow-md: 0 8px 24px rgba(11, 15, 20, 0.08);
-  --yc-shadow-lg: 0 20px 48px rgba(11, 15, 20, 0.16);
+  --yc-elevation-float: 0 1px 2px rgba(0, 0, 0, 0.08), 0 12px 32px -8px rgba(0, 0, 0, 0.12);
 
   /* control geometry — invariant across viewports; dense only for a fine pointer */
   --yc-control-h: 44px;
   --yc-control-h-dense: 36px;
   --yc-hit-min: 44px;
   --yc-control-pad-x: 16px;
-  --yc-focus-ring: 0 0 0 2px var(--yc-bg), 0 0 0 4px var(--yc-focus);
+  --yc-focus-ring: 0 0 0 2px var(--yc-plane-canvas), 0 0 0 4px var(--yc-focus);
   --yc-border-width: 1px;
   --yc-scrollbar-size: 12px;
+  --yc-icon-xs: 14px;
+  --yc-icon-sm: 16px;
+  --yc-icon-md: 20px;
 
   /* layout metrics — a header is one or two declared rows, never a row that
      compresses the controls inside it */
@@ -194,6 +225,10 @@
   --yc-public-max: 1440px;
   --yc-content-max-wide: 1600px;
   --yc-rail-w: 256px;
+  --yc-rail-min-w: 232px;
+  --yc-rail-max-w: 360px;
+  --yc-activity-w: 80px;
+  --yc-status-h: 28px;
   --yc-companion-w: 448px;
   --yc-docs-nav-w: 248px;
   --yc-docs-toc-w: 200px;
@@ -204,12 +239,18 @@
   --yc-dur-instant: 80ms;
   --yc-dur-quick: 140ms;
   --yc-dur-base: 220ms;
-  --yc-dur-slow: 320ms;
+  --yc-dur-trace: 1760ms;
+  --yc-dur-spin: 660ms;
   --yc-ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --yc-ease-entrance: cubic-bezier(0, 0, 0.2, 1);
   --yc-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --yc-ease-linear: linear;
+  --yc-ease-caret: steps(2, jump-none);
   --yc-motion-spatial-dur: var(--yc-dur-base);
   --yc-motion-effect-dur: var(--yc-dur-quick);
+  --yc-motion-exit-dur: var(--yc-dur-quick);
+  --yc-motion-feedback-dur: var(--yc-dur-instant);
+  --yc-motion-travel: 1;
   --yc-motion-ease: var(--yc-ease-standard);
 
   /* stacking */
@@ -223,47 +264,80 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --yc-green: #27d17f;
-  --yc-green-strong: #67d7a4;
-  --yc-green-soft: rgba(103, 215, 164, 0.12);
-  /* The bright green stays the primary surface; the label is dark because white on
-     it reaches only 1.65:1. */
-  --yc-primary-bg: #67d7a4;
-  --yc-primary-fg: #04150c;
-  --yc-yellow-strong: #f0be62;
-  --yc-yellow-soft: rgba(244, 189, 61, 0.14);
-  --yc-danger: #ef6f6f;
-  --yc-danger-soft: rgba(239, 111, 111, 0.14);
-  --yc-focus: #67d7a4;
-  --yc-signal: #79b8ff;
+  --yc-plane-chrome: #0e1116;
+  --yc-plane-canvas: #15181d;
+  --yc-plane-raised: #1d2228;
+  --yc-plane-hover: #242930;
+  --yc-plane-selected: #2b3138;
+  --yc-plane-inverse: #f1f4f8;
+  --yc-line-divider: #363c44;
+  --yc-line-subtle: #676e77;
+  --yc-line-field: #848b95;
+  --yc-ink: #f1f4f8;
+  --yc-ink-secondary: #bfc5cd;
+  --yc-ink-tertiary: #a1a8b2;
+  --yc-ink-inverse: #0e1116;
+  --yc-focus: #5d94ff;
+  --yc-scrim: rgba(14, 17, 22, 0.72);
+  --yc-selection: rgba(93, 148, 255, 0.32);
+  --yc-cobalt-tonal: #162a4f;
+  --yc-cobalt-tonal-hover: #1a3363;
+  --yc-cobalt-line: #2e5eba;
+  --yc-cobalt-graphic: #5d94ff;
+  --yc-cobalt-solid: #2064eb;
+  --yc-cobalt-solid-hover: #0e52d5;
+  --yc-cobalt-ink: #9bbeff;
+  --yc-on-cobalt: #f1f4f8;
+  --yc-mint-tonal: #0b3421;
+  --yc-mint-tonal-hover: #094029;
+  --yc-mint-line: #00764c;
+  --yc-mint-graphic: #0cb477;
+  --yc-mint-solid: #23d08c;
+  --yc-mint-solid-hover: #40dd99;
+  --yc-mint-ink: #4fdb9b;
+  --yc-on-mint: #0e1116;
+  --yc-violet-tonal: #2f2349;
+  --yc-violet-tonal-hover: #3a2a5b;
+  --yc-violet-line: #6c4dab;
+  --yc-violet-graphic: #a47bfb;
+  --yc-violet-solid: #b99efe;
+  --yc-violet-solid-hover: #c4afff;
+  --yc-violet-ink: #c4afff;
+  --yc-on-violet: #0e1116;
+  --yc-teal-tonal: #0d3232;
+  --yc-teal-tonal-hover: #0c3d3e;
+  --yc-teal-line: #057273;
+  --yc-teal-graphic: #21adae;
+  --yc-teal-solid: #31c8ca;
+  --yc-teal-solid-hover: #48d5d6;
+  --yc-teal-ink: #56d4d5;
+  --yc-on-teal: #0e1116;
+  --yc-sky-tonal: #102f40;
+  --yc-sky-tonal-hover: #113a4f;
+  --yc-sky-line: #136b95;
+  --yc-sky-graphic: #33a3dd;
+  --yc-sky-solid: #43befd;
+  --yc-sky-solid-hover: #6cc9ff;
+  --yc-sky-ink: #6cc9ff;
+  --yc-on-sky: #0e1116;
+  --yc-amber-tonal: #3c2603;
+  --yc-amber-tonal-hover: #4a2f01;
+  --yc-amber-line: #875800;
+  --yc-amber-graphic: #cc8801;
+  --yc-amber-solid: #ec9f07;
+  --yc-amber-solid-hover: #fcab11;
+  --yc-amber-ink: #f9ac30;
+  --yc-on-amber: #0e1116;
+  --yc-coral-tonal: #461c1b;
+  --yc-coral-tonal-hover: #572220;
+  --yc-coral-line: #a33c3b;
+  --yc-coral-graphic: #f16461;
+  --yc-coral-solid: #ff8a84;
+  --yc-coral-solid-hover: #ffa09a;
+  --yc-coral-ink: #fea09a;
+  --yc-on-coral: #0e1116;
 
-  --yc-effort: #d2aedf;
-  --yc-effort-none: #a9bacb;
-  --yc-effort-minimal: #91c1f0;
-  --yc-effort-low: #73d1dc;
-  --yc-effort-medium: #5fe3a1;
-  --yc-effort-high: #e4be7b;
-  --yc-effort-xhigh: #c6a1e0;
-  --yc-effort-max: #e2a2b9;
-  --yc-context-system: #8fb3d9;
-  --yc-context-tools: #5fd0c6;
-  --yc-context-assistant: #f7d37c;
-  --yc-context-reasoning: #d7a6f2;
-  --yc-context-tool-calls: #f7a77a;
-
-  --yc-bg: #0b1115;
-  --yc-surface: #11181d;
-  --yc-surface-sunken: #0e151a;
-  --yc-surface-raised: #151e24;
-  --yc-text: #f4f7f6;
-  --yc-text-muted: #99a2ad;
-  --yc-text-subtle: #7d8792;
-  --yc-border: #263039;
-  --yc-border-strong: #718278;
-
-  --yc-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --yc-shadow-md: 0 10px 30px rgba(0, 0, 0, 0.45);
-  --yc-shadow-lg: 0 24px 56px rgba(0, 0, 0, 0.55);
+  --yc-elevation-float: 0 1px 2px rgba(0, 0, 0, 0.35), 0 12px 32px -8px rgba(0, 0, 0, 0.5);
 }
 
 /* Gutter steps: the smallest margin that keeps a 44px control inside the thumb arc
@@ -283,8 +357,8 @@
 @media (min-width: 1024px) {
   :root {
     --yc-gutter: 32px;
-    --yc-size-display: 56px;
-    --yc-leading-display: 60px;
+    --yc-size-display: 48px;
+    --yc-leading-display: 52px;
   }
 }
 
@@ -311,5 +385,15 @@
   :root {
     --yc-motion-spatial-dur: 0s;
     --yc-motion-effect-dur: var(--yc-dur-instant);
+    --yc-motion-exit-dur: 0s;
+    --yc-motion-travel: 0;
   }
+}
+
+:root[data-animations="off"] {
+  --yc-motion-spatial-dur: 0s;
+  --yc-motion-effect-dur: 0s;
+  --yc-motion-exit-dur: 0s;
+  --yc-motion-feedback-dur: 0s;
+  --yc-motion-travel: 0;
 }

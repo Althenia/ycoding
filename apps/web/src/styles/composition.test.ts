@@ -36,7 +36,7 @@ describe("responsive contract", () => {
     expect(hover(sheet, ".nav__link:hover").background).toBe("transparent")
     expect(base(sheet, ".nav__link--active")).toMatchObject({
       background: "transparent",
-      color: "var(--yc-text)",
+      color: "var(--yc-ink)",
       "font-weight": "var(--yc-weight-semibold)",
     })
   })
@@ -45,17 +45,17 @@ describe("responsive contract", () => {
     const site = await readStylesheet("site.css")
     const docs = await readStylesheet("docs.css")
     const radii: readonly (readonly [Stylesheet, string, string])[] = [
-      [site, ".marketing .button", "sm"],
-      [site, ".marketing .code-block", "sm"],
-      [site, ".marketing .input", "sm"],
-      [site, ".marketing .card", "lg"],
-      [site, ".marketing .callout-bar", "lg"],
-      [site, ".marketing .feature", "lg"],
-      [site, ".marketing .trust__item", "xl"],
+      [site, ".marketing .button", "control"],
+      [site, ".marketing .code-block", "control"],
+      [site, ".marketing .input", "control"],
+      [site, ".marketing .card", "card"],
+      [site, ".marketing .callout-bar", "card"],
+      [site, ".marketing .feature", "card"],
+      [site, ".marketing .trust__item", "composer"],
       [docs, ".docs-bar__nav-toggle", "pill"],
       [docs, ".docs-search-trigger", "pill"],
-      [docs, ".docs--index .card-grid > .card", "sm"],
-      [docs, ".docs--article .code-block", "md"],
+      [docs, ".docs--index .card-grid > .card", "control"],
+      [docs, ".docs--article .code-block", "card"],
     ]
     for (const [sheet, selector, step] of radii) {
       expect({ selector, radius: declarationsWhere(sheet, (rule) => rule.header.includes(selector))["border-radius"] }).toEqual({ selector, radius: `var(--yc-radius-${step})` })
@@ -74,39 +74,39 @@ describe("responsive contract", () => {
       return merged
     }
     expect(base(base_, ".card").border).toBeUndefined()
-    expect(base(base_, ".card").background).toBe("var(--yc-surface)")
+    expect(base(base_, ".card").background).toBe("var(--yc-plane-raised)")
     expect(base(base_, ".status-strip")["border-block-end"]).toBeUndefined()
-    expect(base(base_, ".status-strip")["border-radius"]).toBe("var(--yc-radius-lg)")
+    expect(base(base_, ".status-strip")["border-radius"]).toBe("var(--yc-radius-card)")
     expect(base(base_, ".app-header")["border-block-end"]).toBeUndefined()
     expect(frameless(site, ".feature").background).toBe("transparent")
-    expect(frameless(site, ".feature__icon")).toMatchObject({ background: "var(--yc-green-soft)", color: "var(--yc-green-strong)" })
-    expect(frameless(site, ".trust__item").background).toBe("var(--yc-surface)")
+    expect(frameless(site, ".feature__icon")).toMatchObject({ background: "var(--yc-cobalt-tonal)", color: "var(--yc-cobalt-ink)" })
+    expect(frameless(site, ".trust__item").background).toBe("var(--yc-plane-raised)")
     expect(base(site, ".callout-bar").border).toBeUndefined()
     expect(frameless(docs, ".releases--timeline .release").background).toBe("transparent")
-    expect(base(docs, ".releases--timeline .release")["border-block-end"]).toBe("1px solid var(--yc-border)")
+    expect(base(docs, ".releases--timeline .release")["border-block-end"]).toBe("1px solid var(--yc-line-subtle)")
     expect(docs.rules.some(rule => rule.header === ".docs-bar")).toBe(false)
-    expect(base(site, ".marketing .app-header")["border-block-end"]).toBe("1px solid var(--yc-border)")
+    expect(base(site, ".marketing .app-header")["border-block-end"]).toBe("1px solid var(--yc-line-subtle)")
     expect(base(docs, ".docs-shell__nav")["border-inline-end"]).toBeUndefined()
     expect(docs.rules.filter((rule) => rule.header === ".docs-shell__nav" && rule.declarations["border-inline-end"] !== undefined)).toEqual([])
     expect(base(docs, ".doc-section")["border-block-start"]).toBe("0")
     expect(base(docs, ".inline-code").border).toBeUndefined()
-    expect(base(docs, ".docs-nav__link")["border-radius"]).toBe("var(--yc-radius-sm)")
-    expect(base(docs, ".card-grid > .card").background).toBe("var(--yc-surface)")
-    expect(hover(docs, ".card-grid > .card:hover").background).toBe("var(--yc-surface-sunken)")
+    expect(base(docs, ".docs-nav__link")["border-radius"]).toBe("var(--yc-radius-control)")
+    expect(base(docs, ".card-grid > .card").background).toBe("var(--yc-plane-raised)")
+    expect(hover(docs, ".card-grid > .card:hover").background).toBe("var(--yc-plane-hover)")
   })
 
-  test("makes the public header translucent at 92% with opaque fallbacks", async () => {
+  test("makes the public header translucent at 94% with opaque fallbacks", async () => {
     const site = await readStylesheet("site.css")
     expect(base(site, ".marketing .app-header")).toMatchObject({
-      background: "var(--yc-bg)",
+      background: "var(--yc-plane-canvas)",
       "backdrop-filter": "none",
     })
     expect(declarationsWhere(site, (rule) => rule.header === ".marketing .app-header" && rule.conditions.includes("@supports (backdrop-filter: blur(1px))"))).toMatchObject({
-      background: "color-mix(in srgb, var(--yc-bg) 92%, transparent)",
-      "backdrop-filter": "saturate(140%) blur(16px)",
+      background: "color-mix(in srgb, var(--yc-plane-canvas) 94%, transparent)",
+      "backdrop-filter": "blur(12px)",
     })
     for (const condition of ["@media (prefers-reduced-transparency: reduce)", "@media (forced-colors: active)"]) {
-      expect(declarationsWhere(site, (rule) => rule.header === ".marketing .app-header" && rule.conditions.includes(condition))).toMatchObject({ background: "var(--yc-bg)", "backdrop-filter": "none" })
+      expect(declarationsWhere(site, (rule) => rule.header === ".marketing .app-header" && rule.conditions.includes(condition))).toMatchObject({ background: "var(--yc-plane-canvas)", "backdrop-filter": "none" })
     }
   })
 
@@ -149,28 +149,28 @@ describe("responsive contract", () => {
 
   test("owns scrollbars unconditionally through the shared foundation", async () => {
     const sheet = await readStylesheet("base.css")
-    expect(base(sheet, "*")).toMatchObject({ "scrollbar-width": "thin", "scrollbar-color": "var(--yc-border-strong) transparent" })
+    expect(base(sheet, "*")).toMatchObject({ "scrollbar-width": "thin", "scrollbar-color": "var(--yc-line-field) transparent" })
     expect(base(sheet, "::-webkit-scrollbar")).toMatchObject({ width: "var(--yc-scrollbar-size)", height: "var(--yc-scrollbar-size)" })
-    expect(base(sheet, "::-webkit-scrollbar-thumb")).toMatchObject({ "background-color": "var(--yc-border-strong)", "border-radius": "var(--yc-radius-pill)" })
+    expect(base(sheet, "::-webkit-scrollbar-thumb")).toMatchObject({ "background-color": "var(--yc-line-field)", "border-radius": "var(--yc-radius-pill)" })
     expect(declarationsWhere(sheet, rule => rule.conditions.includes("@media (forced-colors: active)") && rule.header === "*")).toMatchObject({ "scrollbar-color": "CanvasText Canvas", "scrollbar-width": "auto" })
   })
 
   test("owns native primitive resets and an opaque header fallback", async () => {
     const sheet = await readStylesheet("base.css")
     expect(declarationsWhere(sheet, rule => rule.conditions.length === 0 && rule.header.split(",").some(selector => selector.trim() === "select")).appearance).toBe("base-select")
-    expect(base(sheet, "select::picker(select)")).toMatchObject({ background: "var(--yc-surface-raised)", color: "var(--yc-text)", border: "1px solid var(--yc-border-strong)" })
+    expect(base(sheet, "select::picker(select)")).toMatchObject({ background: "var(--yc-plane-raised)", color: "var(--yc-ink)", border: "1px solid var(--yc-line-field)" })
     expect(base(sheet, '.check input[type="radio"]').appearance).toBe("none")
     expect(base(sheet, "progress")).toMatchObject({ appearance: "none", border: "0" })
     for (const part of ["::-webkit-progress-bar", "::-webkit-progress-value", "::-moz-progress-bar"]) expect(base(sheet, `progress${part}`).background).toMatch(/^var\(--yc-/)
-    expect(base(sheet, ".app-header")).toMatchObject({ background: "var(--yc-bg)", "backdrop-filter": "none" })
+    expect(base(sheet, ".app-header")).toMatchObject({ background: "var(--yc-plane-canvas)", "backdrop-filter": "none" })
   })
 
   test("uses semantic frame planes, aligned headers and a coarse action floor", async () => {
     const remote = await readStylesheet("remote.css")
     const foundation = await readStylesheet("base.css")
-    expect(base(remote, ".workspace__rail").background).toBe("var(--yc-surface-sunken)")
+    expect(base(remote, ".workspace__rail").background).toBe("var(--yc-plane-chrome)")
     expect(base(remote, ".workspace__rail-head")["block-size"]).toBe("var(--yc-header-public-h)")
-    expect(base(remote, ".workspace__topbar").background).toBe("var(--yc-surface)")
+    expect(base(remote, ".workspace__topbar").background).toBe("var(--yc-plane-canvas)")
     expect(declarationsWhere(foundation, rule => rule.header.startsWith(":root :is(button,") && rule.conditions.includes("@media (pointer: coarse)"))).toMatchObject({ "min-inline-size": "var(--yc-hit-min)", "min-block-size": "var(--yc-hit-min)" })
   })
 
@@ -221,10 +221,10 @@ describe("responsive contract", () => {
     expect(docs.rules.some(rule => rule.header === ".docs-bar__crumbs" || rule.header === ".docs-bar__title")).toBe(false)
   })
 
-  test("adds one shared workspace rail at 768 and keeps each screen in the remaining column", async () => {
+  test("adds the activity bar and one shared workspace rail at 768 and keeps each screen in the remaining column", async () => {
     const remote = await readStylesheet("remote.css")
     expect(columnSteps(remote, ".workspace")).toEqual([])
-    expect(columnSteps(remote, ".app")).toEqual([{ min: 768, tracks: 2 }])
+    expect(columnSteps(remote, ".app")).toEqual([{ min: 768, tracks: 3 }])
     const landscape = declarationsWhere(remote, (rule) => rule.header === ".app" && rule.conditions.includes(COARSE_LANDSCAPE_QUERY))
     expect(landscape["grid-template-columns"]).toBe("var(--yc-bottom-nav-h) minmax(0, 1fr)")
     expect(shownFrom(remote, ".workspace__rail", 768)).toBe(true)
@@ -384,15 +384,15 @@ describe("responsive contract", () => {
 
   test("gives Focus shared geometry, Sans navigation and Mono metadata", async () => {
     const remote = await readStylesheet("remote.css")
-    for (const token of ["--yc-radius-sm", "--yc-radius-md", "--yc-radius-lg", "--yc-radius-xl", "--yc-radius-pill"]) {
+    for (const token of ["--yc-radius-control", "--yc-radius-card", "--yc-radius-card", "--yc-radius-composer", "--yc-radius-pill"]) {
       expect({ token, override: remote.rules.some((rule) => token in rule.declarations) }).toEqual({ token, override: false })
     }
     for (const selector of [".app .pane__title", ".app .chip", ".request__header"]) {
       expect({ selector, font: base(remote, selector)["font-family"] }).toEqual({ selector, font: "var(--yc-font-mono)" })
     }
-    expect(base(remote, ".remote-nav__link")["font-family"]).toBe("var(--yc-font-sans)")
+    expect(base(await readStylesheet("workspace-shell.css"), ".activity-bar__label").font).toBe("var(--yc-weight-medium) var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-sans)")
     expect(base(remote, ".app .pane__title")["text-transform"]).toBe("uppercase")
-    expect(base(remote, ".session-row--active")).toMatchObject({ background: "var(--yc-surface-sunken)", "border-radius": "var(--yc-radius-sm)" })
+    expect(base(remote, ".session-row--active")).toMatchObject({ background: "var(--yc-plane-selected)", "border-radius": "var(--yc-radius-control)" })
   })
 })
 
@@ -634,7 +634,7 @@ describe("modal primitive stylesheet ownership", () => {
     const solid = (selector: string) => declarationsWhere(button, (rule) => rule.header === selector && rule.conditions.length === 0)
     expect(solid(".button")).toMatchObject({ display: "inline-flex", "min-block-size": "var(--yc-control-h)", background: "var(--button-bg)" })
     expect(solid(".button--primary")).toBeDefined()
-    expect(solid(".button--secondary")["--button-bg"]).toBe("var(--yc-surface-raised)")
+    expect(solid(".button--secondary")["--button-bg"]).toBe("var(--yc-plane-raised)")
     expect(solid(".button--ghost")).toMatchObject({ "--button-bg": "transparent", "--button-border": "transparent" })
     expect(solid(".button--icon")).toMatchObject({ "inline-size": "var(--yc-control-h)", padding: "0" })
     expect(Number(solid(".button[disabled]").opacity)).toBeLessThan(1)
@@ -645,7 +645,7 @@ describe("modal primitive stylesheet ownership", () => {
     const base = (selector: string) => declarationsWhere(modal, (rule) => rule.header === selector && rule.conditions.length === 0)
     expect(base(".overlay")).toMatchObject({ border: "0", padding: "0", background: "transparent" })
     expect(base(".overlay::backdrop").background).toBe("var(--yc-scrim)")
-    expect(base(".overlay__surface")).toMatchObject({ position: "fixed", background: "var(--yc-surface-raised)" })
+    expect(base(".overlay__surface")).toMatchObject({ position: "fixed", background: "var(--yc-plane-raised)" })
     expect(base(".overlay--sheet .overlay__surface")).toMatchObject({ "inset-inline": "0", "inset-block-end": "calc(100dvh - (var(--overlay-viewport-top, 0px) + var(--overlay-viewport-height, 100dvh)))", "inline-size": "100%", "block-size":"auto" })
     for (const part of [".overlay__head", ".overlay__title", ".overlay__close", ".overlay__body"]) expect(Object.keys(base(part)).length).toBeGreaterThan(0)
     const keyframes = new Set(modal.rules.flatMap((rule) => rule.conditions.filter((condition) => condition.startsWith("@keyframes "))))

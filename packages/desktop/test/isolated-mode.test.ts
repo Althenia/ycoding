@@ -9,6 +9,7 @@ import {
   validateIsolatedPreferences,
   validateIsolatedSelection,
 } from "../src/isolated-mode"
+import { clampDesktopWindowFrame } from "../src/window-bounds"
 
 function baseEnv(root: string, overrides: Record<string, string | undefined> = {}): Record<string, string | undefined> {
   return {
@@ -230,4 +231,16 @@ test("isolated mode supports bounded custom window dimensions while preserving d
     realHome,
   })
   expect(sized.enabled && sized.frame).toEqual({ width: 1440, height: 900 })
+  const floor = resolveIsolatedTestConfig({
+    argv: [],
+    env: baseEnv(tempRoot, { YCODING_DESKTOP_ISOLATED_WIDTH: "1000", YCODING_DESKTOP_ISOLATED_HEIGHT: "600" }),
+    realHome,
+  })
+  expect(floor.enabled && floor.frame).toEqual({ width: 1000, height: 600 })
+  const below = resolveIsolatedTestConfig({
+    argv: [],
+    env: baseEnv(tempRoot, { YCODING_DESKTOP_ISOLATED_WIDTH: "800", YCODING_DESKTOP_ISOLATED_HEIGHT: "480" }),
+    realHome,
+  })
+  expect(below.enabled && clampDesktopWindowFrame({ x: 80, y: 80, ...below.frame })).toEqual({ x: 80, y: 80, width: 1000, height: 600 })
 })

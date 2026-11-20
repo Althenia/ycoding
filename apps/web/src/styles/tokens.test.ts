@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { COLOR_ROLES } from "../theme/schemes"
 import { declarationsWhere, readStylesheet, widthThreshold, type Declarations, type Stylesheet } from "./css-rules"
 
 /**
@@ -13,85 +14,20 @@ import { declarationsWhere, readStylesheet, widthThreshold, type Declarations, t
  *   values, and both are absolute steps at a declared breakpoint, never a ratio.
  */
 
-const LIGHT = {
-  "--yc-green": "#27d17f",
-  "--yc-green-strong": "#0a7b47",
-  "--yc-green-soft": "rgba(39, 209, 127, 0.12)",
-  "--yc-primary-bg": "#0b8550",
-  "--yc-primary-fg": "#ffffff",
-  "--yc-yellow": "#f4bd3d",
-  "--yc-yellow-strong": "#946200",
-  "--yc-yellow-soft": "rgba(244, 189, 61, 0.16)",
-  "--yc-danger": "#c53a3a",
-  "--yc-danger-soft": "rgba(197, 58, 58, 0.1)",
-  "--yc-focus": "#0b8b50",
-  "--yc-signal": "#1962c0",
-  "--yc-scrim": "rgba(11, 15, 20, 0.45)",
-  "--yc-effort": "#554b72",
-  "--yc-effort-none": "#425466",
-  "--yc-effort-minimal": "#265c8c",
-  "--yc-effort-low": "#136673",
-  "--yc-effort-medium": "#0a7b47",
-  "--yc-effort-high": "#955711",
-  "--yc-effort-xhigh": "#88439c",
-  "--yc-effort-max": "#9d375b",
-  "--yc-context-system": "#3f6587",
-  "--yc-context-tools": "#0f6f6b",
-  "--yc-context-assistant": "#865700",
-  "--yc-context-reasoning": "#8a3aae",
-  "--yc-context-tool-calls": "#a5441a",
-  "--yc-bg": "#ffffff",
-  "--yc-surface": "#f7f9f8",
-  "--yc-surface-sunken": "#eff3f1",
-  "--yc-surface-raised": "#ffffff",
-  "--yc-text": "#0b0f14",
-  "--yc-text-muted": "#5c6672",
-  "--yc-text-subtle": "#646d78",
-  "--yc-border": "#e4e8e6",
-  "--yc-border-strong": "#78847e",
+const REMOVED = [
+  "--yc-bg", "--yc-surface", "--yc-surface-sunken", "--yc-surface-raised", "--yc-text", "--yc-text-muted", "--yc-text-subtle",
+  "--yc-border", "--yc-border-strong", "--yc-green", "--yc-green-strong", "--yc-green-soft", "--yc-primary-bg", "--yc-primary-fg",
+  "--yc-yellow", "--yc-yellow-strong", "--yc-yellow-soft", "--yc-danger", "--yc-danger-soft", "--yc-signal",
+  "--yc-effort", "--yc-effort-none", "--yc-effort-minimal", "--yc-effort-low", "--yc-effort-medium", "--yc-effort-high", "--yc-effort-xhigh", "--yc-effort-max",
+  "--yc-context-system", "--yc-context-tools", "--yc-context-assistant", "--yc-context-reasoning", "--yc-context-tool-calls",
+  "--yc-shadow-sm", "--yc-shadow-md", "--yc-shadow-lg", "--yc-radius-sm", "--yc-radius-md", "--yc-radius-lg", "--yc-radius-xl", "--yc-dur-slow",
+] as const
+
+const TERMINAL = {
   "--yc-terminal-bg": "#0c1413",
   "--yc-terminal-fg": "#d8e6de",
   "--yc-terminal-dim": "#8fa79b",
   "--yc-terminal-accent": "#5fe3a1",
-} as const
-
-const DARK = {
-  "--yc-green": "#27d17f",
-  "--yc-green-strong": "#67d7a4",
-  "--yc-green-soft": "rgba(103, 215, 164, 0.12)",
-  "--yc-primary-bg": "#67d7a4",
-  "--yc-primary-fg": "#04150c",
-  "--yc-yellow-strong": "#f0be62",
-  "--yc-yellow-soft": "rgba(244, 189, 61, 0.14)",
-  "--yc-danger": "#ef6f6f",
-  "--yc-danger-soft": "rgba(239, 111, 111, 0.14)",
-  "--yc-focus": "#67d7a4",
-  "--yc-signal": "#79b8ff",
-  "--yc-effort": "#d2aedf",
-  "--yc-effort-none": "#a9bacb",
-  "--yc-effort-minimal": "#91c1f0",
-  "--yc-effort-low": "#73d1dc",
-  "--yc-effort-medium": "#5fe3a1",
-  "--yc-effort-high": "#e4be7b",
-  "--yc-effort-xhigh": "#c6a1e0",
-  "--yc-effort-max": "#e2a2b9",
-  "--yc-context-system": "#8fb3d9",
-  "--yc-context-tools": "#5fd0c6",
-  "--yc-context-assistant": "#f7d37c",
-  "--yc-context-reasoning": "#d7a6f2",
-  "--yc-context-tool-calls": "#f7a77a",
-  "--yc-bg": "#0b1115",
-  "--yc-surface": "#11181d",
-  "--yc-surface-sunken": "#0e151a",
-  "--yc-surface-raised": "#151e24",
-  "--yc-text": "#f4f7f6",
-  "--yc-text-muted": "#99a2ad",
-  "--yc-text-subtle": "#7d8792",
-  "--yc-border": "#263039",
-  "--yc-border-strong": "#718278",
-  "--yc-shadow-sm": "0 1px 2px rgba(0, 0, 0, 0.4)",
-  "--yc-shadow-md": "0 10px 30px rgba(0, 0, 0, 0.45)",
-  "--yc-shadow-lg": "0 24px 56px rgba(0, 0, 0, 0.55)",
 } as const
 
 /** Type size and the line height that pairs with it. */
@@ -143,11 +79,14 @@ const INVARIANT_LAYOUT = {
   "--yc-hit-min": "44px",
   "--yc-control-pad-x": "16px",
   "--yc-border-width": "1px",
-  "--yc-radius-sm": "6px",
-  "--yc-radius-md": "10px",
-  "--yc-radius-lg": "14px",
-  "--yc-radius-xl": "20px",
+  "--yc-radius-detail": "4px",
+  "--yc-radius-control": "6px",
+  "--yc-radius-card": "8px",
+  "--yc-radius-composer": "12px",
   "--yc-radius-pill": "999px",
+  "--yc-icon-xs": "14px",
+  "--yc-icon-sm": "16px",
+  "--yc-icon-md": "20px",
   "--yc-measure": "68ch",
   "--yc-measure-narrow": "54ch",
   "--yc-measure-wide": "120ch",
@@ -158,6 +97,10 @@ const COMPOSITIONAL_LAYOUT = {
   "--yc-public-max": "1440px",
   "--yc-content-max-wide": "1600px",
   "--yc-rail-w": "256px",
+  "--yc-rail-min-w": "232px",
+  "--yc-rail-max-w": "360px",
+  "--yc-activity-w": "80px",
+  "--yc-status-h": "28px",
   "--yc-companion-w": "448px",
   "--yc-docs-nav-w": "248px",
   "--yc-docs-toc-w": "200px",
@@ -168,18 +111,34 @@ const MOTION = {
   "--yc-dur-instant": "80ms",
   "--yc-dur-quick": "140ms",
   "--yc-dur-base": "220ms",
-  "--yc-dur-slow": "320ms",
+  "--yc-dur-trace": "1760ms",
+  "--yc-dur-spin": "660ms",
   "--yc-ease-standard": "cubic-bezier(0.2, 0, 0, 1)",
   "--yc-ease-entrance": "cubic-bezier(0, 0, 0.2, 1)",
   "--yc-ease-exit": "cubic-bezier(0.4, 0, 1, 1)",
+  "--yc-ease-linear": "linear",
+  "--yc-ease-caret": "steps(2, jump-none)",
   "--yc-motion-spatial-dur": "var(--yc-dur-base)",
   "--yc-motion-effect-dur": "var(--yc-dur-quick)",
+  "--yc-motion-exit-dur": "var(--yc-dur-quick)",
+  "--yc-motion-feedback-dur": "var(--yc-dur-instant)",
+  "--yc-motion-travel": "1",
   "--yc-motion-ease": "var(--yc-ease-standard)",
 } as const
 
 const MOTION_REDUCED = {
   "--yc-motion-spatial-dur": "0s",
   "--yc-motion-effect-dur": "var(--yc-dur-instant)",
+  "--yc-motion-exit-dur": "0s",
+  "--yc-motion-travel": "0",
+} as const
+
+const MOTION_OFF = {
+  "--yc-motion-spatial-dur": "0s",
+  "--yc-motion-effect-dur": "0s",
+  "--yc-motion-exit-dur": "0s",
+  "--yc-motion-feedback-dur": "0s",
+  "--yc-motion-travel": "0",
 } as const
 
 const STACKING = {
@@ -191,33 +150,36 @@ const STACKING = {
 } as const
 
 describe("approved token contract", () => {
-  test("declares every contract colour with its approved light value", async () => {
-    const light = rootDeclarations(await readStylesheet("tokens.css"))
-    expect(pick(light, Object.keys(LIGHT))).toEqual(LIGHT)
-  })
-
-  test("declares every theme-dependent colour in the dark block", async () => {
-    const dark = blockDeclarations(await readStylesheet("tokens.css"), '[data-theme="dark"]')
-    expect(pick(dark, Object.keys(DARK))).toEqual(DARK)
-  })
-
-  test("keeps the brand accent, attention marker, and terminal inks identical across themes", async () => {
+  test("declares every color role in the light and dark blocks and none of the retired names", async () => {
     const sheet = await readStylesheet("tokens.css")
     const light = rootDeclarations(sheet)
     const dark = blockDeclarations(sheet, '[data-theme="dark"]')
-    // Identical ink on the terminal plate in both themes is the contract, so the
-    // dark block either repeats the value or omits the token entirely.
-    const identical = {
-      "--yc-green": "#27d17f",
-      "--yc-yellow": "#f4bd3d",
-      "--yc-terminal-bg": "#0c1413",
-      "--yc-terminal-fg": "#d8e6de",
-      "--yc-terminal-dim": "#8fa79b",
-      "--yc-terminal-accent": "#5fe3a1",
+    const roles = COLOR_ROLES.map((role) => `--yc-${role}`)
+    expect(roles.filter((role) => light[role] === undefined)).toEqual([])
+    expect(roles.filter((role) => dark[role] === undefined)).toEqual([])
+    const declared = sheet.rules.flatMap((rule) => Object.keys(rule.declarations))
+    expect(REMOVED.filter((name) => declared.includes(name))).toEqual([])
+  })
+
+  test("keeps the terminal plate identical across themes", async () => {
+    const sheet = await readStylesheet("tokens.css")
+    const light = rootDeclarations(sheet)
+    const dark = blockDeclarations(sheet, '[data-theme="dark"]')
+    for (const [token, value] of Object.entries(TERMINAL)) expect({ token, light: light[token], dark: dark[token] ?? light[token] }).toEqual({ token, light: value, dark: value })
+  })
+
+  test("no web stylesheet or component references a retired token", async () => {
+    const glob = new Bun.Glob("**/*.{css,ts,tsx,html}")
+    const root = new URL("../..", import.meta.url).pathname
+    const retired = new RegExp(`(${REMOVED.join("|")})(?![-a-z0-9])`)
+    const offenders: string[] = []
+    for await (const file of glob.scan({ cwd: root })) {
+      if (file.includes("node_modules") || file.startsWith("src/content/") || file.endsWith("tokens.test.ts")) continue
+      const text = await Bun.file(`${root}${file}`).text()
+      const match = text.match(retired)
+      if (match) offenders.push(`${file}: ${match[1]}`)
     }
-    for (const [token, value] of Object.entries(identical)) {
-      expect({ token, dark: dark[token] ?? light[token] }).toEqual({ token, dark: value })
-    }
+    expect(offenders).toEqual([])
   })
 
   test("declares a size and a line height for every type step", async () => {
@@ -233,8 +195,8 @@ describe("approved token contract", () => {
     expect(rootDeclarations(sheet)["--yc-size-display"]).toBe("40px")
     expect(rootDeclarations(sheet)["--yc-leading-display"]).toBe("44px")
     expect(stepDeclarations(sheet, 1024)).toMatchObject({
-      "--yc-size-display": "56px",
-      "--yc-leading-display": "60px",
+      "--yc-size-display": "48px",
+      "--yc-leading-display": "52px",
     })
   })
 
@@ -245,13 +207,10 @@ describe("approved token contract", () => {
     }
   })
 
-  test("declares the three elevation steps", async () => {
-    const light = rootDeclarations(await readStylesheet("tokens.css"))
-    expect(pick(light, ["--yc-shadow-sm", "--yc-shadow-md", "--yc-shadow-lg"])).toEqual({
-      "--yc-shadow-sm": "0 1px 2px rgba(11, 15, 20, 0.06)",
-      "--yc-shadow-md": "0 8px 24px rgba(11, 15, 20, 0.08)",
-      "--yc-shadow-lg": "0 20px 48px rgba(11, 15, 20, 0.16)",
-    })
+  test("declares one floating elevation per theme", async () => {
+    const sheet = await readStylesheet("tokens.css")
+    expect(rootDeclarations(sheet)["--yc-elevation-float"]).toBe("0 1px 2px rgba(0, 0, 0, 0.08), 0 12px 32px -8px rgba(0, 0, 0, 0.12)")
+    expect(blockDeclarations(sheet, '[data-theme="dark"]')["--yc-elevation-float"]).toBe("0 1px 2px rgba(0, 0, 0, 0.35), 0 12px 32px -8px rgba(0, 0, 0, 0.5)")
   })
 
   test("declares control geometry as an invariant", async () => {
@@ -281,6 +240,8 @@ describe("approved token contract", () => {
     )
     expect(pick(reduced, Object.keys(MOTION_REDUCED))).toEqual(MOTION_REDUCED)
     expect(Object.keys(reduced).sort()).toEqual(Object.keys(MOTION_REDUCED).sort())
+    const off = declarationsWhere(sheet, (rule) => rule.header === ':root[data-animations="off"]')
+    expect(off).toEqual(MOTION_OFF)
   })
 
   test("defines the semantic motion tokens in tokens.css only", async () => {

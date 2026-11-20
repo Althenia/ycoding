@@ -16,8 +16,8 @@ test("explicit motion off stops reasoning sparkles", () => {
 })
 
 test("reasoning sparkles derive their timing from motion tokens", () => {
-  expect(base(".model-control__sparkles").animation).toContain("calc(var(--yc-dur-slow) * 12.5)")
-  expect(base(".model-control__sparkles i").animation).toContain("calc(var(--yc-dur-slow) * 5)")
+  expect(base(".model-control__sparkles").animation).toContain("calc(var(--yc-dur-base) * 12.5)")
+  expect(base(".model-control__sparkles i").animation).toContain("calc(var(--yc-dur-base) * 5)")
 })
 
 test("keyboard draft geometry does not depend on hover", () => {
@@ -37,10 +37,10 @@ test("the expanded dock follows the floating card at its end edge and the collap
     order: "0",
     "align-self": "stretch",
     "min-block-size": "var(--yc-hit-min)",
-    border: "1px solid var(--yc-border-strong)",
-    "border-radius": "var(--yc-radius-xl)",
-    background: "var(--yc-surface-raised)",
-    "box-shadow": "var(--yc-shadow-md)",
+    border: "1px solid var(--yc-line-field)",
+    "border-radius": "var(--yc-radius-composer)",
+    background: "var(--yc-plane-raised)",
+    "box-shadow": "var(--yc-elevation-float)",
   })
   expect(base(".composer__dock-toggle")).toMatchObject({ "min-inline-size": "var(--yc-hit-min)", "min-block-size": "var(--yc-hit-min)" })
 })
@@ -48,13 +48,13 @@ test("the expanded dock follows the floating card at its end edge and the collap
 test("the composer is one flat rounded card whose borderless draft sits above a chip bar and whose border carries focus", () => {
   expect(base(".composer .composer__row")).toMatchObject({
     padding: "var(--yc-space-2) var(--yc-space-3)",
-    border: "1px solid var(--yc-border-strong)",
-    "border-radius": "var(--yc-radius-xl)",
-    background: "var(--yc-surface)",
+    border: "1px solid var(--yc-line-field)",
+    "border-radius": "var(--yc-radius-composer)",
+    background: "var(--yc-plane-raised)",
     "box-shadow": "none",
   })
   expect(composer.rules.some((rule) => rule.header.includes('[data-theme="dark"] .composer .composer__row'))).toBe(false)
-  expect(base(".composer .composer__row:has(.composer__input:focus)")["border-color"]).toBe("var(--yc-signal)")
+  expect(base(".composer .composer__row:has(.composer__input:focus)")["border-color"]).toBe("var(--yc-sky-ink)")
   expect(base(".mini-composer__input-wrap")).toMatchObject({ border: "0", "border-radius": "0", background: "transparent", padding: "0" })
   expect(composer.rules.some((rule) => rule.header.includes(".mini-composer__input-wrap:focus-within"))).toBe(false)
   expect(base(".composer__input, .composer__input:focus-visible")).toMatchObject({ border: "0", background: "transparent", "box-shadow": "none" })
@@ -72,7 +72,7 @@ test("the attachment disclosure stays available to assistive technology without 
 
 test("wide chip bar reads attach, agent, model and effort as six-pixel mono chips beside a brand send circle", () => {
   const chips = ".composer .composer__controls :is(.model-control__trigger, .mini-picker__trigger, .composer__effort)"
-  expect(wide(chips)).toMatchObject({ "border-radius": "var(--yc-radius-sm)", border: "1px solid var(--yc-border)", background: "var(--yc-surface-sunken)", font: "var(--yc-weight-regular) var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono)" })
+  expect(wide(chips)).toMatchObject({ "border-radius": "var(--yc-radius-control)", border: "1px solid var(--yc-line-subtle)", background: "var(--yc-plane-hover)", font: "var(--yc-weight-regular) var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono)" })
   expect(fine(chips)).toMatchObject({ "block-size": "28px", "min-block-size": "28px" })
   expect(fine(".composer .composer__controls :is(.mini-composer__send, .mini-composer__interrupt)")).toMatchObject({ "inline-size": "28px", "block-size": "28px" })
   expect(fine(".composer .composer__controls :is(.composer__attach, .composer__delivery-toggle, .composer__context-trigger)")).toMatchObject({ "inline-size": "24px", "block-size": "24px" })
@@ -80,8 +80,8 @@ test("wide chip bar reads attach, agent, model and effort as six-pixel mono chip
   expect(wide(chips)["padding-inline"]).toBe("6px")
   expect(wide(".composer .composer__controls .mini-picker__trigger > svg:first-child:not(:last-child)").display).toBe("none")
   expect(composer.rules.some((rule) => rule.header === ".composer .composer__row" && Object.keys(rule.declarations).some((property) => property.startsWith("transition")))).toBe(false)
-  expect(base(".composer__attach")).toMatchObject({ background: "transparent", color: "var(--yc-signal)" })
-  expect(base(".mini-composer__send")).toMatchObject({ background: "var(--yc-primary-bg)", color: "var(--yc-primary-fg)" })
+  expect(base(".composer__attach")).toMatchObject({ background: "transparent", color: "var(--yc-sky-ink)" })
+  expect(base(".mini-composer__send")).toMatchObject({ background: "var(--yc-cobalt-solid)", color: "var(--yc-on-cobalt)" })
   expect(base(".mini-composer__send:disabled").opacity).toBe(".45")
   expect(wide(".composer__spacer").flex).toBe("1 1 0")
   expect(base(".composer__effort-panel .reasoning-effort")["max-inline-size"]).toBe("20rem")
@@ -102,7 +102,7 @@ test("at fine-pointer desktop widths the expanded dock takes no row: the transpa
 
 test("content-level light-mode pickers keep their strong outline while attach stays borderless", () => {
   const light = declarationsWhere(composer, (rule) => rule.header.includes(':root[data-theme="light"] .mini-picker__trigger'))
-  expect(light["border-color"]).toBe("var(--yc-border-strong)")
+  expect(light["border-color"]).toBe("var(--yc-line-field)")
   expect(composer.rules.some((rule) => rule.header.includes(':root[data-theme="light"] .composer__attach'))).toBe(false)
 })
 
@@ -122,7 +122,7 @@ test("in a selected conversation the composer floats over the transcript, which 
   expect(base(floating)).toMatchObject({ "z-index": "2", "pointer-events": "none" })
   expect(base(".composer-resident .composer > *")["pointer-events"]).toBe("auto")
   expect(base(`${floating} .composer`).background).toBeUndefined()
-  expect(base(`${floating} .composer:not(.composer--collapsed) .composer__dock-toggle`)).toMatchObject({ "border-radius": "var(--yc-radius-pill)", background: "var(--yc-surface-raised)" })
+  expect(base(`${floating} .composer:not(.composer--collapsed) .composer__dock-toggle`)).toMatchObject({ "border-radius": "var(--yc-radius-pill)", background: "var(--yc-plane-raised)" })
   expect(source).toContain("--yc-composer-reserve")
   expect(base(".composer.composer--metadata-in-transcript")["padding-block"]).toBe("var(--yc-space-1) max(var(--yc-space-4), env(safe-area-inset-bottom))")
 })

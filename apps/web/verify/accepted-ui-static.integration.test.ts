@@ -143,7 +143,7 @@ for (const [width, height] of [[1440, 900], [390, 844]] as const) {
     const h = await harness(width, height, true)
     try {
       await h.wait(`document.body.textContent.includes('Atlas')`)
-      const nav = width < 768 ? ".bottom-nav" : ".remote-nav"
+      const nav = width < 768 ? ".bottom-nav" : ".activity-bar"
       expect(await h.page.evaluate(`[...document.querySelectorAll('${nav} a[href]')].filter(item => item.getBoundingClientRect().width > 0).map(item => item.getAttribute('href'))`)).toEqual(expect.arrayContaining(["/remote/sessions", "/remote/usage", "/remote/settings"]))
       await h.wait(`document.querySelector('[aria-label="Open Team"]:not([inert])')?.getBoundingClientRect().width > 0`)
       await h.waitRequest("session.review.list")
@@ -235,7 +235,7 @@ for (const [width, height] of [[1440, 900], [390, 844]] as const) {
       expect(await h.page.evaluate(`[...document.querySelectorAll('.team-view__usage dt')].map(item => item.textContent)`)).toEqual(["Tokens (inclusive)", "Cost (inclusive)", "Context", "Cache"])
       if (width < 768) await h.page.pressEscape()
       else await h.page.evaluate(`document.querySelector('[aria-label="Close Team"]').click()`)
-      const nav = width < 768 ? ".bottom-nav" : ".remote-nav"
+      const nav = width < 768 ? ".bottom-nav" : ".activity-bar"
       await h.page.evaluate(`document.querySelector('${nav} a[href="/remote/usage"]').click()`)
       await h.wait(`location.pathname === '/remote/usage' && document.body.textContent.includes('Model incidents')`)
       for (const label of ["Today", "Yesterday", "Last 30 days", "Codex", "Model incidents"]) await h.wait(`document.querySelector('.usage-page')?.textContent.includes(${JSON.stringify(label)})`)

@@ -20,8 +20,8 @@ describe("command palette stylesheet", () => {
     expect(base(sheet, ".command-palette__option")["min-block-size"]).toBe("var(--yc-hit-min)")
     expect(base(sheet, ".command-palette__search")["min-block-size"]).toBe("var(--yc-hit-min)")
     expect(base(sheet, ".command-palette__option[data-active]")).toMatchObject({
-      background: "var(--yc-green-soft)",
-      "border-inline-start-color": "var(--yc-green-strong)",
+      background: "var(--yc-cobalt-tonal)",
+      "border-inline-start-color": "var(--yc-cobalt-ink)",
     })
   })
 

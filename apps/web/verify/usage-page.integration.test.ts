@@ -243,7 +243,7 @@ test("quota status stays concise, diagnostics open by keyboard, and exhausted, s
       expect(closed).not.toContain("12,345.678")
       expect(await page.evaluate(`!!document.querySelector('.usage-consumption__row button[aria-label*=" details"]') && !!document.querySelector('.usage-window--exhausted .usage-pace--exhausted')?.textContent.includes('exhausted') && !document.querySelector('dialog[open]')`)).toBe(true)
       const colors = await page.evaluate(`(() => {
-        const probe = document.createElement('i'); probe.style.color = 'var(--yc-danger)'; document.body.append(probe)
+        const probe = document.createElement('i'); probe.style.color = 'var(--yc-coral-ink)'; document.body.append(probe)
         const danger = getComputedStyle(probe).color; probe.remove()
         const fill = (window) => getComputedStyle(window.querySelector('.usage-meter > span')).backgroundColor
         return { exhausted: fill(document.querySelector('.usage-window--exhausted')), normal: fill(document.querySelector('.usage-window:not(.usage-window--exhausted):has(.usage-meter)')), danger }

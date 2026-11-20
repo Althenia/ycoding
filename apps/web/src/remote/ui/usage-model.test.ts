@@ -149,14 +149,14 @@ test("donut total stays exact below the compact threshold and rounds compact val
 test("pace pills warn only when a window is consumed faster than its period elapses", async () => {
   const css = await Bun.file(new URL("./usage.css", import.meta.url)).text()
   const rule = (selector: string) => css.match(new RegExp(`\\${selector} \\{([^}]*)\\}`))?.[1] ?? ""
-  expect(rule(".usage-pace--ahead")).toContain("var(--yc-yellow-strong)")
+  expect(rule(".usage-pace--ahead")).toContain("var(--yc-amber-ink)")
   expect(rule(".usage-pace--below")).not.toMatch(/danger|yellow/)
-  expect(rule(".usage-pace--below")).toContain("var(--yc-text-muted)")
+  expect(rule(".usage-pace--below")).toContain("var(--yc-ink-secondary)")
 })
 
 test("usage surface uses rounded tokens and disables entrance motion when reduced motion is preferred", async () => {
   const css = await Bun.file(new URL("./usage.css", import.meta.url)).text()
-  expect(css).toContain("border-radius: calc(var(--yc-radius-xl) - var(--yc-space-2))")
+  expect(css).toContain("border-radius: calc(var(--yc-radius-composer) - var(--yc-space-2))")
   expect(css).toContain("border-radius: var(--yc-radius-pill)")
   expect(css).toContain("@media (prefers-reduced-motion: reduce)")
   expect(css).toContain(".usage-meter > span, .usage-donut__arc, .usage-chart__tooltip, .usage-distribution__tooltip { animation: none; }")

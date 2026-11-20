@@ -26,7 +26,7 @@ const columns = [
   { key: "output", label: "Output" }, { key: "reasoning", label: "Reasoning" }, { key: "cacheRead", label: "Cache read" }, { key: "cacheWrite", label: "Cache write" }, { key: "cost", label: "Cost" },
 ] as const
 const count = (value: number) => new Intl.NumberFormat().format(value)
-const distributionColors = ["var(--yc-green-strong)", "var(--yc-yellow-strong)", "var(--yc-text-muted)", "var(--yc-green)", "var(--yc-border-strong)"]
+const distributionColors = ["var(--yc-cobalt-ink)", "var(--yc-amber-ink)", "var(--yc-ink-secondary)", "var(--yc-mint-graphic)", "var(--yc-line-field)"]
 const tileIDs = ["today", "yesterday", "last30"] as const
 const tileLabels = { today: "Today", yesterday: "Yesterday", last30: "Last 30 days" }
 const providerKey = (provider: UsageProvider) => `${provider.providerID}\u0000${provider.profile ?? ""}`
