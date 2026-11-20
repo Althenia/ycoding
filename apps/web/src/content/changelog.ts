@@ -22,6 +22,20 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.12.1",
+    date: "2026-11-20",
+    title: "Instrument redesign for Web and Desktop",
+    tags: ["Changed"],
+    changes: [
+      { tag: "Changed", text: "Web and Desktop use the Instrument design: one shared palette of plane, line, ink and cobalt colors with clearer field and pane boundaries, so state, focus and structure read at a glance in light and dark themes." },
+      { tag: "Changed", text: "The Web workspace from 768px wide shows a labeled activity bar for Chat, Sessions, Projects, Workspaces, Usage and Settings, a searchable Session list column, and a status bar with connection, machine, model, autonomy, context and running-Session readouts. Unreported values are left out rather than shown as zero." },
+      { tag: "Changed", text: "While a Session runs, a thin mint trace follows the status bar and conversation header and branches when a child task starts. With reduced motion turned on, every loop stops and the trace shows as a static line." },
+      { tag: "Changed", text: "Pending request cards use a tonal header band by kind (amber for permissions and guardrails, sky for questions and forms, violet for reviews), and the New chat repository picker and focus rings follow the same palette." },
+      { tag: "Changed", text: "Desktop groups its Session list into Needs action, Running, Pinned and Recent, and its minimum window size is 1000×600." },
+      { tag: "Changed", text: "Agents finishing or integrating work now remove unused temporary files, remove completed or merged worktrees with non-force `git worktree remove`, prune dead worktree registrations, and delete merged local branches with `git branch -d`, leaving dirty, active or unmerged work in place." },
+    ],
+  },
+  {
     version: "0.12.0",
     date: "2026-11-19",
     title: "Desktop window bounds, inset Settings, and Dot prompt bubbles",
