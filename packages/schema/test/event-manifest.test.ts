@@ -286,6 +286,7 @@ describe("public event manifest", () => {
         "session.input.withdrawn.1",
         "session.input.steered.1",
         "session.input.consumed.1",
+        "session.input.deleted.1",
         "session.execution.started.1",
         "session.execution.succeeded.1",
         "session.execution.failed.1",
@@ -439,13 +440,14 @@ describe("public event manifest", () => {
     expect(SessionEvent.Deleted.durable?.version).toBe(2)
   })
 
-  test("defines minimal durable pending input withdrawal and steer events", () => {
+  test("defines minimal durable input withdrawal, steer, and delete events", () => {
     const sessionID = SessionID.make("ses_pending_controls")
     const inputID = SessionMessage.ID.make("msg_pending_controls")
 
     for (const [definition, type] of [
       [SessionEvent.InputWithdrawn, "session.input.withdrawn"],
       [SessionEvent.InputSteered, "session.input.steered"],
+      [SessionEvent.InputDeleted, "session.input.deleted"],
     ] as const) {
       expect(definition.type).toBe(type)
       expect(definition.durable?.aggregate).toBe("sessionID")
