@@ -39,6 +39,7 @@ test("direct and connector Stop use the same authenticated server and exact pend
     observe: async () => { throw new Error("No active target") },
     perform: async () => { throw new Error("No active target") },
     preview: async () => undefined,
+    resume: async () => false,
     detach: async () => {},
   })
   const server = await startServer(directory, { replacements: [[InteractionRuntime.node, Layer.succeed(InteractionRuntime.Service, authority)]] })

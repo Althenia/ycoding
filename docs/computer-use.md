@@ -1,6 +1,29 @@
 # Native computer use
 
-These operations describe the legacy `computer` tool and its macOS helper. The built-in model tool is `interaction`, which uses the YCoding Interaction helper. The legacy operation names and configuration below do not apply to `interaction`.
+These operations describe the legacy `computer` tool and its macOS helper. The built-in model tool is `interaction`, which uses the YCoding Interaction helper described in the next section. The legacy operation names and configuration below do not apply to `interaction`.
+
+## YCoding Interaction helper on macOS
+
+`YCoding Interaction.app` (bundle ID `app.ycoding.interaction`) runs one helper process per adapter connection, verifies the signed app and its process before speaking to it, and exits with its owner. It acts on one approved window at a time and keeps a non-activating Stop panel visible while a lease is active. The helper adds no menu bar item.
+
+`makeMacOSInteraction(...).available(signal)` starts a helper, verifies the app and the running process against the pinned certificate and bundle ID, completes the versioned handshake, and closes that connection. It resolves `true` only after the handshake succeeds and `false` on a missing or unverifiable app, a helper that exits early, an aborted signal, or the 10-second bound.
+
+Every action runs in the background. Observation reads the window's Accessibility tree, `press` uses AX Press, `setValue` sets the AX value of an approved search field, `scroll` sets the value of the window's single vertical scrollbar, and preview uses ScreenCaptureKit for that window only. None of these activates an application, raises or orders a window front, switches Spaces, moves the pointer, or takes keyboard focus. If the target application brings itself forward during an action, the outcome is uncertain and the lease stops; the helper never counter-activates the user's application.
+
+When an action cannot finish without the user in front, the helper pauses the lease instead of forcing the foreground. The action result is `{ outcome: "paused", reason }` and the adapter reports the same reason to the Interaction authority, which shows the Session as paused. Reasons:
+
+| Reason | Detected when |
+| --- | --- |
+| `dialog` | The window has a sheet attached, or another window of the application is modal. |
+| `sensitive` | The window contains a secure text field (role or subrole) or an element labeled as a password, one-time code, payment, recovery, or similar secret, or its title names one. |
+| `captcha` | An element's title, description, help, identifier, or placeholder mentions a CAPTCHA. |
+| `foreground_required` | The application rejects the AX action or attribute as unsupported, or a value set reports success while the field keeps its previous value. |
+
+A pause that occurs before dispatch leaves the window untouched. A `foreground_required` pause after dispatch means the helper verified that the change did not apply. While paused, the helper refuses observation, actions, and previews, and discards any pending action confirmation and observation revision. The Stop panel shows the reason in the attention color with a Resume button. Resume from that panel, or a server resume through `InteractionDriver.resume`, clears the pause. When the panel's Resume arrives before the paused result of the same action is delivered, that action returns `{ outcome: "refused", reason: "stale" }` and the Session stays active; the next action needs a fresh observation, which pauses again if the condition remains. Stop, the Stop panel, detach, target loss, and owner exit revoke a paused lease exactly as an active one.
+
+### Chrome profile consent
+
+First-time authorization of a Chrome profile uses `confirmChromeProfile({ profileLabel, matchCode }, signal)` from `makeMacOSInteraction`. It opens a one-shot helper connection that shows a non-activating **YCoding Chrome Profile** panel on every Space with the profile label and the match code the extension popup shows. The profile label must be 1–128 characters with no control or format characters and no surrounding spaces; the match code must be 4–32 ASCII letters, digits, or hyphens. Invalid values return `false` without starting the helper. Allow has no keyboard shortcut and counts only while the panel is visible on screen. Deny, closing the panel, the 60-second deadline, an aborted signal, helper exit, and any malformed reply all return `false`.
 
 ## Supported capabilities
 
@@ -65,7 +88,7 @@ iTerm text uses the normal `computer` permission boundary and shell guardrail de
 
 Every desktop operation requires `computer` permission before native dispatch. Desktop window operations approve per app: the saved permission resource is `macos.bundle_id/<bundle_id>/desktop` (PID and window ID, still required exactly on every call, travel in the request metadata), so approving a window of an app covers its later windows. Before permission, Core applies a static bundle policy: system-security and credential apps (System Settings, Keychain Access, 1Password, Bitwarden, Dashlane) and the `YCoding Computer Use` helper itself fail closed as `app_not_allowed`; the comma-separated bundle IDs in `YCODING_COMPUTER_ALLOW_APPS` remove bundles from that forbidden list for users who accept the risk. Terminals are elevated-risk: their approval is never saved, so each call asks again. Read-only desktop calls (inspect, query, capture, observe) skip guardrail review, while mutating desktop actions (clicks, typing, paste, keys, scroll, drag, select/perform actions, stage, unstage, launch, quit) go through ordinary guardrail review; deny decisions block either way. Sessions created by the Dots executor for remote threads use a distinct `remote.` permission namespace (for example `remote.macos.bundle_id/<bundle_id>/desktop`), so locally saved approvals never authorize remotely driven control. Desktop mutations re-snapshot at 50 ms intervals until two consecutive revisions agree, bounded to approximately 750 ms, and return that settled revision for chaining actions without an intervening inspect. `effect` reports an AX revision difference or a bounded image difference when AX is unchanged; `changed` is not proof of the intended outcome, `unchanged` means neither observation changed, and `unverified` means neither can establish one. On `unchanged`, do not repeat the same action; inspect for an AX element route or report no effect. A stale revision requires reinspection; an uncertain mutating result invalidates the claim and requires inspection before further mutation.
 
-Desktop tools reject `app.ycoding.interaction` before permission or dispatch. Its approval and enrollment windows are reserved for the person using the Mac. `YCODING_COMPUTER_ALLOW_APPS` cannot grant access to that bundle.
+Desktop tools reject `app.ycoding.interaction` before permission or dispatch. Its approval and consent windows are reserved for the person using the Mac. `YCODING_COMPUTER_ALLOW_APPS` cannot grant access to that bundle.
 
 If a mutating helper service call settles ambiguously, YCoding reports an unknown outcome and invalidates the claim. It does not replay the mutation automatically.
 

@@ -2,11 +2,54 @@
 
 ## Connect Chrome
 
-Use the signed macOS package with Chrome and the YCoding service on the same Mac. The service must listen on `127.0.0.1`. The **Connect Chrome** command in the terminal shows these instructions:
+Use the signed macOS package with Chrome and the YCoding service on the same Mac. The service must listen on `127.0.0.1`. The **Connect Chrome** command in the terminal shows these steps:
 
-1. Find **YCoding > Connect Chrome** in the macOS menu bar. If the menu is unavailable, check that the signed **YCoding Interaction** helper is beside the executable and the local service is listening on `127.0.0.1`.
-2. In `chrome://extensions`, turn on **Developer mode**, choose **Load unpacked**, and select `ycoding-chrome-extension` beside the `ycoding` executable. Open the **YCoding Interaction** popup. If it still shows the old extension after an update, select **Reload** in `chrome://extensions`.
-3. Choose **Connect Chrome** in the macOS menu and authenticate. Enter the private panel's address and one-time code in **Local service address** and **Pairing code**, then choose **Connect** in the extension. Keep the code out of chat and model prompts. Approve tab access separately for the selected Session.
+1. In `chrome://extensions`, turn on **Developer mode**, choose **Load unpacked**, and select `ycoding-chrome-extension` beside the `ycoding` executable. After an update, select **Reload** if the popup still shows the old extension.
+2. Open the **YCoding Interaction** popup and choose **Connect**. The popup shows a short match code, and the Mac shows a native panel with the Chrome profile label and the same code. Choose **Allow** only when the codes match. Deny, closing the panel, or waiting 60 seconds refuses the profile. If YCoding listens on another loopback port, set **Local service address** under **Advanced** before connecting; the default is `http://127.0.0.1:42188`.
+3. Chrome reconnects on its own after that. Each Session still asks separately for tab control, and you approve it in the popup.
+
+### Profile authorization
+
+- The extension generates a random 256-bit profile ID and keeps it, with the server address and credential, in `chrome.storage.local`. The match code is the first 40 bits of `SHA-256("ycoding-chrome-profile:" + profileID)` in Crockford base32, shown as `XXXX-XXXX`. The extension and the server compute it independently.
+- On **Allow**, the server issues a random 256-bit credential to that connection once and stores only its SHA-256 digest, with the profile ID, label and creation time, in `interaction-chrome-profiles.json` under YCoding's global state directory. The file is written with mode `0600` and keeps at most 32 profiles; enrolling a 33rd drops the oldest. An unreadable or malformed file authorizes nobody.
+- A stored credential reconnects without a prompt when the service worker starts, when Chrome starts, after an extension reload, after a YCoding restart, and after a dropped connection. Reconnecting restores only the link: no Session control, debugger attachment, tab group, capture or preview comes back, and each Session asks for tab control again. The extension discards a stored credential or profile ID that is not a 43-character base64url value and shows **Not connected**. Retries back off from 1 to 30 seconds, and a 30-second alarm wakes a stopped worker. While connected, the worker sends a keepalive frame every 20 seconds.
+- An unknown profile, a wrong or forgotten credential, and a refused enrollment close the socket with code `4401`. The extension then clears its credential and shows that this Chrome profile is no longer allowed; it never enrolls again without another **Connect**. Only one enrollment waits at a time, and one Chrome profile holds the connection; another profile receives `4409`.
+- **Forget this profile** under **Advanced** stops control in this browser, deletes the server's digest for the profile, and then clears the extension's credential. If YCoding is unreachable, the extension keeps only the pending revocation and finishes it when the service is reachable again.
+
+### Control in Chrome
+
+- An approved existing tab, or a new background tab that YCoding opens, joins one adapter-owned **YCoding control** group per window, created on first control and reused for later controlled tabs. A tab in one of your own groups is never moved; the popup asks you to move it out first. When the last control in a window ends, YCoding ungroups its tabs, so the group disappears while every tab stays open. YCoding closes only the background tabs it opened, and only while they are inactive.
+- While a tab is controlled, its toolbar icon switches to the active YCoding icon, its badge reads **ON**, and its favicon shows the YCoding mark. Chrome's native debugger infobar with **Cancel** stays visible. Stop restores the idle icon.
+- Actions never activate a tab, focus a window, or raise Chrome. When a step needs you, such as a page file chooser, a JavaScript dialog, a human check, a sensitive field, or **Take over** in the popup, control pauses at once without retrying the step. The popup and mini panel show **Paused** with the reason and **Resume**, and YCoding refuses further observations and actions until you resume or the Session requests resume.
+- A Session's Script or Code run executes in an isolated world of the controlled tab. It consumes the current observation. If the tab no longer shows the approved page after a run, control ends and the run's result is still returned. The extension confines each run to the one tab the control grant authorizes:
+  - **One tab.** Every debugger command a run sends goes to that tab's ID through the debugger session YCoding attached for control. A command naming another tab is refused.
+  - **Method allowlist.** A run may send only `Runtime.enable`, `Runtime.disable`, `Runtime.evaluate`, `Runtime.callFunctionOn`, `Runtime.releaseObjectGroup`, `Runtime.terminateExecution`, `Page.getFrameTree`, `Page.createIsolatedWorld`, `Page.addScriptToEvaluateOnNewDocument` and `Page.removeScriptToEvaluateOnNewDocument`. Every other command is refused before it reaches Chrome. That includes every `Target`, `Browser`, `Storage` and `Network` command (so no cookie reads), navigation, screenshots, input dispatch and request interception.
+  - **No other targets.** The extension never attaches to child targets or popups and never sends a `Target` command, including `Target.setAutoAttach` and `Target.setDiscoverTargets`.
+  - **Event scope.** Debugger events that come from a child session or another target are dropped. A run receives only events from its own tab's top-level target, and its result, console entries and errors go only to the lease and Session that started it. A request that names another Session's lease is refused.
+  - **Related tabs.** A run is refused with `policy`, and control stays active, when its tab was opened by another tab or has opened one (Chrome's `openerTabId`), because such tabs can reach each other's windows.
+  - **Stop and revocation.** Stop, revocation, lease expiry or the debugger detaching first aborts the run and, while the debugger is still attached, sends `Runtime.terminateExecution` through the tab's debugger session. The extension then discards the run's isolated worlds and detaches the debugger. The run settles as `stopped` at once. A later run on that grant is refused `stale` by YCoding, and the extension refuses any request on the revoked lease with `ownership`.
+  - **Inside the page.** Runs and model clicks carry no user activation, so a page cannot open a file picker or a popup from them. The isolated world each run uses restricts page APIs as follows:
+    - `window.open` and three-argument `document.open` return `null` and open nothing.
+    - `opener`, and `postMessage` or `MessageEvent.source` for any window outside this tab's own frames, throw `SecurityError`.
+    - `BroadcastChannel`, `Worker`, `SharedWorker` and `navigator.serviceWorker` throw `SecurityError`.
+    - `localStorage`, `sessionStorage`, `indexedDB`, `document.cookie`, `cookieStore`, `caches`, `navigator.locks` and `navigator.storage` throw `SecurityError`.
+    - `URL.createObjectURL` throws `SecurityError`.
+    - Creating or inserting `script`, `iframe`, `frame`, `frameset`, `object`, `embed`, `base`, `meta`, `link`, `portal` or `fencedframe` elements, or SVG `script`, `animate` or `set`, throws `SecurityError`. This covers clones, fragments, shadow roots and `Range` insertion.
+    - Changing an attribute or the text of an existing `script`, `frame`, `object`, `embed`, `base`, `meta`, `link` or `portal` element throws `SecurityError`.
+    - Setting any `on*` attribute throws `SecurityError` through every attribute-writing API.
+    - A `javascript:` URL in `href`, `src`, `action`, `formaction`, `xlink:href` or another URL-valued attribute throws `SecurityError`, including with leading spaces, embedded tabs or mixed case.
+    - `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `setHTMLUnsafe`, `Document.parseHTMLUnsafe`, `document.write`, `document.writeln`, `execCommand`, `Range.createContextualFragment`, `DOMParser` and `srcdoc` throw `SecurityError`.
+    - `click()`, a dispatched `click` or `DOMActivate` event, `submit()` and `requestSubmit()` throw `SecurityError` when the link or form would leave this tab: a named target, `_blank`, a `<base target>` or a `javascript:` URL. Same-tab `_self`, `_parent` and `_top` are allowed.
+    - Sensitive form fields read as empty through `value`, `defaultValue`, `getAttribute`, `Attr.value` and `FormData`.
+    - Every override is non-configurable and lives only in the isolated world, so neither the page nor the run can undo it.
+    - Discarding a world removes its timers, listeners and observers.
+- **Stop control** in the popup or mini panel revokes action admission at once, before Chrome cleanup finishes. The Session's control status reports the same cleanup result the extension saw. If Chrome refuses to ungroup or close a controlled tab, Stop reports that cleanup was not confirmed and the tab stays in the YCoding control group until you move it out.
+
+### Mini panel
+
+**Mini panel** in the popup opens a small Chrome popup window, 360 by 480 pixels, for the controlled tab. It shows the controlling Session's title, the status, a live preview, **Capture**, **Stop**, and **Resume** while paused. After a capture is sent, the status briefly reads **Capture sent**; failures appear as an alert below the buttons. Only your click opens or focuses it. The live preview stays in the panel and never leaves the browser.
+
+**Capture** sends one frame to the Session that owns that control, and only on your click. Before the screenshot leaves the browser, the extension paints opaque boxes over password, one-time-code, payment, email, phone and address fields, elements marked `data-sensitive` or `data-private`, and visible text that matches the redaction patterns. The page title and URL are redacted before sending, and YCoding applies the same text redaction again before the Session receives the capture. Capture is refused on pages with child frames or more elements than it can inspect.
 
 ## Legacy browser bridge
 

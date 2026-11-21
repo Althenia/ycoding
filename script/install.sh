@@ -237,7 +237,7 @@ if printf '%s\n' "${version_core%%-*}" | awk -F . '
   END { exit !found }
 '; then
   interaction_layout=true
-  extension_files="manifest.json popup.css popup.html popup.js service-worker.js"
+  extension_files="icons/active-16.png icons/active-32.png icons/idle-128.png icons/idle-16.png icons/idle-32.png icons/idle-48.png manifest.json panel.css panel.html panel.js popup.css popup.html popup.js service-worker.js"
 fi
 # Releases after 0.7.1, including their prereleases, include the Chrome extension.
 if printf '%s\n' "${version_core%%-*}" | awk -F . '

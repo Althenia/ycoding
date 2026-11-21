@@ -1,6 +1,13 @@
 import type { Interaction } from "../../../../packages/schema/src/interaction"
 
-export type InteractionStatus = typeof Interaction.Status.Encoded
+export type InteractionPauseReason = "foreground_required" | "file_chooser" | "dialog" | "captcha" | "sensitive" | "user_takeover"
+export type InteractionStatus = typeof Interaction.Status.Encoded | {
+  readonly state: "paused"
+  readonly platform: InteractionPlatform
+  readonly generation: string
+  readonly label: string
+  readonly reason: InteractionPauseReason
+}
 export type InteractionPlatform = typeof Interaction.Platform.Encoded
 type Frame = Omit<typeof Interaction.Frame.Encoded, "base64"> & { readonly bytes: Uint8Array<ArrayBuffer> }
 type Request = typeof Interaction.Request.Encoded
@@ -9,6 +16,7 @@ type Source = {
   status: (signal: AbortSignal) => Promise<ReadStatus>
   preview: (generation: string, signal: AbortSignal) => Promise<unknown>
   stop: (generation: string) => Promise<unknown>
+  resume?: (generation: string) => Promise<unknown>
   request?: (proposal: Request) => Promise<unknown>
 }
 
@@ -17,7 +25,7 @@ export type InteractionView = {
   readonly revealed: boolean
   readonly frame?: Frame
   readonly readingFrame?: boolean
-  readonly busy?: "stop" | "request"
+  readonly busy?: "stop" | "request" | "resume"
   readonly notice?: string
 }
 
@@ -28,6 +36,17 @@ const record = (value: unknown): Record<string, unknown> | undefined => value !=
 export const interactionGeneration = (value: unknown): value is string =>
   typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)
 
+const pauseReasonLabels: Record<InteractionPauseReason, string> = {
+  foreground_required: "Needs window focus",
+  file_chooser: "File chooser open",
+  dialog: "Dialog open",
+  captcha: "CAPTCHA check",
+  sensitive: "Sensitive field",
+  user_takeover: "Paused by you",
+}
+const isPauseReason = (value: unknown): value is InteractionPauseReason =>
+  typeof value === "string" && Object.hasOwn(pauseReasonLabels, value)
+
 export function readInteractionStatus(value: unknown): InteractionStatus | undefined {
   const status = record(value)
   if (status?.state === "unavailable") return { state: "unavailable" }
@@ -36,6 +55,8 @@ export function readInteractionStatus(value: unknown): InteractionStatus | undef
   if (status.state === "pending") return { state: "pending", ...selection }
   if (status.state === "active" && typeof status.label === "string" && status.label.length <= 256 && !/[\u0000-\u001f\u007f]/u.test(status.label))
     return { state: "active", ...selection, label: status.label }
+  if (status.state === "paused" && typeof status.label === "string" && status.label.length <= 256 && !/[\u0000-\u001f\u007f]/u.test(status.label) && isPauseReason(status.reason))
+    return { state: "paused", ...selection, label: status.label, reason: status.reason }
   if (status.state !== "stopped" || (status.cleanup !== "pending" && status.cleanup !== "complete" && status.cleanup !== "failed")) return undefined
   const reason = status.reason
   if (reason === "stopped" || reason === "rejected" || reason === "expired" || reason === "disconnected" || reason === "target_lost" || reason === "uncertain" || reason === "permission" || reason === "shutdown")
@@ -86,7 +107,19 @@ function readyFrame(value: unknown, generation: string): Frame | undefined {
 
 const active = (status: InteractionView["status"]) => typeof status !== "string" && status.state === "active" ? status : undefined
 export const stoppableGeneration = (status: InteractionView["status"]) =>
-  typeof status !== "string" && (status.state === "pending" || status.state === "active") ? status.generation : undefined
+  typeof status !== "string" && (status.state === "pending" || status.state === "active" || status.state === "paused") ? status.generation : undefined
+export const resumableGeneration = (status: InteractionView["status"]) =>
+  typeof status !== "string" && status.state === "paused" ? status.generation : undefined
+export function interactionControlVisible(view: InteractionView | undefined) {
+  if (!view) return false
+  if (view.busy === "request" || view.notice) return true
+  if (typeof view.status === "string") return false
+  return view.status.state !== "unavailable"
+}
+
+export function interactionPauseReasonLabel(reason: InteractionPauseReason) {
+  return pauseReasonLabels[reason]
+}
 
 export function interactionViewLabel(status: InteractionView["status"]) {
   if (status === "checking") return "Checking interaction…"
@@ -96,6 +129,7 @@ export function interactionViewLabel(status: InteractionView["status"]) {
   const platform = status.platform === "chrome" ? "Chrome" : "macOS"
   if (status.state === "pending") return status.platform === "chrome" ? "Chrome control · Awaiting local approval" : "Awaiting approval in macOS"
   if (status.state === "active") return `${platform} control active${status.label ? ` · ${status.label}` : ""}`
+  if (status.state === "paused") return `${platform} control paused${status.label ? ` · ${status.label}` : ""} · ${interactionPauseReasonLabel(status.reason)}`
   const reason = {
     stopped: "", rejected: " · Approval declined", expired: " · Grant expired", disconnected: " · Platform disconnected",
     target_lost: " · Target lost", uncertain: " · Last action unconfirmed", permission: " · Permission lost", shutdown: " · Backend stopped",
@@ -200,14 +234,14 @@ export function createInteractionControl(publish: (view: InteractionView | undef
 
   const mutate = async (kind: NonNullable<InteractionView["busy"]>, send: () => Promise<unknown>) => {
     const scope = owner
-    if (!scope || view.busy === "stop" || (kind === "request" && view.busy)) return
+    if (!scope || view.busy === "stop" || (kind !== "stop" && view.busy)) return
     const revision = ++mutationRevision
     const current = () => owner === scope && revision === mutationRevision
     clearPreview()
     update({ busy: kind, revealed: false, notice: undefined })
     try { await send() }
     catch {
-      if (current()) update({ notice: kind === "stop" ? "Stop was not confirmed. Check the reported status." : "The request was not confirmed. Check the reported status." })
+      if (current()) update({ notice: kind === "stop" ? "Stop was not confirmed. Check the reported status." : kind === "resume" ? "Resume was not confirmed. Check the reported status." : "The request was not confirmed. Check the reported status." })
     }
     if (!current()) return
     update({ busy: undefined, status: "checking" })
@@ -219,6 +253,10 @@ export function createInteractionControl(publish: (view: InteractionView | undef
     stop: (generation: string) => {
       const scope = owner
       if (scope && stoppableGeneration(view.status) === generation) void mutate("stop", () => scope.source.stop(generation))
+    },
+    resume: (generation: string) => {
+      const resume = owner?.source.resume
+      if (resume && resumableGeneration(view.status) === generation) void mutate("resume", () => resume(generation))
     },
     request: (proposal: Request) => {
       const request = owner?.source.request

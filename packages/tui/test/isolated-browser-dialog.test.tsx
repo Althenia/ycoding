@@ -86,7 +86,7 @@ test("production Session command is available and opens isolated browser for its
   }
 })
 
-test("Session Connect Chrome directs fresh setup to the native menu without legacy enrollment", async () => {
+test("Session Connect Chrome explains one-click setup with native Allow and no typed code", async () => {
   const requests: Request[] = []
   const result = await renderBrowser({
     baseUrl: "http://127.0.0.1:43210",
@@ -105,7 +105,7 @@ test("Session Connect Chrome directs fresh setup to the native menu without lega
     await result.app.waitForFrame((frame) => frame.includes("Commands"))
     await result.app.mockInput.typeText("Connect Chrome")
     result.app.mockInput.pressEnter()
-    await result.app.waitForFrame((frame) => frame.includes("YCoding > Connect Chrome"))
+    await result.app.waitForFrame((frame) => frame.includes("Load unpacked"))
     for (const key of ["p", "r", "f"]) result.app.mockInput.pressKey(key)
     expect(result.app.captureCharFrame()).not.toContain("http://127.0.0.1:43210")
     const pages = [result.app.captureCharFrame()]
@@ -116,7 +116,10 @@ test("Session Connect Chrome directs fresh setup to the native menu without lega
     }
     const instructions = pages.join(" ").replace(/\s+/g, " ")
     expect(instructions).toContain("ycoding-chrome-extension")
-    expect(instructions).toContain("Local service address and Pairing code")
+    expect(instructions).toContain("same match code as the popup, then choose Allow")
+    expect(instructions).toContain("Chrome reconnects on its own")
+    expect(instructions).not.toContain("Pairing code")
+    expect(instructions).not.toContain("menu bar")
     expect(instructions).toContain("separate approval")
     pressPage(result.app, "pageup")
     await result.app.waitForFrame((frame) => !frame.includes("separate approval"))

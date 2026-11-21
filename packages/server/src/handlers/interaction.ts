@@ -33,7 +33,7 @@ export const InteractionHandler = HttpApiBuilder.group(Api, "server.interaction"
       }))
       .handle("session.interaction.request", Effect.fnUntraced(function* (ctx) {
         yield* requireSession(ctx.params.sessionID)
-        return { data: interaction.request(ctx.params.sessionID, ctx.payload) }
+        return { data: yield* Effect.promise(() => interaction.request(ctx.params.sessionID, ctx.payload)) }
       }))
       .handle("session.interaction.preview", Effect.fnUntraced(function* (ctx) {
         const sessionID = ctx.params.sessionID
@@ -64,6 +64,15 @@ export const InteractionHandler = HttpApiBuilder.group(Api, "server.interaction"
         if (data.state !== "stopped" || data.generation !== ctx.payload.generation)
           return yield* new ConflictError({ message: "No Interaction matches this generation" })
         return { data }
+      }))
+      .handle("session.interaction.resume", Effect.fnUntraced(function* (ctx) {
+        const sessionID = ctx.params.sessionID
+        yield* requireSession(sessionID)
+        const current = interaction.status(sessionID)
+        if (current.state !== "paused" || current.generation !== ctx.payload.generation)
+          return yield* new ConflictError({ message: "No paused Interaction matches this generation" })
+        yield* Effect.promise((signal) => interaction.resume(sessionID, ctx.payload.generation, signal))
+        return { data: interaction.status(sessionID) }
       }))
   }),
 )

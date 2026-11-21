@@ -124,7 +124,7 @@ describe("screen chrome colour probes", () => {
       await screen.input.typeText("Connect Chrome")
       await waitFor(screen, "Connect Chrome")
       screen.input.pressEnter()
-      await waitFor(screen, "YCoding > Connect Chrome")
+      await waitFor(screen, "Load unpacked")
       expect(screen.lines().join(" ").replace(/\s+/g, " ")).toContain("Session control and site access require separate approval.")
       expect(requests).toEqual([])
     } finally {

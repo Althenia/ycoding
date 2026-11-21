@@ -3125,11 +3125,26 @@ const Endpoint41_3 = (raw: RawClient["server.interaction"]) => (input: Endpoint4
     Effect.map((value) => value.data),
   )
 
+type Endpoint41_4Request = Parameters<RawClient["server.interaction"]["session.interaction.resume"]>[0]
+type Endpoint41_4Input = {
+  readonly sessionID: Endpoint41_4Request["params"]["sessionID"]
+  readonly generation: Endpoint41_4Request["payload"]["generation"]
+}
+const Endpoint41_4 = (raw: RawClient["server.interaction"]) => (input: Endpoint41_4Input) =>
+  raw["session.interaction.resume"]({
+    params: { sessionID: input["sessionID"] },
+    payload: { generation: input["generation"] },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
 const adaptGroup41 = (raw: RawClient["server.interaction"]) => ({
   status: Endpoint41_0(raw),
   request: Endpoint41_1(raw),
   preview: Endpoint41_2(raw),
   stop: Endpoint41_3(raw),
+  resume: Endpoint41_4(raw),
 })
 
 const adaptClient = (raw: RawClient) => ({

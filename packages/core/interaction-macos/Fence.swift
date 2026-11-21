@@ -99,63 +99,38 @@ struct IsolatedConsentFence {
     }
 }
 
-struct ChromeEnrollmentRequest: Decodable, Sendable {
-    let origin: String
-    let code: String
+struct ChromeProfileRequest: Decodable, Sendable {
+    let profileLabel: String
+    let matchCode: String
     let expiresAt: Int64
 
     func valid(now: Int64) -> Bool {
-        guard expiresAt > now, expiresAt - now <= 60_000, Self.validOrigin(origin), code.utf8.count == 43 else { return false }
-        return code.utf8.allSatisfy { (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95 }
-    }
-
-    static func validOrigin(_ origin: String) -> Bool {
-        guard origin.utf8.count <= 128, let url = URLComponents(string: origin), url.scheme == "http",
-              let host = url.host, ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host) else { return false }
-        return url.user == nil && url.password == nil && url.path.isEmpty && url.query == nil && url.fragment == nil
-    }
-}
-
-struct ChromeEnrollmentIntentFence {
-    private enum State {
-        case idle, authenticating(UUID), offered(UUID, Int64), presenting(UUID)
-    }
-    private var state = State.idle
-
-    mutating func select(_ id: UUID) -> Bool {
-        guard case .idle = state else { return false }
-        state = .authenticating(id)
-        return true
-    }
-
-    mutating func authenticate(_ id: UUID, approved: Bool, now: Int64) -> Int64? {
-        guard case .authenticating(let current) = state, current == id else { return nil }
-        guard approved else { state = .idle; return nil }
-        let expiresAt = now + 10_000
-        state = .offered(id, expiresAt)
-        return expiresAt
-    }
-
-    mutating func claim(_ id: UUID, now: Int64) -> Bool {
-        guard case .offered(let current, let expiresAt) = state, current == id, now < expiresAt else { return false }
-        state = .presenting(id)
-        return true
-    }
-
-    mutating func retire(_ id: UUID) -> Bool {
-        switch state {
-        case .offered(let current, _), .presenting(let current):
-            guard current == id else { return false }
-            state = .idle
-            return true
-        default: return false
-        }
+        let label = profileLabel.trimmingCharacters(in: .whitespaces)
+        guard expiresAt > now, expiresAt - now <= 120_000, !label.isEmpty, label == profileLabel, profileLabel.count <= 128,
+              profileLabel.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) && $0.properties.generalCategory != .format }),
+              (4...32).contains(matchCode.utf8.count) else { return false }
+        return matchCode.utf8.allSatisfy { (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 }
     }
 }
 
 enum Refusal: String, Error, Codable {
     case invalidRequest, notAuthorized, targetChanged, staleRevision, stopped, unsupported, permissionMissing
     case sensitive, captcha, unverified, busy, unavailable, uncertain, confirmationRequired
+    case foregroundRequired, dialog, paused
+}
+
+enum PauseReason: String, Codable, Sendable {
+    case foregroundRequired = "foreground_required", dialog, captcha, sensitive
+
+    init?(_ refusal: Refusal) {
+        switch refusal {
+        case .foregroundRequired: self = .foregroundRequired
+        case .dialog: self = .dialog
+        case .captcha: self = .captcha
+        case .sensitive: self = .sensitive
+        default: return nil
+        }
+    }
 }
 
 typealias PreviewFence = @Sendable () throws -> Void
@@ -168,6 +143,7 @@ final class InteractionFence: @unchecked Sendable {
         var active = false
         var revision: String?
         var captureGeneration = UUID()
+        var paused: PauseReason?
     }
 
     private let lock = NSLock()
@@ -193,16 +169,35 @@ final class InteractionFence: @unchecked Sendable {
         }
     }
 
-    private func verified(_ id: UUID, target: InteractionTarget, revision: String?) throws -> Grant {
+    private func verified(_ id: UUID, target: InteractionTarget, revision: String?, whilePaused: Bool = false) throws -> Grant {
         guard let candidate = grant, candidate.id == id, candidate.expiry > .now else { throw Refusal.stopped }
         guard candidate.target == target else { throw Refusal.targetChanged }
         guard candidate.active else { throw Refusal.notAuthorized }
+        guard whilePaused || candidate.paused == nil else { throw Refusal.paused }
         if let revision, candidate.revision != revision { throw Refusal.staleRevision }
         return candidate
     }
 
-    func check(_ id: UUID, target: InteractionTarget, revision: String? = nil) throws {
-        try lock.withLock { _ = try verified(id, target: target, revision: revision) }
+    func check(_ id: UUID, target: InteractionTarget, revision: String? = nil, whilePaused: Bool = false) throws {
+        try lock.withLock { _ = try verified(id, target: target, revision: revision, whilePaused: whilePaused) }
+    }
+
+    func pause(_ id: UUID, target: InteractionTarget, reason: PauseReason) throws {
+        try lock.withLock {
+            var candidate = try verified(id, target: target, revision: nil, whilePaused: true)
+            candidate.paused = reason
+            candidate.revision = nil
+            candidate.captureGeneration = UUID()
+            grant = candidate
+        }
+    }
+
+    func resume(_ id: UUID, target: InteractionTarget) throws {
+        try lock.withLock {
+            var candidate = try verified(id, target: target, revision: nil, whilePaused: true)
+            candidate.paused = nil
+            grant = candidate
+        }
     }
 
     func observed(_ id: UUID, target: InteractionTarget, revision: String) throws {

@@ -1,11 +1,37 @@
-const form = document.querySelector("#pair")
 const status = document.querySelector("#status")
+const matchCode = document.querySelector("#match-code")
+const connect = document.querySelector("#connect")
+const address = document.querySelector("input[name=address]")
+const forget = document.querySelector("#forget")
+const openPanel = document.querySelector("#open-panel")
 const feedback = document.querySelector("#feedback")
 const requests = document.querySelector("#requests")
 const active = document.querySelector("#active")
+const pauseReasons = {
+  foreground_required: "This step needs the tab in front.",
+  file_chooser: "Choose the file in the page yourself.",
+  dialog: "Answer the page dialog.",
+  captcha: "Complete the human check in the page.",
+  sensitive: "Enter the sensitive details yourself.",
+  user_takeover: "You took over this tab.",
+}
+const statusText = {
+  idle: "Not connected",
+  connecting: "Connecting…",
+  reconnecting: "Reconnecting…",
+  enrolling: "Confirm on your Mac",
+  offline: "YCoding is not reachable. Retrying…",
+  denied: "This Mac did not allow the connection",
+  rejected: "This Chrome profile is no longer allowed. Connect to ask again.",
+  busy: "Another Chrome profile is connected",
+  forgetting: "Forgetting this profile…",
+}
+const popupWindow = chrome.windows.getCurrent().then((window) => window.id)
 let version = 0
 let busy = false
 let rendered = ""
+let addressShown = false
+let firstActive
 
 function button(label, kind, input) {
   const control = document.createElement("button")
@@ -29,32 +55,60 @@ function row(label, controls) {
   return article
 }
 
+function describe(result) {
+  if (result?.status !== "connected") return statusText[result?.status] ?? "Not connected"
+  if (result.active.some((item) => item.paused)) return "Paused"
+  return result.active.length ? "Control active" : "Connected"
+}
+
 async function statusRead() {
   const current = ++version
-  const result = await chrome.runtime.sendMessage({ type: "status" }).catch(() => undefined)
+  const result = await chrome.runtime.sendMessage({ type: "status", windowId: await popupWindow }).catch(() => undefined)
   if (current !== version) return
   const signature = JSON.stringify(result)
   if (rendered === signature) return
   rendered = signature
-  const connected = result?.status === "connected"
-  status.textContent = connected ? (result.active.length ? "Control active" : "Connected · no active control") :
-    result?.status === "connecting" ? "Connecting…" : "Not connected"
-  form.hidden = connected || result?.status === "connecting"
+  status.textContent = describe(result)
+  if (!addressShown && result?.address) {
+    address.value = result.address
+    addressShown = true
+  }
+  matchCode.hidden = result?.status !== "enrolling" || !result.matchCode
+  matchCode.textContent = result?.matchCode ?? ""
+  connect.hidden = !["idle", "denied", "rejected", "busy", "offline"].includes(result?.status ?? "idle")
+  forget.hidden = !result?.authorized
+  firstActive = result?.active?.[0]
+  openPanel.hidden = !firstActive
   const groupingNotice = result?.groupingUnavailable ? document.createElement("p") : undefined
-  if (groupingNotice) groupingNotice.textContent = "This tab cannot join YCoding control without changing another group."
+  if (groupingNotice) groupingNotice.textContent = "This tab is in one of your tab groups. Move it out of that group to let YCoding control it."
   requests.replaceChildren(...(groupingNotice ? [groupingNotice] : []), ...(result?.pending ?? []).map((item) => {
     const input = { candidateID: item.candidateID, sessionID: item.sessionID, targetID: item.targetID, grouping: item.grouping }
     const action = item.purpose === "attach" ? "Allow control" : `Allow ${item.action}`
-    const grouping = item.grouping === "move" ? " Move only this tab into a new YCoding control group." :
-      item.grouping === "already" ? " Keep this tab in its existing YCoding control group." :
-      item.grouping === "create" ? " Open the tab in a new YCoding control group." : ""
-    return row(`${action}: ${item.target.label} · ${item.url ?? `${item.target.origin}${item.target.pathname}`}.${grouping}`, [
+    const grouping = item.grouping === "move" ? " Move only this tab into the YCoding control group." :
+      item.grouping === "already" ? " Keep this tab in the YCoding control group." :
+      item.grouping === "create" ? " Open the tab in the background in the YCoding control group." : ""
+    const requester = item.sessionLabel ? ` for ${item.sessionLabel}` : ""
+    return row(`${action}${requester}: ${item.target.label} · ${item.url ?? `${item.target.origin}${item.target.pathname}`}.${grouping}`, [
       button(item.grouping === "move" ? "Approve and group" : "Approve", "approve", { type: "approve", ...input }),
       button("Reject", "reject", { type: "reject", ...input }),
     ])
   }))
-  active.replaceChildren(...(result?.active ?? []).map((item) =>
-    row(item.label, [button("Stop control", "stop", { type: "stop", sessionID: item.sessionID, leaseID: item.leaseID, epoch: item.epoch })])))
+  active.replaceChildren(...(result?.active ?? []).map((item) => {
+    const lease = { sessionID: item.sessionID, leaseID: item.leaseID, epoch: item.epoch }
+    const owner = item.sessionLabel ? `${item.sessionLabel} · ` : ""
+    const state = item.paused ? ` · Paused. ${pauseReasons[item.paused] ?? ""}` : ""
+    return row(`${owner}${item.label}${state}`, [
+      item.paused ? button("Resume", "resume", { type: "resume", ...lease }) : button("Take over", "takeover", { type: "takeover", ...lease }),
+      button("Stop control", "stop", { type: "stop", ...lease }),
+    ])
+  }))
+}
+
+function failure(result) {
+  if (result?.code === "cleanup") return "Control stopped. Chrome cleanup was not confirmed."
+  if (result?.code === "invalid") return "Enter a local address such as http://127.0.0.1:42188."
+  if (result?.code === "busy") return "Wait for the current step to finish, then try again."
+  return "This request did not complete. Check the current tab or connection."
 }
 
 async function send(message, control) {
@@ -64,24 +118,26 @@ async function send(message, control) {
   control.disabled = true
   feedback.textContent = ""
   try {
-    const result = await chrome.runtime.sendMessage(message)
-    if (!result?.ok) feedback.textContent = result?.code === "cleanup" ? "Control stopped. Chrome cleanup was not confirmed." :
-      "This request did not complete. Check the current target or connection."
+    const result = await chrome.runtime.sendMessage({ ...message, windowId: await popupWindow })
+    if (!result?.ok) feedback.textContent = failure(result)
   } catch {
     feedback.textContent = "The extension connection is unavailable. Check its current status."
   } finally {
     control.disabled = false
     busy = false
+    rendered = ""
     await statusRead()
   }
 }
 
-form.addEventListener("submit", (event) => {
-  event.preventDefault()
-  if (!event.isTrusted || busy) return
-  const input = new FormData(form)
-  form.elements.namedItem("code").value = ""
-  void send({ type: "pair", address: input.get("address"), code: input.get("code") }, event.submitter ?? form.querySelector("button"))
+connect.addEventListener("click", (event) => {
+  if (event.isTrusted) void send({ type: "connect", address: address.value.trim() }, connect)
+})
+forget.addEventListener("click", (event) => {
+  if (event.isTrusted) void send({ type: "forget" }, forget)
+})
+openPanel.addEventListener("click", (event) => {
+  if (event.isTrusted && firstActive) void send({ type: "openPanel", leaseID: firstActive.leaseID }, openPanel)
 })
 
 void statusRead()

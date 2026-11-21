@@ -8,6 +8,8 @@ const version = "0.11.12"
 const targets = ["darwin-arm64", "darwin-x64", "linux-x64", "windows-x64"] as const
 const extension = ["icons/ycoding-128.png", "icons/ycoding-16.png", "icons/ycoding-32.png", "icons/ycoding-48.png", "manifest.json", "popup.css", "popup.html", "popup.js", "protocol.js", "service-worker.js"]
 const app = "YCoding Computer Use.app"
+const interactionFiles = ["icons/active-16.png", "icons/active-32.png", "icons/idle-128.png", "icons/idle-16.png", "icons/idle-32.png", "icons/idle-48.png",
+  "manifest.json", "panel.css", "panel.html", "panel.js", "popup.css", "popup.html", "popup.js", "service-worker.js"]
 const desktop = "YCoding Desktop.app"
 const desktopArchive = `YCoding-Desktop-v${version}-darwin-arm64.zip`
 
@@ -18,8 +20,7 @@ test("Interaction archives use the replacement extension and reject a coexistenc
     const directory = path.join(source, "ycoding-chrome-extension")
     await Bun.write(path.join(source, "ycoding"), "synthetic executable\n")
     await fs.chmod(path.join(source, "ycoding"), 0o755)
-    for (const file of ["manifest.json", "popup.html", "popup.css", "popup.js", "service-worker.js"])
-      await Bun.write(path.join(directory, file), "synthetic extension\n")
+    for (const file of interactionFiles) await Bun.write(path.join(directory, file), "synthetic extension\n")
     const application = path.join(source, "YCoding Interaction.app", "Contents")
     await Bun.write(path.join(application, "MacOS/ycoding-interaction"), "synthetic helper\n")
     await fs.chmod(path.join(application, "MacOS/ycoding-interaction"), 0o755)
@@ -37,6 +38,27 @@ test("Interaction archives use the replacement extension and reject a coexistenc
     await fs.rm(root, { recursive: true, force: true })
   }
 })
+test("Interaction archives require the panel and icons", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-interaction-panel-archive-"))
+  try {
+    const source = path.join(root, "payload")
+    const directory = path.join(source, "ycoding-chrome-extension")
+    await Bun.write(path.join(source, "ycoding"), "synthetic executable\n")
+    await fs.chmod(path.join(source, "ycoding"), 0o755)
+    for (const file of ["manifest.json", "popup.html", "popup.css", "popup.js", "service-worker.js"])
+      await Bun.write(path.join(directory, file), "synthetic extension\n")
+    const compact = execute(root, ["create", "linux-x64", "0.12.0", source, "compact"])
+    expect(compact.exitCode).not.toBe(0)
+    expect(compact.stderr.toString()).toContain("unexpected or missing entries")
+    for (const file of ["panel.html", "panel.css", "panel.js", "icons/active-16.png", "icons/active-32.png", "icons/idle-16.png",
+      "icons/idle-32.png", "icons/idle-48.png", "icons/idle-128.png"]) await Bun.write(path.join(directory, file), "synthetic extension\n")
+    const panel = execute(root, ["create", "linux-x64", "0.12.0", source, "panel"])
+    expect(panel.exitCode, panel.stderr.toString()).toBe(0)
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
 const desktopEntries = ["", "Contents/", "Contents/Frameworks/", "Contents/Info.plist", "Contents/MacOS/", "Contents/MacOS/launcher", "Contents/Resources/", "Contents/Resources/AppIcon.icns", "Contents/Resources/metadata.json", "Contents/Resources/1z1pg577pmla1.tar.zst", "Contents/_CodeSignature/", "Contents/_CodeSignature/CodeResources"].map((entry) => `${desktop}/${entry}`).sort()
 
 function execute(root: string, args: string[]) {

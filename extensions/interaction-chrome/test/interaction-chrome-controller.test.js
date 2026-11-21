@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { runInNewContext } from "node:vm"
-import { createChromeController } from "../controller.js"
-import { createChromeKernel } from "../kernel.js"
+import { createChromeController, storedLink } from "../controller.js"
+import { createChromeKernel, scriptMethods } from "../kernel.js"
 import { pageOperation, previewFrame } from "../page.js"
 
 const page = { id: 1, windowId: 2, groupId: -1, index: 0, url: "https://example.test/form", title: "Form", active: true }
@@ -265,6 +265,8 @@ test("owned Chrome creation stays inactive and groups only the new tab; Stop pre
   let duringLayout
   let duringCapture
   const effects = []
+  const methods = []
+  const captured = { mimeType: "image/jpeg", base64: jpegFixture(960, 720), width: 960, height: 720 }
   const kernel = createChromeKernel({
     tabs: {
       create: async (params) => {
@@ -289,16 +291,18 @@ test("owned Chrome creation stays inactive and groups only the new tab; Stop pre
       getBadgeText: async () => badge,
       setBadgeText: async ({ text }) => { badge = text },
       setBadgeBackgroundColor: async () => {},
+      setIcon: async () => {},
     },
     debugger: {
       attach: async ({ tabId }) => { effects.push(["debugger attach", tabId]) },
       detach: async ({ tabId }) => { effects.push(["debugger detach", tabId]) },
       sendCommand: async ({ tabId }, method, params) => {
         expect(tabId).toBe(2)
+        methods.push(method)
         if (method === "Page.navigate") {
           loaderId = "owned-document"
           newTab.url = params.url
-          kernel.nativeEvent(tabId, "Page.lifecycleEvent", { name: "DOMContentLoaded", loaderId })
+          kernel.nativeEvent({ tabId: tabId }, "Page.lifecycleEvent", { name: "DOMContentLoaded", loaderId })
           return { loaderId }
         }
         if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "top", loaderId, url: newTab.url, securityOrigin }, childFrames } }
@@ -312,11 +316,13 @@ test("owned Chrome creation stays inactive and groups only the new tab; Stop pre
         if (method === "Runtime.callFunctionOn" && params.arguments[0].value.operation === "observe") return { result: { value: { elements: [] } } }
         if (method === "Runtime.callFunctionOn" && params.arguments[0].value.operation === "preview")
           return { result: { value: { safe: true, ticket: "preview-fixture" } } }
+        if (method === "Runtime.callFunctionOn" && params.arguments[0].value.operation === "sensitiveBoxes")
+          return { result: { value: { boxes: [], width: 960, height: 720 } } }
         if (method === "Runtime.callFunctionOn") return { result: { value: { marked: true, available: true, cleared: true } } }
         return {}
       },
     },
-  })
+  }, { compose: async () => captured })
   await rejectsWith(kernel.snapshot(existing, () => {}), "permission")
   const owner = await kernel.attach(undefined, { windowId: 2, url: "https://example.test/form?q=synthetic#details", grouping: "create" }, () => {})
   expect(effects).toEqual([
@@ -352,13 +358,13 @@ test("owned Chrome creation stays inactive and groups only the new tab; Stop pre
   expect(await kernel.preview(owner, () => {})).toEqual({ status: "withheld" })
   expect(captures).toBe(2)
   domRoot = complete
-  duringCapture = () => kernel.nativeEvent(2, "Page.frameAttached", { frameId: "child", parentFrameId: "top" })
+  duringCapture = () => kernel.nativeEvent({ tabId: 2 }, "Page.frameAttached", { frameId: "child", parentFrameId: "top" })
   expect(await kernel.preview(owner, () => {})).toEqual({ status: "withheld" })
   expect(captures).toBe(3)
-  duringCapture = () => kernel.nativeEvent(2, "Page.javascriptDialogOpening", { type: "prompt" })
+  duringCapture = () => kernel.nativeEvent({ tabId: 2 }, "Page.javascriptDialogOpening", { type: "prompt" })
   expect(await kernel.preview(owner, () => {})).toEqual({ status: "withheld" })
   expect(captures).toBe(4)
-  expect(await kernel.snapshot(newTab, () => {})).toMatchObject({ id: 7, title: "YCoding control", members: [[2, 1]] })
+  expect(await kernel.snapshot(newTab, () => {})).toEqual({ id: 7 })
   expect(await kernel.perform(owner, { type: "navigate", url: "https://example.test/admin" }, () => {}, () => {
     throw new Error("Dispatched an unapproved destination")
   })).toEqual({ refusal: "policy" })
@@ -366,12 +372,16 @@ test("owned Chrome creation stays inactive and groups only the new tab; Stop pre
   expect(await kernel.verify(owner, () => {})).toBe(false)
   newTab.url = "https://example.test/form"
   expect(await kernel.verify(owner, () => {})).toBe(true)
-  kernel.nativeEvent(2, "Page.navigatedWithinDocument", { frameId: "top", url: "https://example.test/form?q=changed" })
+  kernel.nativeEvent({ tabId: 2 }, "Page.javascriptDialogClosed", {})
+  expect((await kernel.capture(owner, () => {})).frame).toEqual(captured)
+  kernel.nativeEvent({ tabId: 2 }, "Page.navigatedWithinDocument", { frameId: "top", url: "https://example.test/form?q=changed" })
   expect(await kernel.verify(owner, () => {})).toBe(false)
   group.title = "User keeps this group"
   expect(await kernel.verify(owner, () => {})).toBe(false)
   await kernel.detach(owner, "stopped")
   expect(effects.at(-1)).toEqual(["debugger detach", 2])
+  expect(methods).toContain("Page.captureScreenshot")
+  expect(methods.filter((method) => method.startsWith("Target."))).toEqual([])
   expect(existing.groupId).toBe(6)
   expect(group.title).toBe("User keeps this group")
   expect(badge).toBe("")
@@ -424,7 +434,7 @@ function profileKernel(url = page.url) {
           navigations.push(params.url)
           loaderID = `document-${navigations.length}`
           tab.url = params.url
-          kernel.nativeEvent(tabId, "Page.lifecycleEvent", { name: "DOMContentLoaded", loaderId: loaderID })
+          kernel.nativeEvent({ tabId: tabId }, "Page.lifecycleEvent", { name: "DOMContentLoaded", loaderId: loaderID })
           return { loaderId: loaderID }
         }
         if (method === "Page.createIsolatedWorld") return { executionContextId: 1 }
@@ -437,6 +447,7 @@ function profileKernel(url = page.url) {
       getBadgeText: async () => badge,
       setBadgeText: async ({ text }) => { badge = text },
       setBadgeBackgroundColor: async () => {},
+      setIcon: async () => {},
     },
   })
   return { kernel, tab, peer, effects, commands, navigations, badge: () => badge }
@@ -501,4 +512,485 @@ test("paired profile reloads only its exact approved URL and invalidates the pre
   } finally {
     await controller.detach(attached)
   }
+})
+
+function windowKernel(options = {}) {
+  const tabs = new Map([
+    [1, { ...page, id: 1, index: 0, active: true }],
+    [2, { ...page, id: 2, index: 1, active: false, url: "https://example.test/form" }],
+    [3, { ...page, id: 3, index: 2, active: false, groupId: 11 }],
+  ])
+  const groups = new Map([[11, { id: 11, windowId: 2, title: "Mine", color: "blue", collapsed: false }]])
+  const effects = []
+  const commands = []
+  const icons = new Map()
+  const kernel = createChromeKernel({
+    windows: { update: async (...args) => { effects.push(["windows.update", ...args]) } },
+    tabs: {
+      update: async (...args) => { effects.push(["tabs.update", ...args]) },
+      highlight: async (...args) => { effects.push(["tabs.highlight", ...args]) },
+      get: async (id) => ({ ...tabs.get(id) }),
+      query: async (filter) => [...tabs.values()].filter((tab) => filter.groupId !== undefined ? tab.groupId === filter.groupId :
+        filter.windowId === undefined || tab.windowId === filter.windowId),
+      group: async (options) => {
+        effects.push(["group", options])
+        const id = options.groupId ?? 7
+        if (!groups.has(id)) groups.set(id, { id, windowId: 2, title: "", color: "grey", collapsed: false })
+        for (const tabId of options.tabIds) tabs.get(tabId).groupId = id
+        return id
+      },
+      ungroup: async (id) => {
+        effects.push(["ungroup", id])
+        if (options.ungroupFails) throw new Error("Tabs cannot be edited right now")
+        const group = tabs.get(id).groupId
+        tabs.get(id).groupId = -1
+        if (![...tabs.values()].some((tab) => tab.groupId === group)) groups.delete(group)
+      },
+      remove: async (id) => { effects.push(["remove", id]) },
+    },
+    tabGroups: {
+      get: async (id) => {
+        if (!groups.has(id)) throw new Error("No group")
+        return { ...groups.get(id) }
+      },
+      update: async (id, state) => { effects.push(["name group", id]); groups.set(id, { ...groups.get(id), ...state }) },
+    },
+    debugger: {
+      attach: async () => {},
+      detach: async () => { commands.push("debugger.detach") },
+      sendCommand: async ({ tabId }, method, params) => {
+        commands.push(method === "Runtime.callFunctionOn" ? `${method}:${params.arguments?.[0]?.value?.operation}` : method)
+        if (method === "Page.getFrameTree") return { frameTree: { frame: { id: `top-${tabId}`, loaderId: "document", url: tabs.get(tabId).url, securityOrigin: "https://example.test" } } }
+        if (method === "Page.createIsolatedWorld") return { executionContextId: tabId }
+        if (method === "Runtime.callFunctionOn" && params.arguments[0].value.operation === "click") {
+          effects.push(["click", tabId])
+          if (options.clickOpens === "dialog") kernel.nativeEvent({ tabId: tabId }, "Page.javascriptDialogOpening", { type: "alert" })
+          else kernel.nativeEvent({ tabId: tabId }, "Page.fileChooserOpened", { mode: "selectSingle" })
+          return new Promise(() => {})
+        }
+        return { result: { value: { marked: true, available: true, cleared: true } } }
+      },
+    },
+    action: {
+      getBadgeText: async () => "ON",
+      setBadgeText: async () => {},
+      setBadgeBackgroundColor: async () => {},
+      setIcon: async ({ tabId, path }) => { icons.set(tabId, path[16]) },
+    },
+  }, options.kernel)
+  return { kernel, tabs, groups, effects, commands, icons }
+}
+
+test("controlled tabs share one adapter-owned group per window that is ungrouped, never closed, after the last Stop", async () => {
+  const { kernel, tabs, groups, effects, icons } = windowKernel()
+  await rejectsWith(kernel.snapshot(tabs.get(3), () => {}), "permission")
+  const first = await kernel.attach({ ...tabs.get(1) }, { windowId: 2, grouping: "move" }, () => {})
+  const second = await kernel.attach({ ...tabs.get(2) }, { windowId: 2, grouping: "move" }, () => {})
+  expect(effects).toEqual([
+    ["group", { tabIds: [1], createProperties: { windowId: 2 } }], ["name group", 7],
+    ["group", { groupId: 7, tabIds: [2] }],
+  ])
+  expect(groups.get(7)).toMatchObject({ title: "YCoding control", color: "green", collapsed: false })
+  expect(await kernel.snapshot(tabs.get(2), () => {})).toEqual({ id: 7 })
+  expect([...icons]).toEqual([[1, "icons/active-16.png"], [2, "icons/active-16.png"]])
+  await kernel.detach(first, "stopped")
+  expect(tabs.get(1).groupId).toBe(-1)
+  expect(tabs.get(2).groupId).toBe(7)
+  expect(await kernel.verify(second, () => {})).toBe(true)
+  await kernel.detach(second, "stopped")
+  expect(groups.has(7)).toBe(false)
+  expect(groups.get(11)).toMatchObject({ title: "Mine" })
+  expect(tabs.get(3).groupId).toBe(11)
+  expect(effects.filter(([kind]) => kind === "remove")).toEqual([])
+  expect([...icons]).toEqual([[1, "icons/idle-16.png"], [2, "icons/idle-16.png"]])
+  const third = await kernel.attach({ ...tabs.get(1) }, { windowId: 2, grouping: "move" }, () => {})
+  expect(effects.at(-2)).toEqual(["group", { tabIds: [1], createProperties: { windowId: 2 } }])
+  await kernel.detach(third, "stopped")
+})
+
+test("a Chrome refusal to ungroup reports failed cleanup and keeps the control group in use", async () => {
+  const { kernel, tabs, effects } = windowKernel({ ungroupFails: true })
+  const first = await kernel.attach({ ...tabs.get(1) }, { windowId: 2, grouping: "move" }, () => {})
+  await rejectsWith(kernel.detach(first, "stopped"), "cleanup")
+  expect(tabs.get(1).groupId).toBe(7)
+  const second = await kernel.attach({ ...tabs.get(2) }, { windowId: 2, grouping: "move" }, () => {})
+  expect(effects.filter(([kind]) => kind === "group").at(-1)).toEqual(["group", { groupId: 7, tabIds: [2] }])
+  await rejectsWith(kernel.detach(second, "stopped"), "cleanup")
+})
+
+test("a Stop from the popup settles the service's following detach with the same cleanup outcome", async () => {
+  const failed = fixture({ detach: async () => { throw Object.assign(new Error("cleanup"), { code: "cleanup" }) } })
+  const failing = await lease(failed)
+  const local = failed.controller.detach(failing)
+  await rejectsWith(failed.controller.detach(failing), "cleanup")
+  await rejectsWith(local, "cleanup")
+  expect(failed.revoked).toHaveLength(1)
+  const f = fixture()
+  const attached = await lease(f)
+  await f.controller.detach(attached)
+  expect(await f.controller.detach(attached)).toBeUndefined()
+  await rejectsWith(f.controller.detach({ ...attached, epoch: attached.epoch + 1 }), "ownership")
+  await rejectsWith(f.controller.detach({ ...attached, sessionID: "session-b" }), "ownership")
+  expect(f.effects.filter(([kind]) => kind === "detach")).toEqual([["detach", 1]])
+})
+
+test("a page file chooser during an action pauses instead of waiting or taking focus", async () => {
+  const { kernel, tabs } = windowKernel()
+  const target = await kernel.attach({ ...tabs.get(1) }, { windowId: 2, grouping: "move" }, () => {})
+  const pauses = []
+  target.onPause = (reason) => pauses.push(reason)
+  expect(await kernel.perform(target, { platform: "chrome", type: "click", elementID: ref }, () => {}, () => {})).toEqual({ paused: "file_chooser" })
+  expect(pauses).toEqual(["file_chooser"])
+  kernel.nativeEvent({ tabId: 1 }, "Page.javascriptDialogOpening", { type: "alert" })
+  expect(pauses).toEqual(["file_chooser", "dialog"])
+  await rejectsWith(kernel.resume(target, () => {}), "busy")
+  kernel.nativeEvent({ tabId: 1 }, "Page.javascriptDialogClosed", {})
+  await kernel.resume(target, () => {})
+  await kernel.detach(target, "stopped")
+})
+
+test.each(["file_chooser", "dialog"])("an action that needs the user's focus for a %s pauses on its first attempt with no retry or focus command", async (reason) => {
+  const { kernel, tabs, effects, commands } = windowKernel({ clickOpens: reason })
+  const target = await kernel.attach({ ...tabs.get(1) }, { windowId: 2, grouping: "move" }, () => {})
+  const pauses = []
+  target.onPause = (pause) => pauses.push(pause)
+  const before = commands.length
+  const dispatched = []
+  expect(await kernel.perform(target, { platform: "chrome", type: "click", elementID: ref }, () => {}, () => dispatched.push(true))).toEqual({ paused: reason })
+  const during = commands.slice(before)
+  expect(dispatched).toEqual([true])
+  expect(pauses).toEqual([reason])
+  expect(during.filter((method) => method === "Runtime.callFunctionOn:click")).toHaveLength(1)
+  expect(during.filter((method) => /^(?:Emulation|Input)\.|bringToFront|activateTarget/.test(method))).toEqual([])
+  expect(effects.filter(([kind]) => ["tabs.update", "windows.update", "tabs.highlight"].includes(kind))).toEqual([])
+  expect(effects.filter(([kind]) => kind === "click")).toEqual([["click", 1]])
+  if (reason === "dialog") kernel.nativeEvent({ tabId: 1 }, "Page.javascriptDialogClosed", {})
+  await kernel.detach(target, "stopped")
+  expect(commands.some((method) => method.startsWith("Emulation."))).toBe(false)
+})
+
+test("a paused lease refuses actions until resumed, and Stop still works while paused", async () => {
+  const events = []
+  let dispatches = 0
+  const controller = createChromeController({
+    list: async () => [{ ...page }], tab: async () => ({ ...page }),
+    attach: async (tab) => ({ tabId: tab.id, windowId: tab.windowId }), verify: async () => true,
+    observe: async () => ({ pathname: "/form", elements: [{ id: ref, role: "button", label: "Next", editable: false }] }),
+    perform: async (_target, _action, fence, dispatched) => { fence(); dispatched(); dispatches++; return { paused: "dialog" } },
+    preview: async () => ({ status: "withheld" }), resume: async () => {}, detach: async () => {},
+    capture: async () => ({ frame: { mimeType: "image/png", base64: "x", width: 1, height: 1 },
+      title: "Reset for alice@example.test", url: "https://user:pw@example.test/reset?token=abc123&step=2#private" }),
+  }, { now: () => 500, revoked: (event) => events.push(["revoked", event.reason]),
+    paused: (event) => events.push(["paused", event.reason]), resumed: () => events.push(["resumed"]) })
+  const challenge = await pending({ controller })
+  const attached = await controller.attach({ target: challenge.target, proof: controller.approve({ ...challenge.request, grouping: "move" }, selection) })
+  const observed = await controller.observe(attached)
+  const call = { ...attached, revision: observed.revision, action: { platform: "chrome", type: "click", elementID: ref } }
+  expect(await controller.perform({ ...call, callID: crypto.randomUUID() })).toEqual({ outcome: "paused", reason: "dialog", revision: observed.revision })
+  expect(await controller.perform({ ...call, callID: crypto.randomUUID() })).toEqual({ outcome: "paused", reason: "dialog", revision: observed.revision })
+  await rejectsWith(controller.observe(call), "paused")
+  expect(dispatches).toBe(1)
+  expect(controller.lease(attached.leaseID)).toMatchObject({ paused: "dialog" })
+  expect(await controller.capture(attached)).toEqual({ frame: { mimeType: "image/png", base64: "x", width: 1, height: 1 },
+    title: "Reset for [redacted]", url: "https://example.test/reset?token=[redacted]&step=2" })
+  expect(await controller.resume(attached, true)).toBe(true)
+  await rejectsWith(controller.perform({ ...call, callID: crypto.randomUUID() }), "stale")
+  expect(controller.takeover(attached)).toBe(true)
+  await controller.detach(attached)
+  expect(events).toEqual([["paused", "dialog"], ["resumed"], ["paused", "user_takeover"], ["revoked", "stopped"]])
+  await rejectsWith(controller.resume(attached), "ownership")
+})
+
+test("a script run needs the current revision, consumes it, and Stop or cancelRun aborts only that lease's run", async () => {
+  const runs = []
+  const f = fixture({ run: (target, request, fence) => {
+    fence()
+    const settled = Promise.withResolvers()
+    runs.push({ target, request, settled })
+    request.signal.addEventListener("abort", () => settled.resolve({ result: { outcome: "stopped", logs: [] }, verified: true }))
+    return settled.promise
+  } })
+  const attached = await lease(f)
+  const runID = crypto.randomUUID()
+  const script = { mode: "code", source: "1 + 1", timeoutMs: 1000 }
+  await rejectsWith(f.controller.run({ ...attached, ...script, runID, revision: 2 }), "stale")
+  await rejectsWith(f.controller.run({ ...attached, mode: "eval", source: "1", timeoutMs: 1000, runID, revision: 1 }), "invalid")
+  await rejectsWith(f.controller.run({ ...attached, ...script, timeoutMs: 60_001, runID, revision: 1 }), "invalid")
+  const first = f.controller.run({ ...attached, ...script, runID, revision: 1 })
+  await Bun.sleep(0)
+  expect(runs.map(({ target, request }) => [target.tabId, request.leaseID, request.mode, request.source, request.timeoutMs]))
+    .toEqual([[1, attached.leaseID, "code", "1 + 1", 1000]])
+  await rejectsWith(f.controller.run({ ...attached, ...script, runID: crypto.randomUUID(), revision: 1 }), "busy")
+  expect(f.controller.cancelRun({ ...attached, runID: crypto.randomUUID() })).toBe(false)
+  expect(f.controller.cancelRun({ ...attached, runID })).toBe(true)
+  expect(await first).toEqual({ outcome: "stopped", logs: [] })
+  await rejectsWith(f.controller.run({ ...attached, ...script, runID: crypto.randomUUID(), revision: 1 }), "stale")
+  await rejectsWith(f.controller.perform({ ...attached, callID: crypto.randomUUID(), action: { platform: "chrome", type: "scroll", deltaY: 10 } }), "stale")
+  const observed = await f.controller.observe(attached)
+  const second = f.controller.run({ ...attached, ...script, runID: crypto.randomUUID(), revision: observed.revision })
+  await Bun.sleep(0)
+  await f.controller.detach(attached)
+  expect(runs[1].request.signal.aborted).toBe(true)
+  expect(await second).toEqual({ outcome: "stopped", logs: [] })
+  expect(f.revoked).toEqual([{ leaseID: attached.leaseID, epoch: attached.epoch, reason: "stopped" }])
+})
+
+test("a run that leaves the approved page returns its result and revokes the lease; a paused lease never dispatches", async () => {
+  let verified = false
+  let dispatched = 0
+  const f = fixture({ run: async () => {
+    dispatched++
+    return { result: { outcome: "completed", value: 2, logs: [] }, verified }
+  } })
+  const attached = await lease(f)
+  expect(await f.controller.run({ ...attached, mode: "script", source: "return 2", timeoutMs: 1000, runID: crypto.randomUUID(), revision: 1 }))
+    .toEqual({ outcome: "completed", value: 2, logs: [] })
+  expect(f.revoked).toEqual([{ leaseID: attached.leaseID, epoch: attached.epoch, reason: "target_lost" }])
+  expect(f.controller.lease(attached.leaseID)).toBeUndefined()
+  verified = true
+  const paused = await lease(f)
+  f.controller.takeover(paused)
+  expect(await f.controller.run({ ...paused, mode: "script", source: "return 2", timeoutMs: 1000, runID: crypto.randomUUID(), revision: 1 }))
+    .toEqual({ outcome: "paused", reason: "user_takeover" })
+  expect(dispatched).toBe(1)
+  await f.controller.detach(paused)
+})
+
+test("the kernel runs a script only through the granted tab's debugger session and reports a page dialog pause once", async () => {
+  const seen = []
+  const gate = Promise.withResolvers()
+  const { kernel, tabs } = windowKernel({ kernel: { runScript: async (input, cdp, worlds) => {
+    seen.push(["input", input.tabId, input.leaseID, input.mode, input.source, input.timeoutMs, worlds instanceof Map])
+    await rejectsWith(cdp.send(2, "Runtime.evaluate", { expression: "1" }), "ownership")
+    seen.push(["frame", (await cdp.send(1, "Page.getFrameTree")).frameTree.frame.id])
+    const unsubscribe = cdp.onEvent(1, (method) => seen.push(["event", method]))
+    cdp.onEvent(2, (method) => seen.push(["other", method]))
+    input.signal.addEventListener("abort", () => seen.push(["aborted"]))
+    await gate.promise
+    unsubscribe()
+    return { outcome: "completed", value: 1, logs: [] }
+  } } })
+  const target = await kernel.attach({ ...tabs.get(1) }, { windowId: 2, grouping: "move" }, () => {})
+  const pauses = []
+  target.onPause = (reason) => pauses.push(reason)
+  const signal = new AbortController().signal
+  const request = { leaseID: "lease-1", mode: "code", source: "1", timeoutMs: 500, signal }
+  const completed = kernel.run(target, request, () => {})
+  while (seen.length < 2) await Bun.sleep(1)
+  kernel.nativeEvent({ tabId: 1 }, "Runtime.consoleAPICalled", { executionContextId: 1 })
+  kernel.nativeEvent({ tabId: 2 }, "Runtime.consoleAPICalled", { executionContextId: 2 })
+  gate.resolve()
+  expect(await completed).toEqual({ result: { outcome: "completed", value: 1, logs: [] }, verified: true })
+  expect(seen).toEqual([["input", 1, "lease-1", "code", "1", 500, true], ["frame", "top-1"], ["event", "Runtime.consoleAPICalled"]])
+  tabs.get(1).url = "https://example.test/elsewhere"
+  gate.resolve()
+  expect(await kernel.run(target, request, () => {})).toMatchObject({ verified: false })
+  const paused = Promise.withResolvers()
+  const aborted = []
+  const second = windowKernel({ kernel: { runScript: async (input, cdp) => {
+    const dialog = Promise.withResolvers()
+    cdp.onEvent(input.tabId, (method) => { if (method === "Page.javascriptDialogOpening") dialog.resolve() })
+    input.signal.addEventListener("abort", () => aborted.push(true))
+    paused.resolve()
+    await dialog.promise
+    return { outcome: "paused", reason: "dialog" }
+  } } })
+  const other = await second.kernel.attach({ ...second.tabs.get(1) }, { windowId: 2, grouping: "move" }, () => {})
+  other.onPause = (reason) => pauses.push(reason)
+  const running = second.kernel.run(other, request, () => {})
+  await paused.promise
+  second.kernel.nativeEvent({ tabId: 1 }, "Page.javascriptDialogOpening", { type: "alert" })
+  expect(await running).toEqual({ outcome: "paused", reason: "dialog" })
+  expect(pauses).toEqual(["dialog"])
+  expect(aborted).toEqual([])
+  second.kernel.nativeEvent({ tabId: 1 }, "Page.javascriptDialogClosed", {})
+  await kernel.detach(target, "stopped")
+  await second.kernel.detach(other, "stopped")
+})
+
+async function grant(controller, sessionID, tabId) {
+  const request = { candidateID: crypto.randomUUID(), sessionID, purpose: "attach", expiresAt: Date.now() + 60_000 }
+  controller.offer(request)
+  for (const target of await controller.inventory(request)) {
+    const proof = (() => {
+      try {
+        return controller.approve({ ...request, targetID: target.id, grouping: "move" }, { tabId, windowId: 2 })
+      } catch {
+        return undefined
+      }
+    })()
+    if (proof) return controller.attach({ target, proof })
+  }
+  throw new Error(`No candidate for tab ${tabId}`)
+}
+
+const script = { mode: "script", source: "return 1", timeoutMs: 60_000 }
+const scriptSends = async () => [...(await Bun.file(new URL("../script.js", import.meta.url)).text()).matchAll(/send\("([A-Za-z]+\.[A-Za-z]+)"/g)]
+  .map((match) => match[1])
+
+test("a script run forwards only the CDP methods script.js sends and refuses every other command", async () => {
+  expect([...scriptMethods].toSorted()).toEqual(["Page.addScriptToEvaluateOnNewDocument", "Page.createIsolatedWorld", "Page.getFrameTree",
+    "Page.removeScriptToEvaluateOnNewDocument", "Runtime.callFunctionOn", "Runtime.disable", "Runtime.enable", "Runtime.evaluate",
+    "Runtime.releaseObjectGroup", "Runtime.terminateExecution"])
+  const sent = await scriptSends()
+  expect(sent.length).toBeGreaterThan(0)
+  for (const method of sent) expect(scriptMethods.has(method)).toBe(true)
+  const refused = ["Target.setAutoAttach", "Target.setDiscoverTargets", "Target.attachToTarget", "Target.createTarget", "Browser.close",
+    "Browser.grantPermissions", "Storage.getCookies", "Storage.clearDataForOrigin", "Network.getCookies", "Network.getAllCookies",
+    "Network.enable", "Page.navigate", "Page.captureScreenshot", "Fetch.enable", "DOM.getDocument", "Input.dispatchMouseEvent"]
+  const outcomes = []
+  const { kernel, tabs, commands } = windowKernel({ kernel: { runScript: async (input, cdp) => {
+    for (const method of refused) outcomes.push([method, await cdp.send(input.tabId, method, {}).then(() => "sent", (error) => error.code)])
+    for (const method of scriptMethods)
+      outcomes.push([method, await cdp.send(input.tabId, method, { arguments: [{ value: {} }] }).then(() => "sent", (error) => error.code)])
+    return { outcome: "completed", value: 1, logs: [] }
+  } } })
+  const target = await kernel.attach({ ...tabs.get(1) }, { windowId: 2, grouping: "move" }, () => {})
+  const before = commands.length
+  expect(await kernel.run(target, { leaseID: "lease-1", ...script, signal: new AbortController().signal }, () => {}))
+    .toEqual({ result: { outcome: "completed", value: 1, logs: [] }, verified: true })
+  expect(outcomes).toEqual([...refused.map((method) => [method, "policy"]), ...[...scriptMethods].map((method) => [method, "sent"])])
+  const during = commands.slice(before)
+  for (const method of refused) expect(during.some((sentMethod) => sentMethod.startsWith(method))).toBe(false)
+  await kernel.detach(target, "stopped")
+  expect(commands.filter((method) => /^(?:Target|Browser|Storage|Network)\./.test(method))).toEqual([])
+})
+
+test("two Sessions' runs receive only their own tab's root-target events and results, and cannot name each other's lease", async () => {
+  const gates = new Map()
+  const ready = Promise.withResolvers()
+  const crossed = []
+  const { kernel, commands } = windowKernel({ kernel: { runScript: async (input, cdp) => {
+    const seen = []
+    const unsubscribe = cdp.onEvent(input.tabId, (method, params) => seen.push(`${method}:${params.executionContextId}`))
+    cdp.onEvent(input.tabId === 1 ? 2 : 1, () => crossed.push(input.leaseID))
+    crossed.push(...await cdp.send(input.tabId === 1 ? 2 : 1, "Runtime.evaluate", { expression: "1" }).then(() => ["sent"], (error) =>
+      error.code === "ownership" ? [] : [error.code]))
+    const gate = Promise.withResolvers()
+    gates.set(input.tabId, gate)
+    if (gates.size === 2) ready.resolve()
+    await gate.promise
+    unsubscribe()
+    return { outcome: "completed", value: { tab: input.tabId, seen }, logs: [] }
+  } } })
+  const revoked = []
+  const controller = createChromeController(kernel, { revoked: (event) => revoked.push(event) })
+  const first = await grant(controller, "session-a", 1)
+  const second = await grant(controller, "session-b", 2)
+  await rejectsWith(controller.run({ ...first, sessionID: "session-b", ...script, runID: crypto.randomUUID(), revision: 1 }), "ownership")
+  await rejectsWith(controller.run({ ...second, leaseID: first.leaseID, ...script, runID: crypto.randomUUID(), revision: 1 }), "ownership")
+  expect(() => controller.cancelRun({ ...second, leaseID: first.leaseID, runID: crypto.randomUUID() })).toThrow("ownership")
+  const running = [first, second].map((grant) => controller.run({ ...grant, ...script, runID: crypto.randomUUID(), revision: grant.revision }))
+  await ready.promise
+  kernel.nativeEvent({ tabId: 1 }, "Runtime.consoleAPICalled", { executionContextId: 1 })
+  kernel.nativeEvent({ tabId: 2 }, "Runtime.consoleAPICalled", { executionContextId: 2 })
+  kernel.nativeEvent({ tabId: 1, sessionId: "child-session" }, "Runtime.consoleAPICalled", { executionContextId: 3 })
+  kernel.nativeEvent({ tabId: 2, targetId: "popup-target" }, "Runtime.exceptionThrown", { executionContextId: 4 })
+  for (const gate of gates.values()) gate.resolve()
+  expect(await Promise.all(running)).toEqual([
+    { outcome: "completed", value: { tab: 1, seen: ["Runtime.consoleAPICalled:1"] }, logs: [] },
+    { outcome: "completed", value: { tab: 2, seen: ["Runtime.consoleAPICalled:2"] }, logs: [] },
+  ])
+  expect(crossed).toEqual([])
+  expect(revoked).toEqual([])
+  await controller.detach(first)
+  await controller.detach(second)
+  expect(commands.filter((method) => /^(?:Target|Browser|Storage|Network)\./.test(method))).toEqual([])
+})
+
+test("a script run is refused while its tab has an opener or has opened another tab, without ending control", async () => {
+  let started = 0
+  const { kernel, tabs } = windowKernel({ kernel: { runScript: async () => {
+    started++
+    return { outcome: "completed", value: 1, logs: [] }
+  } } })
+  const controller = createChromeController(kernel, { revoked: () => {} })
+  for (const related of [() => { tabs.get(2).openerTabId = 1 }, () => { tabs.get(1).openerTabId = 2 }]) {
+    const granted = await grant(controller, "session-a", 1)
+    related()
+    expect(await controller.run({ ...granted, ...script, runID: crypto.randomUUID(), revision: 1 })).toEqual({ outcome: "refused", reason: "policy" })
+    expect(controller.lease(granted.leaseID)).toBeDefined()
+    await controller.detach(granted)
+    delete tabs.get(1).openerTabId
+    delete tabs.get(2).openerTabId
+  }
+  expect(started).toBe(0)
+  const granted = await grant(controller, "session-a", 1)
+  expect(await controller.run({ ...granted, ...script, runID: crypto.randomUUID(), revision: 1 })).toEqual({ outcome: "completed", value: 1, logs: [] })
+  expect(started).toBe(1)
+  await controller.detach(granted)
+})
+
+test.each(["stop", "revoke", "debugger detach"])("%s settles a never-ending run at once, terminates and discards it before detaching, and refuses the lease afterwards", async (trigger) => {
+  let started = 0
+  const begun = Promise.withResolvers()
+  const fixture = windowKernel({ kernel: { runScript: (input, cdp, worlds) => {
+    started++
+    begun.resolve()
+    worlds.set(input.leaseID, Promise.resolve({ dispose: () => { fixture.commands.push("dispose") } }))
+    return new Promise(() => {})
+  } } })
+  const revoked = []
+  const controller = createChromeController(fixture.kernel, { revoked: (event) => revoked.push(event) })
+  const granted = await grant(controller, "session-a", 1)
+  const running = controller.run({ ...granted, ...script, runID: crypto.randomUUID(), revision: 1 })
+  await begun.promise
+  const before = fixture.commands.length
+  if (trigger === "revoke") controller.invalidate(1, "changed")
+  if (trigger === "debugger detach") {
+    fixture.kernel.nativeDetached(1)
+    controller.invalidate(1, "target_lost")
+  }
+  await controller.detach(granted)
+  expect(await running).toEqual({ outcome: "stopped", logs: [] })
+  const order = fixture.commands.slice(before).filter((method) => ["Runtime.terminateExecution", "dispose", "debugger.detach"].includes(method))
+  expect(order).toEqual(trigger === "debugger detach" ? ["dispose"] : ["Runtime.terminateExecution", "dispose", "debugger.detach"])
+  expect(revoked).toEqual([{ leaseID: granted.leaseID, epoch: granted.epoch,
+    reason: { stop: "stopped", revoke: "changed", "debugger detach": "target_lost" }[trigger] }])
+  await rejectsWith(controller.run({ ...granted, ...script, runID: crypto.randomUUID(), revision: 1 }), "ownership")
+  await rejectsWith(controller.observe(granted), "ownership")
+  await rejectsWith(controller.perform({ ...granted, callID: crypto.randomUUID(), action: { platform: "chrome", type: "scroll", deltaY: 10 } }), "ownership")
+  expect(started).toBe(1)
+})
+
+test("no extension file sends a Target, Browser, Storage or Network command or enables target auto-attach", async () => {
+  const directory = new URL("../", import.meta.url).pathname
+  const files = await Array.fromAsync(new Bun.Glob("*.js").scan(directory))
+  expect(files).toContain("kernel.js")
+  for (const file of files) {
+    const source = await Bun.file(`${directory}${file}`).text()
+    expect(source).not.toMatch(/\b(?:Target|Browser|Storage|Network)\.(?!prototype\b)[a-z]\w*|setAutoAttach|setDiscoverTargets|autoAttach/)
+  }
+})
+
+test("a stored link keeps only a valid profile credential and discards anything invalid so the popup returns to not connected", () => {
+  const address = "http://127.0.0.1:42188"
+  const profileID = "P".repeat(43)
+  const credential = "c".repeat(43)
+  expect(storedLink(undefined)).toEqual({ link: {}, discarded: false })
+  expect(storedLink({ address, profileID, credential })).toEqual({ link: { address, profileID, credential }, discarded: false })
+  expect(storedLink({ address, profileID })).toEqual({ link: { address, profileID }, discarded: false })
+  expect(storedLink({ address, forget: { profileID, credential } })).toEqual({ link: { address, forget: { profileID, credential } }, discarded: false })
+  for (const broken of [{ address, profileID, credential: "short" }, { address, profileID, credential: `${"c".repeat(42)}=` },
+    { address, profileID, credential: 43 }]) {
+    expect(storedLink(broken)).toEqual({ link: { address, profileID }, discarded: true })
+  }
+  expect(storedLink({ address, profileID, credential, extra: true })).toEqual({ link: { address, profileID, credential }, discarded: true })
+  expect(storedLink({ address, profileID: "x", credential })).toEqual({ link: { address }, discarded: true })
+  expect(storedLink({ address: "http://localhost:42188", profileID, credential })).toEqual({ link: { profileID, credential }, discarded: true })
+  expect(storedLink({ address, forget: { profileID, credential: "" } })).toEqual({ link: { address }, discarded: true })
+  expect(storedLink("corrupt")).toEqual({ link: {}, discarded: true })
+  expect(storedLink([credential])).toEqual({ link: {}, discarded: true })
+})
+
+test("no extension action path activates a tab, focuses a window, or raises Chrome", async () => {
+  for (const file of ["controller.js", "kernel.js", "page.js", "service-worker.js", "script.js",
+    "../../packages/core/src/interaction/chrome.ts", "../../packages/core/src/interaction/chrome-isolated.ts"]) {
+    const source = await Bun.file(new URL(`../${file}`, import.meta.url)).text()
+    expect(source).not.toMatch(/tabs\.update|windows\.update|tabs\.highlight|\.focus\(|bringToFront|activateTarget|setFocusEmulationEnabled/)
+    expect(source).not.toMatch(/(?:create|update)\([^)]*active:\s*true/)
+  }
+  const worker = await Bun.file(new URL("../service-worker.js", import.meta.url)).text()
+  expect(worker.match(/focused:\s*true/g)).toHaveLength(1)
+  expect(worker).toMatch(/async function openPanel[\s\S]*focused: true/)
 })

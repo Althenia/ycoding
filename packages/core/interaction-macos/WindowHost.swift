@@ -91,7 +91,7 @@ enum WindowHost {
         _ = try window(target)
     }
 
-    static func enrollmentWindowVisible(_ id: CGWindowID, owner: pid_t) -> Bool {
+    static func elevatedWindowVisible(_ id: CGWindowID, owner: pid_t) -> Bool {
         guard id != kCGNullWindowID, awake(),
               let windows = CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[String: Any]],
               windows.count == 1, let window = windows.first,
@@ -126,6 +126,7 @@ enum WindowHost {
             return idForElement(element, &id) == .success && id == target.windowID
         }
         guard matching.count == 1, let root = matching.first else { throw Refusal.unverified }
+        guard !windows.contains(where: { !CFEqual($0, root) && attribute($0, "AXModal") as? Bool == true }) else { throw Refusal.dialog }
 
         var nodes = [(root, "0", 0)]
         var cursor = 0
@@ -145,12 +146,15 @@ enum WindowHost {
             let (element, id, depth) = nodes[cursor]
             cursor += 1
             guard let role = attribute(element, kAXRoleAttribute) as? String else { throw Refusal.unverified }
+            guard role != "AXSheet" else { throw Refusal.dialog }
+            let subrole = attribute(element, kAXSubroleAttribute) as? String ?? ""
             let names = [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute, kAXIdentifierAttribute, "AXPlaceholderValue"]
                 .compactMap { attribute(element, $0) as? String }
                 .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             guard !names.contains(where: { $0.localizedCaseInsensitiveContains("captcha") }) else { throw Refusal.captcha }
             guard !names.contains(where: { WindowSafety.sensitive(role: role, description: $0) }),
-                  !WindowSafety.sensitive(role: role, description: "") else { throw Refusal.sensitive }
+                  !WindowSafety.sensitive(role: role, description: ""),
+                  !WindowSafety.sensitive(role: subrole, description: "") else { throw Refusal.sensitive }
             guard role != "AXWebArea" else { throw Refusal.unsupported }
             let name = String((names.first ?? "").prefix(120))
             let enabled = (attribute(element, kAXEnabledAttribute) as? Bool) == true
@@ -225,9 +229,13 @@ enum WindowHost {
             guard text != nil, value.utf16.count <= 4096, value.utf8.count <= 16_384,
                   value.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else { throw Refusal.invalidRequest }
         } else if action != "press" || text != nil { throw Refusal.invalidRequest }
+        let before = attribute(element, kAXValueAttribute) as? String
         try send(target, admit: admit) {
             action == "press" ? AXUIElementPerformAction(element, kAXPressAction as CFString)
                 : AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFString)
+        }
+        if action == "replaceText", let before, before != value, attribute(element, kAXValueAttribute) as? String == before {
+            throw Refusal.foregroundRequired
         }
     }
 
@@ -235,7 +243,10 @@ enum WindowHost {
         try verifyTarget(target)
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
         try admit()
-        guard action() == .success, NSWorkspace.shared.frontmostApplication?.processIdentifier == front else { throw Refusal.uncertain }
+        let status = action()
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == front else { throw Refusal.uncertain }
+        guard ![.actionUnsupported, .attributeUnsupported, .notImplemented].contains(status) else { throw Refusal.foregroundRequired }
+        guard status == .success else { throw Refusal.uncertain }
     }
 
     static func previewSize(_ size: CGSize) -> CGSize? {

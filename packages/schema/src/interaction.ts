@@ -73,12 +73,62 @@ export const Refusal = Schema.Literals([
 ]).annotate({ identifier: "Interaction.Refusal" })
 export type Refusal = typeof Refusal.Type
 
+export const PauseReason = Schema.Literals([
+  "foreground_required", "file_chooser", "dialog", "captcha", "sensitive", "user_takeover",
+]).annotate({ identifier: "Interaction.PauseReason" })
+export type PauseReason = typeof PauseReason.Type
+
 export const ActionResult = Schema.Union([
   Schema.Struct({ outcome: Schema.Literal("applied") }),
   Schema.Struct({ outcome: Schema.Literal("refused"), reason: Refusal }),
   Schema.Struct({ outcome: Schema.Literal("uncertain") }),
+  Schema.Struct({ outcome: Schema.Literal("paused"), reason: PauseReason }),
 ]).annotate({ identifier: "Interaction.ActionResult" })
 export type ActionResult = typeof ActionResult.Type
+
+export const ScriptMode = Schema.Literals(["script", "code"]).annotate({ identifier: "Interaction.ScriptMode" })
+export type ScriptMode = typeof ScriptMode.Type
+
+export const defaultScriptTimeoutMs = 10_000
+
+export const ScriptRequest = Schema.Struct({
+  mode: ScriptMode,
+  source: Schema.String.check(Schema.isLengthBetween(1, 65_536)),
+  timeoutMs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(100), Schema.isLessThanOrEqualTo(60_000)).pipe(optional),
+}).annotate({ identifier: "Interaction.ScriptRequest" })
+export interface ScriptRequest extends Schema.Schema.Type<typeof ScriptRequest> {}
+
+export const ConsoleEntry = Schema.Struct({
+  level: Schema.Literals(["log", "info", "warn", "error", "debug"]),
+  text: Schema.String.check(Schema.isMaxLength(2048)),
+}).annotate({ identifier: "Interaction.ConsoleEntry" })
+export interface ConsoleEntry extends Schema.Schema.Type<typeof ConsoleEntry> {}
+
+export const ScriptError = Schema.Struct({
+  name: Schema.String.check(Schema.isMaxLength(128)),
+  message: Schema.String.check(Schema.isMaxLength(2048)),
+  stack: Schema.String.check(Schema.isMaxLength(8192)).pipe(optional),
+}).annotate({ identifier: "Interaction.ScriptError" })
+export interface ScriptError extends Schema.Schema.Type<typeof ScriptError> {}
+
+const utf8 = new TextEncoder()
+const scriptValue = Schema.Json.check(Schema.makeFilter((value: typeof Schema.Json.Type) => utf8.encode(JSON.stringify(value)).byteLength <= 65_536, {
+  expected: "a JSON value of at most 65536 serialized bytes",
+}))
+const logs = {
+  logs: Schema.Array(ConsoleEntry).check(Schema.isMaxLength(200)),
+  logsTruncated: Schema.Literal(true).pipe(optional),
+}
+
+export const ScriptResult = Schema.Union([
+  Schema.Struct({ outcome: Schema.Literal("completed"), value: scriptValue.pipe(optional), valueTruncated: Schema.Literal(true).pipe(optional), ...logs }),
+  Schema.Struct({ outcome: Schema.Literal("error"), error: ScriptError, ...logs }),
+  Schema.Struct({ outcome: Schema.Literal("timeout"), ...logs }),
+  Schema.Struct({ outcome: Schema.Literal("stopped"), ...logs }),
+  Schema.Struct({ outcome: Schema.Literal("refused"), reason: Refusal }),
+  Schema.Struct({ outcome: Schema.Literal("paused"), reason: PauseReason }),
+]).annotate({ identifier: "Interaction.ScriptResult" })
+export type ScriptResult = typeof ScriptResult.Type
 
 const previewBytes = 160 * 1024
 const previewBase64 = 4 * Math.ceil(previewBytes / 3)
@@ -103,6 +153,7 @@ export const Status = Schema.Union([
   Schema.Struct({ state: Schema.Literal("unavailable") }),
   Schema.Struct({ state: Schema.Literal("pending"), ...selection }),
   Schema.Struct({ state: Schema.Literal("active"), ...selection, label }),
+  Schema.Struct({ state: Schema.Literal("paused"), ...selection, label, reason: PauseReason }),
   Schema.Struct({ state: Schema.Literal("stopped"), ...selection, reason: StopReason,
     cleanup: Schema.Literals(["pending", "complete", "failed"]),
   }),
@@ -114,6 +165,14 @@ export const Preview = Schema.Union([
   Schema.Struct({ state: Schema.Literal("ready"), generation: Generation, frame: Frame }),
 ]).annotate({ identifier: "Interaction.Preview" })
 export type Preview = typeof Preview.Type
+
+export const Capture = Schema.Struct({
+  generation: Generation,
+  frame: Frame,
+  title: label.pipe(optional),
+  url: webURL.pipe(optional),
+}).annotate({ identifier: "Interaction.Capture" })
+export interface Capture extends Schema.Schema.Type<typeof Capture> {}
 
 export const Request = Schema.Union([
   Schema.Struct({ platform: Schema.Literal("macos"), mode: Schema.Never.pipe(optional), url: Schema.Never.pipe(optional) }),

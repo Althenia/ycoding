@@ -478,6 +478,7 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
             <span> on {permissionView()?.resources.join(", ")}</span>
           </Show>
         </p>
+        <For each={permissionView()?.details}>{(line) => <p class="request__note">{line}</p>}</For>
         <Show when={permissionView()?.always}>{(scope) => <p class="request__note">{scope()}</p>}</Show>
         <Show when={permission()?.escalation}>{(escalation) => <><p class="request__note" role="status">{humanReviewText(escalation())}</p><Show when={escalation().grades?.length}><DecisionGrades grades={escalation().grades ?? []} selected={escalation().choice} /></Show></>}</Show>
         <Show when={permission()?.projectEscalation}>{(escalation) => <ProjectEscalationNote escalation={escalation()} />}</Show>

@@ -2,6 +2,7 @@ import { createRootRoute, createRoute, createRouter, createHashHistory, Link, Ou
 import { QueryClient, QueryObserver } from "@tanstack/solid-query"
 import type { YCodingEvent } from "@ycoding-ai/client"
 import { dotsPeerLabel } from "@ycoding-ai/client/dots-peer"
+import { browserScriptPermission } from "@ycoding-ai/client/tool-display"
 import { batch, createContext, createEffect, createMemo, createSignal, createUniqueId, For, on, onCleanup, onMount, Show, useContext, type JSX } from "solid-js"
 import { render } from "solid-js/web"
 import type { ConnectionState, FormAnswer, FormRequest, Messages, PendingRequests, PermissionRequest, ComposerCatalog, PromptAgent, PromptFile, RequestReply, SessionItem, ModelSelection, ShellOutput, UsageRange, RevertInput, SetAutonomyInput, SettingsMutationInput, ProjectMutationInput, WorkspaceMutationInput, PinRequest } from "./contract"
@@ -29,7 +30,7 @@ import { schemeStylesheet } from "../../../apps/web/src/theme/schemes"
 import { Icon as WebIcon, type IconName as WebIconName } from "../../../apps/web/src/ui/icon"
 import { ordinarySession } from "./sessions"
 import { Markdown, MarkdownClipboard } from "../../../apps/web/src/remote/ui/markdown"
-import { createInteractionControl, interactionEventGeneration, readInteractionStatus, type InteractionView } from "../../../apps/web/src/remote/interaction-control"
+import { createInteractionControl, interactionControlVisible, interactionEventGeneration, readInteractionStatus, type InteractionView } from "../../../apps/web/src/remote/interaction-control"
 import { InteractionControl, InteractionPreview } from "../../../apps/web/src/remote/ui/interaction-control"
 import { chromeInteractionURL } from "./interaction-request"
 import { WORKSPACE_DESTINATIONS, SharedActivityBar, SharedTrace, SharedListColumn, SharedSessionGroups, clampListWidth, type SharedActivityItem, type SharedSessionGroup, SharedCompanionSurface, SharedCompanionTabs, SharedConversationHeader, SharedMessageTurn, SharedContextRingButton, SharedContextBreakdownPanel, SharedTurnHead, SharedRadioGroup, SharedCompactionDivider, SharedEditedFilesCard, SharedActivitySurface, SharedPageSurface, SharedSessionsSurface, SharedWorkspacesSurface, SharedUsageSurface, SharedSettingsSurface, SharedLoadingSkeleton } from "../../../apps/web/src/remote/ui/shared-workspace"
@@ -705,7 +706,7 @@ type UtilityKind = "connect" | "mcp" | "diff" | "status" | "debug" | "agents" | 
 type UtilityOptions = { readonly kind: UtilityKind; readonly source?: DesktopSource; readonly sessionID?: string; readonly directory?: string; readonly diffMode?: "git" | "branch"; readonly insert?: (value: string) => void; readonly chooseAgent?: (agent: { readonly id: string; readonly name: string }) => void }
 const [utilityDialog, setUtilityDialog] = createSignal<UtilityOptions>()
 const utilityKinds: readonly string[] = ["connect", "mcp", "diff", "status", "debug", "agents", "skills", "browser", "pair", "remote", "artifacts", "plugins", "dots", "help"]
-const [commandOwner, setCommandOwner] = createSignal<{ sessionID?: string; canSendToParent?: () => boolean; run: (name: string, args: string) => Promise<boolean> }>()
+const [commandOwner, setCommandOwner] = createSignal<{ sessionID?: string; canSendToParent?: () => boolean; interactionActions?: () => readonly PaletteAction[]; run: (name: string, args: string) => Promise<boolean> }>()
 const sessionCommands = new Set(["compact", "autonomous", "goal", "daybreak", "rename", "fork", "move", "undo", "redo", "terminals", "session-actions", "processes", "background", "variants", "find", "timeline", "copy", "export", "archive", "unarchive", "delete", "share", "unshare", "parent", "next-child", "previous-child", "btw", "btw-send", "suggest", "cd", "sleep", "wake"])
 type StashOptions = { readonly draft: () => StashedPrompt; readonly update: (draft: StashedPrompt) => void; readonly directory?: string }
 const [stashDialog, setStashDialog] = createSignal<StashOptions>()
@@ -1438,6 +1439,7 @@ function Palette() {
       run: () => { const owner = commandOwner(); void (owner ? owner.run(command.name === "themes" ? "theme" : command.name, "") : commonCommand(command.name, "", {}, (to) => void navigate({ to }))).catch((cause) => setDesktopNotice(failure(cause, "The command was not confirmed."))) } })),
     { id: "branch-diff", group: "Workspace & Git", label: "Branch diff", icon: "git-branch", keywords: "git branch changes compare", run: () => { const owner = commandOwner(); void (owner ? owner.run("branch-diff", "") : commonCommand("branch-diff", "", {}, (to) => void navigate({ to }))).catch((cause) => setDesktopNotice(failure(cause, "Diff could not be opened."))) } },
     ...(commandOwner()?.sessionID ? (["archive", "unarchive", "delete"] as const).map((kind): PaletteAction => ({ id: `session-${kind}`, group: "Session", label: kind === "archive" ? "Archive Session" : kind === "unarchive" ? "Unarchive Session" : "Delete Session", icon: "sessions", keywords: kind, run: () => { void commandOwner()?.run(kind, "").catch((cause) => setDesktopNotice(failure(cause, "The Session change was not confirmed."))) } })) : []),
+    ...(commandOwner()?.interactionActions?.() ?? []),
     { id: "toggle-animations", group: "Customize", label: animationsEnabled() ? "Animations: Turn off" : "Animations: Turn on", detail: "Motion in this window", icon: "sparkles", keywords: "motion animation reduced customize", run: () => applyAnimationsPreference(!animationsEnabled()) },
     { id: "toggle-rail", group: "Customize", label: "Toggle navigation rail", detail: railCollapsed() ? "Expand the rail" : "Collapse the rail", icon: "panel-left", keywords: "sidebar collapse expand navigation customize", run: () => setRailCollapsed(!railCollapsed()) },
     { id: "toggle-companion", group: "Customize", label: "Toggle Session companion", detail: companionOpen() ? "Close the companion" : "Open the companion", icon: "team", keywords: "companion activity changes context customize", run: () => setCompanionOpen(!companionOpen()) },
@@ -2662,6 +2664,7 @@ function PermissionCard(props: { request: PermissionRequest; locked: boolean; no
   return <article class="request rl-decision-card" ref={card} aria-labelledby={`permission-${props.request.id}`}>
     <div class="request__head"><span class="request__head-icon"><Icon name="shield" /></span><h2 id={`permission-${props.request.id}`} tabindex="-1" ref={heading}>Permission requested: {props.request.action}</h2></div>
     <ul class="request__resources"><For each={props.request.resources}>{(resource) => <li class="desktop__metadata">{resource}</li>}</For></ul>
+    <Show when={props.request.action === "browser_script"}><For each={browserScriptPermission(props.request.metadata).lines}>{(line) => <p class="desktop__muted">{line}</p>}</For></Show>
     <Show when={props.request.save?.length} fallback={<p class="desktop__muted">This request has no rule to save, so only Allow once and Reject are offered.</p>}><p class="desktop__muted">Always allow saves a permission rule for: {props.request.save?.join(", ")}.</p></Show>
     <label class="desktop__field">Reason (optional, sent with Reject)<input type="text" maxlength="4096" value={reason()} onInput={(event) => setReason(event.currentTarget.value)} /></label>
     <Show when={props.notice}>{(message) => <p role="alert" class="desktop__error">{message()}</p>}</Show>
@@ -2900,6 +2903,7 @@ function Conversation(props: { sessionID: string }) {
       status: async () => readInteractionStatus(await api.interactionStatus(owner)) ?? "error",
       preview: (generation) => api.interactionPreview({ ...owner, generation }),
       stop: (generation) => api.interactionStop({ ...owner, generation }),
+      resume: (generation) => api.interactionResume({ ...owner, generation }),
       request: (payload) => api.interactionRequest({ ...owner, payload }),
     })
   }))
@@ -3377,7 +3381,23 @@ function Conversation(props: { sessionID: string }) {
     return false
   }
   onMount(() => {
-    const owner = { sessionID: props.sessionID, canSendToParent: () => session()?.agent === "btw" && !!session()?.parentID, run: (name: string, args: string) => executeSlash({ kind: "local", name, args }) }
+    const owner = {
+      sessionID: props.sessionID,
+      canSendToParent: () => session()?.agent === "btw" && !!session()?.parentID,
+      interactionActions: () => {
+        const view = interactionView()
+        if (!view) return []
+        const state = typeof view.status === "string" ? view.status : view.status.state
+        const actions: PaletteAction[] = []
+        if (state === "error") actions.push({ id: "interaction-refresh", group: "Session", label: "Refresh interaction status", icon: "refresh", keywords: "interaction browser macos chrome refresh status", run: () => interaction.refresh() })
+        if (localInteraction() && (state === "unavailable" || state === "stopped") && view.busy === undefined) {
+          actions.push({ id: "interaction-chrome", group: "Session", label: "Request Chrome control", icon: "globe", keywords: "interaction browser chrome control request", run: () => setChromeProposalOpen(true) })
+          actions.push({ id: "interaction-macos", group: "Session", label: "Request macOS control", icon: "monitor", keywords: "interaction desktop macos control request", run: () => interaction.request({ platform: "macos" }) })
+        }
+        return actions
+      },
+      run: (name: string, args: string) => executeSlash({ kind: "local", name, args }),
+    }
     setCommandOwner(owner)
     onCleanup(() => { if (commandOwner() === owner) setCommandOwner(undefined) })
   })
@@ -3514,7 +3534,7 @@ function Conversation(props: { sessionID: string }) {
         <p class="rl-presence" data-tone={running() ? "busy" : "idle"}><span>{workspaceBase(item().location.directory)} · {connectionOwnership()}</span></p>
       </>}</Show>
       </div></SharedConversationHeader><div class="rl-notices">
-      <Show when={interactionView()}>{(view) => <InteractionControl view={view()} inlinePreview={!interactionDocked()} onReveal={revealInteraction} onStop={interaction.stop} onRefresh={interaction.refresh} onRequest={localInteraction() ? (platform) => {
+      <Show when={interactionControlVisible(interactionView()) ? interactionView() : undefined}>{(view) => <InteractionControl view={view()} inlinePreview={!interactionDocked()} onReveal={revealInteraction} onStop={interaction.stop} onResume={interaction.resume} onRefresh={interaction.refresh} onRequest={localInteraction() ? (platform) => {
         if (platform === "chrome") setChromeProposalOpen(true)
         if (platform === "macos") interaction.request({ platform })
       } : undefined} />}</Show>

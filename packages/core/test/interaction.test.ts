@@ -41,6 +41,7 @@ function fixture(driver: Partial<InteractionDriver> = {}, options?: Parameters<t
       return { outcome: "applied" }
     },
     preview: async () => png,
+    resume: async () => true,
     detach: async () => {},
     ...driver,
   }, key)
@@ -48,7 +49,7 @@ function fixture(driver: Partial<InteractionDriver> = {}, options?: Parameters<t
 }
 
 async function activate(f: ReturnType<typeof fixture>, sessionID: SessionID, selection: Interaction.Request = { platform: "chrome" }) {
-  const pending = f.authority.request(sessionID, selection)
+  const pending = await f.authority.request(sessionID, selection)
   if (pending.state !== "pending") throw new Error("Expected a pending native request")
   const candidate = f.native.pending()[0]
   await f.native.inventory(candidate.candidateID)
@@ -60,7 +61,7 @@ test("only the exact native candidate can attach; another Session cannot use or 
   const f = fixture()
   const owner = SessionID.create()
   const other = SessionID.create()
-  const pending = f.authority.request(owner, { platform: "chrome" })
+  const pending = await f.authority.request(owner, { platform: "chrome" })
   if (pending.state !== "pending") throw new Error("Expected a pending native request")
   const proof = { candidateID: f.native.pending()[0].candidateID, sessionID: owner, targetID: target.id, authorization: "native-proof" }
   expect(await f.native.approve(proof)).toBe(false)
@@ -111,7 +112,7 @@ test("Stop fences an in-flight action and late preview before cleanup completes"
   detach.resolve()
   await cleaned.promise
   expect(await f.authority.preview(sessionID, generation)).toEqual({ state: "unavailable", generation })
-  expect(f.authority.request(sessionID, { platform: "chrome" }).state).toBe("pending")
+  expect((await f.authority.request(sessionID, { platform: "chrome" })).state).toBe("pending")
   expect(f.authority.stop(sessionID, generation)).toBe(false)
   f.native.disconnect()
 })
@@ -121,7 +122,7 @@ test("Stop aborts the pending native consent for its exact generation", async ()
   const offered = Promise.withResolvers<{ candidateID: Interaction.ID; signal: AbortSignal }>()
   const unsubscribe = f.native.onPending((request, signal) => offered.resolve({ candidateID: request.candidateID, signal }))
   const sessionID = SessionID.create()
-  const pending = f.authority.request(sessionID, { platform: "chrome" })
+  const pending = await f.authority.request(sessionID, { platform: "chrome" })
   if (pending.state !== "pending") throw new Error("Expected a pending native request")
   try {
     const candidate = await offered.promise
@@ -144,10 +145,10 @@ test("macOS Interaction cannot offer or approve its own private helper window", 
     platform: "macos", inventory: async () => [privateWindow, ordinaryWindow],
     attach: async () => ({ id: Interaction.ID.create() }),
     observe: async () => ({ revision: 1, elements: [] }),
-    perform: async () => ({ outcome: "applied" }), preview: async () => undefined, detach: async () => {},
+    perform: async () => ({ outcome: "applied" }), preview: async () => undefined, resume: async () => true, detach: async () => {},
   })
   const sessionID = SessionID.create()
-  authority.request(sessionID, { platform: "macos" })
+  await authority.request(sessionID, { platform: "macos" })
   const candidateID = native.pending()[0].candidateID
   try {
     expect(await native.inventory(candidateID)).toEqual([ordinaryWindow])
@@ -263,7 +264,7 @@ test("paired disconnect does not revoke an approved isolated Chrome target or pe
   const isolatedSession = SessionID.create()
   const isolatedTarget = { ...target, kind: "chrome-isolated", url: "https://example.test/private", pathname: "/private" } as const
   const selection = { platform: "chrome", mode: "isolated", url: isolatedTarget.url } as const
-  expect(f.authority.request(isolatedSession, selection)).toEqual({ state: "unavailable" })
+  expect(await f.authority.request(isolatedSession, selection)).toEqual({ state: "unavailable" })
   expect(f.native.pending()).toHaveLength(0)
   const isolated = f.authority.register({
     platform: "chrome",
@@ -272,16 +273,17 @@ test("paired disconnect does not revoke an approved isolated Chrome target or pe
     observe: async () => ({ revision: 1, elements: [], pathname: isolatedTarget.pathname }),
     perform: async () => ({ outcome: "applied" }),
     preview: async () => undefined,
+    resume: async () => true,
     detach: async () => {},
   }, "chrome-isolated")
-  const pending = f.authority.request(isolatedSession, selection)
+  const pending = await f.authority.request(isolatedSession, selection)
   if (pending.state !== "pending") throw new Error("Expected an isolated candidate")
   const candidate = isolated.pending()[0]
   expect(candidate).toMatchObject({ purpose: "attach", selection })
   expect(await isolated.inventory(candidate.candidateID)).toEqual([isolatedTarget])
   expect(await isolated.approve({ candidateID: candidate.candidateID, sessionID: isolatedSession,
     targetID: isolatedTarget.id, authorization: "isolated-native-proof" })).toBe(true)
-  expect(f.authority.request(isolatedSession, { platform: "chrome", mode: "tab" })).toMatchObject({ state: "active", generation: pending.generation })
+  expect(await f.authority.request(isolatedSession, { platform: "chrome", mode: "tab" })).toMatchObject({ state: "active", generation: pending.generation })
   const pairedSession = SessionID.create()
   await activate(f, pairedSession)
   f.native.disconnect()
@@ -344,18 +346,99 @@ test("the Location tool applies a path-scoped deny before asking the Chrome driv
     },
   })
   const generation = await activate(f, sessionID)
-  const session = Schema.decodeUnknownSync(Session.Info)({
-    id: sessionID, projectID: "global", scope: "bound", title: "Interaction fixture", location: { directory: "/fixture" },
-    cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 0, updated: 0 },
-  })
   const rules: Permission.Ruleset = [{ action: "browser_read", resource: "https://example.test/admin*", effect: "deny" }]
-  const permission = Layer.mock(Permission.Service, {
-    assert: (input) => Effect.suspend(() => {
+  try {
+    const result = await runTool(f, sessionID, { operation: "observe", generation }, (input) => {
       if (input.action === "browser_read") reads.push(...input.resources)
       return input.resources.some((resource) => Permission.evaluate(input.action, resource, rules).effect === "deny")
         ? Effect.fail(new Permission.BlockedError({ rules, permission: input.action, resources: input.resources }))
         : Effect.void
-    }),
+    })
+    expect(JSON.stringify(result)).toContain("Permission denied: browser_read")
+    expect(reads).toEqual(["https://example.test/admin/settings"])
+    expect(observations).toBe(0)
+  } finally {
+    f.native.disconnect()
+  }
+})
+
+test("the Location tool reports a paused grant as status without driver reads or actions", async () => {
+  const sessionID = SessionID.create()
+  const driverCalls: string[] = []
+  const f = fixture({
+    observe: async () => { driverCalls.push("observe"); return { revision: 1, elements: [], pathname: target.pathname } },
+    perform: async () => { driverCalls.push("perform"); return { outcome: "applied" } },
+  })
+  const generation = await activate(f, sessionID)
+  f.native.pause(f.lease.id, "captcha")
+  try {
+    for (const input of [
+      { operation: "observe", generation },
+      { operation: "perform", generation, revision: 1, action },
+      { operation: "confirm", generation, revision: 1, action: { ...action, destructive: true } },
+    ]) {
+      const text = JSON.stringify(await runTool(f, sessionID, input)).replaceAll("\\", "")
+      expect(text).toContain(`"status":{"state":"paused","platform":"chrome","generation":"${generation}","label":"Selected Chrome tab","reason":"captcha"}`)
+    }
+    expect(driverCalls).toEqual([])
+  } finally {
+    f.native.disconnect()
+  }
+})
+
+test("the Location tool runs a script only after interaction, browser_read and browser_script permission", async () => {
+  const sessionID = SessionID.create()
+  const runs: unknown[] = []
+  const asked: Array<{ action: string; resources: readonly string[]; metadata?: Record<string, unknown> }> = []
+  const f = fixture({ run: async (_lease, request) => { runs.push(request); return { outcome: "completed", value: 3, logs: [] } } })
+  const generation = await activate(f, sessionID)
+  try {
+    const { revision } = await f.authority.observe(sessionID, generation)
+    const source = "const rows = document.querySelectorAll('tr')\nreturn rows.length"
+    const result = await runTool(f, sessionID, { operation: "run", generation, revision, script: { mode: "script", source } }, (input) => {
+      asked.push({ action: input.action, resources: input.resources, metadata: input.metadata })
+      return Effect.void
+    })
+    expect(JSON.stringify(result).replaceAll("\\", "")).toContain('{"type":"script","result":{"outcome":"completed","value":3,"logs":[]}}')
+    expect(asked.map((entry) => [entry.action, entry.resources])).toEqual([
+      ["interaction", ["https://example.test/"]], ["browser_read", ["https://example.test/"]], ["browser_script", ["https://example.test/"]],
+    ])
+    const scriptAsk = asked.find((entry) => entry.action === "browser_script")?.metadata
+    expect(scriptAsk).toMatchObject({ operation: "run", mode: "script", sourcePreview: "const rows = document.querySelectorAll('tr') return rows.length" })
+    expect(scriptAsk?.sourceDigest).toMatch(/^[0-9a-f]{64}$/)
+    expect(runs).toEqual([{ mode: "script", source, timeoutMs: 10_000 }])
+  } finally {
+    f.native.disconnect()
+  }
+})
+
+test("the Location tool reports a paused run without asking any permission or dispatching", async () => {
+  const sessionID = SessionID.create()
+  let runs = 0
+  const asked: string[] = []
+  const f = fixture({ run: async () => { runs++; return { outcome: "completed", logs: [] } } })
+  const generation = await activate(f, sessionID)
+  try {
+    const { revision } = await f.authority.observe(sessionID, generation)
+    f.native.pause(f.lease.id, "dialog")
+    const result = await runTool(f, sessionID, { operation: "run", generation, revision, script: { mode: "code", source: "1" } }, (input) => {
+      asked.push(input.action)
+      return Effect.void
+    })
+    expect(JSON.stringify(result).replaceAll("\\", "")).toContain('{"type":"script","result":{"outcome":"paused","reason":"dialog"}}')
+    expect(asked).toEqual([])
+    expect(runs).toBe(0)
+  } finally {
+    f.native.disconnect()
+  }
+})
+
+function runTool(f: ReturnType<typeof fixture>, sessionID: SessionID, input: Record<string, unknown>,
+  assert: Permission.Interface["assert"] = () => Effect.void,
+) {
+  const session = Schema.decodeUnknownSync(Session.Info)({
+    id: sessionID, projectID: "global", scope: "bound", title: "Interaction fixture", location: { directory: "/fixture" },
+    cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 0, updated: 0 },
   })
   const registration = makeLocationNode({
     name: "test/interaction-tool",
@@ -364,26 +447,22 @@ test("the Location tool applies a path-scoped deny before asking the Chrome driv
   })
   const layer = AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, registration]), [
     [InteractionRuntime.node, Layer.succeed(InteractionRuntime.Service, f.authority)],
-    [Permission.node, permission],
-    [SessionGuardrail.node, Layer.mock(SessionGuardrail.Service, { reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true } })],
+    [Permission.node, Layer.mock(Permission.Service, { assert: (request) => Effect.suspend(() => assert(request)) })],
+    [SessionGuardrail.node, Layer.mock(SessionGuardrail.Service, {
+      reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
+      assert: () => Effect.succeed({ release: Effect.void }),
+    })],
     [SessionStore.node, Layer.mock(SessionStore.Service, { get: () => Effect.succeed(session) })],
     [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
     [Image.node, imagePassthrough],
   ])
-  try {
-    const result = await Effect.runPromise(Effect.gen(function* () {
-      const registry = yield* ToolRegistry.Service
-      return yield* executeTool(registry, { sessionID, ...toolIdentity,
-        call: { type: "tool-call", id: "interaction-denied", name: "interaction", input: { operation: "observe", generation } },
-      })
-    }).pipe(Effect.provide(layer), Effect.scoped))
-    expect(JSON.stringify(result)).toContain("Permission denied: browser_read")
-    expect(reads).toEqual(["https://example.test/admin/settings"])
-    expect(observations).toBe(0)
-  } finally {
-    f.native.disconnect()
-  }
-})
+  return Effect.runPromise(Effect.gen(function* () {
+    const registry = yield* ToolRegistry.Service
+    return yield* executeTool(registry, { sessionID, ...toolIdentity,
+      call: { type: "tool-call", id: "interaction-call", name: "interaction", input },
+    })
+  }).pipe(Effect.provide(layer), Effect.scoped))
+}
 
 test.each(["redirect", "missing document"])("a Chrome %s cannot expose semantics or admit a stale action", async (reason) => {
   let revision = 0

@@ -30,6 +30,7 @@ test("HTTP can request but cannot approve; preview and Stop stay on the owning S
     attach: async () => ({ id: Interaction.ID.create() }),
     observe: async () => ({ revision: 1, elements: [], pathname: target.pathname }),
     perform: async () => ({ outcome: "applied" }),
+    resume: async () => false,
     preview: async () => ({ mimeType: "image/png", width: 1, height: 1,
       base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" }),
     detach: async () => {},

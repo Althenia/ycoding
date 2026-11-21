@@ -40,6 +40,7 @@ export type TelemetryRequestSample = {
     | "session.interaction.status"
     | "session.interaction.preview"
     | "session.interaction.stop"
+    | "session.interaction.resume"
     | "session.message.stream"
     | "session.todo.list"
     | "session.subagent.list"
@@ -972,6 +973,14 @@ export type DotsPendingRequest = {
 export type DotsRespondResult = { outcome: "sent" | "unknown" }
 
 export type InteractionPlatform = "chrome" | "macos"
+
+export type InteractionPauseReason =
+  | "foreground_required"
+  | "file_chooser"
+  | "dialog"
+  | "captcha"
+  | "sensitive"
+  | "user_takeover"
 
 export type InteractionStopReason =
   | "stopped"
@@ -2983,6 +2992,13 @@ export type InteractionStatus =
   | { state: "unavailable" }
   | { state: "pending"; platform: InteractionPlatform; generation: InteractionGeneration }
   | { state: "active"; platform: InteractionPlatform; generation: InteractionGeneration; label: string }
+  | {
+      state: "paused"
+      platform: InteractionPlatform
+      generation: InteractionGeneration
+      label: string
+      reason: InteractionPauseReason
+    }
   | {
       state: "stopped"
       platform: InteractionPlatform
@@ -6295,6 +6311,7 @@ export type ServerTelemetryAppendInput = {
             | "session.interaction.status"
             | "session.interaction.preview"
             | "session.interaction.stop"
+            | "session.interaction.resume"
             | "session.message.stream"
             | "session.todo.list"
             | "session.subagent.list"
@@ -13546,3 +13563,10 @@ export type SessionInteractionStopInput = {
 }
 
 export type SessionInteractionStopOutput = { data: InteractionStatus }["data"]
+
+export type SessionInteractionResumeInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly generation: { readonly generation: string }["generation"]
+}
+
+export type SessionInteractionResumeOutput = { data: InteractionStatus }["data"]

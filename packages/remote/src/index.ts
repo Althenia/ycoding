@@ -59,6 +59,7 @@ export const remoteOperations = [
   "session.interaction.status",
   "session.interaction.preview",
   "session.interaction.stop",
+  "session.interaction.resume",
   "session.message.stream",
   "session.todo.list",
   "session.subagent.list",
@@ -157,6 +158,7 @@ export const remoteSessionOperations = [
   "session.interaction.status",
   "session.interaction.preview",
   "session.interaction.stop",
+  "session.interaction.resume",
   "session.message.stream",
   "session.todo.list",
   "session.subagent.list",
@@ -338,6 +340,7 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "session.interaction.status": "read",
   "session.interaction.preview": "read",
   "session.interaction.stop": "mutation",
+  "session.interaction.resume": "mutation",
   "session.message.stream": "read",
   "session.todo.list": "read",
   "session.subagent.list": "read",
@@ -1005,7 +1008,7 @@ function validUsageReportInput(input: unknown): boolean {
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
   if (operation === "session.interaction.status") return input === undefined
-  if (operation === "session.interaction.preview" || operation === "session.interaction.stop")
+  if (operation === "session.interaction.preview" || operation === "session.interaction.stop" || operation === "session.interaction.resume")
     return isRecord(input) && Object.keys(input).length === 1 && isInteractionGeneration(input.generation)
   if (operation === "dots.get") return input === undefined
   if (operation === "dots.set") return isRecord(input) && Object.keys(input).length === 2 &&

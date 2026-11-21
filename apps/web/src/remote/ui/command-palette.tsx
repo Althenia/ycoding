@@ -107,6 +107,7 @@ export function CommandPalette(props: {
         goalActive: state.view?.id === sessionID && state.view.autonomy?.goal?.status === "active",
         ...(state.view?.id === sessionID && state.view.autonomy !== undefined
           ? { deferred: state.view.autonomy.effective?.deferred ?? state.view.autonomy.defer !== undefined } : {}),
+        canRefreshInteraction: state.interaction?.status === "error",
       },
       commands: ready?.commands ?? [],
       skills: ready?.skills.map((skill) => ({ id: skill.id, name: skill.name, description: skill.description })) ?? [],
@@ -182,6 +183,7 @@ export function CommandPalette(props: {
         if (scope) void remote.queries.toggleKeepAwake(scope)
         return
       }
+      case "refreshInteraction": remote.store.refreshInteraction(); return
       case "skill": void remote.store.activateSkill(intent.skill); return
       case "draft": props.handlers.draft(intent.text); return
       case "go": props.handlers.go(intent.view); return

@@ -240,6 +240,7 @@ export function apply(draft: Pick<AgentDraft, "update">, scope: "bound" | "stand
       { action: "*", resource: "*", effect: "allow" },
       { action: "chatgpt_*", resource: "*", effect: "ask" },
       { action: "claude_*", resource: "*", effect: "ask" },
+      { action: "browser_script", resource: "*", effect: "ask" },
       ...readonlyExternalDirectory,
       { action: "question", resource: "*", effect: "deny" },
       { action: "plan_enter", resource: "*", effect: "deny" },

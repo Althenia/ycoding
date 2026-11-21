@@ -1,6 +1,6 @@
 import { createSignal, onCleanup, Show } from "solid-js"
 import { Icon } from "../../ui/icon"
-import { interactionViewLabel, stoppableGeneration, type InteractionPlatform, type InteractionView } from "../interaction-control"
+import { interactionControlVisible, interactionViewLabel, resumableGeneration, stoppableGeneration, type InteractionPlatform, type InteractionView } from "../interaction-control"
 import "./interaction-control.css"
 
 export function InteractionControl(props: {
@@ -8,12 +8,14 @@ export function InteractionControl(props: {
   readonly inlinePreview: boolean
   readonly onReveal: (revealed: boolean) => void
   readonly onStop: (generation: string) => void
+  readonly onResume?: (generation: string) => void
   readonly onRefresh: () => void
   readonly onRequest?: (platform: InteractionPlatform) => void
 }) {
   const state = () => typeof props.view.status === "string" ? props.view.status : props.view.status.state
   const generation = () => stoppableGeneration(props.view.status)
-  return <section class="interaction-control" aria-label="Interaction control">
+  const resumeGeneration = () => resumableGeneration(props.view.status)
+  return <Show when={interactionControlVisible(props.view)}><section class="interaction-control" aria-label="Interaction control">
     <div class="interaction-control__bar">
       <span class="interaction-control__label" role="status" data-state={state()}>
         <Icon name="monitor" size={16} />
@@ -22,6 +24,9 @@ export function InteractionControl(props: {
       <Show when={state() === "active"}>
         <button type="button" class="interaction-control__button" aria-label={props.view.revealed ? "Hide interaction preview" : "Show interaction preview"} aria-expanded={props.view.revealed} aria-disabled={!!props.view.busy} onClick={() => { if (!props.view.busy) props.onReveal(!props.view.revealed) }}>{props.view.revealed ? "Hide preview" : "Show preview"}<Icon name={props.view.revealed ? "chevron-up" : "chevron-down"} size={14} /></button>
       </Show>
+      <Show when={resumeGeneration()} keyed>{(current) =>
+        <button type="button" class="interaction-control__button interaction-control__resume" aria-label="Resume interaction" aria-disabled={props.view.busy === "resume" || props.view.busy === "stop"} onClick={() => { if (!props.view.busy) props.onResume?.(current) }}>{props.view.busy === "resume" ? "Resuming…" : "Resume"}</button>
+      }</Show>
       <Show when={generation()} keyed>{(current) =>
         <button type="button" class="interaction-control__button interaction-control__stop" aria-label="Stop interaction" aria-disabled={props.view.busy === "stop"} onClick={() => props.onStop(current)}><Icon name="stop" size={14} /> {props.view.busy === "stop" ? "Stopping…" : "Stop"}</button>
       }</Show>
@@ -33,7 +38,7 @@ export function InteractionControl(props: {
     </div>
     <Show when={props.view.notice}>{(notice) => <p class="interaction-control__notice" role="status">{notice()}</p>}</Show>
     <Show when={props.inlinePreview && props.view.revealed && state() === "active"}><InteractionPreview view={props.view} /></Show>
-  </section>
+  </section></Show>
 }
 
 export function InteractionPreview(props: { readonly view: InteractionView }) {

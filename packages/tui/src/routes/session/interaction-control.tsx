@@ -15,9 +15,16 @@ function label(status: InteractionStatus | undefined) {
   if (status.state === "unavailable") return "Interaction unavailable"
   const platform = status.platform === "chrome" ? "Chrome" : "macOS"
   if (status.state === "pending") return status.platform === "chrome" ? "Chrome control · Awaiting local approval" : "Awaiting approval in macOS"
-  if (status.state === "active") {
+  if (status.state === "active" || status.state === "paused") {
     const target = status.label.replace(/[\p{Cc}\u202a-\u202e\u2066-\u2069]/gu, "")
-    return `${platform} control active${target ? ` · ${target}` : ""}`
+    const prefix = `${platform} control ${status.state}${target ? ` · ${target}` : ""}`
+    if (status.state === "active") return prefix
+    const reason = {
+      foreground_required: "Bring the target to the front yourself", file_chooser: "Choose the file yourself",
+      dialog: "Answer the dialog yourself", captcha: "Complete the CAPTCHA yourself",
+      sensitive: "Fill the sensitive field yourself", user_takeover: "You are in control",
+    }[status.reason]
+    return `${prefix} · ${reason}`
   }
   const reason = {
     stopped: "", rejected: " · Approval declined", expired: " · Grant expired", disconnected: " · Platform disconnected",
@@ -31,13 +38,17 @@ export function SessionInteractionControl(props: { readonly sessionID: string })
   const dialog = useDialog()
   const { theme } = useTheme()
   const [status, setStatus] = createSignal<InteractionStatus>()
-  const [busy, setBusy] = createSignal<"request" | "stop">()
+  const [busy, setBusy] = createSignal<"request" | "stop" | "resume">()
   const [readFailed, setReadFailed] = createSignal(false)
   const [notice, setNotice] = createSignal<string>()
   const connected = () => client.connection.status() === "connected"
   const stoppable = () => {
     const current = status()
-    return current?.state === "pending" || current?.state === "active" ? current : undefined
+    return current?.state === "pending" || current?.state === "active" || current?.state === "paused" ? current : undefined
+  }
+  const resumable = () => {
+    const current = status()
+    return current?.state === "paused" ? current : undefined
   }
   let owner: { readonly sessionID: string; readonly controller: AbortController; reading: boolean; again: boolean } | undefined
   let mutationRevision = 0
@@ -79,15 +90,19 @@ export function SessionInteractionControl(props: { readonly sessionID: string })
       ["127.0.0.1", "localhost", "[::1]"].includes(new URL(base).hostname)
   }
 
-  const mutate = async (kind: "request" | "stop", send: (sessionID: string, signal: AbortSignal) => Promise<InteractionStatus>) => {
+  const mutate = async (kind: "request" | "stop" | "resume", send: (sessionID: string, signal: AbortSignal) => Promise<InteractionStatus>) => {
     const scope = owner
-    if (!scope || !connected() || busy() === "stop" || (kind === "request" && busy())) return
+    if (!scope || !connected() || busy() === "stop" || (kind !== "stop" && busy())) return
     const revision = ++mutationRevision
     const current = () => owner === scope && revision === mutationRevision
     setBusy(kind)
     setNotice(undefined)
     await send(scope.sessionID, scope.controller.signal).catch(() => {
-      if (current()) setNotice(kind === "stop" ? "Stop was not confirmed. Check the reported status." : "The request was not confirmed. Check the reported status.")
+      if (current()) setNotice({
+        stop: "Stop was not confirmed. Check the reported status.",
+        resume: "Resume was not confirmed. Check the reported status.",
+        request: "The request was not confirmed. Check the reported status.",
+      }[kind])
     })
     if (!current()) return
     setStatus(undefined)
@@ -125,6 +140,12 @@ export function SessionInteractionControl(props: { readonly sessionID: string })
     void mutate("stop", (sessionID, signal) => client.api.sessionInteraction.stop({ sessionID, generation: current.generation }, { signal }))
   }
 
+  const resume = () => {
+    const current = resumable()
+    if (!current) return
+    void mutate("resume", (sessionID, signal) => client.api.sessionInteraction.resume({ sessionID, generation: current.generation }, { signal }))
+  }
+
   Keymap.createLayer(() => ({
     mode: "global",
     commands: [
@@ -132,17 +153,29 @@ export function SessionInteractionControl(props: { readonly sessionID: string })
       { id: "session.interaction.chrome.owned", group: "Session", title: "Request owned Chrome tab", palette: true, bind: false, enabled: requestable(), run: () => requestNewTab("owned") },
       { id: "session.interaction.chrome.isolated", group: "Session", title: "Request isolated Chrome", palette: true, bind: false, enabled: requestable(), run: () => requestNewTab("isolated") },
       { id: "session.interaction.macos", group: "Session", title: "Request macOS control", palette: true, bind: false, enabled: requestable(), run: () => { dialog.clear(); request({ platform: "macos" }) } },
+      { id: "session.interaction.resume", group: "Session", title: "Resume interaction", palette: true, bind: false, enabled: connected() && !!resumable() && !busy(), run: () => { dialog.clear(); resume() } },
       { id: "session.interaction.stop", group: "Session", title: "Stop interaction", palette: true, bind: false, enabled: connected() && !!stoppable() && busy() !== "stop", run: () => { dialog.clear(); stop() } },
       { id: "session.interaction.refresh", group: "Session", title: "Refresh interaction status", palette: true, bind: false, enabled: connected() && readFailed(), run: () => { dialog.clear(); void refresh() } },
     ],
   }))
 
-  return <Show when={connected()}>
+  const visible = () => {
+    if (!connected()) return false
+    if (busy() === "request" || notice()) return true
+    if (readFailed()) return false
+    const current = status()
+    return current !== undefined && current.state !== "unavailable"
+  }
+
+  return <Show when={visible()}>
     <box flexShrink={0} flexDirection="column" paddingLeft={1}>
       <box flexDirection="row" gap={1}>
-        <text flexGrow={1} fg={status()?.state === "pending" ? theme.text.feedback.warning.default : status()?.state === "active" ? theme.text.action.primary.default : theme.text.subdued}>
+        <text flexGrow={1} fg={status()?.state === "pending" || status()?.state === "paused" ? theme.text.feedback.warning.default : status()?.state === "active" ? theme.text.action.primary.default : theme.text.subdued}>
           {readFailed() ? "Interaction status unavailable" : busy() === "request" && !stoppable() ? "Requesting platform approval…" : label(status())}
         </text>
+        <Show when={resumable()}>
+          <text flexShrink={0} wrapMode="none" fg={theme.text.action.primary.default} selectable={false} onMouseUp={resume}>{busy() === "resume" ? "Resuming…" : "Resume interaction"}</text>
+        </Show>
         <Show when={stoppable()}>
           <text flexShrink={0} wrapMode="none" fg={theme.text.feedback.error.default} selectable={false} onMouseUp={stop}>{busy() === "stop" ? "Stopping…" : "Stop interaction"}</text>
         </Show>

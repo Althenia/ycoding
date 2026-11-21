@@ -792,6 +792,14 @@ export class BackendController {
     await this.use("Stop was not confirmed. Check the reported status.", (api, signal) => api.sessionInteraction.stop(request, { signal }), { revision })
   }
 
+  async interactionResume(input: unknown) {
+    checkedObject(input, { sessionID, revision: isRevision, generation: interactionGeneration })
+    const { revision, generation } = input
+    if (!isRevision(revision) || !interactionGeneration(generation)) throw new DesktopError("Choose the current interaction to resume.")
+    const request = { sessionID: session(input.sessionID), generation }
+    await this.use("Resume was not confirmed. Check the reported status.", (api, signal) => api.sessionInteraction.resume(request, { signal }), { revision })
+  }
+
   async interactionRequest(input: unknown) {
     checkedObject(input, { sessionID, revision: isRevision, payload: object })
     const revision = input.revision

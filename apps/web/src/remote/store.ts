@@ -310,6 +310,7 @@ export type RemoteStore = {
   readonly revealInteraction: (revealed: boolean) => void
   readonly refreshInteraction: () => void
   readonly stopInteraction: (generation: string) => void
+  readonly resumeInteraction: (generation: string) => void
   readonly watchTeam: (enabled: boolean) => void
   readonly watchFamilyActivity: (enabled: boolean) => void
   readonly loadMoreTeam: () => Promise<void>
@@ -631,6 +632,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       stop: async (generation) => {
         const result = await owner.request("session.interaction.stop", { sessionID, input: { generation } })
         if (result.status !== "ok") throw new Error("Interaction Stop was not confirmed")
+      },
+      resume: async (generation) => {
+        const result = await owner.request("session.interaction.resume", { sessionID, input: { generation } })
+        if (result.status !== "ok") throw new Error("Interaction Resume was not confirmed")
       },
     })
   }
@@ -3392,6 +3397,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     revealInteraction: interaction.reveal,
     refreshInteraction: interaction.refresh,
     stopInteraction: interaction.stop,
+    resumeInteraction: interaction.resume,
     watchTeam: (enabled) => {
       if (teamWatching === enabled) return
       teamWatching = enabled

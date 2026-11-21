@@ -6,6 +6,7 @@ export type InteractionDriverKey = Interaction.Platform | "chrome-isolated"
 export type InventoryRequest = {
   readonly candidateID: Interaction.ID
   readonly sessionID: SessionID
+  readonly sessionLabel: string
   readonly expiresAt: number
 } & (
   | { readonly purpose: "attach"; readonly selection: Interaction.Request }
@@ -36,7 +37,21 @@ export interface InteractionDriver {
   observe(lease: Lease, signal: AbortSignal): Promise<Interaction.Observation>
   perform(lease: Lease, revision: Interaction.Revision, command: Command, signal: AbortSignal): Promise<Interaction.ActionResult>
   preview(lease: Lease, signal: AbortSignal): Promise<Interaction.Frame | undefined>
+  resume(lease: Lease, signal: AbortSignal): Promise<boolean>
+  run?(lease: Lease, request: ScriptRun, signal: AbortSignal): Promise<Interaction.ScriptResult>
   detach(lease: Lease, reason: Interaction.StopReason): Promise<void>
+}
+
+export interface ScriptRun {
+  readonly mode: Interaction.ScriptMode
+  readonly source: string
+  readonly timeoutMs: number
+}
+
+export interface CaptureInput {
+  readonly frame: Interaction.Frame
+  readonly title?: string
+  readonly url?: string
 }
 
 export interface NativeInteraction {
@@ -46,5 +61,8 @@ export interface NativeInteraction {
   approve(proof: ConsentProof): Promise<boolean>
   reject(candidateID: Interaction.ID): boolean
   stop(leaseID: Interaction.ID, reason?: "stopped" | "target_lost" | "permission"): boolean
+  pause(leaseID: Interaction.ID, reason: Interaction.PauseReason): boolean
+  resume(leaseID: Interaction.ID): boolean
+  capture(leaseID: Interaction.ID, capture: CaptureInput): Promise<boolean>
   disconnect(): void
 }

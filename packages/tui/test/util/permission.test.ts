@@ -93,3 +93,26 @@ test("does not invent an incidental Chrome download warning for unflagged browse
     permissionAlwaysLines({ action: "browser_navigate", save: ["https://example.test"], metadata }).join(" "),
   ).not.toContain("download")
 })
+
+test.each([["script", "Script"], ["code", "Code"]])("a %s-mode browser_script ask names the site, mode, source preview and short digest", (mode, label) => {
+  const digest = "0123456789abcdef".repeat(4)
+  const presentation = permissionPresentation({
+    action: "browser_script",
+    resources: ["https://example.test/cart"],
+    metadata: { operation: "run", operationDigest: "x", mode, sourceDigest: digest, sourcePreview: "return document.title\u001b[31m" },
+  })
+  expect(presentation.title).toBe(`Run ${label} in Chrome https://example.test/cart`)
+  expect(presentation.lines).toEqual([
+    "Site: https://example.test/cart",
+    `Mode: ${label}`,
+    "Source: return document.title\\u001b[31m",
+    "Digest: 0123456789ab",
+  ])
+})
+
+test("a browser_script ask omits unreadable metadata instead of inventing it", () => {
+  const presentation = permissionPresentation({
+    action: "browser_script", resources: ["https://example.test/"], metadata: { mode: "eval", sourceDigest: "short", sourcePreview: 42 },
+  })
+  expect(presentation).toEqual({ icon: "◉", title: "Run JavaScript in Chrome https://example.test/", lines: ["Site: https://example.test/"] })
+})

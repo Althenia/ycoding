@@ -1,5 +1,9 @@
 import AppKit
 
+private final class FirstMouseButton: NSButton {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 @MainActor
 final class ControlPanel {
     private final class Panel: NSPanel {
@@ -7,30 +11,40 @@ final class ControlPanel {
         override var canBecomeMain: Bool { false }
     }
 
-    private final class StopButton: NSButton {
-        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    }
-
     private final class Control: NSObject {
         let stop: () -> Void
+        let resume: () -> Void
 
-        init(_ stop: @escaping () -> Void) { self.stop = stop }
+        init(stop: @escaping () -> Void, resume: @escaping () -> Void) {
+            self.stop = stop
+            self.resume = resume
+        }
 
         @objc func clicked() { stop() }
+
+        @objc func resumed() { resume() }
     }
 
     private let panel: Panel
     private let control: Control
+    private let title: NSTextField
+    private let detail: NSTextField
+    private let resumeButton: FirstMouseButton
+    private let scope: String
     private var visibilityObserver: NSObjectProtocol?
     private var visibilityTimeout: Timer?
     private var visibilityWaiter: CheckedContinuation<Bool, Never>?
 
-    init?(app: String, scope: String, stop: @escaping () -> Void) {
+    init?(app: String, scope: String, stop: @escaping () -> Void, resume: @escaping () -> Void = {}) {
         guard let screen = NSScreen.screens.first else { return nil }
         let visible = screen.visibleFrame.insetBy(dx: 16, dy: 16)
         guard visible.width >= 308, visible.height >= 52 else { return nil }
         let frame = NSRect(x: visible.maxX - 308, y: visible.maxY - 52, width: 308, height: 52)
-        control = Control(stop)
+        control = Control(stop: stop, resume: resume)
+        self.scope = scope
+        title = NSTextField(labelWithString: "YCoding · Controlling \(app)")
+        detail = NSTextField(labelWithString: scope)
+        resumeButton = FirstMouseButton(title: "Resume", target: control, action: #selector(Control.resumed))
         panel = Panel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
@@ -48,28 +62,55 @@ final class ControlPanel {
         content.layer?.borderColor = NSColor(srgbRed: 58 / 255, green: 64 / 255, blue: 74 / 255, alpha: 1).cgColor
         content.layer?.borderWidth = 1
         content.layer?.cornerRadius = 8
-        let title = NSTextField(labelWithString: "YCoding · Controlling \(app)")
         title.frame = NSRect(x: 12, y: 27, width: 207, height: 16)
         title.font = NSFont(name: "Geist", size: 12) ?? .systemFont(ofSize: 12, weight: .semibold)
         title.textColor = NSColor(srgbRed: 242 / 255, green: 243 / 255, blue: 245 / 255, alpha: 1)
         title.lineBreakMode = .byTruncatingTail
-        let detail = NSTextField(labelWithString: scope)
         detail.frame = NSRect(x: 12, y: 9, width: 207, height: 15)
         detail.font = NSFont(name: "Geist", size: 11) ?? .systemFont(ofSize: 11)
         detail.textColor = NSColor(srgbRed: 103 / 255, green: 215 / 255, blue: 164 / 255, alpha: 1)
-        let button = StopButton(title: "Stop", target: control, action: #selector(Control.clicked))
+        detail.lineBreakMode = .byTruncatingTail
+        let button = FirstMouseButton(title: "Stop", target: control, action: #selector(Control.clicked))
         button.frame = NSRect(x: 225, y: 11, width: 71, height: 30)
         button.bezelStyle = .rounded
         button.bezelColor = .systemRed
         button.font = NSFont(name: "Geist", size: 12) ?? .systemFont(ofSize: 12, weight: .semibold)
         button.setAccessibilityLabel("Stop \(app) control")
+        resumeButton.frame = NSRect(x: 148, y: 11, width: 71, height: 30)
+        resumeButton.bezelStyle = .rounded
+        resumeButton.font = NSFont(name: "Geist", size: 12) ?? .systemFont(ofSize: 12, weight: .semibold)
+        resumeButton.setAccessibilityLabel("Resume \(app) control")
+        resumeButton.isHidden = true
         content.addSubview(title)
         content.addSubview(detail)
+        content.addSubview(resumeButton)
         content.addSubview(button)
         panel.contentView = content
     }
 
     var visible: Bool { panel.isVisible && panel.occlusionState.contains(.visible) }
+
+    func pause(_ reason: PauseReason) {
+        let text = switch reason {
+        case .foregroundRequired: "Paused · Finish this step yourself"
+        case .dialog: "Paused · A dialog needs you"
+        case .captcha: "Paused · Solve the CAPTCHA yourself"
+        case .sensitive: "Paused · Sensitive input needs you"
+        }
+        detail.stringValue = text
+        detail.textColor = NSColor(srgbRed: 240 / 255, green: 190 / 255, blue: 98 / 255, alpha: 1)
+        title.frame.size.width = 130
+        detail.frame.size.width = 130
+        resumeButton.isHidden = false
+    }
+
+    func resume() {
+        detail.stringValue = scope
+        detail.textColor = NSColor(srgbRed: 103 / 255, green: 215 / 255, blue: 164 / 255, alpha: 1)
+        title.frame.size.width = 207
+        detail.frame.size.width = 207
+        resumeButton.isHidden = true
+    }
 
     func show() async -> Bool {
         panel.orderFrontRegardless()
@@ -193,50 +234,22 @@ final class WindowChooser: NSObject, NSWindowDelegate {
 }
 
 @MainActor
-final class ChromeEnrollmentMenu: NSObject {
-    private let status = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    private let select: () -> Void
-
-    init?(select: @escaping () -> Void) {
-        self.select = select
-        super.init()
-        guard let button = status.button else { NSStatusBar.system.removeStatusItem(status); return nil }
-        button.title = "YCoding"
-        let menu = NSMenu()
-        let connect = NSMenuItem(title: "Connect Chrome", action: #selector(connectChrome), keyEquivalent: "")
-        connect.target = self
-        menu.addItem(connect)
-        status.menu = menu
-    }
-
-    @objc private func connectChrome() { select() }
-}
-
-@MainActor
-final class ChromeEnrollmentPanel: NSObject, NSWindowDelegate {
-    private final class CloseButton: NSButton {
-        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    }
-
+final class ChromeProfilePanel: NSObject, NSWindowDelegate {
     private let panel: NSPanel
-    private let code = NSTextField(labelWithString: "")
-    private let request: ChromeEnrollmentRequest
-    private let dismissed: () -> Void
-    private var hidden = false
-    private var timer: Timer?
+    private let request: ChromeProfileRequest
+    private var waiter: CheckedContinuation<Bool, Never>?
+    private var expiry: Timer?
 
-    init?(_ request: ChromeEnrollmentRequest, dismissed: @escaping () -> Void) {
+    init?(_ request: ChromeProfileRequest) {
         guard let screen = NSScreen.screens.first else { return nil }
         let area = screen.visibleFrame.insetBy(dx: 16, dy: 16)
-        guard area.width >= 460, area.height >= 172 else { return nil }
+        guard area.width >= 460, area.height >= 196 else { return nil }
         self.request = request
-        self.dismissed = dismissed
-        let frame = NSRect(x: area.maxX - 460, y: area.maxY - 160, width: 460, height: 148)
+        let frame = NSRect(x: area.maxX - 460, y: area.maxY - 184, width: 460, height: 172)
         panel = NSPanel(contentRect: frame, styleMask: [.titled, .closable, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
-        panel.title = "YCoding Chrome Enrollment"
+        panel.title = "YCoding Chrome Profile"
         panel.level = .statusBar
-        panel.sharingType = .none
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = true
         panel.isReleasedWhenClosed = false
@@ -246,73 +259,68 @@ final class ChromeEnrollmentPanel: NSObject, NSWindowDelegate {
         let content = NSView(frame: NSRect(origin: .zero, size: frame.size))
         content.wantsLayer = true
         content.layer?.backgroundColor = NSColor(srgbRed: 36 / 255, green: 40 / 255, blue: 47 / 255, alpha: 1).cgColor
-        let instructions = NSTextField(labelWithString: "Enter this one-time code in the YCoding Chrome extension.")
-        instructions.frame = NSRect(x: 16, y: 111, width: 428, height: 18)
-        instructions.font = NSFont(name: "Geist", size: 13) ?? .systemFont(ofSize: 13, weight: .semibold)
-        instructions.textColor = .white
-        let origin = NSTextField(labelWithString: request.origin)
-        origin.frame = NSRect(x: 16, y: 86, width: 428, height: 16)
-        origin.font = NSFont(name: "Geist", size: 12) ?? .systemFont(ofSize: 12)
-        origin.textColor = .white
-        code.frame = NSRect(x: 16, y: 52, width: 428, height: 20)
+        let frost = NSColor(srgbRed: 242 / 255, green: 243 / 255, blue: 245 / 255, alpha: 1)
+        let prompt = NSTextField(labelWithString: "Allow this Chrome profile to connect to YCoding?")
+        prompt.frame = NSRect(x: 16, y: 136, width: 428, height: 18)
+        prompt.font = NSFont(name: "Geist", size: 13) ?? .systemFont(ofSize: 13, weight: .semibold)
+        prompt.textColor = frost
+        let profile = NSTextField(labelWithString: "Profile: \(request.profileLabel)")
+        profile.frame = NSRect(x: 16, y: 112, width: 428, height: 16)
+        profile.font = NSFont(name: "Geist", size: 12) ?? .systemFont(ofSize: 12)
+        profile.textColor = frost
+        profile.lineBreakMode = .byTruncatingMiddle
+        let code = NSTextField(labelWithString: "Match code: \(request.matchCode)")
+        code.frame = NSRect(x: 16, y: 84, width: 428, height: 20)
         code.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .medium)
         code.textColor = NSColor(srgbRed: 103 / 255, green: 215 / 255, blue: 164 / 255, alpha: 1)
-        code.isSelectable = false
-        let done = CloseButton(title: "Close", target: self, action: #selector(dismiss))
-        done.frame = NSRect(x: 354, y: 12, width: 90, height: 30)
-        done.bezelStyle = .rounded
-        done.keyEquivalent = "\u{1B}"
-        for view in [instructions, origin, code, done] as [NSView] { content.addSubview(view) }
+        let hint = NSTextField(labelWithString: "Allow only if the extension popup shows the same code.")
+        hint.frame = NSRect(x: 16, y: 60, width: 428, height: 16)
+        hint.font = NSFont(name: "Geist", size: 11) ?? .systemFont(ofSize: 11)
+        hint.textColor = frost
+        let deny = FirstMouseButton(title: "Deny", target: self, action: #selector(denied))
+        deny.frame = NSRect(x: 256, y: 13, width: 90, height: 30)
+        deny.keyEquivalent = "\u{1B}"
+        deny.bezelStyle = .rounded
+        let allow = FirstMouseButton(title: "Allow", target: self, action: #selector(allowed))
+        allow.frame = NSRect(x: 354, y: 13, width: 90, height: 30)
+        allow.bezelStyle = .rounded
+        allow.bezelColor = NSColor(srgbRed: 103 / 255, green: 215 / 255, blue: 164 / 255, alpha: 1)
+        allow.setAccessibilityLabel("Allow Chrome profile \(request.profileLabel)")
+        for view in [prompt, profile, code, hint, deny, allow] as [NSView] { content.addSubview(view) }
         panel.contentView = content
     }
 
-    func show() async -> Bool {
-        guard !hidden else { return false }
-        panel.orderFrontRegardless()
-        await withCheckedContinuation { continuation in
-            DispatchQueue.main.async { continuation.resume() }
-        }
-        guard let id = UInt32(exactly: panel.windowNumber), allowed(id) else {
-            panel.orderOut(nil)
-            return false
-        }
-        code.stringValue = request.code
-        monitor(id)
-        return true
-    }
-
-    private func allowed(_ id: CGWindowID) -> Bool {
-        guard !hidden, panel.isVisible, panel.sharingType == .none, panel.windowNumber == Int(id),
-              WindowHost.enrollmentWindowVisible(id, owner: getpid()) else { return false }
-        return request.valid(now: Int64(Date.now.timeIntervalSince1970 * 1000))
-    }
-
-    private func monitor(_ id: CGWindowID) {
+    func decide() async -> Bool {
         let remaining = TimeInterval(request.expiresAt) / 1000 - Date.now.timeIntervalSince1970
-        guard remaining > 0 else { dismiss(); return }
-        let timer = Timer(timeInterval: min(0.2, remaining), repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                if self.allowed(id) { self.monitor(id); return }
-                self.dismiss()
+        guard remaining > 0, waiter == nil else { return false }
+        return await withCheckedContinuation { continuation in
+            waiter = continuation
+            let timer = Timer(timeInterval: remaining, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.finish(false) }
             }
+            expiry = timer
+            RunLoop.main.add(timer, forMode: .common)
+            panel.orderFrontRegardless()
         }
-        self.timer = timer
-        RunLoop.main.add(timer, forMode: .common)
     }
 
-    func windowWillClose(_ notification: Notification) { dismiss() }
+    func windowWillClose(_ notification: Notification) { finish(false) }
 
-    @objc private func dismiss() {
-        hide()
-        dismissed()
+    @objc private func denied() { finish(false) }
+
+    @objc private func allowed() {
+        guard let id = UInt32(exactly: panel.windowNumber), panel.isVisible,
+              WindowHost.elevatedWindowVisible(id, owner: getpid()),
+              request.valid(now: Int64(Date.now.timeIntervalSince1970 * 1000)) else { return finish(false) }
+        finish(true)
     }
 
-    func hide() {
-        hidden = true
-        code.stringValue = ""
-        timer?.invalidate()
-        timer = nil
+    private func finish(_ approved: Bool) {
+        expiry?.invalidate()
+        expiry = nil
         panel.orderOut(nil)
+        let continuation = waiter
+        waiter = nil
+        continuation?.resume(returning: approved)
     }
 }

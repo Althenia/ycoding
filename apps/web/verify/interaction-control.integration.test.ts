@@ -13,6 +13,7 @@ const pixels = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8A
 const status = `[aria-label="Interaction control"]`
 const preview = `[aria-label="Interaction preview"]`
 const stop = `button[aria-label="Stop interaction"]`
+const resume = `button[aria-label="Resume interaction"]`
 const reveal = `button[aria-label="Show interaction preview"]`
 
 beforeAll(async () => {
@@ -47,10 +48,41 @@ async function open(width: number) {
   return page
 }
 
-test("Interaction status distinguishes unavailable and pending and stops pending consent once", async () => {
+test("Interaction row is hidden when unavailable or errored and adds no offset above chat", async () => {
+  const baseline = await browser!.openPage()
+  let baselineTop: unknown = 0
+  try {
+    await baseline.setViewport(1440, 900)
+    await baseline.navigate(`${origin}/verify/remote.html`)
+    await wait(baseline, `document.querySelector('.workspace__scroll') !== null`)
+    baselineTop = await baseline.evaluate(`document.querySelector('.workspace__scroll').getBoundingClientRect().top`)
+  } finally { await baseline.close() }
+
   const page = await open(1440)
   try {
-    await wait(page, text(status, "Interaction unavailable"))
+    await wait(page, `requestLog.some(call => call.operation === 'session.interaction.status')`)
+    expect(await page.evaluate(`document.querySelector(${JSON.stringify(status)})`)).toBeNull()
+    expect(await page.evaluate(`document.body.textContent.includes('Interaction unavailable') || document.body.textContent.includes('Interaction status unavailable')`)).toBe(false)
+    expect(await page.evaluate(`document.querySelector('.workspace__scroll').getBoundingClientRect().top`)).toBe(baselineTop)
+
+    await page.evaluate(`interactionFixture.change({ invalid: true, generation: ${JSON.stringify(first)} })`)
+    await wait(page, `requestLog.filter(call => call.operation === 'session.interaction.status').length >= 2 && document.querySelector(${JSON.stringify(status)}) === null`)
+    expect(await page.evaluate(`document.body.textContent.includes('Interaction status unavailable')`)).toBe(false)
+    expect(await page.evaluate(`document.querySelector('.workspace__scroll').getBoundingClientRect().top`)).toBe(baselineTop)
+
+    const beforeRefresh = await page.evaluate(`requestLog.filter(call => call.operation === 'session.interaction.status').length`)
+    await click(page, `button[aria-label="Open command palette"]`)
+    await wait(page, `document.body.textContent.includes('Refresh interaction status')`)
+    await page.evaluate(`Array.from(document.querySelectorAll('dialog button, [role="dialog"] button, [role="option"]')).find(el => el.textContent.includes('Refresh interaction status')).click()`)
+    await wait(page, `requestLog.filter(call => call.operation === 'session.interaction.status').length > ${String(beforeRefresh)}`)
+  } finally { await page.close() }
+}, 30_000)
+
+test("Interaction status distinguishes pending and stops pending consent once", async () => {
+  const page = await open(1440)
+  try {
+    await wait(page, `requestLog.some(call => call.operation === 'session.interaction.status')`)
+    expect(await page.evaluate(`document.querySelector(${JSON.stringify(status)})`)).toBeNull()
     await page.evaluate(`interactionFixture.change({ state: 'pending', platform: 'chrome', generation: ${JSON.stringify(first)} })`)
     await wait(page, text(status, "Chrome control · Awaiting local approval"))
     expect(await page.evaluate(`Array.from(document.querySelector(${JSON.stringify(status)}).querySelectorAll('button'), button => button.getAttribute('aria-label'))`)).toEqual(["Stop interaction"])
@@ -64,7 +96,7 @@ test("Interaction status distinguishes unavailable and pending and stops pending
 test("Interaction preview is revealed in Activity, discards the prior generation, and Stop settles once", async () => {
   const page = await open(1440)
   try {
-    await wait(page, text(status, "Interaction unavailable"))
+    await wait(page, `requestLog.some(call => call.operation === 'session.interaction.status')`)
     await page.evaluate(`interactionFixture.change({ state: 'active', platform: 'chrome', label: 'Synthetic tab one', generation: ${JSON.stringify(first)} })`)
     await wait(page, text(status, "Synthetic tab one"))
     expect(await page.evaluate(`requestLog.filter(call => call.operation === 'session.interaction.preview')`)).toEqual([])
@@ -90,7 +122,7 @@ test("Interaction preview is revealed in Activity, discards the prior generation
 test("Interaction preview on a narrow run has one image and keeps the named Stop in the run", async () => {
   const page = await open(390)
   try {
-    await wait(page, text(status, "Interaction unavailable"))
+    await wait(page, `requestLog.some(call => call.operation === 'session.interaction.status')`)
     await page.evaluate(`interactionFixture.change({ state: 'active', platform: 'chrome', label: 'Synthetic tab', generation: ${JSON.stringify(first)} }); interactionFixture.holdPreview()`)
     await wait(page, text(status, "Synthetic tab"))
     await click(page, reveal)
@@ -109,5 +141,32 @@ test("Interaction preview on a narrow run has one image and keeps the named Stop
     await page.evaluate(`Array.from(document.querySelectorAll('button')).find(button => button.textContent.includes('Simulate disconnect and reconnect')).click(); interactionFixture.releasePreview({ state: 'ready', generation: ${JSON.stringify(first)}, frame: { mimeType: 'image/png', base64: ${JSON.stringify(pixels)}, width: 1, height: 1 } })`)
     await wait(page, `document.querySelector(${JSON.stringify(reveal)}) !== null && document.querySelector(${JSON.stringify(preview)}) === null`)
     expect(await page.evaluate(`requestLog.filter(call => call.operation === 'session.interaction.preview').length`)).toBe(3)
+  } finally { await page.close() }
+}, 30_000)
+
+test("Interaction Resume sends the paused generation once through the relay and returns to active", async () => {
+  const page = await open(1440)
+  try {
+    await wait(page, `requestLog.some(call => call.operation === 'session.interaction.status')`)
+    await page.evaluate(`interactionFixture.change({ state: 'paused', platform: 'chrome', label: 'Checkout tab', reason: 'dialog', generation: ${JSON.stringify(first)} })`)
+    await wait(page, `document.querySelector(${JSON.stringify(resume)}) !== null`)
+    await page.evaluate(`const resume = document.querySelector(${JSON.stringify(resume)}); resume.click(); resume.click()`)
+    await wait(page, `${text(status, "Chrome control active · Checkout tab")} && document.querySelector(${JSON.stringify(resume)}) === null`)
+    expect(await page.evaluate(`requestLog.filter(call => call.operation === 'session.interaction.resume').map(call => call.input)`)).toEqual([{ generation: first }])
+    expect(await page.evaluate(`requestLog.filter(call => call.operation === 'session.interaction.stop').length`)).toBe(0)
+  } finally { await page.close() }
+}, 30_000)
+
+test("Interaction paused shows plain-word reason with Resume next to Stop", async () => {
+  const page = await open(1440)
+  try {
+    await wait(page, `requestLog.some(call => call.operation === 'session.interaction.status')`)
+    await page.evaluate(`interactionFixture.change({ state: 'paused', platform: 'chrome', label: 'Checkout tab', reason: 'file_chooser', generation: ${JSON.stringify(first)} })`)
+    await wait(page, text(status, "Chrome control paused · Checkout tab · File chooser open"))
+    expect(await page.evaluate(`Array.from(document.querySelector(${JSON.stringify(status)}).querySelectorAll('button'), button => button.getAttribute('aria-label'))`)).toEqual(["Resume interaction", "Stop interaction"])
+    expect(await page.evaluate(`(() => { const r = document.querySelector(${JSON.stringify(resume)}); const s = document.querySelector(${JSON.stringify(stop)}); return r && s ? r.getBoundingClientRect().right <= s.getBoundingClientRect().left + 1 : false; })()`)).toBe(true)
+    await click(page, stop)
+    await wait(page, text(status, "Cleanup pending"))
+    expect(await page.evaluate(`requestLog.filter(call => call.operation === 'session.interaction.stop').map(call => call.input)`)).toEqual([{ generation: first }])
   } finally { await page.close() }
 }, 30_000)

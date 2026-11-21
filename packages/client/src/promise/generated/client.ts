@@ -463,6 +463,8 @@ import type {
   SessionInteractionPreviewOutput,
   SessionInteractionStopInput,
   SessionInteractionStopOutput,
+  SessionInteractionResumeInput,
+  SessionInteractionResumeOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -3742,6 +3744,18 @@ export function make(options: ClientOptions) {
           {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/interaction/stop`,
+            body: { generation: input["generation"] },
+            successStatus: 200,
+            declaredStatuses: [404, 403, 409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      resume: (input: SessionInteractionResumeInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionInteractionResumeOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/interaction/resume`,
             body: { generation: input["generation"] },
             successStatus: 200,
             declaredStatuses: [404, 403, 409, 401, 400],

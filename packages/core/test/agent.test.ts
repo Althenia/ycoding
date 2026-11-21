@@ -952,6 +952,7 @@ describe("Agent", () => {
         { action: "*", resource: "*", effect: "allow" },
         { action: "chatgpt_*", resource: "*", effect: "ask" },
         { action: "claude_*", resource: "*", effect: "ask" },
+        { action: "browser_script", resource: "*", effect: "ask" },
         { action: "external_directory", resource: "*", effect: "ask" },
         { action: "external_directory", resource: `${Global.Path.data}/*`, effect: "allow" },
         { action: "external_directory", resource: `${Global.Path.tmp}/*`, effect: "allow" },

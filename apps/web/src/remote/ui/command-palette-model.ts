@@ -25,6 +25,7 @@ export type PaletteIntent =
   | { readonly type: "autonomous" }
   | { readonly type: "defer"; readonly defer: boolean }
   | { readonly type: "keepAwake" }
+  | { readonly type: "refreshInteraction" }
   | { readonly type: "dotsConnection" }
   | { readonly type: "skill"; readonly skill: string }
   | { readonly type: "draft"; readonly text: string }
@@ -65,6 +66,7 @@ export type PaletteContext = {
     readonly autonomous?: AutonomyModes
     readonly goalActive: boolean
     readonly deferred?: boolean
+    readonly canRefreshInteraction?: boolean
   }
   readonly commands: readonly { readonly name: string; readonly description?: string }[]
   readonly skills: readonly { readonly id: string; readonly name: string; readonly description?: string }[]
@@ -101,10 +103,14 @@ function sessionActions(context: PaletteContext): readonly PaletteAction[] {
   const interrupt: PaletteAction[] = session.running
     ? [{ id: "session.interrupt", title: "Interrupt session", description: "Stop the running step", group: "Session", keywords: "stop cancel halt", intent: { type: "interrupt" } }]
     : []
+  const interactionRefresh: PaletteAction[] = session.canRefreshInteraction
+    ? [{ id: "session.interaction.refresh", title: "Refresh interaction status", description: "Retry reading browser or desktop control status", group: "Session", keywords: "interaction browser macos chrome refresh status", intent: { type: "refreshInteraction" } }]
+    : []
   if (!context.connected) return []
-  if (session.managedChild) return interrupt
+  if (session.managedChild) return [...interrupt, ...interactionRefresh]
   return [
     ...interrupt,
+    ...interactionRefresh,
     { id: "session.compact", title: "Compact session", description: "Summarize earlier context", group: "Session", keywords: "/compact /summarize summarize context", intent: { type: "compact" } },
     { id: "session.goal", title: "Set goal…", description: "Start an autonomous goal in the composer", group: "Session", keywords: "/goal autonomous autonomy", intent: { type: "draft", text: "/goal " } },
     { id: "session.suggest", title: "Suggest next message", description: "Suggest your next message", group: "Session", keywords: "/suggest prediction next message", intent: { type: "draft", text: "/suggest " } },

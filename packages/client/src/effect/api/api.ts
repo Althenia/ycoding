@@ -2464,11 +2464,24 @@ export type SessionInteractionStopOperation<E = never> = (
   input: Endpoint41_3Input,
 ) => Effect.Effect<Endpoint41_3Output, E>
 
+type Endpoint41_4Request = Parameters<RawClient["server.interaction"]["session.interaction.resume"]>[0]
+export type Endpoint41_4Input = {
+  readonly sessionID: Endpoint41_4Request["params"]["sessionID"]
+  readonly generation: Endpoint41_4Request["payload"]["generation"]
+}
+export type Endpoint41_4Output = EffectValue<
+  ReturnType<RawClient["server.interaction"]["session.interaction.resume"]>
+>["data"]
+export type SessionInteractionResumeOperation<E = never> = (
+  input: Endpoint41_4Input,
+) => Effect.Effect<Endpoint41_4Output, E>
+
 export interface SessionInteractionApi<E = never> {
   readonly status: SessionInteractionStatusOperation<E>
   readonly request: SessionInteractionRequestOperation<E>
   readonly preview: SessionInteractionPreviewOperation<E>
   readonly stop: SessionInteractionStopOperation<E>
+  readonly resume: SessionInteractionResumeOperation<E>
 }
 
 export interface AppApi<E = never> {

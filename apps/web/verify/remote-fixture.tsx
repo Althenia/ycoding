@@ -1079,6 +1079,12 @@ function createFixtureStore(): Fixture {
         interaction.status = { state: "stopped", platform: "chrome", generation: input?.generation, cleanup: "pending", reason: "stopped" }
         return { status: "ok", value: { data: interaction.status } }
       }
+      if (operation === "session.interaction.resume") {
+        if (interaction.status.state !== "paused" || interaction.status.generation !== input?.generation)
+          return { status: "failed", error: { code: "invalid_message", message: "The backend rejected a conflicting request" } }
+        interaction.status = { state: "active", platform: interaction.status.platform, generation: input?.generation, label: interaction.status.label }
+        return { status: "ok", value: { data: interaction.status } }
+      }
     }
     if (paletteAcceptance && ["provider.auth.list", "workspace.list", "session.list"].includes(operation)) {
       const mode = acceptanceReadModes.get(operation)

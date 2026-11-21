@@ -18,6 +18,22 @@ export function toolDisplayName(name: string, metadata?: unknown) {
   }).join(" · ") || "Tool"
 }
 
+export function browserScriptPermission(metadata?: unknown) {
+  const details = metadata && typeof metadata === "object" && !Array.isArray(metadata) ? metadata : {}
+  const raw = "mode" in details ? details.mode : undefined
+  const mode = raw === "script" ? "Script" : raw === "code" ? "Code" : undefined
+  const preview = "sourcePreview" in details && typeof details.sourcePreview === "string" ? Array.from(details.sourcePreview).slice(0, 200).join("") : ""
+  const digest = "sourceDigest" in details && typeof details.sourceDigest === "string" && /^[0-9a-f]{64}$/.test(details.sourceDigest) ? details.sourceDigest : ""
+  return {
+    mode,
+    lines: [
+      ...(mode ? [`Mode: ${mode}`] : []),
+      ...(preview ? [`Source: ${escapeDisplayText(preview)}`] : []),
+      ...(digest ? [`Digest: ${digest.slice(0, 12)}`] : []),
+    ],
+  }
+}
+
 export function escapeDisplayText(value: string) {
   return value.replace(
     /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g,

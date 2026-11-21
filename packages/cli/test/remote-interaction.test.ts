@@ -30,6 +30,10 @@ test("connector forwards only closed Interaction operations after verifying the 
       calls.push(["stop", id, fence])
       return { state: "stopped", generation: fence, platform: "chrome", reason: "stopped", cleanup: "pending" }
     },
+    interactionResume: async (id, fence) => {
+      calls.push(["resume", id, fence])
+      return { state: "active", generation: fence, platform: "chrome", label: "Fixture" }
+    },
   } satisfies Partial<LocalServer>
   const local = new Proxy(createLocalServer({ url: "https://example.invalid" }), { get(_target, member) {
     if (Object.hasOwn(boundary, member)) return Reflect.get(boundary, member)
@@ -44,8 +48,10 @@ test("connector forwards only closed Interaction operations after verifying the 
     } })
     return frames[0]
   }
-  expect(await run("session.interaction.stop", "ses_unshared", { generation })).toMatchObject({
-    ok: false, error: { code: "session_not_allowed" },
+  for (const operation of ["session.interaction.stop", "session.interaction.resume"] as const)
+    expect(await run(operation, "ses_unshared", { generation })).toMatchObject({ ok: false, error: { code: "session_not_allowed" } })
+  expect(await run("session.interaction.resume", owner.id, { generation, directory: "/foreign" })).toMatchObject({
+    ok: false, error: { code: "invalid_message" },
   })
   expect(await run("session.interaction.preview", owner.id, { generation, directory: "/foreign" })).toMatchObject({
     ok: false, error: { code: "invalid_message" },
@@ -54,5 +60,6 @@ test("connector forwards only closed Interaction operations after verifying the 
   expect(await run("session.interaction.status", owner.id)).toMatchObject({ ok: true, value: { data: { state: "active", generation } } })
   expect(await run("session.interaction.preview", owner.id, { generation })).toMatchObject({ ok: true, value: { data: { state: "unavailable", generation } } })
   expect(await run("session.interaction.stop", owner.id, { generation })).toMatchObject({ ok: true, value: { data: { state: "stopped", generation } } })
-  expect(calls).toEqual([["status", owner.id], ["preview", owner.id, generation], ["stop", owner.id, generation]])
+  expect(await run("session.interaction.resume", owner.id, { generation })).toMatchObject({ ok: true, value: { data: { state: "active", generation } } })
+  expect(calls).toEqual([["status", owner.id], ["preview", owner.id, generation], ["stop", owner.id, generation], ["resume", owner.id, generation]])
 })

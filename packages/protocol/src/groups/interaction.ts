@@ -21,3 +21,6 @@ export const InteractionGroup = HttpApiGroup.make("server.interaction")
   .add(HttpApiEndpoint.post("session.interaction.stop", "/api/session/:sessionID/interaction/stop", {
     params: session, payload: Interaction.Fence, success: Schema.Struct({ data: Interaction.Status }), error: [...errors, ConflictError],
   }).annotateMerge(OpenApi.annotations({ identifier: "session.interaction.stop", summary: "Revoke the exact Interaction generation" })))
+  .add(HttpApiEndpoint.post("session.interaction.resume", "/api/session/:sessionID/interaction/resume", {
+    params: session, payload: Interaction.Fence, success: Schema.Struct({ data: Interaction.Status }), error: [...errors, ConflictError],
+  }).annotateMerge(OpenApi.annotations({ identifier: "session.interaction.resume", summary: "Resume the exact paused Interaction generation" })))

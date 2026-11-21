@@ -17,11 +17,12 @@ const desktopApplication = "YCoding Desktop.app"
 function payload(target: Target, withApplication: boolean, version: string) {
   const interaction = usesInteractionLayout(version)
   const app = interaction ? interactionApplication : computerUseApplication
+  const extension = interaction ? interactionExtensionFiles : BrowserExtension.files
   return [
     target === "windows-x64" ? "ycoding.exe" : "ycoding",
     `${interactionExtensionDirectory}/`,
-    ...(interaction ? [] : [`${interactionExtensionDirectory}/icons/`]),
-    ...(interaction ? interactionExtensionFiles : BrowserExtension.files).map((file) => `${interactionExtensionDirectory}/${file}`),
+    ...extension.map((file) => `${interactionExtensionDirectory}/${file}`),
+    ...new Set(extension.filter((file) => file.includes("/")).map((file) => `${interactionExtensionDirectory}/${file.slice(0, file.lastIndexOf("/"))}/`)),
     ...(withApplication ? [
       `${app.name}/`, `${app.name}/Contents/`, `${app.name}/Contents/Info.plist`,
       `${app.name}/Contents/MacOS/`, `${app.name}/Contents/MacOS/${app.executable}`,

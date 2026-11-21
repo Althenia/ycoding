@@ -216,6 +216,7 @@ export function createDesktopRPC(controller: BackendController, preferences: {
     interactionStatus: (input: Parameters<DesktopAPI["interactionStatus"]>[0]) => controller.interactionStatus(input),
     interactionPreview: (input: Parameters<DesktopAPI["interactionPreview"]>[0]) => controller.interactionPreview(input),
     interactionStop: (input: Parameters<DesktopAPI["interactionStop"]>[0]) => controller.interactionStop(input),
+    interactionResume: (input: Parameters<DesktopAPI["interactionResume"]>[0]) => controller.interactionResume(input),
     interactionRequest: (input: Parameters<DesktopAPI["interactionRequest"]>[0]) => controller.interactionRequest(input),
     state: () => ({ ...controller.state(), ...(notice ? { notice } : {}) }),
     preferences: () => preferences.read(preferences.path),

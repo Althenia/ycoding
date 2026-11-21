@@ -91,6 +91,47 @@ export function pageOperation(input) {
     .replace(/[\u0000-\u001f\u007f]/gu, " ").trim().slice(0, 256)
   const repeatedActivation = (element) => element.closest("[disabled],[aria-disabled=true]") || protectedField(element) ||
     captcha.test(attributes(element))
+  if (input.operation === "sensitiveBoxes") {
+    const boxes = []
+    const personal = /^(?:email|username|tel(?:-.+)?|street-address|address-line\d|address-level\d|postal-code|bday(?:-.+)?|cc-.+|.+-password|one-time-code)$/u
+    const patterns = input.patterns.map(({ source, flags }) => new RegExp(source, flags.includes("g") ? flags : `${flags}g`))
+    const matches = (text) => patterns.some((pattern) => {
+      pattern.lastIndex = 0
+      return pattern.test(text)
+    })
+    const add = (rect) => {
+      if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.right <= 0 || rect.top >= innerHeight || rect.left >= innerWidth) return
+      boxes.push([Math.floor(rect.left) - 2, Math.floor(rect.top) - 2, Math.ceil(rect.width) + 4, Math.ceil(rect.height) + 4])
+    }
+    const roots = [document]
+    for (let index = 0; index < roots.length; index++) {
+      if (roots.length > 64) return { refusal: "sensitive" }
+      for (const element of roots[index].querySelectorAll("*")) if (element.shadowRoot) roots.push(element.shadowRoot)
+    }
+    let visited = 0
+    for (const root of roots) {
+      for (const element of root.querySelectorAll("input,textarea,select,[contenteditable],[data-sensitive],[data-private]")) {
+        if (++visited > 4096) return { refusal: "sensitive" }
+        const tokens = (element.getAttribute("autocomplete") ?? "").toLowerCase().split(/\s+/)
+        if (element.matches('[data-sensitive],[data-private],input[type="email" i],input[type="tel" i]') || protectedField(element) ||
+          tokens.some((token) => personal.test(token)) || matches(String(element.value ?? ""))) add(element.getBoundingClientRect())
+      }
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (++visited > 16384) return { refusal: "sensitive" }
+        for (const pattern of patterns) {
+          for (const match of node.data.matchAll(pattern)) {
+            const range = document.createRange()
+            range.setStart(node, match.index)
+            range.setEnd(node, match.index + match[0].length)
+            for (const rect of range.getClientRects()) add(rect)
+          }
+        }
+      }
+    }
+    if (boxes.length > 1024) return { refusal: "sensitive" }
+    return { boxes, width: innerWidth, height: innerHeight, title: document.title }
+  }
   if (input.operation === "observe") {
     state.refs.clear()
     const elements = []

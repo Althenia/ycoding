@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>YCoding Interaction Panel</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="icons/idle-32.png">
+    <link rel="stylesheet" href="panel.css">
+  </head>
+  <body>
+    <header class="deck-head">
+      <div class="brand">
+        <img class="brand-mark" src="icons/idle-32.png" width="18" height="18" alt="">
+        <h1 id="session">YCoding Session</h1>
+      </div>
+      <span id="status" class="status-pill" role="status">Checking…</span>
+    </header>
+    <main class="deck-body">
+      <figure class="preview-frame">
+        <img id="frame" alt="Controlled tab preview" draggable="false">
+      </figure>
+      <div class="actions">
+        <button id="capture" type="button" class="btn btn--primary">Capture</button>
+        <button id="resume" type="button" class="btn btn--primary" hidden>Resume</button>
+        <button id="stop" type="button" class="btn btn--stop">Stop</button>
+      </div>
+      <p id="feedback" class="feedback" role="alert"></p>
+    </main>
+    <script type="module" src="panel.js"></script>
+  </body>
+</html>

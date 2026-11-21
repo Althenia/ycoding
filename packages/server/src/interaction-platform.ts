@@ -1,3 +1,5 @@
+import path from "node:path"
+import { Global } from "@ycoding-ai/core/global"
 import { makeChromeTransport } from "@ycoding-ai/core/interaction/chrome"
 import { makeChromeIsolatedDriver } from "@ycoding-ai/core/interaction/chrome-isolated"
 import type { InteractionDriver, InteractionDriverKey, InventoryRequest, NativeInteraction } from "@ycoding-ai/core/interaction/driver"
@@ -62,21 +64,21 @@ export const mountInteractionPlatforms = Effect.fnUntraced(function* (
   }
 
   if (!origin || !macOS) return undefined
-  const transport = makeChromeTransport({ origin, register: authority.register })
+  return yield* mountChromeTransport(authority, macOS, origin, path.join(Global.Path.state, "interaction-chrome-profiles.json"))
+})
+
+export const mountChromeTransport = Effect.fnUntraced(function* (
+  authority: Pick<InteractionRuntime.Service["Service"], "register">,
+  macOS: Pick<ReturnType<typeof makeMacOSInteraction>, "available" | "confirmChromeProfile">,
+  origin: string,
+  profiles: string,
+) {
   const lifetime = new AbortController()
-  yield* Effect.addFinalizer(() => Effect.sync(() => {
-    lifetime.abort()
-    transport.close()
-  }))
-  const ready = yield* Effect.promise(() => macOS.startChromeEnrollmentMenu(origin, (intent, signal) => {
-    if (intent.type !== "connect-chrome" || signal.aborted || lifetime.signal.aborted) return undefined
-    return transport.enroll()
-  }, lifetime.signal))
-  if (!ready) {
-    lifetime.abort()
-    transport.close()
-    return undefined
-  }
+  yield* Effect.addFinalizer(() => Effect.sync(() => lifetime.abort()))
+  const ready = yield* Effect.promise(() => macOS.available(AbortSignal.any([lifetime.signal, AbortSignal.timeout(10_000)])))
+  if (!ready || lifetime.signal.aborted) return undefined
+  const transport = makeChromeTransport({ origin, register: authority.register, confirm: macOS.confirmChromeProfile, profiles })
+  yield* Effect.addFinalizer(() => Effect.sync(() => transport.close()))
   return { admit: transport.admit, connect: (peer) => transport.connect(peer) } satisfies ChromeTransport
 })
 
@@ -89,11 +91,11 @@ export const connectChromeInteraction = Effect.fnUntraced(function* (transport: 
   const socket = upgraded.value
   const write = yield* socket.writer
   const outbox = yield* Queue.dropping<string>(32)
-  const closing = yield* Deferred.make<void>()
+  const closing = yield* Deferred.make<number>()
   const connected = yield* Effect.option(Effect.try(() => transport.connect({
     ...peer,
     send: (content) => Queue.offerUnsafe(outbox, content),
-    close: () => { Deferred.doneUnsafe(closing, Effect.void) },
+    close: (code) => { Deferred.doneUnsafe(closing, Effect.succeed(code)) },
   })))
   if (Option.isNone(connected)) {
     yield* write(new Socket.CloseEvent(1008)).pipe(Effect.ignore)
@@ -113,7 +115,7 @@ export const connectChromeInteraction = Effect.fnUntraced(function* (transport: 
   })
   const drain = Effect.forever(Queue.take(outbox).pipe(Effect.flatMap(write)))
   yield* Effect.raceFirst(Effect.raceFirst(read, drain), Deferred.await(closing).pipe(
-    Effect.andThen(write(new Socket.CloseEvent(1008))),
+    Effect.flatMap((code) => write(new Socket.CloseEvent(code))),
   )).pipe(Effect.ignore, Effect.ensuring(Effect.sync(channel.disconnect)))
   return HttpServerResponse.empty()
 }, Effect.scoped)

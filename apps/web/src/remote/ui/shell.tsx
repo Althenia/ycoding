@@ -83,6 +83,7 @@ import { LoadingPlaceholder } from "./loading"
 import { SubagentBar, TeamAnswerForm } from "./subagent-bar"
 import { createRowVirtualizer, sameKeys, scrollParent } from "./virtual-rows"
 import { RunningExecution, TeamView } from "./team-view"
+import { interactionControlVisible } from "../interaction-control"
 import { InteractionControl, InteractionPreview } from "./interaction-control"
 import { SharedActivityBar, SharedCompanionSurface, SharedContextBreakdownPanel, SharedContextRingButton, SharedConversationHeader, SharedTrace, SharedWorkspaceFrame, WORKSPACE_DESTINATIONS, type SharedActivityItem } from "./shared-workspace"
 import { requestAutonomousDialog } from "./autonomous-dialog"
@@ -635,8 +636,8 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
           event.stopPropagation()
           toggleProjectContext()
         }}><For each={[context().detail.id]}>{() => <ProjectPanel data={projects} project={context().detail} />}</For></aside>}</Show>} companion={teamPanel()}>
-            <Show when={!conversationHidden() ? state().interaction : undefined}>{(interaction) =>
-              <InteractionControl view={interaction()} inlinePreview={!interactionDocked()} onReveal={revealInteraction} onStop={remote.store.stopInteraction} onRefresh={remote.store.refreshInteraction} />
+            <Show when={!conversationHidden() && interactionControlVisible(state().interaction) ? state().interaction : undefined}>{(interaction) =>
+              <InteractionControl view={interaction()} inlinePreview={!interactionDocked()} onReveal={revealInteraction} onStop={remote.store.stopInteraction} onResume={remote.store.resumeInteraction} onRefresh={remote.store.refreshInteraction} />
             }</Show>
             <div class="workspace__scroll" ref={scrollHost} onScroll={() => {
               if (scrollHost) lastScroll = { top: scrollHost.scrollTop, distance: scrollHost.scrollHeight - scrollHost.clientHeight - scrollHost.scrollTop }

@@ -449,11 +449,52 @@ async function clickText(page: Page, selector: string, label: string) {
   await page.evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].find(element => element.textContent.trim() === ${JSON.stringify(label)}).click()`)
 }
 
+test("Interaction row is hidden when unavailable or errored and palette actions stay reachable", async () => {
+  const route = "/api/session/ses_test/interaction"
+  let state: Record<string, unknown> = { state: "unavailable" }
+  let fail = false
+  sceneRead = (call) => {
+    if (call.route !== route) return undefined
+    if (call.method === "POST") {
+      state = { state: "pending", platform: "macos", generation: "cf3aa01e-85ca-42fd-af3a-dd706075cb34" }
+      return { data: state }
+    }
+    if (fail) throw new Error("unavailable")
+    return { data: state }
+  }
+  await owned!.controller.connect({ mode: "shared", server: "http://127.0.0.1:1234" })
+  const page = await open()
+  try {
+    const status = `document.querySelector('[aria-label="Interaction control"]')`
+    await wait(page, `document.querySelector('.conversation__scroll') !== null`)
+    expect(await page.evaluate(`${status} === null`)).toBe(true)
+    expect(await page.evaluate(`document.body.textContent.includes('Interaction unavailable') || document.body.textContent.includes('Interaction status unavailable')`)).toBe(false)
+
+    await page.evaluate(`document.querySelector('button.desktop__palette').click()`)
+    await wait(page, `document.querySelector('dialog[open]')?.textContent.includes('Request Chrome control')`)
+    expect(await page.evaluate(`document.querySelector('dialog[open]')?.textContent.includes('Request macOS control')`)).toBe(true)
+    await clickContaining(page, 'dialog[open] [role="option"]', 'Request macOS control')
+    await wait(page, `${status}?.textContent.includes('Awaiting approval in macOS')`)
+
+    fail = true
+    await page.evaluate(`window.__desktopFixture.emit({ type: 'session.interaction.changed', data: { sessionID: 'ses_test', generation: 'b6559809-6be6-4483-a5a1-5c6046cdfd7b' } })`)
+    await wait(page, `${status} === null`)
+    expect(await page.evaluate(`document.body.textContent.includes('Interaction status unavailable')`)).toBe(false)
+
+    const statusCallsBefore = owned!.calls.filter((call) => call.route === route && call.method === "GET").length
+    await page.evaluate(`document.querySelector('button.desktop__palette').click()`)
+    await wait(page, `document.querySelector('dialog[open]')?.textContent.includes('Refresh interaction status')`)
+    await clickContaining(page, 'dialog[open] [role="option"]', 'Refresh interaction status')
+    await wait(page, `window.__desktopFixture.completed.interactionStatus > 0`)
+    expect(owned!.calls.filter((call) => call.route === route && call.method === "GET").length).toBeGreaterThan(statusCallsBefore)
+  } finally { await page.close(); await owned!.controller.connect({ mode: "shared", server: "http://synthetic.invalid" }) }
+}, 30_000)
+
 test("Interaction request and Stop cross the Desktop RPC with the selected Session and exact generation", async () => {
   const generation = "cf3aa01e-85ca-42fd-af3a-dd706075cb34"
   const route = "/api/session/ses_test/interaction"
   const pixels = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
-  let state: Record<string, unknown> = { state: "unavailable" }
+  let state: Record<string, unknown> = { state: "stopped", platform: "macos", generation: "00000000-0000-4000-8000-000000000001", reason: "stopped", cleanup: "complete" }
   sceneRead = (call) => {
     if (call.route === route && call.method === "GET") return { data: state }
     if (call.route === route && call.method === "POST") {
@@ -471,7 +512,7 @@ test("Interaction request and Stop cross the Desktop RPC with the selected Sessi
   const page = await open()
   try {
     const status = `document.querySelector('[aria-label="Interaction control"]')`
-    await wait(page, `${status}?.textContent.includes('Interaction unavailable')`)
+    await wait(page, `${status}?.textContent.includes('Cleanup complete')`)
     await clickText(page, '[aria-label="Interaction control"] button', 'Request macOS control')
     await wait(page, `${status}?.textContent.includes('Awaiting approval in macOS')`)
     state = { state: "active", platform: "macos", generation, label: "Synthetic window" }
@@ -491,6 +532,31 @@ test("Interaction request and Stop cross the Desktop RPC with the selected Sessi
   } finally { await page.close(); await owned!.controller.connect({ mode: "shared", server: "http://synthetic.invalid" }) }
 }, 30_000)
 
+test("Interaction Resume crosses the Desktop RPC with the paused generation and returns to active", async () => {
+  const generation = "cf3aa01e-85ca-42fd-af3a-dd706075cb34"
+  const route = "/api/session/ses_test/interaction"
+  let state: Record<string, unknown> = { state: "paused", platform: "macos", generation, label: "Synthetic window", reason: "file_chooser" }
+  sceneRead = (call) => {
+    if (call.route === route && call.method === "GET") return { data: state }
+    if (call.route === `${route}/resume` && call.method === "POST") {
+      state = { state: "active", platform: "macos", generation, label: "Synthetic window" }
+      return { data: state }
+    }
+    return undefined
+  }
+  await owned!.controller.connect({ mode: "shared", server: "http://127.0.0.1:1234" })
+  const page = await open()
+  try {
+    const status = `document.querySelector('[aria-label="Interaction control"]')`
+    await wait(page, `${status}?.querySelector('button[aria-label="Resume interaction"]') !== null`)
+    await page.evaluate(`const resume = ${status}.querySelector('button[aria-label="Resume interaction"]'); resume.click(); resume.click()`)
+    await wait(page, `${status}?.textContent.includes('macOS control active') && ${status}.querySelector('button[aria-label="Resume interaction"]') === null`)
+    expect(owned!.calls.filter((call) => call.method === "POST" && call.route.startsWith(route)).map((call) => [call.route, call.body])).toEqual([
+      [`${route}/resume`, { generation }],
+    ])
+  } finally { await page.close(); await owned!.controller.connect({ mode: "shared", server: "http://synthetic.invalid" }) }
+}, 30_000)
+
 test("Interaction Stop revokes pending consent without revealing a preview", async () => {
   const generation = "cf3aa01e-85ca-42fd-af3a-dd706075cb34"
   const route = "/api/session/ses_test/interaction"
@@ -503,13 +569,13 @@ test("Interaction Stop revokes pending consent without revealing a preview", asy
     if (call.route === route && call.method === "POST") { proposed = true; requestEntered.resolve(); return requestReply.promise }
     if (call.route === `${route}/stop` && call.method === "POST") stopped = true
     if (call.route !== route && call.route !== `${route}/stop`) return undefined
-    return { data: stopped ? { state: "stopped", platform: "chrome", generation, reason: "stopped", cleanup: "complete" } : proposed ? proposal : { state: "unavailable" } }
+    return { data: stopped ? { state: "stopped", platform: "chrome", generation, reason: "stopped", cleanup: "complete" } : proposed ? proposal : { state: "stopped", platform: "chrome", generation: "00000000-0000-4000-8000-000000000001", reason: "stopped", cleanup: "complete" } }
   }
   await owned!.controller.connect({ mode: "shared", server: "http://127.0.0.1:1234" })
   const page = await open()
   try {
     const status = `document.querySelector('[aria-label="Interaction control"]')`
-    await wait(page, `${status}?.textContent.includes('Interaction unavailable')`)
+    await wait(page, `${status}?.textContent.includes('Cleanup complete')`)
     await clickText(page, '[aria-label="Interaction control"] button', "Request Chrome control")
     await clickText(page, 'dialog[open] button', "Request approval")
     await requestEntered.promise
@@ -536,7 +602,7 @@ test("Interaction Stop revokes pending consent without revealing a preview", asy
 
 test("Chrome Interaction proposes three local modes and sends a URL only for new tabs", async () => {
   const route = "/api/session/ses_test/interaction"
-  sceneRead = (call) => call.route === route ? { data: { state: "unavailable" } } : undefined
+  sceneRead = (call) => call.route === route ? { data: { state: "stopped", platform: "chrome", generation: "00000000-0000-4000-8000-000000000001", reason: "stopped", cleanup: "complete" } } : undefined
   await owned!.controller.connect({ mode: "shared", server: "http://127.0.0.1:1234" })
   const page = await open()
   try {
@@ -3487,6 +3553,21 @@ test("layout stability reserves composer actions through live metadata and runni
     await wait(page, `!document.querySelector('[aria-label="Stop generation"]')`)
     expect(await page.evaluate(geometry)).toEqual(original)
     expect(await page.evaluate(`window.__desktopFixture.errors`)).toEqual([])
+  } finally { await page.close() }
+}, 30_000)
+
+test("a browser_script permission card shows the run mode, source preview and short digest", async () => {
+  pending = false
+  sceneRead = (call) => call.method === "GET" && call.route === "/api/session/ses_test/permission" ? { data: [{ id: "per_script", sessionID: "ses_test", action: "browser_script", resources: ["https://example.test/cart"], save: ["https://example.test/cart"],
+    metadata: { operation: "run", operationDigest: "private", mode: "script", sourceDigest: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", sourcePreview: "return document.title" } }] } : undefined
+  const page = await open()
+  try {
+    await wait(page, `document.querySelector('#permission-per_script')`)
+    const text = await page.evaluate(`document.querySelector('#permission-per_script').closest('article').textContent`, decodeString)
+    expect(text).toContain("Mode: Script")
+    expect(text).toContain("Source: return document.title")
+    expect(text).toContain("Digest: 9f86d081884c")
+    expect(text).not.toContain("operationDigest")
   } finally { await page.close() }
 }, 30_000)
 

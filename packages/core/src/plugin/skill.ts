@@ -16,15 +16,23 @@ import { fileURLToPath } from "url"
 import ycodingContent from "./skill/ycoding.md" with { type: "text" }
 import reportContent from "./skill/report.md" with { type: "text" }
 import chatgptConnectorsContent from "./skill/chatgpt-connectors.md" with { type: "text" }
+import browserUseContent from "./skill/browser-use.md" with { type: "text" }
+import computerUseContent from "./skill/computer-use.md" with { type: "text" }
 
 export const YCodingContent = ycodingContent
 export const ReportContent = reportContent
 export const ChatGPTConnectorsContent = chatgptConnectorsContent
+export const BrowserUseContent = browserUseContent
+export const ComputerUseContent = computerUseContent
 
 export const YCodingDescription =
   "Use this skill for questions about YCoding behavior, configuration, troubleshooting, plugins, hooks, Clients, Server, API, agents, commands, skills, tools, permissions, MCP, providers, models, themes, keymaps, the CLI, the TUI, and contributing to this repository."
 const CHATGPT_CONNECTORS_DESCRIPTION =
   "Use when a YCoding Session needs ChatGPT account connector tools (tools.chatgpt.*): finding which connectors are available, calling them in Code Mode, handling their permissions and failures, or moving files through ChatGPT Library. Do not use for ChatGPT tasks that operate YCoding or for local YCoding operations."
+const BROWSER_USE_DESCRIPTION =
+  "Use when a task needs the interaction tool to operate a Chrome tab: clicking, typing, or navigating a live page the user authorized, or working in a new YCoding-owned tab. Do not use for fetching or searching web content, or for coding tasks."
+const COMPUTER_USE_DESCRIPTION =
+  "Use when a task needs the interaction tool to operate a macOS application window in the background: reading or clicking its controls on the user's Mac. Do not use for web pages in Chrome, shell work, or coding tasks."
 const REPORT_DESCRIPTION =
   "Use when the user wants to report a YCoding issue or bug. Collect standard diagnostics, add reproduction context, and publish the issue with the GitHub CLI."
 
@@ -54,6 +62,30 @@ export const Plugin = define({
             description: CHATGPT_CONNECTORS_DESCRIPTION,
             location: AbsolutePath.make("/builtin/chatgpt-connectors.md"),
             content: ChatGPTConnectorsContent,
+          }),
+        }),
+      )
+      draft.source(
+        Skill.EmbeddedSource.make({
+          type: "embedded",
+          skill: Skill.Info.make({
+            id: Skill.ID.make("browser-use"),
+            name: Skill.Name.make("Browser use"),
+            description: BROWSER_USE_DESCRIPTION,
+            location: AbsolutePath.make("/builtin/browser-use.md"),
+            content: BrowserUseContent,
+          }),
+        }),
+      )
+      draft.source(
+        Skill.EmbeddedSource.make({
+          type: "embedded",
+          skill: Skill.Info.make({
+            id: Skill.ID.make("computer-use"),
+            name: Skill.Name.make("Computer use"),
+            description: COMPUTER_USE_DESCRIPTION,
+            location: AbsolutePath.make("/builtin/computer-use.md"),
+            content: ComputerUseContent,
           }),
         }),
       )

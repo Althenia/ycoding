@@ -29,20 +29,18 @@ export function ChromeConnectionInstructions(props: {
         gap={1}
       >
         <text fg={props.fg} wrapMode="word">
-          Finish setup in the macOS menu bar at YCoding &gt; Connect Chrome.
-        </text>
-        <text fg={props.fg} wrapMode="word">
-          If the menu is missing, run YCoding on macOS 14 or later with the signed YCoding Interaction app beside ycoding and the service listening on 127.0.0.1.
-        </text>
-        <text fg={props.fg} wrapMode="word">
           In chrome://extensions, turn on Developer mode and use Load unpacked to select ycoding-chrome-extension beside ycoding.
           Reload the extension after an update if it still shows the old popup.
         </text>
         <text fg={props.fg} wrapMode="word">
-          Authenticate in the native menu. In the YCoding Interaction popup, enter the Local service address and Pairing code from the native panel, then choose Connect.
+          Open the YCoding Interaction popup and choose Connect. When your Mac asks about this Chrome profile, check that it shows the same match code as the popup, then choose Allow.
+          If YCoding listens on another local address, set it under Advanced first.
         </text>
         <text fg={props.fg} wrapMode="word">
-          Pairing connects the Chrome profile. Session control and site access require separate approval.
+          Chrome reconnects on its own after that. Use Forget this profile under Advanced in the popup to disconnect it.
+        </text>
+        <text fg={props.fg} wrapMode="word">
+          Connecting needs the signed macOS package with YCoding listening on 127.0.0.1. Session control and site access require separate approval.
         </text>
       </box>
     </scrollbox>

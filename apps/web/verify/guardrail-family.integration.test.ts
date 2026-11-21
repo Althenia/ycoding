@@ -271,6 +271,19 @@ test("a permission ask the baseline assessment could not settle names its reason
   }
 })
 
+test("a browser_script permission ask shows its run mode, source preview and short digest", async () => {
+  const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], permissions: [{ id: "per_script", action: "browser_script", resources: ["https://example.test/cart"], save: ["https://example.test/cart"],
+    metadata: { operation: "run", operationDigest: "private", mode: "code", sourceDigest: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", sourcePreview: "return document.title" } }] })
+  const page = await browser.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/guardrail-family-fixture.html?relay=${encodeURIComponent(relay.wsURL("dev_1"))}&http=${encodeURIComponent(relay.httpURL)}`)
+    await wait(page, `document.querySelector('.request--permission') !== null`)
+    expect(await page.evaluate(`[...document.querySelectorAll('.request--permission .request__note')].map(note => note.textContent.trim())`)).toEqual([
+      "Mode: Code", "Source: return document.title", "Digest: 9f86d081884c", "Allow Browser Script for these resource patterns in this Session: https://example.test/cart",
+    ])
+  } finally { await page.close(); await relay.stop() }
+})
+
 const fixtureURL = (relay: Awaited<ReturnType<typeof startRelayDouble>>) => `http://127.0.0.1:${port}/verify/guardrail-family-fixture.html?relay=${encodeURIComponent(relay.wsURL("dev_1"))}&http=${encodeURIComponent(relay.httpURL)}`
 const recoveryButtons = `[...document.querySelectorAll('.request--hard .request__recovery button')].map(button => button.textContent.trim())`
 

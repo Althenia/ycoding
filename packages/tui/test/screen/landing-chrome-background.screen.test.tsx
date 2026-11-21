@@ -61,8 +61,8 @@ async function connectChrome(sessions: readonly ReturnType<typeof row>[]) {
     await screen.input.typeText("Connect Chrome")
     screen.input.pressEnter()
     for (let attempt = 0; attempt < 100 && !screen.frame().includes("Chrome connection"); attempt++) await Bun.sleep(20)
-    expect(screen.frame()).toContain("YCoding > Connect Chrome")
-    expect(screen.frame().replace(/\s+/g, " ")).toContain("Local service address")
+    expect(screen.frame()).toContain("Load unpacked")
+    expect(screen.frame().replace(/\s+/g, " ")).toContain("same match code as the popup")
     return requests
   } finally {
     await screen.dispose()

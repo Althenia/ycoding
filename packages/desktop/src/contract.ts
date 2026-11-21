@@ -346,6 +346,7 @@ export type DesktopAPI = {
   readonly interactionStatus: (input: InteractionOwner) => Promise<InteractionStatus>
   readonly interactionPreview: (input: InteractionFence) => Promise<InteractionPreview>
   readonly interactionStop: (input: InteractionFence) => Promise<void>
+  readonly interactionResume: (input: InteractionFence) => Promise<void>
   readonly interactionRequest: (input: InteractionOwner & { readonly payload: SessionInteractionRequestInput["payload"] }) => Promise<void>
   readonly preferences: () => Promise<Preferences>
   readonly state: () => Promise<ConnectionState>

@@ -5,7 +5,8 @@ import LocalAuthentication
 private let frameLimit = 1_048_576
 
 private enum Operation: String, Decodable, Sendable {
-    case hello, inventory, choose, attach, authorize, confirmIsolated, bindIsolated, startChromeEnrollmentMenu, presentEnrollment, observe, perform, preview, detach
+    case hello, inventory, choose, attach, authorize, confirmIsolated, bindIsolated, confirmChromeProfile
+    case observe, perform, preview, resume, detach
 }
 
 private struct Command: Decodable, Sendable {
@@ -26,9 +27,7 @@ private struct Command: Decodable, Sendable {
     let isolated: IsolatedConsentRequest?
     let candidateID: UUID?
     let choices: WindowChoiceRequest?
-    let enrollment: ChromeEnrollmentRequest?
-    let enrollmentOrigin: String?
-    let intentID: UUID?
+    let profile: ChromeProfileRequest?
 }
 
 private enum Consent: String, Encodable {
@@ -47,10 +46,8 @@ private struct Response: Encodable {
     var authorization: UUID?
     var consent: Consent?
     var selected: UUID?
-    var presented: Bool?
     var candidateID: UUID?
-    var intentID: UUID?
-    var expiresAt: Int64?
+    var reason: PauseReason?
 }
 
 private final class Output: @unchecked Sendable {
@@ -147,11 +144,7 @@ private final class Service {
     private var isolatedChannel = false
     private var isolatedPanel: ControlPanel?
     private var chooserUsed = false
-    private var enrollmentMenu: ChromeEnrollmentMenu?
-    private var enrollmentOrigin: String?
-    private var enrollmentIntent = ChromeEnrollmentIntentFence()
-    private var enrollmentTimeout: Timer?
-    private var enrollmentPanel: ChromeEnrollmentPanel?
+    private var profileUsed = false
 
     init(fence: InteractionFence, output: Output) {
         self.fence = fence
@@ -160,7 +153,7 @@ private final class Service {
 
     func accept(_ command: Command) async {
         do {
-            if chooserUsed || enrollmentMenu != nil && command.operation != .presentEnrollment
+            if chooserUsed || profileUsed
                 || isolatedChannel && command.operation != .confirmIsolated && command.operation != .bindIsolated {
                 throw Refusal.invalidRequest
             }
@@ -187,18 +180,16 @@ private final class Service {
                     throw Refusal.notAuthorized
                 }
                 output.send(Response(id: command.id, generation: command.generation, state: "ok", lease: lease, candidateID: candidateID))
-            case .startChromeEnrollmentMenu:
-                guard binding == nil, context == nil, let origin = command.enrollmentOrigin, ChromeEnrollmentRequest.validOrigin(origin),
-                      let menu = ChromeEnrollmentMenu(select: { [weak self] in
-                          Task { @MainActor in await self?.connectChrome(origin: origin, generation: command.generation) }
-                      }) else { throw Refusal.unavailable }
-                enrollmentOrigin = origin
-                enrollmentMenu = menu
-                output.send(Response(id: command.id, generation: command.generation, state: "ok"))
-            case .presentEnrollment:
-                guard let origin = enrollmentOrigin, let intentID = command.intentID else { throw Refusal.notAuthorized }
-                let presented = await presentEnrollment(command.enrollment, origin: origin, intentID: intentID, generation: command.generation)
-                output.send(Response(id: command.id, generation: command.generation, state: "ok", presented: presented, intentID: intentID))
+            case .confirmChromeProfile:
+                profileUsed = true
+                let consent = await confirmProfile(command.profile)
+                output.send(Response(id: command.id, generation: command.generation, state: "ok", consent: consent))
+            case .resume:
+                guard let lease = command.lease, let active = binding, active.lease == lease, active.generation == command.generation,
+                      active.panel.visible else { throw Refusal.stopped }
+                try fence.resume(lease, target: active.target)
+                active.panel.resume()
+                output.send(Response(id: command.id, generation: command.generation, state: "ok", lease: lease))
             case .detach:
                 guard let lease = command.lease else { throw Refusal.invalidRequest }
                 stop(lease, report: false)
@@ -233,6 +224,10 @@ private final class Service {
             }
         } catch {
             let code = error as? Refusal ?? .unavailable
+            if let lease = command.lease, let reason = PauseReason(code), pause(lease, reason: reason, operation: command.operation) {
+                output.send(Response(id: command.id, generation: command.generation, state: "paused", lease: lease, reason: reason))
+                return
+            }
             if let lease = command.lease, code == .targetChanged || code == .permissionMissing {
                 stop(lease)
             }
@@ -241,42 +236,26 @@ private final class Service {
         }
     }
 
-    private func connectChrome(origin: String, generation: UUID) async {
-        let id = UUID()
-        guard WindowHost.awake(), enrollmentIntent.select(id) else { return }
-        let approved = (try? await authenticate("Connect Chrome to YCoding at \(origin)")) != nil && WindowHost.awake()
-        guard let expiresAt = enrollmentIntent.authenticate(id, approved: approved, now: Int64(Date.now.timeIntervalSince1970 * 1000)) else { return }
-        let timer = Timer(fire: Date(timeIntervalSince1970: TimeInterval(expiresAt) / 1000), interval: 0, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.retireEnrollment(id, generation: generation) }
-        }
-        enrollmentTimeout = timer
-        RunLoop.main.add(timer, forMode: .common)
-        output.send(Response(generation: generation, state: "chromeEnrollmentIntent", intentID: id, expiresAt: expiresAt))
-    }
-
-    private func presentEnrollment(_ request: ChromeEnrollmentRequest?, origin: String, intentID: UUID, generation: UUID) async -> Bool {
-        guard let request else { retireEnrollment(intentID, generation: generation); return false }
-        let now = Int64(Date.now.timeIntervalSince1970 * 1000)
-        guard enrollmentIntent.claim(intentID, now: now) else { return false }
-        enrollmentTimeout?.invalidate()
-        enrollmentTimeout = nil
-        guard WindowHost.awake(), request.origin == origin, request.valid(now: now),
-              let panel = ChromeEnrollmentPanel(request, dismissed: { [weak self] in self?.retireEnrollment(intentID, generation: generation) }) else {
-            retireEnrollment(intentID, generation: generation)
-            return false
-        }
-        enrollmentPanel = panel
-        guard await panel.show() else { retireEnrollment(intentID, generation: generation); return false }
+    private func pause(_ lease: UUID, reason: PauseReason, operation: Operation) -> Bool {
+        guard [.authorize, .observe, .perform].contains(operation), let active = binding, active.lease == lease,
+              (try? fence.pause(lease, target: active.target, reason: reason)) != nil else { return false }
+        confirmation = nil
+        active.panel.pause(reason)
         return true
     }
 
-    private func retireEnrollment(_ id: UUID, generation: UUID) {
-        guard enrollmentIntent.retire(id) else { return }
-        enrollmentTimeout?.invalidate()
-        enrollmentTimeout = nil
-        enrollmentPanel?.hide()
-        enrollmentPanel = nil
-        output.send(Response(generation: generation, state: "chromeEnrollmentEnded", intentID: id))
+    private func resumeFromPanel(_ lease: UUID) {
+        guard let active = binding, active.lease == lease, active.panel.visible,
+              (try? fence.resume(lease, target: active.target)) != nil else { return }
+        active.panel.resume()
+        output.send(Response(generation: active.generation, state: "resumed", lease: lease))
+    }
+
+    private func confirmProfile(_ request: ChromeProfileRequest?) async -> Consent {
+        guard let request, binding == nil, context == nil, WindowHost.awake(),
+              request.valid(now: Int64(Date.now.timeIntervalSince1970 * 1000)),
+              let panel = ChromeProfilePanel(request), await panel.decide(), WindowHost.awake() else { return .denied }
+        return .approved
     }
 
     private func choose(_ request: WindowChoiceRequest?) async -> UUID? {
@@ -346,7 +325,8 @@ private final class Service {
         do {
             try await authenticate("Allow YCoding to observe and control \(app), window \(target.windowID): \(title)")
             try WindowHost.verifyTarget(target)
-            guard let panel = ControlPanel(app: app, scope: "Window \(target.windowID)", stop: { [weak self] in self?.stop(lease) }) else {
+            guard let panel = ControlPanel(app: app, scope: "Window \(target.windowID)", stop: { [weak self] in self?.stop(lease) },
+                resume: { [weak self] in self?.resumeFromPanel(lease) }) else {
                 throw Refusal.unavailable
             }
             guard await panel.show() else {
@@ -410,8 +390,13 @@ private final class Service {
 
     private func checkBinding() {
         guard let active = binding else { return }
-        if !active.panel.visible || (try? fence.check(active.lease, target: active.target)) == nil
-            || (try? WindowHost.verifyTarget(active.target)) == nil || !AXIsProcessTrusted() {
+        let present: Bool
+        do {
+            try WindowHost.verifyTarget(active.target)
+            present = true
+        } catch { present = error as? Refusal == .sensitive }
+        if !active.panel.visible || (try? fence.check(active.lease, target: active.target, whilePaused: true)) == nil
+            || !present || !AXIsProcessTrusted() {
             stop(active.lease)
         }
     }
@@ -438,7 +423,8 @@ struct InteractionService {
         guard ownerPID > 1, pipe(STDIN_FILENO), pipe(STDOUT_FILENO) else { _exit(1) }
         signal(SIGPIPE, SIG_IGN)
         let app = NSApplication.shared
-        guard app.setActivationPolicy(.accessory) else { _exit(1) }
+        _ = app.setActivationPolicy(.accessory)
+        guard app.activationPolicy() == .accessory else { _exit(1) }
         let fence = InteractionFence()
         let output = Output()
         let service = Service(fence: fence, output: output)

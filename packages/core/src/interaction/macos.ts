@@ -5,7 +5,6 @@ import { Interaction } from "@ycoding-ai/schema/interaction"
 import type { SessionID } from "@ycoding-ai/schema/session-id"
 import { Schema } from "effect"
 import type { ConsentProof, InteractionDriver, InventoryRequest, Lease, NativeInteraction } from "./driver"
-import { bindChromeEnrollment, type ChromeEnrollmentIntent, type ChromeEnrollmentOffer, type EnrollmentNotice } from "./macos-enrollment"
 
 export const macOSInteractionApplication = "YCoding Interaction.app"
 export const macOSInteractionBundleID = "app.ycoding.interaction"
@@ -16,6 +15,8 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 const nativeRevision = /^[0-9a-f]{64}$/
 const nativeControlID = /^0(?:\.\d+){0,16}$/
 const decodeFrame = Schema.decodeUnknownOption(Interaction.Frame)
+const decodePauseReason = Schema.decodeUnknownOption(Interaction.PauseReason)
+const matchCode = /^[A-Za-z0-9-]{4,32}$/
 
 type Target = Extract<Interaction.Target, { kind: "macos-window" }>
 type MacWindow = { pid: number; bundleID: string; started: string; windowID: number }
@@ -24,11 +25,13 @@ type Claim = WindowOffer & {
   link: ReturnType<typeof connect>
   lease: Lease
   revision?: { number: number; stamp: string; controls: Map<Interaction.ID, string> }
+  paused?: Interaction.PauseReason
   confirmation?: { proof: ConsentProof; revision: number; action: string; receipt: string; expiresAt: number }
   last: number
 }
 type Wire = Record<string, unknown>
-type Operation = "hello" | "inventory" | "choose" | "attach" | "authorize" | "confirmIsolated" | "bindIsolated" | "startChromeEnrollmentMenu" | "presentEnrollment" | "observe" | "perform" | "preview" | "detach"
+type Operation = "hello" | "inventory" | "choose" | "attach" | "authorize" | "confirmIsolated" | "bindIsolated" | "confirmChromeProfile" |
+  "observe" | "perform" | "preview" | "resume" | "detach"
 type Pending = { resolve: (reply: Wire) => void; fail: (error: NativeFailure) => void; stop: () => void; operation: Operation }
 
 export interface IsolatedConsentRequest {
@@ -36,6 +39,11 @@ export interface IsolatedConsentRequest {
   readonly sessionID: SessionID
   readonly url: string
   readonly expiresAt: number
+}
+
+export interface ChromeProfileConsent {
+  readonly profileLabel: string
+  readonly matchCode: string
 }
 
 export interface IsolatedStop {
@@ -46,7 +54,7 @@ export interface IsolatedStop {
 }
 
 class NativeFailure extends Error {
-  constructor(readonly code: string) {
+  constructor(readonly code: string, readonly reason?: Interaction.PauseReason) {
     super(`macOS interaction ${code}`)
   }
 }
@@ -78,7 +86,8 @@ function connect(executable: string, onClose: () => void) {
   let stopped: string | undefined
   let tail = Buffer.alloc(0)
   let onStop: ((id?: string) => void) | undefined
-  let onEnrollment: ((notice: EnrollmentNotice) => void) | undefined
+  let onPause: ((id: string, reason: Interaction.PauseReason) => void) | undefined
+  let onResume: ((id: string) => void) | undefined
 
   function close() {
     if (closed) return
@@ -99,19 +108,13 @@ function connect(executable: string, onClose: () => void) {
     try {
       const reply: unknown = JSON.parse(line.toString("utf8"))
       if (!object(reply) || typeof reply.generation !== "string" || reply.generation.toLowerCase() !== generation) return close()
-      if (reply.state === "chromeEnrollmentIntent" || reply.state === "chromeEnrollmentEnded") {
-        if (!onEnrollment || typeof reply.intentID !== "string" || !uuid.test(reply.intentID)) return close()
-        const id = Interaction.ID.make(reply.intentID.toLowerCase())
-        if (reply.state === "chromeEnrollmentEnded") {
-          if (Object.keys(reply).length !== 3) return close()
-          return onEnrollment({ state: reply.state, id })
-        }
-        if (Object.keys(reply).length !== 4 || typeof reply.expiresAt !== "number" || !Number.isSafeInteger(reply.expiresAt)) return close()
-        return onEnrollment({ state: reply.state, id, expiresAt: reply.expiresAt })
-      }
       if (reply.state === "stopped" && reply.id === undefined && typeof reply.lease === "string" && uuid.test(reply.lease)) {
         stopped = reply.lease.toLowerCase()
         onStop?.(stopped)
+        return
+      }
+      if (reply.state === "resumed" && reply.id === undefined && typeof reply.lease === "string" && uuid.test(reply.lease)) {
+        onResume?.(reply.lease.toLowerCase())
         return
       }
       const waiter = typeof reply.id === "number" ? pending.get(reply.id) : undefined
@@ -119,6 +122,15 @@ function connect(executable: string, onClose: () => void) {
       pending.delete(reply.id)
       waiter.stop()
       if (reply.state === "ok") return waiter.resolve(reply)
+      if (reply.state === "paused") {
+        const reason = decodePauseReason(reply.reason)
+        if (reason._tag === "None" || typeof reply.lease !== "string" || !uuid.test(reply.lease)) {
+          waiter.fail(new NativeFailure(waiter.operation === "perform" ? "uncertain" : "unavailable"))
+          return close()
+        }
+        onPause?.(reply.lease.toLowerCase(), reason.value)
+        return waiter.fail(new NativeFailure("paused", reason.value))
+      }
       if (reply.state === "uncertain") return waiter.fail(new NativeFailure("uncertain"))
       if (reply.state === "refused" && typeof reply.code === "string" && /^[A-Za-z]{1,40}$/.test(reply.code)) {
         return waiter.fail(new NativeFailure(reply.code))
@@ -162,7 +174,8 @@ function connect(executable: string, onClose: () => void) {
   }
 
   return { close, request, pid: child.pid, alive: () => !closed && !stopped,
-    onEnrollment: (listener: (notice: EnrollmentNotice) => void) => { onEnrollment = listener },
+    onPause: (listener: (id: string, reason: Interaction.PauseReason) => void) => { onPause = listener },
+    onResume: (listener: (id: string) => void) => { onResume = listener },
     onStop: (listener: (id?: string) => void) => {
     onStop = listener
     if (closed || stopped) listener(stopped)
@@ -185,7 +198,7 @@ function refusal(code: string): Interaction.Refusal {
     case "permissionMissing": case "notAuthorized": return "permission"
     case "targetChanged": case "unavailable": return "target_lost"
     case "confirmationRequired": return "confirmation_required"
-    case "busy": return "busy"
+    case "busy": case "paused": return "busy"
     case "unsupported": case "unverified": return "unsupported"
     default: return "policy"
   }
@@ -196,8 +209,25 @@ export function makeMacOSInteraction(options: { readonly application: string; re
       path.basename(options.application) !== macOSInteractionApplication || !/^[a-f0-9]{40}$/i.test(options.certificateSHA1)) {
     throw new NativeFailure("unavailable")
   }
-  const executable = path.join(options.application, "Contents", "MacOS", macOSInteractionExecutable)
   const requirement = `identifier "${macOSInteractionBundleID}" and certificate leaf = H"${options.certificateSHA1.toLowerCase()}"`
+  return makeMacOSAdapter({
+    application: options.application,
+    executable: path.join(options.application, "Contents", "MacOS", macOSInteractionExecutable),
+    verify: (subject, signal) => new Promise<boolean>((settle) => {
+      const verifier = spawn("/usr/bin/codesign", ["--verify", "--strict", "--verbose=1", "-R", `=${requirement}`, subject], {
+        env: { HOME: process.env.HOME, TMPDIR: process.env.TMPDIR }, signal, stdio: "ignore",
+      })
+      verifier.once("error", () => settle(false))
+      verifier.once("exit", (code) => settle(code === 0))
+    }),
+  })
+}
+
+export function makeMacOSAdapter(options: {
+  readonly application: string
+  readonly executable: string
+  readonly verify: (subject: string, signal: AbortSignal) => Promise<boolean>
+}) {
   const connections = new Set<ReturnType<typeof connect>>()
   const claims = new Map<Interaction.ID, Claim>()
   const identities = new Map<string, Interaction.ID>()
@@ -207,35 +237,24 @@ export function makeMacOSInteraction(options: { readonly application: string; re
   const isolated = new Map<SessionID, AbortController>()
   const isolatedCandidates = new Map<Interaction.ID, number>()
   const choosing = new Map<SessionID, { candidateID: Interaction.ID; abort: AbortController }>()
-  let enrollmentMenu: AbortController | undefined
   let closed = false
-
-  function verify(subject: string, signal: AbortSignal) {
-    return new Promise<boolean>((settle) => {
-      const verifier = spawn("/usr/bin/codesign", ["--verify", "--strict", "--verbose=1", "-R", `=${requirement}`, subject], {
-        env: { HOME: process.env.HOME, TMPDIR: process.env.TMPDIR }, signal, stdio: "ignore",
-      })
-      verifier.once("error", () => settle(false))
-      verifier.once("exit", (code) => settle(code === 0))
-    })
-  }
 
   async function start(signal: AbortSignal) {
     if (closed || signal.aborted) throw new NativeFailure("stopped")
-    const file = await open(executable, "r")
+    const file = await open(options.executable, "r")
     try {
       const before = await file.stat({ bigint: true })
       if (!before.isFile()) throw new NativeFailure("unavailable")
-      const verified = await verify(options.application, signal)
-      const current = await open(executable, "r")
+      const verified = await options.verify(options.application, signal)
+      const current = await open(options.executable, "r")
       try {
         const after = await current.stat({ bigint: true })
         if (!verified || closed || signal.aborted || before.dev !== after.dev || before.ino !== after.ino ||
             before.size !== after.size || before.ctimeNs !== after.ctimeNs) throw new NativeFailure("unavailable")
-        const link = connect(executable, () => connections.delete(link))
+        const link = connect(options.executable, () => connections.delete(link))
         connections.add(link)
         try {
-          if (!link.pid || !(await verify(String(link.pid), signal)) || !link.alive()) throw new NativeFailure("unavailable")
+          if (!link.pid || !(await options.verify(String(link.pid), signal)) || !link.alive()) throw new NativeFailure("unavailable")
           await link.request("hello", { version: 1, ownerPID: process.pid }, signal)
           return link
         } catch (error) {
@@ -293,6 +312,7 @@ export function makeMacOSInteraction(options: { readonly application: string; re
     async observe(lease, signal) {
       const claim = claims.get(lease.id)
       if (!claim) throw new NativeFailure("targetChanged")
+      if (claim.paused) throw new NativeFailure("paused", claim.paused)
       claim.revision = undefined
       claim.confirmation = undefined
       const reply = await claim.link.request("observe", { target: claim.window, lease: lease.id }, signal)
@@ -317,6 +337,7 @@ export function makeMacOSInteraction(options: { readonly application: string; re
     },
     async perform(lease, revision, command, signal) {
       const claim = claims.get(lease.id)
+      if (claim?.paused) return { outcome: "paused", reason: claim.paused }
       const current = claim?.revision
       if (!claim || !current || current.number !== revision || signal.aborted || !claim.link.alive()) return { outcome: "refused", reason: "stale" }
       if (command.action.platform !== "macos") return { outcome: "refused", reason: "policy" }
@@ -337,18 +358,28 @@ export function makeMacOSInteraction(options: { readonly application: string; re
         return signal.aborted || !claim.link.alive() ? { outcome: "uncertain" } : { outcome: "applied" }
       } catch (error) {
         const code = error instanceof NativeFailure ? error.code : "uncertain"
+        if (error instanceof NativeFailure && error.reason) return claim.paused ? { outcome: "paused", reason: claim.paused } : { outcome: "refused", reason: "stale" }
         if (code === "confirmationRequired" && claim.link.alive() && !signal.aborted) claim.revision = current
         return code === "uncertain" ? { outcome: "uncertain" } : { outcome: "refused", reason: refusal(code) }
       }
     },
     async preview(lease, signal) {
       const claim = claims.get(lease.id)
-      if (!claim || !claim.link.alive() || signal.aborted) return undefined
+      if (!claim || claim.paused || !claim.link.alive() || signal.aborted) return undefined
       const reply = await claim.link.request("preview", { target: claim.window, lease: lease.id }, signal).catch(() => undefined)
       if (signal.aborted || claims.get(lease.id) !== claim || !claim.link.alive() || typeof reply?.lease !== "string" ||
           reply.lease.toLowerCase() !== lease.id || !object(reply.preview)) return undefined
       const frame = decodeFrame({ mimeType: "image/jpeg", base64: reply.preview.image, width: reply.preview.width, height: reply.preview.height })
       return frame._tag === "Some" ? frame.value : undefined
+    },
+    async resume(lease, signal) {
+      const claim = claims.get(lease.id)
+      if (!claim || !claim.link.alive() || signal.aborted) return false
+      const reply = await claim.link.request("resume", { lease: lease.id }, signal).catch(() => undefined)
+      if (!reply || signal.aborted || claims.get(lease.id) !== claim || !claim.link.alive() ||
+          typeof reply.lease !== "string" || reply.lease.toLowerCase() !== lease.id) return false
+      claim.paused = undefined
+      return true
     },
     async detach(lease) {
       const claim = claims.get(lease.id)
@@ -391,12 +422,24 @@ export function makeMacOSInteraction(options: { readonly application: string; re
         const reply = await link.request("attach", { target: selection.window }, scoped)
         if (!link.alive() || scoped.aborted || typeof reply.lease !== "string" || !uuid.test(reply.lease)) return false
         const lease = { id: Interaction.ID.make(reply.lease.toLowerCase()) }
-        const claim = { ...selection, link, lease, last: 0 }
+        const claim: Claim = { ...selection, link, lease, last: 0 }
         link.onStop((stopped) => {
           if (claims.get(lease.id) !== claim) return
           claims.delete(lease.id)
           native.stop(lease.id, stopped === lease.id ? "stopped" : "target_lost")
           link.close()
+        })
+        link.onPause((id, reason) => {
+          if (id !== lease.id || claims.get(lease.id) !== claim) return
+          claim.paused = reason
+          claim.revision = undefined
+          claim.confirmation = undefined
+          native.pause(lease.id, reason)
+        })
+        link.onResume((id) => {
+          if (id !== lease.id || claims.get(lease.id) !== claim || !claim.paused) return
+          claim.paused = undefined
+          native.resume(lease.id)
         })
         prepared.set(proof.authorization, { claim, proof })
         const accepted = await native.approve(proof)
@@ -507,53 +550,30 @@ export function makeMacOSInteraction(options: { readonly application: string; re
     }
   }
 
-  async function startChromeEnrollmentMenu(origin: string,
-    offer: (intent: ChromeEnrollmentIntent, signal: AbortSignal) => ChromeEnrollmentOffer | undefined,
-    lifetime: AbortSignal,
-  ): Promise<boolean> {
-    if (closed || lifetime.aborted || enrollmentMenu || origin.length > 128 || !URL.canParse(origin)) return false
-    const url = new URL(origin)
-    if (url.protocol !== "http:" || url.origin !== origin || url.username || url.password ||
-        !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) return false
-    const owner = new AbortController()
-    enrollmentMenu = owner
-    const signal = AbortSignal.any([lifetime, owner.signal])
-    const deadline = AbortSignal.any([signal, AbortSignal.timeout(10_000)])
-    let armed = false
+  async function available(signal: AbortSignal) {
     try {
-      const link = await start(deadline)
-      try {
-        await link.request("startChromeEnrollmentMenu", { enrollmentOrigin: origin }, deadline)
-        if (deadline.aborted || !link.alive()) return false
-        const delivery = bindChromeEnrollment({ signal, offer, close: link.close,
-          async send(intentID, enrollment) {
-            const reply = await link.request("presentEnrollment", { intentID, enrollment: enrollment && { origin, ...enrollment } }, signal)
-            return reply.presented === true && typeof reply.intentID === "string" && reply.intentID.toLowerCase() === intentID
-          },
-        })
-        signal.addEventListener("abort", link.close, { once: true })
-        link.onStop(() => {
-          delivery.disconnect()
-          signal.removeEventListener("abort", link.close)
-          if (enrollmentMenu === owner) enrollmentMenu = undefined
-        })
-        link.onEnrollment((notice) => { void delivery.receive(notice).catch(link.close) })
-        armed = true
-        return true
-      } finally {
-        if (!armed) link.close()
-      }
-    } catch { return false } finally {
-      if (!armed) {
-        owner.abort()
-        if (enrollmentMenu === owner) enrollmentMenu = undefined
-      }
-    }
+      const link = await start(AbortSignal.any([signal, AbortSignal.timeout(10_000)]))
+      link.close()
+      return true
+    } catch { return false }
   }
 
-  return { driver, choose, approve, confirmIsolated, startChromeEnrollmentMenu, close() {
+  async function confirmChromeProfile(input: ChromeProfileConsent, signal: AbortSignal) {
+    const profile = { profileLabel: input.profileLabel, matchCode: input.matchCode, expiresAt: Date.now() + 60_000 }
+    if (closed || signal.aborted || !profile.profileLabel || profile.profileLabel.length > 128 || label(profile.profileLabel) !== profile.profileLabel ||
+        profile.profileLabel.trim() !== profile.profileLabel || !matchCode.test(profile.matchCode)) return false
+    const scoped = AbortSignal.any([signal, AbortSignal.timeout(60_000)])
+    try {
+      const link = await start(scoped)
+      try {
+        const reply = await link.request("confirmChromeProfile", { profile }, scoped)
+        return !scoped.aborted && link.alive() && Date.now() < profile.expiresAt && reply.consent === "approved"
+      } finally { link.close() }
+    } catch { return false }
+  }
+
+  return { driver, choose, approve, confirmIsolated, confirmChromeProfile, available, close() {
     closed = true
-    enrollmentMenu?.abort()
     for (const owner of isolated.values()) owner.abort("target_lost")
     for (const owner of choosing.values()) owner.abort.abort()
     for (const link of connections) link.close()

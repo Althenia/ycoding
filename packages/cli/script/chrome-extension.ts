@@ -13,7 +13,7 @@ export async function copyChromeExtension(binDirectory: string) {
   })
   if (!bundle.success || bundle.outputs.length !== 1) throw new Error("Could not bundle the Interaction service worker")
   await mkdir(binDirectory, { recursive: true })
-  await mkdir(destination)
+  await mkdir(path.join(destination, "icons"), { recursive: true })
   await Promise.all(interactionExtensionFiles.map((file) => file === "service-worker.js"
     ? Bun.write(path.join(destination, file), bundle.outputs[0]!)
     : copyFile(path.join(chromeExtensionSource, file), path.join(destination, file))))

@@ -48,7 +48,7 @@ test("actual isolated Chrome observations satisfy the Interaction authority cont
     throw error
   }) }, "chrome-isolated")
   try {
-    const pending = authority.request(sessionID, { platform: "chrome", mode: "isolated", url: `http://127.0.0.1:${fixture.port}/approved?fixture=1` })
+    const pending = await authority.request(sessionID, { platform: "chrome", mode: "isolated", url: `http://127.0.0.1:${fixture.port}/approved?fixture=1` })
     if (pending.state !== "pending") throw new Error("Expected pending isolated Interaction")
     const [candidate] = native.pending()
     const [target] = await native.inventory(candidate.candidateID)

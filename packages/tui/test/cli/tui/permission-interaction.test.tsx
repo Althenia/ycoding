@@ -146,6 +146,54 @@ test.each(["profile", "owned"])(
   },
 )
 
+test("a browser_script ask renders the run mode, one-line source preview and short source digest", async () => {
+  const transport = createFetch(async () => undefined)
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <ClientProvider api={createApi(transport.fetch)}>
+              <DataProvider>
+                <LocationProvider>
+                  <Keymap.Provider>
+                    <PermissionPrompt
+                      request={{
+                        id: "per_script",
+                        sessionID: "ses_browser",
+                        action: "browser_script",
+                        resources: ["https://example.test/cart"],
+                        save: ["https://example.test/cart"],
+                        metadata: {
+                          operation: "run", operationDigest: "digest", mode: "code",
+                          sourceDigest: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                          sourcePreview: "const rows = document.querySelectorAll('tr') rows.length",
+                        },
+                      }}
+                    />
+                  </Keymap.Provider>
+                </LocationProvider>
+              </DataProvider>
+            </ClientProvider>
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 100, height: 24, kittyKeyboard: true },
+  )
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes("Permission required"))
+    const output = app.captureCharFrame().replace(/\s+/g, " ")
+    expect(output).toContain("Run Code in Chrome https://example.test/cart")
+    expect(output).toContain("Mode: Code")
+    expect(output).toContain("Source: const rows = document.querySelectorAll('tr') rows.length")
+    expect(output).toContain("Digest: 9f86d081884c")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("updates permission selection from vertical arrows and hover", async () => {
   const app = await testRender(
     () => (

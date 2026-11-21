@@ -68,6 +68,7 @@ export const Operation = Schema.Literals([
   "session.interaction.status",
   "session.interaction.preview",
   "session.interaction.stop",
+  "session.interaction.resume",
   "session.message.stream",
   "session.todo.list",
   "session.subagent.list",

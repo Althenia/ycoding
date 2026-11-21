@@ -1,6 +1,6 @@
 import { Locale } from "./locale"
 import { canonicalToolName, finiteNumber, webSearchProviderLabel } from "./tool-display"
-import { toolDisplayName } from "@ycoding-ai/client/tool-display"
+import { browserScriptPermission, toolDisplayName } from "@ycoding-ai/client/tool-display"
 import { escapeTerminalText } from "./terminal-text"
 
 type Dict = Record<string, unknown>
@@ -110,6 +110,12 @@ export function permissionPresentation(
       title: `Control Chrome site ${site}`,
       lines: [`Site: ${site}`, ...chromeSideEffectWarning(metadata)],
     }
+  }
+
+  if (action === "browser_script") {
+    const site = escapeTerminalText(resources[0] || "this site")
+    const script = browserScriptPermission(metadata)
+    return { icon: "◉", title: `Run ${script.mode ?? "JavaScript"} in Chrome ${site}`, lines: [`Site: ${site}`, ...script.lines] }
   }
 
   if (action === "lsp") {

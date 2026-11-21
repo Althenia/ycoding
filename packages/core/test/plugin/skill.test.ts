@@ -92,6 +92,22 @@ describe("SkillPlugin.Plugin", () => {
     }),
   )
 
+  it.effect("registers the browser-use and computer-use skills for the interaction tool", () =>
+    Effect.gen(function* () {
+      const skills = yield* registeredSkills()
+      for (const id of ["browser-use", "computer-use"]) {
+        const skill = skills.find((item) => item.id === id)
+        expect(skill?.location).toBe(AbsolutePath.make(`/builtin/${id}.md`))
+        expect(skill?.description).toContain("interaction")
+        expect(skill?.content.split("\n").length).toBeLessThan(80)
+        for (const word of ["status", "observe", "paused", "Stop"]) expect(skill?.content).toContain(word)
+      }
+      const browser = skills.find((item) => item.id === "browser-use")?.content ?? ""
+      for (const word of ["foreground_required", "file_chooser", "dialog", "captcha", "sensitive", "user_takeover", "Capture"])
+        expect(browser).toContain(word)
+    }),
+  )
+
   it.effect("the ChatGPT connectors skill names only real Library operations and configuration keys", () =>
     Effect.gen(function* () {
       const skill = (yield* registeredSkills()).find((item) => item.id === "chatgpt-connectors")

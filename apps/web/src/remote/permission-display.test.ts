@@ -42,3 +42,16 @@ test("permission display escapes resources and limits remembered approval to rep
   expect(permissionDisplay({ action: "read", resources: [], save: ["*"] }).always).toBe("Allow Read for all resources in this Session.")
   expect(permissionDisplay({ action: "read", resources: [], save: [] }).always).toBeUndefined()
 })
+
+test("a browser_script ask keeps and shows its run mode, bounded source preview and short digest", () => {
+  const digest = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+  const script = { ...request, id: "per_script", action: "browser_script", resources: ["https://example.test/cart"], save: ["https://example.test/cart"],
+    metadata: { operation: "run", operationDigest: "private", mode: "code", sourceDigest: digest, sourcePreview: "return document.title\u202e" } }
+  const projected = readPermissionRequests({ data: [script] }, 1)[0]!
+  expect(projected.kind === "permission" && projected.metadata).toEqual({ mode: "code", sourceDigest: digest, sourcePreview: "return document.title\u202e" })
+  expect(permissionDisplay({ ...script, metadata: projected.kind === "permission" ? projected.metadata : undefined }).details).toEqual([
+    "Mode: Code", "Source: return document.title\\u202e", "Digest: 9f86d081884c",
+  ])
+  expect(permissionDisplay({ ...script, metadata: { mode: "eval", sourceDigest: "short", sourcePreview: 42 } })).not.toHaveProperty("details")
+  expect(permissionDisplay({ action, resources: ["connector-42"], metadata })).not.toHaveProperty("details")
+})

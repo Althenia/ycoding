@@ -2,10 +2,17 @@ import { Interaction } from "@ycoding-ai/schema/interaction"
 import type { SessionID } from "@ycoding-ai/schema/session-id"
 import { Schema } from "effect"
 import { previewFrame } from "../../../../extensions/interaction-chrome/page.js"
+import { redactText, redactURL } from "../../../../extensions/interaction-chrome/redact.js"
 import { ComputerPolicy } from "../computer/policy"
-import type { ConsentProof, InteractionDriver, InteractionDriverKey, InventoryRequest, Lease, NativeInteraction } from "./driver"
+import type { CaptureInput, ConsentProof, InteractionDriver, InteractionDriverKey, InventoryRequest, Lease, NativeInteraction } from "./driver"
 
 type StopState = Extract<Interaction.Status, { state: "stopped" }>
+export type AdmittedCapture = {
+  readonly label: string
+  readonly frame: Interaction.Frame
+  readonly title?: string
+  readonly url?: string
+}
 const publicTargetLabels = {
   "chrome-tab": "Selected Chrome tab",
   "chrome-owned": "Background Chrome tab",
@@ -28,12 +35,14 @@ type Entry = {
   controller: AbortController
   expiry: ReturnType<typeof setTimeout>
   candidate?: Candidate
+  sessionLabel: string
   target?: Interaction.Target
   lease?: Lease
   revision?: number
   lastRevision?: number
   busy: boolean
   previewing: boolean
+  capturing: boolean
   calls: Set<Interaction.ID>
 }
 
@@ -45,10 +54,14 @@ const decodeTarget = Schema.decodeUnknownOption(Interaction.Target, strict)
 const decodeFrame = Schema.decodeUnknownOption(Interaction.Frame, strict)
 const decodeID = Schema.decodeUnknownOption(Interaction.ID)
 const decodeRequest = Schema.decodeUnknownOption(Interaction.Request, strict)
+const decodePauseReason = Schema.decodeUnknownOption(Interaction.PauseReason)
+const decodeCapture = Schema.decodeUnknownOption(Interaction.Capture, strict)
+const decodeScript = Schema.decodeUnknownOption(Interaction.ScriptRequest, strict)
+const decodeScriptResult = Schema.decodeUnknownOption(Interaction.ScriptResult, strict)
 const unsupportedActionConsent = { outcome: "refused", reason: "unsupported" } as const
 
 export class InteractionError extends Error {
-  constructor(readonly code: "stale" | "busy" | "unavailable") {
+  constructor(readonly code: "stale" | "busy" | "unavailable" | "paused" | "uncertain") {
     super(`Interaction ${code}`)
   }
 }
@@ -68,6 +81,7 @@ export function makeAuthority(options: {
   readonly currentlyUsable?: (sessionID: SessionID) => Promise<boolean>
   readonly callTimeoutMs?: number
   readonly changed?: (sessionID: SessionID, generation: Interaction.Generation) => void
+  readonly sessionLabel?: (sessionID: SessionID) => Promise<string>
 } = {}) {
   const entries = new Map<SessionID, Entry>()
   const drivers = new Map<InteractionDriverKey, InteractionDriver>()
@@ -79,6 +93,7 @@ export function makeAuthority(options: {
   const maxSessions = 128
   const maxCallsPerGrant = 512
   let closed = false
+  let admission: CaptureAdmission | undefined
 
   const live = (entry: Entry) => entries.get(entry.sessionID) === entry && !entry.controller.signal.aborted &&
     drivers.get(entry.driverKey) === entry.driver
@@ -129,14 +144,77 @@ export function makeAuthority(options: {
     void pending.then(() => finish(entry, "complete"), () => undefined)
   }
 
-  function active(sessionID: SessionID, generation: Interaction.Generation) {
+  function active(sessionID: SessionID, generation: Interaction.Generation, states: readonly Interaction.Status["state"][] = ["active"]) {
     const entry = entries.get(sessionID)
-    return entry?.generation === generation && entry.status.state === "active" && entry.target && entry.lease && live(entry)
+    return entry?.generation === generation && states.includes(entry.status.state) && entry.target && entry.lease && live(entry)
       ? { entry, lease: entry.lease, target: entry.target, pathname: entry.target.kind === "macos-window" ? undefined : entry.target.pathname }
       : undefined
   }
 
-  function request(sessionID: SessionID, input: Interaction.Request): Interaction.Status {
+  function paused(sessionID: SessionID, generation: Interaction.Generation) {
+    const status = active(sessionID, generation, ["paused"])?.entry.status
+    return status?.state === "paused" ? status : undefined
+  }
+
+  function pause(entry: Entry, reason: Interaction.PauseReason) {
+    const status = entry.status
+    if (!entry.lease || !live(entry) || (status.state !== "active" && status.state !== "paused")) return false
+    if (status.state === "paused" && status.reason === reason) return true
+    entry.status = { state: "paused", platform: status.platform, generation: status.generation, label: status.label, reason }
+    entry.revision = undefined
+    options.changed?.(entry.sessionID, entry.generation)
+    return true
+  }
+
+  function unpause(entry: Entry) {
+    const status = entry.status
+    if (!live(entry) || status.state !== "paused") return false
+    entry.status = { state: "active", platform: status.platform, generation: status.generation, label: status.label }
+    options.changed?.(entry.sessionID, entry.generation)
+    return true
+  }
+
+  async function capture(entry: Entry, leaseID: Interaction.ID, input: CaptureInput) {
+    const captured = admission
+    const status = entry.status
+    if (!captured || entry.capturing || !active(entry.sessionID, entry.generation, ["active", "paused"]) ||
+      (status.state !== "active" && status.state !== "paused")) return false
+    const decoded = decodeFrame(input?.frame)
+    const frame = decoded._tag === "Some" ? previewFrame(decoded.value.mimeType, decoded.value.base64) : undefined
+    if (!frame || decoded._tag === "None" || frame.width !== decoded.value.width || frame.height !== decoded.value.height) return false
+    const safe = (field: { title: string } | { url: string }) => decodeCapture({ generation: entry.generation, frame, ...field })._tag === "Some"
+    const title = typeof input.title === "string" ? boundedLabel(redactText(input.title)) : ""
+    const url = typeof input.url === "string" ? redactURL(input.url) : undefined
+    const admitted: AdmittedCapture = { label: status.label, frame,
+      ...(title && safe({ title }) ? { title } : {}),
+      ...(typeof url === "string" && safe({ url }) ? { url } : {}),
+    }
+    entry.capturing = true
+    try {
+      const usable = await (options.currentlyUsable?.(entry.sessionID) ?? Promise.resolve(true)).catch(() => false)
+      if (!usable) {
+        retire(entry, "permission")
+        return false
+      }
+      if (entry.lease?.id !== leaseID || !active(entry.sessionID, entry.generation, ["active", "paused"])) return false
+      return await captured(entry.sessionID, entry.generation, admitted).then(() => true, () => false)
+    } finally {
+      entry.capturing = false
+    }
+  }
+
+  async function resume(sessionID: SessionID, generation: Interaction.Generation, signal?: AbortSignal) {
+    const current = active(sessionID, generation, ["paused"])
+    if (!current) return false
+    const { entry, lease } = current
+    const scoped = AbortSignal.any([entry.controller.signal, AbortSignal.timeout(callTimeoutMs), ...(signal ? [signal] : [])])
+    const resumed = await bounded(scoped, () => entry.driver.resume(lease, scoped)).catch(() => false)
+    if (!resumed) return false
+    unpause(entry)
+    return live(entry) && entry.status.state === "active"
+  }
+
+  async function request(sessionID: SessionID, input: Interaction.Request): Promise<Interaction.Status> {
     const checked = decodeRequest(input)
     if (checked._tag === "None") return { state: "unavailable" }
     if (typeof checked.value.url === "string" && !URL.canParse(checked.value.url)) return { state: "unavailable" }
@@ -153,16 +231,24 @@ export function makeAuthority(options: {
       entries.delete(terminal.sessionID)
     }
     const generation = Interaction.Generation.create()
-    const candidate: InventoryRequest = { candidateID: Interaction.ID.create(), sessionID, purpose: "attach", selection, expiresAt: Date.now() + candidateTtlMs }
+    const expiresAt = Date.now() + candidateTtlMs
     const expiry = setTimeout(() => retire(entry, "expired"), candidateTtlMs)
     expiry.unref()
     const entry: Entry = {
-      sessionID, generation, driver, driverKey, status: { state: "pending", generation, platform }, expiry,
-      controller: new AbortController(), busy: false, previewing: false, calls: new Set(),
-      candidate: { request: candidate, targets: new Map(), inventoryBusy: false },
+      sessionID, generation, driver, driverKey, status: { state: "pending", generation, platform }, expiry, sessionLabel: "",
+      controller: new AbortController(), busy: false, previewing: false, capturing: false, calls: new Set(),
     }
     entries.set(sessionID, entry)
     options.changed?.(sessionID, generation)
+    const sessionLabel = await Promise.resolve().then(() => options.sessionLabel?.(sessionID) ?? "").then(boundedLabel, () => undefined)
+    if (sessionLabel === undefined) {
+      retire(entry, "permission")
+      return entry.status
+    }
+    if (!live(entry) || entry.status.state !== "pending") return entry.status
+    entry.sessionLabel = sessionLabel
+    const candidate: InventoryRequest = { candidateID: Interaction.ID.create(), sessionID, sessionLabel, purpose: "attach", selection, expiresAt }
+    entry.candidate = { request: candidate, targets: new Map(), inventoryBusy: false }
     notify(entry, candidate)
     return entry.status
   }
@@ -299,6 +385,19 @@ export function makeAuthority(options: {
         const entry = owned().find((item) => item.lease?.id === leaseID)
         return entry !== undefined && retire(entry, reason)
       },
+      pause: (leaseID, reason) => {
+        const entry = owned().find((item) => item.lease?.id === leaseID)
+        const checked = decodePauseReason(reason)
+        return entry !== undefined && checked._tag === "Some" && pause(entry, checked.value)
+      },
+      resume: (leaseID) => {
+        const entry = owned().find((item) => item.lease?.id === leaseID)
+        return entry !== undefined && unpause(entry)
+      },
+      capture: async (leaseID, input) => {
+        const entry = owned().find((item) => item.lease?.id === leaseID)
+        return entry !== undefined && capture(entry, leaseID, input)
+      },
       disconnect: () => {
         if (drivers.get(key) !== driver) return
         for (const entry of owned()) retire(entry, "disconnected")
@@ -317,6 +416,7 @@ export function makeAuthority(options: {
   }
 
   async function observe(sessionID: SessionID, generation: Interaction.Generation, signal?: AbortSignal, expectedPathname?: Interaction.Pathname) {
+    if (paused(sessionID, generation)) throw new InteractionError("paused")
     const current = active(sessionID, generation)
     if (!current || (expectedPathname !== undefined && current.pathname !== expectedPathname)) throw new InteractionError("stale")
     const { entry, lease } = current
@@ -338,6 +438,7 @@ export function makeAuthority(options: {
       return observed.value
     } catch (error) {
       if (error instanceof InteractionError) throw error
+      if (live(entry) && entry.status.state === "paused") throw new InteractionError("paused")
       retire(entry, "target_lost")
       throw new InteractionError("unavailable")
     } finally {
@@ -356,7 +457,7 @@ export function makeAuthority(options: {
     if (target.kind === "chrome-isolated") return unsupportedActionConsent
     if (checked.type === "scroll" || checked.type === "navigate") throw new InteractionError("unavailable")
     entry.candidate = {
-      request: { candidateID: Interaction.ID.create(), sessionID, purpose: "confirm", targetID: target.id, revision,
+      request: { candidateID: Interaction.ID.create(), sessionID, sessionLabel: entry.sessionLabel, purpose: "confirm", targetID: target.id, revision,
         action: checked, expiresAt: Date.now() + candidateTtlMs },
       targets: new Map(), inventoryBusy: false,
     }
@@ -367,6 +468,8 @@ export function makeAuthority(options: {
   async function perform(sessionID: SessionID, generation: Interaction.Generation, revision: number, callID: Interaction.ID, action: Interaction.Action,
     signal?: AbortSignal, expectedPathname?: Interaction.Pathname,
   ): Promise<Interaction.ActionResult> {
+    const hold = paused(sessionID, generation)
+    if (hold) return { outcome: "paused", reason: hold.reason }
     const current = active(sessionID, generation)
     if (!current) return { outcome: "refused", reason: "stale" }
     const { entry, lease, target } = current
@@ -401,6 +504,7 @@ export function makeAuthority(options: {
       if (result.value.outcome === "refused" && result.value.reason === "confirmation_required") entry.revision = revision
       if (result.value.outcome === "refused" && result.value.reason === "target_lost") retire(entry, "target_lost")
       if (result.value.outcome === "refused" && result.value.reason === "permission") retire(entry, "permission")
+      if (result.value.outcome === "paused") pause(entry, result.value.reason)
       if (result.value.outcome === "applied") options.changed?.(entry.sessionID, entry.generation)
       return result.value
     } catch {
@@ -411,11 +515,52 @@ export function makeAuthority(options: {
     }
   }
 
+  async function run(sessionID: SessionID, generation: Interaction.Generation, revision: number, request: Interaction.ScriptRequest,
+    signal?: AbortSignal, expectedPathname?: Interaction.Pathname,
+  ): Promise<Interaction.ScriptResult> {
+    const hold = paused(sessionID, generation)
+    if (hold) return { outcome: "paused", reason: hold.reason }
+    const current = active(sessionID, generation)
+    if (!current || (expectedPathname !== undefined && current.pathname !== expectedPathname)) return { outcome: "refused", reason: "stale" }
+    const { entry, lease, target } = current
+    const execute = entry.driver.run?.bind(entry.driver)
+    if (target.kind === "macos-window" || !execute) return { outcome: "refused", reason: "unsupported" }
+    if (entry.busy) return { outcome: "refused", reason: "busy" }
+    if (entry.revision !== revision || signal?.aborted) return { outcome: "refused", reason: "stale" }
+    const checked = decodeScript(request)
+    if (checked._tag === "None") return { outcome: "refused", reason: "policy" }
+    if (entry.calls.size >= maxCallsPerGrant) {
+      retire(entry, "expired")
+      return { outcome: "refused", reason: "stale" }
+    }
+    const script = { mode: checked.value.mode, source: checked.value.source, timeoutMs: checked.value.timeoutMs ?? Interaction.defaultScriptTimeoutMs }
+    entry.busy = true
+    entry.calls.add(Interaction.ID.create())
+    entry.candidate = undefined
+    entry.revision = undefined
+    const scoped = AbortSignal.any([entry.controller.signal, AbortSignal.timeout(script.timeoutMs + callTimeoutMs), ...(signal ? [signal] : [])])
+    try {
+      const result = decodeScriptResult(await settled(scoped, callTimeoutMs, () => execute(lease, script, scoped)))
+      if (result._tag === "None") throw new Error("Unreadable script result")
+      const value = result.value
+      if (value.outcome === "paused") pause(entry, value.reason)
+      if (value.outcome === "refused" && value.reason === "target_lost") retire(entry, "target_lost")
+      if (value.outcome === "refused" && value.reason === "permission") retire(entry, "permission")
+      if (value.outcome !== "refused" && value.outcome !== "paused" && live(entry)) options.changed?.(entry.sessionID, entry.generation)
+      return value
+    } catch {
+      retire(entry, "uncertain")
+      throw new InteractionError("uncertain")
+    } finally {
+      entry.busy = false
+    }
+  }
+
   async function preview(sessionID: SessionID, generation: Interaction.Generation, signal?: AbortSignal,
     expectedPathname?: Interaction.Pathname,
   ): Promise<Interaction.Preview> {
     const unavailable = { state: "unavailable", generation } as const
-    const current = active(sessionID, generation)
+    const current = active(sessionID, generation, ["active", "paused"])
     if (!current || current.entry.previewing || current.entry.busy ||
       (expectedPathname !== undefined && current.pathname !== expectedPathname)) return unavailable
     const { entry, lease } = current
@@ -437,8 +582,21 @@ export function makeAuthority(options: {
     }
   }
 
-  return { request, status, stop, revoke, register, observe, confirmation, perform, preview, shutdown,
+  function admitCaptures(admit: CaptureAdmission) {
+    admission = admit
+    return () => {
+      if (admission === admit) admission = undefined
+    }
+  }
+
+  return { request, status, stop, resume, revoke, register, observe, confirmation, perform, run, preview, shutdown, admitCaptures,
     target: (sessionID: SessionID, generation: Interaction.Generation) => active(sessionID, generation)?.target }
+}
+
+type CaptureAdmission = (sessionID: SessionID, generation: Interaction.Generation, capture: AdmittedCapture) => Promise<void>
+
+function boundedLabel(text: string) {
+  return Array.from(text.replace(/[\p{Cc}\u2028\u2029]/gu, " ").replace(/\s+/gu, " ").trim()).slice(0, 128).join("")
 }
 
 function matchesTarget(selection: Interaction.Request, target: Interaction.Target) {
@@ -461,6 +619,23 @@ function validAction(target: Interaction.Target, input: Interaction.Action) {
       (target.kind !== "chrome-tab" && destination.href !== new URL(target.url).href)) return undefined
   }
   return action
+}
+
+function settled<T>(signal: AbortSignal, graceMs: number, run: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let grace: ReturnType<typeof setTimeout> | undefined
+    const abort = () => { grace = setTimeout(() => reject(signal.reason), graceMs) }
+    const settle = () => {
+      clearTimeout(grace)
+      signal.removeEventListener("abort", abort)
+    }
+    if (signal.aborted) abort()
+    else signal.addEventListener("abort", abort, { once: true })
+    Promise.resolve().then(run).then(
+      (value) => { settle(); resolve(value) },
+      (error: unknown) => { settle(); reject(error) },
+    )
+  })
 }
 
 function bounded<T>(signal: AbortSignal, run: () => Promise<T>): Promise<T> {

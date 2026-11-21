@@ -3,7 +3,11 @@ import { makeAuthority } from "@ycoding-ai/core/interaction/authority"
 import { Interaction } from "@ycoding-ai/core/interaction/index"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { Effect } from "effect"
-import { mountNativeConsent } from "../src/interaction-platform"
+import { mkdtempDisposable } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { chromeConnectPath, chromeExtensionID, chromeMatchCode } from "@ycoding-ai/core/interaction/chrome"
+import { mountChromeTransport, mountNativeConsent } from "../src/interaction-platform"
 
 test.each(["macos", "chrome-isolated"] as const)("matching Stop aborts a %s prompt and rejects a late approval", async (key) => {
   const authority = makeAuthority()
@@ -26,6 +30,7 @@ test.each(["macos", "chrome-isolated"] as const)("matching Stop aborts a %s prom
       observe: async () => ({ revision: 1, elements: [] }),
       perform: async () => ({ outcome: "refused", reason: "unsupported" }),
       preview: async () => undefined,
+      resume: async () => false,
       detach: async () => {},
     }, key, async (native, request, _targets, signal) => {
       const prompt = prompts.shift()!
@@ -36,7 +41,7 @@ test.each(["macos", "chrome-isolated"] as const)("matching Stop aborts a %s prom
       return approved
     })
     yield* Effect.promise(async () => {
-      const pending = authority.request(sessionID, selection)
+      const pending = await authority.request(sessionID, selection)
       if (pending.state !== "pending") throw new Error("Expected first pending grant")
       try {
         const signal = await first.entered.promise
@@ -44,7 +49,7 @@ test.each(["macos", "chrome-isolated"] as const)("matching Stop aborts a %s prom
         expect(signal.aborted).toBe(false)
         expect(authority.stop(sessionID, pending.generation)).toBe(true)
         expect(signal.aborted).toBe(true)
-        const replacement = authority.request(sessionID, selection)
+        const replacement = await authority.request(sessionID, selection)
         if (replacement.state !== "pending") throw new Error("Expected replacement pending grant")
         const replacementSignal = await second.entered.promise
         first.answered.resolve()
@@ -61,5 +66,31 @@ test.each(["macos", "chrome-isolated"] as const)("matching Stop aborts a %s prom
         second.answered.resolve()
       }
     })
+  })))
+})
+
+test("the Chrome route mounts only with the signed helper and enrolls through its native profile confirmation", async () => {
+  await using scratch = await mkdtempDisposable(join(tmpdir(), "ycoding-chrome-mount-"))
+  const origin = "http://127.0.0.1:40009"
+  const profiles = join(scratch.path, "profiles.json")
+  const peer = { url: `${origin}${chromeConnectPath}`, origin: `chrome-extension://${chromeExtensionID}`, peerAddress: "127.0.0.1" }
+  const asked: unknown[] = []
+  const helper = (available: boolean) => ({
+    available: async () => available,
+    confirmChromeProfile: async (input: { profileLabel: string; matchCode: string }) => { asked.push(input); return true },
+  })
+  const authority = makeAuthority()
+  await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+    expect(yield* mountChromeTransport(authority, helper(false), origin, profiles)).toBeUndefined()
+    const transport = yield* mountChromeTransport(authority, helper(true), origin, profiles)
+    if (!transport) throw new Error("Chrome transport did not mount")
+    expect(transport.admit(peer)).toBe(true)
+    const sent: Record<string, unknown>[] = []
+    const channel = transport.connect({ ...peer, send: (text) => { sent.push(JSON.parse(text)); return true }, close: () => {} })
+    const profileID = "P".repeat(43)
+    yield* Effect.promise(() => channel.receive(JSON.stringify({ type: "enroll", version: 1, profileID, profileLabel: "Chrome 152" })))
+    expect(asked).toEqual([{ profileLabel: "Chrome 152", matchCode: chromeMatchCode(profileID) }])
+    expect(sent[0]).toMatchObject({ type: "authenticated", version: 1 })
+    expect(typeof sent[0]?.credential).toBe("string")
   })))
 })

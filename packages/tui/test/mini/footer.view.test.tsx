@@ -757,7 +757,7 @@ test("direct footer recreates the frame across command panel transitions", async
   }
 })
 
-test("Mini Connect Chrome shows native pairing instructions without submitting a prompt", async () => {
+test("Mini Connect Chrome shows one-click setup instructions without submitting a prompt", async () => {
   const prompts: RunPrompt[] = []
   const app = await renderFooter({
     height: 18,
@@ -772,13 +772,13 @@ test("Mini Connect Chrome shows native pairing instructions without submitting a
     await app.mockInput.typeText("chr")
     await app.waitForFrame((frame) => frame.includes("Connect Chrome"))
     app.mockInput.pressEnter()
-    await app.waitForFrame((frame) => frame.includes("YCoding > Connect Chrome"))
+    await app.waitForFrame((frame) => frame.includes("Load unpacked"))
     for (const key of ["p", "r", "f"]) app.mockInput.pressKey(key)
     app.mockInput.pressKey("PAGEDOWN")
     await app.waitForFrame((frame) => frame.includes("separate approval"))
     expect(prompts).toHaveLength(0)
     app.mockInput.pressEscape()
-    await app.waitForFrame((frame) => !frame.includes("YCoding > Connect Chrome") && !frame.includes("separate approval"))
+    await app.waitForFrame((frame) => !frame.includes("Load unpacked") && !frame.includes("separate approval"))
   } finally {
     app.cleanup()
   }

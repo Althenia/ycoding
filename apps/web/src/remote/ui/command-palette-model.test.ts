@@ -54,6 +54,16 @@ describe("palette availability", () => {
     expect(ids({ ...base, connected: false, activeDeviceID: undefined })).not.toContain("dots.connection")
     expect(ids({ ...base, connected: false })).toContain("dots.connection")
   })
+  test("interaction refresh appears in Session only when connected and status read failed", () => {
+    expect(ids(base)).not.toContain("session.interaction.refresh")
+    expect(ids({ ...base, session: { ...base.session!, canRefreshInteraction: true } })).toContain("session.interaction.refresh")
+    expect(paletteActions({ ...base, session: { ...base.session!, managedChild: true, canRefreshInteraction: true } }).find((action) => action.id === "session.interaction.refresh")).toMatchObject({
+      title: "Refresh interaction status",
+      group: "Session",
+      intent: { type: "refreshInteraction" },
+    })
+    expect(ids({ ...base, connected: false, session: { ...base.session!, canRefreshInteraction: true } })).not.toContain("session.interaction.refresh")
+  })
   test("provider actions expose the existing selection owner and the explicit connection flow", () => {
     expect(paletteActions(base).find((action) => action.id === "settings.model")?.intent).toEqual({ type: "model" })
     expect(paletteActions(base).find((action) => action.id === "settings.provider.connect")?.intent).toEqual({ type: "connectProvider" })

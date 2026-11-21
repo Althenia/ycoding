@@ -19,6 +19,11 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
       const info = await Effect.runPromise(sessions.get(sessionID))
       return info?.scope === "bound" && info.time.archived === undefined
     },
+    sessionLabel: async (sessionID) => {
+      const info = await Effect.runPromise(sessions.get(sessionID))
+      if (!info) throw new Error("Session not found")
+      return info.title
+    },
     changed: (sessionID, generation) => { Effect.runFork(events.publish(Interaction.Changed, { sessionID, generation })) },
   })
   yield* Effect.addFinalizer(() => Effect.sync(authority.shutdown))

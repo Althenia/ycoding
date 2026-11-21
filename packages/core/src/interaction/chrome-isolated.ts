@@ -7,8 +7,9 @@ import { promisify } from "node:util"
 import { Interaction } from "@ycoding-ai/schema/interaction"
 import { Schema } from "effect"
 import { pageOperation, previewFrame, safeTree, withinPreviewSize } from "../../../../extensions/interaction-chrome/page.js"
+import { runScript } from "../../../../extensions/interaction-chrome/script.js"
 import { cdpObject, connectChromePipe } from "./chrome-isolated-pipe"
-import type { ConsentProof, InteractionDriver, InventoryRequest } from "./driver"
+import type { ConsentProof, InteractionDriver, InventoryRequest, ScriptRun } from "./driver"
 import type { IsolatedConsentRequest, IsolatedStop } from "./macos"
 
 const executable = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -17,6 +18,7 @@ const decodeObservation = Schema.decodeUnknownSync(Interaction.Observation)
 const decodeFrame = Schema.decodeUnknownOption(Interaction.Frame)
 const decodeChromeAction = Schema.decodeUnknownSync(Interaction.ChromeAction)
 const decodeRefusal = Schema.decodeUnknownSync(Interaction.Refusal)
+const decodeScriptResult = Schema.decodeUnknownSync(Interaction.ScriptResult)
 const previewTransitions = new Set(["Page.frameAttached", "Page.frameDetached", "Page.frameSubtreeWillBeDetached",
   "Page.frameNavigated", "Page.navigatedWithinDocument", "Page.documentOpened", "Page.frameStartedLoading",
   "Page.frameStartedNavigating", "DOM.documentUpdated"])
@@ -96,6 +98,8 @@ async function launch(url: string, onLost: () => void, outer: AbortSignal, chrom
     const seenLoaded = new Set<string>()
     let eventFailure = 0
     let previewEpoch = 0
+    const scriptListeners = new Set<(method: string, params: unknown) => void>()
+    const codeWorlds = new Map<string, unknown>()
 
     async function issue(signal: AbortSignal, method: string, params: Record<string, unknown> = {}, target?: string) {
       const fence = AbortSignal.any([signal, processFence.signal])
@@ -157,6 +161,7 @@ async function launch(url: string, onLost: () => void, outer: AbortSignal, chrom
       if (event.method === "Browser.downloadWillBegin") { eventFailure++; previewEpoch++; return }
       if (event.method === "Target.detachedFromTarget" && sessionID && params.sessionId === sessionID) { lost(); return }
       if (event.sessionId !== sessionID || !sessionID) return
+      for (const listener of scriptListeners) listener(String(event.method), params)
       if (event.method === "Inspector.targetCrashed") { lost(); return }
       if (event.method === "Page.fileChooserOpened" || event.method === "Page.javascriptDialogOpening") { lost(); return }
       if (typeof event.method === "string" && previewTransitions.has(event.method)) previewEpoch++
@@ -275,6 +280,18 @@ async function launch(url: string, onLost: () => void, outer: AbortSignal, chrom
 
     return {
       alive: () => !processFence.signal.aborted,
+      async script(request: ScriptRun, signal: AbortSignal) {
+        await verify(signal)
+        const commands = AbortSignal.timeout(request.timeoutMs + 5000)
+        const result = await runScript({ tabId: 0, leaseID: "isolated", mode: request.mode, source: request.source, timeoutMs: request.timeoutMs, signal }, {
+          send: async (_tab, method, params = {}) => cdpObject(await page(commands, method, params)),
+          onEvent(_tab, listener) {
+            scriptListeners.add(listener)
+            return () => scriptListeners.delete(listener)
+          },
+        }, codeWorlds)
+        return { result: decodeScriptResult(result), verified: await verify(AbortSignal.timeout(5000)).then(() => true, () => false) }
+      },
       async observe(signal: AbortSignal) {
         await verify(signal)
         const result = await run(signal, { operation: "observe" })
@@ -554,6 +571,24 @@ export function makeChromeIsolatedDriver(options: {
     async preview(lease, signal) {
       const live = active.get(lease.id)
       return live?.runtime.preview(AbortSignal.any([signal, live.abort.signal, live.stop.signal]))
+    },
+    resume: async () => false,
+    async run(lease, script, signal) {
+      const live = active.get(lease.id)
+      if (!live || live.awaitingObservation || signal.aborted) return { outcome: "refused", reason: "stale" }
+      live.awaitingObservation = true
+      live.refs.clear()
+      try {
+        const ran = await live.runtime.script(script, AbortSignal.any([signal, live.abort.signal, live.stop.signal]))
+        if (!ran.verified && active.has(lease.id)) {
+          void close(lease.id).catch(() => {})
+          options.lost(lease.id, "target_lost")
+        }
+        return ran.result
+      } catch (error) {
+        void close(lease.id).catch(() => {})
+        throw error
+      }
     },
     detach: (lease) => close(lease.id),
   }

@@ -1005,6 +1005,8 @@ async function run(input: OperationInput) {
       return { data: await input.local.interactionPreview(sessionID, validated.generation, input.signal) }
     case "session.interaction.stop":
       return { data: await input.local.interactionStop(sessionID, validated.generation) }
+    case "session.interaction.resume":
+      return { data: await input.local.interactionResume(sessionID, validated.generation) }
     case "message.stream":
       return await input.local.messageRead(sessionID, location, validated.messageID, input.signal)
     case "subagent.list":
@@ -1279,7 +1281,7 @@ type Validated =
   | { readonly kind: "capturedChanges.list"; readonly cursor?: string }
   | { readonly kind: "attachment.read"; readonly digest: string }
   | { readonly kind: "session.interaction.status" }
-  | { readonly kind: "session.interaction.preview" | "session.interaction.stop"; readonly generation: string }
+  | { readonly kind: "session.interaction.preview" | "session.interaction.stop" | "session.interaction.resume"; readonly generation: string }
   | { readonly kind: "message.stream"; readonly messageID: string }
   | { readonly kind: "subagent.list"; readonly cursor?: string }
   | { readonly kind: "session.pin" | "session.unpin" }
@@ -1550,7 +1552,7 @@ function validate(request: RemoteRequest): Validated {
     return { kind: "attachment.read", digest: fields.digest }
   }
   if (request.operation === "session.interaction.status") return { kind: request.operation }
-  if (request.operation === "session.interaction.preview" || request.operation === "session.interaction.stop") {
+  if (request.operation === "session.interaction.preview" || request.operation === "session.interaction.stop" || request.operation === "session.interaction.resume") {
     if (!isInteractionGeneration(fields.generation)) throw new OperationError("invalid_message", "Invalid Interaction generation")
     return { kind: request.operation, generation: fields.generation }
   }
@@ -2357,6 +2359,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.interaction.status": [],
   "session.interaction.preview": ["generation"],
   "session.interaction.stop": ["generation"],
+  "session.interaction.resume": ["generation"],
   "session.message.stream": ["messageID"],
   "session.subagent.list": ["cursor"],
   "session.pin": [],

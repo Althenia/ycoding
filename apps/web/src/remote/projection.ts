@@ -8,7 +8,7 @@
 
 import { ToolInvocation } from "../../../../packages/schema/src/tool-invocation"
 import type { Form } from "../../../../packages/schema/src/form"
-import { escapeDisplayText, toolDisplayName } from "../../../../packages/client/src/tool-display"
+import { browserScriptPermission, escapeDisplayText, toolDisplayName } from "../../../../packages/client/src/tool-display"
 import { isInternalTranscriptEnvelope } from "../../../../packages/client/src/transcript-visibility"
 import { RemoteLimits, isSessionID, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory } from "@ycoding-ai/remote"
 import { autonomyCategories, autonomyLabels, readAutonomyMode, type AutonomyCategory, type AutonomyModes, type EffectiveAutonomyView } from "./autonomy"
@@ -2358,7 +2358,10 @@ function permissionSave(value: unknown): { readonly save?: readonly string[] } {
 function permissionMetadata(value: unknown): { readonly metadata?: Readonly<Record<string, unknown>> } {
   if (!isRecord(value)) return {}
   const metadata = Object.fromEntries(Object.entries(value).filter(([key, entry]) =>
-    ["connector", "connectorLabel", "tool"].includes(key) ? typeof entry === "string" : key === "requireHuman" && typeof entry === "boolean"))
+    ["connector", "connectorLabel", "tool", "sourcePreview"].includes(key) ? typeof entry === "string"
+      : key === "mode" ? entry === "script" || entry === "code"
+      : key === "sourceDigest" ? typeof entry === "string" && /^[0-9a-f]{64}$/.test(entry)
+      : key === "requireHuman" && typeof entry === "boolean"))
   return Object.keys(metadata).length ? { metadata } : {}
 }
 
@@ -2370,9 +2373,11 @@ export function permissionDisplay(request: {
 }) {
   const action = toolDisplayName(request.action, { connector: request.resources[0], ...request.metadata })
   const save = request.metadata?.requireHuman === true ? [] : request.save ?? []
+  const details = request.action === "browser_script" ? browserScriptPermission(request.metadata).lines : []
   return {
     action,
     resources: request.resources.map(escapeDisplayText),
+    ...(details.length ? { details } : {}),
     always: save.length === 0 ? undefined : save.length === 1 && save[0] === "*"
       ? `Allow ${action} for all resources in this Session.`
       : `Allow ${action} for these resource patterns in this Session: ${save.map(escapeDisplayText).join(", ")}`,
