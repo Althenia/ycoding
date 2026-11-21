@@ -139,6 +139,12 @@ test("a Windows release receipt binds the MSVC host and exact exe bytes", async 
     await Bun.write(binary, new Uint8Array([77, 90, 1, 2, 3, 4]))
     await fs.chmod(binary, 0o755)
     await Bun.write(path.join(root, "shims/rustc"), '#!/bin/sh\nprintf "rustc 1.98.1\\r\\nhost: x86_64-pc-windows-msvc\\r\\n"\n')
+    const checksum = path.join(root, "shims/sha256sum")
+    await Bun.write(
+      checksum,
+      '#!/bin/sh\nset -e\nif [ "$1" = -b ]; then shift; fi\nif [ "$#" -eq 0 ]; then exec shasum -a 256 -b; fi\nresult=$(shasum -a 256 -b <"$1")\nprintf "\\\\%s *C:\\\\\\\\build\\\\\\\\binary\\n" "${result%% *}"\n',
+    )
+    await fs.chmod(checksum, 0o755)
     const artifact = path.join(root, "receipt")
     const dest = path.join(root, "verified/ycoding-runtime.exe")
     const env = environment(root, "linux", { SHIM_OS: "MINGW64_NT-10.0-26100", RECEIPT_TARGET: "windows-x64", RECEIPT_PROFILE: "release",
@@ -147,8 +153,10 @@ test("a Windows release receipt binds the MSVC host and exact exe bytes", async 
     expect(written.code, written.stderr).toBe(0)
     expect((await fs.readdir(artifact)).sort()).toEqual(["receipt.json", "ycoding-runtime.exe"])
     const receipt = await Bun.file(path.join(artifact, "receipt.json")).json()
+    const digest = new Bun.CryptoHasher("sha256").update(await Bun.file(binary).bytes()).digest("hex")
     expect(receipt).toMatchObject({
-      schema: "ycoding.release-runtime.receipt/1", source: { commit }, target: "windows-x64", profile: "release", binary: { name: "ycoding-runtime.exe", bytes: 6 },
+      schema: "ycoding.release-runtime.receipt/1", source: { commit }, target: "windows-x64", profile: "release",
+      binary: { name: "ycoding-runtime.exe", bytes: 6, sha256: digest },
       command: "cargo build --message-format=json-render-diagnostics --locked --manifest-path rust/Cargo.toml --release -p ycoding-runtime --bin ycoding-runtime",
       toolchain: { rustc: "rustc 1.98.1\nhost: x86_64-pc-windows-msvc", compilers: { msvc: "14.44.35207" }, image: { os: "win25" } },
     })

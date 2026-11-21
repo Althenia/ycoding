@@ -24,9 +24,9 @@ esac
 
 digest() {
   set -e
-  if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1
-  else shasum -a 256 "$1" | cut -d' ' -f1
-  fi
+  if command -v sha256sum >/dev/null; then sha256sum -b <"$1"
+  else shasum -a 256 -b <"$1"
+  fi | cut -d' ' -f1
 }
 
 host_target() {
