@@ -156,9 +156,22 @@ for (const entry of graphEntries) {
       })
     }
     const directory = await mkdtemp(path.join(tmpdir(), "ycoding-native-frontend-graph-"))
-    const executable = ["src/tui.ts", "src/index.ts", "src/node/index.ts"].includes(entry)
+    const executable = entry === "src/tui.ts" || entry === "src/index.ts"
     const host = executable ? nativeBuildTarget({ os: process.platform, arch: process.arch, single: true }) : undefined
     try {
+      if (entry === "src/node/index.ts") {
+        const { build, mergeConfig } = await import("vite")
+        const { mainConfig } = await import("../vite.node.config")
+        const { nodeTarget } = await import("../src/node/target")
+        await build(mergeConfig(mainConfig({
+          version: "0.0.0-test.1",
+          channel: "test",
+          models: "{}",
+          assetHash: "test",
+          target: nodeTarget(process.platform, process.arch),
+        }), { build: { outDir: directory, write: false } }))
+        return
+      }
       const result = await Bun.build({
         entrypoints: [path.resolve(packageRoot, entry)],
         tsconfig: path.join(packageRoot, "tsconfig.json"),
@@ -196,10 +209,13 @@ for (const entry of graphEntries) {
           `C07 missing installed host compiler input @opentui/core-${host.os}-${host.arch}`,
         ).toBe(true)
       const edges = Object.entries(result.metafile.inputs).flatMap(([file, input]) =>
-        input.imports.map((imported) => ({ file: path.resolve(packageRoot, file), specifier: imported.path })),
+        input.imports.map((imported) => ({
+          file: path.resolve(packageRoot, file),
+          specifier: imported.external ? imported.path : path.resolve(packageRoot, imported.path),
+        })),
       )
       const graph = {
-        frontend: entry,
+        frontend: entry === "src/index.ts" ? "cli" : entry,
         outputs: Object.entries(result.metafile.outputs).map(([file, output]) => ({
           file,
           modules,

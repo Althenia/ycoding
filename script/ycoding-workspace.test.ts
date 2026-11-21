@@ -58,3 +58,19 @@ test("SQLite is allowed only for the declared Zed reader and its import edge", (
   expect(checkBundleGraph(graph([reader], [{ file: reader, specifier: "bun:sqlite" }]))[0]?.owner).toBe("sqlite")
   expect(checkBundleGraph(graph([reader, owner], [{ file: "/fixture/packages/tui/src/other.ts", specifier: "bun:sqlite" }]))[0]?.owner).toBe("sqlite")
 })
+
+test("only the native CLI may bundle the Desktop Zed reader's Bun SQLite import", () => {
+  const reader = "/fixture/packages/desktop/src/editor-zed.ts"
+  const sqlite = "bun:sqlite"
+  const graph = (frontend: string, modules: string[], importers: string[], specifier = sqlite) => ({
+    frontend,
+    outputs: [{ file: "bundle.js", modules, imports: [specifier], edges: importers.map((file) => ({ file, specifier })) }],
+  })
+  expect(checkBundleGraph(graph("cli", [reader], [reader]))).toEqual([])
+  expect(checkBundleGraph(graph("cli", ["/fixture/index.ts"], [reader]))[0]?.owner).toBe("sqlite")
+  expect(checkBundleGraph(graph("cli", [reader], [reader, "/fixture/other.ts"]))[0]?.owner).toBe("sqlite")
+  expect(checkBundleGraph(graph("cli", [reader], [reader], "node:sqlite"))[0]?.owner).toBe("sqlite")
+  for (const frontend of ["tui", "node", "plugin-sdk"]) {
+    expect(checkBundleGraph(graph(frontend, [reader], [reader]))[0]?.owner).toBe("sqlite")
+  }
+})

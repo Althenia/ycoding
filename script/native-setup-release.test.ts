@@ -6,17 +6,23 @@ import path from "node:path"
 const action = Bun.YAML.parse(await Bun.file(path.join(import.meta.dir, "../.github/actions/setup-rust/action.yml")).text()) as {
   runs: { steps: { name: string; run?: string }[] }
 }
-const install = action.runs.steps.find((step) => step.name === "Install protoc")?.run
+const install = action.runs.steps.find((step) => step.name === "Install protoc")?.run ?? ""
 if (!install) throw new Error("Missing protoc installation step")
 
-async function run(osName: string, arch: string, digest: string) {
+async function run(osName: string, arch: string, digest: string, source: "download" | "cache" = "download") {
   const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-protoc-setup-"))
   try {
     const bin = path.join(root, "bin")
     await mkdir(bin)
+    const runnerTemp = osName === "Windows" ? path.join(root, "D:\\a\\_temp") : root
+    if (source === "cache") {
+      const cache = path.join(runnerTemp, "protoc-cache-36.2")
+      await mkdir(cache, { recursive: true })
+      await writeFile(path.join(cache, "protoc-36.2-win64.zip"), "archive")
+    }
     const scripts: Record<string, string> = {
-      curl: 'while [ "$#" -gt 0 ]; do if [ "$1" = --output ]; then shift; printf archive > "$1"; fi; shift; done',
-      sha256sum: 'printf "%s  archive\\n" "$SHIM_DIGEST"',
+      curl: '[ "$SHIM_SOURCE" = download ] || exit 77; while [ "$#" -gt 0 ]; do if [ "$1" = --output ]; then shift; printf archive > "$1"; fi; shift; done',
+      sha256sum: String.raw`if [ "$#" = 0 ]; then [ "$(cat)" = archive ] || exit 78; fi; case "$1" in *\\*) printf '\\';; esac; printf '%s  archive\n' "$SHIM_DIGEST"`,
       unzip: 'echo unpack >> "$SHIM_LOG"; mkdir -p "$RUNNER_TEMP/protoc-36.2/bin"; printf "#!/bin/sh\\necho libprotoc 36.2\\n" > "$RUNNER_TEMP/protoc-36.2/bin/protoc"; chmod +x "$RUNNER_TEMP/protoc-36.2/bin/protoc"',
       powershell: 'echo unpack >> "$SHIM_LOG"; mkdir -p "$RUNNER_TEMP/protoc-36.2/bin"; printf "#!/bin/sh\\necho libprotoc 36.2\\n" > "$RUNNER_TEMP/protoc-36.2/bin/protoc.exe"; chmod +x "$RUNNER_TEMP/protoc-36.2/bin/protoc.exe"',
       cygpath: 'case "$2" in */protoc.exe) printf "C:\\\\synthetic\\\\protoc.exe\\n" ;; *) printf "%s\\n" "$2" ;; esac',
@@ -29,8 +35,8 @@ async function run(osName: string, arch: string, digest: string) {
     const envFile = path.join(root, "env")
     const log = path.join(root, "log")
     const child = Bun.spawn(["bash", "-euo", "pipefail", "-c", install], {
-      env: { PATH: `${bin}:/usr/bin:/bin`, RUNNER_TEMP: root, RUNNER_OS: osName, RUNNER_ARCH: arch,
-        GITHUB_ENV: envFile, PROTOC_VERSION: "36.2", SHIM_DIGEST: digest, SHIM_LOG: log },
+      env: { PATH: `${bin}:/usr/bin:/bin`, RUNNER_TEMP: runnerTemp, RUNNER_OS: osName, RUNNER_ARCH: arch,
+        GITHUB_ENV: envFile, PROTOC_VERSION: "36.2", SHIM_DIGEST: digest, SHIM_LOG: log, SHIM_SOURCE: source },
       stdout: "pipe", stderr: "pipe",
     })
     const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
@@ -40,8 +46,8 @@ async function run(osName: string, arch: string, digest: string) {
   }
 }
 
-test("Windows exports a native protoc path for cargo", async () => {
-  const result = await run("Windows", "X64", "f0c128dc0d8492eceece83bb459a4c0e316764b929ffbf1aa416357fd644edd3")
+test.each(["download", "cache"] as const)("Windows verifies the protoc %s and exports a native path for cargo", async (source) => {
+  const result = await run("Windows", "X64", "f0c128dc0d8492eceece83bb459a4c0e316764b929ffbf1aa416357fd644edd3", source)
   expect(result.code, result.stderr).toBe(0)
   expect(result.env).toBe("PROTOC=C:\\synthetic\\protoc.exe\n")
 })

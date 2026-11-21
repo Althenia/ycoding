@@ -57,6 +57,7 @@ test("source verification runs the native decision follow regression files in th
 
 test("native builders upload each archive once and the finalizer checks the complete set", () => {
   const build = workflowJob(workflow, "build")
+  expect(build).toContain("timeout-minutes: ${{ matrix.platform == 'linux' && 30 || 60 }}")
   const release = workflowJob(workflow, "finalize-release")
   expect(workflow).not.toContain("\n  package:")
   expect(build).toContain('bun script/release-archive.ts create "${{ matrix.target }}" "$RELEASE_VERSION"')
@@ -813,7 +814,7 @@ test("packaging overlaps source verification without bypassing publication or de
   expect(verify).not.toContain("secrets.")
   expect(verify).not.toContain("token:")
   expect(verify).not.toContain("permissions:")
-  expect(verify).toContain("fetch-depth: 0")
+  expect(verify).toMatch(/- name: Checkout release source\n[^\n]+\n        with:\n          fetch-depth: 0\n/)
   expect(verify).toContain("persist-credentials: false")
   expect(verify).toContain("git merge-base --is-ancestor \"$GITHUB_SHA\" origin/main")
   expect(verify).toContain("      - name: Verify tag is reachable from main\n        if: github.event_name == 'push'\n")
@@ -821,6 +822,7 @@ test("packaging overlaps source verification without bypassing publication or de
 
 test("release workflow builds and archives the macOS desktop app from the locked Electrobun package", () => {
   const desktop = workflowJob(workflow, "build-desktop")
+  expect(desktop).toContain("timeout-minutes: 60")
   const pinned = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "../packages/desktop/package.json"), "utf8")).dependencies.electrobun as string
   const base = `https://github.com/blackboardsh/electrobun/releases/download/v${pinned}`
   expect(desktop).toContain("runs-on: macos-26")

@@ -65,16 +65,19 @@ runs:
         cached_archive="$cache_dir/protoc-$PROTOC_VERSION-$asset.zip"
         directory="$RUNNER_TEMP/protoc-$PROTOC_VERSION"
         archive="$directory/protoc-$PROTOC_VERSION-$asset.zip"
+        archive_digest() {
+          if command -v sha256sum >/dev/null; then sha256sum < "$archive"; else shasum -a 256 < "$archive"; fi | cut -d' ' -f1
+        }
         rm -rf "$directory"
         mkdir -p "$directory" "$cache_dir"
         if [ -f "$cached_archive" ]; then
           cp "$cached_archive" "$archive"
-          if command -v sha256sum >/dev/null; then actual="$(sha256sum "$archive" | cut -d' ' -f1)"; else actual="$(shasum -a 256 "$archive" | cut -d' ' -f1)"; fi
+          actual="$(archive_digest)"
           if [ "$actual" != "$sha256" ]; then rm -f "$cached_archive" "$archive"; fi
         fi
         if [ ! -f "$archive" ]; then
           curl --fail --silent --show-error --location --retry 3 --output "$archive" "https://github.com/protocolbuffers/protobuf/releases/download/v$PROTOC_VERSION/protoc-$PROTOC_VERSION-$asset.zip"
-          if command -v sha256sum >/dev/null; then actual="$(sha256sum "$archive" | cut -d' ' -f1)"; else actual="$(shasum -a 256 "$archive" | cut -d' ' -f1)"; fi
+          actual="$(archive_digest)"
           test "$actual" = "$sha256" || { echo "protoc checksum mismatch for $asset: expected $sha256, got $actual" >&2; exit 1; }
           cp "$archive" "$cached_archive"
         fi

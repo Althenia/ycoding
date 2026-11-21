@@ -80,7 +80,10 @@ export function checkBundleGraph(graph: BundleGraph) {
     if (owner === "sqlite" && declared(specifier)) return []
     if (owner === "sqlite" && /^(?:bun|node):sqlite$/.test(specifier)) {
       const edges = output.edges?.filter((edge) => edge.specifier === raw) ?? []
-      if (edges.length > 0 && edges.every((edge) => declared(edge.file))) return []
+      if (edges.length > 0 && edges.every(({ file }) => declared(file) || (
+        graph.frontend === "cli" && specifier === "bun:sqlite" &&
+        normalize(file).endsWith("/packages/desktop/src/editor-zed.ts") && modules.includes(normalize(file))
+      ))) return []
     }
     return owner ? [{ frontend: graph.frontend, file: output.file, line: 1, specifier: raw, owner, kind: "bundle" }] : []
   }))
