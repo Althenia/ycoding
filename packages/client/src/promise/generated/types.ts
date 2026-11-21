@@ -297,6 +297,18 @@ export type SessionAutonomyDecisionMode = "manual" | "yolo" | "auto"
 
 export type SessionAutonomyGoalStatus = "active" | "completed" | "stopped" | "exhausted"
 
+export type SessionAutonomyGoalPhase = "active" | "waiting" | "rework" | "stalled"
+
+export type SessionAutonomyGoalFailure = {
+  fingerprint: string
+  class: string
+  unit: string
+  count: number
+  recovering: boolean
+}
+
+export type SessionAutonomyGoalRecovery = { condition: string; seen: Array<{ fingerprint: string; count: number }> }
+
 export type SessionOrchestrationProgress = { text: string; time: number }
 
 export type SessionOrchestrationQuestion = {
@@ -2079,6 +2091,13 @@ export type SessionAutonomyGoal = {
   noProgress: number
   maxNoProgress: number
   lastProgressDigest?: string | null
+  phase?: SessionAutonomyGoalPhase | null
+  wait?: "child" | "shell" | "review" | null
+  rework?: number | null
+  reworkOpen?: Array<{ unit: string; reason: string }> | null
+  stalls?: number | null
+  failure?: SessionAutonomyGoalFailure | null
+  recovery?: SessionAutonomyGoalRecovery | null
 }
 
 export type DotsDecisionTarget =

@@ -128,6 +128,10 @@ import { McpInstructions } from "@ycoding-ai/core/mcp/instructions"
 import { CatalogModel } from "@ycoding-ai/core/model"
 import { AppProcess } from "@ycoding-ai/core/process"
 import { ShellLedger } from "@ycoding-ai/core/shell/ledger"
+import { Shell } from "@ycoding-ai/core/shell"
+import { SessionGoal } from "@ycoding-ai/core/session/goal"
+import { GoalTool } from "@ycoding-ai/core/tool/goal"
+import { ConfigGoal } from "@ycoding-ai/core/config/goal"
 import { ModelGuidanceInstructions } from "@ycoding-ai/core/model-incident/instructions"
 import { ModelIncidentTable } from "@ycoding-ai/core/model-incident/sql"
 import { Location } from "@ycoding-ai/core/location"
@@ -532,6 +536,32 @@ const permission = Layer.succeed(
     list: () => Effect.die("unused"),
   }),
 )
+let hangGate: Deferred.Deferred<void> | undefined
+let hangStarted: Deferred.Deferred<void> | undefined
+const hangExecutions: string[] = []
+const registerGoalTools = Effect.gen(function* () {
+  const registry = yield* ToolRegistry.Service
+  const goal = GoalTool.make(yield* SessionAutonomy.Service, yield* Database.Service, { assert: () => Effect.void })
+  yield* registry.register(
+    {
+      goal,
+      hang: Tool.make({
+        description: "Wait until released",
+        input: Schema.Struct({ label: Schema.String }),
+        output: Schema.Struct({ label: Schema.String }),
+        toModelOutput: ({ output }) => [{ type: "text", text: output.label }],
+        execute: ({ label }) =>
+          Effect.gen(function* () {
+            hangExecutions.push(label)
+            if (hangStarted) yield* Deferred.succeed(hangStarted, undefined)
+            if (hangGate && label !== "release") yield* Deferred.await(hangGate)
+            return { label }
+          }),
+      }),
+    },
+    { codemode: false },
+  )
+})
 const echo = Layer.effectDiscard(
   ToolRegistry.Service.use((registry) =>
     registry.register(
@@ -720,6 +750,7 @@ let efficiencyConfig: ConfigEfficiency.Info | undefined
 let imageAnalyzerConfig: ConfigImageAnalyzer.Info | undefined
 let capabilitiesConfig: ConfigCapabilities.Info | undefined
 let modelFallbacks: Config.Info["model_fallbacks"]
+let goalConfig: ConfigGoal.Info | undefined
 let catalogModel: CatalogModel.Info | undefined
 let compactionWakeHook = Effect.void
 let compactionSummary = false
@@ -742,6 +773,7 @@ const config = Layer.succeed(
             ...(imageAnalyzerConfig === undefined ? {} : { image_analyzer: imageAnalyzerConfig }),
             ...(capabilitiesConfig === undefined ? {} : { capabilities: capabilitiesConfig }),
             ...(modelFallbacks === undefined ? {} : { model_fallbacks: modelFallbacks }),
+            ...(goalConfig === undefined ? {} : { goal: goalConfig }),
           }),
         }),
       ]),
@@ -1124,6 +1156,10 @@ const setup = Effect.gen(function* () {
   snapshotCapture = undefined
   profileDigests.clear()
   modelFallbacks = undefined
+  goalConfig = undefined
+  hangGate = undefined
+  hangStarted = undefined
+  hangExecutions.length = 0
   efficiencyConfig = undefined
   imageAnalyzerConfig = undefined
   catalogModel = undefined
@@ -1194,6 +1230,40 @@ const realExecution = Effect.gen(function* () {
   )
   return Context.get(context, SessionExecution.Service)
 })
+
+const goalExecution = (goals: Pick<SessionGoal.Interface, "steer" | "continuation">) =>
+  Effect.gen(function* () {
+    const database = yield* Database.Service
+    const events = yield* EventRuntime.Service
+    const store = yield* SessionStore.Service
+    const autonomy = yield* SessionAutonomy.Service
+    const jobs = yield* Job.Service
+    const compaction = yield* SessionCompactionExecution.Service
+    const runner = yield* SessionRunner.Service
+    const scope = yield* Scope.Scope
+    const locations = yield* fixedLocations(
+      (_ref: Location.Ref) =>
+        Layer.mergeAll(
+          Layer.succeed(SessionRunner.Service, runner),
+          Layer.mock(Shell.Service, { list: () => Effect.succeed([]) }),
+          Layer.succeed(SessionGoal.Service, SessionGoal.Service.of({ ...goals, synthesize: () => Effect.die("unused") })),
+        ) as unknown as Layer.Layer<LocationServices>,
+    )
+    const context = yield* Layer.buildWithScope(
+      SessionExecution.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(EventRuntime.Service, events)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionAutonomy.Service, autonomy)),
+        Layer.provide(Layer.succeed(Job.Service, jobs)),
+        Layer.provide(Layer.succeed(SessionCompactionExecution.Service, compaction)),
+        Layer.provide(Layer.succeed(LocationServiceMap.Service, locations)),
+        Layer.provide(LayerNode.compile(AppProcess.node)),
+      ),
+      scope,
+    )
+    return Context.get(context, SessionExecution.Service)
+  })
 
 const streamReadFailure = () =>
   new LLMError({
@@ -13604,4 +13674,442 @@ describe("SessionRunnerLLM model guidance", () => {
       expect(yield* eventData("session.instructions.updated.2")).toHaveLength(1)
     }),
   )
+})
+
+describe("SessionRunnerLLM goal mode", () => {
+  const admittedGoalInputs = Effect.gen(function* () {
+    const data = yield* eventData(EventRuntime.versionedType(SessionEvent.InputAdmitted.type, SessionEvent.InputAdmitted.durable.version))
+    return data.flatMap((item) => {
+      const input = (item as { inputID: string; input: { data?: { text?: string; description?: string } } })
+      return input.inputID.startsWith("msg_goal_")
+        ? [{ id: input.inputID, text: input.input.data?.text, description: input.input.data?.description }]
+        : []
+    })
+  })
+  const toolPart = (callID: string) =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const messages = yield* session.messages({ sessionID })
+      return messages
+        .flatMap((message) => (message.type === "assistant" ? message.content : []))
+        .find((part) => part.type === "tool" && part.id === callID)
+    })
+  const goalOf = Effect.gen(function* () {
+    const autonomy = yield* SessionAutonomy.Service
+    return (yield* autonomy.get(sessionID)).goal
+  })
+  const step = (...calls: ReadonlyArray<readonly [string, string, unknown]>) => [
+    LLMEvent.stepStart({ index: 0 }),
+    ...calls.map(([id, name, input]) => LLMEvent.toolCall({ id, name, input })),
+    LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+    LLMEvent.finish({ reason: "tool-calls" }),
+  ]
+
+  it.effect("stops only a stalled owner tool call while its parallel sibling settles, and gates completion on the same tool", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* registerGoalTools
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.setGoal({ sessionID, text: "Ship the change" })
+      goalConfig = new ConfigGoal.Info({ stall_timeout_seconds: 60 })
+      hangGate = yield* Deferred.make<void>()
+      hangStarted = yield* Deferred.make<void>()
+      responses = [
+        step(["hang-1", "hang", { label: "stalled" }], ["echo-1", "echo", { text: "sibling" }]),
+        step(["goal-1", "goal", { action: "complete" }]),
+        step(["hang-2", "hang", { label: "release" }]),
+        step(["goal-2", "goal", { action: "complete" }]),
+        reply.text("Done", "goal-done"),
+      ]
+      yield* admit(session, "Ship it")
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(hangStarted)
+      yield* Effect.yieldNow
+      expect(yield* toolPart("echo-1")).toMatchObject({ state: { status: "completed" } })
+      expect(yield* toolPart("hang-1")).toMatchObject({ state: { status: "running" } })
+      yield* TestClock.adjust("61 seconds")
+      yield* Fiber.join(run)
+
+      expect(yield* toolPart("hang-1")).toMatchObject({ state: { status: "error", error: { type: "tool.stalled" } } })
+      expect(JSON.stringify(yield* toolPart("goal-1"))).toContain("Goal cannot complete: failure tool.stalled:tool/hang")
+      expect(yield* toolPart("hang-2")).toMatchObject({ state: { status: "completed" } })
+      expect(yield* toolPart("goal-2")).toMatchObject({ state: { status: "completed" } })
+      expect(yield* goalOf).toMatchObject({ status: "completed", stalls: 1, noProgress: 0, iteration: 0 })
+      expect((yield* goalOf)?.failure).toBeUndefined()
+      expect(requests).toHaveLength(5)
+    }),
+  )
+
+  it.effect("treats a pending permission ask as a wait and stops the call only after it settles and stays silent", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* registerGoalTools
+      const events = yield* EventRuntime.Service
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.setGoal({ sessionID, text: "Ship the change" })
+      goalConfig = new ConfigGoal.Info({ stall_timeout_seconds: 60 })
+      hangGate = yield* Deferred.make<void>()
+      hangStarted = yield* Deferred.make<void>()
+      responses = [step(["hang-w", "hang", { label: "waits" }]), reply.text("Done", "wait-done")]
+      yield* admit(session, "Ship it")
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(hangStarted)
+      const requestID = Permission.ID.make("per_goal_wait")
+      yield* events.publish(Permission.Event.Asked, { id: requestID, sessionID, action: "edit", resources: ["src/index.ts"] })
+      yield* TestClock.adjust("61 seconds")
+      yield* TestClock.adjust("61 seconds")
+      expect(yield* toolPart("hang-w")).toMatchObject({ state: { status: "running" } })
+      expect((yield* goalOf)?.stalls).toBeUndefined()
+      yield* events.publish(Permission.Event.Cancelled, { sessionID, requestID })
+      yield* TestClock.adjust("61 seconds")
+      yield* Fiber.join(run)
+      expect(yield* toolPart("hang-w")).toMatchObject({ state: { status: "error", error: { type: "tool.stalled" } } })
+      expect(yield* goalOf).toMatchObject({ status: "active", stalls: 1, noProgress: 0 })
+    }),
+  )
+
+  it.effect("counts a stalled child unit on the goal owner without vetoing the owner's completion", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* registerGoalTools
+      const { db } = yield* Database.Service
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.setGoal({ sessionID, text: "Ship the change" })
+      const childID = Session.ID.make("ses_runner_goal_child")
+      yield* insertSession(childID)
+      yield* db.update(SessionTable).set({ parent_id: sessionID }).where(eq(SessionTable.id, childID)).run().pipe(Effect.orDie)
+      goalConfig = new ConfigGoal.Info({ stall_timeout_seconds: 60 })
+      hangGate = yield* Deferred.make<void>()
+      hangStarted = yield* Deferred.make<void>()
+      responses = [
+        step(["hang-c", "hang", { label: "child" }]),
+        reply.text("Child done", "child-done"),
+        step(["goal-c", "goal", { action: "complete" }]),
+        reply.text("Done", "owner-done"),
+      ]
+      yield* session.prompt({ sessionID: childID, text: "Child work", resume: false })
+      const run = yield* session.resume(childID).pipe(Effect.forkChild)
+      yield* Deferred.await(hangStarted)
+      yield* TestClock.adjust("61 seconds")
+      yield* Fiber.join(run)
+      expect(yield* goalOf).toMatchObject({ status: "active", stalls: 1, noProgress: 0 })
+      expect((yield* goalOf)?.failure).toBeUndefined()
+      yield* admit(session, "Finish")
+      yield* session.resume(sessionID)
+      expect(yield* toolPart("goal-c")).toMatchObject({ state: { status: "completed" } })
+      expect(yield* goalOf).toMatchObject({ status: "completed", stalls: 1 })
+    }),
+  )
+
+  it.effect("stops a silent provider stream as a retryable read failure and clears it on the next clean step", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.setGoal({ sessionID, text: "Ship the change" })
+      goalConfig = new ConfigGoal.Info({ stall_timeout_seconds: 60 })
+      responseStreams = [
+        Stream.concat(Stream.make(LLMEvent.stepStart({ index: 0 })), Stream.never),
+        Stream.fromIterable(reply.text("Recovered", "stream-recovered")),
+      ]
+      yield* admit(session, "Ship it")
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* TestClock.adjust("61 seconds")
+      yield* TestClock.adjust("5 minutes")
+      yield* Fiber.join(run)
+      expect(requests).toHaveLength(2)
+      expect(JSON.stringify(yield* session.messages({ sessionID }))).toContain("Recovered")
+      expect(yield* goalOf).toMatchObject({ status: "active", stalls: 1, noProgress: 0 })
+      expect((yield* goalOf)?.failure).toBeUndefined()
+    }),
+  )
+
+  it.effect("admits one recovery steer for an owner failure, rejects completion until a clean step, then completes", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* registerGoalTools
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.setGoal({ sessionID, text: "Ship the change" })
+      const steers: string[] = []
+      const execution = yield* goalExecution({
+        steer: (input) => Effect.sync(() => { steers.push(input.phase); return "Recover the failed step." }),
+        continuation: () => Effect.succeed({ action: "continue" as const, steer: "Continue toward the goal." }),
+      })
+      responseStreams = [
+        Stream.fail(invalidRequest()),
+        Stream.fromIterable(step(["goal-a", "goal", { action: "complete" }])),
+        Stream.fromIterable(reply.text("Recovered", "recovered-text")),
+        Stream.fromIterable(step(["goal-b", "goal", { action: "complete" }])),
+        Stream.fromIterable(reply.text("Done", "done-text")),
+      ]
+      yield* admit(session, "Ship it")
+      yield* execution.resume(sessionID).pipe(Effect.exit)
+      yield* execution.awaitIdle(sessionID)
+
+      expect(steers).toEqual(["recover"])
+      expect(JSON.stringify(yield* toolPart("goal-a"))).toContain("Goal cannot complete: failure provider.invalid-request:model/")
+      expect(yield* toolPart("goal-b")).toMatchObject({ state: { status: "completed" } })
+      expect((yield* admittedGoalInputs).map((input) => input.description)).toEqual(["Goal · recovery", "Goal · steer"])
+      const goal = yield* goalOf
+      expect(goal).toMatchObject({ status: "completed", noProgress: 0, iteration: 1, rework: 1 })
+      expect(goal?.failure).toBeUndefined()
+      expect(goal?.recovery?.seen).toEqual([{ fingerprint: expect.stringMatching(/^provider\.invalid-request:model\//), count: 1 }])
+      expect(requests).toHaveLength(5)
+    }),
+  )
+
+  it.effect("waits on a repeated failure with no prompt loop and grants one new attempt after a changed condition", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const { db } = yield* Database.Service
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.setGoal({ sessionID, text: "Ship the change" })
+      const childID = Session.ID.make("ses_runner_goal_sibling")
+      yield* insertSession(childID)
+      yield* db.update(SessionTable)
+        .set({ parent_id: sessionID, model: { id: CatalogModel.ID.make("fake-model"), providerID: Provider.ID.make("fake") } })
+        .where(eq(SessionTable.id, childID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* db.insert(SessionTaskTable).values({
+        session_id: childID,
+        parent_id: sessionID,
+        parent_assistant_message_id: SessionMessage.ID.make("msg_goal_sibling_parent"),
+        tool_call_id: "call_goal_sibling",
+        input_id: SessionMessage.ID.make("msg_goal_sibling_input"),
+        description: "sibling",
+        agent: Agent.ID.make("build"),
+        model: CatalogModel.Ref.make({ providerID: Provider.ID.make("fake"), id: CatalogModel.ID.make("fake-model") }),
+        prompt_digest: "digest",
+        background: true,
+        delivery: "steer",
+        state: "running",
+      }).run().pipe(Effect.orDie)
+      let steerCalls = 0
+      const execution = yield* goalExecution({
+        steer: () => Effect.sync(() => { steerCalls += 1 }).pipe(Effect.andThen(Effect.fail(new SessionGoal.Error({ code: "goal.calculation_failed" })))),
+        continuation: () => Effect.die("A failed owner iteration must not request a continuation"),
+      })
+      responseStreams = Array.from({ length: 6 }, () => Stream.fail(invalidRequest()))
+      yield* admit(session, "Ship it")
+      yield* execution.resume(sessionID).pipe(Effect.exit)
+      yield* execution.awaitIdle(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(steerCalls).toBe(1)
+      const first = yield* admittedGoalInputs
+      expect(first).toHaveLength(1)
+      expect(first[0]).toMatchObject({ description: "Goal · recovery", text: expect.stringContaining("Recover from the failed step (provider.invalid-request on model/") })
+      expect(yield* goalOf).toMatchObject({
+        status: "active",
+        phase: "stalled",
+        noProgress: 0,
+        iteration: 0,
+        rework: 1,
+        failure: { class: "provider.invalid-request", count: 2, recovering: false },
+      })
+
+      yield* session.prompt({ sessionID, text: "Try again with the current state", resume: false })
+      yield* execution.resume(sessionID).pipe(Effect.exit)
+      yield* execution.awaitIdle(sessionID)
+
+      expect(requests).toHaveLength(4)
+      const second = yield* admittedGoalInputs
+      expect(second).toHaveLength(2)
+      expect(new Set(second.map((input) => input.id)).size).toBe(2)
+      expect(yield* goalOf).toMatchObject({ status: "active", phase: "stalled", rework: 2, failure: { count: 2, recovering: false } })
+      const sibling = yield* db.select({ state: SessionTaskTable.state }).from(SessionTaskTable).where(eq(SessionTaskTable.session_id, childID)).get().pipe(Effect.orDie)
+      expect(sibling?.state).toBe("running")
+    }),
+  )
+
+  describe("required checks", () => {
+    const objective = "Fix the parser, run ./verify.sh and complete only after it passes."
+    const registerCheckTools = Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      yield* registry.register(
+        {
+          edit: Tool.make({
+            description: "Edit a file",
+            input: Schema.Struct({ path: Schema.String }),
+            output: Schema.Struct({ path: Schema.String }),
+            toModelOutput: ({ output }) => [{ type: "text", text: output.path }],
+            execute: ({ path }) => Effect.succeed({ path }),
+          }),
+          shell: Tool.make({
+            description: "Run a command",
+            input: Schema.Struct({ command: Schema.String }),
+            output: Schema.Struct({ exit: Schema.Number, truncated: Schema.Boolean }),
+            toModelOutput: ({ output }) => [{ type: "text", text: `exit ${output.exit}` }],
+            execute: ({ command }) => Effect.succeed({ exit: /--fail|missing/.test(command) ? 1 : 0, truncated: false }),
+          }),
+        },
+        { codemode: false },
+      )
+    })
+    const childSession = (id: string) =>
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        const childID = Session.ID.make(id)
+        yield* insertSession(childID)
+        yield* db.update(SessionTable)
+          .set({ parent_id: sessionID, model: { id: CatalogModel.ID.make("fake-model"), providerID: Provider.ID.make("fake") } })
+          .where(eq(SessionTable.id, childID))
+          .run()
+          .pipe(Effect.orDie)
+        return childID
+      })
+    const drain = (session: Session.Interface, id: Session.ID, text: string) =>
+      session.prompt({ sessionID: id, text, resume: false }).pipe(Effect.andThen(session.resume(id)), Effect.andThen(TestClock.adjust("1 second")))
+    const rejection = (callID: string) => toolPart(callID).pipe(Effect.map((part) => JSON.stringify(part)))
+
+    it.effect("rejects completion while the named check never ran after an edit", () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        yield* registerGoalTools
+        yield* registerCheckTools
+        const autonomy = yield* SessionAutonomy.Service
+        yield* autonomy.setGoal({ sessionID, text: objective })
+        responses = [step(["edit-a", "edit", { path: "src/parser.ts" }]), step(["goal-a", "goal", { action: "complete" }]), reply.text("Stopped", "a-done")]
+        yield* drain(session, sessionID, "Ship it")
+        expect(yield* toolPart("goal-a")).toMatchObject({ state: { status: "error" } })
+        expect(yield* rejection("goal-a")).toContain("Required check ./verify.sh is unrun")
+        expect(yield* rejection("goal-a")).toContain("passing run after the latest edit")
+        expect(yield* goalOf).toMatchObject({ status: "active", noProgress: 0, maxNoProgress: 3, iteration: 0 })
+      }),
+    )
+
+    it.effect("rejects completion when the named check ran only before the latest edit", () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        yield* registerGoalTools
+        yield* registerCheckTools
+        const autonomy = yield* SessionAutonomy.Service
+        yield* autonomy.setGoal({ sessionID, text: objective })
+        responses = [
+          step(["shell-b", "shell", { command: "./verify.sh" }]),
+          reply.text("Checked", "b-checked"),
+          step(["edit-b", "edit", { path: "src/parser.ts" }]),
+          step(["goal-b", "goal", { action: "complete" }]),
+          reply.text("Stopped", "b-done"),
+        ]
+        yield* drain(session, sessionID, "Check first")
+        yield* drain(session, sessionID, "Now edit")
+        expect(yield* toolPart("shell-b")).toMatchObject({ state: { status: "completed" } })
+        expect(yield* rejection("goal-b")).toContain("Required check ./verify.sh is stale since the latest edit")
+        expect(yield* goalOf).toMatchObject({ status: "active", noProgress: 0 })
+      }),
+    )
+
+    it.effect("rejects completion when the latest run of the named check after the edit failed", () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        yield* registerGoalTools
+        yield* registerCheckTools
+        const autonomy = yield* SessionAutonomy.Service
+        yield* autonomy.setGoal({ sessionID, text: objective })
+        responses = [
+          step(["edit-c", "edit", { path: "src/parser.ts" }]),
+          reply.text("Edited", "c-edited"),
+          step(["shell-c1", "shell", { command: "./verify.sh" }]),
+          reply.text("Passed", "c-passed"),
+          step(["shell-c2", "shell", { command: "./verify.sh --fail" }]),
+          step(["goal-c", "goal", { action: "update", status: "completed" }]),
+          reply.text("Stopped", "c-done"),
+        ]
+        yield* drain(session, sessionID, "Edit")
+        yield* drain(session, sessionID, "Verify")
+        yield* drain(session, sessionID, "Verify again")
+        expect(yield* rejection("goal-c")).toContain("Required check ./verify.sh is failing")
+        expect(yield* goalOf).toMatchObject({ status: "active", noProgress: 0 })
+      }),
+    )
+
+    it.effect("completes after a passing run following the edit despite a cleared failure, unrelated failures and open rework", () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        yield* registerGoalTools
+        yield* registerCheckTools
+        const { db } = yield* Database.Service
+        const autonomy = yield* SessionAutonomy.Service
+        yield* autonomy.setGoal({ sessionID, text: objective })
+        yield* autonomy.recordStall({ sessionID, failure: { fingerprint: "tool.stalled:tool/shell", class: "tool.stalled", unit: "tool/shell" } })
+        yield* autonomy.rework({ sessionID, unit: "lane F", reason: "lane F attempt 1 failed", state: "opened" })
+        const siblingID = yield* childSession("ses_runner_check_sibling")
+        yield* db.insert(SessionTaskTable).values({
+          session_id: siblingID,
+          parent_id: sessionID,
+          parent_assistant_message_id: SessionMessage.ID.make("msg_check_sibling_parent"),
+          tool_call_id: "call_check_sibling",
+          input_id: SessionMessage.ID.make("msg_check_sibling_input"),
+          description: "sibling",
+          agent: Agent.ID.make("build"),
+          model: CatalogModel.Ref.make({ providerID: Provider.ID.make("fake"), id: CatalogModel.ID.make("fake-model") }),
+          prompt_digest: "digest",
+          background: true,
+          delivery: "steer",
+          state: "failed",
+        }).run().pipe(Effect.orDie)
+        const helperID = yield* childSession("ses_runner_check_helper")
+        responses = [
+          step(["edit-d", "edit", { path: "src/parser.ts" }]),
+          reply.text("Edited", "d-edited"),
+          step(["shell-d-sibling", "shell", { command: "ls missing" }]),
+          reply.text("Sibling failed", "d-sibling"),
+          step(["shell-d1", "shell", { command: "bash ./verify.sh" }]),
+          step(["shell-d2", "shell", { command: "ls missing" }]),
+          step(["goal-d", "goal", { action: "complete" }]),
+          reply.text("Done", "d-done"),
+        ]
+        yield* drain(session, sessionID, "Edit")
+        yield* drain(session, helperID, "Helper work")
+        yield* drain(session, sessionID, "Verify and finish")
+        expect(yield* toolPart("shell-d2")).toMatchObject({ state: { status: "completed", structured: { exit: 1 } } })
+        expect(yield* toolPart("goal-d")).toMatchObject({ state: { status: "completed" } })
+        const goal = yield* goalOf
+        expect(goal).toMatchObject({ status: "completed", rework: 1, reworkOpen: [{ unit: "lane F" }], noProgress: 0 })
+        expect(goal?.failure).toBeUndefined()
+      }),
+    )
+
+    it.effect("never vetoes completion when the objective names no check", () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        yield* registerGoalTools
+        yield* registerCheckTools
+        const autonomy = yield* SessionAutonomy.Service
+        yield* autonomy.setGoal({ sessionID, text: "Fix the parser and keep verify.sh green." })
+        responses = [step(["edit-e", "edit", { path: "src/parser.ts" }]), step(["goal-e", "goal", { action: "complete" }]), reply.text("Done", "e-done")]
+        yield* drain(session, sessionID, "Ship it")
+        expect(yield* toolPart("goal-e")).toMatchObject({ state: { status: "completed" } })
+        expect(yield* goalOf).toMatchObject({ status: "completed" })
+      }),
+    )
+
+    it.effect("accepts a passing run of the named check in a delegated child after the owner's edit", () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        yield* registerGoalTools
+        yield* registerCheckTools
+        const autonomy = yield* SessionAutonomy.Service
+        yield* autonomy.setGoal({ sessionID, text: "Fix the parser; complete only after `bun run verify --strict` passes." })
+        const childID = yield* childSession("ses_runner_check_child")
+        responses = [
+          step(["edit-f", "edit", { path: "src/parser.ts" }]),
+          step(["goal-f1", "goal", { action: "complete" }]),
+          reply.text("Delegating", "f-delegating"),
+          step(["shell-f", "shell", { command: "cd packages/parser && bun run verify --strict" }]),
+          reply.text("Verified", "f-verified"),
+          step(["goal-f2", "goal", { action: "complete" }]),
+          reply.text("Done", "f-done"),
+        ]
+        yield* drain(session, sessionID, "Edit")
+        expect(yield* rejection("goal-f1")).toContain("Required check bun run verify --strict is unrun")
+        yield* drain(session, childID, "Verify")
+        yield* drain(session, sessionID, "Finish")
+        expect(yield* toolPart("goal-f2")).toMatchObject({ state: { status: "completed" } })
+        expect(yield* goalOf).toMatchObject({ status: "completed", noProgress: 0 })
+      }),
+    )
+  })
 })

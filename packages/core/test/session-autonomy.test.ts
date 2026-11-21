@@ -96,6 +96,22 @@ it.effect("reminds an active goal's agent of each category's decision mode and t
   }),
 )
 
+it.effect("reminds an active goal's agent of its phase, open rework and unresolved failure", () =>
+  Effect.sync(() => {
+    const goal = {
+      text: "Finish the bounded task", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 3, phase: "stalled", rework: 2, stalls: 1,
+      reworkOpen: [{ unit: "lane F", reason: "lane F attempt 1 failed" }],
+      failure: { fingerprint: "provider.rate-limit:model/fake/m", class: "provider.rate-limit", unit: "model/fake/m", count: 2, recovering: false },
+    } as const
+    const reminder = goalReminder({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", goal })
+    expect(reminder).toContain("Goal phase: stalled; rework 2; stalled units stopped 1; no progress 0/3")
+    expect(reminder).toContain("Open rework (unfinished): lane F — lane F attempt 1 failed")
+    expect(reminder).toContain("Unresolved failure provider.rate-limit:model/fake/m (provider.rate-limit on model/fake/m, 2 occurrences); waiting for a changed condition")
+    expect(reminder).toContain("call goal rework with the unit and reason")
+    expect(reminder).toContain("Open rework units are unfinished.")
+  }),
+)
+
 it.effect("persists modes in the current autonomy column", () =>
   Effect.gen(function* () {
     const service = yield* setup

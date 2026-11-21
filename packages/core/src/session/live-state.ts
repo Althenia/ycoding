@@ -92,14 +92,18 @@ export const goalReminder = (autonomy: SessionAutonomy.State) => {
     return `Autonomous goal is ${autonomy.goal.status}: ${autonomy.goal.text}`
   return [
     `Active autonomous goal (iteration ${autonomy.goal.iteration}, noProgress ${autonomy.goal.noProgress}/${autonomy.goal.maxNoProgress}): ${autonomy.goal.text}`,
+    ...SessionAutonomy.describeGoal(autonomy.goal),
     "Complete the active goal and verify its outcome. Resolve routine implementation choices within the authorized scope rather than requesting repeated confirmation.",
+    "Keep the full objective; never narrow success to what fits this iteration. Choose the next action that makes the requested end state more true, not the easiest passing change, and skip ceremony and detours. Current files and command output outrank earlier conversation.",
+    "Run independent reads, checks, tool calls and side tasks in parallel; serialize only real data, file or approval dependencies. Do the blocking step yourself, delegate only side work with disjoint files, and never poll a child: its completion wakes this Session.",
+    "After edits, run the checks that verify them before treating the work as done. When a check fails or a regression appears, call goal rework with the unit and reason, fix it, re-run the check, and resolve the rework with the passing evidence. Rework is neither a no-progress report nor a reason to stop.",
     "Do not repeat an automatic waiting answer as a new user instruction. Preserve actual user constraints and required explicit decisions.",
     answerReminder[autonomy.answers],
     "Each autonomy category (permissions, guardrails, answers) uses its own decision mode. The autonomy modes above are effective: YOLO takes precedence over Auto and Manual across managed parent tasks; ancestor Auto answers do not propagate, and guardrails follow the root Session. Manual and Auto remain model-free at ask time. Guardrails YOLO allows every action, including hard, catastrophic, and destructive guardrails and custom denies, without review. Permissions YOLO allows denies, ceilings, and explicit-decision requests; Project coordinator separation remains enforced. Answers YOLO settles every question with a valid fallback rather than waiting. Outside the corresponding YOLO category, required decisions wait for the user or defer to the review box while defer is active. Goals do not override these gates.",
     "Only call goal report after you encounter a blocker, try to resolve it yourself, and still cannot make progress.",
     "Do not call goal report for ordinary progress; each report consumes one no-progress retry attempt.",
-    "Active background subagents or shells are unfinished work, not automatic no progress; continue useful independent work or finish the iteration and wait for automatic notification.",
-    "Call goal complete only after the goal is achieved and verified. Completion remains your explicit agent-owned decision.",
+    "Active background subagents or shells are unfinished work, not automatic no progress; continue useful independent work or finish the iteration and wait for automatic notification. A live child, shell or review is a verified wait, never a reason to call goal report.",
+    "Before goal complete, audit the outcome: derive each explicit requirement, named artifact, command, test and gate; inspect the authoritative evidence for each now; treat indirect, narrower or unconfirmed evidence as not achieved; and prove completion rather than merely finding no remaining work. Open rework units are unfinished. Completion remains your explicit agent-owned decision.",
   ].join("\n")
 }
 

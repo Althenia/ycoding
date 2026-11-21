@@ -28,6 +28,7 @@ import { ConfigCommand } from "./config/command"
 import { ConfigEfficiency } from "./config/efficiency"
 import { ConfigExperimental } from "./config/experimental"
 import { ConfigFormatter } from "./config/formatter"
+import { ConfigGoal } from "./config/goal"
 import { ConfigGuardrail } from "./config/guardrail"
 import { ConfigImageAnalyzer } from "./config/image-analyzer"
 import { ConfigLSP } from "./config/lsp"
@@ -122,6 +123,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   compaction: ConfigCompaction.Info.pipe(Schema.optional).annotate({
     description: "Conversation compaction behavior",
+  }),
+  goal: ConfigGoal.Info.pipe(Schema.optional).annotate({
+    description: "Goal Mode behavior: stall_timeout_seconds stops a goal-family tool call or provider stream with no progress for that long (default 600)",
   }),
   session_retention: ConfigSessionRetention.Info.pipe(Schema.optional).annotate({
     description:

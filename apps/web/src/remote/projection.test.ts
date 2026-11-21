@@ -40,6 +40,7 @@ import {
   readAutonomy,
   readAutonomyState,
   autonomyModeParts,
+  goalProgressLabel,
   readReviewItems,
   readGuardrailRequests,
   readPermissionRequests,
@@ -1212,6 +1213,21 @@ describe("snapshot readers", () => {
     expect(readAutonomyState({ data: { mode: "normal", ...modes, sleep: {} } })).toEqual({ mode: "normal", ...modes })
     for (const old of [{ yolo: true }, { yolo: 1 }, { yolo: false, autoPermission: true, autoGuardrail: true, autoAnswer: true }, { permissions: "auto" }, {}])
       expect(readAutonomyState({ data: { mode: "normal", ...old } })).toBeUndefined()
+  })
+
+  test("reads goal phase, rework, stalls and failure accounting into one progress label", () => {
+    const state = readAutonomyState({ data: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", goal: {
+      text: "Ship", status: "active", iteration: 2, noProgress: 0, maxNoProgress: 3, phase: "stalled", rework: 3,
+      reworkOpen: [{ unit: "lane F", reason: "attempt 1 failed" }], stalls: 1,
+      failure: { fingerprint: "tool.stalled:tool/shell", class: "tool.stalled", unit: "tool/shell", count: 2, recovering: false },
+    } } })
+    expect(state?.goal).toEqual({
+      text: "Ship", status: "active", iteration: 2, noProgress: 0, maxNoProgress: 3, phase: "stalled", rework: 3, reworkOpen: 1, stalls: 1,
+      failure: { class: "tool.stalled", unit: "tool/shell", count: 2 },
+    })
+    expect(goalProgressLabel(state!.goal!)).toBe("active · iteration 2 · no progress 0/3 · stalled · rework 3 (1 open) · 1 stalled stopped · failure tool.stalled on tool/shell ×2")
+    expect(goalProgressLabel({ text: "Ship", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 3, phase: "waiting", wait: "child" })).toBe("active · iteration 1 · no progress 0/3 · waiting on child")
+    expect(goalProgressLabel({ text: "Ship", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 3 })).toBe("active · iteration 1 · no progress 0/3")
   })
 
   test("names the effective modes before goal and defer", () => {

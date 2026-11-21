@@ -7,6 +7,8 @@ import { Database } from "../database/database"
 import { Permission } from "../permission"
 import type { StandalonePermission } from "./standalone-permission"
 import { SessionAutonomy } from "../session/autonomy"
+import { SessionGoalVerification } from "../session/goal-verification"
+import type { SessionSchema } from "../session/schema"
 import { SessionReviewFold } from "../session/review-fold"
 import { Tool } from "./tool"
 import { Hash } from "../util/hash"
@@ -14,11 +16,23 @@ import { Hash } from "../util/hash"
 export const name = "goal"
 
 export const Input = Schema.Struct({
-  action: Schema.Literals(["get", "set", "update", "report", "complete", "stop", "clear"]).annotate({
-    description: "Goal action: get, update status, report no progress, complete, or stop/clear the current goal",
+  action: Schema.Literals(["get", "set", "update", "report", "rework", "complete", "stop", "clear"]).annotate({
+    description: "Goal action: get, update status, report no progress, record rework, complete, or stop/clear the current goal",
   }),
   status: Schema.Literals(["active", "completed", "stopped"]).pipe(Schema.optional).annotate({
     description: "Desired status for update action",
+  }),
+  unit: Schema.String.check(Schema.isPattern(/\S/), Schema.isMaxLength(120)).pipe(Schema.optional).annotate({
+    description: "Rework unit: the file, check, feature or child result being reopened or resolved",
+  }),
+  reason: Schema.String.check(Schema.isPattern(/\S/), Schema.isMaxLength(300)).pipe(Schema.optional).annotate({
+    description: "Rework reason: the failed check, regression or contradicting evidence",
+  }),
+  state: Schema.Literals(["opened", "resolved"]).pipe(Schema.optional).annotate({
+    description: "Rework state: opened when evidence reopens the unit, resolved when its check passes",
+  }),
+  evidence: Schema.String.check(Schema.isPattern(/\S/), Schema.isMaxLength(300)).pipe(Schema.optional).annotate({
+    description: "Required for resolved rework: the check that now passes",
   }),
 })
 
@@ -32,7 +46,7 @@ export type Output = typeof Output.Type
 
 export const make = (autonomy: SessionAutonomy.Interface, database: Database.Interface, permission: StandalonePermission.Interface) => Tool.make({
             description:
-              "Manage the current autonomous goal for this session. The user alone creates, replaces, or resumes the goal through the /goal command or the UI; never change the objective text. After the user enables a goal, maintain its status: use get to inspect, report after a blocker, complete after verified achievement, and stop/clear only when the user asks. Do not report ordinary progress. Use report only after encountering a blocker, attempting reasonable self-resolution, and remaining unable to progress; every report consumes one no-progress retry attempt. Active background subagents or shells are unfinished work, not automatic no progress. Use complete only after the goal is achieved and verified; completion is agent-owned. Do not use set to create a goal; it will be rejected.",
+              "Manage the current autonomous goal for this session. The user alone creates, replaces, or resumes the goal through the /goal command or the UI; never change the objective text. After the user enables a goal, maintain its status: use get to inspect, report after a blocker, complete after verified achievement, and stop/clear only when the user asks. Do not report ordinary progress. Use report only after encountering a blocker, attempting reasonable self-resolution, and remaining unable to progress; every report consumes one no-progress retry attempt. Active background subagents or shells are unfinished work, not automatic no progress. Use complete only after the goal is achieved and verified; completion is agent-owned. When the user's goal request names a check (a ./ or ../ script path ending in .sh, .bash, .zsh, .ps1, .cmd or .bat, or a backticked command of two or more words), complete and update to completed are rejected after a completed edit, write or patch in this Session or its descendants until a shell run of that check after the latest such edit has passed. Use rework with unit, reason and state opened when a failed check, regression or rejected result reopens finished work, and with state resolved plus evidence once its check passes; rework is neither a no-progress report nor progress narration and never stops the goal. Do not use set to create a goal; it will be rejected.",
             input: Input,
             output: Output,
             toModelOutput: ({ output }) => [{ type: "text", text: output.message }],
@@ -89,6 +103,25 @@ export const make = (autonomy: SessionAutonomy.Interface, database: Database.Int
                           message: `Goal no-progress attempt ${goal.noProgress}/${goal.maxNoProgress} reported; status ${goal.status}.`,
                         }
                       }
+                      if (input.action === "rework") {
+                        if (!input.unit || !input.state || (input.state === "opened" && !input.reason))
+                          return yield* Effect.fail(new ToolFailure({ message: "Rework requires unit, state, and a reason when opened" }))
+                        if (input.state === "resolved" && !input.evidence)
+                          return yield* Effect.fail(new ToolFailure({ message: "Resolved rework requires evidence naming the check that now passes" }))
+                        const owner = yield* autonomy.goalOwner(context.sessionID)
+                        if (!owner) return yield* Effect.fail(new ToolFailure({ message: "No active goal to record rework" }))
+                        const open = (yield* autonomy.get(owner)).goal?.reworkOpen?.some((item) => item.unit === input.unit)
+                        if (input.state === "resolved" && !open)
+                          return yield* Effect.fail(new ToolFailure({ message: `No open rework for ${input.unit}` }))
+                        const after = (yield* autonomy.rework({ sessionID: owner, unit: input.unit, reason: input.reason ?? input.evidence ?? "", state: input.state })).goal
+                        return {
+                          action: "rework",
+                          ...(after ? { goal: after } : {}),
+                          message: input.state === "opened"
+                            ? `Rework opened for ${input.unit}; rework count ${after?.rework ?? 0}. Fix it, re-run the check, then resolve it with evidence.`
+                            : `Rework resolved for ${input.unit}: ${input.evidence}`,
+                        }
+                      }
                       if (input.action === "update") {
                         const stateBefore = yield* autonomy.get(context.sessionID).pipe(
                           Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(SessionAutonomy.defaultState)),
@@ -96,6 +129,8 @@ export const make = (autonomy: SessionAutonomy.Interface, database: Database.Int
                         const existing = stateBefore.goal
                         if (!existing) return yield* Effect.fail(new ToolFailure({ message: "No existing goal to update. The user creates goals via /goal." }))
                         if (input.status === "completed") {
+                          yield* requireResolved(existing)
+                          yield* requireChecks(database, context.sessionID, existing)
                           const advanced = yield* autonomy.complete(context.sessionID)
                           const goal = advanced.goal!
                           return { action: "update", goal, message: `Goal marked completed: ${goal.text}` }
@@ -120,6 +155,8 @@ export const make = (autonomy: SessionAutonomy.Interface, database: Database.Int
                         )
                         const existing = stateBefore.goal
                         if (!existing || existing.status !== "active") return yield* Effect.fail(new ToolFailure({ message: "No active goal to complete" }))
+                        yield* requireResolved(existing)
+                        yield* requireChecks(database, context.sessionID, existing)
                         const advanced = yield* autonomy.complete(context.sessionID)
                         const goal = advanced.goal!
                         return { action: "complete", goal, message: `Goal completed: ${goal.text}. It will disappear from sidebar.` }
@@ -142,3 +179,28 @@ export const Plugin = {
     yield* ctx.tool.transform((draft) => draft.add(name, make(autonomy, database, permission), { codemode: false })).pipe(Effect.orDie)
   }),
 }
+
+const requireResolved = (goal: SessionAutonomy.Goal) => {
+  const failure = goal.failure
+  if (!failure) return Effect.void
+  const clears = failure.unit.startsWith("tool/")
+    ? `a successful ${failure.unit.slice(5)} call in this Session or a clean iteration`
+    : "a successful model step in this Session or a clean iteration"
+  return Effect.fail(new ToolFailure({
+    message: `Goal cannot complete: failure ${failure.fingerprint} (class ${failure.class}, unit ${failure.unit}, ${failure.count} occurrence${failure.count === 1 ? "" : "s"}) stopped this Session's own iteration and is unresolved. It clears after ${clears}.`,
+  }))
+}
+
+const checkStates = {
+  unrun: "is unrun",
+  stale: "is stale since the latest edit",
+  failing: "is failing",
+} as const
+
+const requireChecks = Effect.fnUntraced(function* (database: Database.Interface, ownerID: SessionSchema.ID, goal: SessionAutonomy.Goal) {
+  const checks = SessionGoalVerification.requiredChecks(goal.rawText ?? goal.text)
+  const unmet = checks.length === 0 ? [] : SessionGoalVerification.unmetChecks(checks, yield* SessionGoalVerification.familyCalls(database.db, ownerID))
+  if (unmet.length > 0) yield* Effect.fail(new ToolFailure({
+    message: `Goal cannot complete: ${unmet.map((item) => `Required check ${item.check} ${checkStates[item.state]}`).join("; ")}. Only a passing run after the latest edit, in this Session or one of its descendant Sessions, clears it.`,
+  }))
+})

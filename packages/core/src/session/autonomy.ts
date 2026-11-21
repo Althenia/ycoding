@@ -19,6 +19,30 @@ export type GoalStatus = typeof GoalStatus.Type
 const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0))
 
+export const GoalPhase = Schema.Literals(["active", "waiting", "rework", "stalled"])
+export type GoalPhase = typeof GoalPhase.Type
+
+export const GoalWait = Schema.Literals(["child", "shell", "review"])
+export type GoalWait = typeof GoalWait.Type
+
+export const GoalRework = Schema.Struct({ unit: Schema.String, reason: Schema.String })
+export type GoalRework = typeof GoalRework.Type
+
+export const GoalFailure = Schema.Struct({
+  fingerprint: Schema.String,
+  class: Schema.String,
+  unit: Schema.String,
+  count: PositiveInt,
+  recovering: Schema.Boolean,
+})
+export type GoalFailure = typeof GoalFailure.Type
+
+export const GoalRecovery = Schema.Struct({
+  condition: Schema.String,
+  seen: Schema.Array(Schema.Struct({ fingerprint: Schema.String, count: PositiveInt })),
+})
+export type GoalRecovery = typeof GoalRecovery.Type
+
 export const Goal = Schema.Struct({
   text: Schema.String,
   rawText: Schema.String.pipe(Schema.optional),
@@ -27,8 +51,77 @@ export const Goal = Schema.Struct({
   noProgress: NonNegativeInt,
   maxNoProgress: PositiveInt,
   lastProgressDigest: Schema.String.pipe(Schema.optional),
+  phase: GoalPhase.pipe(Schema.optional),
+  wait: GoalWait.pipe(Schema.optional),
+  rework: NonNegativeInt.pipe(Schema.optional),
+  reworkOpen: Schema.Array(GoalRework).pipe(Schema.optional),
+  stalls: NonNegativeInt.pipe(Schema.optional),
+  failure: GoalFailure.pipe(Schema.optional),
+  recovery: GoalRecovery.pipe(Schema.optional),
 })
 export type Goal = typeof Goal.Type
+
+export const maxReworkOpen = 16
+export const maxRecoverySeen = 16
+
+export function phaseOf(goal: Goal): GoalPhase {
+  if (goal.failure) return goal.failure.recovering ? "rework" : "stalled"
+  if (goal.wait) return "waiting"
+  if (goal.reworkOpen?.length) return "rework"
+  return "active"
+}
+
+export function describeGoal(goal: Goal) {
+  return [
+    `Goal phase: ${phaseOf(goal)}${goal.wait ? ` (waiting on ${goal.wait})` : ""}; rework ${goal.rework ?? 0}; stalled units stopped ${goal.stalls ?? 0}; no progress ${goal.noProgress}/${goal.maxNoProgress}`,
+    ...(goal.reworkOpen ?? []).map((item) => `Open rework (unfinished): ${item.unit} — ${item.reason}`),
+    ...(goal.failure
+      ? [`Unresolved failure ${goal.failure.fingerprint} (${goal.failure.class} on ${goal.failure.unit}, ${goal.failure.count} occurrence${goal.failure.count === 1 ? "" : "s"})${goal.failure.recovering ? "" : "; waiting for a changed condition"}`]
+      : []),
+  ]
+}
+
+function withPhase(goal: Goal): Goal {
+  const phase = phaseOf(goal)
+  const { phase: _previous, ...rest } = goal
+  return phase === "active" ? rest : { ...rest, phase }
+}
+
+export interface FailureCause {
+  readonly fingerprint: string
+  readonly class: string
+  readonly unit: string
+}
+
+export interface FailureInput extends FailureCause {
+  readonly condition: string
+}
+
+export function recordFailure(goal: Goal, input: FailureInput): Goal {
+  const seen = goal.recovery?.condition === input.condition ? goal.recovery.seen : []
+  const previous = seen.find((item) => item.fingerprint === input.fingerprint)
+  const count = (previous?.count ?? 0) + 1
+  const recovering = previous === undefined
+  return {
+    ...goal,
+    ...(recovering ? { rework: (goal.rework ?? 0) + 1 } : {}),
+    failure: { fingerprint: input.fingerprint, class: input.class, unit: input.unit, count, recovering },
+    recovery: {
+      condition: input.condition,
+      seen: [...seen.filter((item) => item.fingerprint !== input.fingerprint), { fingerprint: input.fingerprint, count }].slice(-maxRecoverySeen),
+    },
+  }
+}
+
+function settled(goal: Goal): Goal {
+  const { failure: _failure, wait: _wait, ...rest } = goal
+  return rest
+}
+
+function resumed(goal: Goal): Goal {
+  const { failure: _failure, wait: _wait, recovery: _recovery, ...rest } = goal
+  return { ...rest, status: "active" }
+}
 
 export interface EffectiveDecisions extends Decisions {
   readonly inherited: { readonly [K in Category]?: SessionSchema.ID }
@@ -139,6 +232,24 @@ export interface Interface {
     sessionID: SessionSchema.ID
     expectedSequence: number
   }) => Effect.Effect<{ readonly state: State; readonly applied: boolean }, NotFoundError>
+  readonly goalOwner: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.ID | undefined>
+  readonly rework: (input: {
+    sessionID: SessionSchema.ID
+    unit: string
+    reason: string
+    state: "opened" | "resolved"
+  }) => Effect.Effect<State, NotFoundError>
+  readonly recordStall: (input: { sessionID: SessionSchema.ID; failure?: FailureCause }) => Effect.Effect<State, NotFoundError>
+  readonly resolveFailure: (input: { sessionID: SessionSchema.ID; tool?: string }) => Effect.Effect<State, NotFoundError>
+  readonly recordWait: (input: {
+    sessionID: SessionSchema.ID
+    expectedSequence: number
+    wait: GoalWait
+  }) => Effect.Effect<{ readonly state: State; readonly applied: boolean }, NotFoundError>
+  readonly recordFailure: (input: FailureInput & {
+    sessionID: SessionSchema.ID
+    expectedSequence: number
+  }) => Effect.Effect<{ readonly state: State; readonly applied: boolean }, NotFoundError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionAutonomy") {}
@@ -214,6 +325,21 @@ export function make(input: {
 
   const load = (sessionID: SessionSchema.ID) => snapshot(sessionID).pipe(Effect.map((value) => value.state))
 
+  const goalOwnerOf = (sessionID: SessionSchema.ID): Effect.Effect<SessionSchema.ID | undefined> =>
+    input.db
+      .select({ autonomy: SessionTable.autonomy, parentID: SessionTable.parent_id })
+      .from(SessionTable)
+      .where(eq(SessionTable.id, sessionID))
+      .get()
+      .pipe(
+        Effect.orDie,
+        Effect.flatMap((row) => {
+          if (!row) return Effect.succeed(undefined)
+          if (read(row.autonomy).goal?.status === "active") return Effect.succeed(sessionID)
+          return row.parentID ? goalOwnerOf(row.parentID) : Effect.succeed(undefined)
+        }),
+      )
+
   const familyID = (sessionID: SessionSchema.ID): Effect.Effect<SessionSchema.ID> =>
     input.db
       .select({ parentID: SessionTable.parent_id })
@@ -252,8 +378,9 @@ export function make(input: {
             if (!row) return yield* new NotFoundError({ sessionID })
             const state = read(row.autonomy)
             if (expectedSequence !== undefined && row.revision !== expectedSequence) return { state, applied: false }
-            const next = transition(state)
-            if (!next) return { state, applied: false }
+            const transitioned = transition(state)
+            if (!transitioned) return { state, applied: false }
+            const next = transitioned.goal ? { ...transitioned, goal: withPhase(transitioned.goal) } : transitioned
             const updated = yield* tx
               .update(SessionTable)
               .set({
@@ -352,7 +479,7 @@ export function make(input: {
       sessionID,
       (state) => {
         if (!state.goal) return undefined
-        return { ...state, mode: "normal", goal: { ...state.goal, status: "active" as const } }
+        return { ...state, mode: "normal", goal: resumed(state.goal) }
       },
       expectedSequence,
     )
@@ -405,7 +532,7 @@ export function make(input: {
           } else if (goal === true) {
             // Resume the retained goal without recalculating it; the user alone re-activates.
             if (next.goal && next.goal.status !== "active") {
-              next = { ...next, goal: { ...next.goal, status: "active" as const } }
+              next = { ...next, goal: resumed(next.goal) }
               changed = true
             }
           } else {
@@ -464,7 +591,63 @@ export function make(input: {
         (state) => {
           const goal = state.goal
           if (!goal || goal.status !== "active") return undefined
-          return { ...state, goal: { ...goal, iteration: goal.iteration + 1 } }
+          return { ...state, goal: { ...settled(goal), iteration: goal.iteration + 1 } }
+        },
+        expectedSequence,
+      ),
+    goalOwner: goalOwnerOf,
+    rework: ({ sessionID, unit, reason, state: change }) =>
+      apply(sessionID, (state) => {
+        const goal = state.goal
+        if (!goal || goal.status !== "active") return undefined
+        const open = (goal.reworkOpen ?? []).filter((item) => item.unit !== unit)
+        if (change === "resolved") {
+          if (open.length === (goal.reworkOpen ?? []).length) return undefined
+          const { reworkOpen: _open, ...rest } = goal
+          return { ...state, goal: open.length ? { ...rest, reworkOpen: open } : rest }
+        }
+        return {
+          ...state,
+          goal: { ...goal, rework: (goal.rework ?? 0) + 1, reworkOpen: [...open, { unit, reason }].slice(-maxReworkOpen) },
+        }
+      }),
+    recordStall: ({ sessionID, failure }) =>
+      apply(sessionID, (state) => {
+        const goal = state.goal
+        if (!goal || goal.status !== "active") return undefined
+        const stalls = (goal.stalls ?? 0) + 1
+        if (!failure) return { ...state, goal: { ...goal, stalls } }
+        const count = goal.failure?.fingerprint === failure.fingerprint ? goal.failure.count + 1 : 1
+        return { ...state, goal: { ...goal, stalls, failure: { ...failure, count, recovering: true } } }
+      }),
+    resolveFailure: ({ sessionID, tool }) =>
+      apply(sessionID, (state) => {
+        const failure = state.goal?.failure
+        if (!state.goal || !failure) return undefined
+        const resolves = tool === undefined ? !failure.unit.startsWith("tool/") : failure.unit === `tool/${tool}`
+        if (!resolves) return undefined
+        const { failure: _failure, ...goal } = state.goal
+        return { ...state, goal }
+      }),
+    recordWait: ({ sessionID, expectedSequence, wait }) =>
+      mutate(
+        sessionID,
+        (state) => {
+          const goal = state.goal
+          if (!goal || goal.status !== "active") return undefined
+          if (goal.wait === wait && goal.failure === undefined) return undefined
+          return { ...state, goal: { ...settled(goal), wait } }
+        },
+        expectedSequence,
+      ),
+    recordFailure: ({ sessionID, expectedSequence, ...failure }) =>
+      mutate(
+        sessionID,
+        (state) => {
+          const goal = state.goal
+          if (!goal || goal.status !== "active") return undefined
+          const { wait: _wait, ...rest } = goal
+          return { ...state, goal: recordFailure(rest, failure) }
         },
         expectedSequence,
       ),

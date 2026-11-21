@@ -14,6 +14,7 @@ import { ToolInvocation } from "@ycoding-ai/schema/tool-invocation"
 import { SessionEvent } from "./event"
 import { SessionAutonomy } from "./autonomy"
 import { SessionHelperPolicy } from "./helper-policy"
+import { SessionGoalVerification } from "./goal-verification"
 import { SessionHistory } from "./history"
 import { SessionMessage } from "./message"
 import { SessionModelHeaders } from "./model-headers"
@@ -60,7 +61,7 @@ export interface Interface {
   readonly steer: (input: {
     session: SessionSchema.Info
     goal: SessionAutonomy.Goal
-    phase: "start" | "continue"
+    phase: "start" | "continue" | "recover"
     latestAssistantText?: string
   }) => Effect.Effect<string, Error>
   readonly continuation: (input: {
@@ -71,6 +72,12 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionGoal") {}
+
+const verificationLine = {
+  none: "Verification: no file changes recorded in recent history.",
+  verified: "Verification: a check ran after the latest file change; confirm it passed before completion.",
+  unverified: "Verification: files changed or rework opened after the latest check; the next step must run the checks that verify them.",
+} as const
 
 const make = (dependencies: Dependencies) => {
   const generate = Effect.fn("SessionGoal.generate")(
@@ -241,6 +248,7 @@ const make = (dependencies: Dependencies) => {
       const answers = yield* dependencies.autonomy
         .decisionMode(input.session.id, "answers")
         .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed("manual" as const)))
+      const checked = SessionGoalVerification.verification(yield* SessionHistory.recent(db, input.session.id, 40))
       return yield* generate(db, {
         session: input.session,
         request: (assistant) => {
@@ -257,8 +265,16 @@ const make = (dependencies: Dependencies) => {
             `Active goal: ${input.goal.text}`,
             `Phase: ${input.phase}`,
             `Current iteration: ${input.goal.iteration}`,
+            ...SessionAutonomy.describeGoal(input.goal),
+            verificationLine[checked],
             `Answers decision mode: ${answers}`,
             `Latest assistant response: ${latestAssistantText?.trim().slice(-2_000) || "(none)"}`,
+            ...(input.phase === "recover" && input.goal.failure
+              ? [`The previous step failed with ${input.goal.failure.class} on ${input.goal.failure.unit}. Direct resuming the failed work with an approach that avoids the same failure.`]
+              : []),
+            "Name the acceptance criteria the current evidence does not yet satisfy and direct the single highest-value next step toward them; skip ceremony and detours.",
+            "Run independent work in parallel; serialize only real data, file or approval dependencies.",
+            "After edits, keep going through verification until the outcome is verified or a real blocker remains.",
             "Preserve the active goal and produce only the next concise user-proxy steer.",
           ].join("\n")
         },

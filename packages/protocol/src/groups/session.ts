@@ -180,13 +180,35 @@ export const SessionAutonomyMode = Schema.Literals(["normal"]).annotate({
 export const SessionAutonomyGoalStatus = Schema.Literals(["active", "completed", "stopped", "exhausted"]).annotate({
   identifier: "SessionAutonomyGoalStatus",
 })
+const GoalCount = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+export const SessionAutonomyGoalPhase = Schema.Literals(["active", "waiting", "rework", "stalled"]).annotate({
+  identifier: "SessionAutonomyGoalPhase",
+})
+export const SessionAutonomyGoalFailure = Schema.Struct({
+  fingerprint: Schema.String,
+  class: Schema.String,
+  unit: Schema.String,
+  count: PositiveInt,
+  recovering: Schema.Boolean,
+}).annotate({ identifier: "SessionAutonomyGoalFailure" })
+export const SessionAutonomyGoalRecovery = Schema.Struct({
+  condition: Schema.String,
+  seen: Schema.Array(Schema.Struct({ fingerprint: Schema.String, count: PositiveInt })),
+}).annotate({ identifier: "SessionAutonomyGoalRecovery" })
 export const SessionAutonomyGoal = Schema.Struct({
   text: Schema.String,
   status: SessionAutonomyGoalStatus,
-  iteration: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  noProgress: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  iteration: GoalCount,
+  noProgress: GoalCount,
   maxNoProgress: PositiveInt,
   lastProgressDigest: Schema.String.pipe(Schema.optional),
+  phase: SessionAutonomyGoalPhase.pipe(Schema.optional),
+  wait: Schema.Literals(["child", "shell", "review"]).pipe(Schema.optional),
+  rework: GoalCount.pipe(Schema.optional),
+  reworkOpen: Schema.Array(Schema.Struct({ unit: Schema.String, reason: Schema.String })).pipe(Schema.optional),
+  stalls: GoalCount.pipe(Schema.optional),
+  failure: SessionAutonomyGoalFailure.pipe(Schema.optional),
+  recovery: SessionAutonomyGoalRecovery.pipe(Schema.optional),
 }).annotate({ identifier: "SessionAutonomyGoal" })
 export const SessionAutonomyDefer = Schema.Struct({}).pipe(Schema.decodeTo(Schema.Struct({}), {
   decode: SchemaGetter.transform(() => ({})),

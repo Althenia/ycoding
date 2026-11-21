@@ -5,6 +5,7 @@ import { Effect, Fiber, Layer, Logger, PubSub, Schema, Stream } from "effect"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
+import { ConfigGoal } from "@ycoding-ai/core/config/goal"
 import { ConfigModel } from "@ycoding-ai/core/config/model"
 import { Config as ConfigSchema } from "@ycoding-ai/schema/config"
 import { ConfigProvider } from "@ycoding-ai/core/config/provider"
@@ -377,6 +378,17 @@ describe("Config", () => {
       const decode = Schema.decodeUnknownSync(Config.Info, { onExcessProperty: "error" })
       expect(decode({})).toBeDefined()
       for (const seconds of [0, 300]) expect(() => decode({ question_timeout_seconds: seconds })).toThrow()
+    }),
+  )
+
+  it.effect("decodes the goal stall timeout as an optional positive integer with a 600 second default", () =>
+    Effect.sync(() => {
+      const decode = Schema.decodeUnknownSync(Config.Info, { onExcessProperty: "error" })
+      expect(ConfigGoal.stallTimeoutSeconds(decode({}).goal)).toBe(600)
+      expect(ConfigGoal.stallTimeoutSeconds(decode({ goal: {} }).goal)).toBe(600)
+      expect(ConfigGoal.stallTimeoutSeconds(decode({ goal: { stall_timeout_seconds: 10 } }).goal)).toBe(10)
+      for (const invalid of [0, -1, 1.5, "10", null]) expect(() => decode({ goal: { stall_timeout_seconds: invalid } })).toThrow()
+      expect(() => decode({ goal: { stall_timeout: 10 } })).toThrow()
     }),
   )
 

@@ -4,7 +4,7 @@ import { Icon } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
 import { useRemote } from "../context"
 import { autonomyCategories, autonomyLabels, autonomyModeLabel, autonomySummary, type AutonomyModes } from "../autonomy"
-import { reviewItemsInScope } from "../projection"
+import { goalProgressLabel, reviewItemsInScope } from "../projection"
 import { createRemoteQuery } from "../query"
 import { AutonomousDialog, autonomousDialogRequests } from "./autonomous-dialog"
 import { DotTrail } from "./dot-trail"
@@ -128,7 +128,7 @@ export function ComposerStatus() {
       window.removeEventListener("scroll", reposition, true)
     })
   })
-  const goalPanel = () => <Show when={goal()?.status === "active"} fallback={<form onSubmit={(event) => { event.preventDefault(); if (!draft().trim()) return; void remote.store.setGoal(draft().trim()).then((accepted) => { if (!accepted) return; setDraft(""); dismissGoal() }) }}><label for="session-status-goal">Goal</label><input id="session-status-goal" type="text" aria-label="Goal" placeholder="Describe the objective" autofocus value={draft()} onInput={(event) => setDraft(event.currentTarget.value)} /><button type="submit" disabled={!draft().trim() || goalSetting()}>Set goal</button></form>}><p>{goal()?.text}</p><span>{goal()?.status} · iteration {goal()?.iteration} · no progress {goal()?.noProgress}/{goal()?.maxNoProgress}</span><button type="button" onClick={() => { dismissGoal(); void remote.store.stopGoal() }}>Stop goal</button></Show>
+  const goalPanel = () => <Show when={goal()?.status === "active"} fallback={<form onSubmit={(event) => { event.preventDefault(); if (!draft().trim()) return; void remote.store.setGoal(draft().trim()).then((accepted) => { if (!accepted) return; setDraft(""); dismissGoal() }) }}><label for="session-status-goal">Goal</label><input id="session-status-goal" type="text" aria-label="Goal" placeholder="Describe the objective" autofocus value={draft()} onInput={(event) => setDraft(event.currentTarget.value)} /><button type="submit" disabled={!draft().trim() || goalSetting()}>Set goal</button></form>}><p>{goal()?.text}</p><Show when={goal()}>{(current) => <span>{goalProgressLabel(current())}</span>}</Show><button type="button" onClick={() => { dismissGoal(); void remote.store.stopGoal() }}>Stop goal</button></Show>
   return <div class="session-status" role="group" aria-label="Session status and autonomy">
     <Show when={view()?.autonomy}>
     <button ref={autonomousTrigger} type="button" class="session-status__autonomous-trigger" aria-label={`Autonomous: ${autonomyLabels(modes()!).join(", ")}`} data-tooltip={`Autonomous: ${autonomyLabels(modes()!).join(", ")}`} aria-haspopup="dialog" aria-expanded={autonomousOpen()} onClick={() => setAutonomousOpen(true)}><span class="session-status__autonomous-icon"><Icon name="shield" size={16} /></span><span class="session-status__autonomous-full">{summary().label}</span><span class="session-status__autonomous-word">{autonomyPhoneWord(modes()!)}</span></button>

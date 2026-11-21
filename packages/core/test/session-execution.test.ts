@@ -112,7 +112,7 @@ function configuredGoals(continuation: SessionGoal.Interface["continuation"]) {
   }))
 }
 
-completionIt.effect("open review items pause goal continuation without consuming its retry budget", () => Effect.gen(function* () {
+completionIt.effect("open review items pause goal continuation as a review wait without consuming its retry budget", () => Effect.gen(function* () {
   const database = yield* Database.Service
   const events = yield* EventRuntime.Service
   const sessionID = Session.ID.make("ses_review_goal_pause")
@@ -128,7 +128,7 @@ completionIt.effect("open review items pause goal continuation without consuming
   const execution = Context.get(context, SessionExecution.Service)
   yield* execution.resume(sessionID)
   yield* execution.awaitIdle(sessionID)
-  expect(yield* autonomy.get(sessionID)).toEqual(before)
+  expect(yield* autonomy.get(sessionID)).toEqual({ ...before, goal: { ...before.goal!, phase: "waiting", wait: "review" } })
   expect(yield* admittedInputs(database)).toEqual([])
   expect(yield* SessionReviewFold.openCount(database.db, sessionID)).toBe(1)
   expect(review.kind).toBe("question")
@@ -1440,7 +1440,7 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
-  it.effect("does not continue a goal-managed Session after a drain whose latest message ended unsettled", () =>
+  it.effect("recovers a goal once from a drain whose latest message ended unsettled and then waits on the repeated failure", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionID = Session.ID.make("ses_goal_incomplete")
@@ -1474,10 +1474,12 @@ describe("SessionExecution lifecycle", () => {
       yield* execution.resume(sessionID)
       yield* execution.awaitIdle(sessionID)
 
-      expect(drains).toBe(1)
-      expect(steered).toBe(0)
-      expect(yield* autonomy.get(sessionID)).toMatchObject({ goal: { status: "active", iteration: 0 } })
-      expect(yield* admittedInputs(database)).toEqual([])
+      expect(drains).toBe(2)
+      expect(steered).toBe(1)
+      expect(yield* autonomy.get(sessionID)).toMatchObject({
+        goal: { status: "active", iteration: 0, noProgress: 0, phase: "stalled", failure: { class: "provider.invalid-output", count: 2, recovering: false } },
+      })
+      expect(yield* admittedInputs(database)).toHaveLength(1)
       yield* Scope.close(scope, Exit.void)
     }),
   )
@@ -1739,7 +1741,7 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
-  it.effect("leaves an active goal untouched when a drain fails", () =>
+  it.effect("admits one recovery steer when a drain fails and never advances the goal", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionID = Session.ID.make("ses_goal_failed")
@@ -1762,8 +1764,8 @@ describe("SessionExecution lifecycle", () => {
       yield* execution.resume(sessionID).pipe(Effect.exit)
       yield* execution.awaitIdle(sessionID)
 
-      expect(yield* autonomy.get(sessionID)).toMatchObject({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", goal: { status: "active", iteration: 0 } })
-      expect(yield* admittedInputs(database)).toEqual([])
+      expect(yield* autonomy.get(sessionID)).toMatchObject({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", goal: { status: "active", iteration: 0, noProgress: 0, rework: 1 } })
+      expect(yield* admittedInputs(database)).toHaveLength(1)
       yield* Scope.close(scope, Exit.void)
     }),
   )
@@ -1944,7 +1946,7 @@ function buildExecution(
   steer: (input: {
     readonly session: Session.Info
     readonly goal: SessionAutonomy.Goal
-    readonly phase: "start" | "continue"
+    readonly phase: "start" | "continue" | "recover"
     readonly latestAssistantText?: string
   }) => Effect.Effect<string, SessionGoal.Error> = ({ goal }) => Effect.succeed(`Continue work on ${goal.text}`),
   continuation: SessionGoal.Interface["continuation"] = (input) =>

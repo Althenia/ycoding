@@ -20,7 +20,7 @@ import { SessionMessage } from "./message"
 import { SessionPending } from "./pending"
 import { SessionHistory } from "./history"
 import { SessionPendingTable, SessionTaskTable } from "./sql"
-import { and, eq, inArray, ne } from "drizzle-orm"
+import { and, eq, inArray, ne, sql } from "drizzle-orm"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { Shell } from "../shell"
 import { SessionGoal } from "./goal"
@@ -29,6 +29,26 @@ import { SessionCompletion } from "./completion"
 import { Job } from "../job"
 import type { ShellLedger } from "../shell/ledger"
 import { SessionStatusEvent } from "@ycoding-ai/schema/session-status-event"
+import type { SessionError } from "@ycoding-ai/schema/session-error"
+import { EventTable } from "../event/sql"
+
+const admittedType = EventRuntime.versionedType(SessionEvent.InputAdmitted.type, SessionEvent.InputAdmitted.durable.version)
+
+function assistantText(assistant: SessionMessage.Assistant | undefined) {
+  return assistant?.content
+    .filter((part): part is Extract<(typeof assistant.content)[number], { type: "text" }> => part.type === "text")
+    .map((part) => part.text)
+    .join("")
+}
+
+function failureUnit(error: SessionError.Error, assistant: SessionMessage.Assistant | undefined, session: SessionSchema.Info) {
+  if (error.type.startsWith("tool.")) {
+    const failed = assistant?.content.findLast((part) => part.type === "tool" && part.state.status === "error")
+    return failed?.type === "tool" ? `tool/${failed.name}` : "tool"
+  }
+  const model = assistant?.model ?? session.model
+  return model ? `model/${model.providerID}/${model.id}` : "session"
+}
 
 export interface Interface {
   readonly prepareTask: (owner: ShellLedger.Process) => Effect.Effect<void, ScopeUnavailableError>
@@ -104,11 +124,7 @@ export const layer = Layer.effect(
         ),
         Effect.asVoid,
       )
-    const continuedGoal = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
-      const snapshot = yield* autonomy
-        .snapshot(sessionID)
-        .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
-      if (!snapshot?.state.goal || snapshot.state.goal.status !== "active") return undefined
+    const goalWait = Effect.fnUntraced(function* (sessionID: SessionSchema.ID, session: SessionSchema.Info) {
       const activeChild = yield* db
         .select({ sessionID: SessionTaskTable.session_id })
         .from(SessionTaskTable)
@@ -121,52 +137,131 @@ export const layer = Layer.effect(
         .limit(1)
         .get()
         .pipe(Effect.orDie)
-      if (activeChild) return undefined
-      if ((yield* SessionReviewFold.openCount(db, sessionID)) > 0) return undefined
-      const session = yield* store.get(sessionID)
-      if (!session || session.scope === "standalone") return undefined
+      if (activeChild) return "child" as const
+      if ((yield* SessionReviewFold.openCount(db, sessionID)) > 0) return "review" as const
       const activeShell = yield* Effect.gen(function* () {
         const shell = yield* Shell.Service
         return (yield* shell.list()).some((info) => info.metadata.sessionID === sessionID)
       }).pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
-      if (activeShell) return undefined
+      if (activeShell) return "shell" as const
+      return undefined
+    })
+
+    const goalSession = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+      const snapshot = yield* autonomy
+        .snapshot(sessionID)
+        .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
+      if (!snapshot?.state.goal || snapshot.state.goal.status !== "active") return undefined
+      const session = yield* store.get(sessionID)
+      if (!session || session.scope === "standalone") return undefined
+      return { snapshot, goal: snapshot.state.goal, session }
+    })
+
+    const continuedGoal = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+      const current = yield* goalSession(sessionID)
+      if (!current) return undefined
       const assistant = yield* SessionHistory.latest(db, sessionID, "assistant")
-      if (assistant?.error !== undefined) return undefined
-      const latestAssistantText = assistant?.content
-        .filter((part): part is Extract<(typeof assistant.content)[number], { type: "text" }> => part.type === "text")
-        .map((part) => part.text)
-        .join("")
-      const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
+      if (assistant?.error !== undefined) return yield* failedGoal(sessionID, assistant.error)
+      const wait = yield* goalWait(sessionID, current.session)
+      if (wait) {
+        yield* autonomy.recordWait({ sessionID, expectedSequence: current.snapshot.sequence, wait })
+        return undefined
+      }
+      const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(current.session.location, [LocationServiceMap.full])))
       const continuation = yield* goals.continuation({
-        session,
-        goal: snapshot.state.goal,
-        latestAssistantText,
+        session: current.session,
+        goal: current.goal,
+        latestAssistantText: assistantText(assistant),
       })
-      const advanced = yield* autonomy.advanceIfCurrent({ sessionID, expectedSequence: snapshot.sequence })
+      const advanced = yield* autonomy.advanceIfCurrent({ sessionID, expectedSequence: current.snapshot.sequence })
       if (!advanced.applied || !advanced.state.goal || advanced.state.goal.status !== "active") return undefined
       return {
-        goal: advanced.state.goal,
-        steer: continuation.steer,
+        id: SessionMessage.ID.make(`msg_goal_${Hash.sha256(`${sessionID}\0${advanced.state.goal.iteration}`).slice(0, 24)}`),
+        text: continuation.steer,
+        description: "Goal · steer",
+        metadata: { autonomy: { goal: true, iteration: advanced.state.goal.iteration } },
       }
+    })
+
+    const failedGoal = Effect.fnUntraced(function* (sessionID: SessionSchema.ID, error: SessionError.Error) {
+      const current = yield* goalSession(sessionID)
+      if (!current) return undefined
+      const assistant = yield* SessionHistory.latest(db, sessionID, "assistant")
+      const unit = failureUnit(error, assistant, current.session)
+      const fingerprint = `${error.type}:${unit}`
+      const condition = yield* goalCondition(sessionID, current.session, current.snapshot.state)
+      const recorded = yield* autonomy.recordFailure({
+        sessionID,
+        expectedSequence: current.snapshot.sequence,
+        fingerprint,
+        class: error.type,
+        unit,
+        condition,
+      })
+      const goal = recorded.state.goal
+      if (!recorded.applied || !goal?.failure) return undefined
+      if (!goal.failure.recovering) {
+        yield* Effect.logWarning("Autonomous goal stalled on a repeated failure; waiting for a changed condition").pipe(
+          Effect.annotateLogs({ sessionID, fingerprint, count: goal.failure.count, errorClass: error.type }),
+        )
+        return undefined
+      }
+      const fallback = `Recover from the failed step (${error.type} on ${unit}): inspect the current state, then resume the unfinished work toward the goal with an approach that avoids the same failure.`
+      const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(current.session.location, [LocationServiceMap.full])))
+      const text = yield* goals
+        .steer({ session: current.session, goal, phase: "recover", latestAssistantText: assistantText(assistant) })
+        .pipe(
+          Effect.catchTag("SessionGoal.Error", (cause) =>
+            Effect.logWarning("Goal recovery steer generation failed; admitting the deterministic recovery steer", cause).pipe(
+              Effect.annotateLogs({ sessionID, fingerprint }),
+              Effect.as(fallback),
+            ),
+          ),
+        )
+      return {
+        id: SessionMessage.ID.make(`msg_goal_${Hash.sha256(`${sessionID}\0recover\0${fingerprint}\0${condition}`).slice(0, 24)}`),
+        text,
+        description: "Goal · recovery",
+        metadata: { autonomy: { goal: true, recovery: fingerprint } },
+      }
+    })
+
+    const goalCondition = Effect.fnUntraced(function* (
+      sessionID: SessionSchema.ID,
+      session: SessionSchema.Info,
+      state: SessionAutonomy.State,
+    ) {
+      const input = yield* db
+        .select({ seq: sql<number | null>`max(${EventTable.seq})` })
+        .from(EventTable)
+        .where(
+          and(
+            eq(EventTable.aggregate_id, sessionID),
+            eq(EventTable.type, admittedType),
+            sql`substr(coalesce(json_extract(${EventTable.data}, '$.inputID'), ''), 1, 9) <> 'msg_goal_'`,
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
+      return Hash.json({
+        input: input?.seq ?? 0,
+        agent: session.agent ?? null,
+        model: session.model ?? null,
+        decisions: SessionAutonomy.decisions(state),
+        defer: SessionAutonomy.isDeferred(state),
+      })
     })
 
     const admitGoalContinuation = Effect.fnUntraced(function* (
       sessionID: SessionSchema.ID,
-      advanced: { readonly goal: SessionAutonomy.Goal; readonly steer: string },
+      steer: { readonly id: SessionMessage.ID; readonly text: string; readonly description: string; readonly metadata: Record<string, unknown> },
     ) {
-      const id = SessionMessage.ID.make(
-        `msg_goal_${Hash.sha256(`${sessionID}\0${advanced.goal.iteration}`).slice(0, 24)}`,
-      )
       const input = SessionPending.Message.make({
         type: "synthetic",
-        data: {
-          text: advanced.steer,
-          description: "Goal · steer",
-          metadata: { autonomy: { goal: true, iteration: advanced.goal.iteration } },
-        },
+        data: { text: steer.text, description: steer.description, metadata: steer.metadata },
         delivery: "steer",
       })
-      return yield* SessionPending.admit(db, events, { id, sessionID, input }).pipe(
+      return yield* SessionPending.admit(db, events, { id: steer.id, sessionID, input }).pipe(
         Effect.as(true),
         Effect.catchDefect((defect) =>
           defect instanceof SessionPending.LifecycleConflict ? Effect.succeed(false) : Effect.die(defect),
@@ -343,8 +438,9 @@ export const layer = Layer.effect(
         Effect.gen(function* () {
           const outcome = terminal(exit, reason)
           const advanced =
-            outcome.type === "succeeded"
-              ? yield* continuedGoal(sessionID).pipe(
+            outcome.type === "interrupted"
+              ? undefined
+              : yield* (outcome.type === "succeeded" ? continuedGoal(sessionID) : failedGoal(sessionID, outcome.error)).pipe(
                   Effect.catchCause((cause) =>
                     Effect.logWarning("Failed to continue the autonomous goal", cause).pipe(
                       Effect.annotateLogs({ sessionID }),
@@ -352,7 +448,6 @@ export const layer = Layer.effect(
                     ),
                   ),
                 )
-              : undefined
           yield* reportLifecycle(
             sessionID,
             Effect.gen(function* () {

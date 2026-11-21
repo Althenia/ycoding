@@ -5,6 +5,7 @@ import {
   LLMError,
   LLMEvent,
   LLMRequest,
+  TransportReason,
   isContextOverflowFailure,
   type ProviderErrorEvent,
 } from "@ycoding-ai/ai"
@@ -12,7 +13,7 @@ import { Money } from "@ycoding-ai/schema/money"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { classifyProviderFailure } from "@ycoding-ai/ai/provider-error"
 import { SessionError } from "@ycoding-ai/schema/session-error"
-import { Cause, Clock, Effect, Exit, Fiber, FiberSet, Layer, Option, Schedule, Semaphore, Stream } from "effect"
+import { Cause, Clock, Duration, Effect, Exit, Fiber, FiberSet, Layer, Option, Schedule, Semaphore, Stream } from "effect"
 import { Config } from "../../config"
 import { StandaloneConfig } from "../../config/standalone"
 import { Database } from "../../database/database"
@@ -25,6 +26,11 @@ import { ProjectArtifactAccounting } from "../../project-artifact/accounting"
 import { ProjectArtifactSource } from "../../project-artifact/source"
 import { SessionSkill } from "../skill"
 import { ToolOutputStore } from "../../tool-output-store"
+import { ConfigGoal } from "../../config/goal"
+import { SessionAutonomy } from "../autonomy"
+import { SessionTaskTable } from "../sql"
+import { SessionRunnerStall } from "./stall"
+import type { ToolRegistry } from "../../tool/registry"
 import { InstructionState } from "../instruction-state"
 import { SessionCompaction } from "../compaction"
 import { StandaloneCompaction } from "../standalone-compaction"
@@ -167,7 +173,32 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
     const activity = yield* GenerationActivity.Service
     const continuation = yield* SessionContinuation.Service
     const liveState = yield* SessionLiveState.Service
+    const autonomy = yield* SessionAutonomy.Service
     const host = source.host
+    const goalStall = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+      if (standalone) return undefined
+      const owner = yield* autonomy.goalOwner(sessionID)
+      if (owner === undefined) return undefined
+      const seconds = ConfigGoal.stallTimeoutSeconds(Config.latest(yield* readConfig(), "goal"))
+      const recordStall = (errorClass: string, unit: string) =>
+        autonomy.recordStall({
+          sessionID: owner,
+          ...(owner === sessionID ? { failure: { fingerprint: `${errorClass}:${unit}`, class: errorClass, unit } } : {}),
+        }).pipe(
+          Effect.catchTag("SessionAutonomy.NotFound", () => Effect.void),
+          Effect.andThen(Effect.logWarning("Stopped a stalled goal unit").pipe(Effect.annotateLogs({ sessionID, owner, unit, seconds }))),
+          Effect.asVoid,
+        )
+      const resolveFailure = (tool?: string) =>
+        owner !== sessionID
+          ? Effect.void
+          : autonomy.get(owner).pipe(
+              Effect.flatMap((state) => state.goal?.failure ? autonomy.resolveFailure({ sessionID: owner, ...(tool === undefined ? {} : { tool }) }) : Effect.void),
+              Effect.catchTag("SessionAutonomy.NotFound", () => Effect.void),
+              Effect.asVoid,
+            )
+      return { seconds, millis: seconds * 1_000, recordStall, resolveFailure }
+    })
     const resolveRequestedSkills = Effect.fn("SessionRunner.resolveRequestedSkills")(function* (
       selected: SessionContext.Selection,
       ids: ReadonlyArray<Skill.ID>,
@@ -644,6 +675,30 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
       })
       const publication = Semaphore.makeUnsafe(1)
       yield* Effect.acquireRelease(events.listen(publisher.observe), (unsubscribe) => unsubscribe)
+      const stall = yield* goalStall(session.id)
+      const waits = SessionRunnerStall.requests(session.id)
+      if (stall) yield* Effect.acquireRelease(events.listen(waits.observe), (unsubscribe) => unsubscribe)
+      const watchTool = <E, R>(name: string, settle: (touch: Effect.Effect<void>) => Effect.Effect<ToolRegistry.Settlement, E, R>) => {
+        if (stall === undefined) return settle(Effect.void)
+        const message = `Tool ${name} stopped after ${stall.seconds} seconds without progress; its effects are unknown. Inspect the current state before retrying it.`
+        return SessionRunnerStall.watch(settle, {
+          millis: stall.millis,
+          waiting,
+          stalled: stall.recordStall("tool.stalled", `tool/${name}`).pipe(
+            Effect.as<ToolRegistry.Settlement>({ result: { type: "error", value: message }, error: { type: "tool.stalled", message } }),
+          ),
+        })
+      }
+      const waiting = Effect.suspend(() =>
+        waits.pending()
+          ? Effect.succeed(true)
+          : db
+              .select({ state: SessionTaskTable.state })
+              .from(SessionTaskTable)
+              .where(eq(SessionTaskTable.session_id, session.id))
+              .get()
+              .pipe(Effect.orDie, Effect.map((task) => task?.state === "waiting")),
+      )
       // Durable publishes are serialized so tool fibers and step settlement never interleave
       // mid-event.
       const serialized = <A, E, R>(effect: Effect.Effect<A, E, R>) => publication.withPermit(effect)
@@ -692,7 +747,16 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
       let inputConsumptionPending = consumedInputID !== undefined
       requestTrackerState.attempts += 1
       const providerStream = publishLiveGeneration().pipe(
-        Effect.andThen(llm.stream(prepared.request).pipe(Stream.runForEach((event) =>
+        Effect.andThen(llm.stream(prepared.request).pipe(
+          (stream) => stall === undefined ? stream : stream.pipe(Stream.timeoutOrElse({
+            duration: Duration.millis(stall.millis),
+            orElse: () => Stream.fromEffect(stall.recordStall("provider.stalled", `model/${effective.ref.providerID}/${effective.ref.id}`)).pipe(Stream.flatMap(() => Stream.fail(new LLMError({
+              module: effectiveModel.route.id,
+              method: "stream",
+              reason: new TransportReason({ message: `Provider stream stalled: no events for ${stall.seconds} seconds`, kind: "read" }),
+            })))),
+          })),
+          Stream.runForEach((event) =>
           Effect.gen(function* () {
             const receivedNs = yield* Clock.currentTimeNanos
             if (inputConsumptionPending && consumedInputID) {
@@ -753,21 +817,23 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
             ownedToolFibers.push(
               yield* Effect.uninterruptibleMask((restore) =>
                 restore(
-                  tool.settle({
-                    sessionID: session.id,
-                    agent: agent.id,
-                    messageID: assistantMessageID,
-                    call: event,
-                    progress: (update) =>
-                      serialized(
-                        publisher.progress({
-                          assistantMessageID,
-                          callID: event.id,
-                          structured: { ...update.structured },
-                          content: [...update.content],
-                        }),
-                      ),
-                  }).pipe(Effect.provideService(SessionUsageAttribution.Current, requestTracker.usageAnchor ?? null)),
+                  watchTool(event.name, (touch) =>
+                    tool.settle({
+                      sessionID: session.id,
+                      agent: agent.id,
+                      messageID: assistantMessageID,
+                      call: event,
+                      progress: (update) =>
+                        touch.pipe(Effect.andThen(serialized(
+                          publisher.progress({
+                            assistantMessageID,
+                            callID: event.id,
+                            structured: { ...update.structured },
+                            content: [...update.content],
+                          }),
+                        ))),
+                    }).pipe(Effect.provideService(SessionUsageAttribution.Current, requestTracker.usageAnchor ?? null)),
+                  ),
                 ).pipe(
                   Effect.flatMap((settlement) =>
                     publish(
@@ -778,7 +844,7 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
                         output: settlement.output,
                       }),
                       settlement.error,
-                    ),
+                    ).pipe(Effect.andThen(stall && settlement.error === undefined ? stall.resolveFailure(event.name) : Effect.void)),
                   ),
                 ),
               ).pipe(FiberSet.run(toolFibers)),
@@ -917,6 +983,7 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
             ),
           )
           yield* completeProviderRequest("completed", settlement)
+          if (stall) yield* stall.resolveFailure()
         })
 
       return yield* Effect.uninterruptibleMask((restore) =>
@@ -1532,13 +1599,14 @@ export const node = makeLocationNode({
     ProjectArtifactAccounting.node,
     ProjectArtifactSource.node,
     Integration.node,
+    SessionAutonomy.node,
   ],
 })
 
 export const standaloneNode = makeLocationNode({
   service: Service,
   layer: makeLayer(standaloneSource),
-  deps: [EventRuntime.node, SessionStepBoundary.node, llmClient, GenerationActivity.node, SessionContext.standaloneNode, SessionLiveState.standaloneNode, SessionModelRequest.standaloneNode, SessionProviderRequest.node, SessionContinuation.node, SessionProviderState.node, SessionCompactionJob.node, SessionStore.node, StandaloneCompaction.node, SessionTitle.standaloneNode, StandaloneConfig.node, Database.node],
+  deps: [EventRuntime.node, SessionStepBoundary.node, llmClient, GenerationActivity.node, SessionContext.standaloneNode, SessionLiveState.standaloneNode, SessionModelRequest.standaloneNode, SessionProviderRequest.node, SessionContinuation.node, SessionProviderState.node, SessionCompactionJob.node, SessionStore.node, StandaloneCompaction.node, SessionTitle.standaloneNode, StandaloneConfig.node, Database.node, SessionAutonomy.node],
 })
 
 const isInvalidPreviousResponse = (message: string) =>

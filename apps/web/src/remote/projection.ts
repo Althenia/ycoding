@@ -417,6 +417,12 @@ export type SessionAutonomyView = AutonomyModes & {
     readonly iteration: number
     readonly noProgress: number
     readonly maxNoProgress: number
+    readonly phase?: "waiting" | "rework" | "stalled"
+    readonly wait?: string
+    readonly rework?: number
+    readonly reworkOpen?: number
+    readonly stalls?: number
+    readonly failure?: { readonly class: string; readonly unit: string; readonly count: number }
   }
   readonly defer?: Readonly<Record<string, never>>
   readonly effective?: EffectiveAutonomyView
@@ -2105,13 +2111,36 @@ function readGoal(value: Record<string, unknown>): NonNullable<SessionAutonomyVi
   const text = stringField(value.text)
   if (text === undefined) return undefined
   const status = stringField(value.status)
+  const phase = stringField(value.phase)
+  const wait = stringField(value.wait)
+  const rework = numberField(value.rework)
+  const stalls = numberField(value.stalls)
+  const failure = isRecord(value.failure) ? value.failure : undefined
+  const failureClass = stringField(failure?.class)
+  const failureUnit = stringField(failure?.unit)
   return {
     text,
     status: status === "completed" || status === "stopped" || status === "exhausted" ? status : "active",
     iteration: numberField(value.iteration) ?? 0,
     noProgress: numberField(value.noProgress) ?? 0,
     maxNoProgress: numberField(value.maxNoProgress) ?? 0,
+    ...(phase === "waiting" || phase === "rework" || phase === "stalled" ? { phase } : {}),
+    ...(wait === undefined ? {} : { wait }),
+    ...(rework ? { rework } : {}),
+    ...(Array.isArray(value.reworkOpen) && value.reworkOpen.length > 0 ? { reworkOpen: value.reworkOpen.length } : {}),
+    ...(stalls ? { stalls } : {}),
+    ...(failureClass === undefined || failureUnit === undefined ? {} : { failure: { class: failureClass, unit: failureUnit, count: numberField(failure?.count) ?? 1 } }),
   }
+}
+
+export function goalProgressLabel(goal: NonNullable<SessionAutonomyView["goal"]>) {
+  return [
+    `${goal.status} · iteration ${goal.iteration} · no progress ${goal.noProgress}/${goal.maxNoProgress}`,
+    ...(goal.phase ? [goal.wait ? `${goal.phase} on ${goal.wait}` : goal.phase] : []),
+    ...(goal.rework ? [`rework ${goal.rework}${goal.reworkOpen ? ` (${goal.reworkOpen} open)` : ""}`] : []),
+    ...(goal.stalls ? [`${goal.stalls} stalled stopped`] : []),
+    ...(goal.failure ? [`failure ${goal.failure.class} on ${goal.failure.unit}${goal.failure.count > 1 ? ` ×${goal.failure.count}` : ""}`] : []),
+  ].join(" · ")
 }
 
 function dotsInputOf(metadata: unknown): { readonly dotsDelivery?: "steer" | "queue" } {

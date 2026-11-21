@@ -148,6 +148,45 @@ export function AutonomyRailContent(props: {
               value={goal().status}
               valueColor={theme.text.feedback.success.default}
             />
+            <Show when={goal().phase}>
+              {(phase) => (
+                <RailRow
+                  label="Phase"
+                  value={goal().wait ? `${phase()} · ${goal().wait}` : phase()}
+                  valueColor={
+                    phase() === "stalled"
+                      ? theme.text.feedback.error.default
+                      : phase() === "rework"
+                        ? theme.text.feedback.warning.default
+                        : theme.text.feedback.info.default
+                  }
+                />
+              )}
+            </Show>
+            <Show when={goal().rework}>
+              {(rework) => (
+                <RailRow
+                  label="Rework"
+                  value={goal().reworkOpen?.length ? `${rework()} · ${goal().reworkOpen!.length} open` : `${rework()}`}
+                  valueColor={goal().reworkOpen?.length ? theme.text.feedback.warning.default : undefined}
+                />
+              )}
+            </Show>
+            <For each={goal().reworkOpen ?? []}>
+              {(item) => <text fg={theme.text.subdued}>{`↻ ${item.unit}: ${item.reason}`}</text>}
+            </For>
+            <Show when={goal().stalls}>
+              {(stalls) => <RailRow label="Stalled" value={`${stalls()} stopped`} />}
+            </Show>
+            <Show when={goal().failure}>
+              {(failure) => (
+                <RailRow
+                  label="Failure"
+                  value={`${failure().class} · ${failure().unit}${failure().count > 1 ? ` ×${failure().count}` : ""}`}
+                  valueColor={theme.text.feedback.error.default}
+                />
+              )}
+            </Show>
           </RailSection>
         )}
       </Show>

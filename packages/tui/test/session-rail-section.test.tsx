@@ -187,6 +187,77 @@ test("renders the goal panel only while its durable status is active", async () 
   }
 })
 
+test("shows goal phase, rework, stalls and the unresolved failure only when reported", async () => {
+  const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
+  const plain = await mount(
+    () => (
+      <AutonomyRailContent
+        autonomy={railAutonomy({
+          goal: { text: "Finish the migration", status: "active", iteration: 2, noProgress: 0, maxNoProgress: 3 },
+        })}
+      />
+    ),
+    { width: 40, height: 24 },
+  )
+  try {
+    await plain.waitForFrame((frame) => frame.includes("Finish the migration"))
+    expect(plain.captureCharFrame()).not.toMatch(/Phase|Rework|Stalled|Failure/)
+  } finally {
+    plain.renderer.destroy()
+  }
+
+  const app = await mount(
+    () => (
+      <AutonomyRailContent
+        autonomy={railAutonomy({
+          goal: {
+            text: "Finish the migration",
+            status: "active",
+            iteration: 2,
+            noProgress: 0,
+            maxNoProgress: 3,
+            phase: "stalled",
+            rework: 3,
+            reworkOpen: [{ unit: "lane F", reason: "attempt 1 failed" }],
+            stalls: 1,
+            failure: { fingerprint: "tool.stalled:tool/shell", class: "tool.stalled", unit: "tool/shell", count: 2, recovering: false },
+          },
+        })}
+      />
+    ),
+    { width: 60, height: 24 },
+  )
+  try {
+    await app.waitForFrame((frame) => frame.includes("Failure"))
+    const frame = app.captureCharFrame().replace(/\s+/g, " ")
+    expect(frame).toContain("Phase stalled")
+    expect(frame).toContain("Rework 3 · 1 open")
+    expect(frame).toContain("↻ lane F: attempt 1 failed")
+    expect(frame).toContain("Stalled 1 stopped")
+    expect(frame).toContain("Failure tool.stalled · tool/shell ×2")
+    expect(frame).not.toContain("no progress")
+  } finally {
+    app.renderer.destroy()
+  }
+
+  const waiting = await mount(
+    () => (
+      <AutonomyRailContent
+        autonomy={railAutonomy({
+          goal: { text: "Finish the migration", status: "active", iteration: 2, noProgress: 0, maxNoProgress: 3, phase: "waiting", wait: "child" },
+        })}
+      />
+    ),
+    { width: 40, height: 24 },
+  )
+  try {
+    await waiting.waitForFrame((frame) => frame.includes("Phase"))
+    expect(waiting.captureCharFrame().replace(/\s+/g, " ")).toContain("Phase waiting · child")
+  } finally {
+    waiting.renderer.destroy()
+  }
+})
+
 test("keeps autonomy semantics out of generic rail sections", async () => {
   const { RailSection } = await import("../src/routes/session/rail-section")
   const app = await mount(() => <RailSection section="autonomy" title="AUTONOMY" />)

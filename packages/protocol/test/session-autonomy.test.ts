@@ -35,6 +35,27 @@ test("session autonomy state preserves active goal progress", () => {
   })
 })
 
+test("session autonomy state carries goal phase, rework, stall and failure accounting", () => {
+  const goal = {
+    text: "Ship the release",
+    status: "active",
+    iteration: 2,
+    noProgress: 0,
+    maxNoProgress: 3,
+    phase: "stalled",
+    wait: "child",
+    rework: 2,
+    reworkOpen: [{ unit: "lane F", reason: "lane F attempt 1 failed" }],
+    stalls: 1,
+    failure: { fingerprint: "tool.stalled:tool/shell", class: "tool.stalled", unit: "tool/shell", count: 2, recovering: false },
+    recovery: { condition: "c1", seen: [{ fingerprint: "tool.stalled:tool/shell", count: 2 }] },
+  } as const
+  const state = { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", goal } as const
+  expect(Schema.decodeUnknownSync(SessionAutonomyState)(state)).toEqual(state)
+  for (const invalid of [{ phase: "done" }, { wait: "user" }, { rework: -1 }, { failure: { ...goal.failure, count: 0 } }])
+    expect(() => Schema.decodeUnknownSync(SessionAutonomyState)({ ...state, goal: { ...goal, ...invalid } })).toThrow()
+})
+
 test("session autonomy state rejects obsolete Boolean and numeric controls", () => {
   for (const yolo of [false, true, 0, 1, 2, 3])
     expect(() => Schema.decodeUnknownSync(SessionAutonomyState)({ mode: "normal", yolo })).toThrow()

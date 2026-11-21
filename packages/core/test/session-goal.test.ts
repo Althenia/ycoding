@@ -20,6 +20,7 @@ import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionGoal } from "@ycoding-ai/core/session/goal"
+import { SessionGoalVerification } from "@ycoding-ai/core/session/goal-verification"
 import { SessionHelperPolicy, localTitle } from "@ycoding-ai/core/session/helper-policy"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
@@ -178,7 +179,7 @@ const synthesisCalls: string[] = []
 const steerCalls: Array<{
   readonly goal: SessionAutonomy.Goal
   readonly latestAssistantText?: string
-  readonly phase: "start" | "continue"
+  readonly phase: "start" | "continue" | "recover"
 }> = []
 const calculationEntered = Deferred.makeUnsafe<void>()
 const calculationRelease = Deferred.makeUnsafe<void>()
@@ -518,6 +519,9 @@ it.effect("steers from automatic question facts and current answer policy withou
     yield* goals.steer({ session, goal: before.state.goal!, phase: "continue" })
     const request = JSON.stringify(requests[0]?.messages)
     expect(request).toContain("Answers decision mode: auto")
+    expect(request).toContain("Goal phase: active; rework 0; stalled units stopped 0; no progress 0/")
+    expect(request).toContain("Verification: no file changes recorded in recent history.")
+    expect(request).toContain("Name the acceptance criteria the current evidence does not yet satisfy")
     expect(request).toContain("Continue verification or wait?")
     expect(request).toContain("Keep waiting")
     expect(request).toContain("Proceed with authorized checks")
@@ -529,6 +533,38 @@ it.effect("steers from automatic question facts and current answer policy withou
     yield* goals.steer({ session, goal: before.state.goal!, phase: "continue" })
     expect(JSON.stringify(requests[1]?.messages)).toContain("Answers decision mode: manual")
     expect(requests[1]?.system).toEqual(requests[0]?.system)
+  }),
+)
+
+it.effect("classifies verification from completed edits, opened rework and later checks", () =>
+  Effect.sync(() => {
+    const time = { created: DateTime.makeUnsafe(100), completed: DateTime.makeUnsafe(101) }
+    const call = (id: string, name: string, input: Record<string, unknown>, status: "completed" | "error" = "completed") =>
+      SessionMessage.Assistant.make({
+        id: SessionMessage.ID.make(`msg_verify_${id}`), type: "assistant", agent: Agent.defaultID,
+        model: SessionRunnerModel.resolved(model).ref, time,
+        content: [status === "completed"
+          ? { type: "tool", id: `call_${id}`, name, time, state: { status, content: [], input, structured: {} } }
+          : { type: "tool", id: `call_${id}`, name, time, state: { status, content: [], input, structured: {}, error: { type: "tool.failed", message: "failed" } } }],
+      })
+    const edit = call("edit", "edit", { path: "a.ts" })
+    const check = call("check", "shell", { command: "bun test a.test.ts" })
+    const rework = call("rework", "goal", { action: "rework", unit: "lane F", reason: "lane F attempt 1 failed", state: "opened" })
+    const failedEdit = call("failed_edit", "edit", { path: "b.ts" }, "error")
+    expect(SessionGoalVerification.verification([])).toBe("none")
+    expect(SessionGoalVerification.verification([check, failedEdit])).toBe("none")
+    expect(SessionGoalVerification.verification([edit])).toBe("unverified")
+    expect(SessionGoalVerification.verification([edit, check])).toBe("verified")
+    expect(SessionGoalVerification.verification([edit, check, rework])).toBe("unverified")
+    expect(SessionGoalVerification.verification([rework, check])).toBe("verified")
+  }),
+)
+
+it.effect("extracts only explicitly named checks from the objective", () =>
+  Effect.sync(() => {
+    expect(SessionGoalVerification.requiredChecks("Fix it, run ./verify.sh and complete only after it passes.")).toEqual(["./verify.sh"])
+    expect(SessionGoalVerification.requiredChecks("Pass `bun test   parser.test.ts` and `../scripts/check.sh`, then ./verify.sh.")).toEqual(["bun test parser.test.ts", "../scripts/check.sh", "./verify.sh"])
+    expect(SessionGoalVerification.requiredChecks("Update `f.txt`, edit ./src/parser.ts and keep verify.sh green.")).toEqual([])
   }),
 )
 
