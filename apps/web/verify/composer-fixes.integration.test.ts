@@ -178,9 +178,11 @@ describe("composer", () => {
         if (decodeString(colors["typing"]) !== "") expect(greenDominant(decodeString(colors["typing"])), `${scheme} working dots`).toBe(true)
         await page.navigate(shell(`&theme=${scheme}`))
         await wait(page, `document.querySelector('.activity-bar__item[aria-current="page"]') !== null`)
-        const pill = decodeRecord(await page.evaluate(`(() => { const style = getComputedStyle(document.querySelector('.activity-bar__item[aria-current="page"]')); return { background: style.backgroundColor, color: style.color } })()`))
+        const pill = decodeRecord(await page.evaluate(`(() => { const active = document.querySelector('.activity-bar__item[aria-current="page"]'); const style = getComputedStyle(active); const inset = getComputedStyle(active, '::before'); return { background: style.backgroundColor, color: style.color, insetWidth: inset.inlineSize, insetColor: inset.backgroundColor } })()`))
         expect(greenDominant(decodeString(pill["background"])), `${scheme} chat pill ${pill["background"]}`).toBe(true)
         expect(greenDominant(decodeString(pill["color"])), `${scheme} chat pill text ${pill["color"]}`).toBe(true)
+        expect(pill["insetWidth"]).toBe("2px")
+        expect(greenDominant(decodeString(pill["insetColor"])), `${scheme} leading current marker`).toBe(true)
       }
     } finally { await page.close() }
   }, 60_000)
@@ -613,7 +615,7 @@ describe("markdown", () => {
         await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(scheme)}`)
         await page.evaluate(`window.composerSetMessages([${JSON.stringify(assistant)}])`)
         await wait(page, `document.querySelectorAll('.transcript-md__code').length === 3`)
-        expect(decodeString(await page.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--yc-plane-canvas').trim()`))).toBe(scheme === "dark" ? "#15181d" : "#fafcfe")
+        expect(decodeString(await page.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--yc-plane-canvas').trim()`))).toBe(scheme === "dark" ? "#191f19" : "#fffaf0")
         const colors = decodeRecord(await page.evaluate(`(() => {
           const card = document.querySelector('.transcript-md__code'), head = card.querySelector('.transcript-md__code-head')
           const spans = {}

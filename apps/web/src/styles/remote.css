@@ -726,6 +726,17 @@ body:has(.app) {
   color: var(--yc-ink);
 }
 
+.session-row--active::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block: var(--yc-space-2);
+  inline-size: calc(2 * var(--yc-border-width));
+  border-radius: var(--yc-radius-pill);
+  background: var(--yc-green-ink);
+  pointer-events: none;
+}
+
 @media (hover: hover) { .session-row--active:hover:not(:disabled) { background: var(--yc-plane-selected); } }
 
 .session-row__name {

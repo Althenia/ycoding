@@ -184,8 +184,9 @@ describe("Web design authority", () => {
     expect(rule).toContain("approval")
     expect(rule).not.toContain("MUST NOT add, remove or change a token")
     expect(documentedTokens(document)).toMatchObject({ "--yc-header-public-h": "56px", "--yc-public-max": "1440px" })
-    expect(document).toMatch(/light and alternate themes are native product variants/i)
-    expect(document).toContain("They are not claimed as directly observed Stitch variants.")
+    const schemes = document.split("\n").find(line => line.startsWith("| W42 |")) ?? ""
+    expect(schemes).toContain("Default, One Dark, One Dark Pro, and High contrast")
+    expect(schemes).toContain("One Dark Pro has no light palette and keeps the default light theme")
   })
 
   test("Session and Settings document their centered tracks and distinct content constraints", async () => {
@@ -203,17 +204,16 @@ describe("Web design authority", () => {
     expect(rules).toMatch(/R12[^\n]*public header/)
     expect(document).not.toContain("scoped Web exception")
   })
-  test("both Web rule owners bind the approved Stitch project without a specimen-value exclusion", async () => {
-    const documents = await Promise.all([
+  test("Field Notes rules assign Web and Desktop to their own surface contracts", async () => {
+    const [root, web, desktop] = await Promise.all([
+      Bun.file(new URL("../../../../DESIGN.md", import.meta.url)).text(),
       Bun.file(new URL("../../DESIGN.md", import.meta.url)).text(),
-      Bun.file(new URL("../../../../.stitch/DESIGN.md", import.meta.url)).text(),
+      Bun.file(new URL("../../../../packages/desktop/DESIGN.md", import.meta.url)).text(),
     ])
-    for (const document of documents) {
-      expect(document).toContain("10627183425669399580")
-      expect(document).not.toContain("15933380309160575156")
-      expect(document).not.toContain("specimen hex values, fonts and canvas labels MUST NOT enter production")
-      expect(document).toContain("JetBrains Mono")
-    }
+    expect(root).toMatch(/R13[^\n]*Field Notes/)
+    expect(web).toMatch(/W123[^\n]*1024px/)
+    expect(web).toMatch(/W124[^\n]*leading inset/)
+    expect(desktop).toMatch(/D67[^\n]*leading current destination marker/)
   })
 
   test("the brand chain scopes Web type and composition without replacing other surfaces", async () => {

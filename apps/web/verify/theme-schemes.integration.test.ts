@@ -33,6 +33,8 @@ describe("web color schemes", () => {
       await page.setMobileViewport(390, 844)
       await page.navigate(`${url()}/verify/remote.html?view=settings&noSelection=1`)
       await waitFor(page, `document.querySelector('section[aria-labelledby="appearance-settings"] [aria-label="Color scheme"]') instanceof HTMLButtonElement`)
+      await page.evaluate(`[...document.querySelectorAll('section[aria-labelledby="appearance-settings"] [role="radio"]')].find(option => option.textContent?.trim() === 'Light')?.click()`)
+      await waitFor(page, `document.documentElement.dataset.theme === 'light'`)
       await selectScheme(page, "One Dark")
       await waitFor(page, `document.documentElement.dataset.scheme === 'onedark'`)
       const light = await page.evaluate(`(() => ({
@@ -63,7 +65,7 @@ describe("web color schemes", () => {
       await waitFor(page, `document.documentElement.dataset.scheme === 'onedark-pro'`)
       await page.evaluate(`[...document.querySelectorAll('section[aria-labelledby="appearance-settings"] [role="radio"]')].find(option => option.textContent?.trim() === 'Light')?.click()`)
       await waitFor(page, `document.documentElement.dataset.theme === 'light'`)
-      expect(await page.evaluate(`({ scheme: document.documentElement.dataset.scheme, background: getComputedStyle(document.documentElement).getPropertyValue('--yc-plane-canvas').trim() })`)).toEqual({ scheme: "onedark-pro", background: "#fafcfe" })
+      expect(await page.evaluate(`({ scheme: document.documentElement.dataset.scheme, background: getComputedStyle(document.documentElement).getPropertyValue('--yc-plane-canvas').trim() })`)).toEqual({ scheme: "onedark-pro", background: "#fffaf0" })
 
       await selectScheme(page, "High contrast")
       await waitFor(page, `document.documentElement.dataset.scheme === 'high-contrast'`)

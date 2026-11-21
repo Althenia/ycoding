@@ -1,22 +1,22 @@
 ---
 version: alpha
 name: YCoding Desktop
-description: Icon-led conversation, Session activity, and management for the YCoding Desktop client.
-surface: web
+description: Field Notes rules for the YCoding Desktop client.
+surface: native
 extends: ../../DESIGN.md
 colors:
-  plane-chrome: "#0e1116"
-  plane-canvas: "#15181d"
-  plane-raised: "#1d2228"
-  plane-hover: "#242930"
-  plane-selected: "#2b3138"
+  plane-chrome: "#111611"
+  plane-canvas: "#191f19"
+  plane-raised: "#222b21"
+  plane-hover: "#2a3528"
+  plane-selected: "#303b2e"
   plane-inverse: "#f1f4f8"
   line-divider: "#363c44"
-  line-subtle: "#676e77"
-  line-field: "#848b95"
-  ink: "#f1f4f8"
-  ink-secondary: "#bfc5cd"
-  ink-tertiary: "#a1a8b2"
+  line-subtle: "#818e7b"
+  line-field: "#9da895"
+  ink: "#f3f5e9"
+  ink-secondary: "#c2ccbb"
+  ink-tertiary: "#a4b09e"
   code-comment: "#a1a8b2"
   code-function: "#6cc9ff"
   code-ink: "#f1f4f8"
@@ -27,7 +27,7 @@ colors:
   code-string: "#9ac8ac"
   code-type: "#f9ac30"
   ink-inverse: "#0e1116"
-  focus: "#55a67a"
+  focus: "#80b58b"
   scrim: "rgba(14, 17, 22, 0.72)"
   selection: "rgba(93, 148, 255, 0.32)"
   green-tonal: "#143021"
@@ -98,18 +98,18 @@ colors:
 themes:
   light:
     colors:
-      plane-chrome: "#f3f6fb"
-      plane-canvas: "#fafcfe"
-      plane-raised: "#e5eaf0"
-      plane-hover: "#dde2e9"
-      plane-selected: "#d3d8df"
+      plane-chrome: "#f3eee1"
+      plane-canvas: "#fffaf0"
+      plane-raised: "#e8dfce"
+      plane-hover: "#eee6d8"
+      plane-selected: "#ded4c1"
       plane-inverse: "#151618"
       line-divider: "#c4c9d1"
-      line-subtle: "#80858c"
-      line-field: "#70757c"
-      ink: "#151618"
-      ink-secondary: "#404449"
-      ink-tertiary: "#565b62"
+      line-subtle: "#777664"
+      line-field: "#6a6c5a"
+      ink: "#23251c"
+      ink-secondary: "#414639"
+      ink-tertiary: "#535949"
       code-comment: "#565b62"
       code-function: "#025c83"
       code-ink: "#151618"
@@ -120,7 +120,7 @@ themes:
       code-string: "#045e39"
       code-type: "#744c00"
       ink-inverse: "#f3f6fb"
-      focus: "#088955"
+      focus: "#526d4e"
       scrim: "rgba(243, 246, 251, 0.5)"
       selection: "rgba(47, 112, 242, 0.32)"
       green-tonal: "#e4efe8"
@@ -645,21 +645,17 @@ motion:
     caret: "steps(2, jump-none)"
 ---
 
-# YCoding Desktop design
+# YCoding Desktop
 
 ## Overview
 
-YCoding Desktop centers a readable conversation between the activity bar and Session list on the leading side and an optional Companion on the trailing side. Project coordination and Settings use the same navigation rhythm, ink, and spacing as chat, with wider work areas for rosters and forms. Management dialogs keep their title and actions separate from scrollable detail. Nothing in these surfaces changes where a Session runs or how its data is stored.
-
-The parent `DESIGN.md` owns brand and cross-surface accessibility. Desktop paints the shared `--yc-` palette, radius, motion and shell components from `apps/web/src/styles/tokens.css`, `apps/web/src/theme/schemes.ts` and `apps/web/src/styles/workspace-shell.css`; it owns its brand tokens, fonts and component geometry in `src/tokens.css`, and this document records every value it paints. Approved rules govern behavior and appearance. `Implemented` rules describe local geometry, not a new brand requirement. The inspected Settings, Keyboard Shortcuts, Connect Providers, and Master-Session Team Stitch screens inform grouping and alignment. Their illustrative runtime states and actions are not product capabilities. A `proposal` does not bind the implementation.
+Field Notes centers an active Session between persistent navigation and an optional Companion. Desktop operates through its own backend connection and owns the native menu and window. It uses the same visual vocabulary as Web without importing browser routes or remote-account controls.
 
 ## Principles
 
-- Make user messages, substantive responses and final results the reading path. Put intermediate execution within that path without making it the dominant furniture.
-- Center the useful conversation and composer together. Give both sides deliberate, modest space rather than parking content on the left of a blank pane.
-- Use typography, spacing, semantic ink and surface tone before borders. Preserve boundaries that explain an input, floating layer, pending decision or danger.
-- Keep information, provenance, keyboard actions, drafts, reported state and confirmation boundaries intact.
-- Animate a change of state, not every incoming token. Keep the reading anchor and input responsive.
+- Lead with conversation and decisions. Keep progress, history and tool output readable without making them compete with user intent.
+- Keep the same reading and composer axis as the window resizes. Preserve visible controls, shortcuts, drafts and scroll position.
+- Use owned layers and real status. Never infer execution or provide a control the backend does not support.
 
 ## Rules
 
@@ -702,7 +698,7 @@ The parent `DESIGN.md` owns brand and cross-surface accessibility. Desktop paint
 | D35 | approved | The transcript MUST omit repeated `subagent_notification` events, Project `started` and `progress`, and undescribed synthetic task noise. Preserve parent answers, goal steers, described completions and notes, and actionable described Project member notifications with an Open action. Filtering MUST NOT change retained history or Activity. | `test/form-rules.test.ts`; `test/renderer.integration.test.ts` |
 | D36 | approved | Companion Context MUST give the category breakdown the full inner width, with readable labels, counts and shares. Keep usage and Session tasks readable; put Diagnostics, Loaded child task costs and Compaction history behind named keyboard-operable disclosures. Nested snapshot values MUST stack below their keys. Activity and Running MUST wrap both headings and metadata without truncation, with `scrollWidth <= clientWidth` throughout. | `test/renderer.integration.test.ts` |
 | D37 | approved | The mint Working arc MUST spin continuously through 360° at a constant speed around its center. The YCoding label and strip stay still. Keep the arc static with reduced motion or when animations are off. | `test/renderer.integration.test.ts` |
-| D38 | approved | At every supported window width, connection status MUST sit beside the session title with one spacing step between them. Truncate text only when width is constrained: the connection status keeps its natural width while the title keeps at least `--yc-space-20`, so the title truncates first and the status truncates only once the title is at that floor. The header actions remain at the trailing edge. The status bar repeats connection status as its first state item. | `test/renderer.integration.test.ts` |
+| D38 | approved | At every supported window width, connection status MUST sit beside the session title with one spacing step between them. Truncate text only when width is constrained: the connection status keeps its natural width while the title keeps at least `--yc-space-20`, so the title truncates first and the status truncates only once the title is at that floor. The header actions remain at the trailing edge. The header presence line owns connection status. | `test/renderer.integration.test.ts` |
 | D39 | approved | The model and effort chips MUST open the same searchable catalog without blocking interaction, including when 600 models are offered. Keep provider grouping, recent models, profile and effort selection, and focus return to the invoking control. | `test/renderer.integration.test.ts`; `test/model-switch.test.ts` |
 | D40 | approved | User and assistant turns, reasoning, substantive notices and narrative tool output MUST use Markdown. Fenced code MUST preserve indentation and line breaks; show its language or `text` and an icon-led Copy action that writes the rendered code text through the native clipboard. Text must remain selectable and any code scrollbar must stay inside the code viewport. | `test/renderer.integration.test.ts` |
 | D41 | approved | Use the control, card and composer corner roles consistently across navigation, views and overlays. Use the canvas for the reading track, raised cards for coherent control/inspector groups, and semantic ink for state. Keep existing pane boundaries, routes and named actions. Provider profiles MUST show labelled default and connection state rather than raw booleans. System tool notices MUST appear only on their owning tab. | `test/ledger-design.test.ts`; `test/renderer.integration.test.ts` |
@@ -731,142 +727,73 @@ The parent `DESIGN.md` owns brand and cross-surface accessibility. Desktop paint
 | D64 | implemented | A sent image MUST render as a thumbnail button labeled `Open image <name>` that opens a `DesktopDialog` of kind `image` titled `Image: <name>`. The dialog takes the full available viewport width and shows the image at natural size, scaled down with `object-fit: contain` to fit the dialog body, never cropped. Its Close button, a backdrop press and Escape MUST close it and return focus to the thumbnail. | `test/renderer.integration.test.ts` |
 | D65 | implemented | A user prompt admitted from Dots native input (`metadata.dotsInput.origin` is `dots-native`) MUST carry the D50 ChatGPT mark badge. When its delivery is `steer`, and on every D50 synthetic Dot steer, a `Steer` marker MUST sit 4px after the badge on the same center line: a 22px pill on `plane-raised` with a `line-field` border and 600 `--yc-size-2xs` mono ink text, without a `title`. Queued Dot input shows the badge only; ordinary prompts and any other origin show neither. | `test/renderer.integration.test.ts` |
 | D66 | implemented | A pending guardrail card MUST show `Waiting <age>` from the request's `created` time, refreshed at least every 15 seconds, a `Stale` badge (`--yc-amber-tonal` with `--yc-amber-ink`) from 15 minutes, and the owning Session and request IDs. A request without `created`, as older backends send, MUST be accepted and render with its reason, IDs and actions and no age or `Stale` badge. A `Review recovery` group with `Cancel` and `Retry` MUST lead the card footer, with Approve and Deny at its end. Both re-read the pending list and call `guardrail.request.cancel` or `guardrail.request.retry` on the owning Session only while the request is still listed; otherwise they report that the request is no longer pending, send nothing, and drop the card on refresh. Retry re-presents the same pending review: it never reaches `guardrail.request.reply`, never approves, rejects or settles the review and never runs its command, and the card stays pending with its waiting age unchanged and no did-not-run or approval notice. Any `guardrail.cancelled` event MUST refresh requests and drop the card whether or not it has a reason. When a card leaves and the Session's guardrail decisions record a `cancelled` or `expired` reason for it, a status line MUST say the review was cancelled or expired and the action did not run; the decision history labels those rows `Cancelled · did not run` and `Expired · did not run`, and rows without a reason keep their reply labels. | `test/renderer.integration.test.ts`, `test/parity-backend.test.ts` |
+| D67 | approved | The Desktop shell MUST use the shared Field Notes light and dark role values, a leading current destination marker and restrained raised input. Selected Session and command actions MUST retain distinct focus, existing scroll and keyboard ownership, and the one Send/Stop slot. | `test/ledger-design.test.ts`, `test/renderer.integration.test.ts` |
 
 ## Colors
 
-Paint the activity bar, Session list, Companion and inspectors on `plane-chrome`, and the reading track and page on `plane-canvas`. Use `plane-raised` for cards, the composer field, request cards, settings sections and floating bodies, `plane-hover` for hover, and `plane-selected` for selected rows. Green is the interaction color: primary buttons (`green-solid` with `on-green`), focus, links in controls, selection (`green-tonal`) and the current destination. The local user bubble uses `green-tonal`. Code blocks paint `code-ink` and the `code-keyword`, `code-string`, `code-number`, `code-function`, `code-type`, `code-property`, `code-comment` and `code-meta` roles on `plane-raised`. Mint marks running and completed work only; violet marks reasoning and Projects, teal terminal and tools, sky files, models and Markdown links, amber attention, usage and goals, and coral failures and destructive actions. Each hue offers `tonal`, `tonal-hover`, `line`, `graphic`, `solid`, `solid-hover`, `ink` and `on-<hue>` roles; text uses `-ink`, fills and glyphs use `-graphic` or `-solid`. Effort icons follow their variant hues. Pair every state color with a name or distinct icon. The default dark palette is listed under `colors`; Light, One Dark light and dark, One Dark Pro and High contrast light and dark are listed under `themes`. Keep raw color values in tokens, never in component styles.
+The palette is shared with `apps/web/src/styles/tokens.css` and `apps/web/src/theme/schemes.ts`, with Desktop's brand roles in `src/tokens.css`. Use chrome for activity, Session rails and Companion, canvas for reading, raised for fields, cards and overlay bodies, and hover/selected for the state they name. Green indicates primary actions, selected destinations, focus and user attribution. Mint indicates work status; warning, error and stop use their named amber or coral roles. Syntax uses the declared `code-*` roles. Contrast applies across every supported palette.
 
 ## Typography
 
-Use self-hosted Geist for interface prose and JetBrains Mono Regular, Medium and SemiBold for code and metadata. Body text is 13px with 20px leading; metadata has a 12px floor. Prose occupies the same centered track as the surrounding activity and composer without another character-count maximum. Preserve original whitespace and line structure when wrapping code and tool output.
+Geist labels the interface and transcript. JetBrains Mono renders code, paths and precise metadata. The Desktop body uses 13px at 20px leading and preserves 12px control and metadata text. Keep wrapped identifiers selectable and preserve code whitespace.
 
 ## Layout
 
-The 80px activity bar, the 280px Session list (256px in windows up to 1180px wide, resizable from 232px to 360px) and the optional 320px Companion bound the conversation pane. Center transcript and composer in one track with equal inline gutters and a 1024px cap. Use 48px gutters, which keep the floating scroll and zoom controls outside the track. Assistant prose and tool detail use the full track. Local user bubbles, attachments, Copy message and delivery status align at the trailing edge. Keep the title and workspace or connection status together at the leading edge of the 40px conversation header. Group the trailing Team, context, Companion and menu controls; show the context values beside the ring, not in a second control or a tooltip alone.
+The fixed 80px activity bar and 232–360px resizable Session list lead the workspace. Center transcript and composer on one 1024px track with symmetric gutters. Keep the native title bar, the bounded conversation header and its named controls. The composer has one 44px text line, a flat field boundary, and one Send or Stop slot. Reflow actions without moving their ownership; no status strip below the dock.
 
-Keep the composer footer compact. Place the flexible spacer before the metrics/autonomy/send cluster, not between Auto and Send. Keep their control-box gap at 8–10px and Send's trailing and bottom card insets at 10–12px, matching the left attachment/model treatment. Reflow controls at the window floor without losing any control or shrinking coarse targets. Tighten turn, activity-step and composer spacing together without removing content or reducing text sizes.
-
-Give every flex/grid child that contains long content a shrinkable track. Wrap paths, labels, tool output and code without destroying their text; keep controls at their readable size and reflow the action row when needed. Neither the composer nor its surrounding dock owns a horizontal scroller. Give each pane one deliberate vertical scroll owner and retain the established attached-reader behavior.
-
-Diff lines retain their original whitespace and existing `Wrap diff lines` control. Stored `word` wraps code within the available width without a horizontal bar. Stored `none` keeps no-wrap lines and intentional horizontal scrolling inside the bounded inner diff/code viewport. Keep that viewport shrinkable and contained; its scroll must not widen the page, pane, transcript or composer. Preserve preference values/defaults, line numbers, content, copy actions, reviewed state and split/unified controls.
-
-Coordination uses a project inventory, one Master/member roster and a separate Add-existing/New-member workflow sidebar. Both panes reach the bottom of the window. Stretch the roster and its header across the main pane, with actions facing the workflow divider. Keep row heights natural. The list region owns vertical scrolling above the pinned footer. In the footer, align the concurrency label and picker with a labelled delegation summary. Pair a folder field and chooser along their control baseline; wrap the chooser below the input when the form track cannot fit both.
-
-### Surface geometry
-
-| Component | Wide-window geometry |
-|---|---|
-| Workspaces | 48px toolbar, 420px detail |
-| Projects | 44px toolbar, 400px workflow inspector |
-| Sessions | 40px toolbar |
-| Team | 40px toolbar, 320px selected detail; one scrolling content track at or below 1000px |
-| Coordination | 56px toolbar, 320px selected detail |
-| Agents & Skills | 1080×720 dialog; 48px header; 320px agent and 360px skill tracks |
-| Browser | 960×640 dialog, 48px header |
-| Status & Debug | 980×650 dialog, 48px header plus 40px tabs |
-| Session actions | 920×680 dialog, 48px header |
-| Git diff | 1080×720 dialog, 57px border-inclusive header, 340px files |
-| Provider connection | Up to 880px, standard dialog header, shrinkable registry and detail tracks |
-| Folder chooser | Up to 580px, shared title and close controls |
-| Prompt stashes / editor / export | 740px / 680px / 520px widths, bounded content height |
-| Appearance / command palette | 560px / 640px widths; palette search 48px |
-| Captured-file confirmation | 460px width |
-
-Desktop enforces a native minimum window content size of `1000×600px` (`window-min-width: 1000px`, `window-min-height: 600px`) and opens new windows at `1360×860px` with no persisted window-bounds file (`preferences.ts` stores only backend `mode` and `sharedEndpoint`). At `1000×600px` the `80px` activity bar and the `256px` Session list sit beside a `664px` main pane, whose centered track keeps `48px` gutters, above the `28px` status bar, the title and status share one header row (`D38`), Settings cards keep `--yc-space-5` insets (`D44`), Companion overlays at `min(320px, 100%)` below the `1180px` docking boundary, Connect providers keeps two columns (`D45`/`D47`), Team stacks into one scrolling track at `1000px` and below, and modal dialogs use the `952px` (`100dvw - 48px`) track. `600px` exceeds the `36rem` (`576px`) short-height dialog rule in `src/style.css`. Desktop styles own no width rule below `1000px`.
-
-The composer recognizes `/btw`, `/btw-send`, `/suggest`, `/prompt`, `/cd`, `/editor`, `/docs`, `/exit` and `/defer` as local commands. Side-chat and prompt-assistance commands open a reviewable dialog with the supplied text; they do not submit that text as an ordinary prompt. `/btw-send` is restricted to a BTW side chat with a parent. `/prompt` from New chat creates a Session only after confirmation and opens prompt assistance without sending a prompt. `/editor` opens the draft through `VISUAL`, then `EDITOR`, using a private temporary file and argument parsing without a shell. Missing or unsuccessful external editors open the owned draft dialog instead. Saving preserves file and agent attachments; an empty edited draft is valid. `/docs` opens the documentation in the external browser. `/exit` confirms before disconnecting and quitting; a failed disconnect prevents quitting.
-
-The autonomy popover and `/defer` toggle persistent deferral without changing Permissions, Guardrails or Answers. `/defer on` and `/defer off` set it explicitly. The chip shows its current state and the action reads Defer on or Defer off. Normal prompts leave deferral enabled; only an explicit off action disables it. The popover keeps a named dialog role, independent category controls, Goal actions and an alert region. Enabling a new YOLO category requires an explicit risk confirmation before applying it; New chat requires the same consent for staged YOLO autonomy before sending.
-
-Full Session diffs use independent 240px unified and 220px split file tracks. Keep the Git diff viewer read-only; it does not stage, discard or commit changes.
+Use pane-specific toolbar and inspector tokens. Workspaces, Projects, Sessions and Team retain their separate list and detail tracks. Project coordination docks its concurrency and delegated-decision footer below the roster's own scrolling region. Settings keeps named sections, live values and keyboard editing. Modals use an owned header, close control and bounded body.
 
 ## Responsive
 
-Desktop renders only at `1000px` and wider. The `1180px` boundary docks Companion beside the conversation above it and overlays it at or below it. Workspaces and Projects add their side-by-side list/detail tracks at `1100px` and `1280px`, and Settings navigation stacks above its cards below `1280px`. Coarse pointers keep 44px targets, grow the conversation and Companion headers to 52px so those targets stay inside them, and keep 16px inputs and content-sized picker sheets with visual viewport geometry, safe-area insets, a named Close, scrim dismissal and Escape.
+Native minimum content size is 1000×600; new windows open at 1360×860. At the width floor, keep both navigation rails and let the Companion overlay. Dock above 1180px; Workspaces and Projects switch to their wider detail tracks at their own boundaries. On coarse pointers, keep 44px targets and 16px editable text; open named, focus-contained sheets within the visual viewport.
 
 ## Elevation & Depth
 
-Use single-level tonal planes in normal flow: chrome, canvas and raised steps carry the hierarchy, and the composer and cards stay flat. `elevation-float` belongs only to popovers, dialogs, sheets, toasts, tooltips and the Companion while it overlays the conversation below the 1180px docking boundary. Keep useful pane separators, field boundaries and destructive/pending treatments. Remove a redundant wrapper at its owner; never apply blanket border-removal CSS. A disclosure is an interaction, not a reason to put another card around every nested row.
+Use opaque native content planes. Keep the composer flat and separate hover from keyboard focus. Reserve `elevation-float` for popovers, tooltips, dialogs, toasts, sheets and an overlaid Companion. Meaningful pane, field and danger edges remain visible.
 
 ## Shapes
 
-Use 6px (`radius-control`) for interactive controls, 8px (`radius-card`) for raised cards and dialogs, 12px (`radius-composer`) for the single composer boundary, 4px (`radius-detail`) for keycaps and code chips, and 999px (`radius-pill`) for pills and badges. Keep circular status geometry. Group controls without enclosing each field in another card; keep repeated conversation activity open and aligned.
+Use 4px for detail, 6px for controls, 8px for cards, 12px for the composer and the pill role for compact state. The current destination takes a leading inset and selection fill; neither adds to its physical dimensions. Preserve distinct selected, hover, focus and disabled states.
 
 ## Motion
 
-Reuse the canonical shared `--yc-dur-*`, `--yc-ease-*` and `--yc-motion-*` tokens: 80ms feedback, 140ms small changes and exits, and 220ms entrances, with no spring overshoot. Loops use linear easing: the trace runs on `dur-trace` (1760ms) and the Working arc on `dur-spin` (660ms); the streaming caret steps on `ease-caret`. Screen/Session navigation stays within 300ms. Use standard easing for state feedback, entrance easing for entering layers and exit easing for closing layers. Animate transform and opacity; do not tween transcript height, every streaming token, large grids or permanent layout widths.
-
-Keep the shell, composer and stable message rows mounted through navigation and refresh. Panel and disclosure state changes retain focus and the reading anchor. Start closing behavior immediately and remove a floating layer when its actual exit finishes; interruption must leave a usable final state. Essential content remains visible at rest. No new motion framework or dependency is needed.
-
-One global reduced-motion mapping sets `motion-spatial-dur` and `motion-exit-dur` to 0s, `motion-effect-dur` to 80ms and `motion-travel` to 0, which removes spatial travel and smooth scroll and makes exits immediate. The Desktop animations-off preference (`data-animations="off"`) sets every motion duration to 0s. Both stop the trace on a static 50% mint line. Reduced motion preserves feedback, expanded state, focus visibility and announcements. Verify normal and reduced motion during streaming, disclosure, navigation and member selection; a stationary screenshot alone proves none of those transitions.
-
-The Working strip shows a mint partial circle immediately before YCoding. Rotate only the arc on its center at a constant speed, one `dur-spin` revolution at a time. Keep its label and neighbors still. Reduced motion and the Desktop animation preference both stop the spin.
+Use shared durations and easing for 80ms feedback, 140ms smaller changes, and 220ms entrances. Keep the 1760ms trace and 660ms Working arc tied to actual execution. Reduced motion stops repetitive and spatial motion, makes exits immediate and keeps effect feedback at 80ms; the explicit animation-off preference disables all durations. Do not remount streaming rows to animate them.
 
 ## Icons
 
-Use the owned 24-unit SVG registry and 1.6-unit rounded currentColor strokes, rendered at 14px in dense chips, 16px in rows and buttons, and 20px in the activity bar. Model, effort, policy, delivery, attachment and execution controls keep meaningful symbols, consistent alignment and readable values. Running, waiting, failed, idle and unknown states keep distinct glyphs and names. Dense actions expose owned non-native hover/focus hints; a trigger hides its hint while its popover, menu or dialog is open. Coarse actions keep 44px reach. Do not replace user-facing names with unexplained icons or native title tooltips.
+Use the owned 24-unit SVG family at 14px in dense chips, 16px in rows and actions and 20px in activity destinations. Keep all icon actions named. State glyphs with accessible status labels distinguish waiting, running, failed, idle and unknown.
 
 ## Components
 
-### Populated conversation
+| Surface | Owner and treatment |
+| --- | --- |
+| Activity, Sessions, transcript and composer | `src/renderer.tsx`, `src/style.css`, shared workspace styles: inset current destination, independent scroll, compact provenance, trailing prompt, centered input, retained actions and drafts. |
+| Companion and requests | `src/renderer.tsx`, `src/active-questions.tsx`, `src/terminal-inspector.tsx`: labels reflect actual context, process and request state. Named details, read-only output and owned decision actions. |
+| Projects and Team | `src/projects-surface.tsx`, `src/project-members.tsx`, `src/style.css`: one roster and selected inspector, real membership and native-owned workflows. |
+| Settings, dialogs, keyboard and diff | `src/renderer.tsx`, `src/keyboard-settings.tsx`, `src/responsive-layer.tsx` and `src/diff-view.css`: stable focus, genuine errors, bounded scroll, real activation and confirmations. |
+| Window, host menus and connection | `src/bun/index.ts`, `src/window-bounds.ts`, `src/backend-controller.ts`: macOS window and runtime contracts, separate from renderer presentation. |
 
-Present user intent, assistant prose and final results as the primary content. Intermediate tool and thought activity forms compact, meaningful disclosure groups. Show actor/model changes clearly; within a consecutive unchanged actor/model tool/thought-only run, avoid a new prominent badge for every microstep. Keep provenance and timing reachable in the group or per-message details. Preserve message identities, deep links, statuses, error recovery, outputs, copy controls and all user actions. Never group across a user message, nonempty assistant prose including commentary, an actor/model change or a final result. Explicit saved reasoning/tool display choices remain functional.
+## Content
 
-Use the local user's trailing bubble as attribution; do not print “You”. External peers keep their own attribution. Keep substantive synthetic notices in the reading path as icon-led rows, adding a start-edge accent where detail needs grouping. Show Project member reviews and escalations with the originating member's Open action. Keep repeated lifecycle notices out of chat; consult Activity or Running for shell and child work. Render conversation prose and narrative tool results as Markdown, but preserve literal shell output. Use JetBrains Mono in code and its language/Copy header. Keep browser HTML out of the transcript and retain only safe link destinations.
+User intent, assistant prose and real results lead the conversation. Group consecutive tool and thought activity only within one actor/model and never across prose or a user prompt. Copy preserves source text; controlled output stays in bounded scrollports. Show connection errors, pending requests and review history from their owners, not speculative results or substitute actions.
 
-### Session Companion
+## Touchpoints
 
-Show Interaction status above the run's scroll region with the shared compact canvas row, including the active platform and target. Keep the named Stop there independently of companion state and prompt generation. Offer Chrome and macOS requests on a local backend only; approval stays in the selected platform. Pending, unavailable, stopped, and the stopped cleanup result each have distinct text.
-
-Use the Desktop dialog, radio group, and field treatments for a Chrome proposal. Default to Existing tab and show a starting URL field only for Owned tab or Isolated Chrome. Submit only a credential-free HTTP(S) URL for those modes. Cancel and invalid input submit nothing. Direct existing and owned tab proposals to Chrome and isolated proposals to the macOS system prompt. A proposal does not activate control. The pending Chrome status says local approval is required without naming a prompt.
-
-On explicit reveal, place the labeled preview in Activity at the docked 1181px step and inline in the run below it. Keep the invoking control focused. Use one raised, bounded preview or a visible withheld state; discard its frame on close, view or connection change, generation change, or Stop. Verify the renderer through the synthetic native RPC in `test/renderer.integration.test.ts`.
-
-Place the context ring beside the window summary, above a full-width category breakdown. Use one label column and two consistently aligned numeric columns. Show Session usage and tasks without frames; open diagnostics, loaded child costs and compaction history through icon-led, named disclosures. Separate nested snapshot groups by indentation or a start-edge rule; do not fit a new key/value grid inside a narrow value column. In Activity and Running, place the icon first and wrap the complete command, task description and metadata in the available space without a horizontal scroll bar.
-
-### Composer and navigation
-
-Align the composer with the transcript axis, with one input boundary and open icon-led controls. Model, reasoning, autonomy and delivery retain their menus, values and validation. Metrics remain labelled and distinct from Send/Stop. Attachments and context chips wrap without pushing the pane wider. Sidebar titles retain full accessible names; grouping, status filters, paging and pinning keep bounded connection-scoped reads.
-
-The activity bar holds the destinations; the Session list holds New chat, the Sessions overview link, search, status filters and the grouped rows. Group the list as Needs action, Running, Pinned, Recent, with the workspace name as row metadata. On startup, use the saved connection and open the last available Session or New chat. Machine & Backend owns configuration and reconnect actions. Activity-bar destinations use `aria-current="page"` and a green tonal current state; Settings section buttons share 16px icons, the control inset and tonal selection with `aria-current="location"`. Machine and Updates share equal-width tracks and a top edge, with content-height frames. Settings switches to one content column below 1280px. Session display, Keyboard shortcuts, Permissions, Models & Providers, and MCP retain the same raised card, inset and frame. Provider and MCP cards open the existing management dialogs. Keep Command, Shortcut and its action group on one baseline. Show chords in mono pills. The selected row has a tonal surface and inset marker; keyboard focus is distinct from selection.
-
-### Projects and management
-
-Keep the Project Master/member roster singular. Master and member creation accept an absolute POSIX, drive or UNC path, `~`, `~/…` or `~\…`. Send it to the backend as typed without probing this machine's filesystem; create a missing folder after confirmation. Escape preserves selection and returns focus. Remove from project retains the Session; Delete Session and Delete project keep their distinct confirmations.
-
-Team uses separate roster and selected-child scrollports above the composer at regular widths. In stacked mode the Team view owns their scroll. The scroll-to-top action lives on the composer caption row. Its tooltip opens toward the caption, within a reserved inline slot and outside both scrollports and the composer field. Hover and keyboard focus use the same geometry without moving the caption. The blocker summary and inspector cards share a 16px content inset. Preserve long progress text, row selection, the keyboard path to the last member, and the selected child's request boundary.
-
-Use the Desktop modal shell for a named title, compact header actions, visible Close, scrollable content and, where needed, a footer. Keep inner navigation and confirmation actions keyboard reachable. MCP shows state beside the server name, groups actions at the trailing edge or below, and nests the resource cards within that server. Connect providers uses a bounded vertical registry with separate wrapping name and identifier lines. The registry stays visible while the dialog scrolls through authorization details. Use 16px card insets and an 8px minimum input-to-action gap for Add provider. Keep focus visible and restore it on dismissal; reduced motion preserves that interaction without travel.
-
-### Bridge gaps
-
-Expose only operations supported by the Desktop backend connection. The Git diff viewer does not stage, discard or commit files. Report unavailable data and actions without simulating them.
+Web owns shared palette and work chrome tokens; Desktop owns viewport, window, density and native interaction rules. Keep native controls and renderer verification distinct.
 
 ## Accessibility
 
-Keep semantic landmarks, names, visible focus and keyboard operation. Normal text retains 4.5:1 contrast and meaningful non-text affordances 3:1; status uses a name or glyph as well as color. Long content remains available and readable in expanded groups. Keep forced-colors system rendering and existing high-contrast schemes. No collapsing transition may leave invisible focusable descendants or hide a required error/action. Browser emulation does not establish native accessibility or device behavior.
+Preserve keyboard navigation, visible focus entry and return, one Close per layer, named controls, semantic states, selectable text and reported status announcements. Text reaches 4.5:1 and meaningful boundaries reach 3:1. Users may disable animation or request reduced motion without losing feedback or state.
 
 ## Verification
 
-`SCENARIOS.md` maps populated layout, execution hierarchy, long-content containment, Project sizing and motion to selected local tests and separate native observations. Record before/after `1000×600` and `1440×900` screenshots plus relevant DOM widths, gutters, centers and scrollbar geometry. Use existing synthetic sessions and managed data for isolated QA; do not mutate a live backend or use real provider accounts to populate validation states.
-
-Run strict `design_md.py lint` on this file and its brand parent. Use `test/ledger-design.test.ts` for token drift and binding rules, `test/form-rules.test.ts` for transcript visibility, and `test/renderer.integration.test.ts` for rendered geometry, keyboard controls, motion and model selection. Keep native acceptance separate: browser fixtures do not establish native-window behavior, saved-endpoint readback or a crash-free packaged app.
+Run `python3 ~/.agents/skills/daedalus/scripts/design_md.py lint packages/desktop/DESIGN.md --strict` and `bun test --cwd packages/desktop test/ledger-design.test.ts`. Select renderer cases for normal and minimum layouts, focus, palette and motion from `SCENARIOS.md`. Verify the packaged app separately, including bundle signatures and actual native rendering in an isolated guest. Headless browser tests prove the renderer fixture only.
 
 ## Maintenance
 
-Read this contract and its brand parent before visual changes. Obtain approval for rule changes, update the rule before its styling and tests, and preserve strict lint and bidirectional token drift checks. Keep browser-fixture and native evidence distinct.
+Obtain approval for changed rules, update rules before code and tests, and run strict lint and the bidirectional token check. Keep native and browser evidence labeled and distinct.
 
 ## Do's and Don'ts
 
-- Do measure the populated reading path, both gutters and composer center, including expanded long execution content.
-- Do keep sparse lists naturally sized, controls comfortable and errors/provenance reachable.
-- Don't fill space with dummy content, stretch rows, clip an overflow defect or flatten code whitespace.
-- Don't animate incoming tokens, break scroll anchoring, repeat noisy metadata or silently remove an interaction.
-
-## Exceptions
-
-Root R9, Desktop code/metadata only: self-hosted JetBrains Mono follows the explicit Desktop font directive and approved source declarations. Geist remains the interface family; Web and other surfaces keep their font contract. Approval: Desktop-only directive of 2026-11-16; review date 2026-11-17.
-
-Root R4, coarse-pointer Desktop pickers only: content-sized bottom sheets replace beside-control anchoring. Fine-pointer Desktop anchoring is unchanged. Approval: compact-renderer directive of 2026-11-16; review date 2026-11-17.
-
-Root Ledger Settings composition, Desktop only: pane-filling responsive tracks and icon-led section navigation retain all Settings behavior. Approval: Desktop directive of 2026-11-17; review date 2026-11-17.
+- Do keep the same navigation, current Session and draft after disclosure, refresh and resize.
+- Don't hide a scroll defect, clip unbroken content, or replace a native verification result with a browser screenshot.

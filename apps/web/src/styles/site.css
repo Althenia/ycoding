@@ -133,20 +133,27 @@
   padding-block: var(--yc-space-16) var(--yc-space-12);
 }
 
-.hero__content { position: relative; }
-
-.hero__content {
+.hero__content,
+.hero__intro,
+.hero__install {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: var(--yc-space-6);
-  justify-items: center;
-  text-align: center;
-}
-
-.hero__content > .code-block {
-  inline-size: min(100%, 640px);
+  align-content: start;
+  gap: var(--yc-space-4);
   min-inline-size: 0;
   text-align: start;
+}
+
+.hero__install {
+  gap: var(--yc-space-2);
+}
+
+@media (min-width: 1024px) {
+  .hero__content {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: center;
+    gap: var(--yc-space-12);
+  }
 }
 
 .hero__eyebrow {
@@ -191,8 +198,9 @@
 
 @media (min-width: 1024px) {
   .hero__headline {
-    font-size: 48px;
-    line-height: 48px;
+    font-size: var(--yc-space-16);
+    line-height: 1.06;
+    max-inline-size: 16ch;
   }
 }
 
@@ -206,7 +214,6 @@
 .hero__actions {
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
   gap: var(--yc-space-3);
   margin-block-start: var(--yc-space-2);
 }
@@ -337,11 +344,6 @@
 }
 
 @media (max-width: 479px) {
-  .hero__content {
-    justify-items: stretch;
-    text-align: start;
-  }
-
   .hero__actions {
     flex-direction: column;
   }
@@ -422,10 +424,6 @@
   .marketing .hero--compact .hero__actions .button {
     min-block-size: var(--yc-hit-min);
     inline-size: 100%;
-  }
-
-  .marketing .hero--compact .code-block {
-    margin-block-start: var(--yc-space-2);
   }
 
   .marketing .features {
@@ -610,8 +608,6 @@
   margin-block-start: var(--yc-space-6);
 }
 
-/* P09 keeps installation in the hero flow: the command is a compact terminal row,
-   not a second content section. */
 /* The hero keeps more room above than below, so it reads as the page's opening and
    the capabilities follow it as one group. */
 .hero--compact {
@@ -639,18 +635,13 @@
   padding-block-start: var(--yc-space-6);
 }
 
-.hero--compact .hero__content {
-  gap: var(--yc-space-4);
-}
-
 .hero--compact .hero__actions {
   margin-block-start: var(--yc-space-3);
 }
 
 .hero--compact .code-block {
-  inline-size: fit-content;
-  max-inline-size: 100%;
-  margin-block-start: var(--yc-space-1);
+  min-inline-size: 0;
+  border-inline-start: calc(2 * var(--yc-border-width)) solid var(--yc-green-graphic);
 }
 
 .hero--compact .code-block__head {

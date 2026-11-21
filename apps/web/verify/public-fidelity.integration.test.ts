@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { RELEASES } from "../src/content/changelog"
+import { SITE } from "../src/content/site"
 import { SITEMAP_PATHS } from "../src/seo/sitemap"
 import { launchBrowser, decodeArray, decodeBoolean, decodeNumber, decodeOptional, decodeRecord, decodeString } from "./cdp"
 
@@ -364,6 +365,33 @@ describe("public routes and design-system behavior", () => {
     await page.evaluate(`document.querySelector(".hero .code-block__copy")?.dispatchEvent(new MouseEvent("click", { bubbles: true }))`)
     expect(await page.evaluate(`document.querySelector(".hero .code-block__copy")?.getAttribute("aria-label")`)).toBe("Copied")
     await page.close()
+  })
+
+  test("places the real install command beside the landing copy only at the wide layout boundary", async () => {
+    const page = await requireBrowser().openPage()
+    try {
+      await page.setReducedMotion(true)
+      for (const width of [1023, 1024]) {
+        await page.setViewport(width, 800)
+        await page.navigate(url("/"))
+        await waitFor(page, ".hero .code-block__copy")
+        expect(await page.evaluate(`(() => {
+          const box = selector => document.querySelector(selector).getBoundingClientRect()
+          const title = box('.hero__headline'), actions = box('.hero__actions'), plate = box('.hero .code-block'), platforms = box('.hero__platforms')
+          return {
+            columns: plate.left >= title.right && plate.top < actions.bottom,
+            sameStart: Math.abs(plate.left - title.left) < 1,
+            belowActions: plate.top >= actions.bottom,
+            noteFollowsPlate: platforms.top >= plate.bottom,
+            command: document.querySelector('.hero .code-block pre').textContent.trim(),
+            fits: document.documentElement.scrollWidth === document.documentElement.clientWidth,
+          }
+        })()`)).toEqual({ columns: width >= 1024, sameStart: width < 1024, belowActions: width < 1024, noteFollowsPlate: true, command: SITE.installing.command, fits: true })
+        await page.evaluate(`document.querySelector('.hero__actions .button:last-child').focus()`)
+        await page.pressKey("Tab", "Tab", 9)
+        expect(await page.evaluate(`document.activeElement.matches('.hero .code-block__copy:focus-visible')`)).toBe(true)
+      }
+    } finally { await page.close() }
   })
 
   test("keeps the product landing page mobile navigation and capability composition", async () => {
@@ -1132,7 +1160,7 @@ describe("public routes and design-system behavior", () => {
     expect(primary.targets.every((height) => height >= 44)).toBe(true)
     expect(await heading("/", 390, ".hero__headline")).toEqual({ size: 24, line: 33 })
     expect(await heading("/", 768, ".hero__headline")).toEqual({ size: 30, line: 37.5 })
-    expect(await heading("/", 1440, ".hero__headline")).toEqual({ size: 48, line: 48 })
+    expect(await heading("/", 1440, ".hero__headline")).toEqual({ size: 64, line: 67.84 })
     expect(await heading("/docs", 390, ".docs-article > h1")).toEqual({ size: 16, line: 24 })
     expect(await heading("/docs", 768, ".docs-article > h1")).toEqual({ size: 20, line: 28 })
     expect(await heading("/docs", 1440, ".docs-article > h1")).toEqual({ size: 30, line: 38 })
@@ -1144,7 +1172,7 @@ describe("public routes and design-system behavior", () => {
     expect(await heading("/changelog", 1440, ".docs-article > h1")).toEqual({ size: 20, line: 28 })
     expect(await heading("/not-a-route", 390, ".not-found h1")).toEqual({ size: 40, line: 44 })
     expect(await heading("/not-a-route", 768, ".not-found h1")).toEqual({ size: 40, line: 44 })
-    expect(await heading("/not-a-route", 1440, ".not-found h1")).toEqual({ size: 56, line: 60 })
+    expect(await heading("/not-a-route", 1440, ".not-found h1")).toEqual({ size: 48, line: 52 })
     expect(await heading("/offline.html", 390, ".offline-card h1")).toEqual({ size: 20, line: 28 })
     expect(await heading("/offline.html", 768, ".offline-card h1")).toEqual({ size: 18, line: 27 })
     expect(await heading("/offline.html", 1440, ".offline-card h1")).toEqual({ size: 20, line: 28 })

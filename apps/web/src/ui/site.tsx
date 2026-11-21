@@ -224,27 +224,31 @@ export function LandingPage(): JSX.Element {
     <>
       <section class="hero hero--compact">
         <div class="container hero__content">
-          <p class="hero__eyebrow enter">Terminal-first coding agent</p>
-          <h1 class="hero__headline enter">{SITE.hero.headline}</h1>
-          <p class="hero__support enter enter-1">{SITE.hero.support}</p>
-          <div class="hero__actions enter enter-2">
-            <button
-              type="button"
-              class="button button--primary button--large"
-              onClick={() => navigate({ to: SITE.hero.primaryAction.href })}
-            >
-              {SITE.hero.primaryAction.label}
-            </button>
-            <button
-              type="button"
-              class="button button--secondary button--large"
-              onClick={() => navigate({ to: SITE.hero.secondaryAction.href })}
-            >
-              {SITE.hero.secondaryAction.label}
-            </button>
+          <div class="hero__intro">
+            <p class="hero__eyebrow enter">Terminal-first coding agent</p>
+            <h1 class="hero__headline enter">{SITE.hero.headline}</h1>
+            <p class="hero__support enter enter-1">{SITE.hero.support}</p>
+            <div class="hero__actions enter enter-2">
+              <button
+                type="button"
+                class="button button--primary button--large"
+                onClick={() => navigate({ to: SITE.hero.primaryAction.href })}
+              >
+                {SITE.hero.primaryAction.label}
+              </button>
+              <button
+                type="button"
+                class="button button--secondary button--large"
+                onClick={() => navigate({ to: SITE.hero.secondaryAction.href })}
+              >
+                {SITE.hero.secondaryAction.label}
+              </button>
+            </div>
           </div>
-          <CodeBlock code={SITE.installing.command} language="shell" label="Install command" class="enter enter-3" />
-          <p class="hero__platforms">{SITE.installing.platforms.join(" · ")}</p>
+          <div class="hero__install">
+            <CodeBlock code={SITE.installing.command} language="shell" label="Install command" class="enter enter-3" />
+            <p class="hero__platforms">{SITE.installing.platforms.join(" · ")}</p>
+          </div>
         </div>
       </section>
 

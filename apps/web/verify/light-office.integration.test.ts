@@ -26,7 +26,7 @@ beforeAll(async () => {
 
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
-test("light landing keeps its hero neutral while dark retains the ambient glow", async () => {
+test("the landing keeps the hero neutral and the install command readable in both modes", async () => {
   for (const theme of ["light", "dark"] as const) {
     const page = await browser!.openPage()
     try {
@@ -35,8 +35,7 @@ test("light landing keeps its hero neutral while dark retains the ambient glow",
       for (let attempt = 0; attempt < 40 && !await page.evaluate(`!!document.querySelector('.hero')`); attempt++) await Bun.sleep(100)
       await page.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`)
       const glow = await page.evaluate(`getComputedStyle(document.querySelector('.hero'),'::before').backgroundImage`)
-      if (theme === "light") expect(glow).toBe("none")
-      else expect(glow).toContain("radial-gradient")
+      expect(glow).toBe("none")
       const command = await page.evaluate(`(() => ({background:getComputedStyle(document.querySelector('.hero .code-block')).backgroundColor,ink:getComputedStyle(document.querySelector('.hero .code-block pre')).color}))()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, background: (decodeString)(record["background"]), ink: (decodeString)(record["ink"]) } })
       expect(command.background).toBe("rgb(12, 20, 19)")
       expect(ratio(command.ink, command.background)).toBeGreaterThanOrEqual(4.5)

@@ -6,8 +6,8 @@
   "start_url": "/remote",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#15181d",
-  "theme_color": "#15181d",
+  "background_color": "#191f19",
+  "theme_color": "#191f19",
   "icons": [
     {
       "src": "/icons/icon-192.png",

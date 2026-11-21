@@ -55,7 +55,7 @@ export function writeSchemePreference(storage: StorageLike | null | undefined, s
   return writeStored(storage, SCHEME_STORAGE_KEY, scheme)
 }
 
-export const DEFAULT_CANVAS = { light: "#fafcfe", dark: "#15181d" } as const
+export const DEFAULT_CANVAS = { light: "#fffaf0", dark: "#191f19" } as const
 
 export function themeColor(scheme: SchemeID, resolved: ResolvedTheme): string {
   return schemeBackground(scheme, resolved) ?? DEFAULT_CANVAS[resolved]

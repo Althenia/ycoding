@@ -3395,6 +3395,9 @@ test("R9-SHELL activity bar, resizable Session list, header toggle and trace fol
           && Math.round(bar.getBoundingClientRect().width) === 80
           && items.every(item => { const rect = item.getBoundingClientRect(); return Math.round(rect.width) === 72 && Math.round(rect.height) === 56 && item.textContent.trim().length > 0; })
           && settings.top > usage.bottom + 8 && items[0].getAttribute('aria-current') === 'page' && items.slice(1).every(item => !item.hasAttribute('aria-current'))
+          && items.filter(item => getComputedStyle(item, '::before').content !== 'none').length === 1
+          && getComputedStyle(items[0], '::before').inlineSize === '2px'
+          && getComputedStyle(rail.querySelector('.rl-session-row[aria-current="page"]'), '::before').inlineSize === '2px'
           && Math.abs(rail.getBoundingClientRect().left - bar.getBoundingClientRect().right) <= 1
           && !document.querySelector('.status-bar') && Math.round(rail.getBoundingClientRect().bottom) === innerHeight
           && Math.round(document.querySelector('.rl-main').getBoundingClientRect().width) === innerWidth - 80 - ${list}
