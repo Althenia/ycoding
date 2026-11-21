@@ -895,7 +895,7 @@ function RemoteHeader(props: {
           aria-expanded={props.navExpanded}
           onClick={(event) => props.onOpenNav(event.currentTarget)}
         >
-          <Icon name="menu" />
+          <span class="workspace-nav-glyph"><Icon name="menu" /></span>
         </button>
         {props.listToggle}
         <Link to="/" class={`brand${props.view !== "/remote/session" && state().activeSessionID !== undefined ? " brand--with-resume" : ""}`} data-tooltip="YCoding home">
@@ -1860,7 +1860,7 @@ function ResumeSession(props: { readonly view: RemoteView }): JSX.Element {
   return <Show when={props.view !== "/remote/session" ? remote.state().activeSessionID : undefined}>{(sessionID) => <Link
     to="/remote/session" search={() => sessionSearch(sessionID(), remote.state().activeDeviceID)} class="workspace-resume button button--ghost"
     ariaLabel={attention().conversation ? "Resume session, waiting for your decision" : "Resume session"}>
-    <Icon name="arrow-left" /><span>Resume session</span><AttentionMark show={attention().conversation} />
+    <span class="workspace-nav-glyph"><Icon name="arrow-left" /></span><span class="workspace-resume__label">Resume session</span><AttentionMark show={attention().conversation} />
   </Link>}</Show>
 }
 

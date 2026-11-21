@@ -379,7 +379,7 @@ body:has(.app) {
 .session-search__icon { position: absolute; inset-inline-start: var(--yc-space-3); inset-block-start: 50%; translate: 0 -50%; color: var(--yc-ink-tertiary); pointer-events: none; }
 .session-list__group { display: flex; align-items: flex-end; min-inline-size: 0; padding: var(--yc-space-3) var(--yc-space-2) var(--yc-space-1); color: var(--yc-ink-tertiary); font: var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-resume { justify-content: flex-start; min-block-size: var(--yc-hit-min); min-inline-size: var(--yc-hit-min); gap: var(--yc-space-2); position: relative; }
-.workspace-resume svg { flex: none; }
+.workspace-nav-glyph { display: grid; flex: none; place-items: center; }
 .app-header .workspace-resume { display: none; }
 
 .workspace__main {
@@ -1673,7 +1673,7 @@ form .request__actions .button--secondary {
 
 @media (max-width: 767px), (max-height: 599px) and (pointer: coarse) {
   .app-header .workspace-resume { display: inline-flex; flex: none; padding: 0; justify-content: center; }
-  .app-header .workspace-resume > span:not(.attention-dot),
+  .app-header .workspace-resume__label,
   .app-header .brand--with-resume { display: none; }
   .app-header .workspace-resume .attention-dot { position: absolute; inset-block-start: var(--yc-space-1); inset-inline-end: 0; }
   .new-session__actions {

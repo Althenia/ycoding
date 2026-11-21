@@ -1893,6 +1893,23 @@ function ModelPopover(props: { chipLabel: string; effortLabel?: string; disabled
   const show = (trigger?: HTMLButtonElement) => { opener = trigger; setQuery(""); setOpen(true); queueMicrotask(() => { chip?.parentElement?.querySelector<HTMLInputElement>('.model-popover input[type="search"]')?.focus({ preventScroll: true }) }) }
   createEffect(() => { const tick = props.openTick ?? 0; if (tick !== wasTick) { wasTick = tick; show(chip) } })
   createEffect(() => { if (paletteOpen()) setOpen(false) })
+  createEffect(() => {
+    if (!open()) return
+    const anchor = chip?.parentElement
+    if (!anchor) return
+    const measure = () => anchor.style.setProperty("--rl-model-anchor-top", `${anchor.getBoundingClientRect().top}px`)
+    const observer = new ResizeObserver(measure)
+    observer.observe(anchor)
+    const composer = anchor.closest(".rl-capsule")
+    if (composer) observer.observe(composer)
+    window.addEventListener("resize", measure)
+    measure()
+    onCleanup(() => {
+      observer.disconnect()
+      window.removeEventListener("resize", measure)
+      anchor.style.removeProperty("--rl-model-anchor-top")
+    })
+  })
   const selectedModel = () => props.models[props.choice.model]
   const variants = () => variantsFor(selectedModel(), props.choice.profile)
   const stops = () => effortStopsFor(variants())

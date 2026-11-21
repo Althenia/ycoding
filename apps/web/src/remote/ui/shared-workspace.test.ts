@@ -806,12 +806,12 @@ test("delivery status renders three bouncing dots while sending, one check once 
   expect(render("failed", "Send failed")).toContain("Send failed")
 })
 
-test("a user turn shows the delivery icon under the bubble with its title and no visible clock time, and the copy button is a labelled control", () => {
+test("a user turn keeps the receipt time in the owned tooltip and the copy button labelled", () => {
   const html = renderToString(() => createComponent(SharedMessageTurn, {
     kind: "user", markdownText: "hello", copyText: "hello", receiptLabel: "Read by YCoding", receiptTitle: "Read by YCoding · 10:42 AM",
     receipt: createComponent(SharedDeliveryStatus, { state: "read", label: "Read by YCoding" }),
   }))
-  expect(html).toContain('class="transcript-message__receipt" role="status" aria-label="Read by YCoding" title="Read by YCoding · 10:42 AM"')
+  expect(html).toContain('class="transcript-message__receipt" role="status" aria-label="Read by YCoding" data-tooltip="Read by YCoding · 10:42 AM" tabindex="0"')
   expect(html).toContain('aria-label="Copy message"')
   expect(html).not.toMatch(/>\s*\d{1,2}:\d{2}/)
   expect(html).not.toContain("transcript-message__origin")

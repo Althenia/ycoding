@@ -169,7 +169,7 @@ export function SharedActivityBar(props: { readonly label: string; readonly item
     event.preventDefault()
     props.onNavigate(entry)
   }}>
-    <span class="activity-bar__glyph"><Icon name={entry.icon} size={20} /><Show when={entry.badge !== undefined && entry.badge.count > 0}><span class="activity-bar__badge" data-hue={entry.badge!.hue}><span aria-hidden="true">{entry.badge!.count}</span><span class="visually-hidden">{entry.badge!.label}</span></span></Show></span>
+    <span class="activity-bar__glyph" data-icon={entry.icon}><Icon name={entry.icon} size={20} /><Show when={entry.badge !== undefined && entry.badge.count > 0}><span class="activity-bar__badge" data-hue={entry.badge!.hue}><span aria-hidden="true">{entry.badge!.count}</span><span class="visually-hidden">{entry.badge!.label}</span></span></Show></span>
     <span class="activity-bar__label">{entry.label}</span>
   </a></li>
   return <nav class={props.class ?? "activity-bar"} aria-label={props.label}>
@@ -304,7 +304,7 @@ export function SharedMessageTurn(props: { readonly kind: string; readonly bubbl
   return <article class={`transcript-message transcript-message--${props.kind}${props.bubble && props.kind !== "user" ? " transcript-message--user" : ""}`} aria-label={props.articleLabel} data-delivery-state={props.deliveryState}>
     <Show when={promptBubble()}>
       <Show when={props.markdownText !== undefined || props.bubbleAttachments !== undefined}><div class="transcript-message__bubble"><Show when={props.origin === "chatgpt"}><span class="transcript-message__origin" role="img" aria-label="ChatGPT" title="Sent via ChatGPT"><ProviderLogo providerID="openai" /></span><Show when={props.steer}><span class="transcript-message__steer">Steer</span></Show></Show><Show when={props.markdownText}>{(text) => <div class="transcript-message__bubble-text"><Markdown text={text()} /></div>}</Show>{props.bubbleAttachments}</div></Show>
-      {props.attachments}<Show when={props.receipt !== undefined || props.copyText !== undefined}><div class="transcript-message__meta"><Show when={props.copyText !== undefined}><SharedCopyButton text={props.copyText!} /></Show><Show when={props.receipt !== undefined}><span class="transcript-message__receipt" role="status" aria-label={props.receiptLabel} title={props.receiptTitle}>{props.receipt}</span></Show></div></Show>{props.sendError}
+      {props.attachments}<Show when={props.receipt !== undefined || props.copyText !== undefined}><div class="transcript-message__meta"><Show when={props.copyText !== undefined}><SharedCopyButton text={props.copyText!} /></Show><Show when={props.receipt !== undefined}><span class="transcript-message__receipt" role="status" aria-label={props.receiptLabel} data-tooltip={props.receiptTitle} tabindex={props.receiptTitle ? 0 : undefined}>{props.receipt}</span></Show></div></Show>{props.sendError}
     </Show>
     <Show when={props.kind === "assistant"}>{props.head}<Show when={props.agent}><h3 class="transcript-message__agent">{props.agent}</h3></Show>{props.body}{props.error}{props.fileChanges}<span class="transcript-message__copy-slot"><Show when={props.copyText}>{(text) => <SharedCopyButton class="transcript-message__copy--assistant" text={text()} />}</Show></span></Show>
     <Show when={props.kind === "shell"}><div class="shell"><div class="shell__header">{props.shellHeader}</div>{props.shellOutput}</div></Show>

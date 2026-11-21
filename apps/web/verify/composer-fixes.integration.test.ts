@@ -273,13 +273,19 @@ describe("transcript", () => {
       await wait(page, `typeof window.composerSetMessages === 'function'`)
       await page.evaluate(`document.documentElement.dataset.theme = 'dark'; window.composerSetMessages([{ kind: "user", id: "msg_fixture", text: "Sending text", state: "pending", delivery: "steer", created: new Date("2026-11-20T10:42:00").getTime() }]); window.composerSetMutation('sending')`)
       await wait(page, `document.querySelector('.delivery-status[data-state="sending"]') !== null`)
-      const sending = decodeRecord(await page.evaluate(`(() => { const dots = [...document.querySelectorAll('.delivery-status[data-state="sending"] .delivery-status__dots i')]; const receipt = document.querySelector('.transcript-message__receipt'); return { count: dots.length, names: dots.map((dot) => getComputedStyle(dot).animationName), delays: dots.map((dot) => getComputedStyle(dot).animationDelay), running: dots.map((dot) => dot.getAnimations().some((animation) => animation.playState === 'running')), label: receipt.getAttribute('aria-label'), title: receipt.getAttribute('title') } })()`))
+      const sending = decodeRecord(await page.evaluate(`(() => { const dots = [...document.querySelectorAll('.delivery-status[data-state="sending"] .delivery-status__dots i')]; const receipt = document.querySelector('.transcript-message__receipt'); return { count: dots.length, names: dots.map((dot) => getComputedStyle(dot).animationName), delays: dots.map((dot) => getComputedStyle(dot).animationDelay), running: dots.map((dot) => dot.getAnimations().some((animation) => animation.playState === 'running')), label: receipt.getAttribute('aria-label') } })()`))
       expect(decodeNumber(sending["count"])).toBe(3)
       expect(decodeArray(decodeString)(sending["names"])).toEqual(["delivery-dot", "delivery-dot", "delivery-dot"])
       expect(new Set(decodeArray(decodeString)(sending["delays"])).size).toBe(3)
       expect(decodeArray(decodeBoolean)(sending["running"])).toEqual([true, true, true])
       expect(decodeString(sending["label"])).toBe("Sending")
-      expect(decodeString(sending["title"])).toMatch(/Sending prompt · .*\d/)
+      const receipt = `document.querySelector('.transcript-message__receipt')`
+      expect(await page.evaluate(`${receipt}.hasAttribute('title')`, decodeBoolean)).toBe(false)
+      await page.evaluate(`${receipt}.focus()`)
+      await wait(page, `document.activeElement === ${receipt} && document.getElementById(${receipt}.getAttribute('aria-describedby'))?.getAttribute('role') === 'tooltip'`)
+      expect(decodeString(await page.evaluate(`document.querySelector('.owned-tooltip').textContent`))).toMatch(/Sending prompt · .*\d/)
+      await page.pressEscape()
+      await wait(page, `!document.querySelector('.owned-tooltip') && document.activeElement === ${receipt}`)
       await page.setReducedMotion(true)
       const reduced = decodeRecord(await page.evaluate(`(() => { const dots = [...document.querySelectorAll('.delivery-status__dots i')]; return { names: dots.map((dot) => getComputedStyle(dot).animationName), running: dots.some((dot) => dot.getAnimations().length > 0) } })()`))
       expect(decodeArray(decodeString)(reduced["names"])).toEqual(["none", "none", "none"])
@@ -291,7 +297,7 @@ describe("transcript", () => {
       const done = decodeRecord(await page.evaluate(`(() => {
         const [sent, read] = [...document.querySelectorAll('.delivery-status')]
         return { sent: { state: sent.dataset.state, svgs: sent.querySelectorAll('svg').length, double: sent.querySelector('.delivery-status__double') !== null, label: sent.closest('.transcript-message__receipt').getAttribute('aria-label') },
-          read: { state: read.dataset.state, double: read.querySelector('.delivery-status__double') !== null, label: read.closest('.transcript-message__receipt').getAttribute('aria-label'), color: getComputedStyle(read).color, title: read.closest('.transcript-message__receipt').getAttribute('title') },
+          read: { state: read.dataset.state, double: read.querySelector('.delivery-status__double') !== null, label: read.closest('.transcript-message__receipt').getAttribute('aria-label'), color: getComputedStyle(read).color, hint: read.closest('.transcript-message__receipt').getAttribute('data-tooltip') },
           bubbleBackground: getComputedStyle(document.querySelector('.transcript-message__bubble')).backgroundColor, canvas: getComputedStyle(document.body).backgroundColor,
           visibleTime: [...document.querySelectorAll('.transcript-message--user')].some((message) => /\\b\\d{1,2}:\\d{2}\\b/.test(message.innerText)) }
       })()`))
@@ -303,7 +309,7 @@ describe("transcript", () => {
       expect(decodeString(read["label"])).toBe("Read by YCoding")
       expect(greenDominant(decodeString(read["color"]))).toBe(true)
       expect(contrast(decodeString(read["color"]), decodeString(done["canvas"]))).toBeGreaterThanOrEqual(3)
-      expect(decodeString(read["title"])).toMatch(/Read by YCoding · .*\d/)
+      expect(decodeString(read["hint"])).toMatch(/Read by YCoding · .*\d/)
       expect(decodeBoolean(done["visibleTime"])).toBe(false)
     } finally { await page.close() }
   }, 30_000)
@@ -373,11 +379,17 @@ describe("workspace shell", () => {
           const at = await point(page, selector)
           await page.mouse("mouseMoved", decodeNumber(at["x"]), decodeNumber(at["y"]))
           await Bun.sleep(300)
-          const measured = decodeRecord(await page.evaluate(`(() => { const item = document.querySelector(${JSON.stringify(selector)}), label = item.querySelector('.activity-bar__label'), badge = item.querySelector('.activity-bar__badge'), box = label.getBoundingClientRect(), outer = item.getBoundingClientRect(); return { hovered: item.matches(':hover'), background: getComputedStyle(item).backgroundColor, label: getComputedStyle(label).color, badge: badge ? [getComputedStyle(badge).color, getComputedStyle(badge).backgroundColor] : null, inside: box.left >= outer.left - 1 && box.right <= outer.right + 1 && box.top >= outer.top - 1 && box.bottom <= outer.bottom + 1, badgeInside: badge ? badge.getBoundingClientRect().right <= outer.right + 1 : true } })()`))
+          const measured = decodeRecord(await page.evaluate(`(() => {
+            const item = document.querySelector(${JSON.stringify(selector)}), label = item.querySelector('.activity-bar__label'), badge = item.querySelector('.activity-bar__badge');
+            const box = label.getBoundingClientRect(), icon = item.querySelector('.activity-bar__glyph svg').getBoundingClientRect(), outer = item.getBoundingClientRect();
+            const center = rect => (rect.left + rect.right) / 2;
+            return { hovered: item.matches(':hover'), background: getComputedStyle(item).backgroundColor, label: getComputedStyle(label).color, badge: badge ? [getComputedStyle(badge).color, getComputedStyle(badge).backgroundColor] : null, inside: box.left >= outer.left - 1 && box.right <= outer.right + 1 && box.top >= outer.top - 1 && box.bottom <= outer.bottom + 1, badgeInside: badge ? badge.getBoundingClientRect().right <= outer.right + 1 : true, aligned: Math.abs(center(box) - center(icon)) <= 0.5 && box.top >= icon.bottom };
+          })()`))
           expect(decodeBoolean(measured["hovered"])).toBe(true)
           expect(contrast(decodeString(measured["label"]), decodeString(measured["background"])), `${scheme} ${id} label`).toBeGreaterThanOrEqual(4.5)
           expect(decodeBoolean(measured["inside"]), `${scheme} ${id} label inside`).toBe(true)
           expect(decodeBoolean(measured["badgeInside"]), `${scheme} ${id} badge inside`).toBe(true)
+          expect(decodeBoolean(measured["aligned"]), `${scheme} ${id} icon and label share a column`).toBe(true)
           if (measured["badge"] !== null) {
             const [color, background] = decodeArray(decodeString)(measured["badge"])
             expect(contrast(color!, background!), `${scheme} ${id} badge`).toBeGreaterThanOrEqual(4.5)

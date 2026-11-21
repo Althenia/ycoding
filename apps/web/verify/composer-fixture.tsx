@@ -1,4 +1,5 @@
 import { render } from "solid-js/web"
+import { Tooltips } from "../src/ui/tooltip"
 import { createSignal, For, Show } from "solid-js"
 import { useStore } from "@tanstack/solid-store"
 import { RemoteProvider } from "../src/remote/context"
@@ -215,4 +216,4 @@ function Fixture() {
     </main>
   </RemoteProvider>
 }
-render(() => <Fixture />, document.getElementById("app")!)
+render(() => <><Fixture /><Tooltips /></>, document.getElementById("app")!)

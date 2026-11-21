@@ -707,6 +707,11 @@ describe("quiet workspace", () => {
         await until(page, `document.querySelector('.app--settings') !== null`)
         const resume = width < 768 ? ".app-header .workspace-resume" : ".workspace__rail .workspace-resume"
         expect(await page.evaluate(`document.querySelector(${JSON.stringify(resume)})?.getAttribute('href') ?? ''`)).toBe("/remote/session?session_id=ses_fixture&device_id=dev_studio")
+        if (width < 768) expect(await page.evaluate(`['.app-header__menu', '.app-header .workspace-resume'].every(selector => {
+          const button = document.querySelector(selector), icon = button.querySelector('svg');
+          const target = button.getBoundingClientRect(), glyph = icon.getBoundingClientRect();
+          return glyph.width > 0 && target.width >= 44 && target.height >= 44 && Math.abs(target.left + target.width / 2 - glyph.left - glyph.width / 2) <= 0.5 && Math.abs(target.top + target.height / 2 - glyph.top - glyph.height / 2) <= 0.5;
+        })`)).toBe(true)
         await page.evaluate(`document.querySelector(${JSON.stringify(resume)}).click()`)
         await until(page, `document.querySelector('.app--selected') !== null`)
         expect(await page.evaluate(`document.querySelector('.composer-resident textarea').value`)).toBe("Keep this Session draft")

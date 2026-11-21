@@ -827,7 +827,7 @@ test("Desktop rotates only the Working arc and keeps it static when motion is di
 test("Desktop renders Markdown and fenced code cards with wrap, highlighting and native copy", async () => {
   referenceScene = true
   pending = false
-  const code = "const answer: number = 42 // note\n\nfunction cursor() {\n  return \"retained\"\n}"
+  const code = `const answer: number = 42 // ${"retained".repeat(180)}\n\nfunction cursor() {\n  return "retained"\n}`
   replyText = `# Sample heading\n\n- first item\n- second \`inline\` item\n\n\`\`\`ts\n${code}\n\`\`\``
   const page = await open()
   try {
@@ -840,8 +840,10 @@ test("Desktop renders Markdown and fenced code cards with wrap, highlighting and
     expect(await page.evaluate(`(() => { const pre = ${card}.querySelector('pre'); const kinds = [...new Set([...pre.querySelectorAll('span.code-token')].map(span => [...span.classList].find(name => name.startsWith('code-token--'))))].sort(); return { raw: pre.textContent === ${JSON.stringify(code)}, kinds, selectable: [pre, pre.querySelector('code'), pre.closest('.transcript-md')].every(el => getComputedStyle(el).userSelect === 'text'), html: pre.querySelectorAll('script, style').length }; })()`, decodeRecord)).toEqual({ raw: true, kinds: ["code-token--comment", "code-token--function", "code-token--keyword", "code-token--number", "code-token--string"], selectable: true, html: 0 })
     expect(await page.evaluate(`(() => { const parse = value => value.match(/\\d+(\\.\\d+)?/g).slice(0, 3).map(Number); const light = value => parse(value).map(channel => channel / 255).map(channel => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4).reduce((total, channel, index) => total + channel * [0.2126, 0.7152, 0.0722][index], 0); const ratio = (a, b) => (Math.max(light(a), light(b)) + 0.05) / (Math.min(light(a), light(b)) + 0.05); const background = getComputedStyle(${card}).backgroundColor; return [...${card}.querySelectorAll('pre span.code-token')].filter(span => ratio(getComputedStyle(span).color, background) < 4.5).length; })()`, decodeNumber)).toBe(0)
     expect(await page.evaluate(`(() => { const pre = ${card}.querySelector('pre'); return [${wrap}.getAttribute('aria-pressed'), pre.getAttribute('data-wrap'), getComputedStyle(pre).whiteSpace]; })()`, decodeArray(decodeNullable(decodeString)))).toEqual(["false", null, "pre"])
+    expect(await page.evaluate(`(() => { const pre = ${card}.querySelector('pre'); pre.scrollLeft = pre.scrollWidth; const scrolled = pre.scrollLeft > 0; pre.scrollLeft = 0; return scrolled && ${card}.scrollWidth === ${card}.clientWidth; })()`, decodeBoolean)).toBe(true)
     await page.evaluate(`${wrap}.click()`)
     expect(await page.evaluate(`(() => { const pre = ${card}.querySelector('pre'); return [${wrap}.getAttribute('aria-pressed'), pre.getAttribute('data-wrap'), getComputedStyle(pre).whiteSpace]; })()`, decodeArray(decodeNullable(decodeString)))).toEqual(["true", "true", "pre-wrap"])
+    expect(await page.evaluate(`(() => { const pre = ${card}.querySelector('pre'); return pre.scrollWidth === pre.clientWidth; })()`, decodeBoolean)).toBe(true)
     await page.evaluate(`${wrap}.click()`)
     expect(await page.evaluate(`[${wrap}.getAttribute('aria-pressed'), ${card}.querySelector('pre').getAttribute('data-wrap')]`, decodeArray(decodeNullable(decodeString)))).toEqual(["false", null])
     clipboardFailure = true
@@ -854,6 +856,55 @@ test("Desktop renders Markdown and fenced code cards with wrap, highlighting and
     await wait(page, `${copy}.textContent.trim() === 'Copied'`)
     expect(clipboard).toEqual([code])
   } finally { await page.close() }
+}, 30_000)
+
+test("Desktop renders a pending-send receipt and honors both motion preferences", async () => {
+  pending = false
+  referenceScene = true
+  for (const animations of [true, false]) {
+    const release = Promise.withResolvers<void>()
+    const admission = Promise.withResolvers<string>()
+    const text = "Keep the send receipt visible while admission settles."
+    const sessionID = "ses_test"
+    let id: string | undefined
+    sceneRead = call => {
+      if (call.method === "POST" && call.route === `/api/session/${sessionID}/prompt`) {
+        id = decodeString(call.body.id)
+        admission.resolve(id)
+        return release.promise.then(() => ({ data: { id, sessionID, type: "user", delivery: "steer", admittedSeq: 1001, timeCreated: 600, data: { text } } }))
+      }
+      if (id !== undefined && call.route === `/api/session/${sessionID}/snapshot`) return { sourceEpoch: "synthetic", session: session(sessionID), messages: [...transcript(), { id, sessionID, type: "user", text, time: { created: 600 } }], watermark: { type: "log.synced", aggregateID: sessionID, seq: 1001 } }
+      return undefined
+    }
+    const page = await open()
+    try {
+      await page.setViewport(1440, 900)
+      await page.setReducedMotion(false)
+      await page.evaluate(`localStorage.setItem('ycoding.desktop.theme', 'dark'); localStorage.setItem('ycoding.desktop.animations', '${animations}'); location.reload()`)
+      await wait(page, `document.documentElement.dataset.animations === '${animations ? "on" : "off"}' && document.querySelector('#turn-msg_response') && document.fonts.status === 'loaded'`)
+      await message(page, text)
+      await page.evaluate(`document.querySelector('.rl-send').click()`)
+      await wait(page, `document.querySelector('.rl-send[aria-label="Sending"]')`)
+      const messageID = await admission.promise
+      const receipt = `document.getElementById(${JSON.stringify(`turn-${messageID}`)})?.querySelector('.transcript-message__delivery')`
+      await page.evaluate(`window.__desktopFixture.resync()`)
+      await wait(page, `${receipt}?.dataset.state === 'sending'`)
+      await page.evaluate(`${receipt}.scrollIntoView({ block: 'nearest', behavior: 'instant' })`)
+      const dots = `[...${receipt}.querySelectorAll('.delivery-dots i')]`
+      const readDots = `(() => { const receipt = ${receipt}, box = receipt.getBoundingClientRect(); return { label: receipt.getAttribute('aria-label'), visible: receipt.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)), moving: ${dots}.map(dot => dot.getAnimations().some(animation => animation.playState === 'running')) }; })()`
+      expect(await page.evaluate(readDots, decodeRecord)).toEqual({ label: "Sending", visible: true, moving: Array(3).fill(animations) })
+      const output = process.env.YCODING_DESKTOP_CAPTURE_DIR
+      if (output) await Bun.write(path.join(output, `pending-send-${animations ? "animated" : "static"}-dark-1440.png`), Buffer.from(await page.screenshot(), "base64"))
+      if (animations) {
+        await page.setReducedMotion(true)
+        await wait(page, `${dots}.length === 3 && ${dots}.every(dot => getComputedStyle(dot).animationName === 'none' && dot.getAnimations().length === 0)`)
+        expect(await page.evaluate(readDots, decodeRecord)).toEqual({ label: "Sending", visible: true, moving: [false, false, false] })
+      }
+      release.resolve()
+      await wait(page, `${receipt}?.dataset.state === 'sent' && !!${receipt}.querySelector('svg')`)
+      expect(await page.evaluate(`window.__desktopFixture.errors`, decodeArray((value: unknown) => value))).toEqual([])
+    } finally { release.resolve(); await page.close() }
+  }
 }, 30_000)
 
 test("Desktop opens a 600-model catalog from both composer chips and applies selections", async () => {
@@ -1413,15 +1464,25 @@ for (const [name, id] of [
             const pane = document.querySelector('.conversation__scroll'), frame = pane.getBoundingClientRect(), track = rect('.rl-col'), composer = rect('.rl-dock .rl-col');
             const left = track.left - frame.left - pane.clientLeft, right = pane.clientWidth - left - track.width;
             if (Math.abs(frame.left - rect('.rl-nav').right) > 1) layout.push('Conversation pane alignment');
-            if (left < 24 || right < 24 || Math.abs(left - right) > 1) layout.push('Balanced transcript gutters');
-            if (track.width > ${maximum} + 1 || (${width >= 1440} && Math.abs(track.width - ${maximum}) > 1)) layout.push('Documented conversation maximum');
+            if (left < 48 || right < 48 || Math.abs(left - right) > 1) layout.push('Balanced transcript gutters');
+            if (Math.abs(track.width - Math.min(${maximum}, pane.clientWidth - 96)) > 1) layout.push('Conversation track fits available width up to the documented cap');
             if (Math.abs(track.left - composer.left) > 1 || Math.abs(track.right - composer.right) > 1) layout.push('Composer alignment');
+          }
+          if (${name === "popover"}) {
+            const layer = rect('.model-popover'), close = rect('.model-popover__heading button'), anchor = rect('.model-popover').bottom;
+            const trigger = rect('.composer-anchor:has(.model-popover)');
+            if (layer.top < visualViewport.offsetTop || close.top < visualViewport.offsetTop || close.bottom > visualViewport.offsetTop + visualViewport.height) layout.push('Model picker heading and Close must stay in the viewport');
+            if (anchor >= trigger.top || trigger.top - anchor > 16) layout.push('Model picker must remain beside the composer control');
           }
           return { audit: auditRender(), designAudit: auditRender({ controlHeights: ${JSON.stringify(controlHeights)} }), geometry, layout, errors: window.__desktopFixture.errors };
         })()`, (value: unknown) => { const result = decodeRecord(value); return { audit: ((value: unknown) => { const result = decodeRecord(value); return { findings: (decodeArray((value: unknown) => { const result = decodeRecord(value); return { code: (decodeString)(result["code"]), level: (decodeString)(result["level"]) } }))(result["findings"]) } })(result["audit"]), designAudit: ((value: unknown) => { const result = decodeRecord(value); return { findings: (decodeArray((value: unknown) => { const result = decodeRecord(value); return { code: (decodeString)(result["code"]), level: (decodeString)(result["level"]) } }))(result["findings"]) } })(result["designAudit"]), layout: (decodeArray(decodeString))(result["layout"]) } })
         const key = `${name}-${theme}-${width}`
         await Bun.write(path.join(output, `${key}.png`), Buffer.from(await page.screenshot(), "base64"))
         await Bun.write(path.join(output, `${key}.audit.json`), JSON.stringify(results, null, 2))
+        if (name === "popover" && width === 1000) {
+          await page.evaluate(`document.querySelector('.model-popover__foot button').focus()`)
+          expect(await page.evaluate(`(() => { const button = document.querySelector('.model-popover__foot button'), rect = button.getBoundingClientRect(); return document.activeElement === button && button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)); })()`, decodeBoolean)).toBe(true)
+        }
         expect(await page.evaluate(`window.__desktopFixture.errors`, decodeArray((value: unknown) => value))).toEqual([])
         const contractCodes = new Set(["page-overflow-x", "icon-control-unnamed", "target-too-small", "text-below-floor"])
         const contractFindings = [...results.audit.findings, ...results.designAudit.findings].filter(finding => contractCodes.has(finding.code))
@@ -1773,9 +1834,22 @@ async function captureR7(page: Page, name: string) {
     const rect = element => { const box = element.getBoundingClientRect(); return { x: box.x, y: box.y, width: box.width, height: box.height, right: box.right, bottom: box.bottom }; };
     const visible = element => { const box = element.getBoundingClientRect(); return box.width > 1 && box.height > 1 && getComputedStyle(element).visibility !== 'hidden' && !element.closest('details:not([open]) > :not(summary)'); };
     const label = element => element.getAttribute('aria-label') || element.className || element.tagName;
-    const selectors = 'html, body, .rl-main, .conversation, .conversation__scroll, .rl-scroll .rl-col, .rl-dock, .rl-dock .rl-col, .rl-capsule, .composer-bar, .composer-attachments, .composer-attachments > *, .conversation__chip, .composer-chip, .composer-policy-chip, .transcript-message__text, .transcript-md pre, .rl-output, .rl-tools-card, .rl-step-card, .rl-step-head, .rl-reason, .transcript-reasoning, .desktop-diff, .desktop-diff__files, .desktop-diff table, .desktop-diff td, .desktop-diff pre, .desktop-diff code, .desktop-project-settings, .desktop-project-overview, .desktop-project-inspector, .desktop-project-roster, .desktop-project-roster > li';
+    const selectors = 'html, body, .rl-main, .conversation, .conversation__scroll, .rl-scroll .rl-col, .rl-dock, .rl-dock .rl-col, .rl-capsule, .composer-bar, .composer-attachments, .composer-attachments > *, .conversation__chip, .composer-chip, .composer-policy-chip, .transcript-message__text, .transcript-md__code, .transcript-md pre, .rl-output, .rl-tools-card, .rl-step-card, .rl-step-head, .rl-reason, .transcript-reasoning, .desktop-diff, .desktop-diff__files, .desktop-diff table, .desktop-diff td, .desktop-diff pre, .desktop-diff code, .desktop-project-settings, .desktop-project-overview, .desktop-project-inspector, .desktop-project-roster, .desktop-project-roster > li';
     const innerCodeViewports = [...document.querySelectorAll('.desktop-diff__file *')].filter(element => /^(auto|scroll)$/.test(getComputedStyle(element).overflowX) && (element.matches('table, pre, code') || element.querySelector('table, pre, code')));
-    const allowedNoWrapViewport = element => { const file = element.closest('.desktop-diff[data-wrap="none"] .desktop-diff__file'); if (!file) return false; const pane = file.closest('.desktop-diff__files'); for (let owner = element; owner && owner !== file; owner = owner.parentElement) { if (!innerCodeViewports.includes(owner) || owner.clientWidth === 0) continue; const box = rect(owner); const parent = rect(file); const bounds = rect(pane); return box.x >= parent.x && box.right <= parent.right && parent.x >= bounds.x && parent.right <= bounds.right; } return false; };
+    const withinInline = (element, container) => { const box = rect(element), bounds = rect(container); return box.x >= bounds.x && box.right <= bounds.right; };
+    const allowedNoWrapViewport = element => {
+      if (element.matches('.transcript-md__code pre:not([data-wrap="true"])')) {
+        const card = element.closest('.transcript-md__code'), track = card.closest('.rl-col'), style = getComputedStyle(element);
+        return track !== null && style.whiteSpace === 'pre' && /^(auto|scroll)$/.test(style.overflowX) && withinInline(element, card) && withinInline(card, track);
+      }
+      const file = element.closest('.desktop-diff[data-wrap="none"] .desktop-diff__file');
+      if (!file) return false;
+      const pane = file.closest('.desktop-diff__files');
+      for (let owner = element; owner && owner !== file; owner = owner.parentElement) {
+        if (innerCodeViewports.includes(owner) && owner.clientWidth > 0) return withinInline(owner, file) && withinInline(file, pane);
+      }
+      return false;
+    };
     const regions = [...new Set([...document.querySelectorAll(selectors), ...innerCodeViewports])].filter(visible).map(element => ({ label: label(element), rect: rect(element), scrollWidth: element.scrollWidth, clientWidth: element.clientWidth, overflowX: getComputedStyle(element).overflowX, border: getComputedStyle(element).border, fontSize: getComputedStyle(element).fontSize, allowedInnerNoWrap: allowedNoWrapViewport(element) }));
     const controls = [...document.querySelectorAll('.rl-capsule button, .rl-capsule input, .rl-capsule textarea, .desktop-project-settings button, .desktop-project-settings input, .transcript-tools__button, .transcript-reasoning summary')].filter(visible);
     const pane = document.querySelector('.conversation__scroll'); const column = document.querySelector('.rl-scroll .rl-col'); const composer = document.querySelector('.rl-dock .rl-col');
@@ -2080,6 +2154,15 @@ test("Desktop r7 disclosure motion retains focus, mounted streaming content and 
       await settleR7(page)
       const attachedDistance = await page.evaluate(`(() => { const scroll = document.querySelector('.conversation__scroll'); return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight; })()`, decodeNumber)
       if (attachedDistance > 1) failures.push(`${name}: attached reader left the latest response by ${attachedDistance}px`)
+      if (!reduce && width === 1440) {
+        const spill = await page.evaluate(`(() => {
+          const animation = document.querySelector('.rl-top .trace__run').getAnimations()[0];
+          animation.pause(); animation.currentTime = animation.effect.getTiming().duration * 0.95;
+          const widths = ['.rl-top', '.conversation', '.rl-main'].map(selector => { const node = document.querySelector(selector); return node.scrollWidth - node.clientWidth; });
+          animation.play(); return widths;
+        })()`, decodeArray(decodeNumber))
+        if (spill.some(width => width > 0)) failures.push(`${name}: running header trace widens the header, conversation or workspace by ${spill.join(', ')}px`)
+      }
       failures.push(...r7Failures(await captureR7(page, `${name}-attached`), name))
       await page.wheel(point[0], point[1], 0, -700)
       await wait(page, `document.querySelector('[aria-label="Jump to latest"]')`)
