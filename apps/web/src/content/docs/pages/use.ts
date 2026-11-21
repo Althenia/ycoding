@@ -306,7 +306,7 @@ export const usePages: readonly DocPage[] = [
             kind: "table",
             head: ["Command", "Arguments / options", "Purpose"],
             rows: [
-              ["ycoding update", "Optional --version <version>", "Install the latest release or a specific published version, then restart an idle background server onto it."],
+              ["ycoding update", "Optional --version <version>", "Install the latest release when it is newer than the running version, or a specific published version, then restart an idle background server onto it."],
               ["ycoding service status", "None", "Show background service status."],
               ["ycoding service restart", "None", "Restart the background service."],
               ["ycoding remote enroll <enrollmentID>", "Optional --name <name>, --relay <origin>, --replace", "Enroll this machine; the one-use code is read at a prompt, never from argv."],

@@ -17,7 +17,7 @@ describe("release entries", () => {
       if (!tag) return []
       return [...section.matchAll(/^[+*-] (.+)$/gm)].map((match) => ({ tag, text: match[1]! }))
     })
-    expect(changes).toHaveLength(31)
+    expect(changes).toHaveLength(32)
     expect(entry?.changes).toEqual(changes)
     expect(after("0.12.0")?.version).toBe("0.11.12")
     expect(RELEASES.filter((release) => /^0\.12\.[1-4]$/.test(release.version))).toEqual([])

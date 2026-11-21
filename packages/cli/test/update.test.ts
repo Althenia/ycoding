@@ -2,8 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { chmod, copyFile, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { installRelease, latestRelease, releaseTarget, validVersion } from "../src/update/update"
+import { installRelease, latestRelease, planUpdate, releaseTarget, validVersion } from "../src/update/update"
 import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
+import { interactionExtensionFiles } from "../src/update/interaction-layout"
 
 const temporary: string[] = []
 const fixtureVersion = process.env.YCODING_TEST_VERSION ?? "9.9.9"
@@ -12,6 +13,89 @@ const macTest = process.platform === "darwin" ? test : test.skip
 
 afterEach(async () => {
   await Promise.all(temporary.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
+})
+
+describe("update selection", () => {
+  const latestURL = "https://api.github.com/repos/Althenia/ycoding/releases/latest"
+  const latestFetch = (tag: string, urls: string[]) => async (url: string) => {
+    urls.push(url)
+    if (url === latestURL) return Response.json({ tag_name: tag })
+    return new Response("unexpected", { status: 500 })
+  }
+
+  test("a bare update never selects a latest release older than the running version and fetches no archive", async () => {
+    const urls: string[] = []
+    expect(await planUpdate({ installed: "0.12.4", fetch: latestFetch("v0.12.0", urls) })).toEqual({ action: "newer-installed", latest: "0.12.0" })
+    expect(urls).toEqual([latestURL])
+  })
+
+  test("a bare update reports an up-to-date installation without fetching the archive", async () => {
+    const urls: string[] = []
+    expect(await planUpdate({ installed: "0.12.0", fetch: latestFetch("v0.12.0", urls) })).toEqual({ action: "current" })
+    expect(urls).toEqual([latestURL])
+  })
+
+  test("a bare update installs a newer latest release", async () => {
+    const urls: string[] = []
+    expect(await planUpdate({ installed: "0.11.12", fetch: latestFetch("v0.12.0", urls) })).toEqual({ action: "install", version: "0.12.0" })
+    expect(urls).toEqual([latestURL])
+  })
+
+  test("an explicit version installs that exact release, including an older one, without resolving latest", async () => {
+    const urls: string[] = []
+    expect(await planUpdate({ installed: "0.12.4", requested: "0.12.0", fetch: latestFetch("v0.12.0", urls) })).toEqual({ action: "install", version: "0.12.0" })
+    expect(await planUpdate({ installed: "0.12.0", requested: "0.12.0", fetch: latestFetch("v0.12.0", urls) })).toEqual({ action: "current" })
+    expect(urls).toEqual([])
+  })
+
+  test("installs the 0.12.0 Interaction layout and retires the Computer Use app after verifying both signatures", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-update-interaction-"))
+    temporary.push(root)
+    const source = path.join(root, "source")
+    const contents = path.join(source, "YCoding Interaction.app/Contents")
+    await mkdir(path.join(contents, "MacOS"), { recursive: true })
+    await mkdir(path.join(contents, "Resources"))
+    await mkdir(path.join(contents, "_CodeSignature"))
+    await writeFile(path.join(source, "ycoding"), "new executable\n")
+    await writeFile(path.join(contents, "Info.plist"), "<key>CFBundleIdentifier</key><string>app.ycoding.interaction</string><key>CFBundleDisplayName</key><string>YCoding Interaction</string><key>CFBundleIconFile</key><string>YCoding.icns</string>\n")
+    await writeFile(path.join(contents, "MacOS/ycoding-interaction"), "interaction helper\n")
+    await writeFile(path.join(contents, "Resources/YCoding.icns"), "icon\n")
+    await writeFile(path.join(contents, "_CodeSignature/CodeResources"), "signature\n")
+    await mkdir(path.join(source, "ycoding-chrome-extension/icons"), { recursive: true })
+    for (const file of interactionExtensionFiles) await writeFile(path.join(source, "ycoding-chrome-extension", file), `new ${file}\n`)
+    const asset = "ycoding-0.12.0-darwin-arm64.tar.gz"
+    expect(Bun.spawnSync(["tar", "-C", "source", "-czf", asset, "ycoding", "YCoding Interaction.app", "ycoding-chrome-extension"], { cwd: root, env: { ...process.env, COPYFILE_DISABLE: "1" } }).exitCode).toBe(0)
+    const archive = new Uint8Array(await Bun.file(path.join(root, asset)).arrayBuffer())
+    const checksums = `${new Bun.CryptoHasher("sha256").update(archive).digest("hex")}  ${asset}\n`
+    const install = path.join(root, "bin")
+    await mkdir(path.join(install, "YCoding Computer Use.app/Contents"), { recursive: true })
+    await writeFile(path.join(install, "YCoding Computer Use.app/Contents/Info.plist"), "old app\n")
+    await mkdir(path.join(install, "ycoding-chrome-extension/icons"), { recursive: true })
+    await writeFile(path.join(install, "ycoding-chrome-extension/protocol.js"), "old protocol\n")
+    await writeFile(path.join(install, "ycoding"), "old executable\n")
+    const verified: string[] = []
+    const result = await installRelease({
+      version: "0.12.0",
+      executable: path.join(install, "ycoding"),
+      platform: "darwin",
+      arch: "arm64",
+      fetch: async (url) => new Response(url.endsWith("checksums.txt") ? checksums : archive),
+      filesystem: {
+        rename,
+        verifyExecutable: async (file) => { verified.push(`executable:${path.basename(file)}`) },
+        verifyApplication: async (file) => {
+          verified.push(`application:${path.basename(file)}`)
+          expect(await Bun.file(path.join(install, "YCoding Computer Use.app/Contents/Info.plist")).exists()).toBe(true)
+        },
+      },
+    })
+    expect(result).toEqual({ version: "0.12.0", asset })
+    expect(verified).toEqual(["executable:ycoding", "application:YCoding Interaction.app"])
+    expect(await readFile(path.join(install, "ycoding"), "utf8")).toBe("new executable\n")
+    expect((await readdir(install)).sort()).toEqual(["YCoding Interaction.app", "ycoding", "ycoding-chrome-extension"])
+    expect((await readdir(path.join(install, "ycoding-chrome-extension"), { recursive: true })).filter((file) => file !== "icons").sort()).toEqual([...interactionExtensionFiles].sort())
+    expect(await Bun.file(path.join(install, "ycoding-chrome-extension/protocol.js")).exists()).toBe(false)
+  })
 })
 
 describe("release updater", () => {

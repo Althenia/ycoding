@@ -11,15 +11,20 @@ export default Runtime.handler(UpdateCommand, (input) =>
   Effect.promise(async () => {
     try {
       if (InstallationLocal) throw new Error("Self-update is unavailable for local development builds")
-      const { installRelease, latestRelease, validVersion } = await import("../../update/update")
+      const { installRelease, planUpdate, validVersion } = await import("../../update/update")
       const { UpdateProgress } = await import("../../update/progress")
       const requested = Option.getOrUndefined(input.version)
       if (requested && !validVersion(requested)) throw new Error(`Invalid YCoding version: ${requested}`)
-      const version = requested ?? (await latestRelease())
-      if (version === InstallationVersion) {
+      const plan = await planUpdate({ installed: InstallationVersion, requested })
+      if (plan.action === "current") {
         process.stdout.write(`ycoding ${InstallationVersion} is already up to date\n`)
         return undefined
       }
+      if (plan.action === "newer-installed") {
+        process.stdout.write(`ycoding ${InstallationVersion} is newer than the latest release ${plan.latest}; nothing to update\n`)
+        return undefined
+      }
+      const version = plan.version
       process.stdout.write(`Updating ycoding from ${InstallationVersion} to ${version}...\n`)
       const progress = UpdateProgress.terminal({
         write: (text) => process.stdout.write(text),

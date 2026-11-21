@@ -77,6 +77,20 @@ export async function latestRelease(fetcher: Fetch = fetch) {
   return version
 }
 
+export type UpdatePlan =
+  | { readonly action: "install"; readonly version: string }
+  | { readonly action: "current" }
+  | { readonly action: "newer-installed"; readonly latest: string }
+
+export async function planUpdate(input: { readonly installed: string; readonly requested?: string; readonly fetch?: Fetch }): Promise<UpdatePlan> {
+  if (input.requested !== undefined)
+    return input.requested === input.installed ? { action: "current" } : { action: "install", version: input.requested }
+  const latest = await latestRelease(input.fetch)
+  if (latest === input.installed) return { action: "current" }
+  if (semver.valid(input.installed) && semver.lt(latest, input.installed)) return { action: "newer-installed", latest }
+  return { action: "install", version: latest }
+}
+
 export async function installRelease(input: InstallReleaseInput) {
   if (!validVersion(input.version)) throw new Error(`Invalid YCoding version: ${input.version}`)
   const existing = await lstat(input.executable)

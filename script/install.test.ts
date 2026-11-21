@@ -3,11 +3,14 @@ import { chmod, copyFile, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeF
 import os from "node:os"
 import path from "node:path"
 import { BrowserExtension } from "../packages/core/src/browser/extension"
+import { interactionExtensionFiles } from "../packages/cli/src/update/interaction-layout"
 
 const temporary: string[] = []
 const installer = path.join(import.meta.dir, "install.sh")
 const fixtureVersion = "0.7.0"
 const macTest = process.platform === "darwin" ? test : test.skip
+const pinnedSigner = "9dd524184b0db949ffac7f0ada0ae860ac7f5f85"
+const pinnedTest = process.platform === "darwin" && Bun.spawnSync(["/usr/bin/security", "find-identity", "-v", "-p", "codesigning"]).stdout.toString().toLowerCase().includes(pinnedSigner) ? test : test.skip
 setDefaultTimeout(30_000)
 
 afterEach(async () => {
@@ -195,6 +198,53 @@ exec /bin/mv "$@"
     expect(await readFile(path.join(install, "ycoding-chrome-extension/manifest.json"), "utf8")).toBe("fixture manifest.json\n")
     expect(await Bun.file(path.join(legacy, "Info.plist")).exists()).toBe(false)
     expect(await Array.fromAsync(new Bun.Glob(".ycoding*").scan({ cwd: install, dot: true, onlyFiles: false }))).toEqual([])
+  })
+
+  pinnedTest("installs a fresh 0.12.0 Interaction release after verifying its pinned signatures", async () => {
+    const fixture = await setup({ version: "0.12.0" })
+    await interactionArchive(fixture, pinnedSigner)
+    const install = path.join(fixture.home, ".local/bin")
+    const result = await runInstaller(fixture)
+    expect(result.exitCode, result.stderr).toBe(0)
+    await expectInteractionInstall(fixture, install)
+  })
+
+  pinnedTest("moves a Computer Use installation to 0.12.0 and retires the Computer Use app", async () => {
+    const fixture = await setup({ version: "0.12.0" })
+    await interactionArchive(fixture, pinnedSigner)
+    const install = path.join(fixture.home, ".local/bin")
+    await computerUseInstall(install)
+    const result = await runInstaller(fixture)
+    expect(result.exitCode, result.stderr).toBe(0)
+    await expectInteractionInstall(fixture, install)
+  })
+
+  pinnedTest("moves a higher-versioned v0.12.4 Interaction installation to 0.12.0", async () => {
+    const fixture = await setup({ version: "0.12.0" })
+    await interactionArchive(fixture, pinnedSigner)
+    const install = path.join(fixture.home, ".local/bin")
+    await mkdir(path.join(install, "YCoding Interaction.app/Contents"), { recursive: true })
+    await writeFile(path.join(install, "YCoding Interaction.app/Contents/Info.plist"), "v0.12.4 app\n")
+    await mkdir(path.join(install, "ycoding-chrome-extension"))
+    for (const file of ["manifest.json", "popup.css", "popup.html", "popup.js", "service-worker.js"]) await writeFile(path.join(install, "ycoding-chrome-extension", file), "v0.12.4\n")
+    await writeExecutable(path.join(install, "ycoding"), "#!/bin/sh\necho ycoding v0.12.4\n")
+    const result = await runInstaller(fixture)
+    expect(result.exitCode, result.stderr).toBe(0)
+    await expectInteractionInstall(fixture, install)
+  })
+
+  macTest("keeps a Computer Use installation when the 0.12.0 executable lacks the pinned signature", async () => {
+    const fixture = await setup({ version: "0.12.0" })
+    await interactionArchive(fixture, "-")
+    const install = path.join(fixture.home, ".local/bin")
+    await computerUseInstall(install)
+    const result = await runInstaller(fixture)
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain("YCoding executable signature verification failed")
+    expect((await readdir(install)).sort()).toEqual(["YCoding Computer Use.app", "ycoding", "ycoding-chrome-extension"])
+    expect(await readFile(path.join(install, "YCoding Computer Use.app/Contents/Info.plist"), "utf8")).toBe("old app\n")
+    expect(await readFile(path.join(install, "ycoding-chrome-extension/protocol.js"), "utf8")).toBe("old protocol\n")
+    expect(await readFile(path.join(install, "ycoding"), "utf8")).toBe("#!/bin/sh\necho ycoding v0.12.3\n")
   })
 
   test("installs the Chrome extension beside a Linux executable from releases after v0.7.1", async () => {
@@ -668,4 +718,45 @@ function tarEntry(name: string, options: { type?: string; content?: string; link
   const data = new Uint8Array(Math.ceil(content.length / 512) * 512)
   data.set(content)
   return Buffer.concat([header, data])
+}
+
+
+async function interactionArchive(fixture: Awaited<ReturnType<typeof setup>>, signer: string) {
+  const executable = path.join(fixture.fixture, "ycoding")
+  await rm(executable)
+  await copyFile("/usr/bin/true", executable)
+  await chmod(executable, 0o755)
+  expect(Bun.spawnSync(["/usr/bin/codesign", "--force", "--sign", signer, "--identifier", "app.ycoding.cli", executable]).exitCode).toBe(0)
+  const app = path.join(fixture.fixture, "YCoding Interaction.app")
+  const contents = path.join(app, "Contents")
+  await mkdir(path.join(contents, "MacOS"), { recursive: true })
+  await mkdir(path.join(contents, "Resources"))
+  await writeFile(path.join(contents, "Info.plist"), `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>ycoding-interaction</string><key>CFBundleIdentifier</key><string>app.ycoding.interaction</string><key>CFBundleDisplayName</key><string>YCoding Interaction</string><key>CFBundleIconFile</key><string>YCoding.icns</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string></dict></plist>`)
+  await writeFile(path.join(contents, "Resources/YCoding.icns"), "fixture icon\n")
+  await copyFile("/usr/bin/true", path.join(contents, "MacOS/ycoding-interaction"))
+  await chmod(path.join(contents, "MacOS/ycoding-interaction"), 0o755)
+  expect(Bun.spawnSync(["/usr/bin/codesign", "--force", "--sign", signer, app]).exitCode).toBe(0)
+  const extension = path.join(fixture.fixture, "ycoding-chrome-extension")
+  await mkdir(path.join(extension, "icons"), { recursive: true })
+  for (const file of interactionExtensionFiles) await writeFile(path.join(extension, file), `fixture ${file}\n`)
+  const tar = Bun.spawnSync(["tar", "-C", fixture.fixture, "-czf", path.join(fixture.fixture, fixture.asset), "ycoding", "YCoding Interaction.app", "ycoding-chrome-extension"], { env: { ...process.env, COPYFILE_DISABLE: "1" } })
+  expect(tar.exitCode).toBe(0)
+  await writeChecksum(fixture.fixture, fixture.asset)
+}
+
+async function computerUseInstall(install: string) {
+  await mkdir(path.join(install, "YCoding Computer Use.app/Contents"), { recursive: true })
+  await writeFile(path.join(install, "YCoding Computer Use.app/Contents/Info.plist"), "old app\n")
+  await mkdir(path.join(install, "ycoding-chrome-extension/icons"), { recursive: true })
+  await writeFile(path.join(install, "ycoding-chrome-extension/protocol.js"), "old protocol\n")
+  await writeExecutable(path.join(install, "ycoding"), "#!/bin/sh\necho ycoding v0.12.3\n")
+}
+
+async function expectInteractionInstall(fixture: Awaited<ReturnType<typeof setup>>, install: string) {
+  expect((await readdir(install)).sort()).toEqual(["YCoding Interaction.app", "ycoding", "ycoding-chrome-extension"])
+  expect(Buffer.compare(await readFile(path.join(install, "ycoding")), await readFile(path.join(fixture.fixture, "ycoding")))).toBe(0)
+  expect(Bun.spawnSync(["/usr/bin/codesign", "--verify", "--strict", "-R", `=identifier "app.ycoding.cli" and certificate leaf = H"${pinnedSigner}"`, path.join(install, "ycoding")]).exitCode).toBe(0)
+  expect(Bun.spawnSync(["/usr/bin/codesign", "--verify", "--deep", "--strict", "-R", `=identifier "app.ycoding.interaction" and certificate leaf = H"${pinnedSigner}"`, path.join(install, "YCoding Interaction.app")]).exitCode).toBe(0)
+  expect((await readdir(path.join(install, "ycoding-chrome-extension"), { recursive: true })).filter((file) => file !== "icons").sort()).toEqual([...interactionExtensionFiles].sort())
+  expect(await readFile(path.join(install, "ycoding-chrome-extension/manifest.json"), "utf8")).toBe("fixture manifest.json\n")
 }

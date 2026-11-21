@@ -190,12 +190,12 @@ export const gettingStartedPages: readonly DocPage[] = [
           {
             kind: "callout",
             tone: "warning",
-            title: "Upgrade from v0.11.12 or earlier",
-            text: "On macOS or Linux, use the shell installer above to install v0.12.0 or later from v0.11.12 or earlier. An older `ycoding update` cannot install the new archive layout. On Windows, close YCoding and replace it with the contents of the release ZIP.",
+            title: "Move to v0.12.0 with the installer",
+            text: "On macOS or Linux, use the shell installer above to move to v0.12.0 from v0.11.12 or earlier, v0.12.1 through v0.12.3, or v0.12.4. The `ycoding update` command in those versions cannot install the v0.12.0 archive, and v0.12.4 is numbered above v0.12.0. On Windows, close YCoding and replace it with the contents of the release ZIP.",
           },
           {
             kind: "paragraph",
-            text: "From v0.12.0 on macOS or Linux, use `ycoding update` to install a release. It verifies the archive checksum and contents before replacement. The updater verifies the YCoding signing certificate for both the CLI and the Interaction helper on macOS.",
+            text: "From v0.12.0 on macOS or Linux, use `ycoding update` to install a newer release. Without `--version` it never installs a release older than the one running; it reports that the installation is up to date or newer and downloads nothing. With `--version` it installs that published version, older or newer. It verifies the archive checksum and contents before replacement. The updater verifies the YCoding signing certificate for both the CLI and the Interaction helper on macOS.",
           },
           { kind: "code", language: "sh", label: "Install the newest release", code: "ycoding update" },
           {
