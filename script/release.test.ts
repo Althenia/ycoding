@@ -317,13 +317,13 @@ test("release source checks cover Interaction and stored OpenAI Responses withou
 })
 
 test.each([
-  ["0.12.4-rc.1+build.2", "preview", "branch", "0.12.4-rc.1+build.2"],
-  ["", "v0.12.4", "tag", "0.12.4"],
-  ["", "v0.11.0-preview", "branch", "0.12.4"],
+  ["0.12.0-rc.1+build.2", "preview", "branch", "0.12.0-rc.1+build.2"],
+  ["", "v0.12.0", "tag", "0.12.0"],
+  ["", "v0.11.0-preview", "branch", "0.12.0"],
   ["0.12.04", "preview", "branch", null],
-  ["0.12.4\nANOTHER=value", "preview", "branch", null],
-  ["0.12.4$(printf unexpected)", "preview", "branch", null],
-  ["", "v0.12.4/invalid", "tag", null],
+  ["0.12.0\nANOTHER=value", "preview", "branch", null],
+  ["0.12.0$(printf unexpected)", "preview", "branch", null],
+  ["", "v0.12.0/invalid", "tag", null],
 ])("release version validates the selected input before environment export (%j, %j, %s)", (requested, ref, type, expected) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ycoding-release-version-"))
   try {

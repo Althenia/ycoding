@@ -57,7 +57,7 @@ Run a single prompt without opening the interface:
 ycoding --model <[profile#]provider/model[#variant]> "Explain this repository"
 ```
 
-Use the installer above to upgrade from v0.12.3 or earlier. Use `ycoding update` for subsequent releases on macOS and Linux. See [installation](https://ycoding.althenia.app/docs/installation) for macOS permissions and archive verification.
+Use the installer above to upgrade from v0.11.12 or earlier. Use `ycoding update` for subsequent releases on macOS and Linux. See [installation](https://ycoding.althenia.app/docs/installation) for macOS permissions and archive verification.
 
 ## Three surfaces, one runtime
 

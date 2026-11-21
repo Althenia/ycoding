@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 
 const script = path.join(import.meta.dir, "release-archive.ts")
-const version = "0.12.3"
+const version = "0.11.12"
 const targets = ["darwin-arm64", "darwin-x64", "linux-x64", "windows-x64"] as const
 const extension = ["icons/ycoding-128.png", "icons/ycoding-16.png", "icons/ycoding-32.png", "icons/ycoding-48.png", "manifest.json", "popup.css", "popup.html", "popup.js", "protocol.js", "service-worker.js"]
 const app = "YCoding Computer Use.app"
@@ -26,7 +26,7 @@ test("Interaction archives use the replacement extension and reject a coexistenc
     await Bun.write(path.join(application, "Resources/YCoding.icns"), "synthetic icon\n")
     await Bun.write(path.join(application, "_CodeSignature/CodeResources"), "synthetic signature\n")
     await Bun.write(path.join(application, "Info.plist"), "<key>CFBundleIdentifier</key><string>app.ycoding.interaction</string><key>CFBundleDisplayName</key><string>YCoding Interaction</string><key>CFBundleIconFile</key><string>YCoding.icns</string>")
-    const args = ["create", "darwin-arm64", "0.12.4-rc.1", source, "prepared"]
+    const args = ["create", "darwin-arm64", "0.12.0-rc.1", source, "prepared"]
     const created = execute(root, args)
     expect(created.exitCode, created.stderr.toString()).toBe(0)
     await Bun.write(path.join(directory, "protocol.js"), "legacy artifact\n")

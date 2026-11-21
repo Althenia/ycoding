@@ -14,5 +14,5 @@ export const interactionApplication = {
 export function usesInteractionLayout(version: string) {
   const match = /^([0-9]+)[.]([0-9]+)[.]([0-9]+)(?=$|[+-])/.exec(version)
   if (!match) return false
-  return Number(match[1]) > 0 || Number(match[2]) > 12 || (Number(match[2]) === 12 && Number(match[3]) >= 4)
+  return Number(match[1]) > 0 || Number(match[2]) >= 12
 }

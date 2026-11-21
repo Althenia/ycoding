@@ -233,7 +233,7 @@ app_required=false
 version_core=${version%%+*}
 interaction_layout=false
 if printf '%s\n' "${version_core%%-*}" | awk -F . '
-  $1 > 0 || ($1 == 0 && ($2 > 12 || ($2 == 12 && $3 >= 4))) { found=1 }
+  $1 > 0 || ($1 == 0 && $2 >= 12) { found=1 }
   END { exit !found }
 '; then
   interaction_layout=true
