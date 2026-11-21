@@ -17,8 +17,10 @@ describe("release entries", () => {
       if (!tag) return []
       return [...section.matchAll(/^[+*-] (.+)$/gm)].map((match) => ({ tag, text: match[1]! }))
     })
-    expect(changes).toHaveLength(45)
+    expect(changes).toHaveLength(46)
     expect(changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ tag: "Added", text: expect.stringMatching(/Steer now and Delete.*exactly `\.\.`/) }),
+      expect.objectContaining({ tag: "Added", text: expect.stringMatching(/still unread.*same operation.*message stays/) }),
       expect.objectContaining({ tag: "Changed", text: expect.stringContaining("Field Notes") }),
       expect.objectContaining({ tag: "Changed", text: expect.stringContaining("install command") }),
       expect.objectContaining({ tag: "Added", text: expect.stringContaining("Chrome can bring its own window forward") }),
