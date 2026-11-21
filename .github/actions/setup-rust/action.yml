@@ -106,7 +106,14 @@ runs:
           ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml', 'rust/vendor/**') }}-
           ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-
 
-    - name: Select prebuilt NASM objects
+    - name: Verify Windows native build tools
       if: runner.os == 'Windows'
       shell: bash
-      run: echo "AWS_LC_SYS_PREBUILT_NASM=1" >> "$GITHUB_ENV"
+      run: |
+        set -euo pipefail
+        perl='C:\Strawberry\perl\bin\perl.exe'
+        executable="$(cygpath -u "$perl")"
+        test -x "$executable" || { echo "Windows OpenSSL builds require the runner's Strawberry Perl at $perl" >&2; exit 1; }
+        "$executable" -MIPC::Cmd -MLocale::Maketext::Simple -e 'die "Expected native Windows Perl\n" unless $^O eq "MSWin32"; print "Windows Perl $^V\n"'
+        nasm -v
+        printf '%s\n' "OPENSSL_SRC_PERL=$perl" "AWS_LC_SYS_PREBUILT_NASM=1" >> "$GITHUB_ENV"

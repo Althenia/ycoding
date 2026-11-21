@@ -577,6 +577,29 @@ test("an ordinary review offers Allow for this session beside Retry and Cancel",
   }
 })
 
+for (const operation of ["reply", "cancel", "retry"] as const) {
+  test(`the v5 guardrail fixture preserves ${operation} routing and results`, async () => {
+    const request = waiting()
+    const calls: string[] = []
+    const transport = createFetch(async (url, input) => {
+      calls.push(`${input.method} ${url.pathname}`)
+      if (operation === "reply") expect(await input.json()).toEqual({ reply: "reject" })
+      return operation === "retry" ? json(request) : new Response(null, { status: 204 })
+    })
+    const api = createApi(transport.fetch)
+    const target = { sessionID: request.rootSessionID, requestID: request.id }
+    try {
+      const result = operation === "reply"
+        ? await api.guardrail.request.reply({ ...target, reply: "reject" })
+        : await api.guardrail.request[operation](target)
+      expect(calls).toEqual([`POST /api/session/ses_root/guardrail/request/grq_waiting/${operation}`])
+      expect(result).toEqual(operation === "retry" ? request : undefined)
+    } finally {
+      api.transport.close()
+    }
+  })
+}
+
 test("Cancel posts the cancel operation and never a reply", async () => {
   const calls: string[] = []
   const app = await mountWaiting(waiting(), {}, async (url, request) => {
@@ -678,9 +701,10 @@ for (const [label, presses, operation] of [
   test(`${label} on a review that was settled elsewhere removes it without approving`, async () => {
     const calls: string[] = []
     const gone = Promise.withResolvers<void>()
-    const app = await mountWaiting(waiting(), { onClosed: () => gone.resolve() }, async (url, request) => {
+    const review = waiting()
+    const app = await mountWaiting(review, { onClosed: () => gone.resolve() }, async (url, request) => {
       if (request.method === "POST") calls.push(`${request.method} ${url.pathname}`)
-      return json({ _tag: "GuardrailRequestNotFoundError", message: "Guardrail request not found" }, { status: 404 })
+      return json({ _tag: "GuardrailRequestNotFoundError", requestID: review.id, message: "Guardrail request not found" }, { status: 404 })
     })
     try {
       for (let press = 0; press < presses; press++) app.mockInput.pressArrow("left")

@@ -236,18 +236,16 @@ for (const kind of ["bun", "node"] as const) {
       for (const env of [{}, runtime]) await rejectsConnection(command, env)
     }, 120_000)
 
-    test("partial and empty embedded pairs fail without HTTP requests or credential diagnostics", async () => {
-      for (const [index, env] of [
-        { YCODING_ANTIGRAVITY_CLIENT_ID: embedded.YCODING_ANTIGRAVITY_CLIENT_ID },
-        { YCODING_ANTIGRAVITY_CLIENT_SECRET: embedded.YCODING_ANTIGRAVITY_CLIENT_SECRET },
-        { ...embedded, YCODING_ANTIGRAVITY_CLIENT_ID: "" },
-        { ...embedded, YCODING_ANTIGRAVITY_CLIENT_SECRET: "" },
-        { YCODING_ANTIGRAVITY_CLIENT_ID: "", YCODING_ANTIGRAVITY_CLIENT_SECRET: "" },
-      ].entries()) {
-        const command = await bundle(kind, env, `${kind}-invalid-${index}`)
-        expect(await run(command, runtime, ["--import-only"])).toEqual({ imported: true, requests: [] })
-        for (const runtimeEnv of [{}, runtime]) await rejectsConnection(command, runtimeEnv)
-      }
+    test.each([
+      { name: "missing-secret", env: { YCODING_ANTIGRAVITY_CLIENT_ID: embedded.YCODING_ANTIGRAVITY_CLIENT_ID } },
+      { name: "missing-id", env: { YCODING_ANTIGRAVITY_CLIENT_SECRET: embedded.YCODING_ANTIGRAVITY_CLIENT_SECRET } },
+      { name: "empty-id", env: { ...embedded, YCODING_ANTIGRAVITY_CLIENT_ID: "" } },
+      { name: "empty-secret", env: { ...embedded, YCODING_ANTIGRAVITY_CLIENT_SECRET: "" } },
+      { name: "empty-pair", env: { YCODING_ANTIGRAVITY_CLIENT_ID: "", YCODING_ANTIGRAVITY_CLIENT_SECRET: "" } },
+    ])("$name rejects connections without HTTP requests or credential diagnostics", async ({ name, env }) => {
+      const command = await bundle(kind, env, `${kind}-${name}`)
+      expect(await run(command, runtime, ["--import-only"])).toEqual({ imported: true, requests: [] })
+      for (const runtimeEnv of [{}, runtime]) await rejectsConnection(command, runtimeEnv)
     }, 120_000)
   })
 }

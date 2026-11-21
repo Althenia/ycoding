@@ -50,9 +50,11 @@ test("a replacement connection drops the old prediction and ignores late old-tra
       handlers.set(deviceID, callbacks)
       return {
         connect: () => callbacks.onStatus?.({ kind: "open" }), close: () => {}, setPriority: () => {}, status: () => ({ kind: "open" }),
-        request: async (operation) => operation === "session.snapshot"
-          ? { status: "ok", value: { sourceEpoch: "epoch_prediction", session: { id: base.id, title: "Prediction", time: { created: 1, updated: 1 } }, messages: [], watermark: { type: "log.synced", aggregateID: base.id, seq: 0 } } }
-          : { status: "ok", value: { data: operation === "session.autonomy.get" ? { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", effective: { permissions: "manual", guardrails: "manual", answers: "manual", inherited: {}, deferred: false, guardrailsEnabled: true } } : [] } },
+        request: async (operation) => {
+          if (operation === "event.subscribe") return { status: "ok", value: { subscription_id: `sub-${deviceID}-${base.id}` } }
+          if (operation === "session.snapshot") return { status: "ok", value: { sourceEpoch: "epoch_prediction", session: { id: base.id, title: "Prediction", time: { created: 1, updated: 1 } }, messages: [], watermark: { type: "log.synced", aggregateID: base.id, seq: 0 } } }
+          return { status: "ok", value: { data: operation === "session.autonomy.get" ? { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", effective: { permissions: "manual", guardrails: "manual", answers: "manual", inherited: {}, deferred: false, guardrailsEnabled: true } } : [] } }
+        },
       }
     },
   })
@@ -139,7 +141,8 @@ test("an unavailable suggestion is a notice, and failed or unknown outcomes stay
 
 test("a suggestion settled after the Session changes does not publish that outcome notice", async () => {
   let release: (outcome: { status: "ok"; value: { status: "unavailable" } }) => void = () => {}
-  const store = predictionStore([], (operation) => operation === "session.prediction"
+  const requests: Parameters<typeof predictionStore>[0] = []
+  const store = predictionStore(requests, (operation) => operation === "session.prediction"
     ? new Promise((resolve) => { release = resolve })
     : undefined)
   try {
@@ -151,6 +154,9 @@ test("a suggestion settled after the Session changes does not publish that outco
     await pending
     expect(store.state().activeSessionID).toBe("ses_other")
     expect(store.state().notice).not.toBe("No suggestion available for the latest reply")
+    expect(requests.filter(({ operation }) => operation === "event.unsubscribe")).toEqual([
+      { operation: "event.unsubscribe", sessionID: "ses_prediction", input: { subscription_id: "sub-ses_prediction" } },
+    ])
   } finally { store.dispose() }
 })
 
@@ -170,6 +176,7 @@ function predictionStore(
         requests.push({ operation, sessionID: request?.sessionID, input: request?.input })
         const answered = await prediction(operation)
         if (answered) return answered
+        if (operation === "event.subscribe") return { status: "ok" as const, value: { subscription_id: `sub-${request?.sessionID}` } }
         if (operation === "session.snapshot") return { status: "ok" as const, value: { sourceEpoch: "epoch_prediction", session: { id: request?.sessionID, title: "Prediction", time: { created: 1, updated: 1 } }, messages: [], watermark: { type: "log.synced", aggregateID: request?.sessionID ?? "ses_prediction", seq: 0 } } }
         if (operation === "session.autonomy.get") return { status: "ok" as const, value: { data: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", effective: { permissions: "manual", guardrails: "manual", answers: "manual", inherited: {}, deferred: false, guardrailsEnabled: true } } } }
         return { status: "ok" as const, value: { data: [] } }

@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 
 const action = Bun.YAML.parse(await Bun.file(path.join(import.meta.dir, "../.github/actions/setup-rust/action.yml")).text()) as {
-  runs: { steps: { name: string; run?: string }[] }
+  runs: { steps: { name: string; if?: string; shell?: string; run?: string }[] }
 }
 const install = action.runs.steps.find((step) => step.name === "Install protoc")?.run ?? ""
 if (!install) throw new Error("Missing protoc installation step")
@@ -66,6 +66,45 @@ test("an unsupported runner fails before extraction and never exports protoc", a
   expect(result.stderr).toContain("Unsupported runner")
   expect(result.log).toBe("")
   expect(result.env).toBe("")
+})
+
+test.each(["complete", "missing module"] as const)("Windows native tools verify Strawberry Perl with %s", async (perl) => {
+  const step = action.runs.steps.find((entry) => entry.run?.includes("AWS_LC_SYS_PREBUILT_NASM"))
+  expect(step?.if).toBe("runner.os == 'Windows'")
+  expect(step?.shell).toBe("bash")
+  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-windows-build-tools-"))
+  try {
+    const envFile = path.join(root, "env")
+    const nativePerl = String.raw`C:\Strawberry\perl\bin\perl.exe`
+    const scripts = {
+      cygpath: 'test "$1" = -u && test "$2" = "$SHIM_NATIVE_PERL" && printf "%s\\n" "$SHIM_ROOT/Strawberry Perl.exe"',
+      perl: 'echo "Git Bash Perl was selected" >&2; exit 1',
+      "Strawberry Perl.exe": `test "$1" = -MIPC::Cmd && test "$2" = -MLocale::Maketext::Simple && test "$3" = -e || exit 78
+        if [ "$SHIM_PERL" = 'missing module' ]; then echo "Can't locate Locale/Maketext/Simple.pm" >&2; exit 1; fi`,
+      nasm: 'test "$1" = -v && echo "NASM version 2.16.03"',
+    }
+    for (const [name, script] of Object.entries(scripts)) {
+      const file = path.join(root, name)
+      await writeFile(file, `#!/bin/sh\n${script}\n`)
+      await chmod(file, 0o755)
+    }
+    await writeFile(envFile, "")
+    const result = Bun.spawnSync(["bash", "-c", step?.run ?? "exit 79"], {
+      env: { PATH: `${root}:/usr/bin:/bin`, GITHUB_ENV: envFile, SHIM_ROOT: root, SHIM_NATIVE_PERL: nativePerl, SHIM_PERL: perl },
+      stdout: "pipe", stderr: "pipe",
+    })
+    if (perl === "missing module") {
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stderr.toString()).toContain("Can't locate Locale/Maketext/Simple.pm")
+      expect(await readFile(envFile, "utf8")).toBe("")
+    } else {
+      expect(result.exitCode, result.stderr.toString()).toBe(0)
+      expect(result.stdout.toString()).toContain("NASM version")
+      expect(await readFile(envFile, "utf8")).toBe(`OPENSSL_SRC_PERL=${nativePerl}\nAWS_LC_SYS_PREBUILT_NASM=1\n`)
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 test("the runtime source shard checks the setup and receipt contracts before using them", async () => {

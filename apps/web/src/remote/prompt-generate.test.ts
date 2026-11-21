@@ -4,6 +4,7 @@ import { remoteKeys } from "./queries"
 import { submission } from "./ui/composer-logic"
 import { createRemoteHttp } from "./http"
 import { createRemoteStore } from "./store"
+import type { RemoteRequestOutcome } from "./transport"
 
 const sessionID = "ses_prompt"
 const workspace: RemoteWorkspaceInfo = { id: "work_one", projectID: "project_hash", directory: "/workspace/ycoding", name: "YCoding" }
@@ -60,9 +61,7 @@ test("a generated prompt fills only an empty draft", async () => {
 
 test("goal mode fills a /goal draft and queue mode sends delivery queue until the draft changes", async () => {
   const requests: { operation: string; input?: Readonly<Record<string, unknown>> }[] = []
-  const store = promptStore(requests, async (operation) => operation === "session.promptGenerate"
-    ? { status: "ok", value: { status: "generated", text: "Finish the migration" } }
-    : undefined)
+  const store = promptStore(requests, async () => ({ status: "ok", value: { status: "generated", text: "Finish the migration" } }))
   try {
     store.connect("dev_1")
     await store.selectSession(sessionID)
@@ -97,8 +96,7 @@ test("goal mode fills a /goal draft and queue mode sends delivery queue until th
 
 test("an unavailable prompt is a notice, and failed or unknown outcomes stay mutation toasts", async () => {
   const answers: ({ status: "ok"; value: { status: "unavailable" } } | { status: "failed" | "unknown"; error: { code: "internal_error" | "outcome_unknown"; message: string } })[] = []
-  const store = promptStore([], async (operation) => {
-    if (operation !== "session.promptGenerate") return undefined
+  const store = promptStore([], async () => {
     const answer = answers.shift()
     if (!answer) throw new Error("missing prompt answer")
     return answer
@@ -122,9 +120,7 @@ test("an unavailable prompt is a notice, and failed or unknown outcomes stay mut
 
 test("a prompt settled after the Session changes does not publish that outcome", async () => {
   let release: (outcome: { status: "ok"; value: { status: "generated"; text: string } }) => void = () => {}
-  const store = promptStore([], (operation) => operation === "session.promptGenerate"
-    ? new Promise((resolve) => { release = resolve })
-    : undefined)
+  const store = promptStore([], () => new Promise((resolve) => { release = resolve }))
   try {
     store.connect("dev_1")
     await store.selectSession(sessionID)
@@ -139,18 +135,18 @@ test("a prompt settled after the Session changes does not publish that outcome",
 })
 
 test("a new Session is created from the backend workspace, selected, then generated", async () => {
-  const requests: { operation: string; sessionID?: string; input?: Readonly<Record<string, unknown>> }[] = []
-  const store = promptStore(requests, async (operation) => operation === "session.promptGenerate"
-    ? { status: "ok", value: { status: "generated", text: "Start here" } }
-    : undefined)
+  const requests: Parameters<typeof promptStore>[0] = []
+  const store = promptStore(requests, async () => ({ status: "ok", value: { status: "generated", text: "Start here" } }))
   try {
     store.connect("dev_1")
     store.queryClient.setQueryData(remoteKeys.workspaces({ deviceID: "dev_1", generation: store.state().generation }), [workspace])
     expect(await store.requestPromptGenerate({ mode: "steer", intent: "steer first", memory: [], workspaceID: workspace.id })).toBe(false)
     expect(requests.some((request) => request.operation === "session.create" || request.operation === "session.promptGenerate")).toBe(false)
     expect(await store.requestPromptGenerate({ mode: "start", intent: "open the task", memory: ["repository"], workspaceID: workspace.id })).toBe(true)
-    expect(requests.find((request) => request.operation === "session.create")?.input).toEqual({ id: "ses_created", workspace: "work_one" })
-    expect(JSON.stringify(requests.find((request) => request.operation === "session.create")?.input)).not.toContain(workspace.directory)
+    const creation = requests.find((request) => request.operation === "session.create")
+    expect(creation?.workspaceID).toBe(workspace.id)
+    expect(creation?.input).toEqual({ id: "ses_created" })
+    expect(JSON.stringify(creation)).not.toContain(workspace.directory)
     expect(requests.find((request) => request.operation === "session.promptGenerate")).toMatchObject({
       sessionID: "ses_created",
       input: { mode: "start", intent: "open the task", memory: ["repository"] },
@@ -170,8 +166,8 @@ test("Steer and Queue are hidden without a Session, and a queue draft shows its 
 })
 
 function promptStore(
-  requests: { operation: string; sessionID?: string; input?: Readonly<Record<string, unknown>> }[],
-  prompt: (operation: string) => Promise<{ status: "ok"; value: unknown } | { status: "failed" | "unknown"; error: { code: "internal_error" | "outcome_unknown"; message: string } } | undefined> | { status: "ok"; value: unknown } | { status: "failed" | "unknown"; error: { code: "internal_error" | "outcome_unknown"; message: string } } | undefined,
+  requests: { operation: string; sessionID?: string; workspaceID?: string; input?: Readonly<Record<string, unknown>> }[],
+  generate: () => Promise<RemoteRequestOutcome>,
 ) {
   return createRemoteStore({
     http: createRemoteHttp(),
@@ -183,9 +179,9 @@ function promptStore(
       setPriority: () => {},
       status: () => ({ kind: "open" as const }),
       request: async (operation, request) => {
-        requests.push({ operation, sessionID: request?.sessionID, input: request?.input })
-        const answered = await prompt(operation)
-        if (answered) return answered
+        requests.push({ operation, sessionID: request?.sessionID, ...(request?.workspaceID === undefined ? {} : { workspaceID: request.workspaceID }), input: request?.input })
+        if (operation === "session.promptGenerate") return generate()
+        if (operation === "event.subscribe") return { status: "ok" as const, value: { subscription_id: `sub-${request?.sessionID}` } }
         if (operation === "session.create") {
           const id = typeof request?.input?.id === "string" ? request.input.id : "ses_created"
           return { status: "ok" as const, value: { data: { id, title: "Prompt", projectID: workspace.projectID, location: { directory: workspace.directory }, time: { created: 1, updated: 1 } } } }

@@ -18,7 +18,8 @@ import { antigravityBuildDefinitions } from "./antigravity-build-env"
 test("release OAuth secrets are supplied only to the TUI build step", async () => {
   const workflow = await Bun.file(new URL("../../../.github/workflows/release.yml", import.meta.url)).text()
   const step = workflow.split("      - name: Build TUI artifact\n")[1]?.split("\n      - name:")[0] ?? ""
-  expect(step).toContain("        run: bun run build:tui")
+  expect(step).toContain('            bun run build:tui --target=win32-x64 --runtime-receipt="$RUNNER_TEMP/windows-runtime"\n')
+  expect(step).toContain("            bun run build:tui\n")
   for (const name of ["YCODING_ANTIGRAVITY_CLIENT_ID", "YCODING_ANTIGRAVITY_CLIENT_SECRET"]) {
     expect(step).toContain(`          ${name}: \${{ secrets.${name} }}`)
     expect(workflow.split(name)).toHaveLength(3)

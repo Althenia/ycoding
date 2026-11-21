@@ -97,30 +97,34 @@ async function run(command: string[], env: Record<string, string | undefined> = 
 
 for (const kind of ["bun", "node"] as const) {
   describe(`${kind} packaged Muse OAuth`, () => {
-    test("embedded credentials are used for both requests regardless of runtime values", async () => {
-      for (const [index, env] of [embedded, { YCODING_MUSE_CLIENT_ID: embedded.YCODING_MUSE_CLIENT_ID }, { YCODING_MUSE_CLIENT_ID: embedded.YCODING_MUSE_CLIENT_ID, YCODING_MUSE_CLIENT_SECRET: "" }].entries()) {
-        const command = await bundle(kind, env, `${kind}-embedded-${index}`)
-        const expectedDigest = digest(env.YCODING_MUSE_CLIENT_ID, "YCODING_MUSE_CLIENT_SECRET" in env && env.YCODING_MUSE_CLIENT_SECRET ? env.YCODING_MUSE_CLIENT_SECRET : null)
-        const requests = ["authorization", "token"].map((endpoint) => ({ url: `https://auth.meta.com/oidc/device/${endpoint}/`, digest: expectedDigest }))
-        for (const runtimeEnv of runtimeEnvironments) expect(await run(command, runtimeEnv)).toEqual({ result: { ok: true, access: "synthetic-access", refresh: "synthetic-refresh" }, requests })
-        const rejected = await run(command, runtime, ["--token-error"])
-        expect(rejected.result.ok).toBe(false)
-        expect(rejected.result.error).toContain("invalid_client")
-        expect(rejected.requests).toEqual(requests)
-      }
+    test.each([
+      { name: "embedded-pair", env: embedded },
+      { name: "no-secret", env: { YCODING_MUSE_CLIENT_ID: embedded.YCODING_MUSE_CLIENT_ID } },
+      { name: "empty-secret", env: { YCODING_MUSE_CLIENT_ID: embedded.YCODING_MUSE_CLIENT_ID, YCODING_MUSE_CLIENT_SECRET: "" } },
+    ])("$name uses only embedded credentials for both requests", async ({ name, env }) => {
+      const command = await bundle(kind, env, `${kind}-${name}`)
+      const expectedDigest = digest(env.YCODING_MUSE_CLIENT_ID, env.YCODING_MUSE_CLIENT_SECRET || null)
+      const requests = ["authorization", "token"].map((endpoint) => ({ url: `https://auth.meta.com/oidc/device/${endpoint}/`, digest: expectedDigest }))
+      for (const runtimeEnv of runtimeEnvironments) expect(await run(command, runtimeEnv)).toEqual({ result: { ok: true, access: "synthetic-access", refresh: "synthetic-refresh" }, requests })
+      const rejected = await run(command, runtime, ["--token-error"])
+      expect(rejected.result.ok).toBe(false)
+      expect(rejected.result.error).toContain("invalid_client")
+      expect(rejected.requests).toEqual(requests)
     }, 120_000)
 
-    test("missing and empty embedded IDs import and reject authorization without HTTP", async () => {
-      for (const [index, env] of [{}, { YCODING_MUSE_CLIENT_SECRET: "synthetic-secret" }, { YCODING_MUSE_CLIENT_ID: "", YCODING_MUSE_CLIENT_SECRET: "synthetic-secret" }].entries()) {
-        const command = await bundle(kind, env, `${kind}-invalid-${index}`)
-        expect(await run(command, {}, ["--import-only"])).toEqual({ imported: true, requests: [] })
-        for (const runtimeEnv of [{}, runtime]) {
-          const result = await run(command, runtimeEnv)
-          expect(result.requests).toEqual([])
-          expect(result.result.ok).toBe(false)
-          expect(result.result.error).toContain("YCODING_MUSE_CLIENT_ID")
-          expect(result.result.error).not.toContain("synthetic-")
-        }
+    test.each([
+      { name: "unconfigured", env: {} },
+      { name: "missing-id", env: { YCODING_MUSE_CLIENT_SECRET: "synthetic-secret" } },
+      { name: "empty-id", env: { YCODING_MUSE_CLIENT_ID: "", YCODING_MUSE_CLIENT_SECRET: "synthetic-secret" } },
+    ])("$name imports and rejects authorization without HTTP", async ({ name, env }) => {
+      const command = await bundle(kind, env, `${kind}-${name}`)
+      expect(await run(command, {}, ["--import-only"])).toEqual({ imported: true, requests: [] })
+      for (const runtimeEnv of [{}, runtime]) {
+        const result = await run(command, runtimeEnv)
+        expect(result.requests).toEqual([])
+        expect(result.result.ok).toBe(false)
+        expect(result.result.error).toContain("YCODING_MUSE_CLIENT_ID")
+        expect(result.result.error).not.toContain("synthetic-")
       }
     }, 120_000)
   })

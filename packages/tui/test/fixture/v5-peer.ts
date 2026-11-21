@@ -369,8 +369,10 @@ function scenario(dispatch: Dispatch) {
         return `${root}/form${suffix === "list" ? "" : `/${params.formID}/${suffix}`}`
       }
       if (action === "guardrail.status") return `${root}/guardrail`
-      if (action === "guardrail.request.list") return `${root}/guardrail/request`
-      if (action === "guardrail.request.reply") return `${root}/guardrail/request/${params.requestID}/reply`
+      if (action.startsWith("guardrail.request.")) {
+        const suffix = action.slice("guardrail.request.".length)
+        return `${root}/guardrail/request${suffix === "list" ? "" : `/${params.requestID}/${suffix}`}`
+      }
       return `${root}/${sessionPaths[action] ?? action.replaceAll(".", "/")}`
     }
     if (name.startsWith("artifact.")) {
@@ -423,7 +425,9 @@ function scenario(dispatch: Dispatch) {
             name === "session.deleteMessage" ||
             name.endsWith(".clear") ||
             name.endsWith(".forget") ||
-            (name.endsWith(".cancel") && !name.startsWith("session.subagent."))
+            (name.endsWith(".cancel") &&
+              !name.startsWith("session.subagent.") &&
+              name !== "session.guardrail.request.cancel")
           ? "DELETE"
           : name.endsWith(".set") || name.endsWith(".update")
             ? "PUT"
@@ -648,6 +652,7 @@ export function scriptedTransport(run: Scenario, events: EventSource) {
             return [
               "location.get",
               "session.snapshot",
+              "session.guardrail.request.retry",
               "session.subagent.list",
               "session.compaction.list",
               "session.messages",
