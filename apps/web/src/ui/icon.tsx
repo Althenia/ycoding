@@ -9,6 +9,8 @@ export type IconName =
   | "devices"
   | "menu"
   | "close"
+  | "more"
+  | "trash"
   | "sun"
   | "moon"
   | "monitor"
@@ -81,6 +83,8 @@ const paths: Record<IconName, readonly string[]> = {
   devices: ["M3 5h10v10H3z", "M15 8h6v11h-6z", "M6 18h4"],
   menu: ["M4 7h16", "M4 12h16", "M4 17h16"],
   close: ["M6 6l12 12", "M18 6L6 18"],
+  more: ["M5 12h.01", "M12 12h.01", "M19 12h.01"],
+  trash: ["M4 7h16", "M9 7V4h6v3", "M6 7l1 13h10l1-13", "M10 10v6", "M14 10v6"],
   sun: ["M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M12 2v2", "M12 20v2", "M2 12h2", "M20 12h2", "M5 5l1.5 1.5", "M17.5 17.5L19 19", "M19 5l-1.5 1.5", "M6.5 17.5L5 19"],
   moon: ["M20.35 14.15A8.5 8.5 0 1 1 9.85 3.65a7 7 0 0 0 10.5 10.5z"],
   monitor: ["M3 4.5h18v11H3z", "M9 19.5h6", "M12 15.5v4"],

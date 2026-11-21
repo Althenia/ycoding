@@ -1978,9 +1978,9 @@ describe("operation mapping", () => {
     expect(output).toMatchObject({ data: [{ sessionID: "ses_root", executing: false }, { sessionID: "ses_child", activity: { text: "Searching" } }] })
     expect(JSON.stringify(output)).not.toContain("sensitive-value")
   })
-  test("pending input controls call the local server for the verified Session and report a gone input as not_found", async () => {
+  test("message actions call the local server for the verified Session and preserve delete refusals", async () => {
     const { local, registry, subscriptions, calls } = await harness({
-      results: { pendingRemove: async () => undefined, pendingSteer: async () => undefined },
+      results: { pendingRemove: async () => undefined, pendingSteer: async () => undefined, deleteMessage: async () => undefined },
     })
     const send = (operation: RemoteRequest["operation"], fields?: Readonly<Record<string, unknown>>) =>
       executeRemoteOperation({ request: request(operation, fields), sessions: registry, subscriptions, local })
@@ -1989,6 +1989,8 @@ describe("operation mapping", () => {
     expect(calls.at(-1)).toEqual({ method: "pendingRemove", args: ["ses_1", { directory: "/work" }, "msg_1"] })
     expect(valueOf(await send("session.pending.steer", { messageID: "msg_2" }))).toBeNull()
     expect(calls.at(-1)).toEqual({ method: "pendingSteer", args: ["ses_1", { directory: "/work" }, "msg_2"] })
+    expect(valueOf(await send("session.message.delete", { messageID: "msg_4" }))).toBeNull()
+    expect(calls.at(-1)).toEqual({ method: "deleteMessage", args: ["ses_1", { directory: "/work" }, "msg_4"] })
 
     calls.length = 0
     for (const fields of [undefined, {}, { messageID: "ses_1" }, { messageID: "msg_1", delivery: "steer" }])
@@ -2004,6 +2006,14 @@ describe("operation mapping", () => {
       local: missing.local,
     })
     expect(errorOf(outcome).code).toBe("not_found")
+
+    const read = await harness({ results: { deleteMessage: new LocalFailureClass("conflict", "read", { cause: { _tag: "MessageDeleteRefusedError", reason: "read" } }) } })
+    expect(errorOf(await executeRemoteOperation({
+      request: request("session.message.delete", { messageID: "msg_4" }),
+      sessions: read.registry,
+      subscriptions: read.subscriptions,
+      local: read.local,
+    }))).toMatchObject({ code: "message_read", message: "YCoding has already read this message." })
 
     const foreign = await executeRemoteOperation({
       request: { ...request("session.pending.remove", { messageID: "msg_1" }), sessionID: "ses_foreign" },

@@ -850,6 +850,16 @@ const Endpoint5_62 = (raw: RawClient["server.session"]) => (input: Endpoint5_62I
     Effect.map((value) => value.data),
   )
 
+type Endpoint5_63Request = Parameters<RawClient["server.session"]["session.deleteMessage"]>[0]
+type Endpoint5_63Input = {
+  readonly sessionID: Endpoint5_63Request["params"]["sessionID"]
+  readonly messageID: Endpoint5_63Request["params"]["messageID"]
+}
+const Endpoint5_63 = (raw: RawClient["server.session"]) => (input: Endpoint5_63Input) =>
+  raw["session.deleteMessage"]({ params: { sessionID: input["sessionID"], messageID: input["messageID"] } }).pipe(
+    Effect.mapError(mapClientError),
+  )
+
 const adaptGroup5 = (raw: RawClient["server.session"]) => ({
   list: Endpoint5_0(raw),
   create: Endpoint5_1(raw),
@@ -908,6 +918,7 @@ const adaptGroup5 = (raw: RawClient["server.session"]) => ({
   interrupt: Endpoint5_60(raw),
   background: Endpoint5_61(raw),
   message: Endpoint5_62(raw),
+  deleteMessage: Endpoint5_63(raw),
 })
 
 type Endpoint6_0Request = Parameters<RawClient["server.guardrail"]["session.guardrail.status"]>[0]

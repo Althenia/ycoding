@@ -208,6 +208,7 @@ export type LocalServer = {
   readonly interrupt: (sessionID: string, location: LocalLocation) => Promise<void>
   readonly pendingRemove: (sessionID: string, location: LocalLocation, messageID: string) => Promise<void>
   readonly pendingSteer: (sessionID: string, location: LocalLocation, messageID: string) => Promise<void>
+  readonly deleteMessage: (sessionID: string, location: LocalLocation, messageID: string) => Promise<void>
   readonly deleteSession: (sessionID: string, location: LocalLocation) => Promise<void>
   readonly prediction: (
     sessionID: string,
@@ -490,6 +491,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       call(async () => {
         await client.session.pending.steer({ sessionID, messageID }, request(location, timeoutMs))
       }),
+    deleteMessage: (sessionID, location, messageID) =>
+      call(() => client.session.deleteMessage({ sessionID, messageID }, request(location, timeoutMs))),
     prediction: (sessionID, location, input) =>
       call(() => client.session.prediction({
         sessionID,
@@ -638,7 +641,7 @@ function classify(cause: unknown, timeoutMs: number): LocalFailure {
     return new LocalFailure("not_found", "Session is not available on this device", { cause })
   if (tag === "CommandEvaluationError") return new LocalFailure("invalid", "Local server rejected the command", { cause })
   if (tag === "AttachmentTooLargeError") return new LocalFailure("too_large", "Attachment exceeds the read size limit", { cause })
-  if (tag === "ConflictError" || tag === "SessionBusyError" || tag === "ModelSwitchBlockedError" || tag === "CoordinationError")
+  if (tag === "ConflictError" || tag === "SessionBusyError" || tag === "ModelSwitchBlockedError" || tag === "CoordinationError" || tag === "MessageDeleteRefusedError")
     return new LocalFailure("conflict", "Local server rejected the request", { cause })
   return new LocalFailure("server", `Local server failed the request after ${timeoutMs}ms timeout policy`, { cause })
 }

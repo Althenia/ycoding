@@ -422,11 +422,8 @@ export type DeliveryState = "sending" | "sent" | "read"
 
 export function userDeliveryStates(messages: readonly Messages[number][], sendingID?: string): ReadonlyMap<string, DeliveryState> {
   const states = new Map<string, DeliveryState>()
-  let consumed = false
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index]!
-    if (message.type === "assistant") consumed = true
-    if (message.type === "user") states.set(message.id, message.id === sendingID ? "sending" : consumed ? "read" : "sent")
+  for (const message of messages) {
+    if (message.type === "user") states.set(message.id, message.time.consumed !== undefined ? "read" : message.id === sendingID ? "sending" : "sent")
   }
   return states
 }

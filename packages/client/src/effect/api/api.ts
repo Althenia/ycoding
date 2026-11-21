@@ -628,6 +628,16 @@ export type Endpoint5_62Input = {
 export type Endpoint5_62Output = EffectValue<ReturnType<RawClient["server.session"]["session.message"]>>["data"]
 export type SessionMessageOperation<E = never> = (input: Endpoint5_62Input) => Effect.Effect<Endpoint5_62Output, E>
 
+type Endpoint5_63Request = Parameters<RawClient["server.session"]["session.deleteMessage"]>[0]
+export type Endpoint5_63Input = {
+  readonly sessionID: Endpoint5_63Request["params"]["sessionID"]
+  readonly messageID: Endpoint5_63Request["params"]["messageID"]
+}
+export type Endpoint5_63Output = EffectValue<ReturnType<RawClient["server.session"]["session.deleteMessage"]>>
+export type SessionDeleteMessageOperation<E = never> = (
+  input: Endpoint5_63Input,
+) => Effect.Effect<Endpoint5_63Output, E>
+
 export interface SessionApi<E = never> {
   readonly list: SessionListOperation<E>
   readonly create: SessionCreateOperation<E>
@@ -700,6 +710,7 @@ export interface SessionApi<E = never> {
   readonly interrupt: SessionInterruptOperation<E>
   readonly background: SessionBackgroundOperation<E>
   readonly message: SessionMessageOperation<E>
+  readonly deleteMessage: SessionDeleteMessageOperation<E>
 }
 
 type Endpoint6_0Request = Parameters<RawClient["server.guardrail"]["session.guardrail.status"]>[0]

@@ -147,8 +147,8 @@ test("guardrail review cancel and retry are Session-scoped mutations", () => {
   }
 })
 
-test("pending input controls are Session-scoped mutations that accept only an indexed message ID", () => {
-  for (const operation of ["session.pending.remove", "session.pending.steer"] as const) {
+test("message actions are Session-scoped mutations that accept only an indexed message ID", () => {
+  for (const operation of ["session.pending.remove", "session.pending.steer", "session.message.delete"] as const) {
     const frame = { type: "request", id: "req_pending", operation, sessionID: "ses_1", input: { messageID: "msg_1" } }
     expect(remoteOperationAccess[operation]).toBe("mutation")
     expect(remoteOperations).toContain(operation)
@@ -882,6 +882,7 @@ describe("remote operations", () => {
       "session.pending.list",
       "session.pending.remove",
       "session.pending.steer",
+      "session.message.delete",
       "session.attachment.read",
       "session.interaction.status",
       "session.interaction.preview",

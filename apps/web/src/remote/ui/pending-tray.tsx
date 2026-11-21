@@ -2,6 +2,7 @@ import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, type 
 import { Icon } from "../../ui/icon"
 import { useRemote } from "../context"
 import { pendingTrayItems } from "../view-model"
+import { PendingPreview } from "./pending-preview"
 import "./pending-tray.css"
 
 export function PendingTray(): JSX.Element {
@@ -32,7 +33,7 @@ export function PendingTray(): JSX.Element {
       <Show when={items().length > 0}>
         <button type="button" class="pending-tray__toggle" aria-expanded={expanded()} aria-controls="pending-tray-list" onClick={() => setExpanded(!expanded())}>
           <Icon name="queue" size={16} /><strong>{items().length} pending</strong>
-          <Show when={!expanded()}><span class="pending-tray__preview">{items()[0]!.text}</span></Show>
+          <Show when={!expanded()}><PendingPreview class="pending-tray__preview" text={items()[0]!.text} /></Show>
           <Icon name={expanded() ? "chevron-down" : "chevron-up"} size={16} />
         </button>
         <Show when={expanded()}>
@@ -40,9 +41,9 @@ export function PendingTray(): JSX.Element {
             <For each={items().map((item) => item.id)}>{(id) => {
               const item = () => items().find((entry) => entry.id === id)
               return <Show when={item()}>{(entry) => <li class="pending-tray__item">
-                <span class="pending-tray__text">{entry().text}</span>
+                <PendingPreview class="pending-tray__text" text={entry().text} />
                 <button type="button" class="pending-tray__action" aria-label="Steer now" data-tooltip="Steer now" disabled={busy() !== undefined} onClick={() => void act("steer", id)}><Icon name="steer" size={16} /></button>
-                <button type="button" class="pending-tray__action" aria-label="Remove pending message" data-tooltip="Remove pending message" disabled={busy() !== undefined} onClick={() => void act("remove", id)}><Icon name="close" size={16} /></button>
+                <button type="button" class="pending-tray__action pending-tray__delete" aria-label="Delete" data-tooltip="Delete" disabled={busy() !== undefined} onClick={() => void act("remove", id)}><Icon name="trash" size={16} /></button>
               </li>}</Show>
             }}</For>
           </ol>

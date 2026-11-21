@@ -6,12 +6,19 @@ import { Context, Effect, Layer } from "effect"
 import { NodeHttpServer } from "@effect/platform-node"
 import { HttpRouter } from "effect/unstable/http"
 import { Session } from "@ycoding-ai/core/session"
+import { Database } from "@ycoding-ai/core/database/database"
+import { EventRuntime } from "@ycoding-ai/core/event"
+import { SessionEvent } from "@ycoding-ai/core/session/event"
+import { SessionPending } from "@ycoding-ai/core/session/pending"
+import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { createRoutes } from "../src/routes"
 
 let root: string
 let sessionID: Session.ID | undefined
 let sessions: Session.Interface | undefined
+let events: EventRuntime.Interface
+let database: Database.Interface
 
 const headers = {
   "content-type": "application/json",
@@ -45,6 +52,8 @@ function createHandler(directory: string) {
       Layer.tap((context) =>
         Effect.gen(function* () {
           sessions = Context.get(context, Session.Service)
+          events = Context.get(context, EventRuntime.Service)
+          database = Context.get(context, Database.Service)
           sessionID = (yield* sessions.create({ location: { directory: AbsolutePath.make(directory) }, title: "Synthetic" })).id
         }),
       ),
@@ -68,6 +77,28 @@ afterAll(async () => {
 })
 
 describe("pending input controls over HTTP", () => {
+  test("sent delete checks current consumption and author at the HTTP mutation boundary", async () => {
+    const session = sessionID!
+    const unread = SessionMessage.ID.make("msg_http_unread")
+    const read = SessionMessage.ID.make("msg_http_read")
+    const plugin = SessionMessage.ID.make("msg_http_plugin")
+    for (const id of [unread, read, plugin]) {
+      await Effect.runPromise(sessions!.prompt({ id, sessionID: session, text: "Synthetic sent input", origin: id === plugin ? "plugin" : undefined, resume: false }))
+    }
+    await Effect.runPromise(SessionPending.promoteSteers(database.db, events, session))
+    const route = (id: string) => `/api/session/${session}/message/${id}`
+    expect(await (await call("GET", route(read))).json()).toMatchObject({ data: { time: { created: expect.any(Number) } } })
+    await Effect.runPromise(events.publish(SessionEvent.InputConsumed, { sessionID: session, inputIDs: [read] }))
+    for (const [id, reason] of [[read, "read"], [plugin, "not_owned"]] as const) {
+      const rejected = await call("DELETE", route(id))
+      expect(rejected.status).toBe(409)
+      expect(await rejected.json()).toMatchObject({ _tag: "MessageDeleteRefusedError", reason, messageID: id })
+      expect((await call("GET", route(id))).status).toBe(200)
+    }
+    expect((await call("DELETE", route(unread))).status).toBe(204)
+    expect((await call("GET", route(unread))).status).toBe(404)
+  })
+
   test("DELETE withdraws a pending user input and answers 204", async () => {
     await admitQueued("msg_http_withdraw")
     expect(await pendingIDs()).toContain("msg_http_withdraw")

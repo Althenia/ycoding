@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { join } from "node:path"
 import { launchBrowser, decodeArray, decodeBoolean, decodeNumber, decodeRecord, decodeString, type Page } from "./cdp"
 
 const port = 4593
@@ -53,6 +54,10 @@ const contrast = (first: string, second: string) => {
 }
 const composerFixture = (query = "") => `${origin}/verify/composer-fixture.html${query}`
 const shell = (query = "") => `${origin}/verify/remote.html?view=chat&team=two&acceptedPreview=1${query}`
+const captureActions = async (page: Page, name: string) => {
+  const output = process.env.YCODING_MESSAGE_ACTION_CAPTURE_DIR
+  if (output) await Bun.write(join(output, name + ".png"), Buffer.from(await page.screenshot(), "base64"))
+}
 const attachPng = (name: string, type: string, via: "paste" | "input") => `(() => {
   const bytes = Uint8Array.from(atob(${JSON.stringify(png)}), (character) => character.charCodeAt(0))
   const data = new DataTransfer()
@@ -486,6 +491,39 @@ describe("workspace shell", () => {
 })
 
 describe("pending tray", () => {
+  test.each([390, 1440])("fits pending previews and both actions at %i pixels", async (width) => {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, 900)
+      await page.navigate(shell("&queued=0"))
+      await wait(page, `typeof window.remoteSetPendingInputs === 'function' && document.querySelector('.composer-resident .composer__input') !== null`)
+      await page.evaluate(`window.remoteSetPendingInputs(${JSON.stringify([
+        row("msg_long", "Synthetic pending preview ".repeat(90).trim()), row("msg_short", "Short preview"),
+      ])}); void 0`)
+      await wait(page, `document.querySelector('.pending-tray__preview')?.textContent.endsWith('..')`)
+      await click(page, ".pending-tray__toggle")
+      const expanded = decodeRecord(await page.evaluate(`(() => {
+        const toggle = document.querySelector('.pending-tray__toggle');
+        const r = toggle.getBoundingClientRect();
+        return { active: toggle.getAttribute('aria-expanded'), hit: document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.outerHTML.slice(0, 140), rows: [...document.querySelectorAll('.pending-tray__text')].map(node => node.textContent.slice(0, 100)) };
+      })()`))
+      expect(expanded).toMatchObject({ active: "true" })
+      await wait(page, `document.querySelectorAll('.pending-tray__item').length === 2 && document.querySelector('.pending-tray__text')?.textContent.endsWith('..')`)
+      expect(decodeBoolean(await page.evaluate(`(() => {
+        const [long, short] = document.querySelectorAll('.pending-tray__text');
+        return long.textContent.endsWith('..') && !long.textContent.includes('…') && short.textContent === 'Short preview' && Array.from(document.querySelectorAll('.pending-tray__item')).every(row => {
+          const bounds = row.getBoundingClientRect();
+          return ['Steer now', 'Delete'].every(label => {
+            const button = row.querySelector('[aria-label="' + label + '"]');
+            const b = button?.getBoundingClientRect();
+            return !!b && b.width > 0 && b.left >= bounds.left && b.right <= Math.min(innerWidth, bounds.right);
+          });
+        });
+      })()`))).toBe(true)
+      await captureActions(page, `web-pending-${width}`)
+    } finally { await page.close() }
+  }, 40_000)
+
   const row = (id: string, text: string, delivery: "queue" | "steer" = "queue") => ({ id, sessionID: "ses_fixture", admittedSeq: 2, timeCreated: 2, type: "user", delivery, data: { text } })
   const rows = [
     row("msg_q1", "First queued message that is long enough to be previewed on one line"),
@@ -512,7 +550,7 @@ describe("pending tray", () => {
         const t = tray.getBoundingClientRect(), i = input.getBoundingClientRect()
         return { expanded: toggle.getAttribute('aria-expanded'), text: toggle.innerText, list: tray.querySelector('.pending-tray__list') !== null, gap: i.top - t.bottom, trayWidth: t.width, inputWidth: i.width, shadow: getComputedStyle(tray).boxShadow, preview: getComputedStyle(tray.querySelector('.pending-tray__preview')).textOverflow, label: tray.getAttribute('aria-label') }
       })()`))
-      expect(collapsed).toMatchObject({ expanded: "false", list: false, preview: "ellipsis", label: "Pending messages" })
+      expect(collapsed).toMatchObject({ expanded: "false", list: false, preview: "clip", label: "Pending messages" })
       expect(decodeString(collapsed["text"])).toContain("3 pending")
       expect(decodeString(collapsed["text"])).toContain("First queued message that is long enough")
       expect(decodeString(collapsed["text"])).not.toContain("internal")
@@ -526,7 +564,7 @@ describe("pending tray", () => {
       await wait(page, `document.querySelector('.pending-tray__list') !== null`)
       expect(decodeArray(decodeString)(await itemTexts(page))).toEqual(["First queued message that is long enough to be previewed on one line", "Second queued message", "Third queued message"])
       const labels = decodeArray(decodeString)(await page.evaluate(`[...document.querySelectorAll('.pending-tray__item button')].map((button) => button.getAttribute('aria-label'))`))
-      expect(labels).toEqual(Array.from({ length: 3 }, () => ["Steer now", "Remove pending message"]).flat())
+      expect(labels).toEqual(Array.from({ length: 3 }, () => ["Steer now", "Delete"]).flat())
       expect(decodeNumber(await page.evaluate(`document.querySelector('.pending-tray__action').getBoundingClientRect().width`))).toBeGreaterThanOrEqual(32)
       await click(page, ".pending-tray__toggle")
       await wait(page, `document.querySelector('.pending-tray__list') === null`)
@@ -545,7 +583,7 @@ describe("pending tray", () => {
       await wait(page, `document.querySelectorAll('.pending-tray__item').length === 3`)
       const action = (index: number, label: string) => `.pending-tray__item:nth-child(${index}) button[aria-label="${label}"]`
 
-      await click(page, action(2, "Remove pending message"))
+      await click(page, action(2, "Delete"))
       await wait(page, `document.querySelectorAll('.pending-tray__item').length === 2`)
       expect(decodeArray(decodeString)(await itemTexts(page))).toEqual(["First queued message that is long enough to be previewed on one line", "Third queued message"])
       expect(await operations(page)).toEqual([{ operation: "session.pending.remove", messageID: "msg_q2" }])
@@ -557,10 +595,10 @@ describe("pending tray", () => {
 
       await page.evaluate(`window.remoteStaleInput('msg_q3'); void 0`)
       await wait(page, `document.querySelector('.pending-tray__action') !== null && !document.querySelector('.pending-tray__action').disabled`)
-      const target = await point(page, action(1, "Remove pending message"))
+      const target = await point(page, action(1, "Delete"))
       await page.mouse("mouseMoved", decodeNumber(target["x"]), decodeNumber(target["y"]))
-      await wait(page, `document.querySelector('.owned-tooltip')?.textContent === 'Remove pending message' && document.querySelector('.owned-tooltip').getBoundingClientRect().top > 0`)
-      await click(page, action(1, "Remove pending message"))
+      await wait(page, `document.querySelector('.owned-tooltip')?.textContent === 'Delete' && document.querySelector('.owned-tooltip').getBoundingClientRect().top > 0`)
+      await click(page, action(1, "Delete"))
       await wait(page, `document.querySelector('.pending-tray__note') !== null`)
       expect(decodeString(await page.evaluate(`document.querySelector('.pending-tray__note').textContent`))).toBe("That input is no longer pending.")
       expect(decodeString(await page.evaluate(`document.querySelector('.pending-tray__note').getAttribute('role')`))).toBe("status")
@@ -569,6 +607,36 @@ describe("pending tray", () => {
     } finally { await page.close() }
   }, 40_000)
 })
+
+test("sent message actions delete unread messages and retain a newly read message when its open menu submits", async () => {
+  const page = await browser!.openPage()
+  const user = (id: string, text: string, origin: string, consumed?: number) => ({ id, type: "user", text, metadata: { inputOrigin: origin }, time: { created: 3, consumed } })
+  const fixture = [
+    user("msg_action_read", "Synthetic already read", "direct", 4),
+    user("msg_action_peer", "Synthetic non-owned", "plugin"),
+    user("msg_action_unread", "Synthetic delete before read", "direct"),
+    user("msg_action_race", "Synthetic read while menu is open", "direct"),
+  ]
+  try {
+    await page.setViewport(1440, 900)
+    await page.navigate(shell("&queued=0"))
+    await wait(page, `typeof window.remoteSetSentMessages === 'function' && document.querySelector('.composer-resident .composer__input')`)
+    await page.evaluate(`window.remoteSetSentMessages(${JSON.stringify(fixture)}); void 0`)
+    await wait(page, `document.querySelectorAll('.message-delete__menu-button').length === 2`)
+    expect(await page.evaluate(`document.querySelectorAll('.transcript-message--user .delivery-status[data-state="read"]').length`)).toBe(1)
+    await page.evaluate(`document.querySelectorAll('.message-delete__menu-button')[0].click()`)
+    await wait(page, `document.querySelector('.message-delete__menu button')?.textContent === 'Delete'`)
+    await captureActions(page, "web-sent-unread-menu")
+    await page.evaluate(`document.querySelector('.message-delete__menu button').click()`)
+    await wait(page, `!document.body.textContent.includes('Synthetic delete before read')`)
+    await page.evaluate(`document.querySelector('.message-delete__menu-button').click(); window.remoteReadSentMessage('msg_action_race'); void 0`)
+    await wait(page, `document.querySelectorAll('.transcript-message--user .delivery-status[data-state="read"]').length === 2`)
+    await page.evaluate(`document.querySelector('.message-delete__menu button').click()`)
+    await wait(page, `document.querySelector('.message-delete__error')?.textContent === 'YCoding has already read this message.'`)
+    expect(await page.evaluate(`document.body.textContent.includes('Synthetic read while menu is open') && !document.querySelector('.message-delete__menu-button')`)).toBe(true)
+    await captureActions(page, "web-sent-read-refusal")
+  } finally { await page.close() }
+}, 40_000)
 
 describe("markdown", () => {
   const code = "const answer: Promise<number> = 42 // keep\n\tfunction run() {\n  return `x`\n}"

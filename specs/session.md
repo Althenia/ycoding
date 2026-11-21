@@ -84,6 +84,10 @@ An unconsumed user input can be withdrawn or promoted to an immediate steer befo
 
 Manual compaction does not use the prompt pending store. `POST /api/session/:sessionID/compact` accepts an optional `cmp_` idempotency ID, admits compaction, starts or joins the process-global worker for that job, and returns the settled `SessionCompaction.Result`: `{ id, sessionID, trigger, status: "ended" | "failed", requestedThrough, timeCreated, failure?: <FailureCode> }`.
 
+### Sent message deletion
+
+`DELETE /api/session/:sessionID/message/:messageID` (`session.deleteMessage`) returns 204 and publishes `session.input.deleted.1` with the Session and input IDs. The projection removes the user message. The same transaction checks that the message belongs to the requested Session, was submitted directly by the local user, and has no durable consumption receipt. An unknown Session or message returns 404. A consumed or non-owned message returns 409 `MessageDeleteRefusedError` with reason `read` or `not_owned`; both leave the transcript unchanged. The remote `session.message.delete` mutation takes `{ messageID }` and reports the refusal as `message_read` or `message_not_owned`. Managed subagent Sessions reject this remote mutation.
+
 ## Causal usage attribution
 
 Trusted runtime dispatch may add optional `causedBy: { sessionID, inputID }` to `session.input.admitted`. `session.provider.request.recorded` may carry optional `usageAnchor` with that same shape, captured before provider execution. Only the `launched` variant of `session.task.updated` and `session.compaction.admitted` may also carry optional `usageAnchor`. These additive fields preserve old payload decoding without a new event type/version or historical rewrite. They never enter model-visible content or provider-cache namespaces; untrusted prompt metadata cannot set ownership.

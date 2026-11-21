@@ -360,6 +360,7 @@ export type RemoteStore = {
   readonly reloadNotifications: () => Promise<void>
   readonly interrupt: () => Promise<void>
   readonly settlePendingInput: (kind: "remove" | "steer", messageID: string) => Promise<string | undefined>
+  readonly deleteMessage: (messageID: string) => Promise<string | undefined>
   readonly dismissPrediction: (sessionID: string, scope: string, source: string) => void
   readonly requestPrediction: (input: { readonly memory: readonly ("repository" | "knowledge")[]; readonly hint?: string }) => Promise<boolean>
   readonly requestPromptGenerate: (input: { readonly mode: "start" | "steer" | "queue" | "goal"; readonly intent: string; readonly memory: readonly ("repository" | "knowledge")[]; readonly workspaceID?: string; readonly agent?: string; readonly model?: ModelRefView }) => Promise<boolean>
@@ -3947,6 +3948,21 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (outcome.error.code === "not_found") return "That input is no longer pending."
       if (outcome.error.code === "subagent_read_only") return "Subagent Sessions are read-only."
       return describeOutcome(outcome, kind === "remove" ? "Remove" : "Steer now")
+    },
+    deleteMessage: async (messageID) => {
+      const owner = transport
+      const sessionID = container.state.activeSessionID
+      if (owner === undefined || sessionID === undefined) return "Connect to the device before deleting a message."
+      const token = selectionToken
+      const outcome = await owner.request("session.message.delete", { sessionID, input: { messageID } })
+      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID) return undefined
+      if (outcome.status === "ok") return undefined
+      if (outcome.status === "failed") {
+        if (outcome.error.code === "message_read") return "YCoding has already read this message."
+        if (outcome.error.code === "message_not_owned") return "You can only delete your own messages."
+        if (outcome.error.code === "not_found") return "This message is no longer available."
+      }
+      return describeOutcome(outcome, "Delete message")
     },
     interrupt: async () => {
       const sessionID = container.state.activeSessionID

@@ -1,6 +1,7 @@
 import { createMemo } from "solid-js"
 import { useData } from "../../context/data"
 import { DialogSelect } from "../../ui/dialog-select"
+import type { DialogContext } from "../../ui/dialog"
 import { useClipboard } from "../../context/clipboard"
 import { useToast } from "../../ui/toast"
 import { useClient } from "../../context/client"
@@ -23,6 +24,15 @@ export function DialogMessage(props: {
   const keymap = Keymap.use()
   const shortcuts = Keymap.useShortcuts()
   const message = createMemo(() => data.session.message.get(props.sessionID, props.messageID))
+  const pending = data.session.pending.list(props.sessionID).find((input) => input.id === props.messageID && input.type === "user")
+  const target = message()
+  const owns = target?.type === "user" && target.metadata?.inputOrigin === "direct"
+  const actionInput = { sessionID: props.sessionID, messageID: props.messageID }
+  const deleteUnread = owns && (pending !== undefined || target.time.consumed === undefined)
+  const settle = async (action: () => Promise<unknown>) => {
+    try { await action() }
+    catch (error) { toast.show({ message: errorMessage(error), variant: "error", duration: 5000 }) }
+  }
   const copy = async () => {
     const value = message()
     if (!value) return
@@ -44,6 +54,20 @@ export function DialogMessage(props: {
     <DialogSelect
       title="Message actions"
       options={[
+        ...(owns && pending?.delivery === "queue" ? [{
+          title: "Steer now", value: "message.steer",
+          onSelect: (dialog: DialogContext) => {
+            dialog.clear()
+            void settle(() => client.api.session.pending.steer(actionInput))
+          },
+        }] : []),
+        ...(deleteUnread ? [{
+          title: "Delete", value: "message.delete",
+          onSelect: (dialog: DialogContext) => {
+            dialog.clear()
+            void settle(() => pending ? client.api.session.pending.remove(actionInput) : client.api.session.deleteMessage(actionInput))
+          },
+        }] : []),
         {
           title: "Copy message",
           value: "message.copy",

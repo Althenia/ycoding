@@ -1536,6 +1536,16 @@ function createFixtureStore(): Fixture {
       })
     }
     if (operation === "session.goal.stop") return autonomyResponse({ mode: "normal" })
+    if (operation === "session.message.delete") {
+      const messageID = input?.messageID
+      const message = messages.find((item) => item && typeof item === "object" && Reflect.get(item, "id") === messageID)
+      if (!message || typeof message !== "object") return { status: "failed", error: { code: "not_found", message: "This message is no longer available." } }
+      const time: unknown = Reflect.get(message, "time")
+      if (time && typeof time === "object" && Reflect.has(time, "consumed")) return { status: "failed", error: { code: "message_read", message: "YCoding has already read this message." } }
+      messages = messages.filter((item) => item !== message)
+      emitEvent(sessionID, { type: "session.input.deleted", data: { sessionID, inputID: messageID } })
+      return { status: "ok", value: null }
+    }
     if (operation === "session.pending.remove" || operation === "session.pending.steer") {
       pendingOperations.push({ operation, sessionID: targetSessionID, input })
       const row = pendingInputs.find((entry) => typeof entry === "object" && entry !== null && Reflect.get(entry, "id") === input?.messageID)
@@ -1552,6 +1562,16 @@ function createFixtureStore(): Fixture {
   }
 
   const emitEvent = (sessionID: string, event: unknown) => handlers?.onEvents?.(sessionID, [event])
+  Object.assign(window, {
+    remoteSetSentMessages: (rows: readonly unknown[]) => { messages = rows; return store.reloadMessages() },
+    remoteReadSentMessage: (inputID: string) => {
+      messages = messages.map((entry) => {
+        if (!entry || typeof entry !== "object" || Reflect.get(entry, "id") !== inputID) return entry
+        return { ...entry, time: { ...Object(Reflect.get(entry, "time")), consumed: Date.now() } }
+      })
+      emitEvent(sessionID, { type: "session.input.consumed", data: { sessionID, inputIDs: [inputID] } })
+    },
+  })
   Object.assign(window, { remotePendingOperations: pendingOperations, remoteStaleInput: (id: string) => staleInputs.add(id), remoteEmit: (event: unknown) => emitEvent(sessionID, event), remoteSetPendingInputs: (rows: readonly unknown[]) => { pendingInputs = rows; return store.reloadMessages() } })
 
   const laptopSession = { id: "ses_laptop", title: "Laptop release check", projectID: "prj_laptop", location: { directory: "/workspace/laptop" }, agent: "god", model, time: { created: ago(20), updated: ago(2) } }

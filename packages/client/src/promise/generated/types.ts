@@ -35,6 +35,7 @@ export type TelemetryRequestSample = {
     | "session.snapshot"
     | "session.pending.list"
     | "session.pending.remove"
+    | "session.deleteMessage"
     | "session.pending.steer"
     | "session.attachment.read"
     | "session.interaction.status"
@@ -42,6 +43,7 @@ export type TelemetryRequestSample = {
     | "session.interaction.stop"
     | "session.interaction.resume"
     | "session.message.stream"
+    | "session.message.delete"
     | "session.todo.list"
     | "session.subagent.list"
     | "session.pin"
@@ -1298,6 +1300,17 @@ export type SessionInputConsumed = {
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
   data: { sessionID: string; inputIDs: [string, ...Array<string>] }
+}
+
+export type SessionInputDeleted = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.input.deleted"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; inputID: string }
 }
 
 export type SessionDotsBindingUnbound = {
@@ -5190,6 +5203,16 @@ export type SessionLogItem =
       created: number
       metadata?: { [x: string]: any }
       sourceEpoch: string
+      type: "session.input.deleted"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: { sessionID: string; inputID: string }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
       type: "session.dots.exchange.created"
       durable: { aggregateID: string; seq: number; version: 1 }
       location?: LocationRef
@@ -5855,6 +5878,7 @@ export type ServerEvent =
   | SessionInputWithdrawn
   | SessionInputSteered
   | SessionInputConsumed
+  | SessionInputDeleted
   | SessionDotsExchangeCreated
   | SessionDotsBindingBound
   | SessionDotsBindingUnbound
@@ -6136,6 +6160,16 @@ export const isInstructionEntryValueTooLargeError = (value: unknown): value is I
   "_tag" in value &&
   value["_tag"] === "InstructionEntryValueTooLargeError"
 
+export type MessageDeleteRefusedError = {
+  readonly _tag: "MessageDeleteRefusedError"
+  readonly sessionID: string
+  readonly messageID: string
+  readonly reason: "read" | "not_owned"
+  readonly message: string
+}
+export const isMessageDeleteRefusedError = (value: unknown): value is MessageDeleteRefusedError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "MessageDeleteRefusedError"
+
 export type GuardrailRequestNotFoundError = {
   readonly _tag: "GuardrailRequestNotFoundError"
   readonly requestID: string
@@ -6325,6 +6359,7 @@ export type ServerTelemetryAppendInput = {
             | "session.snapshot"
             | "session.pending.list"
             | "session.pending.remove"
+            | "session.deleteMessage"
             | "session.pending.steer"
             | "session.attachment.read"
             | "session.interaction.status"
@@ -6332,6 +6367,7 @@ export type ServerTelemetryAppendInput = {
             | "session.interaction.stop"
             | "session.interaction.resume"
             | "session.message.stream"
+            | "session.message.delete"
             | "session.todo.list"
             | "session.subagent.list"
             | "session.pin"
@@ -8255,6 +8291,13 @@ export type SessionMessageInput = {
 }
 
 export type SessionMessageOutput = { data: SessionMessageInfo }["data"]
+
+export type SessionDeleteMessageInput = {
+  readonly sessionID: { readonly sessionID: string; readonly messageID: string }["sessionID"]
+  readonly messageID: { readonly sessionID: string; readonly messageID: string }["messageID"]
+}
+
+export type SessionDeleteMessageOutput = void
 
 export type GuardrailStatusInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 

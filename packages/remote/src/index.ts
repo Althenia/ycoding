@@ -55,6 +55,7 @@ export const remoteOperations = [
   "session.pending.list",
   "session.pending.remove",
   "session.pending.steer",
+  "session.message.delete",
   "session.attachment.read",
   "session.interaction.status",
   "session.interaction.preview",
@@ -154,6 +155,7 @@ export const remoteSessionOperations = [
   "session.pending.list",
   "session.pending.remove",
   "session.pending.steer",
+  "session.message.delete",
   "session.attachment.read",
   "session.interaction.status",
   "session.interaction.preview",
@@ -336,6 +338,7 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "session.pending.list": "read",
   "session.pending.remove": "mutation",
   "session.pending.steer": "mutation",
+  "session.message.delete": "mutation",
   "session.attachment.read": "read",
   "session.interaction.status": "read",
   "session.interaction.preview": "read",
@@ -565,6 +568,8 @@ export type RemoteErrorCode =
   | "session_not_allowed"
   | "subagent_read_only"
   | "not_found"
+  | "message_read"
+  | "message_not_owned"
   | "not_subscribed"
   | "rate_limited"
   | "agent_unavailable"
@@ -582,6 +587,8 @@ const remoteErrorCodes: readonly RemoteErrorCode[] = [
   "session_not_allowed",
   "subagent_read_only",
   "not_found",
+  "message_read",
+  "message_not_owned",
   "not_subscribed",
   "rate_limited",
   "agent_unavailable",
@@ -1050,7 +1057,7 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
     Object.keys(input).every((key) => key === "limit" || key === "before"))
   if (operation === "session.attachment.read") return isRecord(input) && typeof input.digest === "string" &&
     /^[0-9a-f]{64}$/.test(input.digest) && Object.keys(input).length === 1
-  if (operation === "session.pending.remove" || operation === "session.pending.steer") return isRecord(input) && typeof input.messageID === "string" &&
+  if (operation === "session.pending.remove" || operation === "session.pending.steer" || operation === "session.message.delete") return isRecord(input) && typeof input.messageID === "string" &&
     /^msg_[A-Za-z0-9_-]+$/.test(input.messageID) && input.messageID.length <= 128 && Object.keys(input).length === 1
   if (operation === "session.message.stream") return isRecord(input) && typeof input.messageID === "string" &&
     /^msg_[A-Za-z0-9_-]+$/.test(input.messageID) && input.messageID.length <= 128 && Object.keys(input).length === 1

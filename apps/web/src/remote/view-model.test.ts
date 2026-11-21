@@ -263,7 +263,7 @@ test("the latest user prompt keeps a processing receipt while the session runs",
   expect(promptReceipt("pending", "steer", undefined, true)).toMatchObject({ state: "processing", label: "Sent" })
   expect(promptReceipt("pending", "queue", undefined, true)).toMatchObject({ state: "queued", label: "Sent", detail: "Queued for processing" })
   expect(promptReceipt("promoted", "steer", undefined, true)).toEqual({ state: "processing", label: "Sent", detail: "Processing prompt" })
-  expect(promptReceipt("consumed", "steer", undefined, true)).toEqual({ state: "processing", label: "Sent", detail: "Processing prompt" })
+  expect(promptReceipt("consumed", "steer", undefined, true)).toEqual({ state: "read", label: "Read by YCoding", detail: "Read by YCoding" })
   expect(promptReceipt("promoted", "queue", undefined, false)).toMatchObject({ state: "sent", label: "Sent" })
   expect(promptReceipt("consumed", "steer", undefined, false)).toEqual({ state: "read", label: "Read by YCoding", detail: "Read by YCoding" })
 })

@@ -22,6 +22,9 @@ import { SessionCompaction } from "./session-compaction.js"
 export const ID = SessionMessageID
 export type ID = typeof ID.Type
 
+export const DeleteRefusal = Schema.Literals(["read", "not_owned"])
+export type DeleteRefusal = typeof DeleteRefusal.Type
+
 const Base = {
   id: ID,
   metadata: Schema.Record(Schema.String, Schema.Unknown).pipe(optional),

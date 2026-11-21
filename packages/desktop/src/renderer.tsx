@@ -29,6 +29,8 @@ import { composerByteLimit, composerFileLimit, hasTransferFiles, inlineFileSize,
 import type { DesktopAPI, DesktopSource, IntegrationMutationInput, IntegrationAttempt, McpMutationInput, SessionManageInput, SystemManageInput, DisplayValue, Selection, UpdateCheckResult, ArtifactInput, ArtifactMutationInput, ArtifactMutationResult, ArtifactPreviewKind, ArtifactScope, SessionSnapshot, MemoryScope } from "./contract"
 import { schemeStylesheet } from "../../../apps/web/src/theme/schemes"
 import { Icon as WebIcon, type IconName as WebIconName } from "../../../apps/web/src/ui/icon"
+import { PendingPreview } from "../../../apps/web/src/remote/ui/pending-preview"
+import { MessageDelete } from "../../../apps/web/src/remote/ui/message-delete"
 import { ordinarySession } from "./sessions"
 import { Markdown, MarkdownClipboard } from "../../../apps/web/src/remote/ui/markdown"
 import { createInteractionControl, interactionControlVisible, interactionEventGeneration, readInteractionStatus, type InteractionView } from "../../../apps/web/src/remote/interaction-control"
@@ -579,6 +581,11 @@ function App() {
       const type: string = event.type
       if (event.type === "session.text.delta" || event.type === "session.reasoning.delta" || event.type === "session.tool.input.delta") telemetry.record("stream.delay", Date.now() - event.created)
       const sessionID = eventSessionID(event)
+      if (sessionID && event.type === "session.input.deleted") {
+        queries.setQueryData<SessionSnapshot>(["messages", ...scope(), sessionID], (current) => current && {
+          ...current, messages: current.messages.filter((message) => message.id !== event.data.inputID),
+        })
+      }
       if (sessionID && (stopped.has(type) || type === "session.execution.started" || type === "session.deleted")) setExecutionStates((current) => {
         if (type === "session.idle" && current.get(sessionID) === "failed") return current
         const next = new Map(current)
@@ -2338,10 +2345,10 @@ function DesktopComposerSurface(props: { readonly formClass: string; readonly bu
 function PendingTray(props: { readonly items: readonly { readonly id: string; readonly text: string; readonly delivery: "steer" | "queue" }[]; readonly busy?: string; readonly note?: string; readonly onRemove: (id: string) => void; readonly onSteer: (id: string) => void }) {
   const [expanded, setExpanded] = createSignal(false)
   return <Show when={props.items.length}><section class="pending-tray" aria-label="Pending messages" data-expanded={expanded() ? "true" : undefined}>
-    <button type="button" class="pending-tray__toggle" aria-expanded={expanded()} aria-controls="pending-tray-list" onClick={() => setExpanded(!expanded())}><Icon name="queue" /><strong>{props.items.length} pending</strong><Show when={!expanded()}><span class="pending-tray__preview">{props.items[0]!.text}</span></Show><Icon name={expanded() ? "chevron-down" : "chevron-up"} /></button>
-    <Show when={expanded()}><ol id="pending-tray-list" class="pending-tray__list"><For each={props.items}>{(item) => <li class="pending-tray__item"><span class="pending-tray__text">{item.text}</span>
-      <button type="button" class="rl-icon-button" aria-label="Steer now" data-tooltip="Steer now" disabled={props.busy !== undefined || item.delivery === "steer"} onClick={() => props.onSteer(item.id)}><Icon name="steer" /></button>
-      <button type="button" class="rl-icon-button" aria-label="Remove pending message" data-tooltip="Remove pending message" disabled={props.busy !== undefined} onClick={() => props.onRemove(item.id)}><Icon name="close" /></button></li>}</For></ol></Show>
+    <button type="button" class="pending-tray__toggle" aria-expanded={expanded()} aria-controls="pending-tray-list" onClick={() => setExpanded(!expanded())}><Icon name="queue" /><strong>{props.items.length} pending</strong><Show when={!expanded()}><PendingPreview class="pending-tray__preview" text={props.items[0]!.text} /></Show><Icon name={expanded() ? "chevron-down" : "chevron-up"} /></button>
+    <Show when={expanded()}><ol id="pending-tray-list" class="pending-tray__list"><Keyed each={props.items} by={item => item.id}>{(item) => <li class="pending-tray__item"><PendingPreview class="pending-tray__text" text={item().text} />
+      <button type="button" class="rl-icon-button" aria-label="Steer now" data-tooltip="Steer now" disabled={props.busy !== undefined || item().delivery === "steer"} onClick={() => props.onSteer(item().id)}><Icon name="steer" /></button>
+      <button type="button" class="rl-icon-button pending-tray__delete" aria-label="Delete" data-tooltip="Delete" disabled={props.busy !== undefined} onClick={() => props.onRemove(item().id)}><WebIcon name="trash" size={16} /></button></li>}</Keyed></ol></Show>
     <Show when={props.note}>{(note) => <p role="status" class="pending-tray__note">{note()}</p>}</Show>
   </section></Show>
 }
@@ -2479,7 +2486,7 @@ function intermediateAssistant(message: Messages[number] | undefined): message i
   return !message.content.some(part => part.type === "text" && part.text.length > 0)
 }
 
-function TurnView(props: { sessionID: string; message: Messages[number]; continuation?: boolean; delivery?: keyof typeof deliveryLabels }) {
+function TurnView(props: { sessionID: string; message: Messages[number]; continuation?: boolean; delivery?: keyof typeof deliveryLabels; onDelete: (id: string) => Promise<string | undefined> }) {
   const duration = (start: number, end?: number) => end === undefined ? undefined : `${Math.max(0, Math.round((end - start) / 1000))}s`
   const role = () => props.message.type
   const externalPeer = () => dotsPeerLabel(props.message.metadata)
@@ -2504,7 +2511,7 @@ function TurnView(props: { sessionID: string; message: Messages[number]; continu
       const dots = () => dotsDelivery(message().metadata)
       return <SharedMessageTurn kind="user" markdownText={message().text} bubbleAttachments={images().length || dots() ? <><Show when={dots()}>{(delivery) => <DotOrigin steer={delivery() === "steer"} />}</Show><Show when={images().length}><div class="transcript-message__images"><For each={images()}>{(file) => <SentImage sessionID={props.sessionID} file={file} />}</For></div></Show></> : undefined} attachments={<>
         <For each={message().files?.filter((file) => !file.mime.startsWith("image/"))}>{(file) => <span class="conversation__chip">{file.name ?? "Attachment"}</span>}</For>
-        <div class="transcript-message__meta"><CopyMessageButton text={message().text} /><DeliveryStatus state={props.delivery ?? "sent"} time={message().time.created} /></div>
+        <div class="transcript-message__meta"><Show when={message().metadata?.inputOrigin === "direct"}><MessageDelete eligible={message().time.consumed === undefined && props.delivery !== "sending"} onDelete={() => props.onDelete(message().id)} /></Show><CopyMessageButton text={message().text} /><DeliveryStatus state={props.delivery ?? "sent"} time={message().time.created} /></div>
       </>} />
     }}</Show>
     <Show when={steer()}>{(entry) => <SharedMessageTurn kind="synthetic" content={<div class="transcript-message--user" aria-label="Dot steer prompt"><div class="transcript-message__bubble" data-origin="chatgpt"><DotOrigin steer /><div class="transcript-message__bubble-text"><Markdown text={entry().text} /></div></div><div class="transcript-message__meta"><CopyMessageButton text={entry().text} /></div></div>} />}</Show>
@@ -2958,6 +2965,18 @@ function Conversation(props: { sessionID: string }) {
   const historyKey = () => ["messages", ...scope(), props.sessionID] as const
   const messages = observe(() => ({ queryKey: historyKey(), queryFn: async () => { const key = historyKey(), started = performance.now(), owner = scope().join(":"); const next = await api.sessionSnapshot({ sessionID: props.sessionID }); if (owner === scope().join(":")) telemetry.record("transcript.load", performance.now() - started); return reconcileSessionHistory(queries.getQueryData<SessionSnapshot>(key), next, "refresh") }, enabled: reading(), refetchOnMount: "always" as const }))
   const history = () => messages.result().isError ? undefined : currentSnapshot(messages.result().data, connection().revision, props.sessionID)
+  const deleteMessage = async (messageID: string) => {
+    const current = history()
+    if (!current) return "Refresh the Session before deleting a message."
+    const key = historyKey()
+    try {
+      await api.deleteMessage({ sessionID: props.sessionID, messageID, revision: current.revision })
+      queries.setQueryData<SessionSnapshot>(key, (snapshot) => snapshot && { ...snapshot, messages: snapshot.messages.filter((message) => message.id !== messageID) })
+      return undefined
+    } catch (cause) {
+      return failure(cause, "The backend did not confirm deletion. Refresh before trying again.")
+    }
+  }
   const pendingRead = observe(() => ({ queryKey: ["pendingInputs", ...scope(), props.sessionID] as const, queryFn: () => api.pendingInputs(props.sessionID), enabled: reading() }))
   const pendingInputs = () => pendingRead.result().isError ? undefined : currentSnapshot(pendingRead.result().data, connection().revision, props.sessionID)
   const [historyBusy, setHistoryBusy] = createSignal(false)
@@ -3583,7 +3602,7 @@ function Conversation(props: { sessionID: string }) {
       <Show when={historyError()}><p role="alert">{historyError()}</p></Show>
       <Show when={!messages.result().isPending} fallback={<SharedLoadingSkeleton kind="conversation" label="Loading the transcript…" />}><Show when={!messages.result().isError} fallback={<div role="alert" class="desktop__error"><p>{failure(messages.result().error, "The transcript could not be read. Check the connection and refresh.")}</p><button type="button" onClick={messages.refetch} disabled={!reading()}>Refresh transcript</button></div>}>
         <Show when={turns().length} fallback={<div class="desktop-empty-transcript" role="status" aria-label="Empty transcript"><Icon name="chat" /><p>No messages in this Session yet.</p></div>}><ol class="transcript rl-thread" aria-label="Transcript"><Keyed each={turns()} by={(item) => item.id}>{(item) => <>
-          <TurnView sessionID={props.sessionID} message={item()} continuation={!findQuery().trim() && continuations().has(item().id)} delivery={deliveries().get(item().id)} />
+          <TurnView sessionID={props.sessionID} message={item()} continuation={!findQuery().trim() && continuations().has(item().id)} delivery={deliveries().get(item().id)} onDelete={deleteMessage} />
           <Show when={editPlacements().get(item().id)}>{(edit) => <li class="transcript__turn transcript__edits"><SharedEditedFilesCard files={edit().files} onViewChanges={(path) => { setSelectedTurn(edit().turnID); openChanges(path) }} onUndo={() => { setSelectedTurn(edit().turnID); openChanges(); void doRevert("stage") }} undoDisabled={revertBusy() || revertUncertain() || running()} footerNote={activeRevert() ? "Staged revert · preview and confirmation required" : undefined} /></li>}</Show></>}</Keyed></ol></Show>
       </Show></Show>
       <Show when={requests.result().isError}><div role="alert" class="desktop__error"><p>Pending requests could not be read. Refresh to retry.</p><button type="button" onClick={requests.refetch} disabled={!reading()}>Refresh requests</button></div></Show>

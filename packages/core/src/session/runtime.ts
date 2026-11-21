@@ -295,6 +295,11 @@ export type PendingInputInvalidError = SessionPending.InvalidError
 export const MessageNotFoundError = SessionRevert.MessageNotFoundError
 export type MessageNotFoundError = SessionRevert.MessageNotFoundError
 
+export class MessageDeleteRefusedError extends Schema.TaggedErrorClass<MessageDeleteRefusedError>()(
+  "Session.MessageDeleteRefusedError",
+  { sessionID: SessionSchema.ID, messageID: SessionMessage.ID, reason: SessionMessage.DeleteRefusal },
+) {}
+
 export type Error =
   | NotFoundError
   | AgentNotFoundError
@@ -371,6 +376,10 @@ export interface Interface {
     sessionID: SessionSchema.ID
     messageID: SessionMessage.ID
   }) => Effect.Effect<SessionMessage.Info | undefined>
+  readonly deleteMessage: (input: {
+    sessionID: SessionSchema.ID
+    messageID: SessionMessage.ID
+  }) => Effect.Effect<void, NotFoundError | MessageNotFoundError | MessageDeleteRefusedError>
   readonly context: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<SessionMessage.Info[], NotFoundError | MessageDecodeError>
@@ -2187,6 +2196,24 @@ const layer = Layer.effect(
       message: Effect.fn("Session.message")(function* (input) {
         const stored = yield* store.message(input.messageID)
         return stored?.sessionID === input.sessionID ? stored.message : undefined
+      }),
+      deleteMessage: Effect.fn("Session.deleteMessage")(function* (input) {
+        yield* result.get(input.sessionID)
+        let refusal: MessageNotFoundError | MessageDeleteRefusedError | undefined
+        const deleted = yield* events.publishBatch([
+          { definition: SessionEvent.InputDeleted, data: { sessionID: input.sessionID, inputID: input.messageID } },
+        ], {
+          when: Effect.gen(function* () {
+            const message = yield* result.message(input)
+            if (message === undefined) refusal = new MessageNotFoundError(input)
+            else if (message.type !== "user" || message.metadata?.inputOrigin !== "direct")
+              refusal = new MessageDeleteRefusedError({ ...input, reason: "not_owned" })
+            else if (message.time.consumed !== undefined)
+              refusal = new MessageDeleteRefusedError({ ...input, reason: "read" })
+            return refusal === undefined
+          }),
+        })
+        if (deleted.length === 0 && refusal) yield* refusal
       }),
       context: Effect.fn("Session.context")(function* (sessionID) {
         yield* result.get(sessionID)

@@ -1006,15 +1006,15 @@ test("namespaced slash commands resolve to their backend command", () => {
   expect(slashAction("/ui:foo go", [], ["ui:foo"])).toEqual({ kind: "backend", name: "ui:foo", args: "go" })
 })
 
-test("user delivery shows sending while in flight, sent until an assistant starts after it, then read", () => {
-  const user = (id: string) => ({ id, type: "user", text: id }) as never
-  const assistant = (id: string) => ({ id, type: "assistant", content: [] }) as never
-  const states = userDeliveryStates([user("a"), assistant("x"), user("b"), user("c")], "c")
-  expect(states.get("a")).toBe("read")
-  expect(states.get("b")).toBe("sent")
+test("user delivery becomes read only when the message has a consumption receipt", () => {
+  const user = (id: string, consumed?: number) => ({ id, type: "user" as const, text: id, time: { created: 1, consumed } })
+  const assistant = (id: string) => msg({ id, type: "assistant", content: [] })
+  const states = userDeliveryStates([user("a"), assistant("x"), user("b", 2), user("c")], "c")
+  expect(states.get("a")).toBe("sent")
+  expect(states.get("b")).toBe("read")
   expect(states.get("c")).toBe("sending")
   expect(userDeliveryStates([user("only")]).get("only")).toBe("sent")
-  expect(userDeliveryStates([user("first"), assistant("x")]).get("first")).toBe("read")
+  expect(userDeliveryStates([user("first", 2)], "first").get("first")).toBe("read")
 })
 
 test("assistant reply text copies only text parts in order", () => {

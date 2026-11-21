@@ -279,6 +279,7 @@ export type RemoteMessageView =
       /** Absent when the projection does not carry a delivery mode. */
       readonly delivery?: "steer" | "queue"
       readonly dotsDelivery?: "steer" | "queue"
+      readonly owned?: true
       readonly state: "pending" | "promoted" | "consumed"
       readonly created: number
     }
@@ -1130,6 +1131,8 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
       const id = stringField(data.inputID)
       return { ...view, messages: view.messages.filter((message) => !(message.id === id && message.kind === "user" && message.state === "pending")) }
     }
+    case "session.input.deleted":
+      return { ...view, messages: view.messages.filter((message) => message.id !== data.inputID) }
     case "session.input.steered":
       return updateUserMessage(view, stringField(data.inputID), (message) => message.state === "pending" ? { ...message, delivery: "steer" } : message)
     case "session.input.consumed": {
@@ -1729,6 +1732,7 @@ function applyAdmitted(view: SessionView, data: Record<string, unknown>, now: nu
     ...(attachments.length > 0 ? { attachments } : existing?.kind === "user" && existing.attachments ? { attachments: existing.attachments } : {}),
     delivery: deliveryField(pending.delivery),
     ...dotsInputOf(payload.metadata),
+    ...(recordField(payload.metadata)?.inputOrigin === "direct" ? { owned: true } : {}),
     state: existing?.kind === "user" ? existing.state : "pending",
     created: existing?.kind === "user" ? existing.created : now,
   }
@@ -2031,6 +2035,7 @@ export function readProjectedMessage(value: unknown): RemoteMessageView | undefi
       text: stringField(value.text) ?? "",
       ...(attachments.length === 0 ? {} : { attachments }),
       ...dotsInputOf(value.metadata),
+      ...(recordField(value.metadata)?.inputOrigin === "direct" ? { owned: true } : {}),
       state: numberField(time.consumed) === undefined ? "promoted" : "consumed",
       created,
     }

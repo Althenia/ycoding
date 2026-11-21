@@ -25,6 +25,7 @@ import {
   MessageNotFoundError,
   ModelSwitchBlockedError,
   PendingInputNotFoundError,
+  MessageDeleteRefusedError,
   ServiceUnavailableError,
   SessionBusyError,
   SessionNotFoundError,
@@ -1353,6 +1354,19 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             description: "Retrieve one projected message owned by the Session.",
           }),
         ),
+    )
+    .add(
+      HttpApiEndpoint.delete("session.deleteMessage", "/api/session/:sessionID/message/:messageID", {
+        params: { sessionID: Session.ID, messageID: SessionMessage.ID },
+        success: HttpApiSchema.NoContent,
+        error: [SessionNotFoundError, MessageNotFoundError, MessageDeleteRefusedError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(OpenApi.annotations({
+          identifier: "session.deleteMessage",
+          summary: "Delete an unread sent message",
+          description: "Delete one direct user message only if it belongs to this Session and has not been consumed. Eligibility is checked in the deletion transaction.",
+        })),
     )
     .annotateMerge(
       OpenApi.annotations({

@@ -160,7 +160,7 @@ const receiptDetails = { sending: "Sending prompt", queued: "Queued for processi
 const promptReceiptOf = (state: PromptReceiptState): PromptReceipt => ({ state, label: receiptLabels[state], detail: receiptDetails[state] })
 
 export function promptReceipt(state: "pending" | "promoted" | "consumed" | undefined, delivery: "steer" | "queue" | undefined, mutation?: Pick<PendingMutation, "state">, processing = false): PromptReceipt {
-  if (state === "consumed" && !processing) return promptReceiptOf("read")
+  if (state === "consumed") return promptReceiptOf("read")
   if (mutation?.state === "failed") return promptReceiptOf("failed")
   if (mutation?.state === "unknown") return promptReceiptOf("unknown")
   if (mutation?.state === "sending") return promptReceiptOf("sending")

@@ -393,6 +393,7 @@ export type DesktopAPI = {
   readonly pendingInputs: (sessionID: string) => Promise<PendingInputs>
   readonly removePending: (input: PendingInputAction) => Promise<void>
   readonly steerPending: (input: PendingInputAction) => Promise<void>
+  readonly deleteMessage: (input: PendingInputAction & { readonly revision: number }) => Promise<void>
   readonly sessionAttachment: (input: SessionAttachmentInput) => Promise<SessionAttachment>
   readonly sessionInsights: (input: SessionInsightsInput) => Promise<SessionInsights>
   readonly switchAgent: (input: AgentSwitch) => Promise<void>

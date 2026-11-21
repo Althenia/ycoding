@@ -39,6 +39,7 @@ import { Markdown } from "./markdown"
 import { DotTrail } from "./dot-trail"
 import { SharedCompactionDivider, SharedDeliveryStatus, SharedMessageTurn, SharedTurnHead } from "./shared-workspace"
 import { FileChangeCard } from "./file-change-card"
+import { MessageDelete } from "./message-delete"
 import { ImagePreview, UserImage } from "./image"
 import { LoadingPlaceholder } from "./loading"
 import "./transcript.css"
@@ -409,6 +410,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
   }
   const dotsDelivery = () => { const message = props.message(); return message.kind === "user" ? message.dotsDelivery : undefined }
   const dotOrigin = () => steer() !== undefined || dotsDelivery() !== undefined
+  const ownMessage = () => { const message = props.message(); return message.kind === "user" && message.owned === true }
   const steerDeliveryState = () => {
     const message = props.message()
     return steer() !== undefined && message.kind === "synthetic" && message.pending ? (message.delivery ?? "steer") : undefined
@@ -416,7 +418,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
   return (
     <Show when={kind() !== "notice"} fallback={<p class="notice">{noticeText(props.message())}</p>}>
       <Show when={!hiddenEmptySteer()}>
-      <SharedMessageTurn kind={kind()} bubble={steer() !== undefined} origin={dotOrigin() ? "chatgpt" : undefined} steer={steer() !== undefined || dotsDelivery() === "steer"} copyText={copyText()} articleLabel={steer() !== undefined ? "Dot steer prompt" : undefined} deliveryState={steerDeliveryState()} markdownText={steer()?.text ?? (display().text || undefined)} bubbleAttachments={display().images.length > 0 || display().files.length > 0 ? <>
+      <SharedMessageTurn kind={kind()} bubble={steer() !== undefined} origin={dotOrigin() ? "chatgpt" : undefined} steer={steer() !== undefined || dotsDelivery() === "steer"} copyText={copyText()} actions={<Show when={ownMessage()}><MessageDelete eligible={userState(props.message()) === "promoted"} onDelete={() => remote.store.deleteMessage(props.message().id)} /></Show>} articleLabel={steer() !== undefined ? "Dot steer prompt" : undefined} deliveryState={steerDeliveryState()} markdownText={steer()?.text ?? (display().text || undefined)} bubbleAttachments={display().images.length > 0 || display().files.length > 0 ? <>
             <Show when={display().images.length > 0}><span class="transcript-message__images" aria-label={`${display().images.length} attached image${display().images.length === 1 ? "" : "s"}`} role="group">
               <For each={imageKeys()}>{(key) => {
                 const image = () => display().images[Number(key.slice(0, key.indexOf(":")))]!

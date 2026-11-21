@@ -359,6 +359,7 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
       "session.input.admitted": () => Effect.void,
       "session.input.withdrawn": () => Effect.void,
       "session.input.steered": () => Effect.void,
+      "session.input.deleted": () => Effect.void,
       "session.input.consumed": (event) =>
         Effect.forEach(
           event.data.inputIDs,

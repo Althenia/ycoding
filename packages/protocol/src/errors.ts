@@ -2,6 +2,7 @@ import { Schema } from "effect"
 import { Dots } from "@ycoding-ai/schema/dots"
 import { Skill } from "@ycoding-ai/schema/skill"
 import { Session } from "@ycoding-ai/schema/session"
+import { SessionMessage } from "@ycoding-ai/schema/session-message"
 
 export class InvalidRequestError extends Schema.TaggedErrorClass<InvalidRequestError>()(
   "InvalidRequestError",
@@ -100,6 +101,12 @@ export class MessageNotFoundError extends Schema.TaggedErrorClass<MessageNotFoun
     message: Schema.String,
   },
   { httpApiStatus: 404 },
+) {}
+
+export class MessageDeleteRefusedError extends Schema.TaggedErrorClass<MessageDeleteRefusedError>()(
+  "MessageDeleteRefusedError",
+  { sessionID: Session.ID, messageID: SessionMessage.ID, reason: SessionMessage.DeleteRefusal, message: Schema.String },
+  { httpApiStatus: 409 },
 ) {}
 
 export class PendingInputNotFoundError extends Schema.TaggedErrorClass<PendingInputNotFoundError>()(

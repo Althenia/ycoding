@@ -1932,6 +1932,23 @@ export class BackendController {
     await this.use("The pending message could not be steered. It may no longer be pending.", (api, signal) => api.session.pending.steer(request, { signal }))
   }
 
+  async deleteMessage(input: unknown) {
+    if (!object(input) || !isRevision(input.revision)) throw new DesktopError("Refresh the Session before deleting a message.")
+    const { revision, ...action } = input
+    const request = pendingAction(action)
+    await this.use("The backend did not confirm deletion. Refresh before trying again.", async (api, signal) => {
+      try { await api.session.deleteMessage(request, { signal }) }
+      catch (cause) {
+        if (object(cause) && cause._tag === "MessageDeleteRefusedError") {
+          if (cause.reason === "read") throw new DesktopError("YCoding has already read this message.")
+          if (cause.reason === "not_owned") throw new DesktopError("You can only delete your own messages.")
+        }
+        if (object(cause) && cause._tag === "MessageNotFoundError") throw new DesktopError("This message is no longer available.")
+        throw cause
+      }
+    }, { revision })
+  }
+
   async sessionAttachment(input: unknown): Promise<SessionAttachment> {
     const request = attachmentRead(input)
     return this.use("The attachment could not be read.", async (api, signal, revision) => {

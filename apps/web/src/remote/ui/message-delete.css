@@ -1,0 +1,9 @@
+.message-delete { position:relative; min-inline-size:0; }
+.message-delete:empty { display:none; }
+.message-delete__menu-button, .message-delete__menu button { display:flex; align-items:center; gap:var(--yc-space-2); min-block-size:var(--yc-space-6); padding:0 var(--yc-space-1); border:0; border-radius:var(--yc-radius-control); background:transparent; color:var(--yc-ink-secondary); }
+.message-delete__menu-button:hover, .message-delete__menu button:hover { background:var(--yc-plane-hover); }
+.message-delete__menu { position:absolute; z-index:2; inset-block-end:100%; inset-inline-end:0; padding:var(--yc-space-1); border:var(--yc-border-width) solid var(--yc-line-subtle); border-radius:var(--yc-radius-card); background:var(--yc-plane-raised); }
+.message-delete__menu button { padding-inline:var(--yc-space-2); color:var(--yc-coral-ink); }
+.message-delete__error { color:var(--yc-coral-ink); font-size:var(--yc-size-xs); }
+.message-delete button:focus-visible { outline:2px solid var(--yc-focus); outline-offset:2px; }
+@media (pointer:coarse) { .message-delete button { min-block-size:var(--yc-hit-min); min-inline-size:var(--yc-hit-min); justify-content:center; } }

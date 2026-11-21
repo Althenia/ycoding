@@ -251,6 +251,29 @@ describe("pending input controls", () => {
     }),
   )
 
+  it.effect("sent delete removes only an unread direct user message and refuses a consumed or non-owned message", () =>
+    Effect.gen(function* () {
+      const { session, database } = yield* setup
+      const events = yield* EventRuntime.Service
+      const add = (text: string, origin?: "plugin") => session.prompt({ sessionID, text, origin, resume: false })
+      const unread = yield* add("Synthetic unread prompt")
+      const stale = yield* add("Synthetic prompt read after opening its menu")
+      const foreign = yield* add("Synthetic plugin input", "plugin")
+      yield* SessionPending.promoteSteers(database.db, events, sessionID)
+      expect(yield* messageIDs(database)).toEqual([unread.id, stale.id, foreign.id])
+
+      yield* session.deleteMessage({ sessionID, messageID: unread.id })
+      expect(yield* messageIDs(database)).toEqual([stale.id, foreign.id])
+      expect((yield* session.prompt({ id: unread.id, sessionID, text: "Synthetic retry of deleted input", resume: false })).id).toBe(unread.id)
+      expect(yield* SessionPending.list(database.db, sessionID)).toHaveLength(0)
+      expect(yield* messageIDs(database)).toEqual([stale.id, foreign.id])
+      yield* events.publish(SessionEvent.InputConsumed, { sessionID, inputIDs: [stale.id] })
+      expect(yield* session.deleteMessage({ sessionID, messageID: stale.id }).pipe(Effect.flip)).toMatchObject({ reason: "read" })
+      expect(yield* session.deleteMessage({ sessionID, messageID: foreign.id }).pipe(Effect.flip)).toMatchObject({ reason: "not_owned" })
+      expect(yield* messageIDs(database)).toEqual([stale.id, foreign.id])
+    }),
+  )
+
   it.effect("an unknown input ID is not found and a withdrawn input cannot be withdrawn again", () =>
     Effect.gen(function* () {
       const { session, database } = yield* setup

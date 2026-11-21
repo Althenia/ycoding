@@ -752,7 +752,7 @@ test("pending tray removes and steers real user messages and refreshes after a s
     await wait(page, `document.querySelector('.pending-tray')?.textContent.includes('4 pending')`)
     await page.evaluate(`document.querySelector('.pending-tray__toggle').click()`)
     expect(await page.evaluate(rows, decodeArray(decodeString))).toEqual(["Synthetic first pending", "Synthetic second pending", "Synthetic stale pending", "Synthetic third pending"])
-    await page.evaluate(`document.querySelector('.pending-tray__item [aria-label="Remove pending message"]').click()`)
+    await page.evaluate(`document.querySelector('.pending-tray__item [aria-label="Delete"]').click()`)
     await wait(page, `document.querySelector('.pending-tray')?.textContent.includes('3 pending')`)
     await page.evaluate(`document.querySelector('.pending-tray__item [aria-label="Steer now"]').click()`)
     await wait(page, `document.querySelector('.pending-tray')?.textContent.includes('2 pending')`)
@@ -768,6 +768,63 @@ test("pending tray removes and steers real user messages and refreshes after a s
     await page.evaluate(`window.__desktopFixture.emit({ type: 'session.input.withdrawn', data: { sessionID: 'ses_test', inputID: 'msg_pend_three' } })`)
     await wait(page, `!document.querySelector('.pending-tray')`)
     expect(await page.evaluate(`window.__desktopFixture.errors`, decodeArray((value: unknown) => value))).toEqual([])
+  } finally { await page.close() }
+}, 30_000)
+
+test.each([1024, 1440])("Desktop pending previews keep both controls visible at %i pixels", async (width) => {
+  pending = false
+  const input = (id: string, text: string) => ({ id, sessionID: "ses_test", type: "user", delivery: "queue", admittedSeq: 1, timeCreated: 1, data: { text } })
+  const short = "Synthetic short preview"
+  const long = "Synthetic queued preview ".repeat(90).trim()
+  sceneRead = call => call.route.endsWith("/pending") ? { data: [input("msg_pending_long", long), input("msg_pending_short", short)] } : undefined
+  const page = await open()
+  try {
+    await page.setViewport(width, 850)
+    await wait(page, `document.querySelector('.pending-tray__preview')?.textContent.endsWith('..')`)
+    await page.evaluate(`document.querySelector('.pending-tray__toggle').click()`)
+    await wait(page, `document.querySelector('.pending-tray__text')?.textContent.endsWith('..')`)
+    expect(await page.evaluate(`(() => {
+      const [a, b] = document.querySelectorAll('.pending-tray__text');
+      return a.textContent.endsWith('..') && !a.textContent.includes('…') && b.textContent === ${JSON.stringify(short)} && [...document.querySelectorAll('.pending-tray__item')].every(row => {
+        const r = row.getBoundingClientRect();
+        return ['Steer now', 'Delete'].every(label => {
+          const button = row.querySelector('[aria-label="' + label + '"]');
+          const b = button?.getBoundingClientRect();
+          return !!b && b.width > 0 && b.left >= r.left && b.right <= Math.min(r.right, innerWidth);
+        });
+      });
+    })()`, decodeBoolean)).toBe(true)
+  } finally { await page.close() }
+}, 30_000)
+
+test("Desktop sent message actions preserve a read message when a previously open menu deletes", async () => {
+  pending = false
+  const user = (id: string, origin: string, consumed?: number) => ({ id, sessionID: "ses_test", type: "user", text: `Synthetic ${id}`, metadata: { inputOrigin: origin }, time: { created: 501, consumed } })
+  let rows = [user("msg_already_read", "direct", 502), user("msg_peer", "plugin"), user("msg_unread", "direct"), user("msg_race", "direct")]
+  sceneRead = call => {
+    if (call.route.endsWith("/snapshot")) return desktopSnapshot(rows)
+    if (call.method !== "DELETE") return undefined
+    if (call.route.endsWith("/msg_unread")) {
+      rows = rows.filter(row => row.id !== "msg_unread")
+      return new Response(null, { status: 204 })
+    }
+    if (call.route.endsWith("/msg_race") && rows.find(row => row.id === "msg_race")?.time.consumed !== undefined)
+      return Response.json({ _tag: "MessageDeleteRefusedError", sessionID: "ses_test", messageID: "msg_race", reason: "read", message: "YCoding has already read this message." }, { status: 409 })
+    return undefined
+  }
+  const page = await open(`document.querySelector('#turn-msg_race')`)
+  try {
+    expect(await page.evaluate(`document.querySelectorAll('.message-delete__menu-button').length === 2 && !document.querySelector('#turn-msg_already_read .message-delete__menu-button') && !document.querySelector('#turn-msg_peer .message-delete__menu-button')`, decodeBoolean)).toBe(true)
+    await page.evaluate(`document.querySelector('#turn-msg_unread .message-delete__menu-button').click(); document.querySelector('.message-delete__menu button').click()`)
+    await wait(page, `!document.querySelector('#turn-msg_unread')`)
+    await page.evaluate(`document.querySelector('#turn-msg_race .message-delete__menu-button').click()`)
+    rows = rows.map(row => row.id === "msg_race" ? user(row.id, "direct", 504) : row)
+    await page.evaluate(`window.__desktopFixture.emit({ type: 'session.input.consumed', data: { sessionID: 'ses_test', inputIDs: ['msg_race'] } })`)
+    await wait(page, `document.querySelector('#turn-msg_race [data-state="read"]')`)
+    await page.evaluate(`document.querySelector('#turn-msg_race .message-delete__menu button').click()`)
+    await wait(page, `document.querySelector('#turn-msg_race .message-delete__error')?.textContent === 'YCoding has already read this message.'`)
+    expect(await page.evaluate(`!document.querySelector('#turn-msg_race .message-delete__menu-button') && !!document.querySelector('#turn-msg_race [data-state="read"]')`, decodeBoolean)).toBe(true)
+    expect(owned!.calls.filter(call => call.method === "DELETE").map(call => call.route)).toEqual(["/api/session/ses_test/message/msg_unread", "/api/session/ses_test/message/msg_race"])
   } finally { await page.close() }
 }, 30_000)
 

@@ -1163,6 +1163,13 @@ const layer = Layer.effectDiscard(
       }),
     )
     yield* events.project(SessionEvent.InputConsumed, (event) => run(db, event))
+    yield* events.project(SessionEvent.InputDeleted, ({ data }) =>
+      db.delete(SessionMessageTable).where(and(
+        eq(SessionMessageTable.session_id, data.sessionID),
+        eq(SessionMessageTable.id, data.inputID),
+        eq(SessionMessageTable.type, "user"),
+      )).run().pipe(Effect.orDie, Effect.asVoid),
+    )
     yield* events.project(SessionEvent.DotsInstructionRejected, (event) =>
       db.delete(SessionPendingTable).where(and(
         eq(SessionPendingTable.id, event.data.inputID), eq(SessionPendingTable.session_id, event.data.sessionID),

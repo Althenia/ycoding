@@ -1698,7 +1698,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           projectPending(pending)
           break
         }
-        case "session.input.withdrawn": {
+        case "session.input.withdrawn":
+        case "session.input.deleted": {
           removePending(event.data.sessionID, event.data.inputID)
           setStore(
             "session",

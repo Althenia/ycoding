@@ -141,6 +141,8 @@ import type {
   SessionBackgroundOutput,
   SessionMessageInput,
   SessionMessageOutput,
+  SessionDeleteMessageInput,
+  SessionDeleteMessageOutput,
   GuardrailStatusInput,
   GuardrailStatusOutput,
   GuardrailRequestListInput,
@@ -1541,6 +1543,17 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      deleteMessage: (input: SessionDeleteMessageInput, requestOptions?: RequestOptions) =>
+        request<SessionDeleteMessageOutput>(
+          {
+            method: "DELETE",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/message/${encodeURIComponent(input.messageID)}`,
+            successStatus: 204,
+            declaredStatuses: [404, 409, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
     },
     guardrail: {
       status: (input: GuardrailStatusInput, requestOptions?: RequestOptions) =>

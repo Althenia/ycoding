@@ -475,6 +475,13 @@ export const InputConsumed = Event.durable({
 })
 export type InputConsumed = typeof InputConsumed.Type
 
+export const InputDeleted = Event.durable({
+  type: "session.input.deleted",
+  ...options,
+  schema: { sessionID: SessionID, inputID: SessionMessage.ID },
+})
+export type InputDeleted = typeof InputDeleted.Type
+
 export const DotsExchangeCreated = Event.durable({
   type: "session.dots.exchange.created",
   ...options,
@@ -1101,6 +1108,7 @@ export const Definitions = Event.inventory(
   InputWithdrawn,
   InputSteered,
   InputConsumed,
+  InputDeleted,
   DotsExchangeCreated,
   Dots.BindingBound,
   Dots.BindingUnbound,

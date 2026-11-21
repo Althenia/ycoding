@@ -18,6 +18,7 @@ import {
   MessageNotFoundError,
   ModelSwitchBlockedError,
   PendingInputNotFoundError,
+  MessageDeleteRefusedError,
   ServiceUnavailableError,
   SessionBusyError,
   SessionNotFoundError,
@@ -1280,6 +1281,19 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             messageID: ctx.params.messageID,
             message: `Message not found: ${ctx.params.messageID}`,
           })
+        }),
+      )
+      .handle(
+        "session.deleteMessage",
+        Effect.fn(function* (ctx) {
+          yield* session.deleteMessage(ctx.params).pipe(Effect.catchTags({
+            "Session.NotFoundError": mapSessionNotFound,
+            "Session.MessageNotFoundError": ({ sessionID, messageID }) =>
+              new MessageNotFoundError({ sessionID, messageID, message: "This message is no longer available." }),
+            "Session.MessageDeleteRefusedError": ({ sessionID, messageID, reason }) =>
+              new MessageDeleteRefusedError({ sessionID, messageID, reason, message: reason === "read" ? "YCoding has already read this message." : "You can only delete your own messages." }),
+          }))
+          return HttpApiSchema.NoContent.make()
         }),
       )
   }),
