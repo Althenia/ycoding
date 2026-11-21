@@ -69,6 +69,7 @@ export const RELEASES: readonly ReleaseEntry[] = [
       { tag: "Fixed", text: "Settled guardrail reviews clear from the waiting list, and the TUI refreshes pending reviews when it reconnects." },
       { tag: "Fixed", text: "Direct OpenAI Responses requests that continue a stored response no longer resend the system prompt, so input size stays flat and the prompt cache covers it across Steps." },
       { tag: "Fixed", text: "Pasted or attached screenshots show real thumbnails in the composer tray and in the sent message." },
+      { tag: "Fixed", text: "The Web and Desktop composer keeps Send and delivery controls on one row. In narrow windows, secondary controls move into a keyboard-accessible menu without clearing the draft." },
       { tag: "Fixed", text: "Slash-command suggestions stay open after typing a namespace such as `/ui:`." },
       { tag: "Fixed", text: "Device-removal dialogs leave room between the warning and the actions, and the Back focus outline stays visible while scrolling phone Team and companion views." },
     ],

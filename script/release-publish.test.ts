@@ -168,7 +168,7 @@ const replacement = [
   { name: "LICENSE", content: "license 2" },
 ]
 
-async function run(server: ReturnType<typeof github>, entries = replacement) {
+async function run(server: ReturnType<typeof github>, entries = replacement, runID = "77-1") {
   const local = await files(entries)
   const manifestPath = path.join(local.root, "manifest.json")
   const result = await publish({
@@ -179,7 +179,7 @@ async function run(server: ReturnType<typeof github>, entries = replacement) {
     tag,
     title: "YCoding 0.11.0",
     notes: "new notes",
-    run: "77-1",
+    run: runID,
     files: local.paths,
     manifest: manifestPath,
   })
@@ -363,7 +363,32 @@ test("a public asset that no longer matches its verified digest after the swap r
   expect(manifest.error).toContain("LICENSE")
 })
 
-test("leftover staged or prior assets from an earlier run stop publication before any change", async () => {
+test("another replacement retains both generations of prior assets", async () => {
+  const server = github({ assets: original })
+  const first = await run(server)
+  expect(first.result.status).toBe("published")
+  const next = replacement.map((asset) => ({ ...asset, content: `${asset.content} again` }))
+  const second = await run(server, next, "78-1")
+  expect(second.result.status).toBe("published")
+  const names = server.names()
+  expect(Object.keys(names)).toHaveLength(next.length * 3)
+  for (const asset of next) {
+    expect(names[`prior-77-1-${asset.name}`]).toBe(originalIDs[asset.name])
+    expect(names[`prior-78-1-${asset.name}`]).toBe(first.manifest.staged.find((entry) => entry.name === asset.name)?.id)
+    expect(server.assets.get(names[asset.name]!)?.content).toEqual(bytes(asset.content))
+  }
+  expect(server.mutations().some((call) => call.method === "DELETE")).toBe(false)
+})
+
+test("an existing prior archive for the same run stops publication before any change", async () => {
+  const server = github({ assets: [...original, { name: "prior-77-1-LICENSE", content: "earlier" }] })
+  const { result, manifest } = await run(server)
+  expect(result.status).toBe("refused")
+  expect(server.mutations()).toEqual([])
+  expect(manifest.error).toContain("prior-77-1-LICENSE")
+})
+
+test("leftover staged assets stop publication before any change", async () => {
   const server = github({ assets: [...original, { name: "staged-76-1-LICENSE", content: "earlier" }] })
   const { result, manifest } = await run(server)
   expect(result.status).toBe("refused")

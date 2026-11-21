@@ -69,10 +69,10 @@ export async function publish(input: PublishInput) {
   }
   const before = await github.assets(release.id)
   manifest.original = before.map(describe)
-  const leftovers = before.filter((asset) => asset.name.startsWith("staged-") || asset.name.startsWith("prior-"))
+  const leftovers = before.filter((asset) => asset.name.startsWith("staged-") || asset.name.startsWith(`prior-${input.run}-`))
   if (leftovers.length > 0) {
     manifest.status = "refused"
-    manifest.error = `Release has assets from an earlier publication: ${leftovers.map((asset) => asset.name).join(", ")}`
+    manifest.error = `Release has unfinished uploads or conflicting archive names: ${leftovers.map((asset) => asset.name).join(", ")}`
     manifest.final = manifest.original
     await save()
     return { status: manifest.status, manifest }

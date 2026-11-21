@@ -17,7 +17,7 @@ describe("release entries", () => {
       if (!tag) return []
       return [...section.matchAll(/^[+*-] (.+)$/gm)].map((match) => ({ tag, text: match[1]! }))
     })
-    expect(changes).toHaveLength(44)
+    expect(changes).toHaveLength(45)
     expect(changes).toEqual(expect.arrayContaining([
       expect.objectContaining({ tag: "Changed", text: expect.stringContaining("Field Notes") }),
       expect.objectContaining({ tag: "Changed", text: expect.stringContaining("install command") }),
