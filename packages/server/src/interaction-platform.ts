@@ -1,4 +1,5 @@
 import path from "node:path"
+import timers from "node:timers/promises"
 import { Global } from "@ycoding-ai/core/global"
 import { makeChromeTransport } from "@ycoding-ai/core/interaction/chrome"
 import { makeChromeIsolatedDriver } from "@ycoding-ai/core/interaction/chrome-isolated"
@@ -18,20 +19,30 @@ export type InteractionPlatforms = {
   }
 }
 
+const inventoryRetryDelaysMs = [100, 200, 400, 800]
+
 export const mountNativeConsent = Effect.fnUntraced(function* (
   authority: InteractionRuntime.Service["Service"], driver: InteractionDriver, key: InteractionDriverKey,
-  approve: (native: NativeInteraction, request: InventoryRequest, targets: readonly Interaction.Target[], signal: AbortSignal) => Promise<boolean>,
+  approve: (native: NativeInteraction, request: InventoryRequest, targets: readonly Interaction.Target[], signal: AbortSignal) => Promise<true | string>,
 ) {
   const native = authority.register(driver, key)
   const controller = new AbortController()
+  const runFork = Effect.runForkWith(yield* Effect.context())
+  const reject = (request: InventoryRequest, reason: string) => {
+    if (!native.reject(request.candidateID)) return
+    runFork(Effect.logWarning("Native interaction consent was rejected",
+      { driver: key, purpose: request.purpose, sessionID: request.sessionID, reason }))
+  }
   const stop = native.onPending((request, lifetime) => {
     const remaining = request.expiresAt - Date.now()
     if (lifetime.aborted || remaining <= 0) return
     const signal = AbortSignal.any([lifetime, controller.signal, AbortSignal.timeout(remaining)])
-    void native.inventory(request.candidateID).then(async (targets) => {
-      if (!targets.length || signal.aborted) return
-      if (!await approve(native, request, targets, signal) && !signal.aborted) native.reject(request.candidateID)
-    }).catch(() => { if (!signal.aborted) native.reject(request.candidateID) })
+    void offered(native, request, signal).then(async (targets) => {
+      if (signal.aborted) return
+      if (!targets.length) return reject(request, "inventory_empty")
+      const approved = await approve(native, request, targets, signal)
+      if (approved !== true && !signal.aborted) reject(request, approved)
+    }).catch(() => { if (!signal.aborted) reject(request, "error") })
   })
   yield* Effect.addFinalizer(() => Effect.sync(() => {
     controller.abort()
@@ -41,6 +52,19 @@ export const mountNativeConsent = Effect.fnUntraced(function* (
   return native
 })
 
+async function offered(native: NativeInteraction, request: InventoryRequest, signal: AbortSignal) {
+  const pending = () => !signal.aborted && native.pending().some((candidate) => candidate.candidateID === request.candidateID)
+  const targets = await native.inventory(request.candidateID)
+  if (targets.length) return targets
+  for (const delay of inventoryRetryDelaysMs) {
+    await timers.setTimeout(delay, undefined, { signal }).catch(() => undefined)
+    if (!pending()) return []
+    const retried = await native.inventory(request.candidateID)
+    if (retried.length) return retried
+  }
+  return []
+}
+
 export const mountInteractionPlatforms = Effect.fnUntraced(function* (
   authority: InteractionRuntime.Service["Service"], options: InteractionPlatforms, origin?: string,
 ) {
@@ -49,7 +73,8 @@ export const mountInteractionPlatforms = Effect.fnUntraced(function* (
     yield* Effect.addFinalizer(() => Effect.sync(() => macOS.close()))
     yield* mountNativeConsent(authority, macOS.driver, "macos", async (native, request, targets, signal) => {
       const targetID = await macOS.choose(request, targets, signal)
-      return targetID !== undefined && !signal.aborted && macOS.approve(native, request.candidateID, targetID, signal)
+      if (targetID === undefined) return "not_chosen"
+      return signal.aborted ? "aborted" : macOS.approve(native, request.candidateID, targetID, signal)
     })
     const isolated = makeChromeIsolatedDriver({
       lost: (leaseID, reason) => { isolatedNative.stop(leaseID, reason) },
@@ -57,9 +82,11 @@ export const mountInteractionPlatforms = Effect.fnUntraced(function* (
     })
     const isolatedNative = yield* mountNativeConsent(authority, isolated.driver, "chrome-isolated", async (channel, request, targets, signal) => {
       const target = targets[0]
-      if (targets.length !== 1 || target?.kind !== "chrome-isolated") return false
+      if (targets.length !== 1 || target?.kind !== "chrome-isolated") return "target_mismatch"
       const proof = await isolated.approve({ candidateID: request.candidateID, sessionID: request.sessionID, targetID: target.id }, signal)
-      return proof !== undefined && !signal.aborted && channel.approve(proof)
+      if (proof === undefined) return "not_confirmed"
+      if (signal.aborted) return "aborted"
+      return await channel.approve(proof) || "authority_declined"
     })
   }
 

@@ -15,7 +15,7 @@ Drive the user's Chrome through the single `interaction` tool. Every action need
 - Stay on the granted origin. Use `navigate` only within it.
 - Request exact confirmation (`operation: "confirm"` with the same action and revision) before anything irreversible: purchases, submissions, deletions, sending messages, account or permission changes. Perform only after the user approves. Isolated Chrome supports no confirmation or irreversible actions.
 - Never touch, list, or switch to tabs outside the YCoding control group.
-- YCoding never focuses Chrome, but Chrome itself may raise its window when a page opens a new tab or window.
+- YCoding never focuses Chrome, but Chrome itself raises its window when a page opens a new tab or window, or when a page in the selected tab opens a JavaScript dialog (`alert`, `confirm` or `prompt`). The dialog then takes the user's keyboard focus. Expect `paused` with reason `dialog` after any action that can open one, and tell the user to answer the dialog in Chrome before pressing Resume.
 
 ## Script and Code modes
 

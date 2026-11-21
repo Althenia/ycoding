@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process"
 import { open } from "node:fs/promises"
+import timers from "node:timers/promises"
 import path from "node:path"
 import { Interaction } from "@ycoding-ai/schema/interaction"
 import type { SessionID } from "@ycoding-ai/schema/session-id"
@@ -17,6 +18,8 @@ const nativeControlID = /^0(?:\.\d+){0,16}$/
 const decodeFrame = Schema.decodeUnknownOption(Interaction.Frame)
 const decodePauseReason = Schema.decodeUnknownOption(Interaction.PauseReason)
 const matchCode = /^[A-Za-z0-9-]{4,32}$/
+const authorizeRetryDelaysMs = [100, 200, 400, 800]
+const preAuthenticationRefusals = new Set(["unverified", "busy"])
 
 type Target = Extract<Interaction.Target, { kind: "macos-window" }>
 type MacWindow = { pid: number; bundleID: string; started: string; windowID: number }
@@ -393,14 +396,14 @@ export function makeMacOSAdapter(options: {
     },
   }
 
-  async function approve(native: NativeInteraction, candidateID: Interaction.ID, targetID: Interaction.ID, signal?: AbortSignal) {
+  async function approve(native: NativeInteraction, candidateID: Interaction.ID, targetID: Interaction.ID, signal?: AbortSignal): Promise<true | string> {
     const entry = offered.get(candidateID)
     const selection = entry?.offers.get(targetID)
     const request = entry?.request
     if (!selection || !request || closed || signal?.aborted || request.expiresAt <= Date.now() || approving.has(candidateID) ||
-        !native.pending().some((pending) => pending.candidateID === candidateID && pending.sessionID === request.sessionID)) return false
+        !native.pending().some((pending) => pending.candidateID === candidateID && pending.sessionID === request.sessionID)) return "stale"
     const remaining = request.expiresAt - Date.now()
-    if (remaining <= 0) return false
+    if (remaining <= 0) return "stale"
     const scoped = AbortSignal.any([AbortSignal.timeout(Math.min(60_000, remaining)), ...(signal ? [signal] : [])])
     const proof = { candidateID, sessionID: request.sessionID, targetID, authorization: crypto.randomUUID() }
     approving.add(candidateID)
@@ -408,19 +411,30 @@ export function makeMacOSAdapter(options: {
       if (request.purpose === "confirm") {
         const current = Array.from(claims.values()).find((value) => value.target.id === targetID)
         const revision = current?.revision
-        if (!current || !revision || revision.number !== request.revision || request.action.platform !== "macos" || !current.link.alive()) return false
-        const reply = await current.link.request("authorize", { ...wireAction(request.action, revision), target: current.window,
-          lease: current.lease.id, revision: revision.stamp }, scoped)
-        if (scoped.aborted || !current.link.alive() || current.revision !== revision || typeof reply.authorization !== "string" || !uuid.test(reply.authorization)) return false
+        if (!current || !revision || revision.number !== request.revision || request.action.platform !== "macos" || !current.link.alive()) return "stale"
+        const fields = { ...wireAction(request.action, revision), target: current.window, lease: current.lease.id, revision: revision.stamp }
+        const authorize = () => current.link.request("authorize", fields, scoped)
+          .catch((error: unknown) => error instanceof NativeFailure ? error : new NativeFailure("error"))
+        let reply = await authorize()
+        for (const delay of authorizeRetryDelaysMs) {
+          if (!(reply instanceof NativeFailure) || !preAuthenticationRefusals.has(reply.code)) break
+          await timers.setTimeout(delay, undefined, { signal: scoped }).catch(() => undefined)
+          if (scoped.aborted || !current.link.alive() || current.revision !== revision) return "stale"
+          reply = await authorize()
+        }
+        if (reply instanceof NativeFailure) return reply.code
+        if (scoped.aborted || !current.link.alive() || current.revision !== revision) return "stale"
+        if (typeof reply.authorization !== "string" || !uuid.test(reply.authorization)) return "invalid_reply"
         current.confirmation = { proof, action: JSON.stringify(request.action), revision: revision.number, receipt: reply.authorization, expiresAt: request.expiresAt }
         const approved = await native.approve(proof)
         if (!approved && current.confirmation?.proof === proof) current.confirmation = undefined
-        return approved
+        return approved || "authority_declined"
       }
       const link = await start(scoped)
       try {
         const reply = await link.request("attach", { target: selection.window }, scoped)
-        if (!link.alive() || scoped.aborted || typeof reply.lease !== "string" || !uuid.test(reply.lease)) return false
+        if (!link.alive() || scoped.aborted) return "stale"
+        if (typeof reply.lease !== "string" || !uuid.test(reply.lease)) return "invalid_reply"
         const lease = { id: Interaction.ID.make(reply.lease.toLowerCase()) }
         const claim: Claim = { ...selection, link, lease, last: 0 }
         link.onStop((stopped) => {
@@ -443,12 +457,12 @@ export function makeMacOSAdapter(options: {
         })
         prepared.set(proof.authorization, { claim, proof })
         const accepted = await native.approve(proof)
-        return accepted && claims.get(lease.id) === claim && link.alive()
+        return accepted && claims.get(lease.id) === claim && link.alive() || "authority_declined"
       } finally {
         prepared.delete(proof.authorization)
         if (!Array.from(claims.values()).some((claim) => claim.link === link)) link.close()
       }
-    } catch { return false } finally {
+    } catch (error) { return error instanceof NativeFailure ? error.code : "error" } finally {
       approving.delete(candidateID)
       if (offered.get(candidateID) === entry) offered.delete(candidateID)
     }

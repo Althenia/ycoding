@@ -9,7 +9,7 @@ import type { NativeInteraction } from "../src/interaction/driver"
 import { makeMacOSAdapter, makeMacOSInteraction } from "../src/interaction/macos"
 
 type StubMode = "exit" | "dialog" | "foreground" | "sensitive" | "observe-paused" | "resumed-in-panel" | "stopped-in-panel" | "invalid-reason" | "allow" | "deny" |
-  "malformed" | "hang"
+  "malformed" | "hang" | "authorize-cold" | "authorize-denied"
 
 const pauseReasons: Partial<Record<StubMode, string>> = { foreground: "foreground_required", sensitive: "sensitive", "invalid-reason": "bogus" }
 
@@ -19,6 +19,8 @@ const { appendFileSync } = require("node:fs")
 const window = { pid: 4100, started: "100:21", bundleID: "local.synthetic.Example", windowID: 72 }
 let buffer = ""
 let observed = 0
+let authorized = 0
+const confirming = ${JSON.stringify(mode)}.startsWith("authorize-")
 if (${JSON.stringify(mode)} === "exit") process.exit(3)
 const line = (value) => JSON.stringify(value) + "\\n"
 process.stdin.setEncoding("utf8")
@@ -34,7 +36,13 @@ process.stdin.on("data", (chunk) => {
     if (command.operation === "inventory") process.stdout.write(line({ ...ok, targets: [{ target: window, label: "Synthetic" }] }))
     else if (command.operation === "attach" || command.operation === "resume") process.stdout.write(line({ ...ok, lease: ${JSON.stringify(lease)} }))
     else if (command.operation === "observe" && ${JSON.stringify(mode)} === "observe-paused" && observed++ > 0) process.stdout.write(line({ ...paused, reason: "sensitive" }))
-    else if (command.operation === "observe") process.stdout.write(line({ ...ok, lease: ${JSON.stringify(lease)}, observation: { revision: "a".repeat(64), controls: [] } }))
+    else if (command.operation === "observe") process.stdout.write(line({ ...ok, lease: ${JSON.stringify(lease)}, observation: { revision: "a".repeat(64),
+      controls: confirming ? [{ id: "0.1", role: "AXButton", label: "Increment count: 0", actions: ["press"] }] : [] } }))
+    else if (command.operation === "authorize" && ${JSON.stringify(mode)} === "authorize-cold" && authorized++ === 0) {
+      process.stdout.write(line({ ...ok, state: "refused", code: "unverified" }))
+    } else if (command.operation === "authorize" && ${JSON.stringify(mode)} === "authorize-denied") process.stdout.write(line({ ...ok, state: "refused", code: "notAuthorized" }))
+    else if (command.operation === "authorize") process.stdout.write(line({ ...ok, lease: ${JSON.stringify(lease)}, authorization: "0f5e9a3c-1d2b-4c3a-8e7f-6a5b4c3d2e1f" }))
+    else if (command.operation === "perform" && confirming) process.stdout.write(line(ok))
     else if (command.operation === "perform" && ${JSON.stringify(mode)} === "resumed-in-panel") {
       process.stdout.write(line({ ...paused, reason: "foreground_required" }) + line({ ...notice, state: "resumed" }))
     } else if (command.operation === "perform" && ${JSON.stringify(mode)} === "stopped-in-panel") {
@@ -110,7 +118,7 @@ async function authorityStub(mode: StubMode) {
   expect(authority.status(sessionID)).toMatchObject({ state: "active", platform: "macos", generation: pending.generation })
   const observed = await authority.observe(sessionID, pending.generation)
   return {
-    ...stub, authority, sessionID, generation: pending.generation, observed,
+    ...stub, authority, native, sessionID, generation: pending.generation, observed,
     perform: () => authority.perform(sessionID, pending.generation, observed.revision, Interaction.ID.create(), scroll.action),
     async cleanup() {
       authority.shutdown()
@@ -337,4 +345,39 @@ test("the macOS adapter and helper sources never call an API that moves focus, r
   const hits = await Promise.all(sources.map(async (file) => (await Bun.file(file).text()).split("\n").flatMap((line, index) =>
     focusStealing.filter((entry) => entry.pattern.test(line)).map((entry) => `${path.basename(file)}:${index + 1} ${entry.symbol}`))))
   expect(hits.flat()).toEqual([])
+})
+
+async function confirmAtFirstRevision(mode: "authorize-cold" | "authorize-denied") {
+  const stub = await authorityStub(mode)
+  const native = stub.native
+  const press = { platform: "macos", type: "press", elementID: stub.observed.elements[0].id } as const
+  expect(stub.observed.revision).toBe(1)
+  expect(stub.authority.confirmation(stub.sessionID, stub.generation, 1, press)).toBeUndefined()
+  const request = native.pending()[0]
+  expect(request).toMatchObject({ purpose: "confirm", revision: 1 })
+  const targets = await native.inventory(request.candidateID)
+  expect(targets).toHaveLength(1)
+  const signal = AbortSignal.timeout(10_000)
+  const targetID = await stub.adapter.choose(request, targets, signal)
+  expect(targetID).toBe(targets[0].id)
+  return { ...stub, press, approved: await stub.adapter.approve(native, request.candidateID, targetID!, signal) }
+}
+
+test("the first confirmation after a fresh helper start retries a refusal raised before authentication and the press applies", async () => {
+  const stub = await confirmAtFirstRevision("authorize-cold")
+  try {
+    expect(stub.approved).toBe(true)
+    expect((await stub.operations()).filter((operation) => operation === "authorize")).toHaveLength(2)
+    expect(await stub.authority.perform(stub.sessionID, stub.generation, 1, Interaction.ID.create(), stub.press)).toEqual({ outcome: "applied" })
+  } finally { await stub.cleanup() }
+})
+
+test("a confirmation the user declines is not retried and reports the helper refusal", async () => {
+  const stub = await confirmAtFirstRevision("authorize-denied")
+  try {
+    expect(stub.approved).toBe("notAuthorized")
+    expect((await stub.operations()).filter((operation) => operation === "authorize")).toHaveLength(1)
+    expect(await stub.authority.perform(stub.sessionID, stub.generation, 1, Interaction.ID.create(), stub.press))
+      .toEqual({ outcome: "refused", reason: "confirmation_required" })
+  } finally { await stub.cleanup() }
 })

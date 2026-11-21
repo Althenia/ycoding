@@ -28,10 +28,11 @@ export function pageOperation(input) {
     }
     const clear = () => {
       clearInterval(store.timer)
+      const held = [...store.originals].filter(({ icon }) => icon.isConnected && icon.getAttribute("rel") === "ycoding-held-icon")
+      const live = [...document.querySelectorAll('link[rel~="icon" i]')].some((icon) => icon !== store.link)
+      if (store.link.isConnected && !held.length && !live) store.link.href = `${location.origin}/favicon.ico`
       store.link.remove()
-      for (const { icon, value } of store.originals) {
-        if (icon.isConnected && icon.getAttribute("rel") === "ycoding-held-icon") icon.setAttribute("rel", value)
-      }
+      for (const { icon, value } of held) icon.setAttribute("rel", value)
       delete globalThis[storeKey]
     }
     globalThis[storeKey] = store
