@@ -22,23 +22,33 @@ beforeAll(async () => {
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
-test("companion-open desktop keeps composer controls on one row", async () => {
-  for (const width of [1280, 1440]) for (const theme of ["light", "dark"]) {
-    const page = await browser!.openPage()
-    try {
-      await page.setViewport(width, 900)
-      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?ledger=1&view=chat&theme=${theme}`)
-      await wait(page, `document.querySelector('.companion-context-trigger') && document.querySelector('.composer__controls .session-status__goal-trigger')`)
-      await page.evaluate(`document.querySelector('.companion-context-trigger').click()`)
-      await wait(page, `document.querySelector('#companion-context:not([hidden])') !== null`)
-      const result = await page.evaluate(`(() => { const controls=document.querySelector('.composer__controls'), selectors=['.composer__attach','.mini-picker__trigger','.model-control__trigger','.composer__effort','.composer__context-trigger','.session-status__autonomous-trigger','.session-status__goal-trigger','.composer__delivery-toggle','.mini-composer__interrupt','.mini-composer__send'], elements=selectors.map(selector=>controls.querySelector(selector)), rects=elements.map(element=>element.getBoundingClientRect()), bounds=controls.getBoundingClientRect(), model=controls.querySelector('.model-control__trigger'); return { row:Math.max(...rects.map(rect=>rect.top)) < Math.min(...rects.map(rect=>rect.bottom)), contained:rects.every(rect=>rect.width>=24 && rect.height>=24 && rect.left>=bounds.left-1 && rect.right<=bounds.right+1), separate:rects.every((rect,index)=>rects.slice(index+1).every(other=>rect.right<=other.left+1 || other.right<=rect.left+1)), description:model.getAttribute('aria-description') ?? '', model:model.querySelector('.model-control__name').textContent.trim(), geometry:{bounds:[bounds.left,bounds.right],rects:rects.map(rect=>[rect.left,rect.right])} }; })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, row: (decodeBoolean)(record["row"]), contained: (decodeBoolean)(record["contained"]), separate: (decodeBoolean)(record["separate"]), description: (decodeString)(record["description"]), model: (decodeString)(record["model"]), geometry: ((value: unknown) => value)(record["geometry"]) } })
-      expect(result.row).toBe(true)
-      expect(result).toMatchObject({ contained: true })
-      expect(result.separate, JSON.stringify(result.geometry)).toBe(true)
-      expect(result.model.length).toBeGreaterThan(0)
-      expect(result.description).toContain(result.model)
-    } finally { await page.close() }
-  }
+test("opening the companion keeps Send on the primary row and moves crowded controls into the disclosure", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(1280, 900)
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?ledger=1&view=chat&theme=light`)
+    await wait(page, `document.querySelector('.companion-context-trigger') && document.querySelector('.composer__controls .session-status__goal-trigger')`)
+    await page.evaluate(`document.querySelector('.companion-context-trigger').click()`)
+    await wait(page, `document.querySelector('#companion-context:not([hidden])') && document.querySelector('.composer-toolbar__more:not([hidden])')`)
+    const primary = `(() => {
+      const bar = document.querySelector('.composer-toolbar'), bounds = bar.getBoundingClientRect();
+      const rects = ['.composer__attach', '.composer-toolbar__more', '.mini-composer__send'].map(selector => bar.querySelector(selector).getBoundingClientRect());
+      return rects.every(rect => rect.width >= 24 && rect.height >= 24 && rect.left >= bounds.left && rect.right <= bounds.right) &&
+        Math.max(...rects.map(rect => rect.top)) < Math.min(...rects.map(rect => rect.bottom)) &&
+        rects[0].right <= rects[1].left && rects[1].right <= rects[2].left && Math.abs(rects[2].right - bounds.right) <= 1;
+    })()`
+    expect(await page.evaluate(primary, decodeBoolean)).toBe(true)
+    await page.evaluate(`document.querySelector('.composer-toolbar__more').click()`)
+    expect(await page.evaluate(`(() => {
+      const trigger = document.querySelector('.composer-toolbar__more'), panel = document.getElementById(trigger.getAttribute('aria-controls'));
+      const box = panel.getBoundingClientRect(), model = panel.querySelector('.model-control__trigger'), modelName = model.querySelector('.model-control__name').textContent.trim();
+      const selectors = ['.mini-picker__trigger', '.model-control__trigger', '.composer__effort', '.composer__context-trigger', '.session-status__autonomous-trigger', '.session-status__goal-trigger'];
+      return trigger.getAttribute('aria-expanded') === 'true' && box.top >= 0 && box.left >= 0 && box.right <= innerWidth &&
+        box.bottom <= trigger.getBoundingClientRect().top && selectors.every(selector => panel.querySelector(selector)?.checkVisibility({checkVisibilityCSS:true})) &&
+        modelName.length > 0 && model.getAttribute('aria-description')?.includes(modelName);
+    })()`, decodeBoolean)).toBe(true)
+    expect(await page.evaluate(primary, decodeBoolean)).toBe(true)
+  } finally { await page.close() }
 }, 60_000)
 
 test("composer is one 20px card whose draft field has no inner outline and whose border shows draft focus", async () => {
@@ -320,7 +330,7 @@ test("transcript activity names progress and disappears at idle without entering
   }
 }, 30_000)
 
-test("phone tool-running and waiting states keep the composer summary on the identity line and put status in the transcript", async () => {
+test("phone tool-running and waiting states keep the composer summary in Controls and put status in the transcript", async () => {
   for (const theme of ["light", "dark"]) for (const [status, expected] of [["tool", "Running Shell"], ["waiting", "Waiting for your decision"]] as const) {
     const page = await browser!.openPage()
     try {
@@ -330,8 +340,9 @@ test("phone tool-running and waiting states keep the composer summary on the ide
       await wait(page, `document.querySelector('.mini-composer__mount .composer__mobile-trigger') !== null`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; window.composerSetStatus(${JSON.stringify(status)})`)
       await settled(page)
-      const bounds = await page.evaluate(`(() => { const mount=document.querySelector('.mini-composer__mount'), identity=mount.querySelector('.composer__mobile-trigger').getBoundingClientRect(), auto=mount.querySelector('.session-status__autonomous-trigger').getBoundingClientRect(), goal=mount.querySelector('.session-status__goal-trigger').getBoundingClientRect(), row=mount.querySelector('.composer__row').getBoundingClientRect(), activity=document.querySelector('.transcript .transcript-activity'); return { slots:mount.querySelectorAll('.session-status__slot').length, composerStatuses:mount.querySelectorAll('.composer [role="status"]:not(.session-status__announce)').length, summaryLine:Math.abs(identity.top-auto.top)<=1 && Math.abs(identity.top-goal.top)<=1, inside:goal.right<=row.right+1 && identity.left>=row.left-1, activityOutside:!!activity && !mount.contains(activity) }})()`)
-      expect(bounds).toEqual({ slots: 0, composerStatuses: 0, summaryLine: true, inside: true, activityOutside: true })
+      await page.evaluate(`document.querySelector('.composer-toolbar__more').click()`)
+      const bounds = await page.evaluate(`(() => { const mount=document.querySelector('.mini-composer__mount'), panel=mount.querySelector('[aria-label="Composer controls"]'), activity=document.querySelector('.transcript .transcript-activity'); return { slots:mount.querySelectorAll('.session-status__slot').length, composerStatuses:mount.querySelectorAll('.composer [role="status"]:not(.session-status__announce)').length, controls:['.composer__mobile-trigger','.session-status__autonomous-trigger','.session-status__goal-trigger'].every(selector=>panel.querySelector(selector)?.checkVisibility({checkVisibilityCSS:true})), activityOutside:!!activity && !mount.contains(activity) }})()`)
+      expect(bounds).toEqual({ slots: 0, composerStatuses: 0, controls: true, activityOutside: true })
       expect(await page.evaluate(activityState)).toBe(expected)
       await Bun.write(join(captures, `composer-tool-390-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
     } finally { await page.close() }
@@ -356,7 +367,7 @@ test("phone activity shows the Session state in the transcript, never the autono
 }, 30_000)
 
 for (const [width, height] of [[360, 780], [390, 844], [430, 932], [820, 1180]]) for (const theme of ["light", "dark"]) {
-  test(`phone agent and model summary, autonomy and goal share one line above the draft at ${width} in ${theme}`, async () => {
+  test(`composer secondary controls remain reachable at ${width} in ${theme}`, async () => {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width!, height!)
@@ -365,23 +376,19 @@ for (const [width, height] of [[360, 780], [390, 844], [430, 932], [820, 1180]])
       await wait(page, `document.querySelector('.mini-composer__mount .composer__row') !== null`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; window.composerSetStatus('tool')`)
       await Bun.sleep(600)
-      const layout = await page.evaluate(`(() => { const mount=document.querySelector('.mini-composer__mount'), button=mount.querySelector('.composer__summary .composer__mobile-trigger'), auto=mount.querySelector('.session-status__autonomous-trigger'), goal=mount.querySelector('.session-status__goal-trigger'), controls=mount.querySelector('.composer__controls'), card=mount.querySelector('.composer__row').getBoundingClientRect(), input=mount.querySelector('textarea').getBoundingClientRect(), attach=mount.querySelector('.composer__attach').getBoundingClientRect(), delivery=mount.querySelector('.composer__delivery-toggle').getBoundingClientRect(), send=mount.querySelector('.mini-composer__send').getBoundingClientRect(), summary=[button,auto,goal].map(item=>item?.getBoundingClientRect()); const present=!!button; return { present, label:button?.textContent ?? '', pillVisible:[...controls.querySelectorAll('.mini-picker,.model-control')].some(item=>getComputedStyle(item).display!=='none'), summaryLine:present && summary.every(rect=>rect && Math.abs(rect.top-summary[0].top)<=1), summaryAboveDraft:present && summary.every(rect=>rect.bottom<=input.top+1), actionsBelowDraft:[attach,delivery,send].every(rect=>rect.top>=input.bottom-1 && Math.abs(rect.top-attach.top)<=1), inside:present && summary[0].left>=card.left && summary[2].right<=card.right, ellipsis:present && getComputedStyle(button.querySelector('.composer__mobile-label')).textOverflow==='ellipsis', overflow:document.documentElement.scrollWidth>innerWidth } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, present: (decodeBoolean)(record["present"]), label: (decodeString)(record["label"]), pillVisible: (decodeBoolean)(record["pillVisible"]), summaryLine: (decodeBoolean)(record["summaryLine"]), summaryAboveDraft: (decodeBoolean)(record["summaryAboveDraft"]), actionsBelowDraft: (decodeBoolean)(record["actionsBelowDraft"]), inside: (decodeBoolean)(record["inside"]), ellipsis: (decodeBoolean)(record["ellipsis"]), overflow: (decodeBoolean)(record["overflow"]) } })
+      await page.evaluate(`const t = document.querySelector('.composer-toolbar__more:not([hidden])'); t?.focus(); t?.click()`)
+      const layout = await page.evaluate(`(() => { const mount=document.querySelector('.mini-composer__mount'), button=mount.querySelector('.composer__mobile-trigger'), auto=mount.querySelector('.session-status__autonomous-trigger'), goal=mount.querySelector('.session-status__goal-trigger'), input=mount.querySelector('textarea').getBoundingClientRect(), bar=mount.querySelector('.composer-toolbar').getBoundingClientRect(), send=mount.querySelector('.mini-composer__send').getBoundingClientRect(), panel=mount.querySelector('[aria-label="Composer controls"]'), r=panel?.getBoundingClientRect(), visible=e=>e?.checkVisibility({checkVisibilityCSS:true}); return { phone:!!button, label:button?.textContent ?? '', separatePickers:[...mount.querySelectorAll('.composer__control-set .mini-picker,.composer__control-set .model-control')].some(visible), popover:!!r && r.bottom <= bar.top && r.left >= 0 && r.right <= innerWidth && [button,auto,goal].every(visible), actionsBelowDraft:bar.top >= input.bottom-1 && Math.abs(send.right-bar.right)<1, overflow:document.documentElement.scrollWidth>innerWidth }; })()`, decodeRecord)
       if (width! <= 430) {
-        expect(layout.present).toBe(true)
-        expect(layout.label).toContain("GSD")
-        expect(layout.label).toContain("GPT-6 Sol")
-        expect(layout.label).toContain("High")
-        expect(layout.pillVisible).toBe(false)
-        expect(layout.summaryLine).toBe(true)
-        expect(layout.summaryAboveDraft).toBe(true)
-        expect(layout.actionsBelowDraft).toBe(true)
-        expect(layout.inside).toBe(true)
-        expect(layout.ellipsis).toBe(true)
+        expect(layout["phone"]).toBe(true)
+        expect(layout["label"]).toContain("GSD · GPT-6 Sol · High")
+        expect(layout["separatePickers"]).toBe(false)
+        expect(layout["popover"]).toBe(true)
       } else {
-        expect(layout.present).toBe(false)
-        expect(layout.pillVisible).toBe(true)
+        expect(layout["phone"]).toBe(false)
+        expect(layout["separatePickers"]).toBe(true)
       }
-      expect(layout.overflow).toBe(false)
+      expect(layout["actionsBelowDraft"]).toBe(true)
+      expect(layout["overflow"]).toBe(false)
       await Bun.write(join(captures, `composer-selection-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
       if (width! <= 430) {
         await page.evaluate(`document.querySelector('.composer__mobile-trigger')?.click()`)

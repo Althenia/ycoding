@@ -6,9 +6,12 @@ const base = (header: string) => declarationsWhere(composer, (rule) => rule.head
 const wide = (header: string) => declarationsWhere(composer, (rule) => rule.header === header && rule.conditions.includes("@media (min-width: 768px)"))
 const fine = (header: string) => declarationsWhere(composer, (rule) => rule.header === header && rule.conditions.includes("@media (min-width: 768px) and (pointer: fine)"))
 
-test("context and action clusters wrap as units rather than orphaning Stop", () => {
-  expect(base(".composer__context-controls")).toMatchObject({ display: "flex", "flex-wrap": "wrap", "min-inline-size": "0" })
-  expect(base(".composer__actions")).toMatchObject({ display: "flex", "flex-wrap": "nowrap", "margin-inline-start": "auto" })
+test("composer actions have a single in-flow line and overflow does not add a row", async () => {
+  const toolbar = await Bun.file(new URL("./composer-toolbar.css", import.meta.url)).text().then(source => parseStylesheet("composer-toolbar.css", source))
+  const rule = (header: string) => declarationsWhere(toolbar, rule => rule.header === header && rule.conditions.length === 0)
+  expect(rule(".composer-toolbar")).toMatchObject({ display: "flex", "min-inline-size": "0" })
+  expect(rule(".composer-toolbar__trailing")["margin-inline-start"]).toBe("auto")
+  expect(rule('.composer-toolbar[data-overflow="true"] > .composer-toolbar__secondary')).toMatchObject({ position: "absolute", "max-inline-size": "100%" })
 })
 
 test("explicit motion off stops reasoning sparkles", () => {
@@ -83,7 +86,6 @@ test("wide chip bar reads attach, agent, model and effort as six-pixel mono chip
   expect(base(".composer__attach")).toMatchObject({ background: "transparent", color: "var(--yc-green-ink)" })
   expect(base(".mini-composer__send")).toMatchObject({ background: "var(--yc-green-solid)", color: "var(--yc-on-green)" })
   expect(base(".mini-composer__send:disabled").opacity).toBe(".45")
-  expect(wide(".composer__spacer").flex).toBe("1 1 0")
   expect(base(".composer__effort-panel .reasoning-effort")["max-inline-size"]).toBe("20rem")
   const controls = source.slice(source.indexOf('class="composer__attach"'))
   const order = ['label="Agent"', "<ModelControl", 'class="composer__effort"', 'class="composer__context"'].map((marker) => controls.indexOf(marker))
@@ -153,29 +155,22 @@ const source = await Bun.file(new URL("./composer.tsx", import.meta.url)).text()
 test("the agent and model summary lives inside the phone card and is hidden from tablet width up", () => {
   expect(base(".composer__mobile-trigger").display).toBe("none")
   expect(phoneRule(".composer__mobile-trigger")).toMatchObject({ display: "flex", "min-block-size": "var(--yc-hit-min)" })
-  expect(base(".composer__summary").display).toBe("contents")
+  expect(base(".composer__summary").display).toBe("flex")
   expect(source).toContain("phoneSummary")
   expect(source).not.toContain("mobileMount")
   expect(composer.rules.some((rule) => rule.header.includes("composer__mobile-identity"))).toBe(false)
 })
 
-test("companion clusters reserve the actions, retain readable model width and allow wrapping", () => {
-  expect(base(".composer .composer__controls")["flex-wrap"]).toBe("wrap")
+test("companion clusters retain readable model width before moving into overflow", () => {
+  expect(base(".composer .composer__controls")["flex-wrap"]).toBeUndefined()
   const companion = (header: string) => declarationsWhere(composer, (rule) => rule.header === header && rule.conditions.includes("@media (min-width: 1280px) and (pointer: fine)"))
-  expect(companion(".app--team-open .composer .composer__controls")["flex-wrap"]).toBe("wrap")
-  expect(companion(".app--team-open .composer__context-controls").flex).toBe("1 1 0")
   expect(companion(".app--team-open .composer__controls .model-control")).toMatchObject({ flex: "1 1 var(--yc-space-16)", "min-inline-size": "var(--yc-space-16)" })
   expect(companion(".app--team-open .composer__controls .session-status__autonomous-full").display).toBe("none")
   expect(companion(".app--team-open .composer__controls .session-status__autonomous-word").display).toBe("inline")
 })
 
-test("below 768px the card puts the summary on its own wrapping line above the draft, with attach and the end-aligned primary actions on one line below it", () => {
-  expect(phoneRule(".composer--phone-summary .composer__row")).toMatchObject({ "flex-direction": "row", "flex-wrap": "wrap" })
-  expect(phoneRule(".composer--phone-summary .composer__body")).toMatchObject({ flex: "1 1 100%", "min-inline-size": "0" })
-  expect(phoneRule(".composer--phone-summary .composer__controls").display).toBe("contents")
-  expect(phoneRule(".composer--phone-summary .composer__summary")).toMatchObject({ display: "flex", flex: "1 1 100%", "flex-wrap": "wrap", order: "-1", "min-inline-size": "0" })
-  expect(phoneRule(".composer--phone-summary .composer__actions")["margin-inline-start"]).toBe("auto")
-  expect(phoneRule(".composer--phone-summary .composer__control-set > :is(.mini-picker, .model-control, .composer__context, .composer__speed, .composer__spacer, .composer__effort)")).toMatchObject({ display: "none" })
+test("below 768px the overflow popover uses the combined agent and model picker", () => {
+  expect(phoneRule(".composer--phone-summary .composer__control-set")).toMatchObject({ display: "none" })
   expect(composer.rules.some((rule) => rule.conditions.some((condition) => condition.includes("479px")) && rule.header.includes(".mini-composer__mount"))).toBe(false)
 })
 

@@ -1,0 +1,19 @@
+.composer-toolbar { position:relative; display:flex; flex:1 1 100%; align-items:center; gap:var(--composer-toolbar-gap,var(--yc-space-2)); inline-size:100%; min-inline-size:0; }
+.composer-toolbar__leading,.composer-toolbar__trailing,.composer-toolbar__items { display:flex; flex:none; align-items:center; gap:inherit; }
+.composer-toolbar__secondary { display:flex; flex:none; align-items:center; gap:inherit; }
+.composer-toolbar__items > * { flex:none; }
+.composer-toolbar__trailing { margin-inline-start:auto; }
+.composer-toolbar__more { display:inline-flex; flex:none; align-items:center; gap:var(--yc-space-1); min-block-size:var(--yc-control-h-dense); min-inline-size:var(--yc-control-h-dense); padding-inline:var(--yc-space-2); border:0; border-radius:var(--yc-radius-control); background:var(--yc-plane-hover); color:var(--yc-ink); white-space:nowrap; }
+.composer-toolbar__more[hidden] { display:none; }
+@media (hover:hover) { .composer-toolbar__more:hover { background:var(--yc-plane-selected); } }
+.composer-toolbar__more[aria-expanded="true"] { background:var(--yc-plane-selected); }
+.composer-toolbar__more[aria-expanded="true"] > svg:last-child { transform:rotate(180deg); }
+.composer-toolbar__more > svg { flex:none; }
+.composer-toolbar__more:focus-visible,.composer-toolbar__secondary:focus-visible { outline:2px solid var(--yc-focus); outline-offset:2px; }
+.composer-toolbar[data-overflow="true"] > .composer-toolbar__secondary { position:absolute; z-index:var(--yc-z-overlay); inset-inline-start:0; inset-block-end:calc(100% + var(--yc-space-2) + var(--composer-toolbar-rise, 0px)); inline-size:max-content; max-inline-size:100%; max-block-size:var(--composer-toolbar-room, 50dvh); padding:var(--yc-space-2); border:1px solid var(--yc-line-subtle); border-radius:var(--yc-radius-composer); background:var(--yc-plane-raised); box-shadow:var(--yc-elevation-float); }
+.composer-toolbar[data-overflow="true"] .composer-toolbar__items { flex:0 1 auto; min-inline-size:0; flex-wrap:wrap; }
+.composer-toolbar[data-overflow="true"] .composer-toolbar__items > * { max-inline-size:100%; }
+.composer-toolbar .composer-toolbar__items[data-measuring] { flex:none; inline-size:max-content; flex-wrap:nowrap; }
+.composer-toolbar .composer-toolbar__items[data-measuring] > * { max-inline-size:none; }
+.composer-toolbar[data-overflow="true"] .composer-toolbar__secondary:not([data-open]) { visibility:hidden; pointer-events:none; }
+@media (pointer:coarse),(max-width:767px) { .composer-toolbar__more { min-inline-size:var(--yc-hit-min); min-block-size:var(--yc-hit-min); } }

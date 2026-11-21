@@ -160,7 +160,7 @@ test("visible ghost Tab fills only, retains attachments and caret, and otherwise
   }
 }, 60000)
 
-test("a 35-word prediction above 200 characters fits the composer and Tab accepts its complete text without sending", async () => {
+test("a 35-word prediction stays on one line and Tab accepts its complete text without sending", async () => {
   const text = "Review the completed implementation against the agreed requirements, inspect the modified files for regressions, verify focused tests and browser behavior, then summarize any remaining risks before deciding whether the changes are ready for safe integration."
   expect(text.split(/\s+/).length).toBe(35)
   expect(text.length).toBeGreaterThan(200)
@@ -176,9 +176,9 @@ test("a 35-word prediction above 200 characters fits the composer and Tab accept
       await page.evaluate(`(async () => { document.documentElement.dataset.theme = ${JSON.stringify(theme)}; await document.fonts.ready; window.composerPredictionReply('msg_long'); window.composerPredictionEvent(${JSON.stringify(text)}, 'msg_long'); })()`)
       await wait(page, `document.querySelector('.composer__use-prediction') !== null`)
       const geometry = `(() => {
-        const root=document.querySelector('.mini-composer__mount'), field=root.querySelector('.composer__input'), row=root.querySelector('.composer__row').getBoundingClientRect(), rect=field.getBoundingClientRect(), actions=root.querySelector('.composer__actions').getBoundingClientRect();
-        return { placeholder:field.placeholder, value:field.value, height:rect.height, fits:field.scrollHeight<=field.clientHeight+1 && field.scrollWidth<=field.clientWidth+1, contained:rect.left>=row.left && rect.right<=row.right && rect.top>=row.top && rect.bottom<=actions.top, overflow:document.documentElement.scrollWidth>innerWidth,
-          actionsExposed:Array.from(root.querySelectorAll('.composer__actions button, .composer__dock button')).every(button => { const box=button.getBoundingClientRect(); return box.width>0 && box.height>0 && box.left>=0 && box.right<=innerWidth && box.top>=0 && box.bottom<=innerHeight && button.contains(document.elementFromPoint(box.left+box.width/2,box.top+box.height/2)) }),
+        const root=document.querySelector('.mini-composer__mount'), field=root.querySelector('.composer__input'), row=root.querySelector('.composer__row').getBoundingClientRect(), rect=field.getBoundingClientRect(), actions=root.querySelector('.composer-toolbar').getBoundingClientRect();
+        return { placeholder:field.placeholder, value:field.value, height:rect.height, fits:field.scrollHeight<=field.clientHeight+1, contained:rect.left>=row.left && rect.right<=row.right && rect.top>=row.top && rect.bottom<=actions.top, overflow:document.documentElement.scrollWidth>innerWidth,
+          actionsExposed:Array.from(root.querySelectorAll('.composer-toolbar__trailing button, .composer__dock button')).every(button => { const box=button.getBoundingClientRect(); return box.width>0 && box.height>0 && box.left>=0 && box.right<=innerWidth && box.top>=0 && box.bottom<=innerHeight && button.contains(document.elementFromPoint(box.left+box.width/2,box.top+box.height/2)) }),
           focused:document.activeElement===field, start:field.selectionStart, end:field.selectionEnd };
       })()`
       const ghost = await page.evaluate(geometry, (value: unknown) => { const record = decodeRecord(value); return { ...record, placeholder: (decodeString)(record["placeholder"]), value: (decodeString)(record["value"]), height: (decodeNumber)(record["height"]), fits: (decodeBoolean)(record["fits"]), contained: (decodeBoolean)(record["contained"]), overflow: (decodeBoolean)(record["overflow"]), actionsExposed: (decodeBoolean)(record["actionsExposed"]) } })

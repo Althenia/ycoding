@@ -3394,7 +3394,7 @@ test("Desktop floating composer keeps one Send or Stop slot and preserves steeri
   prepareImplementedSurface()
   const page = await openReference()
   try {
-    expect(await page.evaluate(`(() => { const label = document.querySelector('.composer-bar > .composer-chip[aria-haspopup="dialog"] span'); return label.textContent.includes('Mixed') && label.scrollWidth <= label.clientWidth; })()`, decodeBoolean)).toBe(true)
+    expect(await page.evaluate(`(() => { const label = document.querySelector('.composer-bar .composer-policy-chip span'); return label.textContent.includes('Mixed') && label.scrollWidth <= label.clientWidth; })()`, decodeBoolean)).toBe(true)
     expect(await page.evaluate(`(() => { const dock = document.querySelector('.rl-dock'), style = getComputedStyle(dock); return style.backgroundColor === 'rgba(0, 0, 0, 0)' && parseFloat(style.borderTopWidth) === 0 && !dock.innerText.includes('Working') && parseFloat(getComputedStyle(dock.querySelector('.rl-capsule')).borderTopLeftRadius) === 12 && dock.querySelector('.rl-send').getAttribute('aria-label') === 'Send prompt'; })()`, decodeBoolean)).toBe(true)
     if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "composer-ready.png"), Buffer.from(await page.screenshot(), "base64"))
     await page.evaluate(`(() => { const capsule = document.querySelector('.rl-capsule').getBoundingClientRect(); window.__fixedExecutionSlots = ['.rl-send', '.composer-bar button[aria-label="Send mode"]'].map(selector => { const rect = document.querySelector(selector).getBoundingClientRect(); return [rect.left - capsule.left, rect.top - capsule.top, rect.width, rect.height]; }); })()`)
@@ -3402,7 +3402,7 @@ test("Desktop floating composer keeps one Send or Stop slot and preserves steeri
     await page.evaluate(`window.__desktopFixture.resync(); window.__desktopFixture.emit({ type: 'session.execution.started', data: { sessionID: 'ses_test' } })`)
     await wait(page, `document.querySelector('.rl-send[data-stopping="true"]') && document.querySelector('[aria-label="Current activity"]')`)
     expect(await page.evaluate(`(() => {
-      const capsule = document.querySelector('.rl-capsule').getBoundingClientRect(), stop = document.querySelector('.rl-send[data-stopping="true"]'), bounds = stop.getBoundingClientRect(), label = document.querySelector('.composer-bar > .composer-chip[aria-haspopup="dialog"] span');
+      const capsule = document.querySelector('.rl-capsule').getBoundingClientRect(), stop = document.querySelector('.rl-send[data-stopping="true"]'), bounds = stop.getBoundingClientRect(), label = document.querySelector('.composer-bar .composer-policy-chip span');
       const selectors = ['.rl-send', '.composer-bar button[aria-label="Send mode"]'], controls = selectors.map(selector => document.querySelector(selector).getBoundingClientRect());
       const stable = JSON.stringify(window.__fixedExecutionSlots) === JSON.stringify(controls.map(rect => [rect.left - capsule.left, rect.top - capsule.top, rect.width, rect.height]));
       const contained = bounds.left >= capsule.left && bounds.right <= capsule.right && bounds.top >= capsule.top && bounds.bottom <= capsule.bottom && bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight;
@@ -3422,6 +3422,42 @@ test("Desktop floating composer keeps one Send or Stop slot and preserves steeri
     await wait(page, `!document.querySelector('.rl-send[data-stopping="true"]')`)
     expect(owned!.calls.filter(call => call.method === "POST" && call.route.endsWith("/interrupt"))).toHaveLength(1)
     expect(await page.evaluate(`window.__desktopFixture.errors`, decodeArray((value: unknown) => value))).toEqual([])
+  } finally { await page.close() }
+}, 30_000)
+
+test("Desktop composer toolbar keeps one row and retains draft and focus when controls overflow", async () => {
+  pending = false
+  const page = await open()
+  const field = `document.querySelector('.rl-capsule textarea')`
+  const toggle = `document.querySelector('.composer-bar button[aria-label="More composer controls"]')`
+  const oneRow = `(() => { const bar = document.querySelector('.composer-bar'), send = bar.querySelector('.rl-send'), s = send.getBoundingClientRect(), b = bar.getBoundingClientRect(), buttons = [...bar.querySelectorAll('button')].filter(e => e.checkVisibility() && !e.closest('[inert]')); return buttons.length >= 3 && buttons.every(e => { const r = e.getBoundingClientRect(); return Math.abs(r.top + r.height / 2 - s.top - s.height / 2) < 1 && r.left >= b.left && r.right <= b.right + 1 }) && Math.abs(s.right - b.right) < 1 && document.elementFromPoint(s.x + s.width / 2, s.y + s.height / 2)?.closest('button') === send; })()`
+  try {
+    await page.setViewport(1440, 900)
+    await wait(page, `document.querySelector('.composer-chip--model:not([disabled])') && document.fonts.status === 'loaded'`)
+    await message(page, "Synthetic toolbar draft")
+    await page.evaluate(`${field}.setSelectionRange(2, 7); window.toolbarField = ${field}`)
+    expect(await page.evaluate(oneRow)).toBe(true)
+    await page.setViewport(1000, 600)
+    await page.evaluate(`document.querySelector('#session-rail .list-column__resize').focus()`)
+    await page.pressKey("End", "End", 35)
+    await page.evaluate(`${field}.focus()`)
+    await wait(page, `${toggle}?.checkVisibility()`)
+    expect(await page.evaluate(oneRow)).toBe(true)
+    expect(await page.evaluate(`${field} === window.toolbarField && ${field}.selectionStart === 2 && ${field}.selectionEnd === 7 && document.activeElement === ${field}`)).toBe(true)
+    await page.evaluate(`${toggle}.focus()`)
+    await page.pressKey(" ", "Space", 32, " ")
+    await wait(page, `${toggle}.getAttribute('aria-expanded') === 'true'`)
+    expect(await page.evaluate(`(() => { const t = ${toggle}, p = document.getElementById(t.getAttribute('aria-controls')), r = p.getBoundingClientRect(), b = t.getBoundingClientRect(); return t.getAttribute('aria-haspopup') === 'dialog' && p.contains(document.activeElement) && r.top >= 0 && r.left >= 0 && r.right <= innerWidth && r.bottom <= b.top; })()`)).toBe(true)
+    const first = await page.evaluate(`document.activeElement.textContent`)
+    await page.pressKey("ArrowDown", "ArrowDown", 40)
+    expect(await page.evaluate(`document.activeElement.textContent`)).not.toEqual(first)
+    await page.pressKey("Tab", "Tab", 9)
+    await page.pressKey("Escape", "Escape", 27)
+    expect(await page.evaluate(`document.activeElement === ${toggle} && ${toggle}.getAttribute('aria-expanded') === 'false'`)).toBe(true)
+    await page.setViewport(1440, 900)
+    await wait(page, `!${toggle}.checkVisibility()`)
+    expect(await page.evaluate(oneRow)).toBe(true)
+    expect(await page.evaluate(`${field} === window.toolbarField && ${field}.value === 'Synthetic toolbar draft' && ${field}.selectionStart === 2 && ${field}.selectionEnd === 7`)).toBe(true)
   } finally { await page.close() }
 }, 30_000)
 
@@ -3632,7 +3668,7 @@ test("layout stability reserves composer actions through live metadata and runni
     await page.evaluate(`window.__desktopFixture.emit({ type: 'session.execution.started', data: { sessionID: 'ses_test' } })`)
     await wait(page, `document.querySelector('[aria-label="Stop generation"]')`)
     expect(await page.evaluate(geometry, decodeArray((value: unknown) => value))).toEqual(original)
-    expect(await page.evaluate(`(() => { const stop = document.querySelector('[aria-label="Stop generation"]').getBoundingClientRect(), send = document.querySelector('.rl-send').getBoundingClientRect(), card = document.querySelector('.rl-capsule').getBoundingClientRect(); return stop.width >= send.width && stop.height >= send.height && stop.left >= card.left && stop.right <= card.right && stop.top >= card.top && stop.bottom <= card.bottom && (stop.right <= send.left || stop.left >= send.right || stop.bottom <= send.top || stop.top >= send.bottom); })()`, decodeBoolean)).toBe(true)
+    expect(await page.evaluate(`(() => { const action = document.querySelector('.composer-bar .rl-send'), stop = action.getBoundingClientRect(), delivery = document.querySelector('.composer-bar [aria-label="Send mode"]').getBoundingClientRect(), card = document.querySelector('.rl-capsule').getBoundingClientRect(); return action.getAttribute('aria-label') === 'Stop generation' && document.querySelectorAll('[aria-label="Stop generation"]').length === 1 && delivery.right < stop.left && stop.right <= card.right && stop.top >= card.top && stop.bottom <= card.bottom; })()`, decodeBoolean)).toBe(true)
     expect(await page.evaluate(`document.querySelector('.rl-capsule textarea').value`, decodeString)).toBe("Retained synthetic draft")
     running = false
     await page.evaluate(`window.__desktopFixture.emit({ type: 'session.idle', data: { sessionID: 'ses_test' } })`)

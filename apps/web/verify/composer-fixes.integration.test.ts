@@ -62,6 +62,43 @@ const attachPng = (name: string, type: string, via: "paste" | "input") => `(() =
 })()`
 
 describe("composer", () => {
+  test("composer toolbar fits one row and keeps its draft and keyboard actions when controls overflow", async () => {
+    const page = await browser!.openPage()
+    const scope = `.composer-resident:not([inert])`
+    const field = `document.querySelector('${scope} textarea')`
+    const toggle = `document.querySelector('${scope} button[aria-label="More composer controls"]')`
+    const row = `(() => { const bar = document.querySelector('${scope} .composer__controls'), send = bar.querySelector('.mini-composer__send'), s = send.getBoundingClientRect(), b = bar.getBoundingClientRect(); const buttons = [...bar.querySelectorAll('button')].filter(e => e.checkVisibility() && !e.closest('[inert]')); return buttons.length >= 3 && buttons.every(e => { const r = e.getBoundingClientRect(); return Math.abs(r.top + r.height / 2 - s.top - s.height / 2) < 1 && r.left >= b.left && r.right <= b.right + 1 }) && Math.abs(s.right - b.right) < 1 && document.elementFromPoint(s.x + s.width / 2, s.y + s.height / 2)?.closest('button') === send; })()`
+    try {
+      await page.setViewport(1440, 900)
+      await page.navigate(shell())
+      await wait(page, `${field} && !${field}.disabled`)
+      await click(page, `${scope} textarea`)
+      await type(page, "Synthetic toolbar draft")
+      await page.evaluate(`${field}.setSelectionRange(2, 7); window.toolbarField = ${field}`)
+      expect(await page.evaluate(row)).toBe(true)
+      await page.setCoarsePointer(true)
+      await page.setViewport(390, 844)
+      await wait(page, `${toggle}?.checkVisibility()`)
+      expect(await page.evaluate(row)).toBe(true)
+      expect(await page.evaluate(`${field} === window.toolbarField && ${field}.selectionStart === 2 && ${field}.selectionEnd === 7 && document.activeElement === ${field}`)).toBe(true)
+      await page.evaluate(`${toggle}.focus()`)
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      await wait(page, `${toggle}.getAttribute('aria-expanded') === 'true'`)
+      expect(await page.evaluate(`(() => { const t = ${toggle}, p = document.getElementById(t.getAttribute('aria-controls')), r = p.getBoundingClientRect(), b = t.getBoundingClientRect(); return t.getAttribute('aria-haspopup') === 'dialog' && p.contains(document.activeElement) && b.width >= 44 && b.height >= 44 && r.top >= 0 && r.left >= 0 && r.right <= innerWidth && r.bottom <= b.top; })()`)).toBe(true)
+      const first = await page.evaluate(`document.activeElement.textContent`)
+      await page.pressKey("ArrowDown", "ArrowDown", 40)
+      expect(await page.evaluate(`document.activeElement.textContent`)).not.toEqual(first)
+      await page.pressKey("Tab", "Tab", 9)
+      await page.pressEscape()
+      expect(await page.evaluate(`document.activeElement === ${toggle} && ${toggle}.getAttribute('aria-expanded') === 'false'`)).toBe(true)
+      await page.setCoarsePointer(false)
+      await page.setViewport(1440, 900)
+      await wait(page, `!${toggle}.checkVisibility()`)
+      expect(await page.evaluate(row)).toBe(true)
+      expect(await page.evaluate(`${field} === window.toolbarField && ${field}.value === 'Synthetic toolbar draft' && ${field}.selectionStart === 2 && ${field}.selectionEnd === 7`)).toBe(true)
+    } finally { await page.close() }
+  }, 30_000)
+
   test("typing and pasting long text never changes the composer height, wraps or reflows the transcript", async () => {
     const page = await browser!.openPage()
     try {

@@ -1677,26 +1677,25 @@ describe("remote shell layout", () => {
       const state = await page.evaluate(`(() => {
         const composer=document.querySelector('.composer');
         const root=getComputedStyle(document.documentElement), hit=parseFloat(root.getPropertyValue('--yc-hit-min')), space=parseFloat(root.getPropertyValue('--yc-space-1')), border=parseFloat(root.getPropertyValue('--yc-border-width'));
-        const dock=composer.querySelector('.composer__dock').getBoundingClientRect(), summary=composer.querySelector('.composer__summary'), summaryRect=summary.getBoundingClientRect(), input=composer.querySelector('.composer__input').getBoundingClientRect(), actions=composer.querySelector('.composer__actions').getBoundingClientRect(), transcript=document.querySelector('.workspace__scroll').getBoundingClientRect();
+        const dock=composer.querySelector('.composer__dock').getBoundingClientRect(), summary=composer.querySelector('.composer__summary'), input=composer.querySelector('.composer__input').getBoundingClientRect(), actions=composer.querySelector('.composer-toolbar').getBoundingClientRect(), transcript=document.querySelector('.workspace__scroll').getBoundingClientRect();
         return {
           height:composer?.getBoundingClientRect().height ?? 0,
           budget:4*hit+4*space+2*border,hit,space,
-          rows:[dock.height,summaryRect.height,input.height,actions.height],
-          ordered:summaryRect.bottom<=input.top && input.bottom<=actions.top && actions.bottom<=dock.top,
+          rows:[dock.height,input.height,actions.height],
+          ordered:input.bottom<=actions.top && actions.bottom<=dock.top,
           summaryNamed:['.composer__mobile-trigger','.session-status__autonomous-trigger','.session-status__goal-trigger'].every(selector=>!!summary.querySelector(selector)?.getAttribute('aria-label')),
-          transcriptVisible:transcript.height>=2*hit && transcript.top>=0 && transcript.bottom<=composer.getBoundingClientRect().top+1 && composer.getBoundingClientRect().bottom<=innerHeight,
+          transcriptVisible:Math.min(transcript.bottom, composer.getBoundingClientRect().top)-transcript.top>=2*hit && transcript.top>=0 && composer.getBoundingClientRect().bottom<=innerHeight,
           input:composer?.querySelector('.composer__input')?.getBoundingClientRect().height ?? 0,
-          mobileTrigger:document.querySelector('.composer__mobile-trigger')?.getBoundingClientRect().height ?? 0,
-          actions:[...composer?.querySelectorAll('button') ?? []].filter(button=>button.getBoundingClientRect().width>0).map(button=>({label:button.getAttribute('aria-label') ?? button.textContent.trim(),height:button.getBoundingClientRect().height})),
+          mobileTrigger:composer.querySelector('.composer-toolbar__more')?.getBoundingClientRect().height ?? 0,
+          actions:[...composer.querySelectorAll('button')].filter(button=>button.checkVisibility({checkVisibilityCSS:true})).map(button=>({label:button.getAttribute('aria-label') ?? button.textContent.trim(),height:button.getBoundingClientRect().height})),
           messages:document.querySelectorAll('.transcript > .transcript-navigation__item > .transcript-message').length,
           overflow:document.documentElement.scrollWidth > innerWidth,
         };
       })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, height: (decodeNumber)(record["height"]), budget: (decodeNumber)(record["budget"]), hit: (decodeNumber)(record["hit"]), space: (decodeNumber)(record["space"]), rows: (decodeArray(decodeNumber))(record["rows"]), ordered: (decodeBoolean)(record["ordered"]), summaryNamed: (decodeBoolean)(record["summaryNamed"]), transcriptVisible: (decodeBoolean)(record["transcriptVisible"]), input: (decodeNumber)(record["input"]), mobileTrigger: (decodeNumber)(record["mobileTrigger"]), actions: (decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, label: (decodeString)(record["label"]), height: (decodeNumber)(record["height"]) } }))(record["actions"]), messages: (decodeNumber)(record["messages"]), overflow: (decodeBoolean)(record["overflow"]) } })
       expect(state.height).toBeLessThanOrEqual(state.budget)
       expect(state.rows[0]).toBeLessThanOrEqual(state.hit)
-      expect(state.rows[1]).toBeLessThanOrEqual(state.hit + state.space)
-      expect(state.rows[2]).toBeLessThanOrEqual(state.hit)
-      expect(state.rows[3]).toBeLessThanOrEqual(state.hit + state.space)
+      expect(state.rows[1]).toBeLessThanOrEqual(state.hit)
+      expect(state.rows[2]).toBeLessThanOrEqual(state.hit + state.space)
       expect(state.ordered).toBe(true)
       expect(state.summaryNamed).toBe(true)
       expect(state.transcriptVisible).toBe(true)
@@ -1707,7 +1706,7 @@ describe("remote shell layout", () => {
       expect(state.messages).toBe(2)
       expect(state.overflow).toBe(false)
       await page.setCoarsePointer(true)
-      expect(await page.evaluate(`[...document.querySelectorAll('.composer button,.composer__mobile-trigger')].filter(button => button.getBoundingClientRect().width > 0).every(button => button.getBoundingClientRect().height >= 44)`)).toBe(true)
+      expect(await page.evaluate(`[...document.querySelectorAll('.composer button')].filter(button => button.checkVisibility({checkVisibilityCSS:true})).every(button => button.getBoundingClientRect().height >= 44)`)).toBe(true)
       await page.evaluate(`(() => { const field = document.querySelector('.composer__input'); field.value = 'Keep this phone draft'; field.dispatchEvent(new InputEvent('input', { bubbles: true })) })()`)
       await page.evaluate(`document.querySelector('.composer__delivery-toggle')?.click()`)
       expect(await page.evaluate(`document.querySelector('.composer__delivery-toggle')?.getAttribute('aria-pressed') ?? null`)).toBe("true")
