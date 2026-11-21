@@ -1007,8 +1007,9 @@ test("source contracts and production builds run independently while legacy jobs
   expect(workflowJob(testWorkflow, "portability")).toContain(skipped)
   expect(unit).toContain("run: GITHUB_ACTIONS=false bun turbo test")
   expect(unit).toContain("name: Cache Turbo")
+  expect(source).toContain("    needs: build-inputs\n    if: ${{ !cancelled() }}\n")
+  expect(build).not.toMatch(/^    (?:if|needs):/m)
   for (const job of [source, build]) {
-    expect(job).not.toMatch(/^    if:/m)
     expect(job).not.toContain("continue-on-error:")
     expect(job).not.toContain("actions/cache")
     expect(job).not.toContain("secrets.")
