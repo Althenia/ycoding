@@ -14111,5 +14111,87 @@ describe("SessionRunnerLLM goal mode", () => {
         expect(yield* goalOf).toMatchObject({ status: "completed", noProgress: 0 })
       }),
     )
+
+    it.effect("completes without a no-progress charge once the stale named check is rerun after the edit", () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        yield* registerGoalTools
+        yield* registerCheckTools
+        const autonomy = yield* SessionAutonomy.Service
+        yield* autonomy.setGoal({ sessionID, text: objective })
+        responses = [
+          step(["shell-g1", "shell", { command: "./verify.sh" }]),
+          step(["edit-g", "edit", { path: "src/parser.ts" }]),
+          step(["goal-g1", "goal", { action: "complete" }]),
+          step(["shell-g2", "shell", { command: "./verify.sh" }]),
+          step(["goal-g2", "goal", { action: "complete" }]),
+          reply.text("Done", "g-done"),
+        ]
+        yield* drain(session, sessionID, "Finish")
+        expect(yield* rejection("goal-g1")).toContain("Required check ./verify.sh is stale since the latest edit")
+        expect(yield* rejection("goal-g1")).toContain("Rerun ./verify.sh")
+        expect(yield* rejection("goal-g1")).toContain("uses one no-progress attempt")
+        expect(yield* toolPart("goal-g2")).toMatchObject({ state: { status: "completed" } })
+        expect(yield* goalOf).toMatchObject({ status: "completed", noProgress: 0 })
+      }),
+    )
+
+    it.effect("charges one no-progress attempt per identical repeated rejection without new work and exhausts the goal", () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        yield* registerGoalTools
+        yield* registerCheckTools
+        const autonomy = yield* SessionAutonomy.Service
+        yield* autonomy.setGoal({ sessionID, text: objective })
+        responses = [
+          step(["edit-h", "edit", { path: "src/parser.ts" }]),
+          step(["goal-h1", "goal", { action: "complete" }]),
+          step(["goal-h2", "goal", { action: "complete" }]),
+          step(["goal-h3", "goal", { action: "update", status: "completed" }]),
+          step(["goal-h4", "goal", { action: "complete" }]),
+          step(["goal-h5", "goal", { action: "complete" }]),
+          reply.text("Stopped", "h-done"),
+        ]
+        yield* drain(session, sessionID, "Finish")
+        expect(yield* rejection("goal-h1")).toContain("Required check ./verify.sh is unrun")
+        expect(yield* rejection("goal-h1")).not.toContain("charged")
+        expect(yield* rejection("goal-h2")).toContain("no-progress attempt 1/3 charged")
+        expect(yield* rejection("goal-h3")).toContain("no-progress attempt 2/3 charged")
+        expect(yield* rejection("goal-h4")).toContain("no-progress attempt 3/3 charged")
+        expect(yield* rejection("goal-h4")).toContain("goal is exhausted")
+        expect(yield* rejection("goal-h5")).toContain("No active goal to complete")
+        expect(yield* rejection("goal-h5")).not.toContain("Required check")
+        expect(yield* goalOf).toMatchObject({ status: "exhausted", noProgress: 3, maxNoProgress: 3 })
+      }),
+    )
+
+    it.effect("charges nothing when owner or descendant work separates identical rejections", () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        yield* registerGoalTools
+        yield* registerCheckTools
+        const autonomy = yield* SessionAutonomy.Service
+        yield* autonomy.setGoal({ sessionID, text: objective })
+        const childID = yield* childSession("ses_runner_check_worker")
+        responses = [
+          step(["edit-i", "edit", { path: "src/parser.ts" }]),
+          step(["goal-i1", "goal", { action: "complete" }]),
+          step(["shell-i", "shell", { command: "ls src" }]),
+          step(["goal-i2", "goal", { action: "complete" }]),
+          reply.text("Waiting on the worker", "i-wait"),
+          reply.text("Worker notes", "i-worker"),
+          step(["goal-i3", "goal", { action: "complete" }]),
+          reply.text("Stopped", "i-done"),
+        ]
+        yield* drain(session, sessionID, "Finish")
+        yield* drain(session, childID, "Investigate")
+        yield* drain(session, sessionID, "Try again")
+        expect(yield* rejection("goal-i2")).toContain("Required check ./verify.sh is unrun")
+        expect(yield* rejection("goal-i2")).not.toContain("charged")
+        expect(yield* rejection("goal-i3")).toContain("Required check ./verify.sh is unrun")
+        expect(yield* rejection("goal-i3")).not.toContain("charged")
+        expect(yield* goalOf).toMatchObject({ status: "active", noProgress: 0 })
+      }),
+    )
   })
 })

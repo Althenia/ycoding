@@ -46,7 +46,7 @@ export type Output = typeof Output.Type
 
 export const make = (autonomy: SessionAutonomy.Interface, database: Database.Interface, permission: StandalonePermission.Interface) => Tool.make({
             description:
-              "Manage the current autonomous goal for this session. The user alone creates, replaces, or resumes the goal through the /goal command or the UI; never change the objective text. After the user enables a goal, maintain its status: use get to inspect, report after a blocker, complete after verified achievement, and stop/clear only when the user asks. Do not report ordinary progress. Use report only after encountering a blocker, attempting reasonable self-resolution, and remaining unable to progress; every report consumes one no-progress retry attempt. Active background subagents or shells are unfinished work, not automatic no progress. Use complete only after the goal is achieved and verified; completion is agent-owned. When the user's goal request names a check (a ./ or ../ script path ending in .sh, .bash, .zsh, .ps1, .cmd or .bat, or a backticked command of two or more words), complete and update to completed are rejected after a completed edit, write or patch in this Session or its descendants until a shell run of that check after the latest such edit has passed. Use rework with unit, reason and state opened when a failed check, regression or rejected result reopens finished work, and with state resolved plus evidence once its check passes; rework is neither a no-progress report nor progress narration and never stops the goal. Do not use set to create a goal; it will be rejected.",
+              "Manage the current autonomous goal for this session. The user alone creates, replaces, or resumes the goal through the /goal command or the UI; never change the objective text. After the user enables a goal, maintain its status: use get to inspect, report after a blocker, complete after verified achievement, and stop/clear only when the user asks. Do not report ordinary progress. Use report only after encountering a blocker, attempting reasonable self-resolution, and remaining unable to progress; every report consumes one no-progress retry attempt. Active background subagents or shells are unfinished work, not automatic no progress. Use complete only after the goal is achieved and verified; completion is agent-owned. When the user's goal request names a check (a ./ or ../ script path ending in .sh, .bash, .zsh, .ps1, .cmd or .bat, or a backticked command of two or more words), complete and update to completed are rejected after a completed edit, write or patch in this Session or its descendants until a shell run of that check after the latest such edit has passed; the rejection names the check to rerun. A completion rejection identical to the previous one, with no other tool call, check run, edit or descendant work in between, consumes one no-progress retry attempt. Use rework with unit, reason and state opened when a failed check, regression or rejected result reopens finished work, and with state resolved plus evidence once its check passes; rework is neither a no-progress report nor progress narration and never stops the goal. Do not use set to create a goal; it will be rejected.",
             input: Input,
             output: Output,
             toModelOutput: ({ output }) => [{ type: "text", text: output.message }],
@@ -129,8 +129,7 @@ export const make = (autonomy: SessionAutonomy.Interface, database: Database.Int
                         const existing = stateBefore.goal
                         if (!existing) return yield* Effect.fail(new ToolFailure({ message: "No existing goal to update. The user creates goals via /goal." }))
                         if (input.status === "completed") {
-                          yield* requireResolved(existing)
-                          yield* requireChecks(database, context.sessionID, existing)
+                          yield* requireCompletable(autonomy, database, context.sessionID, existing)
                           const advanced = yield* autonomy.complete(context.sessionID)
                           const goal = advanced.goal!
                           return { action: "update", goal, message: `Goal marked completed: ${goal.text}` }
@@ -155,8 +154,7 @@ export const make = (autonomy: SessionAutonomy.Interface, database: Database.Int
                         )
                         const existing = stateBefore.goal
                         if (!existing || existing.status !== "active") return yield* Effect.fail(new ToolFailure({ message: "No active goal to complete" }))
-                        yield* requireResolved(existing)
-                        yield* requireChecks(database, context.sessionID, existing)
+                        yield* requireCompletable(autonomy, database, context.sessionID, existing)
                         const advanced = yield* autonomy.complete(context.sessionID)
                         const goal = advanced.goal!
                         return { action: "complete", goal, message: `Goal completed: ${goal.text}. It will disappear from sidebar.` }
@@ -180,15 +178,34 @@ export const Plugin = {
   }),
 }
 
-const requireResolved = (goal: SessionAutonomy.Goal) => {
+const requireCompletable = Effect.fnUntraced(function* (
+  autonomy: SessionAutonomy.Interface,
+  database: Database.Interface,
+  sessionID: SessionSchema.ID,
+  goal: SessionAutonomy.Goal,
+) {
+  const rejection = failureRejection(goal) ?? (yield* checkRejection(database, sessionID, goal))
+  if (!rejection) return
+  const repeated = yield* SessionGoalVerification.repeatsRejection(database.db, sessionID, rejection.reason)
+  const charged = repeated && (yield* SessionReviewFold.openCount(database.db, sessionID)) === 0
+    ? (yield* autonomy.report({ sessionID })).goal
+    : undefined
+  const budget = charged
+    ? `No new work since the identical previous rejection: no-progress attempt ${charged.noProgress}/${charged.maxNoProgress} charged${charged.status === "exhausted" ? "; the goal is exhausted" : ""}.`
+    : "Calling complete again with no new tool call, check run, edit or descendant work since this rejection uses one no-progress attempt."
+  yield* Effect.fail(new ToolFailure({ message: [rejection.reason, rejection.detail, budget].join("\n") }))
+})
+
+const failureRejection = (goal: SessionAutonomy.Goal) => {
   const failure = goal.failure
-  if (!failure) return Effect.void
+  if (!failure) return undefined
   const clears = failure.unit.startsWith("tool/")
     ? `a successful ${failure.unit.slice(5)} call in this Session or a clean iteration`
     : "a successful model step in this Session or a clean iteration"
-  return Effect.fail(new ToolFailure({
-    message: `Goal cannot complete: failure ${failure.fingerprint} (class ${failure.class}, unit ${failure.unit}, ${failure.count} occurrence${failure.count === 1 ? "" : "s"}) stopped this Session's own iteration and is unresolved. It clears after ${clears}.`,
-  }))
+  return {
+    reason: `Goal cannot complete: failure ${failure.fingerprint} (class ${failure.class}, unit ${failure.unit}) stopped this Session's own iteration and is unresolved.`,
+    detail: `${failure.count} occurrence${failure.count === 1 ? "" : "s"}. It clears after ${clears}.`,
+  }
 }
 
 const checkStates = {
@@ -197,10 +214,12 @@ const checkStates = {
   failing: "is failing",
 } as const
 
-const requireChecks = Effect.fnUntraced(function* (database: Database.Interface, ownerID: SessionSchema.ID, goal: SessionAutonomy.Goal) {
+const checkRejection = Effect.fnUntraced(function* (database: Database.Interface, ownerID: SessionSchema.ID, goal: SessionAutonomy.Goal) {
   const checks = SessionGoalVerification.requiredChecks(goal.rawText ?? goal.text)
   const unmet = checks.length === 0 ? [] : SessionGoalVerification.unmetChecks(checks, yield* SessionGoalVerification.familyCalls(database.db, ownerID))
-  if (unmet.length > 0) yield* Effect.fail(new ToolFailure({
-    message: `Goal cannot complete: ${unmet.map((item) => `Required check ${item.check} ${checkStates[item.state]}`).join("; ")}. Only a passing run after the latest edit, in this Session or one of its descendant Sessions, clears it.`,
-  }))
+  if (unmet.length === 0) return undefined
+  return {
+    reason: `Goal cannot complete: ${unmet.map((item) => `Required check ${item.check} ${checkStates[item.state]}`).join("; ")}.`,
+    detail: `Rerun ${unmet.map((item) => item.check).join(" and ")}. Only a passing run after the latest edit, in this Session or one of its descendant Sessions, clears it.`,
+  }
 })

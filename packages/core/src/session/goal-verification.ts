@@ -78,6 +78,73 @@ export const familyCalls = Effect.fn("SessionGoalVerification.familyCalls")(func
     .map((item) => item.call)
 })
 
+export const repeatsRejection = Effect.fn("SessionGoalVerification.repeatsRejection")(function* (
+  db: Database.Interface["db"],
+  ownerID: SessionSchema.ID,
+  reason: string,
+) {
+  const family = yield* descendants(db, [ownerID], [ownerID])
+  const rows = yield* db
+    .select({ sessionID: SessionMessageTable.session_id, type: SessionMessageTable.type, data: SessionMessageTable.data, seq: SessionMessageTable.seq, time: SessionMessageTable.time_created })
+    .from(SessionMessageTable)
+    .where(inArray(SessionMessageTable.session_id, [...family]))
+    .orderBy(asc(SessionMessageTable.seq))
+    .all()
+    .pipe(Effect.orDie)
+  const owned = rows.filter((row) => row.sessionID === ownerID)
+  const parts = owned.flatMap((row) => contentOf(row.data).map((part) => ({ seq: row.seq, part })))
+  const previous = parts.findLast((item) => completionAttempt(item.part) && statusOf(item.part) === "error")
+  if (!previous || !errorLines(previous.part).includes(reason)) return false
+  const since = settledAt(previous.part) ?? 0
+  const ownerWork = owned.some((row) => row.seq > previous.seq && row.type === "shell") ||
+    parts.some((item) => isWork(item.part) && (item.seq >= previous.seq || unsettled(item.part)))
+  const descendantWork = rows.some((row) =>
+    row.sessionID !== ownerID && (
+      row.time > since ||
+      (row.type === "assistant" && !completedMessage(row.data)) ||
+      contentOf(row.data).some((part) => isWork(part) && (unsettled(part) || (settledAt(part) ?? 0) > since))
+    ))
+  return !ownerWork && !descendantWork
+})
+
+function contentOf(data: object): ReadonlyArray<unknown> {
+  return "content" in data && Array.isArray(data.content) ? data.content : []
+}
+
+function isTool(part: unknown): part is { type: "tool"; name: string; state: Record<string, unknown> } {
+  return typeof part === "object" && part !== null && "type" in part && part.type === "tool" &&
+    "name" in part && typeof part.name === "string" && "state" in part && typeof part.state === "object" && part.state !== null
+}
+
+function statusOf(part: unknown) {
+  return isTool(part) ? part.state.status : undefined
+}
+
+function isWork(part: unknown) {
+  return isTool(part) && part.name !== "goal"
+}
+
+function unsettled(part: unknown) {
+  return statusOf(part) === "streaming" || statusOf(part) === "running"
+}
+
+function completionAttempt(part: unknown) {
+  if (!isTool(part) || part.name !== "goal") return false
+  const input = part.state.input
+  if (typeof input !== "object" || input === null || !("action" in input)) return false
+  return input.action === "complete" || (input.action === "update" && "status" in input && input.status === "completed")
+}
+
+function errorLines(part: unknown) {
+  if (!isTool(part)) return []
+  const error = part.state.error
+  return typeof error === "object" && error !== null && "message" in error && typeof error.message === "string" ? error.message.split("\n") : []
+}
+
+function completedMessage(data: object) {
+  return "time" in data && typeof data.time === "object" && data.time !== null && "completed" in data.time && typeof data.time.completed === "number"
+}
+
 function descendants(
   db: Database.Interface["db"],
   frontier: ReadonlyArray<SessionSchema.ID>,
