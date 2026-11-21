@@ -4,8 +4,9 @@
  * Surface:
  * - `GET /health` liveness probe.
  * - `/api/auth/*`, `/api/me`, `/api/devices/*` authentication and device metadata.
- * - `/ws/v4/agent` bearer-authenticated local agent relay socket.
- * - `/ws/v4/client` cookie-authenticated browser relay socket.
+ * - `/ws/v4/agent` and `/ws/v5/agent` bearer-authenticated local agent sockets.
+ * - `/ws/v4/client` and `/ws/v5/client` same-origin browser session sockets.
+ * - `/api/remote/devices/*` authenticated Session content streams.
  * - everything else is served from the asset binding (landing, docs, changelog,
  *   and the `/remote/*` SPA owned by the web lane).
  *

@@ -61,7 +61,7 @@ function report(
     generationP95TokensPerSecond: 55,
     samples: 4,
   }
-  if (values[0]) values[0].outcomes = { completed: 8, failed: 1, cancelled: 1 }
+  if (values[0]) values[0].outcomes = { completed: 2, failed: 1, cancelled: 1 }
   return {
     group,
     rows: values,
@@ -130,6 +130,26 @@ async function waitFor(app: Awaited<ReturnType<typeof renderReports>>, predicate
   throw new Error(`Timed out waiting for ${label}\n${app.captureCharFrame()}`)
 }
 
+test("partial historical outcomes render their coverage without an error rate", async () => {
+  const app = await renderReports({
+    width: 240,
+    load: async (query) => {
+      const value = report(query.group)
+      value.rows[0] = { ...value.rows[0], outcomes: { completed: 1, failed: 1, cancelled: 0 } }
+      return value
+    },
+  })
+  try {
+    await waitFor(app, (frame) => frame.includes("Alpha"), "the initial table")
+    app.mockInput.pressKey("RETURN")
+    const frame = await waitFor(app, (value) => value.includes("Usage details") && value.includes("incomplete coverage"), "partial outcome details")
+    expect(frame).toContain("Outcomes 1 completed · 1 failed · 0 cancelled · incomplete coverage")
+    expect(frame).not.toContain("error rate 50.0%")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("defaults tables to all retained history and exposes normalized metrics plus explicit custom dates", async () => {
   const calls: ReportInput[] = []
   const app = await renderReports({
@@ -153,7 +173,7 @@ test("defaults tables to all retained history and exposes normalized metrics plu
     expect(calls[0]).toEqual({ group: "model", offset: 0, limit: 100, sort: "tokens", order: "desc" })
     for (const column of ["STEPS", "INPUT", "OUTPUT", "REASON", "CACHE READ", "CACHE WRITE", "TOTAL", "COST", "FIRST P50", "FIRST P95", "TOTAL P50", "TOTAL P95", "MEAN TOK/S", "AGG TOK/S", "ERR RATE"]) expect(frame).toContain(column)
     expect(frame).toContain("125ms")
-    expect(frame.split("\n").find((line) => line.includes("Alpha"))).toMatch(/\s37\.4\s+42\.5\s+10\.0%/)
+    expect(frame.split("\n").find((line) => line.includes("Alpha"))).toMatch(/\s37\.4\s+42\.5\s+25\.0%/)
     expect(frame.split("\n").find((line) => line.includes("Beta"))).toMatch(/\$0\.30\s*$/)
     expect(frame).not.toMatch(placeholders)
     expect(frame).toContain("STEPS model calls")
@@ -177,7 +197,7 @@ test("defaults tables to all retained history and exposes normalized metrics plu
     expect(frame).toContain("≥ marks a lower bound")
     expect(frame).toContain("First output p50 125ms · p95 250ms")
     expect(frame).toContain("Total p50 1,200ms · p95 2,500ms · Aggregate 42.5 tok/s")
-    expect(frame).toContain("Outcomes 8 completed · 1 failed · 1 cancelled · error rate 10.0%")
+    expect(frame).toContain("Outcomes 2 completed · 1 failed · 1 cancelled · error rate 25.0%")
     expect(frame).toContain("Aggregate throughput 42.5 tok/s · mean per request 37.4 tok/s")
     expect(frame).toContain("p95 55.0 tok/s")
     app.mockInput.pressKey("ESCAPE")

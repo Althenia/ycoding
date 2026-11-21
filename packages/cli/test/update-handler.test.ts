@@ -1,5 +1,5 @@
 import { NodeFileSystem } from "@effect/platform-node"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../src/paths"
 import { expect, mock, spyOn, test } from "bun:test"
 import { Effect, Option } from "effect"
 import { appendFileSync, rmSync } from "node:fs"
@@ -253,7 +253,7 @@ async function runHandler(scenario: Scenario) {
     stderr.push(String(chunk))
     return true
   })
-  const layer = Global.layerWith({
+  const layer = FrontendPaths.layerWith({
     data: path.join(root, "data"),
     config: path.join(root, "config"),
     state: path.join(root, "state"),

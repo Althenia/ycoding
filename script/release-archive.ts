@@ -19,7 +19,7 @@ function payload(target: Target, withApplication: boolean, version: string) {
   const app = interaction ? interactionApplication : computerUseApplication
   const extension = interaction ? interactionExtensionFiles : BrowserExtension.files
   return [
-    target === "windows-x64" ? "ycoding.exe" : "ycoding",
+    executable(target),
     `${interactionExtensionDirectory}/`,
     ...extension.map((file) => `${interactionExtensionDirectory}/${file}`),
     ...new Set(extension.filter((file) => file.includes("/")).map((file) => `${interactionExtensionDirectory}/${file.slice(0, file.lastIndexOf("/"))}/`)),
@@ -43,8 +43,16 @@ function filename(target: Target, version: string) {
   return `ycoding-${version}-${target}.${target === "windows-x64" ? "zip" : "tar.gz"}`
 }
 
+function executable(target: Target) {
+  return target === "windows-x64" ? "ycoding.exe" : "ycoding"
+}
+
 function desktopFilename(version: string) {
   return `YCoding-Desktop-v${version}-darwin-arm64.zip`
+}
+
+export function releaseArchives(version: string) {
+  return [...targets.map((target) => filename(target, version)), desktopFilename(version)]
 }
 
 function desktopPayload(hash: string) {
@@ -59,7 +67,7 @@ function desktopHash(metadata: string, plist: string) {
   const fields = parsed as Record<string, unknown>
   if (fields.identifier !== "app.ycoding.desktop" || fields.name !== "YCoding Desktop" || fields.channel !== "stable" || typeof fields.hash !== "string" || !/^[0-9a-z]+$/.test(fields.hash))
     throw new Error("Invalid desktop release payload: metadata")
-  for (const [key, value] of [["CFBundleIdentifier", "app.ycoding.desktop"], ["CFBundleExecutable", "launcher"], ["CFBundleIconFile", "AppIcon"]])
+  for (const [key, value] of [["CFBundleIdentifier", "app.ycoding.desktop"], ["CFBundleExecutable", "launcher"], ["CFBundleIconFile", "AppIcon"]] as const)
     if (!new RegExp(`<key>${key}</key>\\s*<string>${value.replaceAll(".", "\\.")}</string>`).test(plist)) throw new Error(`Invalid desktop release payload: ${key}`)
   return fields.hash
 }
@@ -97,19 +105,21 @@ async function validateArchive(file: string, target: Target, version: string) {
   const info = await fs.lstat(file)
   if (!info.isFile() || info.isSymbolicLink() || info.size === 0) throw new Error("Invalid release archive file")
   const expected = payload(target, includesApplication(target, version), version)
-  if (process.platform === "win32") {
-    const listing = run(["7z", "l", "-slt", file]).split(/\n-{10,}\n/)[1]
-    if (!listing) throw new Error("Invalid release archive listing")
+  const zip = target === "windows-x64"
+  if (zip && process.platform === "win32") {
+    const [header, listing] = run(["7z", "l", "-slt", file]).split(/\n-{10,}\n/)
+    if (!listing || !/^Type = zip$/m.test(header!)) throw new Error("Invalid release archive listing")
     const entries = listing.trim().split(/\n\n+/).map((entry) => {
-      const name = /^Path = (.+)$/m.exec(entry)?.[1]?.replaceAll("\\", "/")
-      if (!name || /^Symbolic Link =|^Hard Link =/m.test(entry)) throw new Error("Invalid release archive entry")
-      return `${name}${/^Folder = \+$/m.test(entry) || /^Attributes = D/m.test(entry) ? "/" : ""}`
+      const name = /^Path = (.+)$/m.exec(entry)?.[1]
+      const folder = /^Folder = \+$/m.test(entry) || /^Attributes = D/m.test(entry)
+      if (!name || /^Symbolic Link =|^Hard Link =|^Attributes = .*\blrwx/m.test(entry) ||
+        !folder && !/^Size = [1-9]\d*$/m.test(entry)) throw new Error("Invalid release archive entry")
+      return `${name.replaceAll("\\", "/").replace(/\/$/, "")}${folder ? "/" : ""}`
     })
     if (JSON.stringify(entries.sort()) !== JSON.stringify(expected)) throw new Error("Invalid release archive entries")
     run(["7z", "t", file])
     return
   }
-  const zip = target === "windows-x64"
   const names = run(zip ? ["unzip", "-Z1", file] : ["tar", "-tzf", file]).trimEnd().split("\n")
   if (JSON.stringify([...names].sort()) !== JSON.stringify(expected)) throw new Error("Invalid release archive entries")
   const modes = run(zip ? ["unzip", "-Z", "-l", file] : ["tar", "-tzvf", file]).split("\n").filter((line) => /^[bcdhlps-][rwx-]/.test(line))
@@ -118,6 +128,7 @@ async function validateArchive(file: string, target: Target, version: string) {
     const mode = modes[index]!.split(/\s/)[0]!
     if (mode[0] !== (name.endsWith("/") ? "d" : "-")) throw new Error("Invalid release archive entry type")
     if (!zip && (name === "ycoding" || name.includes("/Contents/MacOS/") && !name.endsWith("/")) && !mode.includes("x")) throw new Error("Invalid release archive executable mode")
+    if (zip && !name.endsWith("/") && !(Number(modes[index]!.trim().split(/\s+/)[3]) > 0)) throw new Error("Invalid release archive empty entry")
   }
   if (zip) run(["unzip", "-t", file])
 }
@@ -163,14 +174,16 @@ async function create(target: Target, version: string, directory: string, output
   const file = path.join(output, filename(target, version))
   if (await Bun.file(file).exists()) throw new Error("Release archive already exists")
   const app = usesInteractionLayout(version) ? interactionApplication : computerUseApplication
-  const entries = [target === "windows-x64" ? "ycoding.exe" : "ycoding", interactionExtensionDirectory, ...(includesApplication(target, version) ? [app.name] : [])]
-  run(target === "windows-x64" ? ["7z", "a", "-tzip", "-mm=Deflate", file, ...entries] : ["tar", "-czf", file, ...entries], directory)
+  const entries = [executable(target), interactionExtensionDirectory, ...(includesApplication(target, version) ? [app.name] : [])]
+  run(target !== "windows-x64" ? ["tar", "-czf", file, ...entries]
+    : process.platform === "win32" ? ["7z", "a", "-tzip", "-mm=Deflate", file, ...entries]
+    : ["zip", "-qr", file, ...entries], directory)
   await validateArchive(file, target, version)
   console.log(`Prepared ${filename(target, version)}`)
 }
 
 async function finalize(version: string, directory: string, output: string) {
-  const expected = [...targets.map((target) => filename(target, version)), desktopFilename(version)]
+  const expected = releaseArchives(version)
   if (JSON.stringify((await fs.readdir(directory)).sort()) !== JSON.stringify([...expected].sort())) throw new Error("Expected exactly five release archives")
   await fs.mkdir(output, { recursive: true })
   if ((await fs.readdir(output)).length !== 0) throw new Error("Release output must be empty")
@@ -183,7 +196,7 @@ async function finalize(version: string, directory: string, output: string) {
   console.log("Validated five release archives and all seven asset checksums")
 }
 
-await main()
+if (import.meta.main) await main()
 
 async function main() {
   const args = process.argv.slice(2)

@@ -1,11 +1,11 @@
 import { Effect, Option } from "effect"
 import { YCoding } from "@ycoding-ai/client"
 import { Service } from "@ycoding-ai/client/effect/service"
-import { Global } from "@ycoding-ai/core/global"
-import { ProcessLock } from "@ycoding-ai/core/util/process-lock"
-import { TaskMCPAuth } from "@ycoding-ai/core/task-mcp/auth"
-import { TaskMCPTasks } from "@ycoding-ai/core/task-mcp/tasks"
-import { TaskMCPTransport } from "@ycoding-ai/core/task-mcp/transport"
+import { FrontendPaths } from "../../../paths"
+import { ProcessLock } from "@ycoding-ai/schema/process-lock"
+import { TaskMCPAuth } from "../../../task-mcp/auth"
+import { TaskMCPTasks } from "../../../task-mcp/tasks"
+import { TaskMCPTransport } from "../../../task-mcp/transport"
 import { createHash } from "node:crypto"
 import { realpath } from "node:fs/promises"
 import path from "node:path"
@@ -46,7 +46,7 @@ export default Runtime.handler(
         }),
       )
       .digest("hex")
-    const global = yield* Global.Service
+    const global = yield* FrontendPaths.Service
     const registry = path.join(global.state, "task-mcp", identity)
     yield* ProcessLock.acquire(`${registry}.lock`)
     const serviceOptions = yield* ServiceConfig.options()
@@ -73,7 +73,6 @@ export default Runtime.handler(
     yield* Effect.addFinalizer(() =>
       Effect.promise(async () => {
         await tasks.settleAdmissions()
-        await transport.close()
       }),
     )
     yield* serveTaskMcp(input.port, (request) => transport.fetch(request))

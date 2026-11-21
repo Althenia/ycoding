@@ -96,6 +96,7 @@ describe("pending input controls over HTTP", () => {
       expect((await call("GET", route(id))).status).toBe(200)
     }
     expect((await call("DELETE", route(unread))).status).toBe(204)
+    expect((await call("DELETE", route(unread))).status).toBe(404)
     expect((await call("GET", route(unread))).status).toBe(404)
   })
 

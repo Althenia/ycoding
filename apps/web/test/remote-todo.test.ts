@@ -5,6 +5,7 @@ import type { TodoView } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
 import type { RemoteTransportHandlers } from "../src/remote/transport"
 import { startRelayDouble, waitFor, type RelayHandlerOutcome } from "./relay-double"
+import { fixtureSnapshot } from "./wire-peer"
 
 const first = { content: "First", status: "pending", priority: "high" } as const
 const second = { content: "Second", status: "in_progress", priority: "medium" } as const
@@ -13,11 +14,10 @@ test("a connector that never answers todo.list does not hold Session hydration o
   const pending = Promise.withResolvers<{ readonly status: "ok"; readonly value: unknown }>()
   const store = createRemoteStore({ http: createRemoteHttp(), createTransport: (_deviceID, handlers) => ({
     connect: () => handlers.onStatus?.({ kind: "open" }), close: () => {}, setPriority: () => {}, status: () => ({ kind: "open" }),
-    request: async (operation) => {
-      if (operation === "session.snapshot") return { status: "ok" as const, value: {
-        sourceEpoch: "epoch_1", session: { id: "ses_a", title: "Root", time: { created: 1, updated: 1 } },
-        messages: [], watermark: { type: "log.synced", aggregateID: "ses_a", seq: 0 },
-      } }
+    request: async (operation, request) => {
+      if (operation === "event.subscribe") return { status: "ok" as const, value: { subscription_id: `sub-${request?.sessionID}` } }
+      if (operation === "session.snapshot") return { status: "ok" as const, value: fixtureSnapshot("ses_a") }
+      if (operation === "session.log") return { status: "ok" as const, value: { watermark: 0 } }
       if (operation === "session.todo.list") return pending.promise
       if (operation === "notice.subscribe") return { status: "ok" as const, value: { notices: [], total: 0, unavailable: false } }
       if (operation === "session.autonomy.get") return { status: "ok" as const, value: { data: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", effective: { permissions: "manual", guardrails: "manual", answers: "manual", inherited: {}, deferred: false, guardrailsEnabled: true } } } }
@@ -105,11 +105,10 @@ test("a superseded same-Session read cannot overwrite reconnect's newer todo lis
         close: () => {},
         setPriority: () => {},
         status: () => ({ kind: "open" }),
-        request: async (operation) => {
-          if (operation === "session.snapshot") return { status: "ok" as const, value: {
-            sourceEpoch: "epoch_1", session: { id: "ses_a", title: "Root", time: { created: 1, updated: 1 } },
-            messages: [], watermark: { type: "log.synced", aggregateID: "ses_a", seq: 0 },
-          } }
+        request: async (operation, request) => {
+          if (operation === "event.subscribe") return { status: "ok" as const, value: { subscription_id: `sub-${request?.sessionID}-${reads}` } }
+          if (operation === "session.snapshot") return { status: "ok" as const, value: fixtureSnapshot("ses_a") }
+          if (operation === "session.log") return { status: "ok" as const, value: { watermark: 0 } }
           if (operation === "session.todo.list") return ++reads === 1 ? held.promise : { status: "ok" as const, value: { data: [second] } }
           return { status: "ok" as const, value: { data: [] } }
         },
@@ -174,7 +173,8 @@ test("a background resync keeps the loaded todos visible and reuses unchanged it
 test("an unreadable background todo answer keeps the todos already shown", async () => {
   let readable = true
   const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], handler: (request) =>
-    request.operation === "session.todo.list" ? { ok: true, value: { data: readable ? [{ ...first }] : "unreadable" } } : "default" })
+    request.operation !== "session.todo.list" ? "default" : readable ? { ok: true, value: { data: [{ ...first }] } }
+      : { wire: (peer, dispatch) => peer.malformedResult(dispatch, Uint8Array.of(255)) } })
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
     createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }),
@@ -189,7 +189,7 @@ test("an unreadable background todo answer keeps the todos already shown", async
     readable = false
     await store.reloadMessages()
     await waitFor(() => relay.requests.filter((request) => request.operation === "session.todo.list").length === 2)
-    await Bun.sleep(30)
+    await waitFor(() => relay.closeEvents.some((event) => event.reason === "MALFORMED"))
     expect(store.state().todos).toBe(loaded)
   } finally {
     store.dispose()

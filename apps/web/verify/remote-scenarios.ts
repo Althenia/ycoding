@@ -134,7 +134,7 @@ const tool = (id: string, name: string, input: Readonly<Record<string, unknown>>
     status: "completed",
     input,
     content: [{ type: "text", text: output }],
-    time: { created: now - minutesAgo * 60_000, ran: now - minutesAgo * 60_000 + 200, completed: now - minutesAgo * 60_000 + 800 },
+    structured: {},
   },
   time: { created: now - minutesAgo * 60_000, ran: now - minutesAgo * 60_000 + 200, completed: now - minutesAgo * 60_000 + 800 },
 })

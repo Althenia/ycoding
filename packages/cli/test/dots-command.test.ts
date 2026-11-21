@@ -1,13 +1,12 @@
 import { expect, test } from "bun:test"
 import { dotsAttachConfirmed, dotsAttachWarning, dotsDetachWarning, dotsTaskLine } from "../src/commands/dots"
+import { v5Server } from "./fixture/v5-server"
 
 const status = (computer: Record<string, unknown> | undefined) => ({
-  data: {
-    access: { enabled: true, revision: 1 },
-    configuration: { ready: true, profile: "dots" },
-    connection: { state: "connected" },
-    ...(computer === undefined ? {} : { computer }),
-  },
+  access: { enabled: true, revision: 1 },
+  configuration: { ready: true, profile: "dots" },
+  connection: { state: "connected" },
+  ...(computer === undefined ? {} : { computer }),
 })
 
 async function cli(args: string[], stdin: "ignore" | "pipe" = "ignore") {
@@ -16,21 +15,10 @@ async function cli(args: string[], stdin: "ignore" | "pipe" = "ignore") {
   return { stdout, stderr, exit }
 }
 
-async function withServer(current: unknown, attached: unknown, use: (url: string, seen: { method: string; path: string; body: string }[]) => Promise<void>) {
-  const seen: { method: string; path: string; body: string }[] = []
-  const server = Bun.serve({ port: 0, async fetch(request) {
-    const path = new URL(request.url).pathname
-    if (path === "/api/health") return Response.json({ healthy: true, version: "test", pid: process.pid })
-    seen.push({ method: request.method, path, body: await request.text() })
-    if (request.method === "GET" && path === "/api/dots") return Response.json(current)
-    if (request.method === "POST" && path === "/api/dots/computer") return Response.json(attached)
-    return new Response("not found", { status: 404 })
-  } })
-  try {
-    await use(server.url.toString(), seen)
-  } finally {
-    server.stop(true)
-  }
+type Request = { name: string; data: unknown }
+
+async function withServer(current: unknown, attached: unknown, use: (url: string, seen: Request[]) => Promise<void>) {
+  await withRoute("dots.attach", current, attached, use)
 }
 
 test("dots attach explains non-replacing attachment in help without starting a server", async () => {
@@ -76,7 +64,7 @@ test("dots attach displays the observed name and forwards its exact target recei
     const result = await cli(["attach", "--yes", "--server", url])
     expect(result.exit).toBe(0)
     expect(result.stdout).toContain("Executor desk")
-    expect(JSON.parse(seen[1]!.body)).toEqual({ replaceOthers: false, expectedTarget: target })
+    expect(seen[1]).toEqual({ name: "dots.attach", data: { payload: { replaceOthers: false, expectedTarget: target } } })
   })
 }, 30000)
 
@@ -88,8 +76,8 @@ test("dots attach posts non-replacing consent with --yes and prints the re-read 
     expect(result.stdout).toContain("keeps your other computers connected")
     expect(result.stdout).toContain("Computer: attached")
     expect(seen).toEqual([
-      { method: "GET", path: "/api/dots", body: "" },
-      { method: "POST", path: "/api/dots/computer", body: '{"replaceOthers":false}' },
+      { name: "dots.get", data: {} },
+      { name: "dots.attach", data: { payload: { replaceOthers: false } } },
     ])
   })
 }, 30000)
@@ -99,19 +87,19 @@ test("dots attach does not post without confirmation, when attached, or when una
     const result = await cli(["attach", "--server", url], "pipe")
     expect(result.exit).toBe(1)
     expect(result.stderr).toContain("--yes")
-    expect(seen.map((item) => item.method)).toEqual(["GET"])
+    expect(seen).toEqual([{ name: "dots.get", data: {} }])
   })
   await withServer(status({ state: "attached" }), status({ state: "attached" }), async (url, seen) => {
     const result = await cli(["attach", "--yes", "--server", url])
     expect(result.exit).toBe(0)
     expect(result.stdout).toBe("Computer: attached\n")
-    expect(seen.map((item) => item.method)).toEqual(["GET"])
+    expect(seen).toEqual([{ name: "dots.get", data: {} }])
   })
   await withServer(status({ state: "unavailable", message: "Turn on Dots access first." }), status({ state: "attached" }), async (url, seen) => {
     const result = await cli(["attach", "--yes", "--server", url])
     expect(result.exit).toBe(1)
     expect(result.stdout).toContain("Computer: unavailable (Turn on Dots access first.)")
-    expect(seen.map((item) => item.method)).toEqual(["GET"])
+    expect(seen).toEqual([{ name: "dots.get", data: {} }])
   })
 }, 30000)
 
@@ -124,21 +112,8 @@ test("dots attach fails when the re-read state is not attached", async () => {
   })
 }, 30000)
 
-async function withRoute(path: string, current: unknown, result: unknown, use: (url: string, seen: { method: string; path: string; body: string }[]) => Promise<void>) {
-  const seen: { method: string; path: string; body: string }[] = []
-  const server = Bun.serve({ port: 0, async fetch(request) {
-    const requested = new URL(request.url).pathname
-    if (requested === "/api/health") return Response.json({ healthy: true, version: "test", pid: process.pid })
-    seen.push({ method: request.method, path: requested, body: await request.text() })
-    if (request.method === "GET" && requested === "/api/dots") return Response.json(current)
-    if (request.method === "POST" && requested === path) return Response.json(result)
-    return new Response("not found", { status: 404 })
-  } })
-  try {
-    await use(server.url.toString(), seen)
-  } finally {
-    void server.stop(true)
-  }
+async function withRoute(name: string, current: unknown, result: unknown, use: (url: string, seen: Request[]) => Promise<void>) {
+  await withConversation({ "dots.get": current, [name]: result }, use)
 }
 
 const exactTarget = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
@@ -154,15 +129,14 @@ test("dots detach and remove explain themselves in help without starting a serve
 }, 30000)
 
 test("dots detach posts the displayed target with --yes and succeeds only when the re-read state is detached", async () => {
-  await withRoute("/api/dots/computer/detach", status({ state: "attached", name: "Executor desk", target: exactTarget }), status({ state: "detached", name: "Executor desk", target: exactTarget }), async (url, seen) => {
+  await withRoute("dots.detach", status({ state: "attached", name: "Executor desk", target: exactTarget }), status({ state: "detached", name: "Executor desk", target: exactTarget }), async (url, seen) => {
     const result = await cli(["detach", "--yes", "--server", url])
     expect(result.exit).toBe(0)
     expect(result.stdout).toContain("Computer: attached · Executor desk")
     expect(result.stdout).toContain("Computer: detached · Executor desk")
-    expect(seen.map((item) => `${item.method} ${item.path}`)).toEqual(["GET /api/dots", "POST /api/dots/computer/detach"])
-    expect(JSON.parse(seen[1].body)).toEqual({ expectedTarget: exactTarget })
+    expect(seen).toEqual([{ name: "dots.get", data: {} }, { name: "dots.detach", data: { payload: { expectedTarget: exactTarget } } }])
   })
-  await withRoute("/api/dots/computer/detach", status({ state: "attached" }), status({ state: "attached", message: "ChatGPT refused the request." }), async (url) => {
+  await withRoute("dots.detach", status({ state: "attached" }), status({ state: "attached", message: "ChatGPT refused the request." }), async (url) => {
     const result = await cli(["detach", "--yes", "--server", url])
     expect(result.exit).toBe(1)
     expect(result.stdout).toContain("Computer: attached (ChatGPT refused the request.)")
@@ -171,36 +145,35 @@ test("dots detach posts the displayed target with --yes and succeeds only when t
 }, 30000)
 
 test("dots detach does not post without confirmation, when already detached or when unavailable", async () => {
-  await withRoute("/api/dots/computer/detach", status({ state: "attached" }), status({ state: "detached" }), async (url, seen) => {
+  await withRoute("dots.detach", status({ state: "attached" }), status({ state: "detached" }), async (url, seen) => {
     const result = await cli(["detach", "--server", url], "pipe")
     expect(result.exit).toBe(1)
     expect(result.stderr).toContain("--yes")
-    expect(seen.map((item) => item.method)).toEqual(["GET"])
+    expect(seen).toEqual([{ name: "dots.get", data: {} }])
   })
-  await withRoute("/api/dots/computer/detach", status({ state: "detached" }), status({ state: "detached" }), async (url, seen) => {
+  await withRoute("dots.detach", status({ state: "detached" }), status({ state: "detached" }), async (url, seen) => {
     const result = await cli(["detach", "--yes", "--server", url])
     expect(result.exit).toBe(0)
     expect(result.stdout).toBe("Computer: detached\n")
-    expect(seen.map((item) => item.method)).toEqual(["GET"])
+    expect(seen).toEqual([{ name: "dots.get", data: {} }])
   })
-  await withRoute("/api/dots/computer/detach", status({ state: "unavailable", message: "Turn on Dots access first." }), status({ state: "detached" }), async (url, seen) => {
+  await withRoute("dots.detach", status({ state: "unavailable", message: "Turn on Dots access first." }), status({ state: "detached" }), async (url, seen) => {
     const result = await cli(["detach", "--yes", "--server", url])
     expect(result.exit).toBe(1)
-    expect(seen.map((item) => item.method)).toEqual(["GET"])
+    expect(seen).toEqual([{ name: "dots.get", data: {} }])
   })
 }, 30000)
 
 test("dots remove posts the displayed target with --yes and succeeds only when removal is confirmed", async () => {
   for (const state of ["attached", "detached"] as const) {
-    await withRoute("/api/dots/computer/remove", status({ state, target: exactTarget }), status({ state: "removed", message: "This computer was removed." }), async (url, seen) => {
+    await withRoute("dots.remove", status({ state, target: exactTarget }), status({ state: "removed", message: "This computer was removed." }), async (url, seen) => {
       const result = await cli(["remove", "--yes", "--server", url])
       expect(result.exit).toBe(0)
       expect(result.stdout).toContain("Computer: removed (This computer was removed.)")
-      expect(seen.map((item) => `${item.method} ${item.path}`)).toEqual(["GET /api/dots", "POST /api/dots/computer/remove"])
-      expect(JSON.parse(seen[1].body)).toEqual({ expectedTarget: exactTarget })
+      expect(seen).toEqual([{ name: "dots.get", data: {} }, { name: "dots.remove", data: { payload: { expectedTarget: exactTarget } } }])
     })
   }
-  await withRoute("/api/dots/computer/remove", status({ state: "detached" }), status({ state: "detached", message: "The outcome is unconfirmed." }), async (url) => {
+  await withRoute("dots.remove", status({ state: "detached" }), status({ state: "detached", message: "The outcome is unconfirmed." }), async (url) => {
     const result = await cli(["remove", "--yes", "--server", url])
     expect(result.exit).toBe(1)
     expect(result.stderr).toContain("not confirmed")
@@ -208,56 +181,61 @@ test("dots remove posts the displayed target with --yes and succeeds only when r
 }, 30000)
 
 test("dots remove does not post without confirmation or when the computer is unavailable", async () => {
-  await withRoute("/api/dots/computer/remove", status({ state: "detached" }), status({ state: "removed" }), async (url, seen) => {
+  await withRoute("dots.remove", status({ state: "detached" }), status({ state: "removed" }), async (url, seen) => {
     const result = await cli(["remove", "--server", url], "pipe")
     expect(result.exit).toBe(1)
     expect(result.stderr).toContain("--yes")
-    expect(seen.map((item) => item.method)).toEqual(["GET"])
+    expect(seen).toEqual([{ name: "dots.get", data: {} }])
   })
-  await withRoute("/api/dots/computer/remove", status({ state: "unavailable" }), status({ state: "removed" }), async (url, seen) => {
+  await withRoute("dots.remove", status({ state: "unavailable" }), status({ state: "removed" }), async (url, seen) => {
     const result = await cli(["remove", "--yes", "--server", url])
     expect(result.exit).toBe(1)
-    expect(seen.map((item) => item.method)).toEqual(["GET"])
+    expect(seen).toEqual([{ name: "dots.get", data: {} }])
   })
 }, 30000)
 
-async function withConversation(routes: Record<string, unknown>, use: (url: string, seen: { method: string; path: string; body: string }[]) => Promise<void>) {
-  const seen: { method: string; path: string; body: string }[] = []
-  const server = Bun.serve({ port: 0, async fetch(request) {
-    const url = new URL(request.url)
-    if (url.pathname === "/api/health") return Response.json({ healthy: true, version: "test", pid: process.pid })
-    const key = `${request.method} ${url.pathname}${url.search}`
-    seen.push({ method: request.method, path: `${url.pathname}${url.search}`, body: await request.text() })
-    if (key in routes) {
-      const reply = routes[key]
-      return reply instanceof Response ? reply : Response.json({ data: reply })
-    }
-    return new Response("not found", { status: 404 })
-  } })
+async function withConversation(routes: Record<string, unknown>, use: (url: string, seen: Request[]) => Promise<void>) {
+  const seen: Request[] = []
+  const httpRequests: string[] = []
+  const server = v5Server((name, data) => {
+    if (name === "health.get") return { data: { healthy: true, version: "test", pid: process.pid } }
+    seen.push({ name, data })
+    if (!(name in routes)) throw new Error(`Unexpected operation: ${name}`)
+    const response = routes[name]
+    const reply = typeof response === "function" ? response(data) : response
+    return typeof reply === "object" && reply !== null && "_tag" in reply ? reply : { data: reply }
+  }, { httpRequests })
   try {
-    await use(server.url.toString(), seen)
+    await use(server.url, seen)
+    expect(httpRequests.every((request) => request === "GET /api/health")).toBe(true)
   } finally {
-    void server.stop(true)
+    await server.close()
   }
 }
 
 test("dots send posts one message with a fresh client message ID and steers unless queued", async () => {
-  await withConversation({ "POST /api/dots/thread/thr-a/message": { admission: "steered", turnID: "turn-1" } }, async (url, seen) => {
+  await withConversation({ "dots.thread.send": { admission: "steered", turnID: "turn-1" } }, async (url, seen) => {
     const steer = await cli(["send", "thr-a", "Check the logs", "--server", url])
     expect(steer.exit).toBe(0)
     expect(steer.stdout).toBe("Message: steered · turn turn-1\n")
     const queue = await cli(["send", "thr-a", "Then summarize", "--queue", "--server", url])
     expect(queue.exit).toBe(0)
-    expect(seen.map((item) => `${item.method} ${item.path}`)).toEqual(["POST /api/dots/thread/thr-a/message", "POST /api/dots/thread/thr-a/message"])
-    const [first, second] = seen.map((item) => JSON.parse(item.body))
-    expect(first).toEqual({ text: "Check the logs", clientMessageID: expect.stringMatching(/^[0-9a-f-]{36}$/), mode: "send" })
-    expect(second).toEqual({ text: "Then summarize", clientMessageID: expect.stringMatching(/^[0-9a-f-]{36}$/), mode: "queue" })
-    expect(first.clientMessageID).not.toBe(second.clientMessageID)
+    expect(seen).toEqual([
+      { name: "dots.thread.send", data: { params: { threadID: "thr-a" }, payload: { text: "Check the logs", clientMessageID: expect.stringMatching(/^[0-9a-f-]{36}$/), mode: "send" } } },
+      { name: "dots.thread.send", data: { params: { threadID: "thr-a" }, payload: { text: "Then summarize", clientMessageID: expect.stringMatching(/^[0-9a-f-]{36}$/), mode: "queue" } } },
+    ])
+    const ids = seen.map(({ data }) => {
+      if (typeof data !== "object" || data === null || !("payload" in data)) throw new Error("Missing request payload")
+      const payload = data.payload
+      if (typeof payload !== "object" || payload === null || !("clientMessageID" in payload)) throw new Error("Missing client message ID")
+      return payload.clientMessageID
+    })
+    expect(ids[0]).not.toBe(ids[1])
   })
 }, 30000)
 
 test("dots send reports an unknown admission once and fails without resending", async () => {
-  await withConversation({ "POST /api/dots/thread/thr-a/message": { admission: "unknown" } }, async (url, seen) => {
+  await withConversation({ "dots.thread.send": { admission: "unknown" } }, async (url, seen) => {
     const result = await cli(["send", "thr-a", "Check the logs", "--server", url])
     expect(result.exit).toBe(1)
     expect(result.stdout).toBe("Message: unknown\n")
@@ -267,12 +245,12 @@ test("dots send reports an unknown admission once and fails without resending", 
 }, 30000)
 
 test("dots send prints a refusal with the upstream rejection code and a control-free message", async () => {
-  const refusal = Response.json({ _tag: "InvalidRequestError", message: "ChatGPT refused the request.", rejection: { code: -32602, message: "thread\u001b[31mbusy" } }, { status: 400 })
-  await withConversation({ "POST /api/dots/thread/thr-a/message": refusal }, async (url, seen) => {
+  const refusal = { _tag: "InvalidRequestError", message: "ChatGPT refused the request.", rejection: { code: -32602, message: "thread\u001b[31mbusy" } }
+  await withConversation({ "dots.thread.send": refusal }, async (url, seen) => {
     const result = await cli(["send", "thr-a", "Check the logs", "--server", url])
     expect(result.exit).toBe(1)
     expect(result.stdout).toBe("")
-    expect(result.stderr.split("\n")).toContain("ycoding: Dots request failed (400): ChatGPT refused the request. ChatGPT rejection code -32602: thread [31mbusy")
+    expect(result.stderr.split("\n")).toContain("ycoding: ChatGPT refused the request. ChatGPT rejection code -32602: thread [31mbusy")
     expect(result.stderr).not.toContain("_tag")
     expect(result.stderr).not.toContain("\u001b")
     expect(seen).toHaveLength(1)
@@ -281,13 +259,13 @@ test("dots send prints a refusal with the upstream rejection code and a control-
 
 test("dots threads and read print Dot thread labels with unchanged task and transcript IDs", async () => {
   await withConversation({
-    "GET /api/dots/threads": { dotID: "dot-a", rootThreadID: "thr-root", threads: [{ threadID: "thr-root", kind: "root", status: "idle", name: "Daily" }, { threadID: "thr-task", kind: "task" }],
+    "dots.threads": { dotID: "dot-a", rootThreadID: "thr-root", threads: [{ threadID: "thr-root", kind: "root", status: "idle", name: "Daily" }, { threadID: "thr-task", kind: "task" }],
       tasks: [{ taskID: "task-1", title: "Ship release", status: "active", createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-02T00:00:00Z" }] },
-    "GET /api/dots/thread/thr-task?limit=5": { thread: { threadID: "thr-task", kind: "task" }, nextCursor: "older-1", turns: [{ turnID: "turn-1", status: "completed", items: [
+    "dots.thread.read": { thread: { threadID: "thr-task", kind: "task" }, nextCursor: "older-1", turns: [{ turnID: "turn-1", status: "completed", items: [
       { type: "userMessage", itemID: "i1", text: "Run tests" }, { type: "commandExecution", itemID: "i2", command: "bun test", exitCode: 0 },
       { type: "fileChange", itemID: "i3", paths: ["src/a.ts"] }, { type: "agentMessage", itemID: "i4", text: "Done" }, { type: "other", itemID: "i5", itemType: "reasoning" },
     ] }] },
-  }, async (url) => {
+  }, async (url, seen) => {
     const threads = await cli(["threads", "--server", url])
     expect(threads.exit).toBe(0)
     expect(threads.stdout).toBe("Dot: dot-a\nThread thr-root root · idle · Daily\nThread thr-task task\nThread task-1 active · Ship release\n")
@@ -297,13 +275,18 @@ test("dots threads and read print Dot thread labels with unchanged task and tran
       "Thread thr-task task", "Turn turn-1 completed", "  user: Run tests", "  command: bun test (exit 0)", "  files: src/a.ts", "  agent: Done", "  reasoning",
       "Older turns: --cursor older-1", "",
     ].join("\n"))
+    expect(seen).toEqual([
+      { name: "dots.threads", data: {} },
+      { name: "dots.thread.read", data: { params: { threadID: "thr-task" }, query: { limit: 5 } } },
+    ])
   })
 }, 30000)
 
 test("dots respond requires exactly one answer form and posts it once; a stale request fails", async () => {
   await withConversation({
-    "POST /api/dots/thread/thr-a/requests/req-1": { outcome: "sent" },
-    "POST /api/dots/thread/thr-a/requests/req-stale": new Response(JSON.stringify({ _tag: "ConflictError", message: "This request was already answered or is no longer pending." }), { status: 409 }),
+    "dots.thread.respond": ({ params }: { params: { requestID: string } }) => params.requestID === "req-stale"
+      ? { _tag: "ConflictError", message: "This request was already answered or is no longer pending." }
+      : { outcome: "sent" },
   }, async (url, seen) => {
     for (const args of [["respond", "thr-a", "req-1"], ["respond", "thr-a", "req-1", "--decision", "accept", "--answers", "{}"], ["respond", "thr-a", "req-1", "--answers", "{\"q1\":[]}"]]) {
       const result = await cli([...args, "--server", url])
@@ -317,16 +300,20 @@ test("dots respond requires exactly one answer form and posts it once; a stale r
     expect(answered.exit).toBe(0)
     const stale = await cli(["respond", "thr-a", "req-stale", "--decision", "decline", "--server", url])
     expect(stale.exit).toBe(1)
-    expect(stale.stderr).toContain("409")
-    expect(seen.map((item) => JSON.parse(item.body))).toEqual([{ decision: "acceptForSession" }, { answers: { q1: ["Yes"] } }, { decision: "decline" }])
+    expect(stale.stderr).toContain("This request was already answered or is no longer pending.")
+    expect(seen).toEqual([
+      { name: "dots.thread.respond", data: { params: { threadID: "thr-a", requestID: "req-1" }, payload: { decision: "acceptForSession" } } },
+      { name: "dots.thread.respond", data: { params: { threadID: "thr-a", requestID: "req-1" }, payload: { answers: { q1: ["Yes"] } } } },
+      { name: "dots.thread.respond", data: { params: { threadID: "thr-a", requestID: "req-stale" }, payload: { decision: "decline" } } },
+    ])
   })
 }, 30000)
 
 test("dots interrupt, resume and requests call their routes once and fail on unconfirmed outcomes", async () => {
   await withConversation({
-    "POST /api/dots/thread/thr-a/interrupt": { outcome: "interrupted" },
-    "POST /api/dots/resume": { outcome: "unconfirmed", threadID: "thr-root", rootChanged: false },
-    "GET /api/dots/thread/thr-a/requests": { threadID: "thr-a", requests: [{ requestID: "req-1", threadID: "thr-a", kind: "command-approval", command: "rm -rf build", reason: "Clean" }] },
+    "dots.thread.interrupt": { outcome: "interrupted" },
+    "dots.resume": { outcome: "unconfirmed", threadID: "thr-root", rootChanged: false },
+    "dots.thread.requests": { threadID: "thr-a", requests: [{ requestID: "req-1", threadID: "thr-a", kind: "command-approval", command: "rm -rf build", reason: "Clean" }] },
   }, async (url, seen) => {
     const interrupt = await cli(["interrupt", "thr-a", "turn-1", "--server", url])
     expect(interrupt.exit).toBe(0)
@@ -336,8 +323,10 @@ test("dots interrupt, resume and requests call their routes once and fail on unc
     expect(resume.stdout).toBe("Resume: unconfirmed · thread thr-root\n")
     const requests = await cli(["requests", "thr-a", "--server", url])
     expect(requests.stdout).toBe("Request req-1 command-approval\n  reason: Clean\n  command: rm -rf build\n")
-    expect(seen.map((item) => `${item.method} ${item.path} ${item.body}`)).toEqual([
-      'POST /api/dots/thread/thr-a/interrupt {"turnID":"turn-1"}', "POST /api/dots/resume {}", "GET /api/dots/thread/thr-a/requests ",
+    expect(seen).toEqual([
+      { name: "dots.thread.interrupt", data: { params: { threadID: "thr-a" }, payload: { turnID: "turn-1" } } },
+      { name: "dots.resume", data: {} },
+      { name: "dots.thread.requests", data: { params: { threadID: "thr-a" } } },
     ])
   })
 }, 30000)

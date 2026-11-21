@@ -6,7 +6,7 @@ import type { CcaLibraryFactory, CcaLibraryProcess } from "../cca/library"
 import type { CcaAuthorization } from "../cca/authorization"
 import { AttachmentStore } from "../attachment-store"
 import { Hash } from "../util/hash"
-import { detect } from "../mime"
+import { detect } from "@ycoding-ai/schema/mime"
 import { AccountConnectorLibrary } from "./library"
 
 const namePattern = /^[^/\\\r\n]{1,255}$/

@@ -2,7 +2,7 @@ import {
   isFormInvalidAnswerError,
   isInvalidRequestError,
   isSessionNotFoundError,
-  YCoding,
+  type YCodingClient,
   type FormInfo,
   type GuardrailRequestListOutput,
   type ModelRef,
@@ -12,10 +12,11 @@ import {
   type SessionInfo,
   type SessionReviewItem,
 } from "@ycoding-ai/client/promise"
-import { TaskMCPTasks } from "@ycoding-ai/core/task-mcp/tasks"
+import { TaskMCPTasks } from "./task-mcp/tasks"
 import { createHash } from "node:crypto"
 import { realpath } from "node:fs/promises"
 import path from "node:path"
+import { Option } from "effect"
 
 type PendingInteraction =
   | { kind: "form"; value: FormInfo }
@@ -24,9 +25,22 @@ type PendingInteraction =
   | { kind: "guardrail"; value: GuardrailRequestListOutput[number] }
   | { kind: "review"; value: SessionReviewItem }
 
+type TaskMcpClient = {
+  session: Pick<YCodingClient["session"], "get" | "create" | "prompt" | "log" | "active" | "outstanding" | "snapshot" | "interrupt"> & {
+    pending: Pick<YCodingClient["session"]["pending"], "list">
+  }
+  project: Pick<YCodingClient["project"], "current">
+  projectCopy: Pick<YCodingClient["projectCopy"], "create">
+  form: Pick<YCodingClient["form"], "list" | "reply" | "cancel">
+  question: Pick<YCodingClient["question"], "list" | "reply" | "reject">
+  permission: Pick<YCodingClient["permission"], "list" | "reply" | "reject">
+  guardrail: { request: Pick<YCodingClient["guardrail"]["request"], "list" | "reply"> }
+  review: Pick<YCodingClient["review"], "list" | "decide">
+}
+
 /** Uses the public runtime API; durable Sessions remain the execution authority. */
 export function makeTaskMcpBackend(
-  client: ReturnType<typeof YCoding.make>,
+  client: TaskMcpClient,
   directory: string,
   agent?: string,
   model?: ModelRef,
@@ -201,9 +215,9 @@ export function makeTaskMcpBackend(
       const work = previous
         .catch(() => undefined)
         .then(async () => {
-          const parsed = TaskMCPTasks.interactionResponseSchema.safeParse(input.response)
-          if (!parsed.success) throw new TaskMCPTasks.InteractionRejected("Invalid interaction response")
-          const response = parsed.data
+          const parsed = TaskMCPTasks.decodeInteractionResponse(input.response)
+          if (Option.isNone(parsed)) throw new TaskMCPTasks.InteractionRejected("Invalid interaction response")
+          const response = parsed.value
           const pending = await pendingInteractions(sessionID, workspace)
           const selected = pending.find(
             (item) => presentInteraction(item, sessionID).interactionId === input.interactionId,
@@ -354,7 +368,7 @@ function presentInteraction(item: PendingInteraction, sessionID: string): TaskMC
   }
 }
 
-function validateQuestionAnswers(questions: QuestionInfo[], answers: string[][]) {
+function validateQuestionAnswers(questions: QuestionInfo[], answers: readonly (readonly string[])[]) {
   if (answers.length !== questions.length)
     throw new TaskMCPTasks.InteractionRejected("Provide one answer list for every question")
   for (const [index, question] of questions.entries()) {

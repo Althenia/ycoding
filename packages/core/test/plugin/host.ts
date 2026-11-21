@@ -51,6 +51,7 @@ export function host(overrides: Overrides = {}): PluginContext {
       subscribe: () => Stream.empty,
     },
     integration: overrides.integration ?? {
+      accountSkills: { read: () => Effect.die("unused integration.accountSkills.read") },
       list: () => Effect.die("unused integration.list"),
       get: () => Effect.die("unused integration.get"),
       connect: {
@@ -225,6 +226,7 @@ export function catalogHost(catalog: Catalog.Interface): PluginContext["catalog"
 
 export function integrationHost(integration: Integration.Interface): PluginContext["integration"] {
   return {
+    accountSkills: { read: () => Effect.die("unused integration.accountSkills.read") },
     list: () => Effect.die("unused integration.list"),
     get: () => Effect.die("unused integration.get"),
     connect: {

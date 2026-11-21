@@ -17,7 +17,6 @@
 // session, so only whole-session `session.background(parentID)` exists.
 import type {
   EventSubscribeOutput,
-  YCodingClient,
   PermissionRequest,
   SessionMessageAssistantTool,
   SessionMessageInfo,
@@ -31,6 +30,7 @@ import type {
   FooterSubagentTab,
   MiniFormRequest,
   MiniPermissionRequest,
+  RunClient,
   StreamCommit,
 } from "./types"
 import { canonicalToolName, normalizeTool, toolOutputText, toolView } from "./tool"
@@ -128,24 +128,24 @@ export type SubagentTrackerInput = {
 }
 
 export type SubagentTracker = {
-  main(sdk: YCodingClient, event: ServerEvent, signal?: AbortSignal): void
-  foreign(sdk: YCodingClient, sessionID: string, event: ServerEvent, signal?: AbortSignal): void
+  main(sdk: RunClient, event: ServerEvent, signal?: AbortSignal): void
+  foreign(sdk: RunClient, sessionID: string, event: ServerEvent, signal?: AbortSignal): void
   hydrate(next: {
-    sdk: YCodingClient
+    sdk: RunClient
     messages: SessionMessageInfo[]
     active: Record<string, unknown>
     signal?: AbortSignal
     reconnect?: boolean
   }): Promise<void>
   ready(): Promise<void>
-  select(sdk: YCodingClient, sessionID: string | undefined): void
+  select(sdk: RunClient, sessionID: string | undefined): void
   snapshot(): FooterSubagentState
   settleForm(sessionID: string, formID: string): void
   close(): void
 }
 
 type DiscoveryJob = {
-  sdk: YCodingClient
+  sdk: RunClient
   sessionID: string
   signal: AbortSignal
   task: Promise<void>
@@ -431,7 +431,7 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
     }
   }
 
-  const hydrateChild = (sdk: YCodingClient, child: ChildState, signal = input.signal): Promise<void> => {
+  const hydrateChild = (sdk: RunClient, child: ChildState, signal = input.signal): Promise<void> => {
     if (!active(signal)) return Promise.resolve()
     const existing = hydrations.get(child.sessionID)
     if (existing) return existing
@@ -479,7 +479,7 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
     active(signal) && epoch === blockerEpoch && children.get(child.sessionID) === child
 
   const resolvePermissionTools = async (
-    sdk: YCodingClient,
+    sdk: RunClient,
     child: ChildState,
     permissions: PermissionRequest[],
     epoch: number,
@@ -533,7 +533,7 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
     }
   }
 
-  function scheduleBlockerRetry(sdk: YCodingClient, child: ChildState, epoch: number, signal = input.signal) {
+  function scheduleBlockerRetry(sdk: RunClient, child: ChildState, epoch: number, signal = input.signal) {
     if (!blockerCurrent(child, epoch, signal) || child.blockersHydrated || blockerRetryTimers.has(child.sessionID))
       return
     const attempt = blockerRetryAttempts.get(child.sessionID) ?? 0
@@ -549,7 +549,7 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
   }
 
   function hydrateBlockers(
-    sdk: YCodingClient,
+    sdk: RunClient,
     child: ChildState,
     epoch = blockerEpoch,
     signal = input.signal,
@@ -665,7 +665,7 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
     }
   }
 
-  const discover = (sdk: YCodingClient, sessionID: string, signal = input.signal) => {
+  const discover = (sdk: RunClient, sessionID: string, signal = input.signal) => {
     // At the cap, a lookup only starts when admission could still win a slot,
     // so an indirectly discovered child sheds a settled entry exactly like a
     // directly launched one. When nothing is sheddable the lookup is skipped

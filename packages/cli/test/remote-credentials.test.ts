@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test"
 import { NodeFileSystem } from "@effect/platform-node"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../src/paths"
 import { deviceSignaturePayload, parsePublicKey } from "@ycoding-ai/remote"
 import { Effect } from "effect"
 import fs from "node:fs/promises"
@@ -45,7 +45,7 @@ function provide(root: string) {
     Effect.runPromise(
       effect.pipe(
         Effect.provide(
-          Global.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") }),
+          FrontendPaths.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") }),
         ),
         Effect.provide(NodeFileSystem.layer),
       ) as Effect.Effect<A, E, never>,

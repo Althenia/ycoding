@@ -9,8 +9,7 @@ import type {
   SessionTodoInfo,
   YCodingEvent,
 } from "@ycoding-ai/client"
-import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../src/frontend-paths"
 import { Effect, FileSystem } from "effect"
 import { createEffect } from "solid-js"
 import type { useData } from "../src/context/data"
@@ -2599,7 +2598,7 @@ async function renderMeasuredScreen(input: {
 
   const events = createEventStream()
   const calls = createFetch(input.route, events)
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request), idleTimeout: 30 })
+  const server = calls.listen()
   const { run } = await import("../src/app")
   const task = Effect.runPromise(
     run({
@@ -2609,7 +2608,7 @@ async function renderMeasuredScreen(input: {
       args: { sessionID },
       terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
       log: () => {},
-    }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
+    }).pipe(Effect.provide(FrontendPaths.layer), Effect.provide(FileSystem.layerNoop({}))),
   )
 
   setup.renderer.start()

@@ -1,4 +1,8 @@
+import { createHash } from "node:crypto"
 import { ToolInvocation } from "@ycoding-ai/schema/tool-invocation"
+
+export const capturedChangeSendID = (parentID: string, messageID: string, callID: string) =>
+  `msg_task_send_${createHash("sha256").update(`${parentID}\0${messageID}\0${callID}`).digest("hex").slice(0, 24)}`
 
 type CapturePart = {
   readonly type: string

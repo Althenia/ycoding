@@ -1,5 +1,6 @@
 import { replaceEqualDeep } from "@tanstack/solid-query"
-import { RemoteLimits, isRemoteLatencySample, isRemoteReviewItemID, isWellFormedBase64, noticeSequence, type CreateEnrollmentResponse, type RemoteDeviceInfo, type RemoteFamilyActivity, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, parseNoticePage, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeFrame, type RemoteNoticePage, type RemoteOperation, type RemoteWorkspaceInfo } from "@ycoding-ai/remote"
+import { RemoteLimits, isRemoteLatencySample, isRemoteReviewItemID, noticeSequence, type CreateEnrollmentResponse, type RemoteDeviceInfo, type RemoteFamilyActivity, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, parseNoticePage, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeFrame, type RemoteNoticePage, type RemoteWorkspaceInfo } from "@ycoding-ai/remote"
+import type { OperationName as RemoteOperation } from "./wire-views"
 import { SessionEvent } from "../../../../packages/schema/src/session-event"
 import { catalogKey, readCatalog, readFileFind, type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileFindResult } from "./catalog"
 import type { DeviceAliasResponse } from "@ycoding-ai/remote"
@@ -439,7 +440,6 @@ function isEphemeralEvent(payload: unknown): boolean {
 }
 
 export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
-  const fetchContent = options.fetch ?? fetch
   const schedule = options.schedule ?? ((callback, ms) => {
     const handle = setTimeout(callback, ms)
     return () => clearTimeout(handle)
@@ -668,7 +668,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     latencyUpload = flight
     const samples = pendingLatency.splice(0, RemoteLimits.maxLatencyBatch)
     setState({ latencySync: "saving" })
-    const outcome = await owner.request("machine.latency.append", { input: { samples } })
+    const outcome = await owner.request("telemetry.append", { input: { samples } })
     if (latencyUpload !== flight) return
     latencyUpload = undefined
     if (transport !== owner || container.state.activeDeviceID !== deviceID) return
@@ -689,7 +689,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       pendingLatency.unshift(...samples)
       pendingLatency.splice(60)
       latencyUnsupported = true
-      setState({ latencySync: outcome.error.code === "unknown_operation" ? "unsupported" : "failed" })
+      setState({ latencySync: "failed" })
       return
     }
     if (outcome.status === "unknown") {
@@ -969,9 +969,22 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    * refcounts them, so releasing a session a socket never registered would stop a
    * stream another remote client still wants.
    */
+  const isGoalSetting = (mutation: PendingMutation) => mutation.kind === "goal" && mutation.operation === "session.autonomy.set" && typeof mutation.input.goal === "string"
+  const ownedSubscriptions = new WeakMap<RemoteTransport, Map<string, string>>()
+  const registerSubscription = (owner: RemoteTransport, sessionID: string, outcome: RemoteRequestOutcome) => {
+    if (outcome.status !== "ok") return
+    const id = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "subscription_id") : undefined
+    if (typeof id !== "string" || !id) throw new Error("Invalid subscription identity")
+    const subscriptions = ownedSubscriptions.get(owner) ?? new Map<string, string>()
+    subscriptions.set(sessionID, id)
+    ownedSubscriptions.set(owner, subscriptions)
+  }
   const releaseSubscription = (owner: RemoteTransport, sessionID: string) => {
     if (subscribedSessionID === sessionID) subscribedSessionID = undefined
-    void owner.request("session.unsubscribe", { sessionID })
+    const id = ownedSubscriptions.get(owner)?.get(sessionID)
+    if (!id) return
+    ownedSubscriptions.get(owner)?.delete(sessionID)
+    void owner.request("event.unsubscribe", { sessionID, input: { subscription_id: id } })
   }
 
   const recordCovered = (before: SessionView, after: SessionView) => {
@@ -1022,22 +1035,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const key = ephemeralPartKey(item.event)
       if (!acceptsPartEvent(view.id, item.event, key)) continue
       const type = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "type") : undefined
-      if (type === "session.remote.oversized") {
-        const data = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "data") : undefined
-        const candidate = data && typeof data === "object" && Reflect.get(data, "sessionID") === view.id ? Reflect.get(data, "messageID") : undefined
-        const messageID = typeof candidate === "string" && /^msg_[A-Za-z0-9_-]+$/.test(candidate) && candidate.length <= 128 ? candidate : undefined
-        if (messageID === undefined) gap = true
-        if (messageID !== undefined) {
-          const previous = view.messages.find((message) => message.id === messageID)
-          const marker: RemoteMessageView = { kind: "oversized", id: messageID, projected: previous?.kind === "oversized" ? previous.projected : previous !== undefined && (previous.kind !== "user" || previous.state !== "pending"), state: "loading" }
-          view = { ...view, messages: view.messages.some((message) => message.id === messageID)
-            ? view.messages.map((message) => message.id === messageID ? marker : message)
-            : [...view.messages, marker] }
-          oversizedIDs.add(messageID)
-        }
-        if (sequence.seq !== undefined) view = { ...view, watermark: sequence.seq }
-        continue
-      }
       if (type === "session.input.promoted") {
         const data = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "data") : undefined
         const inputID = data && typeof data === "object" ? Reflect.get(data, "inputID") : undefined
@@ -1238,15 +1235,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (refresh && currentTeam.status === "ready" && outcome.status !== "ok") {
         setState({ team: { ...currentTeam, pageLoading: false, refreshing: false } })
         void loadTeamEconomics(owner, token, rootID, currentTeam.tasks.map((task) => task.sessionID), "accounting")
-      } else if (outcome.status === "failed" && outcome.error.code === "unknown_operation") {
-        setState({ team: { ...currentTeam, status: "unsupported", tasks: [], pageLoading: false, refreshing: false } })
       } else if (outcome.status !== "ok") {
         setState({ team: { ...currentTeam, status: "error", pageLoading: false, refreshing: false } })
       } else {
         const value = outcome.value
-        const data = typeof value === "object" && value !== null ? Reflect.get(value, "data") : undefined
-        const summary = typeof value === "object" && value !== null ? Reflect.get(value, "summary") : undefined
-        const cursors = typeof value === "object" && value !== null ? Reflect.get(value, "cursor") : undefined
+        const page = typeof value === "object" && value !== null ? Reflect.get(value, "data") : undefined
+        const data = typeof page === "object" && page !== null ? Reflect.get(page, "data") : undefined
+        const summary = typeof page === "object" && page !== null ? Reflect.get(page, "summary") : undefined
+        const cursors = typeof page === "object" && page !== null ? Reflect.get(page, "cursor") : undefined
         if (!Array.isArray(data) || typeof cursors !== "object" || cursors === null) {
           setState({ team: { ...currentTeam, status: "error", pageLoading: false, refreshing: false } })
         } else {
@@ -1349,10 +1345,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const ids = sessionIDs.slice(offset, offset + 100)
       const outcome = await owner.request("session.taskCosts", { sessionID: rootID, input: { sessionIDs: ids }, timeoutMs: 30_000 })
       if (!current() || !container.state.team) return
-      if (outcome.status === "failed" && outcome.error.code === "unknown_operation") {
-        setState({ team: { ...container.state.team, accountingUnsupported: true } })
-        return
-      }
       const data = outcome.status === "ok" && typeof outcome.value === "object" && outcome.value !== null ? readTaskCosts(Reflect.get(outcome.value, "data")) : undefined
       if (!data) {
         const unread = new Set(sessionIDs.slice(offset))
@@ -1547,8 +1539,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         drafts: {},
         queuedPromptDrafts: {},
         promptDraftFocus: undefined,
-        mutations: container.state.mutations.filter((mutation) => mutation.operation !== "session.goal.set"),
-        mutationToasts: (container.state.mutationToasts ?? []).filter((toast) => !container.state.mutations.some((mutation) => mutation.operation === "session.goal.set" && mutation.id === toast.id)),
+        mutations: container.state.mutations.filter((mutation) => !isGoalSetting(mutation)),
+        mutationToasts: (container.state.mutationToasts ?? []).filter((toast) => !container.state.mutations.some((mutation) => isGoalSetting(mutation) && mutation.id === toast.id)),
         sessionCreation: undefined,
         activeSessionID: undefined,
         view: undefined,
@@ -1565,6 +1557,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (opened) queueMicrotask(() => { if (isCurrentConnection(owner) && container.state.transport.kind === "open") void api.readTelemetryConsent() })
     if (status.kind === "open") scheduleLatencyUpload()
     if (opened) void loadNotices(owner)
+    if (opened) {
+      setState({ sessionListStatus: "loading" })
+      void refreshSessionGroups(owner)
+    }
     if (status.kind === "open" && container.state.activeSessionID !== undefined) void readSessionStatus(owner)
     if (reopened) {
       cancelSessionsFrameWindow?.()
@@ -1599,7 +1595,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const jobID = mutation.kind === "compact" && typeof mutation.input.id === "string" ? mutation.input.id : undefined
     const jobSettled = jobID === undefined ? undefined : new Promise<RemoteRequestOutcome>((resolve) => compactionWaiters.set(jobID, resolve))
     const answered = active.request(operation, { sessionID: options.sessionID, input,
-      ...((operation === "session.goal.set" || operation === "session.autonomy.set" && typeof input.goal === "string")
+      ...((operation === "session.autonomy.set" && typeof input.goal === "string")
         ? { timeoutMs: RemoteLimits.goalSetTimeoutMs } : operation === "session.compact" || operation === "session.switchModel"
           ? { timeoutMs: RemoteLimits.compactionTimeoutMs } : {}) })
     const settled = await (jobSettled === undefined ? answered : Promise.race([answered, jobSettled]))
@@ -1794,9 +1790,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (admitted !== undefined && !await admitted) return
       if (token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID || pendingRead !== read || !container.state.view) return
       if (outcome.status === "failed") {
-        setState({ notice: outcome.error.code === "unknown_operation"
-          ? "Update the connected device to restore pending prompts."
-          : describeOutcome(outcome, "Pending prompts") })
+        setState({ notice: describeOutcome(outcome, "Pending prompts") })
         return
       }
       const pending = outcome.status === "ok" ? readPendingInputs(outcome.value, sessionID) : undefined
@@ -1883,10 +1877,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     try {
       const outcome = await owner.request("session.review.list", { sessionID })
       if (reviewRead !== read || token !== selectionToken || !isCurrentConnection(owner) || container.state.view?.id !== sessionID) return
-      if (outcome.status === "failed" && outcome.error.code === "unknown_operation") {
-        setState({ view: { ...container.state.view, review: { status: "unsupported", items: [] } } })
-        return
-      }
       const items = outcome.status === "ok" ? readReviewItems(outcome.value) : undefined
       setState({ view: { ...container.state.view, review: items === undefined
         ? { status: "error", items: container.state.view.review?.items ?? [] }
@@ -1976,15 +1966,15 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       setState({ view: withShellOutputFetch(view, shellID, { state: "error", message: notConnectedPage }) })
       return
     }
-    const outcome = await active.request("session.shell.output", {
+    const outcome = await active.request("shell.output", {
       sessionID,
-      input: { shellID, cursor: from, limit: shellOutputPageLimit },
+      input: { id: shellID, cursor: from, limit: shellOutputPageLimit },
     })
     if (token !== selectionToken || container.state.activeSessionID !== sessionID) return
     const current = container.state.view
     if (current === undefined) return
     if (outcome.status !== "ok") {
-      setState({ view: withShellOutputFetch(current, shellID, { state: "error", message: singlePageFailure(outcome) }) })
+      setState({ view: withShellOutputFetch(current, shellID, { state: "error", message: describeOutcome(outcome, "Terminal output") }) })
       return
     }
     const page = readShellOutputPage(outcome.value)
@@ -2008,7 +1998,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   const readSnapshotPayload = async (sessionID: string, before?: string): Promise<RemoteRequestOutcome | undefined> => {
     const active = transport
     if (!active) return undefined
-    return active.request("session.snapshot", { sessionID, input: { limit: historyPageSize, ...(before === undefined ? {} : { before }) } })
+    const outcome = await active.request("session.snapshot", { sessionID, input: { limit: historyPageSize, ...(before === undefined ? {} : { before }) } })
+    if (outcome.status !== "ok") return outcome
+    const value = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
+    return { status: "ok", value }
   }
 
   const loadCompactionHistory = async (sessionID: string, token: number) => {
@@ -2030,11 +2023,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const historyFailure = (outcome: Exclude<RemoteRequestOutcome, { status: "ok" }>) =>
-    outcome.status === "failed" && (outcome.error.code === "invalid_message" || outcome.error.code === "unknown_operation")
+    outcome.status === "failed" && outcome.error.code === "invalid_message"
       ? "Update the connected device to read windowed Session history."
-      : outcome.status === "failed" && outcome.error.code === "message_too_large"
-        ? `This history page contains a message too large to load. ${outcome.error.message}`
-        : describeOutcome(outcome, "Session history")
+      : describeOutcome(outcome, "Session history")
 
   const loadOlderMessages = async () => {
     const sessionID = container.state.activeSessionID
@@ -2077,34 +2068,28 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       !container.state.view?.messages.some((message) => message.kind === "oversized" && message.id === messageID)) return
     const controller = new AbortController()
     oversizedReads.set(messageID, controller)
-    setState({ view: { ...container.state.view, messages: container.state.view.messages.map((message) => message.kind === "oversized" && message.id === messageID ? { ...message, state: "loading" } : message) } })
+    const owns = () => !controller.signal.aborted && token === selectionToken && isCurrentConnection(owner) && container.state.activeSessionID === sessionID
+    const update = (replace: (entry: Extract<RemoteMessageView, { kind: "oversized" }>) => RemoteMessageView) => {
+      const view = container.state.view
+      if (view === undefined || !owns()) return
+      setState({ view: { ...view, messages: view.messages.map((entry) => entry.kind === "oversized" && entry.id === messageID ? replace(entry) : entry) } })
+    }
+    update((entry) => ({ ...entry, state: "loading" }))
     try {
-      const response = await fetchContent(`/api/remote/devices/${encodeURIComponent(deviceID)}/sessions/${encodeURIComponent(sessionID)}/messages/${encodeURIComponent(messageID)}`,
-        { credentials: "same-origin", signal: controller.signal })
-      if (response.status === 404 && token === selectionToken && isCurrentConnection(owner) && container.state.activeSessionID === sessionID && container.state.view) {
-        const current = container.state.view.messages.find((entry) => entry.id === messageID)
-        if (current?.kind === "oversized" && !current.projected) {
-          setState({ view: { ...container.state.view, messages: container.state.view.messages.map((entry) => entry.id === messageID && entry.kind === "oversized" ? { ...entry, state: "pending" } : entry) } })
-          return
-        }
+      const outcome = await owner.request("session.message", { sessionID, input: { messageID },
+        httpBulk: { deviceID, fetch: options.fetch }, signal: controller.signal })
+      if (!owns()) return
+      if (outcome.status === "failed" && outcome.error.code === "not_found") {
+        update((entry) => ({ ...entry, state: entry.projected ? "error" : "pending" }))
+        return
       }
-      if (response.status === 503) {
-        const payload: unknown = await response.json().catch(() => undefined)
-        const error = payload && typeof payload === "object" ? Reflect.get(payload, "error") : undefined
-        if (error && typeof error === "object" && Reflect.get(error, "code") === "unknown_operation" &&
-          token === selectionToken && isCurrentConnection(owner) && container.state.activeSessionID === sessionID)
-          setState({ notice: "Update the connected device to read full Session content." })
-      }
-      if (!response.ok) throw new Error("Projected message unavailable")
-      const message = readProjectedMessage(await response.json())
-      if (message === undefined || message.id !== messageID) throw new Error("Invalid projected message")
-      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID || controller.signal.aborted || !container.state.view) return
-      setState({ view: { ...container.state.view, messages: container.state.view.messages.some((entry) => entry.id === messageID)
-        ? container.state.view.messages.map((entry) => entry.id === messageID ? message : entry)
-        : [...container.state.view.messages, message] } })
+      if (outcome.status === "failed" && (outcome.error.code === "unknown_operation" || outcome.error.code === "invalid_message"))
+        setState({ notice: "Update the connected device to read full Session content." })
+      const message = outcome.status === "ok" && outcome.value && typeof outcome.value === "object"
+        ? readProjectedMessage(Reflect.get(outcome.value, "data")) : undefined
+      update((entry) => message?.id === messageID ? message : { ...entry, state: "error" })
     } catch {
-      if (token === selectionToken && isCurrentConnection(owner) && container.state.activeSessionID === sessionID && !controller.signal.aborted && container.state.view)
-        setState({ view: { ...container.state.view, messages: container.state.view.messages.map((entry) => entry.kind === "oversized" && entry.id === messageID ? { ...entry, state: "error" } : entry) } })
+      update((entry) => ({ ...entry, state: "error" }))
     } finally {
       if (oversizedReads.get(messageID) === controller) oversizedReads.delete(messageID)
     }
@@ -2297,8 +2282,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   const loadCarouselSessions = async (owner: RemoteTransport, revision: number) => {
     if (container.state.carouselSessions?.length === 0 && container.state.carouselStatus !== "loading" && container.state.carouselStatus !== "ready") setState({ carouselStatus: "loading" })
     const rows = (value: unknown, group: "waiting" | "running" | "idle") => {
-      const status = container.state.sessionStatus ?? (typeof value === "object" && value !== null ? parseSessionStatus(Reflect.get(value, "status")) : undefined)
-      return readSessionInfoList(value).flatMap((entry) => {
+      const response = typeof value === "object" && value !== null ? Reflect.get(value, "data") : undefined
+      const status = container.state.sessionStatus ?? (typeof response === "object" && response !== null ? parseSessionStatus(Reflect.get(response, "status")) : undefined)
+      return readSessionInfoList(response).flatMap((entry) => {
         const session = readSessionInfo(entry)
         return session !== undefined ? [{ ...session, running: group === "running", attention: group === "waiting",
           ...(status === undefined ? {} : rowStatus(status, session.id, container.state.sessionStatus !== undefined)) }] : []
@@ -2361,17 +2347,17 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         setState({ ...listFailure(listed, "Session list"), sessionListStatus: "error" })
         return undefined
       }
-      if (typeof listed.value === "object" && listed.value !== null && Reflect.get(listed.value, "stale") === true) return "stale" as const
-      const pageStatus = typeof listed.value === "object" && listed.value !== null ? parseSessionStatus(Reflect.get(listed.value, "status")) : undefined
-      const rows = readSessionInfoList(listed.value).flatMap((entry) => {
+      const response = typeof listed.value === "object" && listed.value !== null ? Reflect.get(listed.value, "data") : undefined
+      if (typeof response === "object" && response !== null && Reflect.get(response, "stale") === true) return "stale" as const
+      const pageStatus = typeof response === "object" && response !== null ? parseSessionStatus(Reflect.get(response, "status")) : undefined
+      const rows = readSessionInfoList(response).flatMap((entry) => {
         const id = typeof entry === "object" && entry !== null ? (entry as { id?: unknown }).id : undefined
         const info = readSessionInfo(entry,
           typeof id !== "string" ? {} : container.state.sessionStatus !== undefined ? rowStatus(container.state.sessionStatus, id)
             : pageStatus === undefined ? {} : rowStatus(pageStatus, id, false))
         return info ? [info] : []
       })
-      const value = typeof listed.value === "object" && listed.value !== null ? listed.value : undefined
-      const cursors = value === undefined ? undefined : Reflect.get(value, "cursor")
+      const cursors = typeof response === "object" && response !== null ? Reflect.get(response, "cursor") : undefined
       const next = typeof cursors === "object" && cursors !== null ? Reflect.get(cursors, "next") : undefined
       const previous = typeof cursors === "object" && cursors !== null ? Reflect.get(cursors, "previous") : undefined
       if (typeof input.cursor === "string" && (input.cursor === next || input.cursor === previous)) {
@@ -2593,13 +2579,15 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     // Their results apply only once the subscription is confirmed, events that arrive after it are
     // queued and reconciled against the snapshot watermark, and a watermark check after the snapshot
     // applies covers events between the snapshot read and the subscription taking effect.
-    const subscribing = active.request("session.subscribe", { sessionID })
+    if (subscribedSessionID === sessionID) releaseSubscription(active, sessionID)
+    const subscribing = active.request("event.subscribe", { sessionID })
     const snapshotRead = readSnapshotPayload(sessionID)
     const confirmed = subscribing.then((outcome) => outcome.status === "ok")
     const snapshotStage = Promise.withResolvers<boolean>()
     const sessionReads = loadSessionReads(sessionID, token, undefined, confirmed)
     const pendingInputs = loadPendingInputs(active, sessionID, token, snapshotStage.promise)
     const subscribed = await subscribing
+    registerSubscription(active, sessionID, subscribed)
     if (subscribed.status !== "ok") {
       snapshotStage.resolve(false)
       // The selection left the previous session behind, so its stream ends even when
@@ -2682,21 +2670,20 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   const confirmWatermark = async (owner: RemoteTransport, sessionID: string, token: number) => {
     const asked = container.state.view?.watermark
     if (asked === undefined) return
-    const outcome = await owner.request("session.log", { sessionID, input: { after: asked } })
+    const outcome = await owner.request("session.log", { sessionID, input: { after: asked, follow: false } })
     if (token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID) return
-    if (outcome.status === "failed" && outcome.error.code === "unknown_operation") return
     if (outcome.status !== "ok") {
       void resyncSelected()
       return
     }
-    const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
-    if (Array.isArray(data)) {
-      const applied = container.state.view?.watermark
-      if (data.every((event) => {
-        const seq = sessionLogPosition(event, sessionID)
-        return seq === null || seq !== undefined && applied !== undefined && seq <= applied
-      })) return
-      reconcileLoggedExecution(sessionID, token, data)
+    const watermark = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "watermark") : undefined
+    const execution = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "execution") : undefined
+    const applied = container.state.view?.watermark
+    if (typeof watermark === "number" && applied !== undefined && watermark <= applied) return
+    if (execution !== undefined) {
+      const seq = sessionLogPosition(execution, sessionID)
+      if (seq === null || seq !== undefined && applied !== undefined && seq <= applied) return
+      reconcileLoggedExecution(sessionID, token, [execution])
     }
     void resyncSelected()
   }
@@ -2718,10 +2705,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const reconcileLogAfter = async (owner: RemoteTransport, sessionID: string, token: number, after: number) => {
-    const outcome = await owner.request("session.log", { sessionID, input: { after } })
+    const outcome = await owner.request("session.log", { sessionID, input: { after, follow: false } })
     if (outcome.status !== "ok" || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID) return
-    const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
-    if (Array.isArray(data)) reconcileLoggedExecution(sessionID, token, data)
+    const execution = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "execution") : undefined
+    if (execution !== undefined) reconcileLoggedExecution(sessionID, token, [execution])
   }
 
   const resyncSelected = (): Promise<void> => {
@@ -2801,7 +2788,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         return undefined
       }
     }
-    const outcome = await active.request("session.create", { input: { id: attempt.id, workspace: attempt.workspace.id,
+    const outcome = await active.request("session.create", { workspaceID: attempt.workspace.id, input: { id: attempt.id,
       ...(attempt.agent === undefined ? {} : { agent: attempt.agent }), ...(attempt.model === undefined ? {} : { model: attempt.model }) } })
     if (!owns()) return undefined
     if (outcome.status === "ok") return accept(outcome.value)
@@ -3015,7 +3002,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       drafts: {},
       queuedPromptDrafts: {},
       promptDraftFocus: undefined,
-      mutations: container.state.mutations.filter((mutation) => mutation.operation !== "session.goal.set"),
+      mutations: container.state.mutations.filter((mutation) => !isGoalSetting(mutation)),
       mutationToasts: [],
       sessionCreation: undefined,
       activeSessionID: undefined,
@@ -3048,12 +3035,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const deviceID = container.state.activeDeviceID
       const generation = container.state.generation
       if (owner === undefined || deviceID === undefined || container.state.transport.kind !== "open") return { status: "unavailable" }
-      const outcome = await owner.request("machine.latency.list", before === undefined ? {} : { input: { before } })
+      const outcome = await owner.request("telemetry.list", before === undefined ? {} : { input: { before } })
       if (transport !== owner || container.state.activeDeviceID !== deviceID || container.state.generation !== generation) return { status: "unavailable" }
       if (outcome.status === "unavailable") return { status: "unavailable" }
       if (outcome.status === "unknown") return { status: "unknown" }
-      if (outcome.status === "failed") return { status: outcome.error.code === "unknown_operation" ? "unsupported" : "failed" }
-      const value = outcome.value
+      if (outcome.status === "failed") return { status: "failed" }
+      const value = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
       if (typeof value !== "object" || value === null || Array.isArray(value)) return { status: "failed" }
       const data = Reflect.get(value, "data")
       const cursor = Reflect.get(value, "cursor")
@@ -3075,10 +3062,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const deviceID = container.state.activeDeviceID
       const generation = container.state.generation
       if (owner === undefined || deviceID === undefined || container.state.transport.kind !== "open") return { status: "unavailable" }
-      const outcome = await owner.request("machine.telemetry.consent.get", { timeoutMs: 5_000 })
+      const outcome = await owner.request("telemetry.consent.get", { timeoutMs: 5_000 })
       if (transport !== owner || container.state.activeDeviceID !== deviceID || container.state.generation !== generation) return { status: "unavailable" }
       if (outcome.status !== "ok") {
-        const unsupported = outcome.status === "unknown" || outcome.status === "failed" && outcome.error.code === "unknown_operation"
+        const unsupported = outcome.status === "unknown"
         setState({ telemetryConsent: { status: unsupported ? "unsupported" : "failed", ...(unsupported ? {} : { error: "Could not read telemetry consent." }) } })
         return { status: unsupported ? "unsupported" : "failed" }
       }
@@ -3117,7 +3104,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         pendingLatency.length = 0
         setState({ telemetryConsent: { ...previousConsent, status: "disabled", error: undefined }, latencySync: "idle" })
       }
-      const outcome = await owner.request("machine.telemetry.consent.set", { input: { enabled, noticeVersion: 1 }, timeoutMs: 10_000 })
+      const outcome = await owner.request("telemetry.consent.set", { input: { enabled, noticeVersion: 1 }, timeoutMs: 10_000 })
       if (transport !== owner || container.state.activeDeviceID !== deviceID || container.state.generation !== generation) return { status: "unavailable" }
       if (outcome.status !== "ok") {
         setState({ telemetryConsent: { ...previousConsent, error: outcome.status === "unknown" ? "The decision was not confirmed; it was not resent." : "The decision could not be saved." } })
@@ -3346,7 +3333,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       queued = []
       sessionsToken += 1
       endScope({ activeDeviceID: deviceID, transport: { kind: "idle" }, telemetryConsent: { status: "loading" }, sessions: [], carouselSessions: [], carouselStatus: "loading", sessionStatus: undefined, advertised: [], activeSessionID: undefined, view: undefined, notice: undefined, drafts, queuedPromptDrafts, promptDraftFocus,
-        mutations: container.state.mutations.filter((mutation) => mutation.operation !== "session.goal.set"),
+        mutations: container.state.mutations.filter((mutation) => !isGoalSetting(mutation)),
         mutationToasts: [],
         lastRelayDrop: container.state.activeDeviceID === deviceID ? container.state.lastRelayDrop : undefined,
         team: undefined, familyActivity: undefined, teamCues: [], todos: undefined,
@@ -3357,11 +3344,27 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       endAlerts(false, switching)
       const created = options.createTransport(deviceID, {
         onRequestTiming: (sample) => {
-          if (isCurrentConnection(created) && sample.operation !== "machine.telemetry.consent.get" && sample.operation !== "machine.telemetry.consent.set" &&
-            sample.operation !== "machine.latency.append" && sample.operation !== "machine.latency.list") latency.recordRequest(sample)
+          if (isCurrentConnection(created) && sample.operation !== "telemetry.consent.get" && sample.operation !== "telemetry.consent.set" &&
+            sample.operation !== "telemetry.append" && sample.operation !== "telemetry.list") latency.recordRequest(sample)
         },
         onStatus: (status) => handleStatus(created, status),
         onSessionStatus: (status) => applyStatusFrame(created, status),
+        onResync: (sessionID, messageID) => {
+          if (!isCurrentConnection(created) || container.state.activeSessionID !== sessionID) return
+          const token = selectionToken
+          const refreshed = resyncSelected()
+          if (messageID === undefined || !/^msg_[A-Za-z0-9_-]{1,124}$/.test(messageID)) return
+          void refreshed.then(() => {
+            const view = container.state.view
+            if (token !== selectionToken || !isCurrentConnection(created) || created.status().kind !== "open" || view?.id !== sessionID) return
+            const previous = view.messages.find((message) => message.id === messageID)
+            const marker: RemoteMessageView = { kind: "oversized", id: messageID, projected: previous?.kind === "oversized" ? previous.projected : previous !== undefined && (previous.kind !== "user" || previous.state !== "pending"), state: "loading" }
+            setState({ view: { ...view, messages: previous
+              ? view.messages.map((message) => message.id === messageID ? marker : message)
+              : [...view.messages, marker] } })
+            void loadOversizedMessage(messageID)
+          })
+        },
         onNotices: (frame) => applyNotices(created, frame, deviceID),
         onSessions: () => applySessionsFrame(created),
         onEvents: (sessionID, events) => {
@@ -3373,7 +3376,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
               continue
             }
             const createdAt = typeof event === "object" && event !== null ? Reflect.get(event, "created") : undefined
-            if (typeof createdAt === "string" && Number.isFinite(Date.parse(createdAt))) latency.recordClient("stream.delay", now() - Date.parse(createdAt))
+            if (typeof createdAt === "number" && Number.isFinite(createdAt)) latency.recordClient("stream.delay", now() - createdAt)
             queueEvent(sessionID, event)
           }
         },
@@ -3560,8 +3563,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       await loadTeam(owner, token, rootID, undefined, true)
       if (container.state.activeSessionID !== undefined) await loadReview(owner, container.state.activeSessionID, token)
       if (outcome.status !== "ok") {
-        const failure = teamActionFailure(outcome, "Continue subagent")
-        return outcome.status === "failed" && outcome.error.code === "outcome_unknown" ? { ...failure, status: "unknown" } : failure
+        return teamActionFailure(outcome, "Continue subagent")
       }
       if (container.state.team?.tasks.find((task) => task.sessionID === childID)?.stoppedRecovery?.itemID === itemID)
         return { status: "unknown", message: "The Continue could not be confirmed; check the subagent before retrying." }
@@ -3589,9 +3591,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         !(openedTeamShell?.token === selectionToken && openedTeamShell.rootID === team.rootID && openedTeamShell.shellID === shellID && openedTeamShell.ownerID === ownerID)) throw new Error("Shell is not in this family.")
       const token = selectionToken
       openedTeamShell = { rootID: team.rootID, ownerID, shellID, token }
-      const outcome = await owner.request("session.shell.output", { sessionID: ownerID, input: { shellID, cursor: cursor ?? 0, limit: shellOutputPageLimit }, timeoutMs: 5_000 })
+      const outcome = await owner.request("shell.output", { sessionID: ownerID, input: { id: shellID, cursor: cursor ?? 0, limit: shellOutputPageLimit }, timeoutMs: 5_000 })
       if (token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== team.rootID) throw new Error("The family changed during the output read.")
-      if (outcome.status !== "ok") throw new Error(singlePageFailure(outcome))
+      if (outcome.status !== "ok") throw new Error(describeOutcome(outcome, "Terminal output"))
       const page = readShellOutputPage(outcome.value)
       if (!page) throw new Error(unreadablePage)
       return page
@@ -3710,8 +3712,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const generation = catalogGeneration
       setState({ catalogs: { ...container.state.catalogs, [key]: { status: "loading", agents: [], models: [], commands: [], skills: [], references: [], resources: [] } } })
       const read = (async () => {
-        const outcome = await owner.request("sessionID" in target ? "session.catalog" : "workspace.catalog",
-          "sessionID" in target ? { sessionID: target.sessionID } : { input: { workspace: target.workspaceID } })
+        const outcome = await owner.request("catalog.get",
+          "sessionID" in target ? { sessionID: target.sessionID } : { workspaceID: target.workspaceID })
         if (generation !== catalogGeneration || !isCurrentConnection(owner)) return
         const value = outcome.status === "ok" ? readCatalog(outcome.value) : undefined
         const previous = container.state.catalogs[key]
@@ -3735,13 +3737,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const owner = transport
       if (owner === undefined || container.state.transport.kind !== "open") return { status: "failed", message: notConnectedPage }
       const generation = catalogGeneration
-      const read = owner.request("sessionID" in target ? "session.file.find" : "workspace.file.find", {
-        ...( "sessionID" in target ? { sessionID: target.sessionID } : {}),
-        input: { ...( "workspaceID" in target ? { workspace: target.workspaceID } : {}), query, ...(limit === undefined ? {} : { limit }) },
+      const read = owner.request("fs.find", {
+        ...( "sessionID" in target ? { sessionID: target.sessionID } : { workspaceID: target.workspaceID }),
+        input: { query, ...(limit === undefined ? {} : { limit }) },
       }).then((outcome): FileFindResult => {
         if (generation !== catalogGeneration || !isCurrentConnection(owner) || fileTokens.get(key) !== token)
           return { status: "failed", message: "Search superseded by a newer query or connection." }
-        if (outcome.status !== "ok") return { status: outcome.status === "failed" && outcome.error.code === "unknown_operation" ? "unsupported" : "failed", message: describeOutcome(outcome, "File search") }
+        if (outcome.status !== "ok") return { status: "failed", message: describeOutcome(outcome, "File search") }
         const files = readFileFind(outcome.value)
         return files === undefined ? { status: "failed", message: "The device returned unreadable file matches." } : { status: "ok", files }
       })
@@ -3779,12 +3781,15 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     loadOlderMessages,
     loadOversizedMessage,
     loadImageSource: (input) => {
+      const owner = transport
+      if (!owner || owner.status().kind !== "open" || input.deviceID !== container.state.activeDeviceID)
+        return Promise.reject(new Error("Attachment unavailable"))
+      if (!/^[0-9a-f]{64}$/.test(input.digest) || !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(input.mime))
+        return Promise.reject(new Error("Invalid attachment"))
       if (imageScope?.deviceID !== input.deviceID || imageScope.sessionID !== input.sessionID) {
         clearImageSources()
         imageScope = { deviceID: input.deviceID, sessionID: input.sessionID }
       }
-      if (!/^[0-9a-f]{64}$/.test(input.digest) || !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(input.mime))
-        return Promise.reject(new Error("Invalid attachment"))
       const cached = imageSources.get(input.digest)
       if (cached !== undefined) {
         if (cached.mime !== input.mime) return Promise.reject(new Error("Invalid attachment"))
@@ -3793,18 +3798,28 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         return cached.promise
       }
       const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 120_000)
+      const token = selectionToken
       const promise = (async () => {
-        const response = await (options.fetch ?? fetch)(`/api/remote/devices/${encodeURIComponent(input.deviceID)}/sessions/${encodeURIComponent(input.sessionID)}/attachments/${input.digest}`,
-          { credentials: "same-origin", signal: controller.signal })
-        if (!response.ok) throw new Error("Attachment unavailable")
-        const payload: unknown = await response.json()
-        if (typeof payload !== "object" || payload === null || !("mime" in payload) || !("data" in payload) || !("bytes" in payload) ||
-          payload.mime !== input.mime || typeof payload.bytes !== "number" || !Number.isSafeInteger(payload.bytes) || payload.bytes < 0 || payload.bytes > 10 * 1024 * 1024 ||
-          typeof payload.data !== "string" || payload.data.length > 14 * 1024 * 1024 ||
-          !isWellFormedBase64(payload.data) || controller.signal.aborted)
+        const outcome = await owner.request("session.attachment.read", { sessionID: input.sessionID, input: { digest: input.digest }, timeoutMs: 120_000,
+          httpBulk: { deviceID: input.deviceID, fetch: options.fetch }, signal: controller.signal })
+        if (outcome.status !== "ok") throw new Error("Attachment unavailable")
+        const asset = outcome.value
+        if (typeof asset !== "object" || asset === null || !("release" in asset) || typeof asset.release !== "function")
           throw new Error("Invalid attachment")
-        const source = `data:${input.mime};base64,${payload.data}`
+        let source: string
+        try {
+          controller.signal.throwIfAborted()
+          if (token !== selectionToken || !isCurrentConnection(owner) || owner.status().kind !== "open")
+            throw new Error("Attachment unavailable")
+          if (!("mime" in asset) || asset.mime !== input.mime || !("data" in asset) || !(asset.data instanceof Uint8Array) || asset.data.byteLength > 10 * 1024 * 1024)
+            throw new Error("Invalid attachment")
+          const parts: string[] = []
+          for (let offset = 0; offset < asset.data.length; offset += 24_576)
+            parts.push(btoa(String.fromCharCode(...asset.data.subarray(offset, offset + 24_576))))
+          source = `data:${input.mime};base64,${parts.join("")}`
+        } finally {
+          asset.release()
+        }
         const entry = imageSources.get(input.digest)
         if (entry?.controller === controller) {
           imageSources.set(input.digest, { ...entry, size: source.length })
@@ -3822,7 +3837,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       })().catch((error: unknown) => {
         if (imageSources.get(input.digest)?.promise === promise) imageSources.delete(input.digest)
         throw error
-      }).finally(() => clearTimeout(timeout))
+      })
       imageSources.set(input.digest, { mime: input.mime, controller, promise })
       return promise
     },
@@ -3961,6 +3976,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         if (outcome.error.code === "message_read") return "YCoding has already read this message."
         if (outcome.error.code === "message_not_owned") return "You can only delete your own messages."
         if (outcome.error.code === "not_found") return "This message is no longer available."
+        if (outcome.error.code === "subagent_read_only") return "Subagent Sessions are read-only."
       }
       return describeOutcome(outcome, "Delete message")
     },
@@ -4184,7 +4200,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           label: "Stop goal",
           state: "sending",
           sessionID,
-          operation: "session.goal.stop",
+          operation: "session.autonomy.set",
           input: { goal: null },
         },
         { sessionID },
@@ -4234,8 +4250,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       transport = undefined
       subscribedSessionID = undefined
       setState({ drafts: {}, queuedPromptDrafts: {}, promptDraftFocus: undefined, sessionCreation: undefined,
-        mutations: container.state.mutations.filter((mutation) => mutation.operation !== "session.goal.set" && !abandoned.has(mutation.id)),
-        mutationToasts: (container.state.mutationToasts ?? []).filter((toast) => !abandoned.has(toast.id) && !container.state.mutations.some((mutation) => mutation.operation === "session.goal.set" && mutation.id === toast.id)),
+        mutations: container.state.mutations.filter((mutation) => !isGoalSetting(mutation) && !abandoned.has(mutation.id)),
+        mutationToasts: (container.state.mutationToasts ?? []).filter((toast) => !abandoned.has(toast.id) && !container.state.mutations.some((mutation) => isGoalSetting(mutation) && mutation.id === toast.id)),
         team: undefined, familyActivity: undefined, teamCues: [] })
       endAlerts(false, false)
       subscriptions.forEach((subscription) => subscription.unsubscribe())
@@ -4254,7 +4270,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     return false
   }
 
-  const guardrailOperations = { cancel: "session.guardrail.cancel", retry: "session.guardrail.retry" } as const
+  const guardrailOperations = { cancel: "session.guardrail.request.cancel", retry: "session.guardrail.request.retry" } as const
   const sendGuardrail = async (id: string, action: "once" | "always" | "reject" | "cancel" | "retry") => {
     const sessionID = container.state.activeSessionID
     if (sessionID === undefined) return
@@ -4283,7 +4299,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         label: `Guardrail ${action}`,
         state: "sending",
         sessionID,
-        operation: recovery ? guardrailOperations[action] : "session.guardrail.reply",
+        operation: recovery ? guardrailOperations[action] : "session.guardrail.request.reply",
         input: recovery ? { requestID: id } : { requestID: id, reply: action },
       },
       { sessionID },
@@ -4330,7 +4346,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     autonomyCategories.some((category) => category in mutation.input))
 
   const goalRequests = (sessionID: string) => container.state.mutations.filter((mutation) =>
-    mutation.kind === "goal" && mutation.operation === "session.goal.set" && mutation.sessionID === sessionID)
+    isGoalSetting(mutation) && mutation.sessionID === sessionID)
 
   const refreshAutonomy = async (owner: RemoteTransport, sessionID: string, token: number) => {
     const read = await owner.request("session.autonomy.get", { sessionID })
@@ -4351,7 +4367,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         label: "Set goal",
         state: "sending",
         sessionID,
-        operation: "session.goal.set",
+        operation: "session.autonomy.set",
         input: { goal: text },
       },
       { sessionID },
@@ -4383,7 +4399,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       setState({ notice: "Reconnected." })
       return
     }
-    const resubscribed = await owner.request("session.subscribe", { sessionID })
+    const resubscribed = await owner.request("event.subscribe", { sessionID })
+    registerSubscription(owner, sessionID, resubscribed)
     if (!isCurrentConnection(owner)) return
     if (container.state.activeSessionID !== sessionID) {
       // A superseded reload registered a subscription this store no longer shows, so
@@ -4561,17 +4578,6 @@ function validTelemetryConsentState(value: unknown): value is RemoteTelemetryCon
 
 function readAutonomyFromResponse(value: unknown): SessionAutonomyView | undefined {
   return readAutonomy(value)
-}
-
-/**
- * A shell-output page read that failed. An explicit unsupported operation is the device
- * answering for itself; every other failure reports the answer it gave, including an
- * unsettled read, which never diagnoses a version mismatch on its own.
- */
-function singlePageFailure(outcome: Exclude<RemoteRequestOutcome, { status: "ok" }>): string {
-  if (outcome.status === "failed" && outcome.error.code === "unknown_operation")
-    return "This device does not offer paged terminal output."
-  return describeOutcome(outcome, "Terminal output")
 }
 
 function teamActionFailure(outcome: Exclude<RemoteRequestOutcome, { status: "ok" }>, label: string): { readonly status: "failed" | "unknown"; readonly message: string } {

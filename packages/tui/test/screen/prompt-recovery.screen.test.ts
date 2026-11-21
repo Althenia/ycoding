@@ -61,7 +61,7 @@ function resetFixture() {
 
 const route: FetchHandler = async (url, request) => {
   if (url.pathname === "/api/command")
-    return json({ location, data: catalogCommand ? [{ name: "report", description: "Configured report" }] : [] })
+    return json({ location, data: catalogCommand ? [{ name: "report", description: "Configured report", template: "Report $ARGUMENTS" }] : [] })
   if (url.pathname === `/api/session/${sessionID}/command` && request.method === "POST") {
     const body = (await request.json()) as { id: string; command: string; arguments: string; resume?: boolean }
     commandRequests.push(body)
@@ -224,8 +224,8 @@ const route: FetchHandler = async (url, request) => {
       location,
       data: catalogSkill
         ? [
-            { id: "review", name: "Review", description: "Review code", content: "Review instructions", slash: true },
-            { id: "plan", name: "Plan", description: "Plan work", content: "Plan instructions", slash: true },
+            { id: "review", name: "Review", description: "Review code", content: "Review instructions", location: "/tmp/ycoding/prompt-recovery/skills/review/SKILL.md", slash: true },
+            { id: "plan", name: "Plan", description: "Plan work", content: "Plan instructions", location: "/tmp/ycoding/prompt-recovery/skills/plan/SKILL.md", slash: true },
           ]
         : [],
     })

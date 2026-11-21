@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "properties": {
+    "result": { "enum": ["created", "updated", "reconciled"] },
+    "kind": { "enum": ["skill", "command", "agent", "plugin"] },
+    "id": { "type": "string" },
+    "versionID": { "type": "string" },
+    "contentDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "stage": { "const": "trial" },
+    "remaining": {
+      "type": "object",
+      "properties": {
+        "session": { "type": "number" },
+        "projectDaily": { "type": "number" },
+        "projectArtifacts": { "type": "number" },
+        "versions": { "type": "number" },
+        "bytes": { "type": "number" }
+      },
+      "required": ["session", "projectDaily", "projectArtifacts", "versions", "bytes"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["result", "kind", "id", "versionID", "contentDigest", "stage", "remaining"],
+  "additionalProperties": false
+}

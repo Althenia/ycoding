@@ -1,14 +1,17 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { mkdtemp, rm } from "node:fs/promises"
+import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises"
 import { createRequire } from "node:module"
 import os from "node:os"
 import path from "node:path"
 import { build } from "vite"
-import { nodeExecArgv, nodeTarget } from "../src/node/target"
+import { nodeExecArgv, nodeTarget, photonWasmAsset } from "../src/node/target"
 import { museBuildDefinitions } from "./muse-build-env"
 
 const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-muse-build-"))
+const photon = path.join(directory, "assets", photonWasmAsset)
+await mkdir(path.dirname(photon), { recursive: true })
+await copyFile(createRequire(path.resolve(import.meta.dirname, "../../core/package.json")).resolve(photonWasmAsset), photon)
 const require = createRequire(import.meta.url)
 const variables = ["YCODING_MUSE_CLIENT_ID", "YCODING_MUSE_CLIENT_SECRET"] as const
 const originalEnvironment = variables.map((name) => ({ name, present: Object.hasOwn(process.env, name), value: process.env[name] }))
@@ -73,12 +76,14 @@ async function bundle(kind: "bun" | "node", env: Record<string, string | undefin
   const output = path.join(directory, kind === "bun" ? name : `${name}.mjs`)
   if (kind === "bun") {
     const result = await Bun.build({ entrypoints: [entry], target: "bun", define: museBuildDefinitions(env), minify: true, compile: { outfile: output, autoloadDotenv: false, autoloadBunfig: false } })
+    Bun.gc(true)
     expect(result.success, result.logs.map(String).join("\n")).toBe(true)
     return [output]
   }
   const productionOutput = config.build?.rollupOptions?.output
   if (!productionOutput || Array.isArray(productionOutput)) throw new Error("Expected one Node output configuration")
-  await build({ ...config, configFile: false, envFile: false, logLevel: "silent", build: { ...config.build, ssr: entry, target: "node24", outDir: directory, emptyOutDir: false, rollupOptions: { output: { ...productionOutput, entryFileNames: path.basename(output) } } } })
+  await build({ ...config, plugins: (config.plugins ?? []).filter((plugin) => !(plugin && typeof plugin === "object" && "name" in plugin && plugin.name === "ycoding:frontend-graph")), configFile: false, envFile: false, logLevel: "silent", build: { ...config.build, ssr: entry, target: "node24", outDir: directory, emptyOutDir: false, rollupOptions: { ...config.build?.rollupOptions, output: { ...productionOutput, entryFileNames: path.basename(output) } } } })
+  Bun.gc(true)
   return ["node", ...nodeExecArgv.filter((argument) => argument.startsWith("--disable-warning=")), output]
 }
 

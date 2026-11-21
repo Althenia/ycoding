@@ -1,7 +1,7 @@
 import { Effect, Option } from "effect"
 import { createHash } from "node:crypto"
 import path from "node:path"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../../../paths"
 import { Service } from "@ycoding-ai/client/effect/service"
 import {
   YCoding,
@@ -734,7 +734,7 @@ export default Runtime.handler(DecisionCommand.commands.watch, Effect.fn("cli.de
   const client = YCoding.make({ baseUrl: connection.endpoint.url, headers: Service.headers(connection.endpoint) })
   if (input.follow) {
     if (!followID(options.sessionID) || !options.sessionID.startsWith("ses")) return yield* Effect.fail(new Error("Invalid follow root ID"))
-    const global = yield* Global.Service
+    const global = yield* FrontendPaths.Service
     const server = createHash("sha256").update(connection.endpoint.url).digest("hex")
     const filename = Option.getOrElse(input.state, () => path.join(global.data, "tasks", "decision-follow", server, `${options.sessionID}.json`))
     yield* Effect.callback<void, Error>((resume) => {

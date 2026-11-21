@@ -16,9 +16,7 @@ await Effect.runPromise(
   Effect.all(
     [
       write(
-        emitPromise(promiseContract, {
-          mutableOutputs: true,
-        }),
+        emitPromise(promiseContract, { mutableOutputs: true }),
         fileURLToPath(new URL("../src/promise/generated", import.meta.url)),
       ),
       write(

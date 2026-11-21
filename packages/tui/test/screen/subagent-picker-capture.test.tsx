@@ -30,6 +30,7 @@ const session = {
   id: sessionID,
   title: "YCoding",
   projectID: "project",
+  scope: "bound" as const,
   location: { directory },
   agent: "build",
   model: { providerID: "anthropic", id: "claude-opus-5" },
@@ -289,7 +290,7 @@ function task(sessionID: string, agent: string, description: string, state: "wai
     background: true,
     state,
     revision: 1,
-    question: state === "waiting" ? { text: "Should I mark the pre-existing failures as expected, or fix them?" } : undefined,
+    question: state === "waiting" ? { id: "que_subagent_picker", time: capturedAt, text: "Should I mark the pre-existing failures as expected, or fix them?" } : undefined,
     time: { created: capturedAt - elapsed * 1_000, updated: capturedAt },
   }
 }

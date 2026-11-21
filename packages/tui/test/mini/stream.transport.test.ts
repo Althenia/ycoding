@@ -11,7 +11,7 @@ import {
   type PermissionRequest,
 } from "@ycoding-ai/client/promise"
 import { createSessionTransport } from "../../src/mini/stream.transport"
-import type { FooterEvent, StreamCommit } from "../../src/mini/types"
+import type { FooterEvent, RunClient, StreamCommit } from "../../src/mini/types"
 import { createFooterApiFixture } from "./fixture/footer-api"
 import { canonicalToolPart } from "./fixture/tool-part"
 import { tmpdir } from "../fixture/fixture"
@@ -1004,7 +1004,7 @@ describe("Mini transport", () => {
         },
       ])
     })
-    const current: YCodingClient[] = []
+    const current: RunClient[] = []
     const ui = footer()
     const transport = await createSessionTransport({
       sdk: first,

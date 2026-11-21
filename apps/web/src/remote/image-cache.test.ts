@@ -1,93 +1,88 @@
-import { expect, jest, test } from "bun:test"
-import { createRemoteHttp } from "./http"
-import { createRemoteStore } from "./store"
+import { expect, test } from "bun:test"
+import { imageOutcome, imageStoreFixture } from "../../test/wire-peer"
+import type { RemoteRequestOutcome } from "./transport"
+
+const image = { deviceID: "dev_image", sessionID: "ses_image", digest: "a".repeat(64), mime: "image/png" }
+const rejection = (error: unknown) => error instanceof Error ? error.message : undefined
 
 test("shares one validated image response by device, Session, and digest and releases it on selection change", async () => {
-  const requested: string[] = []
-  const source = "AAEC"
-  const store = createRemoteStore({
-    http: createRemoteHttp(),
-    createTransport: () => { throw new Error("No relay needed") },
-    fetch: async (input) => {
-      requested.push(input)
-      return Response.json({ mime: "image/png", bytes: 3, data: source })
-    },
+  const requested: (string | undefined)[] = []
+  let releases = 0
+  const { store } = imageStoreFixture(async (request) => {
+    requested.push(request?.sessionID)
+    expect(request?.httpBulk?.deviceID).toBe(image.deviceID)
+    expect(request?.input?.digest).toBe(image.digest)
+    return imageOutcome(Uint8Array.of(0, 1, 2), image.mime, () => { releases++ })
   })
-  const image = { deviceID: "dev_1", sessionID: "ses_a", digest: "a".repeat(64), mime: "image/png" }
+  const source = "data:image/png;base64,AAEC"
   try {
-    expect(await Promise.all([store.loadImageSource(image), store.loadImageSource(image)])).toEqual([
-      `data:image/png;base64,${source}`, `data:image/png;base64,${source}`,
-    ])
-    expect(await store.loadImageSource(image)).toBe(`data:image/png;base64,${source}`)
-    expect(requested).toHaveLength(1)
+    expect(await Promise.all([store.loadImageSource(image), store.loadImageSource(image)])).toEqual([source, source])
+    expect(await store.loadImageSource(image)).toBe(source)
+    expect(requested).toEqual(["ses_image"])
     await store.selectSession("ses_b")
-    expect(await store.loadImageSource({ ...image, sessionID: "ses_b" })).toBe(`data:image/png;base64,${source}`)
-    expect(requested).toHaveLength(2)
+    expect(await store.loadImageSource({ ...image, sessionID: "ses_b" })).toBe(source)
+    expect(requested).toEqual(["ses_image", "ses_b"])
+    expect(releases).toBe(2)
   } finally { store.dispose() }
 })
 
-test("rejects an invalid image response and permits an explicit retry", async () => {
+test("releases an invalid image response and permits an explicit retry", async () => {
   let calls = 0
-  const store = createRemoteStore({
-    http: createRemoteHttp(),
-    createTransport: () => { throw new Error("No relay needed") },
-    fetch: async () => Response.json(++calls === 1 ? { mime: "text/html", bytes: 3, data: "AAEC" } : { mime: "image/png", bytes: 3, data: "AAEC" }),
-  })
-  const image = { deviceID: "dev_1", sessionID: "ses_a", digest: "a".repeat(64), mime: "image/png" }
+  let releases = 0
+  const { store } = imageStoreFixture(async () =>
+    imageOutcome(Uint8Array.of(0, 1, 2), ++calls === 1 ? "text/html" : image.mime, () => { releases++ }))
   try {
-    expect(await store.loadImageSource(image).then(() => undefined, (reason: unknown) => reason instanceof Error ? reason.message : undefined)).toBe("Invalid attachment")
+    expect(await store.loadImageSource(image).then(() => undefined, rejection)).toBe("Invalid attachment")
+    expect(releases).toBe(1)
     expect(await store.loadImageSource(image)).toBe("data:image/png;base64,AAEC")
     expect(calls).toBe(2)
+    expect(releases).toBe(2)
   } finally { store.dispose() }
 })
 
 test("loads an 8 MiB managed image response", async () => {
-  const data = Buffer.alloc(8 * 1024 * 1024, 42).toString("base64")
-  const store = createRemoteStore({
-    http: createRemoteHttp(),
-    createTransport: () => { throw new Error("No relay needed") },
-    fetch: async () => Response.json({ mime: "image/png", bytes: 8 * 1024 * 1024, data }),
-  })
+  const bytes = Buffer.alloc(8 * 1024 * 1024, 42)
+  const { store } = imageStoreFixture(async () => imageOutcome(bytes))
   try {
-    expect(await store.loadImageSource({ deviceID: "dev_1", sessionID: "ses_a", digest: "a".repeat(64), mime: "image/png" })).toBe(`data:image/png;base64,${data}`)
+    expect(await store.loadImageSource(image)).toBe(`data:image/png;base64,${bytes.toString("base64")}`)
   } finally { store.dispose() }
 })
 
-test("a stalled managed image read settles and can be retried", async () => {
-  jest.useFakeTimers()
+test("an unsettled attachment permits an explicit retry", async () => {
   let calls = 0
-  const store = createRemoteStore({
-    http: createRemoteHttp(),
-    createTransport: () => { throw new Error("No relay needed") },
-    fetch: async (_input, init) => {
-      if (++calls > 1) return Response.json({ mime: "image/png", bytes: 3, data: "AAEC" })
-      return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }))
-    },
-  })
-  const image = { deviceID: "dev_1", sessionID: "ses_a", digest: "a".repeat(64), mime: "image/png" }
+  const { store } = imageStoreFixture(async () => ++calls === 1
+    ? { status: "unknown", error: { code: "outcome_unknown", message: "Timed out" } }
+    : imageOutcome(Uint8Array.of(0, 1, 2)))
   try {
-    const pending = store.loadImageSource(image)
-    jest.advanceTimersByTime(120_001)
-    expect(await pending.then(() => "loaded", () => "unavailable")).toBe("unavailable")
+    expect(await store.loadImageSource(image).then(() => undefined, rejection)).toBe("Attachment unavailable")
     expect(await store.loadImageSource(image)).toBe("data:image/png;base64,AAEC")
     expect(calls).toBe(2)
-  } finally { store.dispose(); jest.useRealTimers() }
+  } finally { store.dispose() }
 })
 
-test("changing Sessions aborts pending image reads and clears the previous Session cache", async () => {
+test("changing Sessions aborts a pending image read and discards a late result", async () => {
   let pendingSignal: AbortSignal | undefined
-  const store = createRemoteStore({
-    http: createRemoteHttp(),
-    createTransport: () => { throw new Error("No relay needed") },
-    fetch: async (_input, init) => new Promise<Response>((_resolve, reject) => {
-      pendingSignal = init?.signal ?? undefined
-      pendingSignal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true })
-    }),
+  let releases = 0
+  const held = Promise.withResolvers<RemoteRequestOutcome>()
+  const { store } = imageStoreFixture((request) => {
+    pendingSignal = request?.signal
+    return held.promise
   })
   try {
-    const pending = store.loadImageSource({ deviceID: "dev_1", sessionID: "ses_a", digest: "a".repeat(64), mime: "image/png" })
+    const pending = store.loadImageSource(image).then(() => "published", () => "refused")
     await store.selectSession("ses_b")
     expect(pendingSignal?.aborted).toBe(true)
-    expect(await pending.then(() => false, () => true)).toBe(true)
+    held.resolve(imageOutcome(Uint8Array.of(1), image.mime, () => { releases++ }))
+    expect(await pending).toBe("refused")
+    expect(releases).toBe(1)
+  } finally { store.dispose() }
+})
+
+test("a foreign device never acquires an image read", async () => {
+  let requests = 0
+  const { store } = imageStoreFixture(async () => { requests++; return imageOutcome(Uint8Array.of(1)) })
+  try {
+    expect(await store.loadImageSource({ ...image, deviceID: "dev_other" }).then(() => undefined, rejection)).toBe("Attachment unavailable")
+    expect(requests).toBe(0)
   } finally { store.dispose() }
 })

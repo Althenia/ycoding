@@ -91,8 +91,8 @@ export function createRemoteHttp(options: RemoteHttpOptions = {}): RemoteHttp {
   }
 
   return {
-    me: () => json<MeResponse>("/api/me", undefined, readMe),
-    devices: () => json<readonly RemoteDeviceInfo[]>("/api/devices", undefined, readDevices),
+    me: () => json<MeResponse>("/api/me?relay=5", undefined, readMe),
+    devices: () => json<readonly RemoteDeviceInfo[]>("/api/devices?relay=5", undefined, readDevices),
     setDeviceAlias: (deviceID, alias) => json<DeviceAliasResponse>(`/api/devices/${encodeURIComponent(deviceID)}/alias`, {
       method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ alias }),
     }, (payload) => {

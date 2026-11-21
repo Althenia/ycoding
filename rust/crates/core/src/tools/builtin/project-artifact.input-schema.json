@@ -1,0 +1,47 @@
+{
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "kind": { "const": "skill" },
+        "id": { "type": "string", "pattern": "^(?!(?:aux|com[1-9]|con|lpt[1-9]|nul|prn)$)[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$" },
+        "insight_key": { "type": "string", "minLength": 1 },
+        "base_version_id": { "type": "string", "pattern": "^pav_[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$" },
+        "name": { "type": "string", "maxLength": 512 },
+        "description": { "type": "string", "maxLength": 2048 },
+        "content": { "type": "string", "maxLength": 24576 }
+      },
+      "required": ["kind", "id", "insight_key", "name", "description", "content"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": { "const": "command" },
+        "id": { "type": "string", "pattern": "^(?!(?:aux|com[1-9]|con|lpt[1-9]|nul|prn)$)[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$" },
+        "insight_key": { "type": "string", "minLength": 1 },
+        "base_version_id": { "type": "string", "pattern": "^pav_[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$" },
+        "name": { "type": "string", "maxLength": 512 },
+        "description": { "type": "string", "maxLength": 2048 },
+        "template": { "type": "string", "maxLength": 16384 }
+      },
+      "required": ["kind", "id", "insight_key", "name", "description", "template"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": { "const": "agent" },
+        "id": { "type": "string", "pattern": "^(?!(?:aux|com[1-9]|con|lpt[1-9]|nul|prn)$)[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$" },
+        "insight_key": { "type": "string", "minLength": 1 },
+        "base_version_id": { "type": "string", "pattern": "^pav_[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$" },
+        "name": { "type": "string", "maxLength": 512 },
+        "description": { "type": "string", "maxLength": 2048 },
+        "system": { "type": "string", "maxLength": 16384 },
+        "permissions": { "type": "array", "items": { "type": "object", "properties": { "action": { "type": "string" }, "effect": { "enum": ["allow", "ask", "deny"] }, "resource": { "type": "string" } }, "required": ["action", "effect", "resource"], "additionalProperties": false } }
+      },
+      "required": ["kind", "id", "insight_key", "name", "description", "system"],
+      "additionalProperties": false
+    }
+  ]
+}

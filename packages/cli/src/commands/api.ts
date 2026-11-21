@@ -7,7 +7,7 @@ export const ApiCommand = Spec.make("api", {
   params: {
     ...ServerParams,
     request: Argument.string("operation | method path").pipe(
-      Argument.withDescription("OpenAPI operation ID, or an HTTP method followed by a path"),
+      Argument.withDescription("V5 operation name, or an HTTP method followed by a path"),
       Argument.variadic({ min: 1, max: 2 }),
     ),
     data: Flag.string("data").pipe(Flag.withAlias("d"), Flag.withDescription("Request body"), Flag.optional),
@@ -16,6 +16,6 @@ export const ApiCommand = Spec.make("api", {
       Flag.withDescription("Request header in name:value form"),
       Flag.atMost(100),
     ),
-    param: Flag.keyValuePair("param").pipe(Flag.withDescription("OpenAPI path or query parameter"), Flag.optional),
+    param: Flag.keyValuePair("param").pipe(Flag.withDescription("Named operation path or query parameter"), Flag.optional),
   },
 })

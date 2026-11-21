@@ -34,6 +34,7 @@ jobs:
         include:
           - suite: types
             runner: ubuntu-24.04
+            fetch-depth: 0
           - suite: web
             runner: ubuntu-24.04
           - suite: cli
@@ -48,7 +49,7 @@ jobs:
       - name: Checkout release source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 0
+          fetch-depth: ${{ github.event_name == 'push' && 0 || 1 }}
           persist-credentials: false
 
       - name: Verify tag is reachable from main
@@ -71,6 +72,16 @@ jobs:
         uses: ./.github/actions/setup-bun
         with:
           install-flags: --frozen-lockfile
+
+      - name: Cache Turbo
+        if: matrix.suite == 'types'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: node_modules/.cache/turbo
+          key: turbo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('turbo.json', 'tsconfig.json', 'bun.lock', '**/package.json', '**/tsconfig.json') }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('turbo.json', 'tsconfig.json', 'bun.lock', '**/package.json', '**/tsconfig.json') }}-
+            turbo-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Check workspace and types
         if: matrix.suite == 'types'
@@ -113,6 +124,10 @@ jobs:
         if: matrix.suite == 'web'
         run: |
           bun test --cwd apps/web ./test/remote-store-container.test.ts
+          bun test --cwd apps/web ./src/remote/endpoint.test.ts ./src/pwa/offline.test.ts ./src/service-worker.push.test.ts
+          bun test --cwd apps/web ./test/remote-http.test.ts ./test/remote-http-bulk.test.ts
+          bun test --cwd apps/web ./test/remote-sync.test.ts -t 'oversized live invalidations'
+          bun test --cwd packages/protocol ./test/http-bulk.test.ts
           bun test --cwd apps/web ./test/dots.test.ts ./src/remote/ui/dots-composer.test.ts
           bun test --cwd apps/web ./test/remote-todo.test.ts -t "a connector that never answers todo.list does not hold Session hydration or raise a state notice|a superseded same-Session read cannot overwrite reconnect's newer todo list"
           bun test --cwd apps/web ./test/remote-guardrail.test.ts -t "preserves inspectable guardrail metadata in the family read"
@@ -121,6 +136,9 @@ jobs:
         if: matrix.suite == 'web'
         run: |
           bun test --cwd infra/cloudflare ./test/mcp-boundary.test.ts ./test/relay-core.test.ts ./test/auth-service.test.ts ./test/push-coordination-filter.test.ts ./test/device-alias.test.ts
+          bun test --cwd infra/cloudflare ./test/router.test.ts -t 'websocket upgrades|message stream forwards|v5 message and attachment bulk selectors|relay presence|closes every device|after rotation|revokes an owned device'
+          bun test --cwd infra/cloudflare ./test/relay-authority.test.ts ./test/relay-handoff.test.ts ./test/relay-http.test.ts ./test/relay-mcp.test.ts ./test/relay-resync.test.ts
+          bun run typecheck:cloudflare
           bun run build:cloudflare
 
       - name: Verify CLI suites
@@ -176,6 +194,33 @@ jobs:
         run: |
           bun test test/session-execution.test.ts test/session-autonomy.test.ts
           bun test --timeout 40000 test/session-runner.test.ts -t "promotes queued input after continuation ends|resets the configured step allowance when steering input promotes|keeps the configured step allowance when only Dots peer input promotes|resets the step allowance when Dots peer input promotes with user steering|resets the step allowance when an ordinary synthetic input promotes without Dots attribution|promotes queued inputs one at a time in FIFO order|promotes queued input after steering continuation ends|promotes steers before the next queued input|coalesces multiple active steering prompts into one continuation step|preserves durable queued input for a later wake after interruption"
+
+      - name: Verify native release bootstrap
+        if: matrix.suite == 'tui-runtime'
+        run: bun test --cwd script ./native-bootstrap.test.ts ./native-setup-release.test.ts ./runtime-receipt.test.ts
+
+      - name: Setup Rust for native contracts
+        if: matrix.suite == 'tui-runtime'
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-profile: dev
+
+      - name: Build and verify native runtime receipt
+        if: matrix.suite == 'tui-runtime'
+        env:
+          RECEIPT_TARGET: linux-x64
+        run: |
+          set -euo pipefail
+          cargo build --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --bin ycoding-runtime
+          bash script/runtime-receipt.sh write rust/target/debug/ycoding-runtime "$RUNNER_TEMP/runtime-receipt"
+          bash script/runtime-receipt.sh verify "$RUNNER_TEMP/runtime-receipt" "$RUNNER_TEMP/verified-runtime/ycoding-runtime"
+
+      - name: Verify native contract boundaries
+        if: matrix.suite == 'tui-runtime'
+        run: |
+          cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-schema --test autonomy_review
+          cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-protocol --test wire_session
+          cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-protocol --test connection ac_wire_002_handshake_invalid_input_matrix_dispatches_nothing
 
       - name: Verify typed decision suites
         if: matrix.suite == 'tui-runtime'
@@ -279,7 +324,7 @@ jobs:
             platform: win32
             arch: x64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.platform == 'win32' && 60 || 30 }}
     env:
       YCODING_MACOS_SIGNING_IDENTITY: YCoding Code Signing
       YCODING_MACOS_SIGNING_SHA1: 9dd524184b0db949ffac7f0ada0ae860ac7f5f85
@@ -290,6 +335,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Resolve release version
@@ -299,6 +345,9 @@ jobs:
         uses: ./.github/actions/setup-bun
         with:
           install-flags: --frozen-lockfile
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
 
       - name: Verify native build host
         env:
@@ -344,7 +393,12 @@ jobs:
           YCODING_ANTIGRAVITY_CLIENT_SECRET: ${{ secrets.YCODING_ANTIGRAVITY_CLIENT_SECRET }}
           YCODING_MUSE_CLIENT_ID: ${{ secrets.YCODING_MUSE_CLIENT_ID }}
           YCODING_MUSE_CLIENT_SECRET: ${{ secrets.YCODING_MUSE_CLIENT_SECRET }}
-        run: bun run build:tui
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            bun run build:tui --target=win32-x64 --runtime-receipt="$RUNNER_TEMP/windows-runtime"
+          else
+            bun run build:tui
+          fi
 
       - name: Verify build metadata
         run: |
@@ -379,12 +433,30 @@ jobs:
           codesign --verify --strict -R "=identifier \"app.ycoding.cli\" and certificate leaf = H\"$YCODING_MACOS_SIGNING_SHA1\"" "$payload/ycoding"
           codesign --verify --deep --strict -R "=identifier \"app.ycoding.interaction\" and certificate leaf = H\"$YCODING_MACOS_SIGNING_SHA1\"" "$payload/YCoding Interaction.app"
 
+      - name: Verify packaged Windows runtime
+        if: runner.os == 'Windows'
+        run: |
+          set -euo pipefail
+          payload=$(mktemp -d "$RUNNER_TEMP/ycoding-payload.XXXXXX")
+          trap 'rm -rf "$payload"' EXIT
+          7z x "dist/release-archive/windows-x64/ycoding-$RELEASE_VERSION-windows-x64.zip" "-o$(cygpath -w "$payload")"
+          bun packages/cli/script/runtime.ts verify-embedded "$payload/ycoding.exe" "$RUNNER_TEMP/windows-runtime/receipt.json"
+
       - name: Upload native archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-archive-${{ matrix.target }}
           path: dist/release-archive/${{ matrix.target }}/
           compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Windows runtime build receipt
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-receipt-windows-x64
+          path: ${{ runner.temp }}/windows-runtime/receipt.json
           if-no-files-found: error
           retention-days: 7
 
@@ -415,6 +487,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Resolve release version
@@ -425,16 +498,33 @@ jobs:
         with:
           install-flags: --frozen-lockfile
 
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Cache Electrobun native assets
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/electrobun-cache-1.18.1
+          key: ${{ runner.os }}-${{ runner.arch }}-electrobun-1.18.1
+
       - name: Provision Electrobun native assets
         run: |
           set -euo pipefail
           sdk="$(cd packages/desktop/node_modules/electrobun && pwd -P)"
           test "$(node -p 'require(process.argv[1]).version' "$sdk/package.json")" = "1.18.1"
+          cache="$RUNNER_TEMP/electrobun-cache-1.18.1"
+          mkdir -p "$cache"
           cd "$RUNNER_TEMP"
-          curl -fsSL --retry 3 -o electrobun-cli-darwin-arm64.tar.gz https://github.com/blackboardsh/electrobun/releases/download/v1.18.1/electrobun-cli-darwin-arm64.tar.gz
-          curl -fsSL --retry 3 -o electrobun-core-darwin-arm64.tar.gz https://github.com/blackboardsh/electrobun/releases/download/v1.18.1/electrobun-core-darwin-arm64.tar.gz
+          if [ -f "$cache/electrobun-cli-darwin-arm64.tar.gz" ] && [ -f "$cache/electrobun-core-darwin-arm64.tar.gz" ]; then
+            cp "$cache/electrobun-cli-darwin-arm64.tar.gz" "$cache/electrobun-core-darwin-arm64.tar.gz" .
+          fi
+          if ! { [ -f electrobun-cli-darwin-arm64.tar.gz ] && [ -f electrobun-core-darwin-arm64.tar.gz ] && echo "1ef4a4b42a957d3349f491f7fbe53153d1d5f427bacbda340c8d7fadce6b58d9  electrobun-cli-darwin-arm64.tar.gz" | shasum -a 256 -c - && echo "474c24f3af26eb5d59ce9fa90483fef2a35974fcdedebb8df969aebc4350e62f  electrobun-core-darwin-arm64.tar.gz" | shasum -a 256 -c -; } >/dev/null 2>&1; then
+            curl -fsSL --retry 3 -o electrobun-cli-darwin-arm64.tar.gz https://github.com/blackboardsh/electrobun/releases/download/v1.18.1/electrobun-cli-darwin-arm64.tar.gz
+            curl -fsSL --retry 3 -o electrobun-core-darwin-arm64.tar.gz https://github.com/blackboardsh/electrobun/releases/download/v1.18.1/electrobun-core-darwin-arm64.tar.gz
+          fi
           echo "1ef4a4b42a957d3349f491f7fbe53153d1d5f427bacbda340c8d7fadce6b58d9  electrobun-cli-darwin-arm64.tar.gz" | shasum -a 256 -c -
           echo "474c24f3af26eb5d59ce9fa90483fef2a35974fcdedebb8df969aebc4350e62f  electrobun-core-darwin-arm64.tar.gz" | shasum -a 256 -c -
+          cp electrobun-cli-darwin-arm64.tar.gz electrobun-core-darwin-arm64.tar.gz "$cache/"
           rm -rf electrobun-cli
           mkdir electrobun-cli
           tar -xzf electrobun-cli-darwin-arm64.tar.gz -C electrobun-cli
@@ -522,6 +612,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Resolve release version
@@ -628,6 +719,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Setup Bun

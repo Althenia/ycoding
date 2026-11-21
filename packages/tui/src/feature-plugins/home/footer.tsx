@@ -1,5 +1,5 @@
 import { Plugin } from "@ycoding-ai/plugin/tui"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationVersion } from "../../build-version"
 import { createMemo, Match, Show, Switch } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useTuiPaths } from "../../context/runtime"

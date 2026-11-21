@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import path from "node:path"
+import { checkBundleGraph } from "../../../script/ycoding-workspace"
+import { userAppPackageMetadata } from "../script/user-app-package"
 import { build } from "vite"
 import { mainConfig } from "../vite.node.config"
 import { nodeTarget } from "../src/node/target"
@@ -33,8 +35,6 @@ describe("CLI frontend import boundaries", () => {
         bunImports: imports.filter((item) => item.path.startsWith("bun:")),
         desktopModules: modules.filter((id) => id.includes("/packages/desktop/")),
       }).toEqual({ bunImports: [], desktopModules: [] })
-      expect(modules.some((id) => id.endsWith("/services/database-recovery-sqlite.node.ts"))).toBe(true)
-      expect(modules.some((id) => id.endsWith("/services/database-recovery-sqlite.bun.ts"))).toBe(false)
     },
     coldBundleTimeout,
   )
@@ -62,9 +62,11 @@ describe("CLI frontend import boundaries", () => {
       expect(Object.keys(run).sort()).toEqual(["runNonInteractive"])
       expect(Object.keys(mini).sort()).toEqual(["runMiniFrontend"])
       expect(advertised.map(([key]) => key).filter((key) => key === "./mini" || key.startsWith("./mini/"))).toEqual([])
+      const built = advertised.filter(([, target]) => typeof target !== "string")
+      expect(Object.fromEntries(built)).toEqual(userAppPackageMetadata(true).exports ?? {})
       const missing = await Promise.all(
         advertised.map(async ([name, target]) =>
-          typeof target === "string" && (await Bun.file(path.join(root, "packages/cli", target)).exists())
+          typeof target !== "string" || (await Bun.file(path.join(root, "packages/cli", target)).exists())
             ? []
             : [name],
         ),
@@ -143,7 +145,12 @@ describe("CLI frontend import boundaries", () => {
       expect(graph).toContain("packages/cli/src/commands/handlers/dots/requests.ts")
       expect(graph).toContain("packages/cli/src/commands/handlers/dots/respond.ts")
       expect(graph.some((file) => file.startsWith("packages/tui/src/"))).toBe(true)
-      expect(graph.some((file) => file.startsWith("packages/server/src/"))).toBe(true)
+      expect(
+        checkBundleGraph({
+          frontend: "tui",
+          outputs: [{ file: "packages/cli/src/tui.ts", modules: graph.map((file) => path.join(root, file)), imports: [] }],
+        }),
+      ).toEqual([])
       expect(graph).not.toContain("packages/cli/src/commands/commands.ts")
       const retained = new Set([
         "ai",
@@ -175,6 +182,7 @@ describe("CLI frontend import boundaries", () => {
           (file) =>
             file.startsWith("packages/cli/src/commands/handlers/") &&
             file !== "packages/cli/src/commands/handlers/coordination.ts" &&
+            file !== "packages/cli/src/commands/handlers/desktop-bridge.ts" &&
             file !== "packages/cli/src/commands/handlers/tui.ts" &&
             file !== "packages/cli/src/commands/handlers/api.ts" &&
             file !== "packages/cli/src/commands/handlers/decision/list.ts" &&

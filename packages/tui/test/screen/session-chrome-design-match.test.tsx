@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
 import { RGBA } from "@opentui/core"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationVersion } from "../../src/build-version"
 import { json, sessionSnapshot } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "../viewport"
 import { railWidth } from "../../src/routes/session/rail"
@@ -80,7 +80,7 @@ function route(url: URL) {
         model: session.model,
         context: { total: 0, percent: 0 },
         tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-        cache: { eligible: 0, hitRatio: 0, mechanism: "unreported", readReported: false, writeReported: false },
+        cache: { eligible: 0, hitRatio: 0, mechanism: "none", readReported: false, writeReported: false },
         requests: {
           logical: 0,
           physical: 0,

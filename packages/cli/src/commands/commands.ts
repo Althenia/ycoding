@@ -12,6 +12,7 @@ import { DecisionCommand } from "./decision"
 import { ApiCommand } from "./api"
 import { DesktopHostCommand } from "./desktop-host"
 import { DesktopClientCommand } from "./desktop-client"
+import { DesktopBridgeCommand } from "./desktop-bridge"
 
 declare const YCODING_CLI_NAME: string | undefined
 
@@ -43,6 +44,7 @@ export const Commands = Spec.make(typeof YCODING_CLI_NAME === "string" ? YCODING
   commands: [
     DesktopHostCommand,
     DesktopClientCommand,
+    DesktopBridgeCommand,
     CoordinationCommand,
     DotsCommand,
     DecisionCommand,

@@ -126,6 +126,8 @@ Agents can be declared in JSON configuration or Markdown files.
 
 ### Markdown location and ID
 
+Markdown frontmatter is parsed per read without retaining full documents in a process-wide cache. Sanitized retries preserve the same parsing boundary, and malformed documents remain errors on repeated reads.
+
 Files are discovered recursively under `agent` or `agents`.
 
 ```text

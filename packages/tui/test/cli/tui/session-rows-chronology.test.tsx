@@ -33,7 +33,7 @@ async function mountRows(messages: readonly unknown[] = []) {
   durableSequence = 0
   const events = createEventStream()
   const calls = createFetch((url) => {
-    if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, messages)
+    if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, messages, { session: { scope: "bound" } })
     return undefined
   }, events)
   let rows!: ReturnType<typeof createSessionRows>

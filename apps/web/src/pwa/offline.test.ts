@@ -90,7 +90,8 @@ describe("shouldCacheStaticAsset", () => {
   test("never caches API, auth, socket, or cross-origin responses", () => {
     expect(shouldCacheStaticAsset(request(`${origin}/api/me`, "GET", ""), origin)).toBe(false)
     expect(shouldCacheStaticAsset(request(`${origin}/auth/google/callback`, "GET", ""), origin)).toBe(false)
-    expect(shouldCacheStaticAsset(request(`${origin}/ws/v4/client`, "GET", "websocket"), origin)).toBe(false)
+    for (const path of ["/ws/v4/client", "/ws/v5/client", "/api/remote/devices/dev_a/sessions/ses_a/messages/msg_a?connectionEpoch=e&requestID=1&transferID=t"])
+      expect(shouldCacheStaticAsset(request(`${origin}${path}`, "GET", "websocket"), origin)).toBe(false)
     expect(shouldCacheStaticAsset(request("https://example.com/assets/app.js"), origin)).toBe(false)
   })
 
@@ -109,7 +110,8 @@ describe("shouldHandleNavigation", () => {
   test("leaves API, auth, and socket requests to the network", () => {
     expect(shouldHandleNavigation({ url: `${origin}/api/me`, method: "GET", mode: "navigate" })).toBe(false)
     expect(shouldHandleNavigation({ url: `${origin}/auth/google`, method: "GET", mode: "navigate" })).toBe(false)
-    expect(shouldHandleNavigation({ url: `${origin}/ws/v4/client`, method: "GET", mode: "cors" })).toBe(false)
+    for (const path of ["/ws/v4/client", "/ws/v5/client", "/ws/v4/agent", "/ws/v5/agent"])
+      expect(shouldHandleNavigation({ url: `${origin}${path}`, method: "GET", mode: "navigate" })).toBe(false)
     expect(shouldHandleNavigation({ url: `${origin}/docs/usage`, method: "POST", mode: "navigate" })).toBe(false)
   })
 

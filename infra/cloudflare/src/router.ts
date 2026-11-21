@@ -1,6 +1,6 @@
 /**
  * Worker HTTP router: Google sign-in, browser sessions, device enrollment and
- * credentials, and the two authenticated WebSocket upgrades.
+ * credentials, and authenticated WebSocket upgrades.
  *
  * The router owns authentication and the trusted relay headers; the Durable
  * Object owns per-connection state. No route accepts a URL, path, or method from
@@ -55,6 +55,20 @@ import {
 
 const sessionCookieName = "yc_session"
 const oauthCookieName = "yc_oauth"
+const relayProtocols = [4, 5] as const
+type RelayProtocol = (typeof relayProtocols)[number]
+const relaySockets = new Map<string, { role: "client" | "agent"; protocol: RelayProtocol }>([
+  ["/ws/v4/client", { role: "client", protocol: 4 }],
+  ["/ws/v4/agent", { role: "agent", protocol: 4 }],
+  [RemoteWebSocketPath.client, { role: "client", protocol: 5 }],
+  [RemoteWebSocketPath.agent, { role: "agent", protocol: 5 }],
+])
+
+function relayTarget(ownerID: string, deviceID: string, protocol: RelayProtocol) {
+  return protocol === 5
+    ? { name: `v5:${ownerID}:${deviceID}`, prefix: "/_ycoding/v5" }
+    : { name: `${ownerID}:${deviceID}`, prefix: "/_ycoding" }
+}
 
 export type RelayNamespace = {
   readonly getByName: (name: string) => { readonly fetch: (request: Request) => Promise<Response> }
@@ -210,13 +224,12 @@ export function createRouter(deps: RouterDeps) {
       if (request.method !== "GET") return methodNotAllowed()
       return streamSessionContent(deps, request, contentStream[1] ?? "", contentStream[2] ?? "", contentStream[4] ?? "", contentStream[3] === "messages")
     }
-    if (url.pathname === RemoteWebSocketPath.client) {
+    const socket = relaySockets.get(url.pathname)
+    if (socket !== undefined) {
       if (request.method !== "GET") return methodNotAllowed()
-      return connectClient(deps, request, url)
-    }
-    if (url.pathname === RemoteWebSocketPath.agent) {
-      if (request.method !== "GET") return methodNotAllowed()
-      return connectAgent(deps, request)
+      return socket.role === "client"
+        ? connectClient(deps, request, url, socket.protocol)
+        : connectAgent(deps, request, socket.protocol)
     }
     // An unmatched relay path must never fall through to the SPA shell: a client
     // asking for JSON cannot be answered with HTML. Relay prefixes are owned by
@@ -274,14 +287,12 @@ async function adminRoute(deps: RouterDeps, request: Request, url: URL, rateLimi
   if (request.method !== "DELETE") return methodNotAllowed()
   const invite = await deps.invite.find(id)
   if (!invite) return apiError(404, "not_found", "Not found")
-  if (invite.userID !== null) {
-    const devices = await deps.service.listDevices(invite.userID)
+  const ownerID = invite.userID
+  if (ownerID !== null) {
+    const devices = await deps.service.listDevices(ownerID)
     for (const device of devices) {
-      const response = await deps.relay.getByName(`${invite.userID}:${device.id}`).fetch(new Request("https://relay.internal/_ycoding/close-device", {
-        method: "POST", headers: { "x-ycoding-internal": "1" },
-      }))
-      if (!response.ok) return apiError(503, "internal_error", "Device could not be closed")
-      await response.text()
+      const results = await Promise.all(relayProtocols.map((protocol) => postRelay(deps, ownerID, device.id, protocol, "close-device")))
+      if (results.some((ok) => !ok)) return apiError(503, "internal_error", "Device could not be closed")
     }
   }
   if (!await deps.invite.delete(id, invite.userID)) return apiError(404, "not_found", "Not found")
@@ -428,7 +439,7 @@ async function currentUser(deps: RouterDeps, request: Request): Promise<Response
   const body: MeResponse = {
     user: { id: authenticated.session.userID },
     session: { expiresAt: authenticated.session.expiresAt },
-    devices: await withPresence(deps, authenticated.session.userID, devices),
+    devices: await withPresence(deps, authenticated.session.userID, devices, presenceProtocol(request)),
   }
   return jsonResponse(body)
 }
@@ -437,7 +448,7 @@ async function listDevices(deps: RouterDeps, request: Request): Promise<Response
   const authenticated = await requireSession(deps, request)
   if (!authenticated.ok) return authenticated.response
   const devices = await deps.service.listDevices(authenticated.session.userID)
-  const body: DevicesResponse = { devices: await withPresence(deps, authenticated.session.userID, devices) }
+  const body: DevicesResponse = { devices: await withPresence(deps, authenticated.session.userID, devices, presenceProtocol(request)) }
   return jsonResponse(body)
 }
 
@@ -595,7 +606,7 @@ async function deleteRevokedDevices(deps: RouterDeps, request: Request, deviceID
   return new Response(null, { status: 204 })
 }
 
-async function connectClient(deps: RouterDeps, request: Request, url: URL): Promise<Response> {
+async function connectClient(deps: RouterDeps, request: Request, url: URL, protocol: RelayProtocol): Promise<Response> {
   if (!isWebSocketUpgrade(request)) return apiError(426, "invalid_message", "WebSocket upgrade required")
   if (isCrossSiteRequest(request) || !isSameOrigin(request))
     return apiError(403, "forbidden", "WebSocket upgrade requires a same-origin browser request")
@@ -613,7 +624,7 @@ async function connectClient(deps: RouterDeps, request: Request, url: URL): Prom
     return apiError(401, "unauthorized", "Browser session or device is no longer authorized")
   }
 
-  return forwardUpgrade(deps, request, {
+  return forwardUpgrade(deps, request, protocol, {
     role: "client",
     ownerID: authorized.value.userID,
     deviceID,
@@ -636,8 +647,20 @@ async function streamSessionContent(deps: RouterDeps, request: Request, deviceID
     if (authorized.reason === "unknown_device") return apiError(404, "not_found", "Unknown device")
     return apiError(401, "unauthorized", "Browser session or device is no longer authorized")
   }
-  return withSecurityHeaders(await deps.relay.getByName(`${authorized.value.userID}:${deviceID}`).fetch(new Request(
-    `https://relay.internal/_ycoding/stream-${message ? "message" : "attachment"}`,
+  const selectors = new URL(request.url).searchParams
+  const epoch = selectors.getAll("connectionEpoch")
+  const requestID = selectors.getAll("requestID")
+  const transferID = selectors.getAll("transferID")
+  const binary = epoch.length + requestID.length + transferID.length > 0
+  if (binary && (
+    epoch.length !== 1 || !/^[A-Za-z0-9_-]{1,64}$/.test(epoch[0]!) ||
+    transferID.length !== 1 || !/^[A-Za-z0-9_-]{1,64}$/.test(transferID[0]!) ||
+    requestID.length !== 1 || !/^[1-9][0-9]{0,19}$/.test(requestID[0]!) || BigInt(requestID[0]!) > 0xffff_ffff_ffff_ffffn
+  )) return apiError(400, "invalid_message", "HTTP reads require a live connection and transfer")
+
+  const target = relayTarget(authorized.value.userID, deviceID, binary ? 5 : 4)
+  return withSecurityHeaders(await deps.relay.getByName(target.name).fetch(new Request(
+    `https://relay.internal${target.prefix}/stream-${message ? "message" : "attachment"}`,
     { method: "POST", signal: request.signal, headers: {
       "x-ycoding-internal": "1",
       "x-ycoding-owner": authorized.value.userID,
@@ -646,17 +669,22 @@ async function streamSessionContent(deps: RouterDeps, request: Request, deviceID
       "x-ycoding-credential-expires-at": String(authenticated.session.expiresAt),
       "x-ycoding-target-session": sessionID,
       [message ? "x-ycoding-target-message" : "x-ycoding-target-digest"]: item,
+      ...(binary ? {
+        "x-ycoding-connection-epoch": epoch[0]!,
+        "x-ycoding-request-id": requestID[0]!,
+        "x-ycoding-transfer-id": transferID[0]!,
+      } : {}),
     } },
   )))
 }
 
-async function connectAgent(deps: RouterDeps, request: Request): Promise<Response> {
+async function connectAgent(deps: RouterDeps, request: Request, protocol: RelayProtocol): Promise<Response> {
   if (!isWebSocketUpgrade(request)) return apiError(426, "invalid_message", "WebSocket upgrade required")
   const token = parseBearerToken(request.headers.get("authorization"))
   if (token === undefined) return apiError(401, "unauthorized", "Device credential is required")
   const credential = await deps.service.authorizeAgentToken(token)
   if (!credential.ok) return apiError(401, "unauthorized", "Device credential is not valid")
-  return forwardUpgrade(deps, request, {
+  return forwardUpgrade(deps, request, protocol, {
     role: "agent",
     ownerID: credential.value.userID,
     deviceID: credential.value.deviceID,
@@ -673,7 +701,7 @@ type TrustedRelayHeaders = {
   readonly credentialExpiresAt: number
 }
 
-async function forwardUpgrade(deps: RouterDeps, request: Request, trusted: TrustedRelayHeaders): Promise<Response> {
+async function forwardUpgrade(deps: RouterDeps, request: Request, protocol: RelayProtocol, trusted: TrustedRelayHeaders): Promise<Response> {
   const headers = new Headers(request.headers)
   for (const key of Array.from(headers.keys())) if (key.startsWith("x-ycoding-")) headers.delete(key)
   headers.set("x-ycoding-role", trusted.role)
@@ -681,7 +709,8 @@ async function forwardUpgrade(deps: RouterDeps, request: Request, trusted: Trust
   headers.set("x-ycoding-device", trusted.deviceID)
   headers.set("x-ycoding-browser-session", trusted.browserSessionID)
   headers.set("x-ycoding-credential-expires-at", String(trusted.credentialExpiresAt))
-  return deps.relay.getByName(`${trusted.ownerID}:${trusted.deviceID}`).fetch(new Request(request, { headers }))
+  headers.set("x-ycoding-protocol", String(protocol))
+  return deps.relay.getByName(relayTarget(trusted.ownerID, trusted.deviceID, protocol).name).fetch(new Request(request, { headers }))
 }
 
 /**
@@ -699,44 +728,56 @@ async function revokeRelaySessions(deps: RouterDeps, userID: string, sessionID: 
   }
 }
 
-async function notifyRelay(
+async function postRelay(
   deps: RouterDeps,
   ownerID: string,
   deviceID: string,
+  protocol: RelayProtocol,
   path: "revoke-session" | "close-device",
   sessionID?: string,
-): Promise<void> {
+): Promise<boolean> {
   const headers = new Headers({ "x-ycoding-internal": "1" })
   if (sessionID !== undefined) headers.set("x-ycoding-target-session", sessionID)
+  const target = relayTarget(ownerID, deviceID, protocol)
   try {
     const response = await deps.relay
-      .getByName(`${ownerID}:${deviceID}`)
-      .fetch(new Request(`https://relay.internal/_ycoding/${path}`, { method: "POST", headers }))
+      .getByName(target.name)
+      .fetch(new Request(`https://relay.internal${target.prefix}/${path}`, { method: "POST", headers }))
     await response.text()
+    return response.ok
   } catch {
-    // Revocation is already durable in D1; the live socket also re-checks authority
-    // on its next command, so a failed push is not a correctness loss.
+    return false
   }
+}
+
+async function notifyRelay(deps: RouterDeps, ownerID: string, deviceID: string, path: "revoke-session" | "close-device", sessionID?: string): Promise<void> {
+  await Promise.all(relayProtocols.map((protocol) => postRelay(deps, ownerID, deviceID, protocol, path, sessionID)))
+}
+
+function presenceProtocol(request: Request): RelayProtocol {
+  return new URL(request.url).searchParams.get("relay") === "5" ? 5 : 4
 }
 
 async function withPresence(
   deps: RouterDeps,
   ownerID: string,
   devices: readonly Omit<DevicesResponse["devices"][number], "online">[],
+  protocol: RelayProtocol,
 ): Promise<DevicesResponse["devices"]> {
   return Promise.all(
     devices.map(async (device) => ({
       ...device,
-      online: device.status === "active" && (await readPresence(deps, ownerID, device.id)),
+      online: device.status === "active" && (await readPresence(deps, ownerID, device.id, protocol)),
     })),
   )
 }
 
-async function readPresence(deps: RouterDeps, ownerID: string, deviceID: string): Promise<boolean> {
+async function readPresence(deps: RouterDeps, ownerID: string, deviceID: string, protocol: RelayProtocol): Promise<boolean> {
+  const target = relayTarget(ownerID, deviceID, protocol)
   try {
     const response = await deps.relay
-      .getByName(`${ownerID}:${deviceID}`)
-      .fetch(new Request("https://relay.internal/_ycoding/presence", {
+      .getByName(target.name)
+      .fetch(new Request(`https://relay.internal${target.prefix}/presence`, {
         headers: { "x-ycoding-internal": "1" },
       }))
     if (!response.ok) return false

@@ -1,7 +1,6 @@
 import { Cause, Effect, Exit, Option } from "effect"
 import { Service } from "@ycoding-ai/client/effect/service"
 import { YCoding, type YCodingClient } from "@ycoding-ai/client/promise"
-import { AppProcess } from "@ycoding-ai/core/process"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
 import { ServiceConfig } from "../../../services/service-config"
@@ -18,7 +17,13 @@ export default Runtime.handler(
       (value) => request(() => value.close()).pipe(Effect.ignore),
     )
     const exit = yield* login(timeline, Option.getOrUndefined(input.url)).pipe(
-      Effect.raceFirst(AppProcess.waitForAbort(timeline.signal)),
+      Effect.raceFirst(Effect.callback<never, Error>((resume) => {
+        const aborted = () => resume(Effect.fail(timeline.signal.reason instanceof Error
+          ? timeline.signal.reason : Object.assign(new Error("Aborted"), { name: "AbortError" })))
+        if (timeline.signal.aborted) return aborted()
+        timeline.signal.addEventListener("abort", aborted, { once: true })
+        return Effect.sync(() => timeline.signal.removeEventListener("abort", aborted))
+      })),
       Effect.exit,
     )
     if (Exit.isSuccess(exit)) return

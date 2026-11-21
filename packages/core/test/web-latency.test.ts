@@ -1,6 +1,6 @@
 import { expect } from "bun:test"
 import path from "node:path"
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import { Effect, Schema } from "effect"
 import { adjust } from "effect/testing/TestClock"
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
@@ -26,10 +26,11 @@ const sample = Schema.decodeUnknownSync(Telemetry.Sample)({
 
 it.effect("stores server receipt time and pages newest samples without Session or Location identity", () =>
   Effect.gen(function* () {
+    const deletion = Schema.decodeUnknownSync(Telemetry.Sample)({ ...sample, operation: "session.message.delete" })
     const consent = yield* TelemetryConsent.Service
     yield* consent.set({ enabled: true, noticeVersion: 1 })
     const db = (yield* Database.Service).db
-    expect(yield* WebLatency.append(db, [sample, { kind: "long-task", at: sample.at, durationMs: 70 }])).toEqual({
+    expect(yield* WebLatency.append(db, [deletion, { kind: "long-task", at: sample.at, durationMs: 70 }])).toEqual({
       accepted: 2,
     })
     const rows = yield* db.select().from(WebLatencyTable).all()
@@ -41,11 +42,31 @@ it.effect("stores server receipt time and pages newest samples without Session o
     expect(first.data).toEqual([{ receivedAt: 0, sample: { kind: "long-task", at: sample.at, durationMs: 70 } }])
     expect(first.cursor.next).toBeString()
     expect((yield* WebLatency.list(db, { limit: 1, before: first.cursor.next })).data).toEqual([
-      { receivedAt: 0, sample },
+      { receivedAt: 0, sample: deletion },
     ])
     expect(yield* Effect.flip(WebLatency.list(db, { before: "not-a-cursor" }))).toBeInstanceOf(
       WebLatency.InvalidCursorError,
     )
+  }),
+)
+
+it.effect("skips retired operation rows before applying the limit and cursor", () =>
+  Effect.gen(function* () {
+    const consent = yield* TelemetryConsent.Service
+    yield* consent.set({ enabled: true, noticeVersion: 1 })
+    const db = (yield* Database.Service).db
+    const deletion = Schema.decodeUnknownSync(Telemetry.Sample)({ ...sample, operation: "session.message.delete" })
+    yield* WebLatency.append(db, [sample])
+    for (const operation of ["artifact.demo.export", "local.app.list", "session.dots.send"])
+      yield* db.run(sql`INSERT INTO web_latency (received_at, sample) VALUES (0, ${JSON.stringify({ ...sample, operation })})`)
+    yield* WebLatency.append(db, [deletion])
+    const first = yield* WebLatency.list(db, { limit: 1 })
+    expect(first.data).toEqual([{ receivedAt: 0, sample: deletion }])
+    expect(first.cursor.next).toBeString()
+    expect(yield* WebLatency.list(db, { limit: 1, before: first.cursor.next })).toEqual({
+      data: [{ receivedAt: 0, sample }],
+      cursor: {},
+    })
   }),
 )
 

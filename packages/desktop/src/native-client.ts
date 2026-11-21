@@ -1,12 +1,15 @@
-import { YCoding, type YCodingEvent } from "@ycoding-ai/client"
+import { YCoding as DiscoveryClient, type YCodingEvent } from "@ycoding-ai/client"
+import { YCoding, type V5Options } from "@ycoding-ai/client/v5"
 import { headers, type Endpoint } from "@ycoding-ai/client/service"
 import { describeError } from "./app-log"
 import { DesktopError } from "./contract"
 
-type Health = Awaited<ReturnType<ReturnType<typeof YCoding.make>["health"]["get"]>>
+type Health = Awaited<ReturnType<ReturnType<typeof DiscoveryClient.make>["health"]["get"]>>
 type Options = {
   readonly signal: AbortSignal
   readonly fetch?: typeof globalThis.fetch
+  readonly socket?: V5Options["socket"]
+  readonly directory?: string
   readonly version?: string
   readonly log?: (line: string) => void
   readonly onEvent?: (event: YCodingEvent) => void | Promise<void>
@@ -21,7 +24,9 @@ export async function connectNative(endpoint: Endpoint, options: Options) {
   const abort = () => lifetime.abort(options.signal.reason)
   options.signal.addEventListener("abort", abort, { once: true })
   if (options.signal.aborted) abort()
-  let api = YCoding.make({ baseUrl: endpoint.url, headers: headers(endpoint), ...(options.fetch ? { fetch: options.fetch } : {}) })
+  const client = (endpoint: Endpoint) => YCoding.make({ endpoint, location: { directory: options.directory ?? process.cwd() }, ...(options.socket ? { socket: options.socket } : {}) })
+  let target = endpoint
+  let api = client(target)
   let current: Health | undefined
   const ready = Promise.withResolvers<void>()
   let established = false
@@ -35,11 +40,16 @@ export async function connectNative(endpoint: Endpoint, options: Options) {
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
         let next = api
-        if (established && options.reconnect) {
-          const moved = await options.reconnect(request.signal)
-          next = YCoding.make({ baseUrl: moved.url, headers: headers(moved), ...(options.fetch ? { fetch: options.fetch } : {}) })
+        if (established) {
+          if (options.reconnect) {
+            target = await options.reconnect(request.signal)
+            api.transport.close()
+            next = client(target)
+            api = next
+          } else await api.transport.reconnect()
         }
-        const health = await next.health.get({ signal: AbortSignal.any([request.signal, AbortSignal.timeout(5_000)]) })
+        const discovery = DiscoveryClient.make({ baseUrl: target.url, headers: headers(target), ...(options.fetch ? { fetch: options.fetch } : {}) })
+        const health = await discovery.health.get({ signal: AbortSignal.any([request.signal, AbortSignal.timeout(5_000)]) })
         if (health.healthy !== true || !Number.isSafeInteger(health.pid) || health.pid <= 0 || typeof health.sourceEpoch !== "string" || typeof health.version !== "string")
           throw new Error("The native backend returned an invalid health response.")
         if (options.version !== undefined && health.version !== options.version) throw new DesktopError("The bundled backend version does not match this desktop app.")
@@ -83,6 +93,7 @@ export async function connectNative(endpoint: Endpoint, options: Options) {
   })()
   const close = async () => {
     lifetime.abort()
+    api.transport.close()
     options.signal.removeEventListener("abort", abort)
     await task
   }

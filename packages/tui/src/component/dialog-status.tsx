@@ -1,7 +1,7 @@
 import { useData } from "../context/data"
 import { createMemo } from "solid-js"
 import { DialogSelect } from "../ui/dialog-select"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationVersion } from "../build-version"
 import { keepAwakeAssertionLabel, keepAwakeStatusLabel, useKeepAwake } from "../keep-awake"
 import { useRemote } from "../remote-connector"
 import { useTelemetry } from "../context/telemetry"

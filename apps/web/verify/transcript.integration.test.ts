@@ -792,7 +792,7 @@ describe("transcript rendering", () => {
       expect(await page.evaluate(`document.querySelector('.transcript-message__receipt .delivery-status')?.dataset.state ?? ''`)).toBe("processing")
       expect(await page.evaluate(`getComputedStyle(document.querySelector('.transcript-message__receipt')).animationName`)).toBe("none")
       await page.evaluate(`document.querySelector('#consume').click()`)
-      expect(await page.evaluate(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') ?? ''`)).toBe("Sent")
+      expect(await page.evaluate(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') ?? ''`)).toBe("Read by YCoding")
     } finally { await page.close() }
   })
 

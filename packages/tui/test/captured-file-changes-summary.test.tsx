@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import type { ModelInfo, SessionMessageInfo } from "@ycoding-ai/client"
-import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
+import { capturedChangeSendID } from "@ycoding-ai/client/file-change-summary"
 import { json, sessionSnapshot } from "./fixture/tui-client"
 import { DESIGN_VIEWPORT } from "./viewport"
 import { renderScreen } from "./screen/harness"
@@ -50,7 +50,7 @@ const childTranscript = [
   assistant("msg_child_1", [editPart("call_edit_child", "src/child.ts", "true"), { type: "tool", id: "call_edit_bad", name: "edit", state: { status: "completed", input: {}, content: [], structured: { files: [{ file: "src/ignored.ts", patch: "not a diff", additions: 1, deletions: 0 }] } }, time: { created: 2, ran: 2, completed: 3 } }]),
   { id: "msg_manual_child", type: "user", text: "Manual nudge", time: { created: 3 } },
   assistant("msg_child_manual", [editPart("call_edit_manual", "src/manual.ts", "true")]),
-  { id: SessionOrchestrationIdentity.send(sessionID, "msg_reply_2", "call_send"), type: "synthetic", text: "Follow up", description: "Parent subagent message", metadata: { source: "subagent_parent", kind: "message" }, time: { created: 3 } },
+  { id: capturedChangeSendID(sessionID, "msg_reply_2", "call_send"), type: "synthetic", text: "Follow up", description: "Parent subagent message", metadata: { source: "subagent_parent", kind: "message" }, time: { created: 3 } },
   assistant("msg_child_2", [editPart("call_edit_later", "src/later.ts", "true")]),
 ] as SessionMessageInfo[]
 function routeFor(messages: SessionMessageInfo[], onMessages?: (sessionID: string) => void) {

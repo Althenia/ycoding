@@ -147,7 +147,7 @@ const runtime = Layer.effect(
         recover: unavailable(),
         resolveRecovery: unavailable,
       },
-      location: { agent: { list: unavailable } },
+      location: { agent: { list: unavailable }, integration: { accountSkills: { read: unavailable } } },
     })
   }),
 )

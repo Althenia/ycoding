@@ -79,15 +79,19 @@ const ctx = {
   getWebSockets: () => [],
   setWebSocketAutoResponse: () => undefined,
   blockConcurrencyWhile: (operation: () => Promise<unknown>) => operation(),
-} as unknown as DurableObjectState
+}
 const priorAutoResponse = globalThis.WebSocketRequestResponsePair
 globalThis.WebSocketRequestResponsePair = class {} as typeof WebSocketRequestResponsePair
 afterAll(() => { globalThis.WebSocketRequestResponsePair = priorAutoResponse })
 
-describe("DeviceRelay retired MCP boundary", () => {
+describe.each(["v4", "v5"])("DeviceRelay %s retired MCP boundary", (protocol) => {
+  const prefix = protocol === "v5" ? "/_ycoding/v5" : "/_ycoding"
+  const name = protocol === "v5" ? "v5:owner:device" : "owner:device"
+  const state = { ...ctx, id: { name } } as unknown as DurableObjectState
+
   test.each(methods)("%s refuses retired internal dispatch with and without trusted headers", async (method) => {
-    const relay = new DeviceRelay(ctx, env)
-    for (const path of ["/_ycoding/mcp", "/_ycoding/mcp-events/authorize"])
+    const relay = new DeviceRelay(state, env)
+    for (const path of new Set(["/_ycoding/mcp", "/_ycoding/mcp-events/authorize", `${prefix}/mcp`, `${prefix}/mcp-events/authorize`]))
       for (const trusted of [false, true]) {
         const response = await relay.fetch(new Request(`https://relay.internal${path}`, {
           method,
@@ -99,9 +103,13 @@ describe("DeviceRelay retired MCP boundary", () => {
   })
 
   test("retains trusted presence and rejects untrusted presence", async () => {
-    const relay = new DeviceRelay(ctx, env)
-    expect((await relay.fetch(new Request("https://relay.internal/_ycoding/presence"))).status).toBe(404)
-    const response = await relay.fetch(new Request("https://relay.internal/_ycoding/presence", { headers: { "x-ycoding-internal": "1" } }))
+    const relay = new DeviceRelay(state, env)
+    const url = `https://relay.internal${prefix}/presence`
+    const trusted = { headers: { "x-ycoding-internal": "1" } }
+    const otherPrefix = protocol === "v5" ? "/_ycoding" : "/_ycoding/v5"
+    expect((await relay.fetch(new Request(url))).status).toBe(404)
+    expect((await relay.fetch(new Request(`https://relay.internal${otherPrefix}/presence`, trusted))).status).toBe(404)
+    const response = await relay.fetch(new Request(url, trusted))
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ online: false })
   })

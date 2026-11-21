@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
-import { YCoding } from "@ycoding-ai/client"
+import { make } from "@ycoding-ai/client/v5"
 import { Effect, Exit, Logger, Scope } from "effect"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { createServer } from "node:net"
@@ -14,7 +14,6 @@ import { ProjectCreationError } from "../src/util/coordination"
 import { TestTuiContexts } from "../test/fixture/tui-environment"
 import { createTuiResolvedConfig } from "../test/fixture/tui-runtime"
 
-const auth = `Basic ${Buffer.from("ycoding:test-password").toString("base64")}`
 
 test("Project creation resolves ~ against the TUI home and rejects relative directories before the real Session API", async () => {
   await mkdir(join(import.meta.dir, "tmp"), { recursive: true })
@@ -38,7 +37,10 @@ test("Project creation resolves ~ against the TUI home and rejects relative dire
         Effect.provide(Logger.layer([Logger.map(Logger.formatStructured, () => {})])),
       ),
     )
-    const client = YCoding.make({ baseUrl: `http://127.0.0.1:${port}`, headers: { authorization: auth } })
+    const client = make({
+      endpoint: { url: `http://127.0.0.1:${port}`, auth: { type: "basic", username: "ycoding", password: "test-password" } },
+      location: { directory: root },
+    })
 
     let coordination!: ReturnType<typeof useCoordination>
     function Probe() {

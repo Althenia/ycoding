@@ -1,14 +1,15 @@
 #!/usr/bin/env bun
 
-import { runRegexProcess } from "@ycoding-ai/core/tool/regex-process"
+import { runPrivateEntry } from "./private-entry"
 
-if (!runRegexProcess()) {
-  const { InstallationVersion } = await import("@ycoding-ai/core/installation/version")
+if (!await runPrivateEntry()) {
+  const { InstallationVersion } = await import("./version")
   const { TuiCommand } = await import("./commands/tui")
   const { Runtime } = await import("./framework/runtime")
   const { main } = await import("./main")
 
   const handlers = Runtime.handlers(TuiCommand, {
+    "desktop-bridge": () => import("./commands/handlers/desktop-bridge"),
     api: () => import("./commands/handlers/api"),
     decision: {
       list: () => import("./commands/handlers/decision/list"),

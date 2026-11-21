@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore } from "../src/remote/store"
 import type { RemoteTransportHandlers } from "../src/remote/transport"
+import { fixtureSnapshot } from "./wire-peer"
 
 function connectedStore(onCompact?: (input: Readonly<Record<string, unknown>> | undefined) => Promise<never>) {
   const handlers = new Map<string, RemoteTransportHandlers>()
@@ -19,11 +20,10 @@ function connectedStore(onCompact?: (input: Readonly<Record<string, unknown>> | 
         request: async (operation, request) => {
           requests.push(operation)
           if (operation === "session.compact" && onCompact) return onCompact(request?.input)
+          if (operation === "event.subscribe") return { status: "ok" as const, value: { subscription_id: `sub-${request?.sessionID}` } }
           if (operation === "session.snapshot")
-            return { status: "ok" as const, value: {
-              sourceEpoch: "epoch_1", session: { id: "ses_a", title: "Root", time: { created: 1, updated: 1 } },
-              messages: [], watermark: { type: "log.synced", aggregateID: "ses_a", seq: 0 },
-            } }
+            return { status: "ok" as const, value: fixtureSnapshot("ses_a") }
+          if (operation === "session.log") return { status: "ok" as const, value: { watermark: 0 } }
           if (operation === "notice.subscribe") return { status: "ok" as const, value: { notices: [], total: 0, unavailable: false } }
           if (operation === "session.autonomy.get") return { status: "ok" as const, value: { data: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", effective: { permissions: "manual", guardrails: "manual", answers: "manual", inherited: {}, deferred: false, guardrailsEnabled: true } } } }
           return { status: "ok" as const, value: { data: [] } }

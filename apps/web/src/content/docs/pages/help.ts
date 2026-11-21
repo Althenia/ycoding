@@ -14,7 +14,7 @@ export const helpPages: readonly DocPage[] = [
             kind: "list",
             items: [
               "**Symptom:** macOS or Linux reports `ycoding: command not found` after installation. **Cause:** The installer added `~/.local/bin` to a shell profile, but the current terminal has not loaded it. **Fix:** Open a new terminal. If it still fails, add `$HOME/.local/bin` to PATH and run `ycoding --version` again.",
-              "**Symptom:** The install script reports an unsupported platform. **Cause:** The shell installer supports macOS arm64/x64 and Linux x64 only. **Fix:** Download the matching release archive from GitHub Releases. Windows users need the Windows x64 ZIP; Linux arm64 is not a published shell-installer target.",
+              "**Symptom:** The install script reports an unsupported platform. **Cause:** The shell installer supports macOS arm64/x64 and Linux x64 only. **Fix:** Download the matching release archive from GitHub Releases. Linux arm64 is not a published target. Windows release builds are paused until the native runtime supports Windows.",
               "**Symptom:** PowerShell cannot find `ycoding.exe`. **Cause:** The release ZIP has not been extracted, or the shell is in another directory. **Fix:** Change to the extracted folder, then run `.\\ycoding.exe --version`; alternatively use the full path to the extracted executable.",
             ],
           },

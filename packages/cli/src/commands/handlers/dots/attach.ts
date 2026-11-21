@@ -2,11 +2,11 @@ import { Effect } from "effect"
 import { Dots } from "@ycoding-ai/schema/dots"
 import { DotsCommand, dotsAttachConfirmed, dotsAttachWarning, dotsComputerLine } from "../../dots"
 import { Runtime } from "../../../framework/runtime"
-import { ask, connectDots, failCommand } from "./request"
+import { ask, connectDots, dotsRequest, failCommand } from "./request"
 
 export default Runtime.handler(DotsCommand.commands.attach, Effect.fn("cli.dots.attach")(function* (input) {
-  const request = yield* connectDots(input.server)
-  const current = yield* request("/api/dots")
+  const dots = yield* connectDots(input.server)
+  const current = yield* dotsRequest(() => dots.get())
   process.stdout.write(`${dotsComputerLine(current)}\n`)
   if (current.computer?.state === "attached") return undefined
   if (current.computer?.state !== "detached") return yield* Effect.fail(new Error("This computer cannot be attached right now"))
@@ -17,7 +17,7 @@ export default Runtime.handler(DotsCommand.commands.attach, Effect.fn("cli.dots.
     if (!dotsAttachConfirmed(answer)) return yield* Effect.fail(new Error("Attach cancelled"))
   }
   const expectedTarget: Dots.ComputerTarget | undefined = current.computer.target
-  const after = yield* request("/api/dots/computer", { replaceOthers: false, ...(expectedTarget === undefined ? {} : { expectedTarget }) })
+  const after = yield* dotsRequest(() => dots.attach({ replaceOthers: false, ...(expectedTarget === undefined ? {} : { expectedTarget }) }))
   process.stdout.write(`${dotsComputerLine(after)}\n`)
   if (after.computer?.state !== "attached") return yield* Effect.fail(new Error("This computer is not attached to your Dot"))
   return undefined

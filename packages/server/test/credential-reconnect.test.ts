@@ -5,8 +5,10 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { Integration } from "@ycoding-ai/core/integration"
 import { Location } from "@ycoding-ai/core/location"
+import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { Project } from "@ycoding-ai/core/project"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
+import { Session } from "@ycoding-ai/core/session"
 import { Authorization } from "@ycoding-ai/protocol/middleware/authorization"
 import { SchemaErrorMiddleware } from "@ycoding-ai/protocol/middleware/schema-error"
 import { Context, Effect, Layer } from "effect"
@@ -112,7 +114,33 @@ const setup = Effect.fn(function* () {
     HttpApiBuilder.layer(
       HttpApi.make("server").add(Api.groups["server.credential"]).add(Api.groups["server.integration"]),
     ).pipe(
-      Layer.provide(Layer.mergeAll(CredentialHandler, IntegrationHandler)),
+      Layer.provide(
+        Layer.mergeAll(
+          CredentialHandler,
+          IntegrationHandler.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.mock(Session.Service, {
+                  daybreak: { set: () => Effect.die("Unexpected daybreak update") },
+                  autonomy: {
+                    get: () => Effect.die("Unexpected autonomy read"),
+                    set: () => Effect.die("Unexpected autonomy update"),
+                    effective: () => Effect.die("Unexpected autonomy resolution"),
+                  },
+                  revert: {
+                    stage: () => Effect.die("Unexpected revert stage"),
+                    clear: () => Effect.die("Unexpected revert clear"),
+                    commit: () => Effect.die("Unexpected revert commit"),
+                  },
+                }),
+                Layer.mock(LocationServiceMap.Service, {
+                  get: () => Layer.effectContext(Effect.die("Unexpected location service read")),
+                }),
+              ),
+            ),
+          ),
+        ),
+      ),
       Layer.provide(
         Layer.mergeAll(
           Layer.succeed(LocationMiddleware, (effect) =>

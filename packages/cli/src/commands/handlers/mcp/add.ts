@@ -3,7 +3,7 @@ import path from "node:path"
 import { readFile, stat, writeFile } from "node:fs/promises"
 import { Effect, Option } from "effect"
 import { applyEdits, modify } from "jsonc-parser"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../../../paths"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
 
@@ -30,7 +30,7 @@ export default Runtime.handler(
       ? { type: "remote" as const, url, ...(headers ? { headers } : {}) }
       : { type: "local" as const, command, ...(environment ? { environment } : {}) }
 
-    const global = yield* Global.Service
+    const global = yield* FrontendPaths.Service
     const configPath = yield* Effect.promise(() => resolveConfigPath(input.global ? global.config : process.cwd()))
     yield* Effect.promise(() => write(configPath, input.name, server))
     process.stdout.write(`MCP server "${input.name}" added to ${configPath}` + EOL)

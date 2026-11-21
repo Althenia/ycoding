@@ -10,7 +10,7 @@ import { Telemetry } from "@ycoding-ai/schema/telemetry"
 import { Schema } from "effect"
 import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
 import { Global } from "@ycoding-ai/core/global"
-import { assertPrivateEndpoint, type LocalLocation, type LocalServer } from "../src/remote-local"
+import { assertPrivateEndpoint, createLocalServer, type LocalLocation, type LocalServer } from "../src/remote-local"
 import { LocalFailure as LocalFailureClass } from "../src/remote-local"
 import {
   contained,
@@ -1907,8 +1907,9 @@ describe("operation mapping", () => {
       ["session.autonomy.set", { answers: "manual" }],
       ["session.goal.set", { goal: "Write code" }], ["session.goal.stop", { goal: null }],
       ["session.pending.remove", { messageID: "msg_1" }], ["session.pending.steer", { messageID: "msg_1" }],
+      ["session.message.delete", { messageID: "msg_1" }],
     ] as const) expect(errorOf(await send(operation, fields)).code).toBe("subagent_read_only")
-    expect(test.calls.some((call) => ["prompt", "command", "compact", "skill", "switchModel", "switchAgent", "autonomySet", "pendingRemove", "pendingSteer"].includes(call.method))).toBe(false)
+    expect(test.calls.some((call) => ["prompt", "command", "compact", "skill", "switchModel", "switchAgent", "autonomySet", "pendingRemove", "pendingSteer", "deleteMessage"].includes(call.method))).toBe(false)
     expect(valueOf(await send("session.get"))).toMatchObject({ data: { id: "ses_child" } })
     expect(valueOf(await send("session.interrupt"))).toBeNull()
     expect(valueOf(await send("session.prompt", { text: "Side chat" }, "ses_btw"))).toEqual({ data: { id: "msg_1" } })
@@ -2023,6 +2024,37 @@ describe("operation mapping", () => {
     })
     expect(errorOf(foreign).code).toBe("session_not_allowed")
     expect(calls.some((call) => call.method === "pendingRemove")).toBe(false)
+  })
+
+  test("Bun connector deletion forwards the recorded Location and classifies HTTP refusals", async () => {
+    const calls: Array<{ method: string; path: string; directory: string | null }> = []
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      const path = new URL(request.url).pathname
+      calls.push({ method: request.method, path, directory: request.headers.get("x-ycoding-directory") })
+      const messageID = path.split("/").at(-1)
+      if (messageID === "msg_unread") return new Response(null, { status: 204 })
+      if (messageID === "msg_missing") return Response.json({
+        _tag: "MessageNotFoundError", sessionID: "ses_1", messageID, message: "Message not found",
+      }, { status: 404 })
+      return Response.json({
+        _tag: "MessageDeleteRefusedError", sessionID: "ses_1", messageID, reason: "not_owned", message: "Message belongs to another author",
+      }, { status: 409 })
+    } })
+    try {
+      const { deleteMessage } = createLocalServer({ url: server.url.href })
+      const { local, registry, subscriptions } = await harness({ results: { deleteMessage } })
+      const send = (messageID: string) => executeRemoteOperation({
+        request: request("session.message.delete", { messageID }), local, sessions: registry, subscriptions,
+      })
+      expect(valueOf(await send("msg_unread"))).toBeNull()
+      expect(errorOf(await send("msg_missing")).code).toBe("not_found")
+      expect(errorOf(await send("msg_plugin")).code).toBe("message_not_owned")
+      expect(calls).toEqual(["msg_unread", "msg_missing", "msg_plugin"].map((messageID) => ({
+        method: "DELETE", path: `/api/session/ses_1/message/${messageID}`, directory: encodeURIComponent("/work"),
+      })))
+    } finally {
+      await server.stop(true)
+    }
   })
 
   test("maps each mutation onto its exact Protocol call and payload", async () => {
@@ -3279,5 +3311,63 @@ describe("directory containment across host path semantics", () => {
       expect(contained(root, paths.dirname(root), paths)).toBe(false)
       expect(contained(root, `${root}-sibling`, paths)).toBe(false)
     }
+  })
+})
+
+describe("session list background filter", () => {
+  const origin = "dots-executor"
+  const fixture = () => [
+    { ...sessionInfo("ses_bg_a", { updated: 50 }), origin },
+    sessionInfo("ses_bg_b", { updated: 40 }),
+    { ...sessionInfo("ses_bg_c", { updated: 30 }), origin },
+    sessionInfo("ses_bg_d", { updated: 20 }),
+    sessionInfo("ses_bg_e", { updated: 10 }),
+  ] as SessionInfo[]
+  const ids = (page: { data: readonly SessionInfo[] }) => page.data.map((row) => row.id)
+
+  test("absent and include list every Session, exclude drops Sessions with an origin", () => {
+    const all = ["ses_bg_a", "ses_bg_b", "ses_bg_c", "ses_bg_d", "ses_bg_e"]
+    expect(ids(listPage(fixture(), parseListQuery({})))).toEqual(all)
+    expect(ids(listPage(fixture(), parseListQuery({ background: "include" })))).toEqual(all)
+    expect(ids(listPage(fixture(), parseListQuery({ background: "exclude" })))).toEqual(["ses_bg_b", "ses_bg_d", "ses_bg_e"])
+  })
+
+  test("exclude applies before limit and cursor in every order", () => {
+    for (const order of ["desc", "asc", "pinned", "active"] as const) {
+      const query = { background: "exclude", order, limit: 2 }
+      const first = listPage(fixture(), parseListQuery(query))
+      const expected = order === "asc" ? ["ses_bg_e", "ses_bg_d"] : ["ses_bg_b", "ses_bg_d"]
+      expect(ids(first)).toEqual(expected)
+      const next = listPage(fixture(), parseListQuery({ ...query, cursor: first.cursor.next }))
+      expect(ids(next)).toEqual([order === "asc" ? "ses_bg_b" : "ses_bg_e"])
+      expect(next.cursor.next).toBeUndefined()
+    }
+  })
+
+  test("an active-order cursor from another background filter is stale", () => {
+    const first = listPage(fixture(), parseListQuery({ order: "active", limit: 2 }))
+    const reused = listPage(fixture(), parseListQuery({ order: "active", limit: 2, background: "exclude", cursor: first.cursor.next }))
+    expect(reused).toMatchObject({ data: [], stale: true })
+  })
+
+  test("rejects values other than include and exclude", async () => {
+    for (const background of ["only", "", "Include", 1, true, null, ["include"], {}])
+      expect(() => parseListQuery({ background })).toThrow("Invalid background")
+    for (const background of ["only", 1, null]) {
+      const h = await harness({ sessions: fixture() })
+      const rejected = await executeRemoteOperation({ request: request("session.list", { background }), local: h.local, sessions: h.registry, subscriptions: h.subscriptions })
+      expect(errorOf(rejected).code).toBe("invalid_message")
+      expect(h.calls).toEqual([])
+    }
+  })
+
+  test("session.list filters the verified backend Sessions before paging", async () => {
+    const h = await harness({ sessions: fixture() })
+    const run = async (input: Record<string, unknown>) => valueOf(await executeRemoteOperation({ request: request("session.list", input), local: h.local, sessions: h.registry, subscriptions: h.subscriptions })) as { data: SessionInfo[]; cursor: { next?: string } }
+    const first = await run({ background: "exclude", limit: 2 })
+    expect(ids(first)).toEqual(["ses_bg_b", "ses_bg_d"])
+    expect(ids(await run({ background: "exclude", limit: 2, cursor: first.cursor.next }))).toEqual(["ses_bg_e"])
+    expect(ids(await run({ background: "include", limit: 2 }))).toEqual(["ses_bg_a", "ses_bg_b"])
+    expect(ids(await run({ limit: 2 }))).toEqual(["ses_bg_a", "ses_bg_b"])
   })
 })

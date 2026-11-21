@@ -4,14 +4,12 @@ import { createHash } from "node:crypto"
 import { Dots } from "@ycoding-ai/schema/dots"
 import { lstat, mkdir, realpath, stat } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
+import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32, posix } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { Project } from "@ycoding-ai/schema/project"
 import type { FormAnswer, ReviewDecideInput, SessionInfo } from "@ycoding-ai/client/promise"
 import { capturedChildSessionIDs, summarizeCapturedChanges } from "@ycoding-ai/client/file-change-summary"
-import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
-import { hostDirectory } from "@ycoding-ai/core/host-directory"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "./paths"
 import {
   RemoteLimits,
   readDotsComputerTarget,
@@ -594,7 +592,7 @@ async function allowedWorkspaceDirectory(directory: string): Promise<boolean> {
 }
 
 async function excludedDirectory(directory: string): Promise<boolean> {
-  const standalone = resolve(Global.Path.state, "standalone-sessions")
+  const standalone = resolve(FrontendPaths.Path.state, "standalone-sessions")
   const temporary = resolve(tmpdir())
   const roots = [standalone, temporary, "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"]
   const [canonical, ...canonicalRoots] = await Promise.all([directory, ...roots].map(canonicalPath))
@@ -1929,7 +1927,8 @@ async function readCapturedGroups(input: OperationInput, cache: OperationCache, 
     return { ...member, messages: member.child === undefined ? undefined : await input.local.capturedInputs(member.child.id, locationInfo(member.child), signal) }
   })
   const children = new Map(members.flatMap((member) => member.messages === undefined ? [] : [[member.childID, member.messages] as const]))
-  const groups = summarizeCapturedChanges(parent, children, (assistantMessageID, callID) => SessionOrchestrationIdentity.send(sessionID, assistantMessageID, callID))
+  const groups = summarizeCapturedChanges(parent, children, (assistantMessageID, callID) =>
+    `msg_task_send_${createHash("sha256").update(`${sessionID}\0${assistantMessageID}\0${callID}`).digest("hex").slice(0, 24)}`)
     .flatMap((unit) => unit.files.map((file) => ({ placementMessageID: unit.placementMessageID, ...file })))
     .map((original) => JSON.stringify(original).length > maxCapturedPageChars
       ? { ...original, additions: 0, deletions: 0, files: [{ path: original.path, diff: "", additions: 0, deletions: 0, status: original.status, unavailable: true }] }
@@ -2165,8 +2164,8 @@ export type ListQuery = {
   readonly searchFields?: "summary"
   readonly workspace?: string
   readonly status?: "waiting" | "running" | "idle"
-  readonly parentID?: string | null
   readonly background?: "include" | "exclude"
+  readonly parentID?: string | null
   readonly limit: number
   readonly anchor?: Cursor
   readonly around?: string
@@ -2188,8 +2187,8 @@ export function parseListQuery(fields: Readonly<Record<string, unknown>>): ListQ
     searchFields: fields.searchFields === undefined ? undefined : literal(fields.searchFields, ["summary"], "searchFields"),
     workspace: fields.workspace === undefined ? undefined : requireString(fields.workspace, "workspace", 128),
     status: fields.status === undefined ? undefined : literal(fields.status, ["waiting", "running", "idle"], "status"),
-    parentID: fields.parentID === undefined ? undefined : fields.parentID === null ? null : sessionID(fields.parentID, "parentID"),
     background: fields.background === undefined ? undefined : literal(fields.background, ["include", "exclude"], "background"),
+    parentID: fields.parentID === undefined ? undefined : fields.parentID === null ? null : sessionID(fields.parentID, "parentID"),
     limit: fields.limit === undefined ? 50 : optionalInteger(fields.limit, "limit", 1, RemoteLimits.maxSessionListPage)!,
     anchor,
     around: fields.around === undefined ? undefined : sessionID(fields.around, "around"),
@@ -2220,9 +2219,10 @@ export function listPage(sessions: readonly SessionInfo[], query: ListQuery, run
     .filter((session) => query.status === undefined || (query.status === "waiting" ? isWaiting(session)
       : query.status === "running" ? isRunning(session) && !isWaiting(session) : !isWaiting(session) && !isRunning(session) && session.time.archived === undefined))
     .filter((session) => (parentID === undefined ? true : (session.parentID ?? null) === parentID))
+    .filter((session) => query.background !== "exclude" || session.origin === undefined)
     .sort(order === "active" ? (left, right) => compareActiveSessions(activeKey(left), activeKey(right)) : order === "pinned" ? comparePinnedSessions : compareSessions)
   const epoch = order !== "active" ? undefined : createHash("sha256").update(JSON.stringify([
-    query.workspace, search, query.searchFields, query.status, parentID, matching.map(activeKey),
+    query.workspace, search, query.searchFields, query.status, query.background, parentID, matching.map(activeKey),
   ])).digest("hex")
   if (order === "active" && anchor !== undefined && anchor.epoch !== epoch) return { data: [], cursor: { previous: undefined, next: undefined }, stale: true }
   const ordered = effectiveOrder === "asc" || ((effectiveOrder === "pinned" || effectiveOrder === "active") && direction === "next") ? matching : matching.toReversed()
@@ -2724,6 +2724,16 @@ function predictionInput(fields: Readonly<Record<string, unknown>>) {
     ...(fields.hint === undefined ? {} : { hint: requireString(fields.hint, "hint", 2_000, { allowEmpty: true }) }),
   }
 }
+
+function hostDirectory(input: string, home: string, platform: NodeJS.Platform = process.platform) {
+  const windows = platform === "win32"
+  const api = windows ? win32 : posix
+  if (input.includes("\0")) return undefined
+  const expanded = input === "~" ? home : (windows ? /^~[\\/]/ : /^~\//).test(input) ? api.join(home, input.slice(2)) : input
+  const absolute = windows ? /^(?:[A-Za-z]:[\\/]|[\\/]{2}(?![?.][\\/])[^\\/]+[\\/][^\\/]+)/.test(expanded) : api.isAbsolute(expanded)
+  return absolute ? api.resolve(expanded) : undefined
+}
+
 
 export function placementDirectory(value: unknown, host: { readonly platform: NodeJS.Platform; readonly home: string } = { platform: process.platform, home: homedir() }) {
   const directory = isSessionDirectoryPath(value) ? hostDirectory(value, host.home, host.platform) : undefined

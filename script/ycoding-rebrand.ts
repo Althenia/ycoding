@@ -50,6 +50,34 @@ const externalLinePattern = new RegExp(
   ].join("|"),
 )
 
+const nativeProviderPaths = [
+  /^rust\/crates\/core\/src\/resources\/auth\/opencode\.rs$/,
+  /^rust\/crates\/core\/tests\/auth_opencode\.rs$/,
+  /^rust\/crates\/core\/tests\/session_runner_auth_refresh\.rs$/,
+]
+
+const nativeActiveProduct = /@opencode-ai|\bOpenCode TUI\b|\bOPENCODE_[A-Z0-9_]+\b|x-opencode-|\.opencode(?:\b|\/)|\bopencode\.jsonc?\b/i
+
+const nativeExternalLines: Array<{ path: RegExp; line: RegExp }> = [
+  {
+    path: /^rust\/crates\/core\/src\/resources\/auth\/(?:mod|builtin)\.rs$/,
+    line: /^\s*pub mod opencode;$|\bopencode::Console::new\(/,
+  },
+  { path: /^rust\/crates\/.+/, line: /\bopencode\.provider\.opencode\b/ },
+  {
+    path: /^rust\/crates\/runtime\/tests\/plugin_context\.rs$/,
+    line: /connection\.active\("opencode"\)/,
+  },
+]
+
+function nativeVerdict(file: string, value: string): "external" | "active" | undefined {
+  const matches =
+    nativeProviderPaths.some((pattern) => pattern.test(file)) ||
+    nativeExternalLines.some((rule) => rule.path.test(file) && rule.line.test(value))
+  if (!matches) return undefined
+  return nativeActiveProduct.test(value.replaceAll("opencode.provider.opencode", "")) ? "active" : "external"
+}
+
 const protectedUrls = [
   /https?:\/\/(?:www\.)?opencode\.ai[^\s)\]}>"']*/gi,
   /https?:\/\/console\.opencode\.ai[^\s)\]}>"']*/gi,
@@ -67,7 +95,9 @@ export function classifyLegacyReference(file: string, value: string): LegacyDisp
   if (compatibilityPaths.some((pattern) => pattern.test(normalized))) return "compatibility"
   if (upstreamPaths.some((pattern) => pattern.test(normalized))) return "upstream"
   if (externalPaths.some((pattern) => pattern.test(normalized))) return "external"
-  if (externalLinePattern.test(value) || value.includes("YCODING_EXTERNAL_OPENCODE")) return "external"
+  const native = nativeVerdict(normalized, value)
+  if (native === "external") return "external"
+  if (native !== "active" && externalLinePattern.test(value) || value.includes("YCODING_EXTERNAL_OPENCODE")) return "external"
   if (!legacyPattern.test(value) && !/opencode/i.test(normalized)) return undefined
   if (value.includes("YCODING_LEGACY_COMPAT")) return "compatibility"
   if (value.includes("YCODING_UPSTREAM")) return "upstream"

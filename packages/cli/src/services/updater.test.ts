@@ -1,5 +1,5 @@
 import { NodeFileSystem } from "@effect/platform-node"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../paths"
 import { afterEach, describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
@@ -74,7 +74,7 @@ describe("updater release source", () => {
             },
           }),
         ),
-        Effect.provide(Global.layerWith({ config: fixture.config })),
+        Effect.provide(FrontendPaths.layerWith({ config: fixture.config })),
         Effect.provide(NodeFileSystem.layer),
       ),
     )
@@ -102,7 +102,7 @@ describe("updater release source", () => {
             },
           }),
         ),
-        Effect.provide(Global.layerWith({ config: fixture.config })),
+        Effect.provide(FrontendPaths.layerWith({ config: fixture.config })),
         Effect.provide(NodeFileSystem.layer),
       ),
     )

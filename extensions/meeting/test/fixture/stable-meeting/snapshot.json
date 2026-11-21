@@ -1,0 +1,332 @@
+{
+  "files": {
+    "checkpointed": {
+      "meetings.sqlite": {
+        "bytes": 110592,
+        "sha256": "c93a3f6474a606a5e9dbff45a5dbe1acf4ded8ec93158040f45c8408fbf4c9d9"
+      }
+    },
+    "wal": {
+      "meetings.sqlite": {
+        "bytes": 110592,
+        "sha256": "2d50d31fbb813a15a3e5d6eef8d8c0333f8be38b71c2e374e18333e09ce87cd4"
+      },
+      "meetings.sqlite-shm": {
+        "bytes": 32768,
+        "sha256": "720d42cb44a2493719afad02196b1512b98a76eb04fbe8a9b0007c3ed37fb69e"
+      },
+      "meetings.sqlite-wal": {
+        "bytes": 111272,
+        "sha256": "1d4e850933acdecd29924fd47ee7f07d751776f5daf37f910e272869b9d0e870"
+      }
+    }
+  },
+  "schema": [
+    {
+      "type": "index",
+      "name": "approvals_meeting",
+      "tbl_name": "approvals",
+      "sql": "CREATE INDEX approvals_meeting ON approvals(meeting_id)"
+    },
+    {
+      "type": "index",
+      "name": "checkpoints_meeting",
+      "tbl_name": "checkpoints",
+      "sql": "CREATE INDEX checkpoints_meeting ON checkpoints(meeting_id)"
+    },
+    {
+      "type": "index",
+      "name": "final_sequence",
+      "tbl_name": "segments",
+      "sql": "CREATE UNIQUE INDEX final_sequence ON segments(meeting_id, sequence) WHERE state='final'"
+    },
+    {
+      "type": "index",
+      "name": "findings_meeting",
+      "tbl_name": "findings",
+      "sql": "CREATE INDEX findings_meeting ON findings(meeting_id)"
+    },
+    {
+      "type": "index",
+      "name": "jobs_meeting",
+      "tbl_name": "jobs",
+      "sql": "CREATE INDEX jobs_meeting ON jobs(meeting_id)"
+    },
+    {
+      "type": "index",
+      "name": "plans_meeting",
+      "tbl_name": "plans",
+      "sql": "CREATE INDEX plans_meeting ON plans(meeting_id)"
+    },
+    {
+      "type": "index",
+      "name": "proposals_meeting",
+      "tbl_name": "proposals",
+      "sql": "CREATE INDEX proposals_meeting ON proposals(meeting_id)"
+    },
+    {
+      "type": "index",
+      "name": "segment_order",
+      "tbl_name": "segments",
+      "sql": "CREATE INDEX segment_order ON segments(meeting_id, sequence)"
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_approvals_1",
+      "tbl_name": "approvals",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_checkpoints_1",
+      "tbl_name": "checkpoints",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_findings_1",
+      "tbl_name": "findings",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_jobs_1",
+      "tbl_name": "jobs",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_knowledge_references_1",
+      "tbl_name": "knowledge_references",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_meetings_1",
+      "tbl_name": "meetings",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_plans_1",
+      "tbl_name": "plans",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_proposals_1",
+      "tbl_name": "proposals",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_segments_1",
+      "tbl_name": "segments",
+      "sql": null
+    },
+    {
+      "type": "table",
+      "name": "approvals",
+      "tbl_name": "approvals",
+      "sql": "CREATE TABLE approvals (id TEXT PRIMARY KEY, meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE, data TEXT NOT NULL CHECK(json_valid(data)))"
+    },
+    {
+      "type": "table",
+      "name": "checkpoints",
+      "tbl_name": "checkpoints",
+      "sql": "CREATE TABLE checkpoints (id TEXT PRIMARY KEY, meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE, data TEXT NOT NULL CHECK(json_valid(data)))"
+    },
+    {
+      "type": "table",
+      "name": "findings",
+      "tbl_name": "findings",
+      "sql": "CREATE TABLE findings (id TEXT PRIMARY KEY, meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE, data TEXT NOT NULL CHECK(json_valid(data)))"
+    },
+    {
+      "type": "table",
+      "name": "jobs",
+      "tbl_name": "jobs",
+      "sql": "CREATE TABLE jobs (id TEXT PRIMARY KEY, meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE, data TEXT NOT NULL CHECK(json_valid(data)))"
+    },
+    {
+      "type": "table",
+      "name": "knowledge_references",
+      "tbl_name": "knowledge_references",
+      "sql": "CREATE TABLE knowledge_references (\n            meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,\n            server TEXT NOT NULL, target TEXT NOT NULL, data TEXT NOT NULL CHECK(json_valid(data)),\n            PRIMARY KEY(meeting_id, server, target)\n          )"
+    },
+    {
+      "type": "table",
+      "name": "meetings",
+      "tbl_name": "meetings",
+      "sql": "CREATE TABLE meetings (id TEXT PRIMARY KEY, data TEXT NOT NULL CHECK(json_valid(data)))"
+    },
+    {
+      "type": "table",
+      "name": "plans",
+      "tbl_name": "plans",
+      "sql": "CREATE TABLE plans (id TEXT PRIMARY KEY, meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE, data TEXT NOT NULL CHECK(json_valid(data)))"
+    },
+    {
+      "type": "table",
+      "name": "proposals",
+      "tbl_name": "proposals",
+      "sql": "CREATE TABLE proposals (id TEXT PRIMARY KEY, meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE, data TEXT NOT NULL CHECK(json_valid(data)))"
+    },
+    {
+      "type": "table",
+      "name": "segments",
+      "tbl_name": "segments",
+      "sql": "CREATE TABLE segments (\n            id TEXT PRIMARY KEY, meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,\n            sequence INTEGER NOT NULL, state TEXT NOT NULL, original_text TEXT NOT NULL,\n            data TEXT NOT NULL CHECK(json_valid(data))\n          )"
+    }
+  ],
+  "rows": {
+    "approvals": [
+      {
+        "rowid": 1,
+        "id": "approval",
+        "meeting_id": "imported",
+        "data": "{\"id\":\"approval\",\"meetingID\":\"imported\",\"targetID\":\"proposal\",\"decision\":\"reject\",\"detail\":\"Retain review history\",\"createdAt\":\"2026-01-01T00:00:00.000Z\"}"
+      }
+    ],
+    "checkpoints": [
+      {
+        "rowid": 1,
+        "id": "checkpoint",
+        "meeting_id": "imported",
+        "data": "{\"id\":\"checkpoint\",\"meetingID\":\"imported\",\"throughSequence\":1,\"summary\":\"Imported summary\",\"final\":true,\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"latencyMs\":12}"
+      }
+    ],
+    "findings": [
+      {
+        "rowid": 1,
+        "id": "finding",
+        "meeting_id": "imported",
+        "data": "{\"id\":\"finding\",\"meetingID\":\"imported\",\"kind\":\"decision\",\"summary\":\"Preserve stable history\",\"sourceSegmentIds\":[\"segment\"],\"confidence\":0.9,\"status\":\"confirmed\",\"createdAt\":\"2026-01-01T00:00:00.000Z\"}"
+      }
+    ],
+    "jobs": [
+      {
+        "rowid": 1,
+        "id": "job",
+        "meeting_id": "imported",
+        "data": "{\"id\":\"job\",\"meetingID\":\"imported\",\"kind\":\"analysis\",\"status\":\"done\",\"attempts\":1,\"updatedAt\":\"2026-01-01T00:00:00.000Z\"}"
+      }
+    ],
+    "knowledge_references": [
+      {
+        "rowid": 1,
+        "meeting_id": "imported",
+        "server": "wiki",
+        "target": "page",
+        "data": "{\"server\":\"wiki\",\"target\":\"page\",\"revision\":\"revision-1\",\"content\":\"Stable knowledge\",\"retrievedAt\":\"2026-01-01T00:00:00.000Z\"}"
+      }
+    ],
+    "meetings": [
+      {
+        "rowid": 1,
+        "id": "imported",
+        "data": "{\"id\":\"imported\",\"title\":\"Stable meeting history\",\"sessionID\":\"ses_imported\",\"status\":\"stopped\",\"createdAt\":\"2026-10-14T02:01:11.841Z\",\"updatedAt\":\"2026-10-14T02:01:11.847Z\"}"
+      }
+    ],
+    "plans": [
+      {
+        "rowid": 1,
+        "id": "imported",
+        "meeting_id": "imported",
+        "data": "{\"meetingID\":\"imported\",\"content\":\"Imported plan\",\"findingIds\":[\"finding\"],\"sourceSegmentIds\":[\"segment\"],\"status\":\"proposed\",\"createdAt\":\"2026-01-01T00:00:00.000Z\"}"
+      }
+    ],
+    "proposals": [
+      {
+        "rowid": 1,
+        "id": "proposal",
+        "meeting_id": "imported",
+        "data": "{\"id\":\"proposal\",\"meetingID\":\"imported\",\"server\":\"wiki\",\"target\":\"page\",\"operation\":\"replace\",\"existingContent\":\"Stable knowledge\",\"suggestedContent\":\"Proposed knowledge\",\"explanation\":\"Meeting evidence\",\"sourceSegmentIds\":[\"segment\"],\"references\":[],\"expectedRevision\":\"revision-1\",\"confidence\":0.9,\"status\":\"pending\",\"createdAt\":\"2026-01-01T00:00:00.000Z\"}"
+      }
+    ],
+    "segments": [
+      {
+        "rowid": 1,
+        "id": "segment",
+        "meeting_id": "imported",
+        "sequence": 1,
+        "state": "final",
+        "original_text": "สวัสดี stable",
+        "data": "{\"id\":\"segment\",\"meetingID\":\"imported\",\"sequence\":1,\"source\":\"remote\",\"speakerID\":\"remote\",\"startMs\":0,\"endMs\":1000,\"rawText\":\"  สวัสดี stable  \",\"text\":\"สวัสดี stable\",\"state\":\"final\",\"model\":\"whisper\",\"createdAt\":\"2026-01-01T00:00:00.000Z\"}"
+      }
+    ]
+  },
+  "pragmas": {
+    "user_version": [
+      {
+        "user_version": 1
+      }
+    ],
+    "application_id": [
+      {
+        "application_id": 0
+      }
+    ],
+    "schema_version": [
+      {
+        "schema_version": 17
+      }
+    ],
+    "encoding": [
+      {
+        "encoding": "UTF-8"
+      }
+    ],
+    "page_size": [
+      {
+        "page_size": 4096
+      }
+    ],
+    "page_count": [
+      {
+        "page_count": 27
+      }
+    ],
+    "freelist_count": [
+      {
+        "freelist_count": 0
+      }
+    ],
+    "auto_vacuum": [
+      {
+        "auto_vacuum": 0
+      }
+    ],
+    "journal_mode": [
+      {
+        "journal_mode": "wal"
+      }
+    ],
+    "foreign_keys": [
+      {
+        "foreign_keys": 1
+      }
+    ],
+    "busy_timeout": [
+      {
+        "timeout": 5000
+      }
+    ],
+    "synchronous": [
+      {
+        "synchronous": 2
+      }
+    ],
+    "secure_delete": [
+      {
+        "secure_delete": 1
+      }
+    ],
+    "integrity_check": [
+      {
+        "integrity_check": "ok"
+      }
+    ],
+    "foreign_key_check": []
+  }
+}

@@ -78,11 +78,18 @@ test("recorded consumption rows stay compact while details keep every exact metr
 })
 
 test("outcome counts and the failed share stay empty until outcome data exists", () => {
-  expect(errorRateText(undefined)).toBe("")
-  expect(errorRateText({ completed: 0, failed: 0, cancelled: 0 })).toBe("")
-  expect(errorRateText({ completed: 8, failed: 1, cancelled: 1 })).toBe("10.0%")
-  expect(errorRateText({ completed: 5, failed: 0, cancelled: 2 })).toBe("0.0%")
-  expect(outcomeLine(undefined)).toBeUndefined()
-  expect(outcomeLine({ completed: 0, failed: 0, cancelled: 0 })).toBe("Outcomes 0 completed · 0 failed · 0 cancelled")
-  expect(outcomeLine({ completed: 1_200, failed: 3, cancelled: 0 })).toBe("Outcomes 1,200 completed · 3 failed · 0 cancelled · error rate 0.2%")
+  expect(errorRateText(undefined, 0)).toBe("")
+  expect(errorRateText({ completed: 0, failed: 0, cancelled: 0 }, 0)).toBe("")
+  expect(errorRateText({ completed: 8, failed: 1, cancelled: 1 }, 10)).toBe("10.0%")
+  expect(errorRateText({ completed: 5, failed: 0, cancelled: 2 }, 7)).toBe("0.0%")
+  expect(outcomeLine(undefined, 0)).toBeUndefined()
+  expect(outcomeLine({ completed: 0, failed: 0, cancelled: 0 }, 0)).toBe("Outcomes 0 completed · 0 failed · 0 cancelled")
+  expect(outcomeLine({ completed: 1_200, failed: 3, cancelled: 0 }, 1_203)).toBe("Outcomes 1,200 completed · 3 failed · 0 cancelled · error rate 0.2%")
+})
+
+test("partial outcome coverage keeps reported counts but never reports a complete failure rate", () => {
+  const outcomes = { completed: 1, failed: 1, cancelled: 0 }
+  expect(errorRateText(outcomes, 3)).toBe("")
+  expect(outcomeLine(outcomes, 3)).toBe("Outcomes 1 completed · 1 failed · 0 cancelled · incomplete coverage")
+  expect(errorRateText(outcomes, 2)).toBe("50.0%")
 })

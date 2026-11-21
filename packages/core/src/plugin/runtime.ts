@@ -1,6 +1,8 @@
 export * as PluginRuntime from "./runtime"
 
 import { Context, Effect, Layer } from "effect"
+import type { Plugin } from "@ycoding-ai/plugin/effect"
+import { AccountConnectors } from "../account-connectors"
 import { Agent } from "../agent"
 import { makeGlobalNode } from "../effect/app-node"
 import { Job } from "../job"
@@ -17,6 +19,14 @@ export interface Interface {
   readonly job: Pick<Job.Interface, "start" | "wait" | "block" | "background" | "cancel" | "noticeAdmitted">
   readonly orchestration: SessionOrchestration.Interface
   readonly location: {
+    readonly integration: {
+      readonly accountSkills: {
+        readonly read: (
+          ref: Location.Ref,
+          input: Parameters<Plugin.Context["integration"]["accountSkills"]["read"]>[0],
+        ) => ReturnType<Plugin.Context["integration"]["accountSkills"]["read"]>
+      }
+    }
     readonly agent: {
       readonly list: (
         ref: Location.Ref,
@@ -81,9 +91,14 @@ export const layerWithCell = (cell: Cell) =>
         reconcileAutonomy: () => Effect.die(new Error("Autonomy reconciliation requires the native Session runtime")),
         page: (input) => require(cell, (runtime) => runtime.orchestration.page(input)),
         send: (input) => require(cell, (runtime) => runtime.orchestration.send(input)),
-        answer: (input) => input.dots
-          ? Effect.fail(new SessionOrchestration.ConflictError({ message: "Dots decisions require an authenticated device operation" }))
-          : require(cell, (runtime) => runtime.orchestration.answer(input)),
+        answer: (input) =>
+          input.dots
+            ? Effect.fail(
+                new SessionOrchestration.ConflictError({
+                  message: "Dots decisions require an authenticated device operation",
+                }),
+              )
+            : require(cell, (runtime) => runtime.orchestration.answer(input)),
         cancel: (input) => require(cell, (runtime) => runtime.orchestration.cancel(input)),
         notice: (input) => require(cell, (runtime) => runtime.orchestration.notice(input)),
         resume: (input) => require(cell, (runtime) => runtime.orchestration.resume(input)),
@@ -96,10 +111,24 @@ export const layerWithCell = (cell: Cell) =>
         recover: require(cell, (runtime) => runtime.orchestration.recover),
         resolveRecovery: () =>
           Effect.fail(
-            new SessionOrchestration.ConflictError({ message: "Restart recovery requires an authenticated review decision operation" }),
+            new SessionOrchestration.ConflictError({
+              message: "Restart recovery requires an authenticated review decision operation",
+            }),
           ),
       },
       location: {
+        integration: {
+          accountSkills: {
+            read: (ref, input) =>
+              Effect.gen(function* () {
+                const runtime = cell.runtime
+                if (runtime === undefined) return yield* Effect.fail(new Error("Plugin runtime is unavailable"))
+                const result = yield* runtime.location.integration.accountSkills.read(ref, input).pipe(Effect.exit)
+                if (cell.runtime !== runtime) return yield* Effect.fail(new Error("Plugin runtime is unavailable"))
+                return yield* result
+              }),
+          },
+        },
         agent: {
           list: (ref) => require(cell, (runtime) => runtime.location.agent.list(ref)),
         },
@@ -107,7 +136,13 @@ export const layerWithCell = (cell: Cell) =>
     }),
   )
 
-export const providerLayerWithCell = (cell: Cell) =>
+export const providerLayerWithCell = (
+  cell: Cell,
+): Layer.Layer<
+  never,
+  never,
+  Session.Service | Job.Service | LocationServiceMap.Service | SessionOrchestration.Service
+> =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const sessions = yield* Session.Service
@@ -119,6 +154,27 @@ export const providerLayerWithCell = (cell: Cell) =>
         job: jobs,
         orchestration,
         location: {
+          integration: {
+            accountSkills: {
+              read: (ref, input) =>
+                Effect.gen(function* () {
+                  const { AccountSkillsRead } = yield* Effect.promise(() => import("../account-connectors/skills-read"))
+                  const location = yield* Location.Service
+                  const data = yield* AccountSkillsRead.read(input)
+                  return {
+                    location: new Location.Info({
+                      directory: location.directory,
+                      workspaceID: location.workspaceID,
+                      project: location.project,
+                    }),
+                    data,
+                  }
+                }).pipe(
+                  Effect.provideService(Session.Service, sessions),
+                  Effect.provide(locations.get(ref, [LocationServiceMap.full, AccountConnectors.node])),
+                ),
+            },
+          },
           agent: {
             list: (ref) =>
               Effect.gen(function* () {

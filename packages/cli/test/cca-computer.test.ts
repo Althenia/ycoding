@@ -1084,7 +1084,7 @@ describe("Dot conversation", () => {
     expect(await sending).toEqual({ ok: true, value: { admission: "unknown" } })
     expect(order).toEqual([`watch ${taskThreadID}`, "turn/addUserMessage"])
     for (const [reply, expected] of [
-      [{ kind: "error", code: -32003, message: "thread access denied", errorType: "thread_archived", errorCode: "thread_not_found" }, { ok: false, problem: "rejected", rejection: { code: -32003, errorCode: "thread_not_found", errorType: "thread_archived", message: "thread access denied" } }],
+      [{ kind: "error", code: -32003, message: "thread access denied", errorType: "permission_denied", errorCode: "thread_not_found" }, { ok: false, problem: "rejected", rejection: { code: -32003, errorCode: "thread_not_found", errorType: "permission_denied", message: "thread access denied" } }],
       [{ kind: "unknown" }, { ok: false, problem: "durable-unavailable" }],
       [{ kind: "not-sent" }, { ok: false, problem: "durable-unavailable" }],
     ] as const) {
@@ -1093,6 +1093,10 @@ describe("Dot conversation", () => {
       expect(await conversationFixture({ durable: refused, routes: membership() }).conversation.send(taskThreadID, { ...message, clientMessageID: "client-2" })).toEqual(expected)
       expect(sent).toEqual([])
     }
+    const archivedSent: string[] = []
+    const archived: CcaDurableClient = { ...base.client, watch: async () => ({ kind: "error", code: -32003, message: "thread access denied", errorType: "thread_archived" }), request: async (method) => { archivedSent.push(method); return { kind: "result", result: {} } } }
+    await conversationFixture({ durable: archived, routes: membership() }).conversation.send(taskThreadID, { ...message, clientMessageID: "client-3" })
+    expect(archivedSent).toEqual(["thread/unarchive"])
   })
 
   test("a refused send keeps the durable error code and a bounded message without control characters", async () => {

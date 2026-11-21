@@ -6,7 +6,6 @@ import type {
   RemoteIncidentRecentInput,
   RemoteIncidentReport,
   RemoteIncidentReportInput,
-  RemoteOperation,
   RemoteWorkspaceInfo,
   RemoteUsageDashboard,
   RemoteUsageDashboardInput,
@@ -14,6 +13,7 @@ import type {
   RemoteUsageMetrics,
   RemoteUsageTokens,
 } from "@ycoding-ai/remote"
+import type { OperationName as RemoteOperation } from "./wire-views"
 import { readCentralPolicy, readProject, readProjects, readSessionCandidates, type CentralPolicy, type ProjectBundle, type SessionCandidate } from "./coordination"
 import { readUsageForecast } from "./usage-read"
 import { keepAwakeAnswer, readKeepAwakeStatus, type KeepAwakeState } from "./keep-awake"
@@ -129,7 +129,7 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     readonly operation: RemoteOperation
     readonly request: (refresh: boolean) => RemoteTransportRequest
     readonly read: (raw: unknown) => T | undefined
-    readonly unsupported: (outcome: RemoteRequestOutcome) => boolean
+    readonly unsupported?: (outcome: RemoteRequestOutcome) => boolean
     readonly label: string
     readonly unreadable: string
     readonly settled?: (data: T) => boolean
@@ -161,7 +161,7 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
           if (!await link.recovered(scope, since)) throw new Error(describeOutcome({ status: "unavailable", reason: "cancelled" }, input.label))
           outcome = await link.request(scope, input.operation, input.request(refresh))
         }
-        if (input.unsupported(outcome)) return { status: "unsupported" }
+        if (input.unsupported?.(outcome)) return { status: "unsupported" }
         const raw = outcome.status === "ok" && typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
         const data = input.read(raw)
         if (data !== undefined) {
@@ -177,29 +177,27 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     })
   }
 
-  const unknownOperation = (outcome: RemoteRequestOutcome) => outcome.status === "failed" && outcome.error.code === "unknown_operation"
-
   const usageProviders = (scope: QueryScope | undefined, enabled: boolean) => usageQuery<readonly UsageProvider[]>({
-    scope, enabled, key: remoteKeys.usageProviders, operation: "usage.providers",
+    scope, enabled, key: remoteKeys.usageProviders, operation: "providerUsage.list",
     request: (refresh) => refresh ? { input: { refresh: true } } : {},
-    read: readUsageProviders, unsupported: unknownOperation, label: "Usage", unreadable: "The device returned unreadable usage data.",
+    read: readUsageProviders, label: "Usage", unreadable: "The device returned unreadable usage data.",
   })
 
   const usageSummary = (scope: QueryScope | undefined, enabled: boolean) => usageQuery<UsageSummary>({
-    scope, enabled, key: remoteKeys.usageSummary, operation: "usage.summary", request: () => ({}),
-    read: readUsageMetrics, unsupported: unknownOperation, label: "Usage", unreadable: "The device returned unreadable usage data.",
+    scope, enabled, key: remoteKeys.usageSummary, operation: "usage.get", request: () => ({}),
+    read: readUsageMetrics, label: "Usage", unreadable: "The device returned unreadable usage data.",
   })
 
   const usageForecast = (scope: QueryScope | undefined, enabled: boolean) => usageQuery<RemoteUsageForecast>({
-    scope, enabled, key: remoteKeys.usageForecast, operation: "usage.forecast", request: () => ({ input: { localScope: "backend" } }),
-    read: readUsageForecast, unsupported: unknownOperation, label: "Usage forecast", unreadable: "The device returned an unreadable usage forecast.",
+    scope, enabled, key: remoteKeys.usageForecast, operation: "providerUsage.forecast", request: () => ({ input: { localScope: "backend" } }),
+    read: readUsageForecast, label: "Usage forecast", unreadable: "The device returned an unreadable usage forecast.",
   })
 
   const usageReport = (scope: QueryScope | undefined, enabled: boolean, report: UsageReportInput) => usageQuery<UsageReport>({
     scope, enabled: enabled && (report.limit === undefined || Number.isInteger(report.limit) && report.limit >= 1 && report.limit <= 200),
     key: (current) => remoteKeys.usageReport(current, report), operation: "usage.report", request: () => ({ input: report }),
     read: (raw) => readUsageReport(raw, report.group),
-    unsupported: (outcome) => outcome.status === "failed" && (outcome.error.code === "unknown_operation" || reportNeedsNewerConnector(report) && outcome.error.code === "invalid_message"),
+    unsupported: (outcome) => outcome.status === "failed" && reportNeedsNewerConnector(report) && outcome.error.code === "invalid_message",
     label: "Usage report", unreadable: "The device returned an unreadable usage report.",
   })
 
@@ -212,28 +210,28 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     request: (refresh) => ({ input: { ...Object.fromEntries(dashboardSlots.flatMap((slot) => dashboard[slot] === undefined ? [] : [[slot, dashboard[slot]]])), ...(refresh ? { refresh: true } : {}) } }),
     read: (raw) => readUsageDashboard(raw, dashboard), settled: dashboardSettled,
     poll: dashboardPollInterval, superseded: dashboardSuperseded,
-    unsupported: unknownOperation, label: "Usage", unreadable: "The device returned unreadable usage data.",
+    label: "Usage", unreadable: "The device returned unreadable usage data.",
   })
 
   const incidentReport = (scope: QueryScope | undefined, enabled: boolean, input: RemoteIncidentReportInput) => usageQuery<RemoteIncidentReport["data"]>({
     scope, enabled: enabled && validIncidentReport(input), key: (current) => remoteKeys.incidentReport(current, input),
     operation: "incident.report", request: () => ({ input: reportInput(input) }),
-    read: (raw) => readIncidentReport(raw, input.group), unsupported: unknownOperation,
+    read: (raw) => readIncidentReport(raw, input.group),
     label: "Incident report", unreadable: "The device returned an unreadable incident report.",
   })
 
   const incidentRecent = (scope: QueryScope | undefined, enabled: boolean, input: RemoteIncidentRecentInput) => usageQuery<RemoteIncidentRecent["data"]>({
     scope, enabled: enabled && validIncidentRecent(input), key: (current) => remoteKeys.incidentRecent(current, input),
     operation: "incident.recent", request: () => ({ input: recentInput(input) }),
-    read: readIncidentRecent, unsupported: unknownOperation,
+    read: readIncidentRecent,
     label: "Recent incidents", unreadable: "The device returned unreadable incident data.",
   })
 
   const incidentGuidance = (scope: QueryScope | undefined, enabled: boolean, input: IncidentGuidanceQueryInput) => usageQuery<RemoteIncidentGuidance["data"]>({
     scope, enabled: enabled && validModelPair(input) && (input.sessionID === undefined || input.sessionID.length > 0),
     key: (current) => remoteKeys.incidentGuidance(current, input),
-    operation: "incident.guidance", request: () => guidanceRequest(input),
-    read: readIncidentGuidance, unsupported: unknownOperation,
+    operation: "incident.guidance.get", request: () => guidanceRequest(input),
+    read: readIncidentGuidance,
     label: "Model guidance", unreadable: "The device returned unreadable model guidance.",
   })
 
@@ -278,7 +276,7 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
       queryFn: async (): Promise<KeepAwakeState> => {
         const prior = client.getQueryData<KeepAwakeState>(queryKey)
         if (prior?.change?.state === "sending") return prior
-        const outcome = await link.request(current, "machine.keepAwake.get", { timeoutMs: 5_000 })
+        const outcome = await link.request(current, "keepAwake.get", { timeoutMs: 5_000 })
         return keepAwakeAnswer(outcome, prior?.change?.state === "unknown" ? { change: prior.change } : {})
       },
     })
@@ -296,7 +294,7 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
         const status = prior.status
         await client.cancelQueries({ queryKey })
         client.setQueryData<KeepAwakeState>(queryKey, { read: "ready", status, change: { state: "sending", enabled } })
-        const outcome = await link.request(current, "machine.keepAwake.set", { input: { enabled } })
+        const outcome = await link.request(current, "keepAwake.set", { input: { enabled } })
         if (client.getQueryData(queryKey) === undefined) return { reached: false, reload: false }
         const write = (next: KeepAwakeState) => client.setQueryData<KeepAwakeState>(queryKey, next)
         const unconfirmed = (message: string) => write({ read: "ready", status, change: { state: "unknown", enabled, message } })
@@ -329,10 +327,6 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
           })
           return { reached, reload: false }
         }
-        if (unknownOperation(outcome)) {
-          write({ read: "outdated" })
-          return { reached: false, reload: false }
-        }
         if (outcome.status === "unknown") {
           unconfirmed(`The result of turning it ${verb} is unconfirmed. The state shown is what the machine reports now; nothing was sent again.`)
           return { reached: false, reload: true }
@@ -348,7 +342,6 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
 
   const toggleKeepAwake = async (scope: QueryScope): Promise<{ readonly reached: boolean; readonly message?: string }> => {
     const state = await client.fetchQuery(keepAwake(scope, true))
-    if (state.read === "outdated") return { reached: false, message: "Update YCoding on this machine to keep it awake from here." }
     if (state.read !== "ready" || state.status === undefined) return { reached: false, message: state.message ?? "Keep machine awake could not be read." }
     if (state.status.state === "unsupported") return { reached: false, message: state.status.message ?? "This machine cannot be kept awake from YCoding." }
     const mutation = keepAwakeMutation(scope)
@@ -386,7 +379,6 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
       retry: false,
       queryFn: async (): Promise<CoordinationOverview> => {
         const listed = await link.request(current, "coordination.list", { timeoutMs: 10_000 })
-        if (unknownOperation(listed)) return { status: "unsupported" }
         if (listed.status !== "ok") throw new Error(describeOutcome(listed, "Projects"))
         const summaries = readProjects(listed.value)
         if (summaries === undefined) throw unreadable
@@ -414,7 +406,6 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
       await reread()
       return { reached: true }
     }
-    if (unknownOperation(outcome)) return { reached: false, message: "Update YCoding on this machine to manage Projects from here." }
     if (outcome.status === "unknown") {
       await reread()
       return { reached: false, unconfirmed: true, message: `${describeOutcome(outcome, "Projects")}. The result is unconfirmed and was not sent again; the list below shows what the machine reports now.` }
@@ -427,10 +418,10 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     settleCoordination(scope, await link.request(scope, operation, { input }))
 
   const deleteProjectSession = async (scope: QueryScope, sessionID: string): Promise<CoordinationChange> =>
-    settleCoordination(scope, await link.request(scope, "session.delete", { sessionID }))
+    settleCoordination(scope, await link.request(scope, "session.remove", { sessionID }))
 
   const createProjectSession = async (scope: QueryScope, target: { readonly workspace: string } | { readonly directory: string }, id = `ses_${crypto.randomUUID().replaceAll("-", "")}`, title?: string): Promise<{ readonly reached: true; readonly sessionID: string } | CoordinationFailure> => {
-    const outcome = await link.request(scope, "session.create", { input: { id, ...target, ...(title === undefined ? {} : { title }) } })
+    const outcome = await link.request(scope, "session.create", { ...("workspace" in target ? { workspaceID: target.workspace } : {}), input: { id, ...("directory" in target ? { location: { directory: target.directory } } : {}), ...(title === undefined ? {} : { title }) } })
     if (outcome.status === "ok") {
       const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
       const echoed = typeof data === "object" && data !== null ? Reflect.get(data, "id") : undefined
@@ -466,7 +457,8 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
       queryFn: async () => {
         const outcome = await link.request(current, "session.snapshot", { sessionID, input: { limit: 40 } })
         if (outcome.status !== "ok") throw new Error(describeOutcome(outcome, "Child conversation"))
-        const snapshot = readSnapshot(outcome.value)
+        const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
+        const snapshot = readSnapshot(data)
         if (snapshot?.sessionID !== sessionID || snapshot.watermarkSessionID !== undefined && snapshot.watermarkSessionID !== sessionID) throw new Error("The device returned a different or unreadable child conversation.")
         return snapshot
       },
@@ -483,7 +475,8 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
       queryFn: async () => {
         const outcome = await link.request(current, "session.subagent.list", { sessionID: parentID, ...(cursor === undefined ? {} : { input: { cursor } }) })
         if (outcome.status !== "ok") throw new Error(describeOutcome(outcome, "Child subagents"))
-        const page = readTeamChildren(outcome.value, parentID)
+        const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
+        const page = readTeamChildren(data, parentID)
         if (!page || page.next !== undefined && page.next === cursor || page.tasks.some(task => task.sessionID === familyID)) throw new Error("The device returned an unreadable or unrelated child list.")
         return page
       },

@@ -1360,7 +1360,7 @@ describe("relay core: per-connection frame order and authority windows", () => {
 
 describe("relay core: protocol metadata", () => {
   test("reports the contract revision it speaks", () => {
-    expect(RemoteProtocolVersion).toBe(4)
+    expect(RemoteProtocolVersion).toBe(5)
   })
 })
 

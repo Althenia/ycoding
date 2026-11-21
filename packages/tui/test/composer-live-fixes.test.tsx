@@ -147,10 +147,14 @@ async function route(url: URL, request: Request) {
       return json({ error: "simulated wake failure" }, { status: 500 })
     }
     submittedPrompt = body.text
-    const files = body.files?.map((file) => ({
-      name: file.name,
-      content: { digest: file.uri.split("/").at(-1)?.padEnd(64, "c").slice(0, 64) ?? "c".repeat(64) },
-    }))
+    const files = body.files?.map((file) => {
+      const digest = file.uri.split("/").at(-1)?.padEnd(64, "c").slice(0, 64) ?? "c".repeat(64)
+      return {
+        name: file.name,
+        mime: "image/png",
+        content: { type: "managed", digest, bytes: 1, path: `attachments/sha256/${digest.slice(0, 2)}/${digest}` },
+      }
+    })
     return json({
       data: {
         id: body.id,
@@ -420,7 +424,7 @@ test("insets the input, caps natural wrapping at six rows, and keeps autocomplet
     expect(initial.some((line) => line.includes("⌃x b sidebar"))).toBe(false)
 
     // The composer sits directly above the footer band with no hint row between them.
-    const footerRow = initial.findIndex((line) => /subagents \d/.test(line))
+    const footerRow = initial.findIndex((line) => /subagents \d|sa\d/.test(line))
     expect(footerRow).toBeGreaterThan(promptRow)
     expect(footerRow - promptRow).toBeLessThanOrEqual(6)
 

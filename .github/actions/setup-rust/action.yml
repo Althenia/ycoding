@@ -1,0 +1,109 @@
+name: "Setup Rust"
+description: "Select the pinned Rust toolchain with rustfmt and clippy, and install a checksum-verified protoc"
+inputs:
+  cache-profile:
+    description: "Cargo build profile key (release or dev)"
+    required: false
+    default: "release"
+runs:
+  using: "composite"
+  steps:
+    - name: Cache Rust toolchain
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.rustup/toolchains
+          ~/.rustup/update-hashes
+          ~/.rustup/settings.toml
+        key: ${{ runner.os }}-${{ runner.arch }}-rustup-1.98.1
+
+    - name: Install Rust toolchain
+      shell: bash
+      env:
+        RUST_VERSION: "1.98.1"
+      run: |
+        set -euo pipefail
+        command -v rustup >/dev/null || { echo "rustup is not installed on this runner; setup-rust requires a runner image that provides rustup" >&2; exit 1; }
+        if ! { rustup run "$RUST_VERSION" rustc --version >/dev/null 2>&1 && rustup run "$RUST_VERSION" cargo fmt --version >/dev/null 2>&1 && rustup run "$RUST_VERSION" cargo clippy --version >/dev/null 2>&1; }; then
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt --component clippy
+        fi
+        {
+          echo "RUSTUP_TOOLCHAIN=$RUST_VERSION"
+          echo "CARGO_INCREMENTAL=0"
+          echo "CARGO_PROFILE_DEV_DEBUG=0"
+          echo "CARGO_PROFILE_TEST_DEBUG=0"
+        } >> "$GITHUB_ENV"
+        export RUSTUP_TOOLCHAIN="$RUST_VERSION"
+        test "$(rustc --version | cut -d' ' -f2)" = "$RUST_VERSION"
+        if [ "$RUNNER_OS" = Windows ]; then
+          rustc -vV | tr -d '\r' | grep -Fx 'host: x86_64-pc-windows-msvc'
+        fi
+        cargo --version
+        cargo fmt --version
+        cargo clippy --version
+
+    - name: Cache protoc archive
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/protoc-cache-36.2
+        key: ${{ runner.os }}-${{ runner.arch }}-protoc-36.2
+
+    - name: Install protoc
+      shell: bash
+      env:
+        PROTOC_VERSION: "36.2"
+      run: |
+        set -euo pipefail
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-X64) asset=linux-x86_64; sha256=121f6c7afe1d4d0e3ea6aab9432038599250134cbf4474cb1167d2c7decd4278 ;;
+          macOS-ARM64) asset=osx-aarch_64; sha256=9cd98a532c5c5e0c4161314de0225de27e4c8a323917b6ea7b1b714d3ae23466 ;;
+          macOS-X64) asset=osx-x86_64; sha256=228cc7add4616cc14ca5e80dee83209d44449a7aee95a914ae748fa374efb078 ;;
+          Windows-X64) asset=win64; sha256=f0c128dc0d8492eceece83bb459a4c0e316764b929ffbf1aa416357fd644edd3 ;;
+          *) echo "Unsupported runner for protoc $PROTOC_VERSION: $RUNNER_OS-$RUNNER_ARCH" >&2; exit 1 ;;
+        esac
+        cache_dir="$RUNNER_TEMP/protoc-cache-$PROTOC_VERSION"
+        cached_archive="$cache_dir/protoc-$PROTOC_VERSION-$asset.zip"
+        directory="$RUNNER_TEMP/protoc-$PROTOC_VERSION"
+        archive="$directory/protoc-$PROTOC_VERSION-$asset.zip"
+        rm -rf "$directory"
+        mkdir -p "$directory" "$cache_dir"
+        if [ -f "$cached_archive" ]; then
+          cp "$cached_archive" "$archive"
+          if command -v sha256sum >/dev/null; then actual="$(sha256sum "$archive" | cut -d' ' -f1)"; else actual="$(shasum -a 256 "$archive" | cut -d' ' -f1)"; fi
+          if [ "$actual" != "$sha256" ]; then rm -f "$cached_archive" "$archive"; fi
+        fi
+        if [ ! -f "$archive" ]; then
+          curl --fail --silent --show-error --location --retry 3 --output "$archive" "https://github.com/protocolbuffers/protobuf/releases/download/v$PROTOC_VERSION/protoc-$PROTOC_VERSION-$asset.zip"
+          if command -v sha256sum >/dev/null; then actual="$(sha256sum "$archive" | cut -d' ' -f1)"; else actual="$(shasum -a 256 "$archive" | cut -d' ' -f1)"; fi
+          test "$actual" = "$sha256" || { echo "protoc checksum mismatch for $asset: expected $sha256, got $actual" >&2; exit 1; }
+          cp "$archive" "$cached_archive"
+        fi
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          powershell -NoProfile -Command "Expand-Archive -LiteralPath '$(cygpath -w "$archive")' -DestinationPath '$(cygpath -w "$directory")'"
+          executable="$directory/bin/protoc.exe"
+        else
+          unzip -q "$archive" -d "$directory"
+          executable="$directory/bin/protoc"
+        fi
+        test "$("$executable" --version | tr -d '\r')" = "libprotoc $PROTOC_VERSION"
+        if [ "$RUNNER_OS" = "Windows" ]; then executable="$(cygpath -w "$executable")"; fi
+        echo "PROTOC=$executable" >> "$GITHUB_ENV"
+
+    - name: Cache Rust dependencies and build artifacts
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          rust/target
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml', 'rust/vendor/**') }}-${{ hashFiles('rust/crates/**/Cargo.toml', 'rust/crates/**/build.rs') }}-${{ hashFiles('rust/crates/**/*.rs') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml', 'rust/vendor/**') }}-${{ hashFiles('rust/crates/**/Cargo.toml', 'rust/crates/**/build.rs') }}-
+          ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml', 'rust/vendor/**') }}-
+          ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-
+
+    - name: Select prebuilt NASM objects
+      if: runner.os == 'Windows'
+      shell: bash
+      run: echo "AWS_LC_SYS_PREBUILT_NASM=1" >> "$GITHUB_ENV"

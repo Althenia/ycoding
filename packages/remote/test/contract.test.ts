@@ -222,7 +222,9 @@ test("machine telemetry consent controls are global and strictly versioned", () 
 test("machine latency ingest and reads accept only bounded anonymous samples for the connected device", () => {
   const sample = { kind: "request", at: "2026-10-04T12:00:00.000Z", operation: "session.list", outcome: "ok", queueMs: 5, settlementMs: 20, totalMs: 25 }
   const task = { kind: "long-task", at: sample.at, durationMs: 70 }
-  const append = { type: "request", id: "req_latency", operation: "machine.latency.append", input: { samples: [sample, task] } }
+  const append = { type: "request", id: "req_latency", operation: "machine.latency.append", input: {
+    samples: [sample, { ...sample, operation: "session.message.delete" }, task],
+  } }
   const list = { type: "request", id: "req_latency_list", operation: "machine.latency.list", input: { limit: 200, before: "cursor_1" } }
   for (const frame of [append, list, { ...list, input: undefined }]) {
     expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true })
@@ -486,6 +488,15 @@ describe("remote envelope: request", () => {
         .toMatchObject({ ok: true, value: { input: { status } } })
     for (const status of ["blocked", "all", true, null])
       expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", operation: "session.list", input: { status } })))
+        .toMatchObject({ ok: false, error: { code: "invalid_message" } })
+  })
+
+  test("validates include and exclude Session list background filters", () => {
+    for (const background of ["include", "exclude"])
+      expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", operation: "session.list", input: { background, limit: 25 } })))
+        .toMatchObject({ ok: true, value: { input: { background } } })
+    for (const background of ["only", "", "Include", 1, true, null])
+      expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", operation: "session.list", input: { background } })))
         .toMatchObject({ ok: false, error: { code: "invalid_message" } })
   })
 
@@ -987,8 +998,8 @@ describe("remote operations", () => {
     expect(requireSession("machine.keepAwake.set")).toBe(false)
     expect(requireSession("machine.latency.append")).toBe(false)
     expect(requireSession("machine.latency.list")).toBe(false)
-    expect(RemoteProtocolVersion).toBe(4)
-    expect(RemoteWebSocketPath).toEqual({ client: "/ws/v4/client", agent: "/ws/v4/agent" })
+    expect(RemoteProtocolVersion).toBe(5)
+    expect(RemoteWebSocketPath).toEqual({ client: "/ws/v5/client", agent: "/ws/v5/agent" })
     expect(parseClientMessage('{"type":"request","id":"r","operation":"session.question.list","sessionID":"ses_1"}').ok).toBe(false)
   })
 

@@ -3,8 +3,7 @@ import { expect, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
 import { testRender } from "@opentui/solid"
 import { Effect, FileSystem } from "effect"
-import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../src/frontend-paths"
 import { onMount } from "solid-js"
 import { ConfigProvider } from "../src/config"
 import { ClientProvider } from "../src/context/client"
@@ -108,12 +107,17 @@ test("keeps subagent and shell footer counts as independent segments", async () 
   const calls = createFetch((url) => {
     if (url.pathname === "/api/session/ses_footer/subagent")
       return json({
-        data: [
-          { state: "running" },
-          { state: "waiting" },
-          { state: "completed" },
-          { state: "cancelled" },
-        ],
+        data: ["running", "waiting", "completed", "cancelled"].map((state, index) => ({
+          sessionID: `ses_footer_child_${index}`,
+          parentID: "ses_footer",
+          description: `Task ${index}`,
+          agent: "builder",
+          model: { providerID: "openai", id: "gpt-5" },
+          background: true,
+          state,
+          revision: 1,
+          time: { created: 1, updated: 2 },
+        })),
         // The footer reads the durable page summary, so the fixture must supply it.
         summary: { total: 4, active: 2, running: 1, waiting: 1 },
         cursor: {},
@@ -247,7 +251,7 @@ async function bootPromptRegression(dimensions = { width: 120, height: 56 }) {
     if (url.pathname === "/api/model") return json({ data: [model] })
     return undefined
   }, events)
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  const server = calls.listen()
   const { run } = await import("../src/app")
   const task = Effect.runPromise(
     run({
@@ -257,7 +261,7 @@ async function bootPromptRegression(dimensions = { width: 120, height: 56 }) {
       args: { sessionID: session.id },
       terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
       log: () => {},
-    }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
+    }).pipe(Effect.provide(FrontendPaths.layer), Effect.provide(FileSystem.layerNoop({}))),
   )
 
   return {

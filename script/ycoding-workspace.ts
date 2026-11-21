@@ -54,6 +54,39 @@ export async function checkWorkspace(root: string): Promise<string[]> {
   return discovered.filter((name) => !approvedPackageNames.has(name))
 }
 
+export type BundleGraph = {
+  frontend: string
+  outputs: { file: string; modules: string[]; imports: string[]; edges?: { file: string; specifier: string }[] }[]
+}
+
+const forbiddenOwners = ["core", "server", "meeting", "ai", "store", "codemode", "effect-drizzle-sqlite", "effect-sqlite-node"].map((name) => `@ycoding-ai/${name}`)
+const sqliteReaders = ["packages/tui/src/editor-zed-sqlite.bun.ts", "packages/tui/src/editor-zed-sqlite.node.ts"]
+const normalize = (value: string) => value.replaceAll("\\", "/")
+
+export function checkBundleGraph(graph: BundleGraph) {
+  if (!graph.outputs.length || !graph.outputs.some((output) => output.modules.length)) throw new Error("Empty shipped graph")
+  const modules = graph.outputs.flatMap((output) => output.modules).map(normalize)
+  const declared = (file: string) => sqliteReaders.some((reader) =>
+    normalize(file).endsWith(`/${reader}`) && modules.some((module) => module.endsWith("/packages/tui/src/editor-zed.ts")),
+  )
+  const violations = graph.outputs.flatMap((output) => [...output.modules, ...output.imports].flatMap((raw) => {
+    const specifier = normalize(raw)
+    const owner = forbiddenOwners.find((name) =>
+      specifier === name || specifier.startsWith(`${name}/`) ||
+      `/${specifier}`.includes(`/packages/${name.slice("@ycoding-ai/".length)}/`) ||
+      `/${specifier}`.includes(`/node_modules/${name}/`),
+    ) ?? (/(^|[/@])(?:node-pty|node-pty-[^/]+)(?:\/|$)/.test(specifier) ? "node-pty" : undefined) ??
+      (/(?:^|[/@:-])(?:sqlite(?:3)?|better-sqlite3|sql-sqlite-[^/]+|drizzle(?:-orm|-kit)?)(?:[/.:-]|$)/.test(specifier) ? "sqlite" : undefined)
+    if (owner === "sqlite" && declared(specifier)) return []
+    if (owner === "sqlite" && /^(?:bun|node):sqlite$/.test(specifier)) {
+      const edges = output.edges?.filter((edge) => edge.specifier === raw) ?? []
+      if (edges.length > 0 && edges.every((edge) => declared(edge.file))) return []
+    }
+    return owner ? [{ frontend: graph.frontend, file: output.file, line: 1, specifier: raw, owner, kind: "bundle" }] : []
+  }))
+  return [...new Map(violations.map((entry) => [JSON.stringify(entry), entry])).values()]
+}
+
 if (import.meta.main) {
   const root = path.resolve(import.meta.dirname, "..")
   const unexpected = await checkWorkspace(root)

@@ -123,6 +123,8 @@ jobs:
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
 
       - name: Configure git identity
         run: |
@@ -151,11 +153,19 @@ jobs:
       - name: Verify injected web transport boundaries
         run: |
           bun test --cwd apps/web ./test/remote-store-container.test.ts
+          bun test --cwd apps/web ./src/remote/endpoint.test.ts ./src/pwa/offline.test.ts ./src/service-worker.push.test.ts
+          bun test --cwd apps/web ./test/remote-http.test.ts ./test/remote-http-bulk.test.ts
+          bun test --cwd apps/web ./test/remote-sync.test.ts -t 'oversized live invalidations'
+          bun test --cwd packages/protocol ./test/http-bulk.test.ts
           bun test --cwd apps/web ./test/remote-todo.test.ts -t "a connector that never answers todo.list does not hold Session hydration or raise a state notice|a superseded same-Session read cannot overwrite reconnect's newer todo list"
           bun test --cwd apps/web ./test/remote-guardrail.test.ts -t "preserves inspectable guardrail metadata in the family read"
 
       - name: Verify Cloudflare Worker
-        run: bun test --cwd infra/cloudflare ./test/mcp-boundary.test.ts ./test/relay-core.test.ts ./test/auth-service.test.ts ./test/push-coordination-filter.test.ts ./test/device-alias.test.ts
+        run: |
+          bun test --cwd infra/cloudflare ./test/mcp-boundary.test.ts ./test/relay-core.test.ts ./test/auth-service.test.ts ./test/push-coordination-filter.test.ts ./test/device-alias.test.ts
+          bun test --cwd infra/cloudflare ./test/router.test.ts -t 'websocket upgrades|message stream forwards|v5 message and attachment bulk selectors|relay presence|closes every device|after rotation|revokes an owned device'
+          bun test --cwd infra/cloudflare ./test/relay-authority.test.ts ./test/relay-handoff.test.ts ./test/relay-http.test.ts ./test/relay-mcp.test.ts ./test/relay-resync.test.ts
+          bun run typecheck:cloudflare
 
       - name: Build Cloudflare Worker
         if: needs.build-inputs.outputs.web != 'false'
@@ -202,9 +212,8 @@ jobs:
         settings:
           - name: linux
             host: ubuntu-24.04
-          - name: windows
-            host: windows-2025
     runs-on: ${{ matrix.settings.host }}
+    timeout-minutes: 20
     permissions:
       contents: read
     defaults:
@@ -221,14 +230,19 @@ jobs:
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
 
       - name: Configure git identity
         run: |
           git config --global user.email "bot@ycoding.ai"
           git config --global user.name "ycoding"
 
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+
       - name: Build native executable
-        timeout-minutes: 10
+        timeout-minutes: 30
         working-directory: packages/cli
         run: bun run script/build.ts --single
 
@@ -243,6 +257,40 @@ jobs:
         timeout-minutes: 15
         working-directory: packages/cli
         run: bun run script/build-node.ts --single --skip-install --outdir=dist/node
+
+  native-windows:
+    name: native runtime build (windows)
+    runs-on: windows-2025
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      YCODING_CHANNEL: latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Resolve release version
+        run: bash script/release-version.sh
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Build Windows native executable
+        run: bun run build:tui --target=win32-x64 --runtime-receipt="$RUNNER_TEMP/windows-runtime"
+
+      - name: Verify the embedded Windows runtime
+        run: bun packages/cli/script/runtime.ts verify-embedded dist/tui/tui-windows-x64/bin/ycoding.exe "$RUNNER_TEMP/windows-runtime/receipt.json"
 
   portability:
     # Temporarily disabled until the Rust release; remove this job-level if to restore.

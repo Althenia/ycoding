@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { testRender } from "@opentui/solid"
-import type { YCodingClient } from "@ycoding-ai/client"
+import type { V5Client } from "@ycoding-ai/client/v5"
 import { expect, test } from "bun:test"
 import { onMount } from "solid-js"
 import { ConfigProvider } from "../src/config"
@@ -101,7 +101,7 @@ test("renders artifact scope and stage-derived load status", async () => {
   expect(result.frame).toContain("Not loaded")
 })
 
-async function renderDialog(view: () => ReturnType<typeof DialogSessionSkills>, api: YCodingClient) {
+async function renderDialog(view: () => ReturnType<typeof DialogSessionSkills>, api: V5Client) {
   function DialogFixture() {
     const dialog = useDialog()
     onMount(() => dialog.replace(view))
@@ -150,7 +150,8 @@ function sessionSkillsClient(skills: ReturnType<typeof skill>[], skillInfos: Ret
       }),
     },
     event: { subscribe: async function* () {} },
-  } as unknown as YCodingClient
+    transport: { close() {}, reconnect: async () => {} },
+  } as unknown as V5Client
 }
 
 function artifactsClient(artifacts: ReturnType<typeof artifact>[]) {
@@ -161,7 +162,8 @@ function artifactsClient(artifacts: ReturnType<typeof artifact>[]) {
       },
     },
     event: { subscribe: async function* () {} },
-  } as unknown as YCodingClient
+    transport: { close() {}, reconnect: async () => {} },
+  } as unknown as V5Client
 }
 
 function skill(input: {

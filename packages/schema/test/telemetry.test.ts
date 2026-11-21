@@ -12,12 +12,45 @@ const request = {
   totalMs: 25,
 } as const
 
+test("historical request labels remain recorded but cannot enter the HTTP page or a new batch", () => {
+  const operations = [
+    "session.dots.targets",
+    "session.dots.status",
+    "session.dots.bind",
+    "session.dots.unbind",
+    "session.dots.send",
+    "session.dots.pause",
+    "session.dots.resume",
+    "session.dots.exchange.create",
+    "session.dots.exchange.read",
+    "session.dots.delegation.status",
+    "session.dots.delegation.create",
+    "session.dots.delegation.revoke",
+  ] as const
+  for (const operation of operations) {
+    const sample = { ...request, operation }
+    const page = { data: [{ receivedAt: 0, sample }], cursor: {} }
+    expect(() => Schema.decodeUnknownSync(Telemetry.Page)(page)).toThrow()
+    expect(Schema.is(Telemetry.Sample)(sample)).toBe(false)
+    expect(Schema.is(Telemetry.Batch)({ samples: [sample] })).toBe(false)
+  }
+  expect(
+    Schema.is(Telemetry.Page)({
+      data: [{ receivedAt: 0, sample: { ...request, operation: "session.private-id" } }],
+      cursor: {},
+    }),
+  ).toBe(false)
+})
+
 test("decodes closed client timings and rejects excess properties", () => {
   const sample = { kind: "client", at: request.at, surface: "tui", metric: "prompt.admit", durationMs: 12 } as const
   expect(Schema.decodeUnknownSync(Telemetry.Sample)(sample)).toEqual(sample)
   for (const surface of ["tui", "web"] as const)
     for (const metric of ["prompt.admit", "stream.delay", "transcript.load"] as const)
-      expect(Schema.decodeUnknownSync(Telemetry.Sample)({ ...sample, surface, metric })).toMatchObject({ surface, metric })
+      expect(Schema.decodeUnknownSync(Telemetry.Sample)({ ...sample, surface, metric })).toMatchObject({
+        surface,
+        metric,
+      })
   for (const invalid of [
     { ...sample, surface: "mobile" },
     { ...sample, metric: "private" },
@@ -27,9 +60,16 @@ test("decodes closed client timings and rejects excess properties", () => {
 })
 
 test("accepts every incident operation name", () => {
-  const names = ["incident.report", "incident.recent", "incident.guidance", "incident.guidance.get", "incident.guidance.clear"]
+  const names = [
+    "incident.report",
+    "incident.recent",
+    "incident.guidance",
+    "incident.guidance.get",
+    "incident.guidance.clear",
+  ]
   expect(new Set(names).size).toBe(5)
-  for (const operation of names) expect(Schema.decodeUnknownSync(Telemetry.Operation)(operation)).toBe(operation as never)
+  for (const operation of names)
+    expect(Schema.decodeUnknownSync(Telemetry.Operation)(operation)).toBe(operation as never)
 })
 
 test("accepts request telemetry for attaching and detaching Project members", () => {

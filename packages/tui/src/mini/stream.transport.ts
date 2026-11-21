@@ -2,7 +2,6 @@ import type {
   EventSubscribeOutput,
   FormInfo,
   LocationRef,
-  YCodingClient,
   PermissionRequest,
   SessionMessageAssistantTool,
   SessionMessageInfo,
@@ -22,6 +21,7 @@ import type {
   MiniPermissionRequest,
   MiniFormRequest,
   RunFilePart,
+  RunClient,
   RunInput,
   RunPrompt,
   RunPromptPart,
@@ -32,10 +32,10 @@ type Trace = {
   write(type: string, data?: unknown): void
 }
 
-type StreamInput = {
-  sdk: YCodingClient
-  reconnect?: (signal: AbortSignal) => Promise<YCodingClient>
-  onClient?: (sdk: YCodingClient) => void
+type StreamInput<Client extends RunClient> = {
+  sdk: Client
+  reconnect?: (signal: AbortSignal) => Promise<Client>
+  onClient?: (sdk: Client) => void
   readTextFile?: (url: string) => Promise<string>
   location?: LocationRef
   sessionID: string
@@ -97,7 +97,7 @@ type RunEvent = EventSubscribeOutput
 type PromptFilePart = Extract<RunPromptPart, { type: "file" }>
 
 type Attempt = {
-  client: YCodingClient
+  client: RunClient
   signal: AbortSignal
   generation: number
 }
@@ -351,8 +351,8 @@ function skillCommit(messageID: string, name: string): StreamCommit {
 }
 
 async function resolveSelectedModel(
-  input: StreamInput,
-  sdk: YCodingClient,
+  sessionID: string,
+  sdk: RunClient,
   next: Pick<SessionTurnInput, "model" | "variant" | "signal">,
 ) {
   if (next.model)
@@ -365,7 +365,7 @@ async function resolveSelectedModel(
   if (next.variant === undefined) return
 
   const session = await sdk.session
-    .get({ sessionID: input.sessionID }, { signal: next.signal })
+    .get({ sessionID }, { signal: next.signal })
     .then((response) => response.model)
   if (session) return { ...session, variant: next.variant }
 
@@ -374,7 +374,9 @@ async function resolveSelectedModel(
   return { ...fallback.selection, variant: next.variant }
 }
 
-export async function createSessionTransport(input: StreamInput): Promise<SessionTransport> {
+export async function createSessionTransport<Client extends RunClient>(
+  input: StreamInput<Client>,
+): Promise<SessionTransport> {
   const controller = new AbortController()
   let sdk = input.sdk
   let generation = 0
@@ -641,7 +643,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
   }
 
   const resolvePermissionSources = async (
-    client: YCodingClient,
+    client: RunClient,
     permissions: PermissionRequest[],
     attempt: Attempt,
   ) => {
@@ -1453,7 +1455,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
         return
       }
       if (command) {
-        const selected = await resolveSelectedModel(input, client, next)
+        const selected = await resolveSelectedModel(input.sessionID, client, next)
         if (next.variant && !selected) throw new Error("Cannot select a variant before selecting a model")
         // Agent and model ride the command payload; the server switches only
         // when the command itself does not pin them.
@@ -1483,7 +1485,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       if (next.agent) {
         await client.session.switchAgent({ sessionID: input.sessionID, agent: next.agent }, { signal: next.signal })
       }
-      const selected = await resolveSelectedModel(input, client, next)
+      const selected = await resolveSelectedModel(input.sessionID, client, next)
       if (next.variant && !selected) throw new Error("Cannot select a variant before selecting a model")
       if (selected)
         await client.session.switchModel({ sessionID: input.sessionID, model: selected }, { signal: next.signal })

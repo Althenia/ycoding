@@ -9,8 +9,8 @@ import type {
   GuardrailStatusOutput,
   SessionInfo,
 } from "@ycoding-ai/client"
-import { SessionMessage } from "@ycoding-ai/core/session/message"
-import { EventRuntime } from "@ycoding-ai/core/event"
+import { Event } from "@ycoding-ai/schema/event"
+import { SessionMessageID } from "@ycoding-ai/schema/session-message-id"
 import { createEffect, onMount, type ParentProps } from "solid-js"
 import { ClientProvider, useClient } from "../../../src/context/client"
 import { DataProvider as DataProviderBase, useData } from "../../../src/context/data"
@@ -371,14 +371,12 @@ test("refreshes resources into reactive getters", async () => {
         [
           {
             id: "msg_second",
-            created: 0,
             type: "user",
             text: "Second",
             time: { created: 2 },
           },
           {
             id: "msg_first",
-            created: 0,
             type: "user",
             text: "First",
             time: { created: 1 },
@@ -895,7 +893,6 @@ test("reconnects the event stream and resyncs active data", async () => {
           id: `model-${requests.model}`,
           providerID: "provider",
           name: `Model ${requests.model}`,
-          api: { type: "native" },
           capabilities: { tools: false, input: [], output: [] },
           cost: [],
           limit: { context: 1, output: 1 },
@@ -939,7 +936,7 @@ test("reconnects the event stream and resyncs active data", async () => {
     events.disconnect()
     await wait(() => client.connection.status() === "reconnecting")
     expect(client.connection.attempt()).toBe(1)
-    expect(client.connection.error()).toBe("Event stream disconnected")
+    expect(client.connection.error()).toBe("Socket disconnected")
 
     await wait(() => requests.active === 2 && client.connection.status() === "connected", 4000)
     resolveActive(json({ data: { "session-new": { type: "running" } } }))
@@ -1164,7 +1161,7 @@ test("removes committed revert messages from local state", async () => {
     await data.session.message.sync(sessionID)
     for (const [seq, inputID] of ["msg_001", "msg_002", "msg_003"].entries()) {
       emitEvent(events, {
-        id: EventRuntime.ID.create(),
+        id: Event.ID.create(),
         created: seq,
         type: "session.input.admitted",
         durable: durable(sessionID, seq),
@@ -1178,7 +1175,7 @@ test("removes committed revert messages from local state", async () => {
     await wait(() => data.session.message.list(sessionID).length === 3)
 
     emitEvent(events, {
-      id: EventRuntime.ID.create(),
+      id: Event.ID.create(),
       created: 3,
       type: "session.revert.committed",
       durable: durable(sessionID, 3),
@@ -1195,31 +1192,8 @@ test("removes committed revert messages from local state", async () => {
 })
 
 test("distinguishes initial connection from reconnection", async () => {
-  const encoder = new TextEncoder()
-  let stream: ReadableStreamDefaultController<Uint8Array> | undefined
-  const eventResponse = () =>
-    new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          stream = controller
-        },
-      }),
-      { headers: { "content-type": "text/event-stream" } },
-    )
-  const connect = () =>
-    stream?.enqueue(
-      encoder.encode(
-        `data: ${JSON.stringify({ id: "evt_connected", created: 0, type: "server.connected", data: {} })}\n\n`,
-      ),
-    )
-  const disconnect = () => {
-    stream?.close()
-    stream = undefined
-  }
-
-  const calls = createFetch((url) => {
-    if (url.pathname === "/api/event") return eventResponse()
-  })
+  const events = createEventStream({ ready: false })
+  const calls = createFetch(undefined, events)
   let client!: ReturnType<typeof useClient>
 
   function Probe() {
@@ -1240,13 +1214,12 @@ test("distinguishes initial connection from reconnection", async () => {
   ))
 
   try {
-    await wait(() => stream !== undefined)
     expect(client.connection.status()).toBe("connecting")
 
-    connect()
+    events.ready()
     await wait(() => client.connection.status() === "connected")
 
-    disconnect()
+    events.disconnect()
     await wait(() => client.connection.status() === "reconnecting")
   } finally {
     app.renderer.destroy()
@@ -2387,7 +2360,7 @@ test("reconnect re-lists pending guardrail reviews for every cached root so a mi
     await view.data().session.guardrail.sync("ses_other")
     expect(view.data().session.guardrail.list("ses_other").map((request) => request.id)).toEqual(["grq_ghost"])
     pending = []
-    emitEvent(view.events, { id: "evt_reconnected", type: "server.connected", sourceEpoch: "test_epoch", data: {} })
+    view.events.disconnect()
     await wait(() => view.data().session.guardrail.list("ses_other").length === 0)
   } finally {
     view.app.renderer.destroy()
@@ -2455,6 +2428,8 @@ test("retains decision grades, rule IDs and source through hydration, live repli
   }
   const decisions = [restored]
   const calls = createFetch(async (url) => {
+    if (url.pathname === "/api/session/ses_root/snapshot")
+      return sessionSnapshot("ses_root", [{ id: "msg_tool", type: "user", text: "Run the release", time: { created: 1 } }])
     if (["/api/session/ses_root/guardrail/request", "/api/session/ses_child/guardrail/request"].includes(url.pathname))
       return json({ data: [] })
     if (["/api/session/ses_root/guardrail", "/api/session/ses_child/guardrail"].includes(url.pathname)) {
@@ -2534,7 +2509,7 @@ test("retains decision grades, rule IDs and source through hydration, live repli
     data.session.guardrail.invalidate("ses_root")
     await data.session.guardrail.sync("ses_root")
     expect(data.session.guardrail.decided("ses_root")).toEqual([restored, live])
-    const displayed = { ...live, sessionID: "ses_root", requestID: "grq_displayed" }
+    const displayed = { ...live, sessionID: "ses_root", requestID: "grq_displayed", reply: "reject" as const }
     decisions.push(displayed)
     data.session.guardrail.invalidate("ses_root")
     await data.session.guardrail.sync("ses_root")
@@ -3672,7 +3647,7 @@ async function pendingControlFixture(sessionID: string) {
   return { app, events, sync, admit }
 }
 
-test("a withdrawn pending input leaves the pending list, input tracking and transcript", async () => {
+test.each(["withdrawn", "deleted"] as const)("a %s pending input leaves the pending list, input tracking and transcript", async (kind) => {
   const sessionID = "session-withdrawn"
   const { app, events, sync, admit } = await pendingControlFixture(sessionID)
   try {
@@ -3683,7 +3658,7 @@ test("a withdrawn pending input leaves the pending list, input tracking and tran
     emitEvent(events, {
       id: "evt_withdrawn",
       created: 2,
-      type: "session.input.withdrawn",
+      type: `session.input.${kind}`,
       durable: durable(sessionID, 2),
       data: { sessionID, inputID: "msg_withdrawn" },
     })
@@ -3996,7 +3971,7 @@ test("skips initial instruction state and projects later updates with their mess
     await wait(() => sync.session.message.list("session-1")?.some((message) => message.time.created === 1))
     expect(sync.session.message.list("session-1")).toHaveLength(1)
     expect(sync.session.message.list("session-1")?.[0]).toMatchObject({
-      id: SessionMessage.ID.fromEvent(EventRuntime.ID.make("evt_instructions_2")),
+      id: SessionMessageID.ID.fromEvent(Event.ID.make("evt_instructions_2")),
       type: "system",
       text: "Instructions updated: core/date",
       time: { created: 1 },
@@ -4017,7 +3992,7 @@ test("places an instruction notice before a resident assistant and keeps it ther
     time: { created: 8 },
   }
   const notice = {
-    id: SessionMessage.ID.fromEvent(EventRuntime.ID.make("evt_instruction_date")),
+    id: SessionMessageID.ID.fromEvent(Event.ID.make("evt_instruction_date")),
     type: "system" as const,
     text: "Instructions updated: core/date",
     time: { created: 3 },
@@ -5040,8 +5015,8 @@ test("indexes subagents that are already running when the stream connects", asyn
   const events = createEventStream()
   const calls = createFetch((url) => {
     if (url.pathname === "/api/session/active") return json({ data: { ses_child: { type: "running" } } })
-    const match = url.pathname.match(/^\/api\/session\/([^/]+)$/)
-    if (match && match[1] !== "active")
+    const match = url.pathname.match(/^\/api\/session\/(ses_[^/]+)$/)
+    if (match)
       return json({
         data: sessionInfo(match[1], match[1] === "ses_child" ? "ses_parent" : undefined),
       })

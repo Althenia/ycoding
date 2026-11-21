@@ -1,6 +1,6 @@
 export * as RemoteCredentials from "./remote-credentials"
 
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "./paths"
 import { deviceSignaturePayload, enrollmentCodePattern } from "@ycoding-ai/remote"
 import { Effect, FileSystem, Option, Schema } from "effect"
 import fs from "node:fs/promises"
@@ -45,7 +45,7 @@ const encodeIdentity = Schema.encodeEffect(Schema.fromJsonString(Identity))
 
 /** The credentials outlive any repository checkout; they are never project-local. */
 export const file = Effect.gen(function* () {
-  const global = yield* Global.Service
+  const global = yield* FrontendPaths.Service
   return path.join(global.state, filename)
 })
 

@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
-import type { YCodingClient, YCodingEvent } from "@ycoding-ai/client"
+import type { YCodingEvent } from "@ycoding-ai/client"
+import type { V5Client } from "@ycoding-ai/client/v5"
 import { testRender } from "@opentui/solid"
 import { onMount } from "solid-js"
 import { ClientProvider, useClient } from "../../../src/context/client"
@@ -52,7 +53,7 @@ function update(version: string): YCodingEvent {
 }
 
 async function mount(
-  reconnect?: (signal: AbortSignal) => Promise<{ api: YCodingClient }>,
+  reconnect?: (signal: AbortSignal) => Promise<{ api: V5Client }>,
   log?: LogSink,
 ) {
   const events = createEventStream()
@@ -146,7 +147,7 @@ describe("useEvent", () => {
 
       await wait(() => seen.length === 1)
 
-      expect(seen).toEqual([event(vcs("main"), { directory: "/tmp/other", workspace: "ws_a" })])
+      expect(seen).toEqual([{ ...event(vcs("main"), { directory: "/tmp/other", workspace: "ws_a" }), sourceEpoch: "source-1" }])
       expect(workspaces).toEqual(["ws_a"])
     } finally {
       app.renderer.destroy()
@@ -161,7 +162,7 @@ describe("useEvent", () => {
 
       await wait(() => seen.length === 1)
 
-      expect(seen).toEqual([event(vcs("ws"), { directory: "/tmp/other", workspace: "ws_b" })])
+      expect(seen).toEqual([{ ...event(vcs("ws"), { directory: "/tmp/other", workspace: "ws_b" }), sourceEpoch: "source-1" }])
     } finally {
       app.renderer.destroy()
     }
@@ -175,7 +176,7 @@ describe("useEvent", () => {
 
       await wait(() => seen.length === 1)
 
-      expect(seen).toEqual([event(update("1.2.3"), { directory: "global" })])
+      expect(seen).toEqual([{ ...event(update("1.2.3"), { directory: "global" }), sourceEpoch: "source-1" }])
     } finally {
       app.renderer.destroy()
     }

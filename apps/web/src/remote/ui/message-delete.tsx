@@ -18,8 +18,11 @@ export function MessageDelete(props: { readonly eligible: boolean; readonly onDe
   const remove = async () => {
     setBusy(true)
     setOpen(false)
-    setError(await props.onDelete())
-    setBusy(false)
+    try {
+      setError(await props.onDelete())
+    } finally {
+      setBusy(false)
+    }
   }
   return <div class="message-delete" ref={root} onKeyDown={(event) => {
     if (event.key !== "Escape" || !open()) return
@@ -28,7 +31,7 @@ export function MessageDelete(props: { readonly eligible: boolean; readonly onDe
     trigger?.focus()
   }}>
     <Show when={props.eligible || open()}>
-      <button ref={trigger} type="button" class="message-delete__menu-button" aria-label="Message actions" aria-expanded={open()} aria-controls={id} disabled={busy()} onClick={() => { setError(undefined); setOpen(!open()) }}><Icon name="more" size={16} /></button>
+      <button ref={trigger} type="button" class="message-delete__menu-button" aria-label="Message actions" aria-expanded={open()} aria-controls={open() ? id : undefined} disabled={busy()} onClick={() => { setError(undefined); setOpen(!open()) }}><Icon name="more" size={16} /></button>
     </Show>
     <Show when={open()}>
       <div id={id} class="message-delete__menu"><button type="button" onClick={() => void remove()}><Icon name="trash" size={16} />Delete</button></div>

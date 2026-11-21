@@ -71,15 +71,16 @@ export type OutcomesPresentation = {
   readonly cancelled: number
 }
 
-export function errorRateText(outcomes: OutcomesPresentation | undefined) {
+export function errorRateText(outcomes: OutcomesPresentation | undefined, logical: number) {
   const total = outcomes === undefined ? 0 : outcomes.completed + outcomes.failed + outcomes.cancelled
-  return outcomes === undefined || total === 0 ? "" : `${((outcomes.failed / total) * 100).toFixed(1)}%`
+  return outcomes === undefined || total === 0 || total !== logical ? "" : `${((outcomes.failed / total) * 100).toFixed(1)}%`
 }
 
-export function outcomeLine(outcomes: OutcomesPresentation | undefined) {
+export function outcomeLine(outcomes: OutcomesPresentation | undefined, logical: number) {
   if (outcomes === undefined) return undefined
-  const errorRate = errorRateText(outcomes)
-  return `Outcomes ${outcomes.completed.toLocaleString("en-US")} completed · ${outcomes.failed.toLocaleString("en-US")} failed · ${outcomes.cancelled.toLocaleString("en-US")} cancelled${errorRate ? ` · error rate ${errorRate}` : ""}`
+  const total = outcomes.completed + outcomes.failed + outcomes.cancelled
+  const errorRate = errorRateText(outcomes, logical)
+  return `Outcomes ${outcomes.completed.toLocaleString("en-US")} completed · ${outcomes.failed.toLocaleString("en-US")} failed · ${outcomes.cancelled.toLocaleString("en-US")} cancelled${errorRate ? ` · error rate ${errorRate}` : total !== logical ? " · incomplete coverage" : ""}`
 }
 
 export type SpeedPresentation = {

@@ -10,7 +10,7 @@ type Fault = "reject" | "applied-reject" | "starter" | "corrupt"
 type Call = { method: string; path: string; name?: string }
 
 const repository = "example/ycoding"
-const tag = "v0.11.0"
+const tag = "v0.12.0"
 const releaseID = 42
 const otherID = 41
 const temporary: string[] = []
@@ -27,7 +27,7 @@ const byText = (left: string, right: string) => (left < right ? -1 : left > righ
 
 function github(
   options: {
-    readonly assets: ReadonlyArray<{ name: string; content: string }>
+    readonly assets: ReadonlyArray<{ name: string; content: string; state?: Asset["state"] }>
     readonly fault?: (call: Call) => Fault | undefined
     readonly digests?: "present" | "null"
     readonly latest?: () => number
@@ -46,7 +46,7 @@ function github(
   const assets = new Map<number, Asset>(
     options.assets.map((asset, index) => [
       index + 1,
-      { id: index + 1, name: asset.name, state: "uploaded", content: bytes(asset.content) },
+      { id: index + 1, name: asset.name, state: asset.state ?? "uploaded", content: bytes(asset.content) },
     ]),
   )
   let latest = releaseID
@@ -364,34 +364,105 @@ test("a public asset that no longer matches its verified digest after the swap r
 })
 
 test("another replacement retains both generations of prior assets", async () => {
-  const server = github({ assets: original })
-  const first = await run(server)
+  const server = github({ assets: active })
+  const original = server.names()
+  const first = await run(server, incoming)
   expect(first.result.status).toBe("published")
-  const next = replacement.map((asset) => ({ ...asset, content: `${asset.content} again` }))
+  const next = fullRelease("second successor")
   const second = await run(server, next, "78-1")
   expect(second.result.status).toBe("published")
   const names = server.names()
   expect(Object.keys(names)).toHaveLength(next.length * 3)
   for (const asset of next) {
-    expect(names[`prior-77-1-${asset.name}`]).toBe(originalIDs[asset.name])
+    expect(names[`prior-77-1-${asset.name}`]).toBe(original[asset.name])
     expect(names[`prior-78-1-${asset.name}`]).toBe(first.manifest.staged.find((entry) => entry.name === asset.name)?.id)
     expect(server.assets.get(names[asset.name]!)?.content).toEqual(bytes(asset.content))
   }
   expect(server.mutations().some((call) => call.method === "DELETE")).toBe(false)
 })
 
-test("an existing prior archive for the same run stops publication before any change", async () => {
-  const server = github({ assets: [...original, { name: "prior-77-1-LICENSE", content: "earlier" }] })
-  const { result, manifest } = await run(server)
-  expect(result.status).toBe("refused")
-  expect(server.mutations()).toEqual([])
-  expect(manifest.error).toContain("prior-77-1-LICENSE")
-})
-
-test("leftover staged assets stop publication before any change", async () => {
+test("leftover staged assets from an earlier run stop publication before any change", async () => {
   const server = github({ assets: [...original, { name: "staged-76-1-LICENSE", content: "earlier" }] })
   const { result, manifest } = await run(server)
   expect(result.status).toBe("refused")
   expect(server.mutations()).toEqual([])
   expect(manifest.error).toContain("staged-76-1-LICENSE")
+})
+
+const publicChecksums = "ycoding-0.12.0-checksums.txt"
+function fullRelease(label: string) {
+  const covered = ["ycoding-0.12.0-darwin-arm64.tar.gz", "ycoding-0.12.0-darwin-x64.tar.gz",
+    "ycoding-0.12.0-linux-x64.tar.gz", "ycoding-0.12.0-windows-x64.zip", "YCoding-Desktop-v0.12.0-darwin-arm64.zip",
+    "LICENSE", "NOTICE"].map((name) => ({ name, content: `${label}: ${name}\n` }))
+  return [...covered, { name: tag + ".md", content: `${label}: release notes\n` }, {
+    name: publicChecksums, content: covered.map(({ name, content }) => `${sha256(bytes(content))}  ${name}\n`).join(""),
+  }]
+}
+
+const active = fullRelease("active")
+const incoming = fullRelease("successor")
+const historical = fullRelease("historical").map((asset) => ({ ...asset, name: `prior-44881817344-1-${asset.name}` }))
+
+function snapshot(server: ReturnType<typeof github>) {
+  return [...server.assets.values()].map((asset) => ({ id: asset.id, name: asset.name, digest: `sha256:${sha256(asset.content)}` }))
+}
+
+test("a complete successor swaps nine public files and leaves the nine older backups untouched", async () => {
+  const server = github({ assets: [...active, ...historical] })
+  const before = snapshot(server)
+  const { result, manifest } = await run(server, incoming)
+  expect(result.status).toBe("published")
+  const after = snapshot(server)
+  expect(after).toHaveLength(27)
+  expect(after.filter((asset) => asset.name.startsWith("prior-44881817344-1-"))).toEqual(before.slice(9))
+  expect(after.filter((asset) => asset.name.startsWith("prior-77-1-"))).toEqual(before.slice(0, 9).map((asset) => ({ ...asset, name: `prior-77-1-${asset.name}` })))
+  for (const file of incoming) {
+    const asset = after.find((entry) => entry.name === file.name)
+    expect(asset?.id).toBeGreaterThanOrEqual(1000)
+    expect(asset?.digest).toBe(`sha256:${sha256(bytes(file.content))}`)
+  }
+  expect(server.mutations().filter((call) => call.method === "PATCH" && call.path.startsWith("/releases/assets/")).at(-1)?.name).toBe(publicChecksums)
+  expect(manifest.final.map(({ id, name, digest }) => ({ id, name, digest }))).toEqual(after)
+  expect(server.mutations().every((call) => !before.slice(9).some((asset) => call.path === `/releases/assets/${asset.id}`))).toBe(true)
+})
+
+test("a failed successor restores public IDs and digests without touching the older backups", async () => {
+  const server = github({
+    assets: [...active, ...historical],
+    fault: (call) => call.method === "PATCH" && call.path === `/releases/${releaseID}` && call.name !== undefined ? "reject" : undefined,
+  })
+  const before = snapshot(server)
+  const { result, manifest } = await run(server, incoming)
+  expect(result.status).toBe("restored")
+  expect(snapshot(server)).toEqual(before)
+  expect(manifest.final.map(({ id, name, digest }) => ({ id, name, digest }))).toEqual(before)
+  expect(server.mutations().every((call) => !before.slice(9).some((asset) => call.path === `/releases/assets/${asset.id}`))).toBe(true)
+})
+
+test("restoration reports a changed original digest even when the original names and IDs are restored", async () => {
+  const server = github({
+    assets: [...active, ...historical],
+    fault: (call) => call.method === "PATCH" && call.name === "prior-77-1-LICENSE" ? "corrupt" : undefined,
+  })
+  const { result, manifest } = await run(server, incoming)
+  expect(result.status).toBe("unrestored")
+  expect(manifest.error).toContain("LICENSE")
+})
+
+test.each([
+  ["an incomplete prior set", [...active, ...historical.slice(1)], incoming],
+  ["a missing current asset", [...active.slice(1), ...historical], incoming],
+  ["a same-run collision", [...active, ...historical.map((asset) => ({ ...asset, name: asset.name.replace("44881817344-1", "77-1") }))], incoming],
+  ["a staged remainder", [...active, ...historical, { name: "staged-75-1-LICENSE", content: "staged" }], incoming],
+  ["a non-uploaded prior file", [...active, ...historical.slice(1), { ...historical[0]!, state: "starter" as const }], incoming],
+  ["public content that differs from the active checksums", [{ ...active[0]!, content: "mixed generation" }, ...active.slice(1), ...historical], incoming],
+  ["prior content that differs from its own checksums", [...active, { ...historical[0]!, content: "mixed generation" }, ...historical.slice(1)], incoming],
+  ["an incomplete successor", [...active, ...historical], incoming.slice(1)],
+])("publication refuses %s before changing anything", async (_, assets, successor) => {
+  const server = github({ assets })
+  const before = snapshot(server)
+  const { result } = await run(server, successor)
+  expect(result.status).toBe("refused")
+  expect(server.mutations()).toEqual([])
+  expect(snapshot(server)).toEqual(before)
 })

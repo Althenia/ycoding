@@ -255,7 +255,7 @@ test("review box lists deferred items with counts and decides a hard guardrail i
   try {
     const frame = screen.frame()
     expect(frame).toContain("review 2")
-    expect(frame).toContain("waiting for your review")
+    expect(frame).toContain("? awaiting input")
     expect(frame).toContain("Guardrail review")
     expect(frame).toContain("decision model escalated · escalate · 0.42")
     expect(frame).toContain("grade approve 0.1 · The repository state needs inspection")

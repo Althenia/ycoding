@@ -21,6 +21,10 @@ expect(landing.headers.get("content-type")?.includes("text/html") === true, "/ i
 expect(landing.headers.get("x-frame-options") === "DENY", "/ is missing baseline security headers")
 checks.push("GET / serves the built landing page with security headers")
 
+const changelog = await fetch(`${origin}/changelog`, { headers: { "sec-fetch-mode": "navigate" } })
+expect(changelog.status === 200 && changelog.headers.get("content-type")?.includes("text/html") === true, "/changelog did not return HTML")
+checks.push("GET /changelog serves the built Web page")
+
 const deepLink = await fetch(`${origin}/remote/status`, { headers: { "sec-fetch-mode": "navigate" } })
 expect(deepLink.status === 200, `/remote/status returned ${deepLink.status}`)
 expect(deepLink.headers.get("content-type")?.includes("text/html") === true, "SPA deep link is not HTML")
@@ -48,13 +52,20 @@ const upgrade = {
   "sec-websocket-version": "13",
   "sec-websocket-key": btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))),
 }
-const agentSocket = await fetch(`${origin}/ws/v4/agent`, { headers: upgrade })
-expect(agentSocket.status === 401, `/ws/v4/agent without a credential returned ${agentSocket.status}`)
-checks.push("GET /ws/v4/agent without credential 401")
-
-const clientSocket = await fetch(`${origin}/ws/v4/client?device=dev_unknown`, { headers: upgrade })
-expect(clientSocket.status === 403, `/ws/v4/client without an Origin returned ${clientSocket.status}`)
-checks.push("GET /ws/v4/client without Origin 403")
+for (const version of [4, 5]) {
+  const agent = `/ws/v${version}/agent`
+  const client = `/ws/v${version}/client?device=dev_unknown`
+  for (const { path, headers, status, condition } of [
+    { path: agent, headers: upgrade, status: 401, condition: "without a device credential" },
+    { path: client, headers: upgrade, status: 403, condition: "without Origin" },
+    { path: client, headers: { ...upgrade, origin: "https://cross-origin.invalid" }, status: 403, condition: "with a foreign Origin" },
+    { path: client, headers: { ...upgrade, origin }, status: 401, condition: "without a browser session" },
+  ]) {
+    const response = await fetch(`${origin}${path}`, { headers })
+    expect(response.status === status, `${path} ${condition} returned ${response.status}`)
+    checks.push(`GET ${path} ${condition} ${status}`)
+  }
+}
 
 for (const retired of ["/ws/v3/agent", "/ws/v3/client", "/ws/smoke/agent", "/ws/smoke/client", "/ws"])
   expect((await fetch(`${origin}${retired}`)).status === 404, `${retired} is still routed`)

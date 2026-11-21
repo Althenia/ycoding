@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import type { RemoteDeviceInfo, RemoteErrorCode, RemoteNoticePage, RemoteNoticeRequest } from "@ycoding-ai/remote"
+import type { RemoteDeviceInfo, RemoteErrorCode, RemoteNoticePage } from "@ycoding-ai/remote"
+import type { NoticeRequestView } from "../src/remote/wire-views"
 import { createRemoteHttp } from "../src/remote/http"
 import type { StorageLike } from "../src/lib/storage"
 import { createNotificationDelivery, type DesktopAlert } from "../src/remote/notifications"
@@ -73,7 +74,7 @@ async function harness(options: {
   readonly devices?: readonly RemoteDeviceInfo[]
   readonly noticeError?: { readonly code: RemoteErrorCode; readonly message: string }
   readonly noticePage?: RemoteNoticePage
-  readonly noticeHandler?: (request: RemoteNoticeRequest) => unknown | Promise<unknown>
+  readonly noticeHandler?: (request: NoticeRequestView) => unknown | Promise<unknown>
   readonly storage?: StorageLike
 } = {}): Promise<Harness> {
   const devices: readonly RemoteDeviceInfo[] =
@@ -193,7 +194,7 @@ describe("external delivery filter", () => {
     const group = { id: "cgrp_1", name: "Release", revision: 1, active: true, settings: { concurrency: 1 }, time: { created: 1, updated: 1 } }
     if (request.operation === "coordination.list") return { ok: true, value: { data: [{ ...group, masterSessionID: lead, memberCount: 1 }] } }
     if (request.operation === "coordination.get") return { ok: true, value: { data: { ...group, master: participant(lead), members: [participant(worker)] } } }
-    return { ok: false, code: "unknown_operation", message: "unknown" }
+    return { ok: false, code: "invalid_message", message: "unknown" }
   }
 
   test("a stored selection gates System alerts by Session while the in-app list keeps every notice", async () => {
@@ -239,7 +240,7 @@ describe("external delivery filter", () => {
   })
 
   test("a connector without the Projects operations keeps the masters scope withheld", async () => {
-    const test = await harness({ storage: storage(), handler: (request) => request.operation.startsWith("coordination.") ? { ok: false, code: "unknown_operation", message: "unknown" } : "default" })
+    const test = await harness({ storage: storage(), handler: (request) => request.operation.startsWith("coordination.") ? { ok: false, code: "invalid_message", message: "unknown" } : "default" })
     try {
       await test.openSession()
       test.store.setNotificationFilter({ scope: "coordinators" })
@@ -357,7 +358,7 @@ describe("remote notification delivery", () => {
     try {
       await test.openSession()
       await test.runUntil(() => test.store.state().notifications.length === 1)
-      test.relay.pushEvent("ses_a", { id: "evt_denied", type: "guardrail.decided", data: { decision: "deny" } })
+      test.relay.pushEvent("ses_a", { id: "evt_denied", type: "guardrail.decided", data: { rootSessionID: "ses_a", action: "shell", ruleIDs: [], decision: "deny" } })
       await test.runUntil(() => test.store.state().notifications.length === 2)
       expect(test.store.state().notifications.map((entry) => [entry.id, entry.synced, entry.live])).toEqual([
         ["ntc_50", true, false], [expect.stringMatching(/^notice_/), false, true],
@@ -387,7 +388,7 @@ describe("remote notification delivery", () => {
   })
 
   test("an unreadable page is rejected as a sync error instead of being listed", async () => {
-    const test = await harness({ noticeHandler: (request) => request.operation === "notice.subscribe" ? { notices: [{ id: "bad" }], total: 1, unavailable: false } : undefined })
+    const test = await harness({ noticeHandler: (request) => request.operation === "notice.subscribe" ? { notices: [{ id: "bad", category: "agent-completed", sessionID: "ses_a", createdAt: 1 }], total: 1, unavailable: false } : undefined })
     try {
       await test.openSession()
       await test.runUntil(() => test.store.state().noticeSync.status === "error")
@@ -477,7 +478,7 @@ describe("remote notification delivery", () => {
   test("a failed Load more is shown as a sync error without dropping the loaded notices", async () => {
     const test = await harness({
       noticePage: { notices: [{ id: "ntc_9", category: "agent-completed", sessionID: "ses_a", createdAt: 9 }], next: "ntc_9", total: 9, unavailable: false },
-      noticeHandler: (request) => request.operation === "notice.list" ? { notices: [{ id: "ntc_8" }], total: 9, unavailable: false } : undefined,
+      noticeHandler: (request) => request.operation === "notice.list" ? { notices: [{ id: "bad", category: "agent-completed", sessionID: "ses_a", createdAt: 8 }], total: 9, unavailable: false } : undefined,
     })
     try {
       await test.openSession()
@@ -492,14 +493,14 @@ describe("remote notification delivery", () => {
     const test = await harness()
     try {
       await test.openSession()
-      test.relay.pushEvent("ses_a", { id: "evt_20", type: "permission.asked", data: { id: "per_1", action: "shell" } })
+      test.relay.pushEvent("ses_a", { id: "evt_20", type: "permission.asked", data: { id: "per_1", action: "shell", resources: [] } })
       await test.flush()
-      test.relay.pushEvent("ses_a", { id: "evt_21", type: "guardrail.asked", data: { id: "grq_1", hardReview: true } })
+      test.relay.pushEvent("ses_a", { id: "evt_21", type: "guardrail.asked", data: { id: "grq_1", rootSessionID: "ses_a", action: "shell", resources: [], ruleIDs: [], reason: "Review", standard: true, hardReview: true } })
       await test.flush()
       await raised(test, "approval-requested", "ses_b")
-      test.relay.pushEvent("ses_a", { id: "evt_denied", type: "guardrail.decided", data: { decision: "deny" } })
+      test.relay.pushEvent("ses_a", { id: "evt_denied", type: "guardrail.decided", data: { rootSessionID: "ses_a", action: "shell", ruleIDs: [], decision: "deny" } })
       await test.runUntil(() => test.store.state().notifications.length === 2)
-      test.relay.pushEvent("ses_a", { id: "evt_22", type: "session.step.failed", durable: { aggregateID: "ses_a", seq: 6, version: 1 }, data: {} })
+      test.relay.pushEvent("ses_a", { id: "evt_22", type: "session.step.failed", durable: { aggregateID: "ses_a", seq: 6, version: 1 }, data: { assistantMessageID: "msg_1", error: { type: "provider", message: "failed" } } })
       await test.flush()
 
       expect(test.store.state().notifications.map((entry) => [entry.category, entry.synced])).toEqual([
@@ -525,7 +526,7 @@ describe("remote notification delivery", () => {
       const notice = { id: "ntc_51", category: "approval-requested" as const, sessionID: "ses_a", createdAt: 5 }
       test.relay.pushNotices({ type: "notice.added", notices: [notice], total: 1 })
       test.relay.pushNotices({ type: "notice.present", items: [{ kind: "notice", notice }] })
-      test.relay.pushEvent("ses_a", { id: "evt_denied", type: "guardrail.decided", data: { decision: "deny" } })
+      test.relay.pushEvent("ses_a", { id: "evt_denied", type: "guardrail.decided", data: { rootSessionID: "ses_a", action: "shell", ruleIDs: [], decision: "deny" } })
       await test.flush()
       await Bun.sleep(30)
       expect(test.store.state().notifications).toHaveLength(0)
@@ -783,7 +784,7 @@ describe("remote notification delivery", () => {
     try {
       await test.openSession()
       const synced = await raised(test, "agent-completed")
-      test.relay.pushEvent("ses_a", { id: "evt_denied", type: "guardrail.decided", data: { decision: "deny" } })
+      test.relay.pushEvent("ses_a", { id: "evt_denied", type: "guardrail.decided", data: { rootSessionID: "ses_a", action: "shell", ruleIDs: [], decision: "deny" } })
       await test.runUntil(() => test.store.state().notifications.length === 2)
       const local = test.store.state().notifications.find((entry) => !entry.synced)?.id ?? ""
 
@@ -808,7 +809,7 @@ describe("remote notification delivery", () => {
     try {
       await test.openSession()
       await raised(test, "agent-completed")
-      test.relay.pushEvent("ses_a", { id: "evt_denied", type: "guardrail.decided", data: { decision: "deny" } })
+      test.relay.pushEvent("ses_a", { id: "evt_denied", type: "guardrail.decided", data: { rootSessionID: "ses_a", action: "shell", ruleIDs: [], decision: "deny" } })
       await test.runUntil(() => test.store.state().notifications.length === 2)
       await test.store.readAllNotifications()
       expect(test.relay.noticeRequests.filter((request) => request.operation === "notice.readAll")).toHaveLength(1)

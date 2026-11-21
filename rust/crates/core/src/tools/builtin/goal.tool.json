@@ -1,0 +1,47 @@
+{
+  "name": "goal",
+  "description": "Inspect and maintain the user's autonomous goal. Only the user creates, replaces or resumes its objective. Use report only for an unresolved blocker after reasonable self-resolution; every accepted report spends one no-progress attempt. Pending family reviews pause accounting. Background work is unfinished work, not a blocker. Record reopened work with rework, unit, reason and state opened; resolve it with state resolved and evidence naming the passing check. Rework never spends the no-progress budget. Complete only after verifying the objective. Named script paths and backticked commands must pass through shell after the latest completed edit, write or patch in the Session family. An identical completion rejection without intervening work spends one no-progress attempt. Stop or clear only at the user's direction. Set cannot create a goal.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "action": {"type": "string", "enum": ["get", "set", "update", "report", "rework", "complete", "stop", "clear"]},
+      "status": {"type": "string", "enum": ["active", "completed", "stopped"]},
+      "unit": {"type": "string", "pattern": "\\S", "maxLength": 120},
+      "reason": {"type": "string", "pattern": "\\S", "maxLength": 300},
+      "state": {"type": "string", "enum": ["opened", "resolved"]},
+      "evidence": {"type": "string", "pattern": "\\S", "maxLength": 300}
+    },
+    "required": ["action"],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "action": {"type": "string"},
+      "message": {"type": "string"},
+      "goal": {
+        "type": "object",
+        "properties": {
+          "text": {"type": "string"},
+          "rawText": {"type": "string"},
+          "status": {"type": "string", "enum": ["active", "completed", "stopped", "exhausted"]},
+          "iteration": {"type": "integer", "minimum": 0},
+          "noProgress": {"type": "integer", "minimum": 0},
+          "maxNoProgress": {"type": "integer", "exclusiveMinimum": 0},
+          "lastProgressDigest": {"type": "string"},
+          "phase": {"type": "string", "enum": ["active", "waiting", "rework", "stalled"]},
+          "wait": {"type": "string", "enum": ["child", "shell", "review"]},
+          "rework": {"type": "integer", "minimum": 0},
+          "reworkOpen": {"type": "array", "items": {"type": "object", "properties": {"unit": {"type": "string"}, "reason": {"type": "string"}}, "required": ["unit", "reason"], "additionalProperties": false}},
+          "stalls": {"type": "integer", "minimum": 0},
+          "failure": {"type": "object", "properties": {"fingerprint": {"type": "string"}, "class": {"type": "string"}, "unit": {"type": "string"}, "count": {"type": "integer", "exclusiveMinimum": 0}, "recovering": {"type": "boolean"}}, "required": ["fingerprint", "class", "unit", "count", "recovering"], "additionalProperties": false},
+          "recovery": {"type": "object", "properties": {"condition": {"type": "string"}, "seen": {"type": "array", "items": {"type": "object", "properties": {"fingerprint": {"type": "string"}, "count": {"type": "integer", "exclusiveMinimum": 0}}, "required": ["fingerprint", "count"], "additionalProperties": false}}}, "required": ["condition", "seen"], "additionalProperties": false}
+        },
+        "required": ["text", "status", "iteration", "noProgress", "maxNoProgress"],
+        "additionalProperties": false
+      }
+    },
+    "required": ["action", "message"],
+    "additionalProperties": false
+  }
+}

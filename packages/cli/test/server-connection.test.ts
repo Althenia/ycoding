@@ -1,6 +1,6 @@
 import { NodeFileSystem } from "@effect/platform-node"
-import { Global } from "@ycoding-ai/core/global"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { FrontendPaths } from "../src/paths"
+import { InstallationVersion } from "../src/version"
 import { expect, test } from "bun:test"
 import { Effect, FileSystem, Scope } from "effect"
 import fs from "node:fs/promises"
@@ -24,12 +24,12 @@ test("resolution groups Effect-native lifecycle operations only for the managed 
     },
   })
   const registration = path.join(root, "state", ServiceConfig.filename())
-  const layer = Global.layerWith({
+  const layer = FrontendPaths.layerWith({
     data: path.join(root, "data"),
     config: path.join(root, "config"),
     state: path.join(root, "state"),
   })
-  const runPromise = <A, E>(effect: Effect.Effect<A, E, Global.Service | FileSystem.FileSystem | Scope.Scope>) =>
+  const runPromise = <A, E>(effect: Effect.Effect<A, E, FrontendPaths.Service | FileSystem.FileSystem | Scope.Scope>) =>
     Effect.runPromise(effect.pipe(Effect.provide(layer), Effect.provide(NodeFileSystem.layer), Effect.scoped))
 
   try {
@@ -66,17 +66,17 @@ const expectedAuthorization = `Basic ${Buffer.from(`ycoding:${secret}`).toString
 
 async function withRegisteredService(
   run: (input: {
-    runPromise: <A, E>(effect: Effect.Effect<A, E, Global.Service | FileSystem.FileSystem | Scope.Scope>) => Promise<A>
+    runPromise: <A, E>(effect: Effect.Effect<A, E, FrontendPaths.Service | FileSystem.FileSystem | Scope.Scope>) => Promise<A>
     register: (url: string) => Promise<void>
   }) => Promise<void>,
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-server-auth-"))
-  const layer = Global.layerWith({
+  const layer = FrontendPaths.layerWith({
     data: path.join(root, "data"),
     config: path.join(root, "config"),
     state: path.join(root, "state"),
   })
-  const runPromise = <A, E>(effect: Effect.Effect<A, E, Global.Service | FileSystem.FileSystem | Scope.Scope>) =>
+  const runPromise = <A, E>(effect: Effect.Effect<A, E, FrontendPaths.Service | FileSystem.FileSystem | Scope.Scope>) =>
     Effect.runPromise(effect.pipe(Effect.provide(layer), Effect.provide(NodeFileSystem.layer), Effect.scoped))
   const register = async (url: string) => {
     await fs.mkdir(path.join(root, "state"), { recursive: true })

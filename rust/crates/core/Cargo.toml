@@ -1,0 +1,71 @@
+[package]
+name = "ycoding-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bench]]
+name = "history_concurrency"
+harness = false
+
+[dependencies]
+jsonschema.workspace = true
+flate2.workspace = true
+tar.workspace = true
+zip.workspace = true
+prost.workspace = true
+axum.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+fff-search.workspace = true
+notify.workspace = true
+icu_properties.workspace = true
+icu_segmenter.workspace = true
+icu_normalizer.workspace = true
+icu_collator.workspace = true
+oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_parser.workspace = true
+oxc_semantic.workspace = true
+photon-rs.workspace = true
+jpeg-decoder.workspace = true
+oxc_span.workspace = true
+reqwest.workspace = true
+rmcp.workspace = true
+ring = { workspace = true, features = ["alloc"] }
+aws-lc-rs.workspace = true
+rustls = { version = "=0.23.45", default-features = false, features = ["std", "tls12", "aws_lc_rs"] }
+tokio-rustls = { version = "=0.26.6", default-features = false, features = ["tls12", "aws_lc_rs"] }
+x509-cert = { version = "=0.2.5", default-features = false, features = ["builder", "hazmat"] }
+signature = { version = "=2.2.0", default-features = false }
+pem-rfc7468 = { version = "=1.0.0", default-features = false, features = ["alloc"] }
+serde_json.workspace = true
+url.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio-tungstenite.workspace = true
+yaml-rust2.workspace = true
+foreign-types.workspace = true
+openssl.workspace = true
+openssl-sys.workspace = true
+tokio-openssl.workspace = true
+ycoding-ai = { path = "../ai" }
+ycoding-schema = { path = "../schema" }
+ycoding-store = { path = "../store" }
+
+[build-dependencies]
+prost-build.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation-sys = { version = "=0.8.7", default-features = false, features = ["link"] }
+security-framework-sys = { version = "=2.17.0", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Threading", "Win32_System_Pipes", "Win32_Storage_FileSystem", "Win32_Security", "Win32_Security_Cryptography", "Wdk_System_SystemServices", "Win32_System_SystemInformation"] }

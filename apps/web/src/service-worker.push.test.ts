@@ -39,7 +39,11 @@ test("service worker shows one notification per push including malformed and foc
       return responses.length
     }
     expect(intercepted("https://relay.test/api/me", "GET", "navigate", "document")).toBe(0)
-    expect(intercepted("https://relay.test/ws/v4/client", "GET", "cors", "websocket")).toBe(0)
+    for (const version of [4, 5]) {
+      expect(intercepted(`https://relay.test/ws/v${version}/client?device=dev_1`, "GET", "cors", "websocket")).toBe(0)
+      expect(intercepted(`https://relay.test/ws/v${version}/client?device=dev_1`, "GET", "navigate", "document")).toBe(0)
+    }
+    expect(intercepted("https://relay.test/api/remote/devices/dev_1/sessions/ses_a/attachments/digest?connectionEpoch=e&requestID=1&transferID=t", "GET", "cors", "image")).toBe(0)
     expect(intercepted("https://relay.test/auth/google", "GET", "navigate", "document")).toBe(0)
     expect(intercepted("https://relay.test/assets/index.js", "POST", "cors", "script")).toBe(0)
     expect(intercepted("https://relay.test/docs/usage", "GET", "navigate", "document")).toBe(1)

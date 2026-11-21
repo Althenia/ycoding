@@ -102,6 +102,28 @@ test("release workflow packages and checksums every CLI archive", () => {
   expect(workflowJob(workflow, "finalize-release")).toContain('bun script/release-archive.ts finalize "$RELEASE_VERSION" downloaded release')
 })
 
+test("the Windows release and independent PR gate compile and verify an embedded native x64 executable", () => {
+  const release = workflowJob(workflow, "build")
+  expect(release).toContain("- target: windows-x64\n            runner: windows-2025\n            platform: win32\n            arch: x64")
+  expect(release.indexOf("uses: ./.github/actions/setup-rust")).toBeLessThan(release.indexOf("name: Build TUI artifact"))
+  expect(release).toContain("--runtime-receipt=")
+  expect(release).toContain("'.exe'")
+  const verify = release.split("- name: Verify packaged Windows runtime")[1]?.split("- name: Upload native archive")[0] ?? ""
+  expect(verify).toContain("if: runner.os == 'Windows'")
+  expect(verify).toContain("7z x")
+  expect(verify).toContain("verify-embedded")
+  expect(verify).toContain("/ycoding.exe")
+  expect(release.indexOf("Create and validate native archive")).toBeLessThan(release.indexOf("Verify packaged Windows runtime"))
+  expect(release.indexOf("Verify packaged Windows runtime")).toBeLessThan(release.indexOf("Upload native archive"))
+  const pr = workflowJob(testWorkflow, "native-windows")
+  expect(pr).toContain("name: native runtime build (windows)")
+  expect(pr).toContain("runs-on: windows-2025")
+  expect(pr).not.toMatch(/^    (?:if|needs):|continue-on-error:/m)
+  const steps = ["uses: ./.github/actions/setup-rust", "--runtime-receipt=", "verify-embedded"].map((text) => pr.indexOf(text))
+  expect(steps.every((index) => index >= 0)).toBe(true)
+  expect(steps).toEqual([...steps].sort((a, b) => a - b))
+})
+
 test("compressed release assets are uploaded without an additional compression pass", () => {
   const upload = workflowJob(workflow, "build").split("      - name: Upload native archive\n")[1] ?? ""
   expect(upload).toContain("compression-level: 0")
@@ -365,12 +387,15 @@ test("active source checks select named files without package-wide test commands
   const commands = source.split("\n").filter((line) => /\bbun test\b/.test(line))
   expect(commands.length).toBeGreaterThan(10)
   for (const command of commands) {
-    expect(command).toMatch(/\S+\.test\.[jt]sx?\b/)
     expect(command).not.toMatch(/\*|\?[^\s]*\.test/)
-    const args = command.replace(/^.*?\bbun test\s+/, "").match(/"[^"]+"|\S+/g) ?? []
-    for (const argument of args.filter((argument, index) =>
+    const args = Array.from(command.replace(/^.*?\bbun test\s+/, "").matchAll(/"([^"]*)"|'([^']*)'|\S+/g),
+      ([token, doubleQuoted, singleQuoted]) => doubleQuoted ?? singleQuoted ?? token,
+    )
+    const files = args.filter((argument, index) =>
       !argument.startsWith("-") && !["--cwd", "--timeout", "-t"].includes(args[index - 1] ?? ""),
-    )) expect(argument).toMatch(/\.test\.[jt]sx?"?$/)
+    )
+    expect(files.length, command).toBeGreaterThan(0)
+    for (const file of files) expect(file, command).toMatch(/\.test\.[jt]sx?$/)
   }
 })
 
@@ -627,6 +652,36 @@ test("test workflow verifies the web application and relay before the Cloudflare
   expect(testWorkflow).toContain("bun test --cwd infra/cloudflare ./test/mcp-boundary.test.ts")
   expect(testWorkflow).toContain("bun run build:cloudflare")
   expect(testWorkflow.indexOf("bun run build:web")).toBeLessThan(testWorkflow.indexOf("bun run build:cloudflare"))
+})
+
+test("release and test workflows keep both relay versions in source verification", () => {
+  const releaseSource = workflowJob(workflow, "verify-source")
+  for (const source of [releaseSource, workflowJob(testWorkflow, "source")]) {
+    for (const check of [
+      "./test/router.test.ts",
+      "./test/relay-authority.test.ts",
+      "./test/relay-handoff.test.ts",
+      "./test/relay-http.test.ts",
+      "./test/relay-mcp.test.ts",
+      "./test/relay-resync.test.ts",
+      "./test/remote-http.test.ts",
+      "./test/remote-http-bulk.test.ts",
+      "./test/remote-sync.test.ts -t 'oversized live invalidations'",
+      "./test/http-bulk.test.ts",
+      "./src/pwa/offline.test.ts",
+      "./src/service-worker.push.test.ts",
+      "bun run typecheck:cloudflare",
+      "bun run build:cloudflare",
+    ]) expect(source).toContain(check)
+    expect(source).not.toContain("wrangler dev")
+  }
+  expect(releaseSource).toContain("ac_wire_002_handshake_invalid_input_matrix_dispatches_nothing")
+  const deploy = workflowJob(workflow, "deploy-web")
+  expect(deploy).toContain("needs: release-tui")
+  expect(workflow).toContain("\npermissions:\n  contents: read\n")
+  expect(deploy).not.toContain("permissions:")
+  expect(deploy).toContain("name: verified-web\n          path: apps/web/dist")
+  expect(deploy).toContain("bun run deploy:cloudflare")
 })
 
 test("active verification selects unit and mock boundaries without browser, listener or runtime suites", () => {
@@ -951,8 +1006,25 @@ test("install retries the pinned Bun action once, then installs the same pinned 
   expect(installBun).not.toContain("bun install")
 })
 
-test("setup installs Bun dependencies cold, without an Actions dependency cache or cache-warming workflow", async () => {
-  expect(setupBun).not.toContain("actions/cache")
+test("setup caches the Bun package store by OS, arch and lockfile before installing dependencies without a cache-warming workflow", async () => {
+  const steps = (Bun.YAML.parse(setupBun) as { runs: { steps: { name: string; if?: string; uses?: string; with?: Record<string, string> }[] } }).runs.steps
+  const names = steps.map((step) => step.name)
+  const install = names.indexOf("Install dependencies")
+  const pin = "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+  const key = "${{ runner.os }}-${{ runner.arch }}-bun-${{ hashFiles('bun.lock') }}"
+  const restore = "${{ runner.os }}-${{ runner.arch }}-bun-"
+  const caches = steps.filter((step) => step.uses === pin)
+  expect(caches).toHaveLength(2)
+  for (const step of caches) expect(names.indexOf(step.name)).toBeLessThan(install)
+  const unix = caches.find((step) => step.if === "runner.os != 'Windows'")
+  const windows = caches.find((step) => step.if === "runner.os == 'Windows'")
+  expect(unix?.with?.path).toBe("~/.bun/install/cache")
+  expect(windows?.with?.path).toBe("${{ runner.temp }}/bun-install-cache")
+  for (const step of [unix, windows]) {
+    expect(step?.with?.key).toBe(key)
+    expect(step?.with?.["restore-keys"]?.trim()).toBe(restore)
+  }
+  expect(setupBun.split(`${pin} # v6.1.0`)).toHaveLength(3)
   expect(setupBun).toContain("bun install ${{ inputs.install-flags }}")
   expect(await Bun.file(path.join(import.meta.dir, "../.github/workflows/bun-cache.yml")).exists()).toBe(false)
 })
@@ -964,10 +1036,9 @@ test("Windows keeps the Bun cache on the runner's workspace disk before installi
 })
 
 test("PR verification uses the same standard hosted runners as release", async () => {
-  for (const runner of ["ubuntu-24.04", "windows-2025"]) {
-    expect(workflow).toContain(`runner: ${runner}`)
-    expect(testWorkflow).toContain(`host: ${runner}`)
-  }
+  expect(workflow).toContain("runner: ubuntu-24.04")
+  expect(workflow).toContain("runner: windows-2025")
+  for (const runner of ["ubuntu-24.04", "windows-2025"]) expect(testWorkflow).toContain(`host: ${runner}`)
   const types = await Bun.file(path.join(import.meta.dir, "../.github/workflows/typecheck.yml")).text()
   expect(types).toContain("runs-on: ubuntu-24.04")
 })
@@ -1057,15 +1128,18 @@ test("the independent source verification job runs the Linux-only gates in order
   expect(source).not.toContain("matrix.")
 })
 
-test("the independent build matrix retains native and Node compilations on Linux and Windows", () => {
+test("the independent build matrix retains native and Node compilations on Linux", () => {
   const lifecycle = workflowJob(testWorkflow, "build")
   expect(lifecycle).toContain("name: native and Node builds (${{ matrix.settings.name }})")
   expect(lifecycle).toContain("fail-fast: false")
   expect(lifecycle).toContain("runs-on: ${{ matrix.settings.host }}")
-  for (const host of ["ubuntu-24.04", "windows-2025"]) expect(lifecycle).toContain(`host: ${host}`)
+  expect(lifecycle).toContain("host: ubuntu-24.04")
+  expect(lifecycle).not.toContain("windows-2025")
   expect(lifecycle).toContain("shell: bash")
+  expect(lifecycle.indexOf("uses: ./.github/actions/setup-rust")).toBeGreaterThan(-1)
+  expect(lifecycle.indexOf("uses: ./.github/actions/setup-rust")).toBeLessThan(lifecycle.indexOf("name: Build native executable"))
   const compiled = lifecycle.split("      - name: Build native executable\n")[1]?.split("\n      - name:")[0] ?? ""
-  expect(compiled).toContain("timeout-minutes: 10")
+  expect(compiled).toContain("timeout-minutes: 30")
   expect(compiled).toContain("working-directory: packages/cli")
   expect(compiled).toContain("run: bun run script/build.ts --single")
   const node = lifecycle.split("      - name: Verify Node build\n")[1] ?? ""

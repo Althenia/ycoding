@@ -69,7 +69,10 @@ describe("PluginRuntime", () => {
           recover: unavailable(),
           resolveRecovery: unavailable,
         },
-        location: { agent: { list: unavailable } },
+        location: {
+          agent: { list: unavailable },
+          integration: { accountSkills: { read: unavailable } },
+        },
       }
 
       const runtime = yield* PluginRuntime.Service

@@ -1,4 +1,4 @@
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationVersion } from "../../version"
 import { Deferred, Effect, Option, Scope } from "effect"
 import path from "node:path"
 import { DesktopHostCommand } from "../desktop-host"

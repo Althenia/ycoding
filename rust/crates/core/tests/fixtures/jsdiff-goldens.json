@@ -1,0 +1,250 @@
+[
+  {
+    "id": "distant",
+    "old": "one\nkeep 1\nkeep 2\nkeep 3\nkeep 4\nkeep 5\nkeep 6\nkeep 7\nkeep 8\nkeep 9\nkeep 10\nkeep 11\nkeep 12\nkeep 13\nkeep 14\n",
+    "next": "ONE\nkeep 1\nkeep 2\nkeep 3\nkeep 4\nkeep 5\nkeep 6\nkeep 7\nkeep 8\nkeep 9\nkeep 10\nkeep 11\nkeep 12\nkeep 13\nkeep 14\nFOURTEEN\n",
+    "chunks": [
+      {
+        "count": 1,
+        "added": false,
+        "removed": true,
+        "value": "one\n"
+      },
+      {
+        "count": 1,
+        "added": true,
+        "removed": false,
+        "value": "ONE\n"
+      },
+      {
+        "count": 14,
+        "added": false,
+        "removed": false,
+        "value": "keep 1\nkeep 2\nkeep 3\nkeep 4\nkeep 5\nkeep 6\nkeep 7\nkeep 8\nkeep 9\nkeep 10\nkeep 11\nkeep 12\nkeep 13\nkeep 14\n"
+      },
+      {
+        "count": 1,
+        "added": true,
+        "removed": false,
+        "value": "FOURTEEN\n"
+      }
+    ],
+    "structured": {
+      "oldFileName": "edit-distant.txt",
+      "newFileName": "edit-distant.txt",
+      "oldHeader": "",
+      "newHeader": "",
+      "hunks": [
+        {
+          "oldStart": 1,
+          "oldLines": 5,
+          "newStart": 1,
+          "newLines": 5,
+          "lines": [
+            "-one",
+            "+ONE",
+            " keep 1",
+            " keep 2",
+            " keep 3",
+            " keep 4"
+          ]
+        },
+        {
+          "oldStart": 12,
+          "oldLines": 4,
+          "newStart": 12,
+          "newLines": 5,
+          "lines": [
+            " keep 11",
+            " keep 12",
+            " keep 13",
+            " keep 14",
+            "+FOURTEEN"
+          ]
+        }
+      ]
+    },
+    "patch": "Index: edit-distant.txt\n===================================================================\n--- edit-distant.txt\n+++ edit-distant.txt\n@@ -1,5 +1,5 @@\n-one\n+ONE\n keep 1\n keep 2\n keep 3\n keep 4\n@@ -12,4 +12,5 @@\n keep 11\n keep 12\n keep 13\n keep 14\n+FOURTEEN\n",
+    "formatted": "Index: edit-distant.txt\n===================================================================\n--- edit-distant.txt\t\n+++ edit-distant.txt\t\n@@ -1,5 +1,5 @@\n-one\n+ONE\n keep 1\n keep 2\n keep 3\n keep 4\n@@ -12,4 +12,5 @@\n keep 11\n keep 12\n keep 13\n keep 14\n+FOURTEEN\n"
+  },
+  {
+    "id": "no-newline",
+    "old": "before\nending",
+    "next": "before\nending changed",
+    "chunks": [
+      {
+        "count": 1,
+        "added": false,
+        "removed": false,
+        "value": "before\n"
+      },
+      {
+        "count": 1,
+        "added": false,
+        "removed": true,
+        "value": "ending"
+      },
+      {
+        "count": 1,
+        "added": true,
+        "removed": false,
+        "value": "ending changed"
+      }
+    ],
+    "structured": {
+      "oldFileName": "edit-no-newline.txt",
+      "newFileName": "edit-no-newline.txt",
+      "oldHeader": "",
+      "newHeader": "",
+      "hunks": [
+        {
+          "oldStart": 1,
+          "oldLines": 2,
+          "newStart": 1,
+          "newLines": 2,
+          "lines": [
+            " before",
+            "-ending",
+            "\\ No newline at end of file",
+            "+ending changed",
+            "\\ No newline at end of file"
+          ]
+        }
+      ]
+    },
+    "patch": "Index: edit-no-newline.txt\n===================================================================\n--- edit-no-newline.txt\n+++ edit-no-newline.txt\n@@ -1,2 +1,2 @@\n before\n-ending\n\\ No newline at end of file\n+ending changed\n\\ No newline at end of file\n",
+    "formatted": "Index: edit-no-newline.txt\n===================================================================\n--- edit-no-newline.txt\t\n+++ edit-no-newline.txt\t\n@@ -1,2 +1,2 @@\n before\n-ending\n\\ No newline at end of file\n+ending changed\n\\ No newline at end of file\n"
+  },
+  {
+    "id": "crlf",
+    "old": "first\r\nkeep\r\nlast\r\n",
+    "next": "first\r\nmiddle\r\nlast\r\n",
+    "chunks": [
+      {
+        "count": 1,
+        "added": false,
+        "removed": false,
+        "value": "first\r\n"
+      },
+      {
+        "count": 1,
+        "added": false,
+        "removed": true,
+        "value": "keep\r\n"
+      },
+      {
+        "count": 1,
+        "added": true,
+        "removed": false,
+        "value": "middle\r\n"
+      },
+      {
+        "count": 1,
+        "added": false,
+        "removed": false,
+        "value": "last\r\n"
+      }
+    ],
+    "structured": {
+      "oldFileName": "edit-crlf.txt",
+      "newFileName": "edit-crlf.txt",
+      "oldHeader": "",
+      "newHeader": "",
+      "hunks": [
+        {
+          "oldStart": 1,
+          "oldLines": 3,
+          "newStart": 1,
+          "newLines": 3,
+          "lines": [
+            " first\r",
+            "-keep\r",
+            "+middle\r",
+            " last\r"
+          ]
+        }
+      ]
+    },
+    "patch": "Index: edit-crlf.txt\n===================================================================\n--- edit-crlf.txt\n+++ edit-crlf.txt\n@@ -1,3 +1,3 @@\n first\r\n-keep\r\n+middle\r\n last\r\n",
+    "formatted": "Index: edit-crlf.txt\n===================================================================\n--- edit-crlf.txt\t\n+++ edit-crlf.txt\t\n@@ -1,3 +1,3 @@\n first\r\n-keep\r\n+middle\r\n last\r\n"
+  },
+  {
+    "id": "empty",
+    "old": "",
+    "next": "single",
+    "chunks": [
+      {
+        "count": 1,
+        "added": true,
+        "removed": false,
+        "value": "single"
+      }
+    ],
+    "structured": {
+      "oldFileName": "edit-empty.txt",
+      "newFileName": "edit-empty.txt",
+      "oldHeader": "",
+      "newHeader": "",
+      "hunks": [
+        {
+          "oldStart": 1,
+          "oldLines": 0,
+          "newStart": 1,
+          "newLines": 1,
+          "lines": [
+            "+single",
+            "\\ No newline at end of file"
+          ]
+        }
+      ]
+    },
+    "patch": "Index: edit-empty.txt\n===================================================================\n--- edit-empty.txt\n+++ edit-empty.txt\n@@ -0,0 +1,1 @@\n+single\n\\ No newline at end of file\n",
+    "formatted": "Index: edit-empty.txt\n===================================================================\n--- edit-empty.txt\t\n+++ edit-empty.txt\t\n@@ -0,0 +1,1 @@\n+single\n\\ No newline at end of file\n"
+  },
+  {
+    "id": "unicode",
+    "old": "naïve 😀\nkeep\n",
+    "next": "naïve 🐇\nkeep\n",
+    "chunks": [
+      {
+        "count": 1,
+        "added": false,
+        "removed": true,
+        "value": "naïve 😀\n"
+      },
+      {
+        "count": 1,
+        "added": true,
+        "removed": false,
+        "value": "naïve 🐇\n"
+      },
+      {
+        "count": 1,
+        "added": false,
+        "removed": false,
+        "value": "keep\n"
+      }
+    ],
+    "structured": {
+      "oldFileName": "edit-unicode.txt",
+      "newFileName": "edit-unicode.txt",
+      "oldHeader": "",
+      "newHeader": "",
+      "hunks": [
+        {
+          "oldStart": 1,
+          "oldLines": 2,
+          "newStart": 1,
+          "newLines": 2,
+          "lines": [
+            "-naïve 😀",
+            "+naïve 🐇",
+            " keep"
+          ]
+        }
+      ]
+    },
+    "patch": "Index: edit-unicode.txt\n===================================================================\n--- edit-unicode.txt\n+++ edit-unicode.txt\n@@ -1,2 +1,2 @@\n-naïve 😀\n+naïve 🐇\n keep\n",
+    "formatted": "Index: edit-unicode.txt\n===================================================================\n--- edit-unicode.txt\t\n+++ edit-unicode.txt\t\n@@ -1,2 +1,2 @@\n-naïve 😀\n+naïve 🐇\n keep\n"
+  }
+]

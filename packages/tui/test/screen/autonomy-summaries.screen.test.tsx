@@ -12,6 +12,7 @@ const session = {
   id: sessionID,
   title: "Autonomy summaries",
   projectID: "proj_summaries",
+  scope: "bound" as const,
   location: { directory },
   agent: "build",
   cost: 0,
@@ -108,7 +109,7 @@ for (const width of [40, 60, 79, 80, 110, 200]) {
     try {
       await waitFor(screen, () => /subagents 1|sa1/.test(footerRow(screen)) && modePattern("Permissions", "Auto").test(footerRow(screen)), "loaded footer")
       const lines = screen.lines()
-      const header = lines.find((line) => line.includes("waiting · 1 subagent"))!
+      const header = lines.find((line) => line.includes("? awaiting input"))!
       if (width >= 60) expect(header).toContain("review 1")
       expect(footerRow(screen)).toMatch(/subagents 1|sa1/)
       expect(footerRow(screen)).toMatch(/shells 0|sh0/)
@@ -137,7 +138,7 @@ test("the docked sidebar keeps the Review row without an AUTONOMY section", asyn
     height: 50,
     args: { sessionID },
     route,
-    settle: "waiting · 1 subagent",
+    settle: "? awaiting input",
     config: { animations: false },
   })
   try {
@@ -226,7 +227,7 @@ for (const width of [60, 200]) {
 
 test("/autonomous opens the dialog without admitting slash text", async () => {
   const { state, route } = fixture()
-  const screen = await renderScreen({ width: 100, height: 50, args: { sessionID }, route, settle: "waiting · 1 subagent", config: { animations: false } })
+  const screen = await renderScreen({ width: 100, height: 50, args: { sessionID }, route, settle: "? awaiting input", config: { animations: false } })
   try {
     await screen.input.typeText("/autonomous")
     screen.input.pressEnter()
@@ -240,7 +241,7 @@ test("/autonomous opens the dialog without admitting slash text", async () => {
 
 test("the four former autonomy commands are gone from the slash menu", async () => {
   const { route } = fixture()
-  const screen = await renderScreen({ width: 100, height: 50, args: { sessionID }, route, settle: "waiting · 1 subagent", config: { animations: false } })
+  const screen = await renderScreen({ width: 100, height: 50, args: { sessionID }, route, settle: "? awaiting input", config: { animations: false } })
   try {
     await screen.input.typeText("/auto")
     await waitFor(screen, () => screen.frame().includes("/autonomous"), "slash menu")
@@ -252,7 +253,7 @@ test("the four former autonomy commands are gone from the slash menu", async () 
 
 test("the four former autonomy toggles are gone from the palette", async () => {
   const { route } = fixture()
-  const screen = await renderScreen({ width: 100, height: 50, args: { sessionID }, route, settle: "waiting · 1 subagent", config: { animations: false } })
+  const screen = await renderScreen({ width: 100, height: 50, args: { sessionID }, route, settle: "? awaiting input", config: { animations: false } })
   try {
     screen.input.pressKey("p", { ctrl: true })
     await waitFor(screen, () => screen.frame().includes("Commands"), "palette")
@@ -266,7 +267,7 @@ test("the four former autonomy toggles are gone from the palette", async () => {
 
 test("the palette lists exactly one Autonomous entry with its description in full at 80 columns", async () => {
   const { route } = fixture()
-  const screen = await renderScreen({ width: 80, height: 50, args: { sessionID }, route, settle: "waiting · 1 subagent", config: { animations: false } })
+  const screen = await renderScreen({ width: 80, height: 50, args: { sessionID }, route, settle: "? awaiting input", config: { animations: false } })
   try {
     screen.input.pressKey("p", { ctrl: true })
     await waitFor(screen, () => screen.frame().includes("Commands"), "palette")
@@ -288,7 +289,7 @@ test("the sidebar toggle command preserves the Review row without an AUTONOMY se
     height: 50,
     args: { sessionID },
     route,
-    settle: "waiting · 1 subagent",
+    settle: "? awaiting input",
     config: { animations: false },
   })
   try {
@@ -340,13 +341,13 @@ test("an active goal shows in the docked GOAL section and nowhere in the header 
     height: 50,
     args: { sessionID },
     route,
-    settle: "waiting · 1 subagent",
+    settle: "? awaiting input",
     config: { animations: false },
   })
   try {
     await waitFor(screen, () => /GOAL\s+active/.test(screen.frame()), "GOAL section")
     const lines = screen.lines()
-    expect(lines.find((line) => line.includes("waiting · 1 subagent"))).not.toMatch(/goal/)
+    expect(lines.find((line) => line.includes("? awaiting input"))).not.toMatch(/goal/)
     expect(lines.find((line) => line.includes("commands"))).not.toMatch(/goal/)
   } finally {
     await screen.dispose()
@@ -359,7 +360,7 @@ test("an inherited effective mode stays concise in the footer with its source in
     { permissions: "manual", guardrails: "manual", answers: "manual" },
     { guardrails: "yolo", inherited: { guardrails: "ses_root" } },
   )
-  const screen = await renderScreen({ width: 200, height: 50, args: { sessionID }, route, settle: "waiting · 1 subagent", config: { animations: false } })
+  const screen = await renderScreen({ width: 200, height: 50, args: { sessionID }, route, settle: "? awaiting input", config: { animations: false } })
   try {
     await waitFor(screen, () => /Guardrails YOLO/.test(footerRow(screen)), "effective guardrails indicator")
     expect(footerRow(screen)).toMatch(/Guardrails YOLO/)

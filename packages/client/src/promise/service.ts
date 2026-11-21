@@ -78,7 +78,7 @@ export async function ensure(options: EnsureOptions = {}): Promise<Endpoint> {
     while (true) {
       if (Date.now() - started >= startupTimeout)
         throw new Error("Timed out waiting for the background service to start")
-      const registration = await registered(options.file, true)
+      const registration = await registered(options.file, true, options.existing === "preserve")
 
       if (registration.service !== undefined) {
         ownerHeld = false
@@ -86,6 +86,10 @@ export async function ensure(options: EnsureOptions = {}): Promise<Endpoint> {
         const service = registration.service
         const compatible = !service.legacy && (options.version === undefined || service.version === options.version)
         if (compatible && service.state === "ready") return service.endpoint
+        if (options.existing === "preserve") {
+          if (!compatible) throw new Error("Background server version does not match this client")
+          if (service.state === "failed") throw new Error("Existing background service failed to start")
+        }
         if (compatible && service.state === "failed") {
           if (failedReplacement) throw new Error("Background service failed to start")
           failedReplacement = true
@@ -112,6 +116,8 @@ export async function ensure(options: EnsureOptions = {}): Promise<Endpoint> {
         // Keep one candidate plus one lock probe so a pre-lock stall cannot block recovery.
         if (contenders.size < 2 && Date.now() - lastSpawn >= spawnDelay) {
           announce("missing")
+          if (options.existing === "preserve" && (await registered(options.file, false, true)).info !== undefined)
+            continue
           contenders.add(spawnContender())
           lastSpawn = Date.now()
         }
@@ -171,14 +177,37 @@ export function headers(endpoint: Endpoint) {
   }
 }
 
-async function read(file?: string) {
-  const text = await readFile(file ?? fallback(), "utf8").catch(() => undefined)
+async function read(file?: string, preserve = false) {
+  const text = await readFile(file ?? fallback(), "utf8").catch((cause: unknown) => {
+    if (!preserve || (cause instanceof Error && "code" in cause && cause.code === "ENOENT")) return undefined
+    throw new Error("Could not read background service registration", { cause })
+  })
   if (text === undefined) return undefined
   try {
-    return JSON.parse(text) as Info
-  } catch {
+    const info: unknown = JSON.parse(text)
+    if (!registrationInfo(info) || (preserve && (!info.id || !info.version || !info.url)))
+      throw new Error("Invalid service registration")
+    return info
+  } catch (cause) {
+    if (preserve) throw new Error("Invalid background service registration", { cause })
     return undefined
   }
+}
+
+function registrationInfo(value: unknown): value is Info {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "url" in value &&
+    typeof value.url === "string" &&
+    "pid" in value &&
+    typeof value.pid === "number" &&
+    Number.isSafeInteger(value.pid) &&
+    value.pid > 0 &&
+    (!("id" in value) || typeof value.id === "string") &&
+    (!("version" in value) || typeof value.version === "string") &&
+    (!("password" in value) || typeof value.password === "string")
+  )
 }
 
 type LocalService = {
@@ -189,7 +218,7 @@ type LocalService = {
   readonly legacy: boolean
 }
 
-async function probe(info: Info, allowLegacy = false): Promise<LocalService | undefined> {
+async function probe(info: Info, allowLegacy = false, preserve = false): Promise<LocalService | undefined> {
   const endpoint = {
     url: info.url,
     auth:
@@ -202,6 +231,23 @@ async function probe(info: Info, allowLegacy = false): Promise<LocalService | un
     signal: AbortSignal.timeout(2_000),
   }).catch(() => undefined)
   const body = (await response?.json().catch(() => undefined)) as ServiceHealth | { readonly healthy: true } | undefined
+  if (
+    preserve &&
+    (body === null ||
+      typeof body !== "object" ||
+      body.healthy !== true ||
+      !("version" in body) ||
+      typeof body.version !== "string" ||
+      !("pid" in body) ||
+      typeof body.pid !== "number" ||
+      !Number.isSafeInteger(body.pid) ||
+      body.pid <= 0 ||
+      !("sourceEpoch" in body) ||
+      typeof body.sourceEpoch !== "string" ||
+      body.sourceEpoch !== info.id ||
+      ![200, 500, 503].includes(response?.status ?? 0))
+  )
+    return undefined
   if (body !== undefined && "version" in body && "pid" in body) {
     if (body.pid !== info.pid) return undefined
     if (info.version !== undefined && body.version !== info.version) return undefined
@@ -217,10 +263,17 @@ async function probe(info: Info, allowLegacy = false): Promise<LocalService | un
   return { info, endpoint, state: "ready", legacy: true }
 }
 
-async function registered(file?: string, allowLegacy = false) {
-  const info = await read(file)
+async function registered(file?: string, allowLegacy = false, preserve = false) {
+  const info = await read(file, preserve)
   if (info === undefined) return { info: undefined, service: undefined }
-  return { info, service: await probe(info, allowLegacy) }
+  const service = await probe(info, allowLegacy, preserve)
+  if (preserve) {
+    if (service === undefined) throw new Error("Existing background service could not be authenticated")
+    const current = await read(file, true)
+    if (current === undefined || !same(info, current) || info.password !== current.password)
+      throw new Error("Background service registration changed during verification")
+  }
+  return { info, service }
 }
 
 async function find(options: { readonly file?: string }) {

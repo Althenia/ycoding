@@ -2,7 +2,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Althenia/ycoding?style=flat&color=67D7A4)](https://github.com/Althenia/ycoding/releases/latest)
 [![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](./LICENSE)
-[![Platforms](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-supported-lightgrey)](https://github.com/Althenia/ycoding/releases/latest)
+[![Platforms](https://img.shields.io/badge/macOS%20%7C%20Linux-supported-lightgrey)](https://github.com/Althenia/ycoding/releases/latest)
 [![Docs](https://img.shields.io/badge/docs-ycoding.althenia.app-67D7A4)](https://ycoding.althenia.app/docs)
 
 **A terminal-first coding agent that runs on your own machine.** YCoding keeps every Session durable, lets you decide how much it may do on its own, and puts the same local runtime in your browser and on your phone when you step away from the terminal.
@@ -49,7 +49,7 @@ ycoding
 
 Type `/connect` in the composer to add a provider profile, then describe your task.
 
-**Windows (x64):** download the ZIP from [GitHub Releases](https://github.com/Althenia/ycoding/releases/latest), extract `ycoding.exe`, and run it in your terminal.
+**Windows:** Windows release builds are paused until the native runtime supports Windows.
 
 Run a single prompt without opening the interface:
 

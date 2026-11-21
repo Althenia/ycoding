@@ -7,6 +7,8 @@ import { nodeExecArgv, nodeTarget, type NodeTarget, photonWasmAsset } from "./sr
 import { NODE_BINARY } from "./src/binary"
 import { antigravityBuildDefinitions } from "./script/antigravity-build-env"
 import { museBuildDefinitions } from "./script/muse-build-env"
+import { runtimeAssetConfig, pluginSDKAssetConfig, type RuntimeAsset } from "./script/runtime-asset"
+import { checkBundleGraph } from "../../script/ycoding-workspace"
 
 const dir = import.meta.dirname
 
@@ -45,15 +47,50 @@ function runtimeRequirePlugin(): Plugin {
 }
 
 function nativeOnlyMeetingPlugin(): Plugin {
+  const message = JSON.stringify("Meeting requires the native ycoding executable; it is not supported by the Node CLI.")
+  const meeting = path.join(dir, "src/commands/handlers/meeting.ts").replaceAll("\\", "/")
+  const serve = path.join(dir, "src/commands/handlers/serve-shared.ts").replaceAll("\\", "/")
   return {
     name: "ycoding:native-only-meeting",
     enforce: "pre",
-    transform(code) {
-      const transformed = code.replace(
-        /\bimport\(\s*["']@ycoding-ai\/meeting\/(?:plugin|discovery)["']\s*\)/g,
-        'Promise.reject(new Error("Meeting requires the native ycoding executable; it is not supported by the Node CLI."))',
-      )
-      return transformed === code ? undefined : transformed
+    transform(code, id) {
+      const file = id.split("?")[0].replaceAll("\\", "/")
+      if (file === meeting)
+        return `import { Effect } from "effect"\nexport default () => Effect.fail(new Error(${message}))`
+      if (file !== serve) return null
+      const entry = "export const runServe = Effect.fnUntraced(function* (input: Input) {"
+      if (!code.includes(entry)) this.error("Failed to bind the Node-only Meeting restriction")
+      return code.replace(entry, `${entry}\n  if (input.meeting) return yield* Effect.fail(new Error(${message}))`)
+    },
+  }
+}
+
+function frontendGraphPlugin(): Plugin {
+  return {
+    name: "ycoding:frontend-graph",
+    generateBundle(_options, bundle) {
+      const outputs = Object.values(bundle).flatMap((output) => {
+        if (output.type !== "chunk") return []
+        const modules = Object.keys(output.modules)
+        const edges = modules.flatMap((file) => {
+          const info = this.getModuleInfo(file)
+          return [...(info?.importedIds ?? []), ...(info?.dynamicallyImportedIds ?? [])].map((specifier) => ({
+            file,
+            specifier,
+          }))
+        })
+        return [
+          {
+            file: output.fileName,
+            modules,
+            imports: [...output.imports, ...output.dynamicImports, ...edges.map((edge) => edge.specifier)],
+            edges,
+          },
+        ]
+      })
+      const violations = checkBundleGraph({ frontend: "node", outputs })
+      if (violations.length)
+        this.error(`Node frontend contains forbidden runtime modules: ${JSON.stringify(violations)}`)
     },
   }
 }
@@ -194,15 +231,19 @@ export type NodeBuildInput = {
   readonly models: string
   readonly assetHash: string
   readonly target: NodeTarget
+  readonly runtimeAsset?: RuntimeAsset
 }
 
 export function mainConfig(input: NodeBuildInput): UserConfig {
+  const runtimeAsset = runtimeAssetConfig(input.runtimeAsset)
   return defineConfig({
     root: dir,
     plugins: [
       rawTextPlugin(),
+      ...runtimeAsset.plugins,
       runtimeRequirePlugin(),
       nativeOnlyMeetingPlugin(),
+      frontendGraphPlugin(),
       solid({
         solid: {
           generate: "universal",
@@ -215,6 +256,9 @@ export function mainConfig(input: NodeBuildInput): UserConfig {
     define: {
       ...antigravityBuildDefinitions(),
       ...museBuildDefinitions(),
+      ...runtimeAsset.define,
+      "process.env.WS_NO_BUFFER_UTIL": JSON.stringify("1"),
+      "process.env.WS_NO_UTF_8_VALIDATE": JSON.stringify("1"),
       YCODING_VERSION: JSON.stringify(input.version),
       YCODING_CLI_NAME: JSON.stringify(NODE_BINARY),
       YCODING_MODELS_DEV: input.models,
@@ -232,6 +276,43 @@ export function mainConfig(input: NodeBuildInput): UserConfig {
       rollupOptions: {
         external: [/^@ycoding-ai\/simulation(?:\/|$)/],
         output: output("ycoding.mjs", nodePrelude(input)),
+      },
+    },
+  })
+}
+
+export function userAppConfig(input: {
+  readonly version: string
+  readonly channel: string
+  readonly directory: string
+  readonly runtimeAsset: RuntimeAsset
+  readonly pluginSDKAsset: { readonly path: string; readonly digest: string }
+}): UserConfig {
+  const runtime = runtimeAssetConfig(input.runtimeAsset, true)
+  const sdk = pluginSDKAssetConfig(input.pluginSDKAsset, true)
+  return defineConfig({
+    root: dir,
+    plugins: [rawTextPlugin(), ...runtime.plugins, ...sdk.plugins, frontendGraphPlugin()],
+    resolve,
+    define: {
+      ...runtime.define,
+      ...sdk.define,
+      YCODING_VERSION: JSON.stringify(input.version),
+      YCODING_CHANNEL: JSON.stringify(input.channel),
+      YCODING_USER_APP_PACKET: JSON.stringify("./user-app.packet.json"),
+    },
+    ssr: { noExternal: true },
+    build: {
+      ssr: "src/server-process.ts",
+      target: "node26",
+      outDir: input.directory,
+      emptyOutDir: false,
+      minify: true,
+      rollupOptions: {
+        output: output(
+          "server-process.mjs",
+          'import __userAppModule from "node:module"\nconst require = __userAppModule.createRequire(import.meta.url)',
+        ),
       },
     },
   })

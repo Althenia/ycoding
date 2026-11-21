@@ -1,0 +1,666 @@
+use super::{Connection, Decision, Phase, ProtocolError, Queued, classify, digest};
+use crate::{limits, v5};
+use std::rc::Rc;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Send,
+    Receive,
+}
+
+pub struct Incoming {
+    owner: Rc<()>,
+    id: u64,
+    byte_length: u64,
+}
+impl Incoming {
+    pub fn byte_length(&self) -> u64 {
+        self.byte_length
+    }
+}
+
+pub struct Prepared {
+    owner: Rc<()>,
+    id: u64,
+    frame: v5::Frame,
+    reserved_bytes: u64,
+}
+impl Prepared {
+    pub fn frame(&self) -> &v5::Frame {
+        &self.frame
+    }
+    pub fn reserved_bytes(&self) -> u64 {
+        self.reserved_bytes
+    }
+}
+
+pub(super) struct PreparedState {
+    pub id: u64,
+    pub order: u64,
+    pub bytes: u64,
+    pub class: usize,
+    pub ready_at: u64,
+    pub authority: u64,
+    pub request_id: Option<String>,
+    pub transfer_id: Option<String>,
+    pub subscription_id: Option<String>,
+    pub ticket: Option<u64>,
+    pub event_fence: Option<u64>,
+    pub event_key: Option<String>,
+    pub event_count: usize,
+    pub ping: bool,
+}
+
+impl Connection {
+    pub fn admit_incoming(&mut self, byte_length: u64) -> Option<Incoming> {
+        if self.phase == Phase::Closed {
+            return None;
+        }
+        let handshake = matches!(self.phase, Phase::Initial | Phase::Hello);
+        if byte_length == 0
+            || byte_length > self.frame_cap(self.config.peer_role)
+            || handshake
+                && (byte_length > limits::HANDSHAKE_BYTES
+                    || self
+                        .owned_charge
+                        .checked_add(byte_length)
+                        .is_none_or(|total| total > limits::HANDSHAKE_RETAINED_BYTES))
+            || self.next_token == u64::MAX
+            || !self.reserve(byte_length)
+        {
+            let decisions = self.close(ProtocolError::Limit);
+            self.notifications.extend(decisions);
+            return None;
+        }
+        let id = self.next_token;
+        self.next_token += 1;
+        self.admissions
+            .insert(id, (byte_length, self.authority_version));
+        Some(Incoming {
+            owner: self.owner.clone(),
+            id,
+            byte_length,
+        })
+    }
+
+    pub fn reject_incoming(&mut self, token: &Incoming) -> Result<Vec<Decision>, ProtocolError> {
+        self.require_incoming(token)?;
+        self.admissions.remove(&token.id);
+        self.release(token.byte_length)?;
+        Ok(self.close(ProtocolError::Malformed))
+    }
+
+    pub fn accept_incoming(
+        &mut self,
+        token: &Incoming,
+        frame: v5::Frame,
+        now_ms: u64,
+    ) -> Result<Vec<Decision>, ProtocolError> {
+        self.require_incoming(token)?;
+        let (_, authority) = self
+            .admissions
+            .remove(&token.id)
+            .ok_or(ProtocolError::Unknown)?;
+        if authority != self.authority_version {
+            return self.revoke(4403);
+        }
+        let handshake = matches!(self.phase, Phase::Initial | Phase::Hello);
+        let decisions = self.receive_reserved(frame, token.byte_length, now_ms);
+        if handshake && self.phase != Phase::Closed {
+            self.release(token.byte_length)?;
+        }
+        Ok(decisions)
+    }
+
+    fn require_incoming(&self, token: &Incoming) -> Result<(), ProtocolError> {
+        if !Rc::ptr_eq(&token.owner, &self.owner) || !self.admissions.contains_key(&token.id) {
+            return Err(ProtocolError::Unknown);
+        }
+        Ok(())
+    }
+
+    pub fn prepare_handoff(&mut self, now_ms: u64) -> Option<Prepared> {
+        let decisions = self.advance(now_ms);
+        self.notifications.extend(decisions);
+        if self.phase == Phase::Closed || self.prepared.is_some() {
+            return None;
+        }
+        let (class, position) = self.select()?;
+        let record = self.queues[class].remove(position)?;
+        let id = self.next_token;
+        if id == u64::MAX {
+            self.queues[class].insert(position, record);
+            let decisions = self.close(ProtocolError::Limit);
+            self.notifications.extend(decisions);
+            return None;
+        }
+        self.next_token += 1;
+        let mut frame = record.frame;
+        let handshake = matches!(
+            frame.body,
+            Some(v5::frame::Body::Hello(_) | v5::frame::Body::Ready(_))
+        );
+        if !handshake {
+            frame.connection_epoch = Some(self.epoch.clone());
+            frame.ledger = Some((class + 1) as i32);
+            frame.delivery_ordinal = Some(self.send[class].next_ordinal());
+            frame.tiny_consumed_through = Some(self.receive[3].consumed);
+        }
+        let request_id = match frame.body.as_ref() {
+            Some(v5::frame::Body::Request(request)) => Some(request.request_id.clone()),
+            Some(v5::frame::Body::Result(result)) => Some(result.request_id.clone()),
+            Some(v5::frame::Body::BulkStart(start)) => Some(start.request_id.clone()),
+            _ => None,
+        };
+        let transfer_id = match frame.body.as_ref() {
+            Some(v5::frame::Body::BulkStart(start)) => Some(start.transfer_id.clone()),
+            Some(v5::frame::Body::BulkPiece(piece)) => Some(piece.transfer_id.clone()),
+            Some(v5::frame::Body::BulkEnd(end)) => Some(end.transfer_id.clone()),
+            _ => None,
+        };
+        let subscription_id = match frame.body.as_ref() {
+            Some(v5::frame::Body::EventBatch(batch)) => Some(batch.subscription_id.clone()),
+            Some(v5::frame::Body::StreamEnd(end)) => Some(end.subscription_id.clone()),
+            _ => None,
+        };
+        let event_count = match &frame.body {
+            Some(v5::frame::Body::EventBatch(batch)) => batch.events.len(),
+            _ => 0,
+        };
+        let ping = matches!(
+            &frame.body,
+            Some(v5::frame::Body::Control(v5::Control {
+                kind: Some(v5::control::Kind::Ping(_))
+            }))
+        );
+        self.prepared = Some(PreparedState {
+            id,
+            order: record.order,
+            class,
+            bytes: record.bytes,
+            ready_at: record.ready_at,
+            authority: self.authority_version,
+            request_id,
+            transfer_id,
+            subscription_id,
+            ticket: record.ticket,
+            event_fence: record.event_fence,
+            event_key: record.event_key,
+            event_count,
+            ping,
+        });
+        Some(Prepared {
+            owner: self.owner.clone(),
+            id,
+            frame,
+            reserved_bytes: record.bytes,
+        })
+    }
+
+    pub fn abort_prepared(&mut self, token: Prepared) -> Result<(), ProtocolError> {
+        self.require_prepared(&token)?;
+        let state = self.prepared.take().ok_or(ProtocolError::Unknown)?;
+        self.queues[state.class].push_front(Queued {
+            frame: token.frame,
+            order: state.order,
+            bytes: state.bytes,
+            ready_at: state.ready_at,
+            ticket: state.ticket,
+            event_fence: state.event_fence,
+            event_key: state.event_key,
+        });
+        Ok(())
+    }
+
+    pub fn handoff(
+        &mut self,
+        token: Prepared,
+        exact_bytes: u64,
+        now_ms: u64,
+    ) -> Result<Vec<Decision>, ProtocolError> {
+        self.require_prepared(&token)?;
+        let state = self.prepared.as_ref().ok_or(ProtocolError::Unknown)?;
+        if state.authority != self.authority_version {
+            return self.revoke(4403);
+        }
+        let order = state.order;
+        if let Err(error) = self.time(now_ms) {
+            return Ok(self.close(error));
+        }
+        if exact_bytes == 0 || exact_bytes > token.reserved_bytes {
+            return Ok(self.close(ProtocolError::Malformed));
+        }
+        let class = classify(token.frame.body.as_ref().ok_or(ProtocolError::Malformed)?);
+        let handshake = matches!(
+            token.frame.body,
+            Some(v5::frame::Body::Hello(_) | v5::frame::Body::Ready(_))
+        );
+        if let Err(error) = self.check_size(&token.frame, exact_bytes, self.config.local_role) {
+            return Ok(self.close(error));
+        }
+        if let Some(v5::frame::Body::StreamEnd(end)) = &token.frame.body
+            && !self.stream_end_ready(&end.subscription_id, order)
+        {
+            self.abort_prepared(token)?;
+            return Ok(Vec::new());
+        }
+        if !handshake {
+            if let Err(error) = self.rate(class, exact_bytes, false) {
+                return Ok(self.close(error));
+            }
+            if self.send[class].hand(exact_bytes, self.now).is_err() {
+                return Ok(self.close(ProtocolError::Limit));
+            }
+        }
+        let state = self.prepared.take().ok_or(ProtocolError::Unknown)?;
+        if let Some(ticket) = state.ticket
+            && let Some(key) = state.event_key
+        {
+            self.handed_events.insert(
+                token
+                    .frame
+                    .delivery_ordinal
+                    .ok_or(ProtocolError::Malformed)?,
+                (ticket, key),
+            );
+        }
+        self.queued_bytes[class] -= token.reserved_bytes;
+        self.release(if handshake {
+            token.reserved_bytes
+        } else {
+            token.reserved_bytes - exact_bytes
+        })?;
+        self.mark_handed(&token.frame)?;
+        Ok(vec![Decision::Send(token.frame)])
+    }
+
+    fn require_prepared(&self, token: &Prepared) -> Result<(), ProtocolError> {
+        if !Rc::ptr_eq(&token.owner, &self.owner)
+            || self
+                .prepared
+                .as_ref()
+                .is_none_or(|state| state.id != token.id)
+        {
+            return Err(ProtocolError::Unknown);
+        }
+        Ok(())
+    }
+
+    pub fn take_decisions(&mut self) -> Vec<Decision> {
+        std::mem::take(&mut self.notifications)
+    }
+
+    pub fn update_authority(
+        &mut self,
+        version: u64,
+        authorized: bool,
+        now_ms: u64,
+        code: u16,
+    ) -> Result<Vec<Decision>, ProtocolError> {
+        if version <= self.authority_version || (code != 4401 && code != 4403) {
+            return Err(ProtocolError::Direction);
+        }
+        if let Err(error) = self.time(now_ms) {
+            return Ok(self.close(error));
+        }
+        self.authority_version = version;
+        if !authorized {
+            return self.revoke(code);
+        }
+        Ok(Vec::new())
+    }
+
+    pub(super) fn reserve(&mut self, bytes: u64) -> bool {
+        let reserved = self.reservation.borrow_mut().reserve(bytes);
+        if reserved {
+            self.owned_charge += bytes;
+        }
+        reserved
+    }
+
+    pub(super) fn release(&mut self, bytes: u64) -> Result<(), ProtocolError> {
+        if bytes > self.owned_charge {
+            return Err(ProtocolError::Limit);
+        }
+        self.reservation.borrow_mut().release(bytes)?;
+        self.owned_charge -= bytes;
+        Ok(())
+    }
+
+    pub(super) fn queue_handshake(&mut self, frame: v5::Frame) -> Result<(), ProtocolError> {
+        let order = self
+            .queue_order
+            .checked_add(1)
+            .ok_or(ProtocolError::Limit)?;
+        if self
+            .owned_charge
+            .checked_add(limits::HANDSHAKE_BYTES)
+            .is_none_or(|total| total > limits::HANDSHAKE_RETAINED_BYTES)
+            || !self.reserve(limits::HANDSHAKE_BYTES)
+        {
+            return Err(ProtocolError::Limit);
+        }
+        self.queue_order = order;
+        self.queued_bytes[0] += limits::HANDSHAKE_BYTES;
+        self.queues[0].push_back(Queued {
+            frame,
+            order,
+            bytes: limits::HANDSHAKE_BYTES,
+            ready_at: self.now,
+            ticket: None,
+            event_fence: None,
+            event_key: None,
+        });
+        Ok(())
+    }
+
+    pub(super) fn frame_cap(&self, sender: v5::PeerRole) -> u64 {
+        let receiver = if sender == self.config.local_role {
+            self.config.peer_role
+        } else {
+            self.config.local_role
+        };
+        if sender == v5::PeerRole::Agent
+            || matches!(
+                receiver,
+                v5::PeerRole::LocalClient | v5::PeerRole::RemoteClient
+            )
+        {
+            limits::SERVER_FRAME_BYTES
+        } else {
+            limits::CLIENT_FRAME_BYTES
+        }
+    }
+
+    pub(super) fn envelope(
+        &self,
+        frame: &v5::Frame,
+        sender: v5::PeerRole,
+    ) -> Result<(), ProtocolError> {
+        if frame.revision != limits::REVISION as u32 {
+            return Err(ProtocolError::Incompatible);
+        }
+        let body = frame.body.as_ref().ok_or(ProtocolError::Malformed)?;
+        if !allowed(body, sender)? {
+            return Err(ProtocolError::Direction);
+        }
+        bounded(body)?;
+        if matches!(body, v5::frame::Body::Hello(_) | v5::frame::Body::Ready(_)) {
+            if frame.ledger.is_some()
+                || frame.delivery_ordinal.is_some()
+                || frame.tiny_consumed_through.is_some()
+            {
+                return Err(ProtocolError::Malformed);
+            }
+            let (revision, hash, role, windows) = match body {
+                v5::frame::Body::Hello(hello) => (
+                    hello.revision,
+                    &hello.contract_digest,
+                    hello.role,
+                    &hello.receive_windows,
+                ),
+                v5::frame::Body::Ready(ready) => (
+                    ready.revision,
+                    &ready.contract_digest,
+                    ready.role,
+                    &ready.receive_windows,
+                ),
+                _ => return Err(ProtocolError::Malformed),
+            };
+            if revision != limits::REVISION as u32 || *hash != digest() || role != sender as i32 {
+                return Err(ProtocolError::Incompatible);
+            }
+            if windows.normal_bytes == 0
+                || windows.normal_bytes > limits::NORMAL_WINDOW_BYTES
+                || windows.event_bytes == 0
+                || windows.event_bytes > limits::EVENT_WINDOW_BYTES
+                || windows.bulk_bytes == 0
+                || windows.bulk_bytes > limits::BULK_WINDOW_BYTES
+            {
+                return Err(ProtocolError::Limit);
+            }
+            return Ok(());
+        }
+        if frame.connection_epoch.as_deref() != Some(self.epoch.as_str()) {
+            return Err(ProtocolError::Epoch);
+        }
+        if frame.ledger != Some((classify(body) + 1) as i32)
+            || frame.delivery_ordinal.is_none_or(|ordinal| ordinal == 0)
+        {
+            return Err(ProtocolError::Malformed);
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn allowed(body: &v5::frame::Body, sender: v5::PeerRole) -> Result<bool, ProtocolError> {
+    let mask = match body {
+        v5::frame::Body::Hello(_) => v5::SenderMask::HelloSenders,
+        v5::frame::Body::Ready(_) => v5::SenderMask::ReadySenders,
+        v5::frame::Body::Request(_) => v5::SenderMask::RequestSenders,
+        v5::frame::Body::Result(_)
+        | v5::frame::Body::EventBatch(_)
+        | v5::frame::Body::StreamEnd(_) => v5::SenderMask::ResultSenders,
+        v5::frame::Body::BulkStart(_)
+        | v5::frame::Body::BulkPiece(_)
+        | v5::frame::Body::BulkEnd(_) => v5::SenderMask::PingSenders,
+        v5::frame::Body::Control(control) => {
+            match control.kind.as_ref().ok_or(ProtocolError::Malformed)? {
+                v5::control::Kind::Ping(_)
+                | v5::control::Kind::Pong(_)
+                | v5::control::Kind::Cancel(_)
+                | v5::control::Kind::Credit(_)
+                | v5::control::Kind::Failure(_) => v5::SenderMask::PingSenders,
+                v5::control::Kind::SubscriptionSnapshot(_) | v5::control::Kind::Notice(_) => {
+                    v5::SenderMask::SubscriptionSnapshotSenders
+                }
+                v5::control::Kind::Priority(_) => v5::SenderMask::RequestSenders,
+                v5::control::Kind::Completions(_) | v5::control::Kind::Blocked(_) => {
+                    v5::SenderMask::CompletionsSenders
+                }
+                v5::control::Kind::McpState(_) | v5::control::Kind::QuotaPace(_) => {
+                    v5::SenderMask::McpStateSenders
+                }
+                v5::control::Kind::McpStateAck(_) | v5::control::Kind::QuotaPaceResult(_) => {
+                    v5::SenderMask::SubscriptionSnapshotSenders
+                }
+                v5::control::Kind::InventoryInvalidated(_)
+                | v5::control::Kind::Status(_)
+                | v5::control::Kind::ResyncRequired(_) => v5::SenderMask::ResultSenders,
+            }
+        }
+    };
+    Ok((mask as i32) & (1 << (sender as i32 - 1)) != 0)
+}
+
+pub(super) fn bounded(body: &v5::frame::Body) -> Result<(), ProtocolError> {
+    let v5::frame::Body::Control(v5::Control { kind: Some(kind) }) = body else {
+        return Ok(());
+    };
+    let valid = match kind {
+        v5::control::Kind::McpState(v5::McpState { id, epoch, .. })
+        | v5::control::Kind::McpStateAck(v5::McpStateAck { id, epoch, .. }) => {
+            stable_id(id) && stable_id(epoch)
+        }
+        v5::control::Kind::QuotaPace(quota) => instant(quota.reset_at),
+        v5::control::Kind::QuotaPaceResult(result) => instant(result.quota.reset_at),
+        v5::control::Kind::Notice(v5::Notice {
+            kind: Some(v5::notice::Kind::QuotaPace(notice)),
+        }) => instant(notice.quota.reset_at) && instant(notice.at),
+        v5::control::Kind::Notice(v5::Notice {
+            kind: Some(v5::notice::Kind::Present(present)),
+        }) => present.items.iter().all(|item| match &item.kind {
+            Some(v5::presentation::Kind::QuotaPace(quota)) => instant(quota.reset_at),
+            _ => true,
+        }),
+        _ => true,
+    };
+    if valid {
+        return Ok(());
+    }
+    Err(ProtocolError::Malformed)
+}
+
+fn stable_id(value: &str) -> bool {
+    (1..=64).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+fn instant(value: u64) -> bool {
+    (1..=9_007_199_254_740_991).contains(&value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{allowed, bounded};
+    use crate::connection::ProtocolError;
+    use crate::{encode_lossless, v5};
+
+    fn control(kind: v5::control::Kind) -> v5::frame::Body {
+        v5::frame::Body::Control(v5::Control { kind: Some(kind) })
+    }
+
+    fn quota(reset_at: u64) -> v5::QuotaPace {
+        v5::QuotaPace {
+            provider_id: encode_lossless(&"openai".encode_utf16().collect::<Vec<_>>()),
+            window_id: encode_lossless(&"weekly".encode_utf16().collect::<Vec<_>>()),
+            milestone: v5::QuotaPaceMilestone::CuttingItClose as i32,
+            reset_at,
+        }
+    }
+
+    fn state(id: &str, epoch: &str) -> v5::McpState {
+        v5::McpState {
+            id: id.into(),
+            enabled: true,
+            epoch: epoch.into(),
+        }
+    }
+
+    fn ack(id: &str, epoch: &str) -> v5::McpStateAck {
+        v5::McpStateAck {
+            id: id.into(),
+            enabled: false,
+            epoch: epoch.into(),
+        }
+    }
+
+    #[test]
+    fn agents_send_mcp_state_and_quota_pace_while_relays_acknowledge_and_settle() {
+        let cases = [
+            (
+                control(v5::control::Kind::McpState(state("s", "e"))),
+                v5::PeerRole::Agent,
+            ),
+            (
+                control(v5::control::Kind::McpStateAck(ack("s", "e"))),
+                v5::PeerRole::Relay,
+            ),
+            (
+                control(v5::control::Kind::QuotaPace(quota(1))),
+                v5::PeerRole::Agent,
+            ),
+            (
+                control(v5::control::Kind::QuotaPaceResult(v5::QuotaPaceResult {
+                    quota: quota(1),
+                    status: v5::QuotaPaceStatus::Pending as i32,
+                })),
+                v5::PeerRole::Relay,
+            ),
+        ];
+        let roles = [
+            v5::PeerRole::LocalClient,
+            v5::PeerRole::RemoteClient,
+            v5::PeerRole::Relay,
+            v5::PeerRole::Agent,
+            v5::PeerRole::Server,
+        ];
+        for (body, sender) in cases {
+            for role in roles {
+                assert_eq!(
+                    allowed(&body, role),
+                    Ok(role == sender),
+                    "{role:?} {body:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mcp_state_identifiers_and_quota_instants_are_bounded() {
+        let id = "A".repeat(64);
+        for (body, valid) in [
+            (
+                control(v5::control::Kind::McpState(state(&id, "epoch_1-2"))),
+                true,
+            ),
+            (control(v5::control::Kind::McpStateAck(ack("s", &id))), true),
+            (control(v5::control::Kind::McpState(state("", "e"))), false),
+            (
+                control(v5::control::Kind::McpState(state(&"A".repeat(65), "e"))),
+                false,
+            ),
+            (
+                control(v5::control::Kind::McpStateAck(ack("s", "e.1"))),
+                false,
+            ),
+            (control(v5::control::Kind::McpState(state("s", "é"))), false),
+            (
+                control(v5::control::Kind::QuotaPace(quota(9_007_199_254_740_991))),
+                true,
+            ),
+            (control(v5::control::Kind::QuotaPace(quota(0))), false),
+            (
+                control(v5::control::Kind::QuotaPace(quota(9_007_199_254_740_992))),
+                false,
+            ),
+            (
+                control(v5::control::Kind::QuotaPaceResult(v5::QuotaPaceResult {
+                    quota: quota(0),
+                    status: v5::QuotaPaceStatus::Settled as i32,
+                })),
+                false,
+            ),
+            (
+                control(v5::control::Kind::Notice(v5::Notice {
+                    kind: Some(v5::notice::Kind::QuotaPace(v5::QuotaPaceNotice {
+                        quota: quota(1),
+                        at: 1,
+                    })),
+                })),
+                true,
+            ),
+            (
+                control(v5::control::Kind::Notice(v5::Notice {
+                    kind: Some(v5::notice::Kind::QuotaPace(v5::QuotaPaceNotice {
+                        quota: quota(1),
+                        at: 0,
+                    })),
+                })),
+                false,
+            ),
+            (
+                control(v5::control::Kind::Notice(v5::Notice {
+                    kind: Some(v5::notice::Kind::Present(v5::NoticesPresent {
+                        items: vec![v5::Presentation {
+                            kind: Some(v5::presentation::Kind::QuotaPace(quota(0))),
+                        }],
+                    })),
+                })),
+                false,
+            ),
+        ] {
+            assert_eq!(
+                bounded(&body),
+                if valid {
+                    Ok(())
+                } else {
+                    Err(ProtocolError::Malformed)
+                },
+                "{body:?}"
+            );
+        }
+    }
+}

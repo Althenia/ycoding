@@ -3,8 +3,7 @@ import type { useData } from "../../src/context/data"
 import { ScrollBoxRenderable, type Renderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { Effect, FileSystem } from "effect"
-import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../../src/frontend-paths"
 import { createEventStream, createFetch, type FetchHandler } from "../fixture/tui-client"
 import type { TuiPluginStatus } from "../../src/plugin/host-api"
 import type { ClipboardService } from "../../src/context/clipboard"
@@ -61,7 +60,7 @@ export async function renderScreen(input: {
 
   const events = createEventStream()
   const calls = createFetch(input.route, events)
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request), idleTimeout: 30 })
+  const server = calls.listen()
   const { run } = await import("../../src/app")
 
   const task = Effect.runPromise(
@@ -79,7 +78,7 @@ export async function renderScreen(input: {
       remote: input.remote,
       keepAwake: input.keepAwake,
     }).pipe(
-      Effect.provide(input.state ? Global.layerWith({ state: input.state }) : AppNodeBuilder.build(Global.node)),
+      Effect.provide(input.state ? FrontendPaths.layerWith({ state: input.state }) : FrontendPaths.layer),
       Effect.provide(FileSystem.layerNoop({})),
     ),
   )

@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { testRender } from "@opentui/solid"
-import type { YCodingClient } from "@ycoding-ai/client"
+import type { V5Client } from "@ycoding-ai/client/v5"
 import { expect, test } from "bun:test"
 import path from "path"
 import { onMount, type JSX } from "solid-js"
@@ -77,7 +77,7 @@ test("captures workspace dialogs at reference terminal dimensions", async () => 
 async function capture(
   name: string,
   view: () => JSX.Element,
-  api: YCodingClient,
+  api: V5Client,
   viewport: (typeof viewports)[number],
   settle: string,
   commands = false,
@@ -209,7 +209,7 @@ function expectAt(rows: string[], row: number, column: number, text: string) {
 }
 
 function commandPaletteClient() {
-  return { event: { subscribe: async function* () {} } } as unknown as YCodingClient
+  return { event: { subscribe: async function* () {} }, transport: { close() {}, reconnect: async () => {} } } as unknown as V5Client
 }
 
 function sessionSkillsClient() {
@@ -222,14 +222,16 @@ function sessionSkillsClient() {
       }),
     },
     event: { subscribe: async function* () {} },
-  } as unknown as YCodingClient
+    transport: { close() {}, reconnect: async () => {} },
+  } as unknown as V5Client
 }
 
 function artifactsClient() {
   return {
     projectArtifact: { artifact: { list: async () => artifacts } },
     event: { subscribe: async function* () {} },
-  } as unknown as YCodingClient
+    transport: { close() {}, reconnect: async () => {} },
+  } as unknown as V5Client
 }
 
 function skill(input: {

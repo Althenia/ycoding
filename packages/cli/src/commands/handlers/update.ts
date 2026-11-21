@@ -1,6 +1,6 @@
 import { Service } from "@ycoding-ai/client/effect/service"
 import { YCoding } from "@ycoding-ai/client/promise"
-import { InstallationLocal, InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationLocal, InstallationVersion } from "../../version"
 import { Effect, Option, Result } from "effect"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"

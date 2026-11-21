@@ -2,6 +2,8 @@
 
 Status: **Deferred; Rust-first implementation proposed**
 
+The release workflow includes `windows-x64` on `windows-2025`. Its package check compares the Rust executable extracted by the CLI with the build receipt and runs a native regex worker request. The Windows runtime safety gaps described here remain open.
+
 This backlog records unresolved Windows contracts found while verifying [PR #14](https://github.com/Althenia/ycoding/pull/14). It is not an implementation specification, a claim of Windows feature parity, or approval to change permissions, release gates, or supported capabilities. The larger Windows work is deferred. Current executable behavior and tests remain authoritative.
 
 ## Scope and reuse
@@ -91,6 +93,6 @@ Choose supported PowerShell/cmd/Git Bash dialects, protected profile/system root
 
 ## Delivery boundary
 
-The larger implementation and any reduced-capability Windows release are both deferred pending a product decision. Explicit refusal can be a safe alternative only when enforced before affected operations execute or private data is accessed. It materially changes the supported feature set and needs corresponding documentation and positive refusal tests, not skipped tests.
+The broader Windows runtime work remains deferred. The package check does not settle whether to ship with the remaining limits. Explicit refusal can be a safe alternative only when enforced before affected operations execute or private data is accessed. It materially changes the supported feature set and needs corresponding documentation and positive refusal tests, not skipped tests.
 
 Other Windows failures still require independent diagnosis, including service lifecycle, Meeting startup, native-helper fixtures, attachment privacy, repository/file operations, and retention cleanup. Completing the three designs above does not by itself prove that the full suite is green. Keep release readiness based on actual completed gates; do not release v0.10.17 merely because this backlog exists.

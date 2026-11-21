@@ -57,7 +57,7 @@ test("live history is labelled relative to its own snapshot and active models li
 
 test("overview figures label estimates, averages, percentiles, and unreported values", () => {
   const monthly = report([model("openai/a", { physical: 10 })], {
-    physical: 16, cost: 3.5, costProvenance: "current_catalog", costCoverage: { pricedRequests: 16, unpricedRequests: 0 }, cacheReadReported: true, outcomes: { completed: 12, failed: 3, cancelled: 1 },
+    logical: 16, physical: 16, cost: 3.5, costProvenance: "current_catalog", costCoverage: { pricedRequests: 16, unpricedRequests: 0 }, cacheReadReported: true, outcomes: { completed: 12, failed: 3, cancelled: 1 },
   }, speed({ generationSamples: 4, meanTokensPerSecond: 40, firstOutputP50Ms: 300, firstOutputP95Ms: 2400 }))
   const figures = new Map(generationFigures(live({ active: 2, streaming: 1, outputTokensPerSecond: 44 }), monthly).map((figure) => [figure.id, figure]))
   expect(figures.get("active")).toMatchObject({ value: "2", note: "1 streaming now" })
@@ -86,6 +86,15 @@ test("absent speed, outcomes, cache, and totals render empty values, never zero 
   const missing = new Map(generationFigures(live(), undefined).map((figure) => [figure.id, figure]))
   expect(["requests", "tokens", "cache", "cost", "outcomes"].map((id) => missing.get(id)!.value)).toEqual(["", "", "", "", ""])
   expect(["tokens", "cache"].map((id) => missing.get(id)!.note)).toEqual(["", ""])
+})
+
+test("partial outcome coverage preserves reported counts without a complete failure rate", () => {
+  const outcomes = { completed: 1, failed: 1, cancelled: 0 }
+  const figure = generationFigures(live(), report([], { logical: 3, outcomes })).find((entry) => entry.id === "outcomes")!
+  expect(figure).toMatchObject({ value: "1 completed · 1 failed · 0 cancelled", note: "Incomplete outcome coverage" })
+  const now = Date.UTC(2026, 9, 28, 12)
+  const daily = { group: "day", rows: [{ key: "2026-10-28", label: "2026-10-28", ...metrics, logical: 3, outcomes }], total: metrics, rowCount: 1 } as unknown as UsageReport
+  expect(trendDays(daily, now).at(-1)!.errorRate).toBeUndefined()
 })
 
 test("the live figure shows the latest history rate while requests are active and no rate is measured yet", () => {
@@ -117,7 +126,7 @@ test("daily trends carry outcomes, percentiles, throughput, and concurrency with
   const now = Date.UTC(2026, 9, 28, 12)
   const today = "2026-10-28"
   const daily = { group: "day", rows: [
-    { key: today, label: today, ...metrics, physical: 9, outcomes: { completed: 6, failed: 2, cancelled: 0 }, concurrency: 1.5, speed: speed({ totalP50Ms: 4000, totalP95Ms: 9000 }) },
+    { key: today, label: today, ...metrics, logical: 8, physical: 9, outcomes: { completed: 6, failed: 2, cancelled: 0 }, concurrency: 1.5, speed: speed({ totalP50Ms: 4000, totalP95Ms: 9000 }) },
     { key: "2026-10-27", label: "2026-10-27", ...metrics, physical: 3 },
   ], total: metrics, rowCount: 2 } as unknown as UsageReport
   const days = trendDays(daily, now)

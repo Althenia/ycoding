@@ -45,12 +45,19 @@ test("explicit and integration-event refreshes coalesce into one active and one 
   await ready.promise
   const refresh = () =>
     Promise.all([data.location.integration.sync(ref), data.location.model.sync(ref), data.location.provider.sync(ref)])
+  const model = (fresh: boolean) => ({
+    id: fresh ? "newest" : "stale", modelID: fresh ? "newest" : "stale", providerID: "fixture",
+    name: fresh ? "Newest" : "Stale", capabilities: { tools: true, input: [], output: [] }, variants: [],
+    time: { released: 0 }, cost: [], status: "active", enabled: true, limit: { context: 1000, output: 100 },
+  })
   const response = (path: string, fresh: boolean) =>
     json({
       location,
       data:
         path === "/api/model/default"
-          ? { selection: { providerID: "fixture", id: fresh ? "newest" : "stale", profile: fresh ? "Work" : "Old" } }
+          ? { ...model(fresh), selection: { providerID: "fixture", id: fresh ? "newest" : "stale", profile: fresh ? "Work" : "Old" } }
+          : path === "/api/model"
+            ? [model(fresh)]
           : [
               {
                 id: fresh ? "newest" : "stale",
@@ -193,10 +200,12 @@ test("a failed trailing refresh releases its cache entry for an explicit retry",
 
 test("disposing the data owner ignores a late read failure and starts no further reads", async () => {
   const response = Promise.withResolvers<Response>()
+  const started = Promise.withResolvers<void>()
   let requests = 0
   const fixture = await mount((url) => {
     if (url.pathname !== "/api/provider") return undefined
     requests++
+    started.resolve()
     return response.promise
   })
   const ref = { directory: "/tmp/ycoding-sync-disposed" }
@@ -204,6 +213,7 @@ test("disposing the data owner ignores a late read failure and starts no further
   fixture.data.location.provider.invalidate(ref)
   const trailing = fixture.data.location.provider.sync(ref)
   try {
+    await started.promise
     expect(requests).toBe(1)
     fixture.destroy()
     response.resolve(json({ message: "Owner closed" }, { status: 503 }))

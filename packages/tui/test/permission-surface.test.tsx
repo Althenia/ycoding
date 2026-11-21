@@ -167,7 +167,7 @@ test("surfaces a subagent's own pending permission in the subagent view", async 
   })
   try {
     await waitForFrameText(screen, "Permission required")
-    expect(screen.frame()).toContain("atlassian-rovo_updateConfluenceContent")
+    expect(screen.frame()).toContain("Atlassian Rovo Update Confluence Content")
     screen.input.pressEnter()
     for (let attempt = 0; attempt < 150 && repliedTo.length === 0; attempt++) await Bun.sleep(20)
     expect(repliedTo).toEqual([`/api/session/${childID}/permission/per_child_shell/reply`])

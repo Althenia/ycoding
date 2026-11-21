@@ -2,29 +2,23 @@ import { expect, test } from "bun:test"
 import fs from "node:fs"
 import path from "node:path"
 import { Effect } from "effect"
-import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../src/frontend-paths"
 
-test("test preload isolates static Core imports and the Global service before test modules load", async () => {
+test("test preload isolates static frontend imports and the FrontendPaths service before test modules load", async () => {
   const root = process.env.YCODING_TEST_XDG_ROOT
   expect(root).toBeDefined()
   const expected = {
     home: path.join(root!, "home"),
-    data: path.join(root!, "data", "ycoding"),
     cache: path.join(root!, "cache", "ycoding"),
     config: path.join(root!, "config", "ycoding"),
     state: path.join(root!, "state", "ycoding"),
-    tmp: path.join(root!, "tmp", "ycoding"),
-    bin: path.join(root!, "cache", "ycoding", "bin"),
-    log: path.join(root!, "data", "ycoding", "log"),
-    repos: path.join(root!, "data", "ycoding", "repos"),
   }
-  expect(Global.Path).toEqual(expected)
-  expect(await Effect.runPromise(Global.Service.pipe(Effect.provide(AppNodeBuilder.build(Global.node))))).toEqual(expected)
+  expect(FrontendPaths.Path).toEqual(expected)
+  expect(await Effect.runPromise(FrontendPaths.Service.pipe(Effect.provide(FrontendPaths.layer)))).toEqual(expected)
   expect(process.env.HOME).toBe(expected.home)
   expect(process.env.YCODING_CONFIG_DIR).toBe(expected.config)
   expect(process.env.YCODING_DB).toBeUndefined()
-  for (const directory of Object.values(expected)) expect(fs.statSync(directory).isDirectory()).toBe(true)
+  expect(fs.statSync(expected.home).isDirectory()).toBe(true)
 })
 
 test("test preload replaces inherited paths and cleans only its own root on process exit", async () => {
@@ -35,11 +29,12 @@ test("test preload replaces inherited paths and cleans only its own root on proc
   fs.writeFileSync(marker, "retain inherited data")
   const database = path.join(inherited, "user.db")
   fs.writeFileSync(database, "retain inherited database")
+  const frontendPaths = path.resolve(import.meta.dir, "../src/frontend-paths.ts")
   const child = Bun.spawn([
     process.execPath,
     "--preload", "./test/preload.ts",
     "-e",
-    'import { Global } from "@ycoding-ai/core/global"; console.log(JSON.stringify({ root: process.env.YCODING_TEST_XDG_ROOT, paths: Global.Path, config: process.env.YCODING_CONFIG_DIR, db: process.env.YCODING_DB, content: process.env.YCODING_CONFIG_CONTENT, file: process.env.YCODING_CONFIG }))',
+    `import { FrontendPaths } from ${JSON.stringify(frontendPaths)}; console.log(JSON.stringify({ root: process.env.YCODING_TEST_XDG_ROOT, paths: FrontendPaths.Path, config: process.env.YCODING_CONFIG_DIR, db: process.env.YCODING_DB, content: process.env.YCODING_CONFIG_CONTENT, file: process.env.YCODING_CONFIG }))`,
   ], {
     cwd: path.resolve(import.meta.dir, ".."),
     env: {
@@ -67,11 +62,11 @@ test("test preload replaces inherited paths and cleans only its own root on proc
   const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
   expect(error).toBe("")
   expect(code).toBe(0)
-  const result: { root: string; paths: Global.Interface; config: string; db?: string; content?: string; file?: string } = JSON.parse(output)
+  const result: { root: string; paths: FrontendPaths.Interface; config: string; db?: string; content?: string; file?: string } = JSON.parse(output)
   expect(result.root).not.toBe(inherited)
   for (const directory of Object.values(result.paths)) expect(String(directory).startsWith(result.root + path.sep)).toBe(true)
   expect(result.config).toBe(result.paths.config)
-  expect(result.paths.data).toBe(path.join(result.root, "data", "ycoding"))
+  expect(result.paths.state).toBe(path.join(result.root, "state", "ycoding"))
   expect(result.db).toBeUndefined()
   expect(result.content).toBeUndefined()
   expect(result.file).toBeUndefined()

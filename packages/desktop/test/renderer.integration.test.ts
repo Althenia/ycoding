@@ -66,8 +66,8 @@ const location = { directory: "/synthetic/repo", project: { id: "global", direct
 const transcript = () => {
   if (populatedKind) return populatedTranscript(populatedKind, replyText, running)
   const messages = [
-  ...Array.from({ length: 240 }, (_, index) => ({ id: `msg_prompt_${index}`, sessionID: "ses_test", type: "user", text: `Synthetic prompt ${index}. ${"Retained history ".repeat(16)}`, files: index === 239 ? [{ content: { type: "managed", digest: "a".repeat(64), bytes: 4, path: `attachments/sha256/aa/${"a".repeat(64)}` }, mime: "text/plain", name: "restored-notes.txt" }] : [], agents: index === 239 ? [{ name: "reviewer" }] : [], time: { created: index + 1 } })),
-  { id: "msg_response", sessionID: "ses_test", type: "assistant", agent: "build", model: { id: "synthetic", providerID: "synthetic" }, content: [...(presentationParts ? [{ id: "part_reasoning", type: "reasoning", text: "Synthetic reasoning summary", time: { created: 500, completed: 500 } }, { id: "part_read", type: "tool", name: "read", state: { status: "completed", input: { path: "src/a.ts" }, content: [], structured: {} }, time: { created: 500 } }, { id: "part_grep", type: "tool", name: "grep", state: { status: "completed", input: { pattern: "synthetic" }, content: [], structured: {} }, time: { created: 500 } }] : []), { id: "part_response", type: "text", text: replyText, time: { created: 500 } }], time: { created: 500, ...(!running ? { completed: 501 } : {}) } },
+  ...Array.from({ length: 240 }, (_, index) => ({ id: `msg_prompt_${index}`, type: "user", text: `Synthetic prompt ${index}. ${"Retained history ".repeat(16)}`, files: index === 239 ? [{ content: { type: "managed", digest: "a".repeat(64), bytes: 4, path: `attachments/sha256/aa/${"a".repeat(64)}` }, mime: "text/plain", name: "restored-notes.txt" }] : [], agents: index === 239 ? [{ name: "reviewer" }] : [], time: { created: index + 1 } })),
+  { id: "msg_response", type: "assistant", agent: "build", model: { id: "synthetic", providerID: "synthetic" }, content: [...(presentationParts ? [{ type: "reasoning", text: "Synthetic reasoning summary", time: { created: 500, completed: 500 } }, { id: "part_read", type: "tool", name: "read", state: { status: "completed", input: { path: "src/a.ts" }, content: [], structured: {} }, time: { created: 500 } }, { id: "part_grep", type: "tool", name: "grep", state: { status: "completed", input: { pattern: "synthetic" }, content: [], structured: {} }, time: { created: 500 } }] : []), { type: "text", text: replyText, time: { created: 500 } }], time: { created: 500, ...(!running ? { completed: 501 } : {}) } },
   ]
   return referenceScene ? messages.slice(-2).map(message => message.type === "user" ? { ...message, text: "Please execute the virtual scroll test suite and verify that cursor pagination does not break reverse sorting when filter tags are updated. Then run the build step to confirm tree-shaking works." } : captureScene ? { ...message, tokens: { input: 4000, output: 600, reasoning: 200, cache: { read: 8000, write: 0 } }, diagnostics: { contextLimit: 200000, contextBreakdown: { system: 1000, tools: 1000, user: 2000, assistant: 600, reasoning: 200, toolCalls: 0, other: 0 } } } : message) : messages
 }
@@ -182,7 +182,7 @@ beforeAll(async () => {
     if (call.route.endsWith("/subagent")) return { data: familyEnabled && call.route === "/api/session/ses_test/subagent" ? ["ses_child_a", "ses_child_b"].map((sessionID) => ({ sessionID, parentID: "ses_test", description: sessionID, agent: "build", model: selection(), background: true, state: "running", revision: 1, time: { created: 1, updated: 2 } })) : [], summary: { total: familyEnabled && call.route === "/api/session/ses_test/subagent" ? 2 : 0, active: familyEnabled && call.route === "/api/session/ses_test/subagent" ? 2 : 0 }, cursor: {} }
     if (call.route.endsWith("/snapshot")) {
       const sessionID = call.route.split("/")[3]!
-      const messages = transcript().map((message) => ({ ...message, sessionID }))
+      const messages = transcript()
       const end = Number(call.query.get("before") ?? messages.length)
       const start = Math.max(0, end - Number(call.query.get("limit") ?? 100))
       return { sourceEpoch: "synthetic", session: session(sessionID), messages: messages.slice(start, end), watermark: { type: "log.synced", aggregateID: sessionID, seq: 1000 }, ...(start > 0 ? { before: String(start) } : {}) }
@@ -799,7 +799,7 @@ test.each([1024, 1440])("Desktop pending previews keep both controls visible at 
 
 test("Desktop sent message actions preserve a read message when a previously open menu deletes", async () => {
   pending = false
-  const user = (id: string, origin: string, consumed?: number) => ({ id, sessionID: "ses_test", type: "user", text: `Synthetic ${id}`, metadata: { inputOrigin: origin }, time: { created: 501, consumed } })
+  const user = (id: string, origin: string, consumed?: number) => ({ id, type: "user", text: `Synthetic ${id}`, metadata: { inputOrigin: origin }, time: { created: 501, ...(consumed === undefined ? {} : { consumed }) } })
   let rows = [user("msg_already_read", "direct", 502), user("msg_peer", "plugin"), user("msg_unread", "direct"), user("msg_race", "direct")]
   sceneRead = call => {
     if (call.route.endsWith("/snapshot")) return desktopSnapshot(rows)
@@ -832,7 +832,7 @@ test("Desktop transcript omits routine notices and keeps actionable messages and
   referenceScene = true
   pending = false
   const long = "UnbrokenPrompt".repeat(90)
-  const notice = (id: string, text: string, description: string | undefined, metadata: Record<string, unknown>) => ({ id, type: "synthetic", sessionID: "ses_test", text, description, metadata, time: { created: 503 } })
+  const notice = (id: string, text: string, description: string | undefined, metadata: Record<string, unknown>) => ({ id, type: "synthetic", text, description, metadata, time: { created: 503 } })
   sceneRead = call => call.route === "/api/session/ses_test/snapshot" ? {
     sourceEpoch: "synthetic", session: session("ses_test"), watermark: { type: "log.synced", aggregateID: "ses_test", seq: 1000 },
     messages: [...transcript().map(entry => entry.type === "user" ? { ...entry, text: `\`\`\`txt\n${long}\n\`\`\`` } : entry),
@@ -930,7 +930,7 @@ test("Desktop renders a pending-send receipt and honors both motion preferences"
         admission.resolve(id)
         return release.promise.then(() => ({ data: { id, sessionID, type: "user", delivery: "steer", admittedSeq: 1001, timeCreated: 600, data: { text } } }))
       }
-      if (id !== undefined && call.route === `/api/session/${sessionID}/snapshot`) return { sourceEpoch: "synthetic", session: session(sessionID), messages: [...transcript(), { id, sessionID, type: "user", text, time: { created: 600 } }], watermark: { type: "log.synced", aggregateID: sessionID, seq: 1001 } }
+      if (id !== undefined && call.route === `/api/session/${sessionID}/snapshot`) return { sourceEpoch: "synthetic", session: session(sessionID), messages: [...transcript(), { id, type: "user", text, time: { created: 600 } }], watermark: { type: "log.synced", aggregateID: sessionID, seq: 1001 } }
       return undefined
     }
     const page = await open()
@@ -2053,8 +2053,8 @@ test("Desktop r7 commentary, ordinary prose and final results restart intermedia
   const messages = ids.map((id, index) => {
     const created = 1000 + index * 10
     const prose = index === 1 ? commentary : index === 3 ? ordinary : index === 5 ? final : undefined
-    return { id, sessionID: "ses_test", type: "assistant", agent: "reviewer", model: { id: "synthetic", providerID: "synthetic", variant: "high", profile }, finish: index === 5 ? "stop" : "tool-calls", content: prose ? [{ id: id + "_text", type: "text", text: prose, ...(index === 1 ? { phase: "commentary" } : index === 5 ? { phase: "final_answer" } : {}), time: { created } }] : [
-      { id: id + "_reasoning", type: "reasoning", text: "Reasoning retained for " + id, time: { created, completed: created + 1 } },
+    return { id, type: "assistant", agent: "reviewer", model: { id: "synthetic", providerID: "synthetic", variant: "high", profile }, finish: index === 5 ? "stop" : "tool-calls", content: prose ? [{ type: "text", text: prose, ...(index === 1 ? { phase: "commentary" } : index === 5 ? { phase: "final_answer" } : {}), time: { created } }] : [
+      { type: "reasoning", text: "Reasoning retained for " + id, time: { created, completed: created + 1 } },
       { id: id + "_read", type: "tool", name: "read", state: { status: "completed", input: { path: "src/synthetic-cursor.ts" }, structured: {}, content: [{ type: "text", text: "Read output retained for " + id }] }, time: { created: created + 1, completed: created + 2 } },
     ], time: { created, completed: created + 3 } }
   })
@@ -2091,7 +2091,7 @@ test("Desktop r7 populated transcripts retain centered tracks and long evidence"
   for (const kind of ["multiagent", "tool-heavy", "thought-heavy"] as const) for (const width of [1440, 1000]) {
     prepareImplementedSurface(); referenceScene = false; populatedKind = kind; sessionCost = 3.21
     replyText = "Selected checks remain read-only. Native execution is not established by this fixture."
-    const messages = () => [...transcript(), { id: "r8_shell_finished", sessionID: "ses_test", type: "synthetic", text: "The selected cursor boundary check finished without changing files.", description: "The selected cursor boundary check finished without changing files.", metadata: { source: "shell", state: "completed" }, time: { created: 1600 } }]
+    const messages = () => [...transcript(), { id: "r8_shell_finished", type: "synthetic", text: "The selected cursor boundary check finished without changing files.", description: "The selected cursor boundary check finished without changing files.", metadata: { source: "shell", state: "completed" }, time: { created: 1600 } }]
     sceneRead = call => call.route.endsWith('/snapshot') ? { sourceEpoch: "synthetic", session: session("ses_test"), messages: messages(), watermark: { type: "log.synced", aggregateID: "ses_test", seq: 1000 } } : call.route.endsWith('/message') ? { data: messages() } : call.route === "/api/vcs/diff" ? { location, data: [{ file: "src/session/cursor-pagination-and-retained-message-boundaries.ts", patch: `@@ -1 +1 @@\n-${populatedLongLine}\n+${populatedLongLine.replace("updated-descending", "created-ascending")}`, additions: 1, deletions: 1, status: "modified" }] } : call.route === "/api/session/ses_test/subagent" ? { data: ["ses_child_a", "ses_child_b"].map((sessionID, index) => ({ sessionID, parentID: "ses_test", description: index === 0 ? "Trace cursor ownership and retained history" : "Review keyboard focus and streaming layout", agent: index === 0 ? "planner" : "reviewer", model: selection(), background: true, state: index === 0 ? "running" : "waiting", revision: 1, time: { created: 1, updated: 2 } })), summary: { total: 2, active: 2 }, cursor: {} } : undefined
     const page = await openR7(width)
     const name = `r7-${kind}-${width}`
@@ -2710,9 +2710,9 @@ test("Stitch implemented surface ba7c7489375448f99efdeacb0b49b3ea native inline 
     if (call.route === "/api/remote") return { data: remote }
     const parts: NonNullable<Extract<Messages[number], { type: "assistant" }>["content"]> = phase === "reasoning" ? [{ type: "reasoning", text: "Checking the synthetic cursor boundary", time: { created: 501 } }] : phase === "tool" ? [{ id: "part_live_read", type: "tool", name: "read", state: { status: "running", input: { path: "src/pagination.ts" }, structured: {}, content: [] }, time: { created: 501 } }] : []
     if (call.route.endsWith("/snapshot")) return { sourceEpoch: "synthetic", session: session("ses_test"), messages: [...transcript().map(message => "content" in message && Array.isArray(message.content) ? { ...message, content: [...message.content, ...parts] } : message),
-      { id: "msg_dots", sessionID: "ses_test", type: "synthetic", text: "External pagination note", description: "External pagination note", metadata: { dots: peer }, time: { created: 502 } },
-      { id: "msg_exchange", sessionID: "ses_test", type: "user", text: "Review the synthetic task", metadata: { inputOrigin: "plugin", remoteMcp: { requestID: "synthetic-request", epoch: "synthetic-epoch", principal: { ownerID: "synthetic-owner", deviceID: "synthetic-device", clientID: "synthetic-client" } }, dotsExchange: exchange }, time: { created: 503 } },
-      { id: "msg_not_peer", sessionID: "ses_test", type: "synthetic", text: "Ordinary pagination note", description: "Ordinary pagination note", metadata: { dots: { operation: "invented-operation", path: "invented-path", processId: "invented-process" } }, time: { created: 504 } },
+      { id: "msg_dots", type: "synthetic", text: "External pagination note", description: "External pagination note", metadata: { dots: peer }, time: { created: 502 } },
+      { id: "msg_exchange", type: "user", text: "Review the synthetic task", metadata: { inputOrigin: "plugin", remoteMcp: { requestID: "synthetic-request", epoch: "synthetic-epoch", principal: { ownerID: "synthetic-owner", deviceID: "synthetic-device", clientID: "synthetic-client" } }, dotsExchange: exchange }, time: { created: 503 } },
+      { id: "msg_not_peer", type: "synthetic", text: "Ordinary pagination note", description: "Ordinary pagination note", metadata: { dots: { operation: "invented-operation", path: "invented-path", processId: "invented-process" } }, time: { created: 504 } },
     ], watermark: { type: "log.synced", aggregateID: "ses_test", seq: sequence } }
     return undefined
   }
@@ -2996,15 +2996,15 @@ test("Desktop polish renders genuine Dot steer events as right-aligned prompt bu
   prepareImplementedSurface()
   const peer = { origin: "dots-peer", profile: "synthetic", dotID: "dot-1", threadID: "thread-1", itemID: "item-1" }
   const dotMessages = [
-    { id: "msg_human", type: "user", sessionID: "ses_test", text: "Check the claim decisions and readiness log.", time: { created: 1 } },
-    { id: "msg_reply_before", type: "assistant", sessionID: "ses_test", agent: "god", model: { providerID: "synthetic", id: "echo" }, content: [{ type: "text", text: "Checked the claim log." }], time: { created: 2, completed: 3 } },
-    { id: "msg_subagent_notice", type: "synthetic", sessionID: "ses_test", text: "Subagent updated", description: "Subagent updated", metadata: { source: "subagent_notification", type: "updated", childID: "ses_task_c6de7f60e010244c053d4832" }, time: { created: 4 } },
-    { id: "msg_dot_steer_argo", type: "synthetic", sessionID: "ses_test", description: "Install and verify the pinned official Argo CD MCP in Work project config", text: "<shared-context>\nUser evidence:\nprior turn\n</shared-context>\n\n<system-update>{\"autonomy\":{\"mode\":\"normal\"}}</system-update>\nInstall and verify the pinned official Argo CD MCP in Work project config by checking the project settings and docs first.\n<!-- hidden:trace -->", time: { created: 5 } },
-    { id: "msg_dot_steer_empty", type: "synthetic", sessionID: "ses_test", description: "Hidden empty steer title", text: "<system-update>{}</system-update>", time: { created: 6 } },
-    { id: "msg_goal_steer", type: "synthetic", sessionID: "ses_test", description: "Goal · steer", text: "Continue remaining work", metadata: { autonomy: { goal: true } }, time: { created: 7 } },
-    { id: "msg_dot_peer", type: "synthetic", sessionID: "ses_test", description: "Peer message", text: "Room peer message", metadata: { dots: peer }, time: { created: 8 } },
-    { id: "msg_shell_done", type: "synthetic", sessionID: "ses_test", description: "Shell command completed", text: "Shell command completed", metadata: { source: "shell", state: "completed" }, time: { created: 9 } },
-    { id: "msg_reply_after", type: "assistant", sessionID: "ses_test", agent: "god", model: { providerID: "synthetic", id: "echo" }, content: [{ type: "text", text: "Verified the pinned Argo CD MCP configuration." }], time: { created: 10, completed: 11 } },
+    { id: "msg_human", type: "user", text: "Check the claim decisions and readiness log.", time: { created: 1 } },
+    { id: "msg_reply_before", type: "assistant", agent: "god", model: { providerID: "synthetic", id: "echo" }, content: [{ type: "text", text: "Checked the claim log." }], time: { created: 2, completed: 3 } },
+    { id: "msg_subagent_notice", type: "synthetic", text: "Subagent updated", description: "Subagent updated", metadata: { source: "subagent_notification", type: "updated", childID: "ses_task_c6de7f60e010244c053d4832" }, time: { created: 4 } },
+    { id: "msg_dot_steer_argo", type: "synthetic", description: "Install and verify the pinned official Argo CD MCP in Work project config", text: "<shared-context>\nUser evidence:\nprior turn\n</shared-context>\n\n<system-update>{\"autonomy\":{\"mode\":\"normal\"}}</system-update>\nInstall and verify the pinned official Argo CD MCP in Work project config by checking the project settings and docs first.\n<!-- hidden:trace -->", time: { created: 5 } },
+    { id: "msg_dot_steer_empty", type: "synthetic", description: "Hidden empty steer title", text: "<system-update>{}</system-update>", time: { created: 6 } },
+    { id: "msg_goal_steer", type: "synthetic", description: "Goal · steer", text: "Continue remaining work", metadata: { autonomy: { goal: true } }, time: { created: 7 } },
+    { id: "msg_dot_peer", type: "synthetic", description: "Peer message", text: "Room peer message", metadata: { dots: peer }, time: { created: 8 } },
+    { id: "msg_shell_done", type: "synthetic", description: "Shell command completed", text: "Shell command completed", metadata: { source: "shell", state: "completed" }, time: { created: 9 } },
+    { id: "msg_reply_after", type: "assistant", agent: "god", model: { providerID: "synthetic", id: "echo" }, content: [{ type: "text", text: "Verified the pinned Argo CD MCP configuration." }], time: { created: 10, completed: 11 } },
   ]
   sceneRead = call => call.route === "/api/session/ses_test/snapshot"
     ? { sourceEpoch: "synthetic", session: session("ses_test"), watermark: { type: "log.synced", aggregateID: "ses_test", seq: 1000 }, messages: dotMessages }
@@ -4638,15 +4638,16 @@ test("rendered parity discards a file lookup after its mention closes and never 
 }, 30_000)
 
 const desktopSnapshot = (messages: readonly unknown[]) => ({ sourceEpoch: "synthetic", session: session("ses_test"), watermark: { type: "log.synced", aggregateID: "ses_test", seq: 1000 }, messages })
-const desktopReply = { id: "msg_response", type: "assistant", sessionID: "ses_test", agent: "god", model: { providerID: "synthetic", id: "echo" }, content: [{ type: "text", text: "Reviewed." }], time: { created: 90, completed: 91 } }
+const desktopReply = { id: "msg_response", type: "assistant", agent: "god", model: { providerID: "synthetic", id: "echo" }, content: [{ type: "text", text: "Reviewed." }], time: { created: 90, completed: 91 } }
 
 test("Desktop sent image thumbnails open a modal full-size preview that closes by button, backdrop and Escape and returns focus to the thumbnail", async () => {
   prepareImplementedSurface()
   const svg = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400"><rect width="640" height="400" fill="#2f7a55"/></svg>`).toString("base64")
+  const bytes = Buffer.from(svg, "base64").length
   const digest = "c".repeat(64)
   sceneRead = call => call.route === "/api/session/ses_test/snapshot"
-    ? desktopSnapshot([{ id: "msg_image", type: "user", sessionID: "ses_test", text: "See the screenshot", files: [{ content: { type: "managed", digest, bytes: 128, path: `attachments/sha256/cc/${digest}` }, mime: "image/svg+xml", name: "screen.svg" }], time: { created: 1 } }, desktopReply])
-    : call.route === `/api/session/ses_test/attachment/${digest}` ? { mime: "image/svg+xml", bytes: 128, data: svg } : undefined
+    ? desktopSnapshot([{ id: "msg_image", type: "user", text: "See the screenshot", files: [{ content: { type: "managed", digest, bytes, path: `attachments/sha256/cc/${digest}` }, mime: "image/svg+xml", name: "screen.svg" }], time: { created: 1 } }, desktopReply])
+    : call.route === `/api/session/ses_test/attachment/${digest}` ? { mime: "image/svg+xml", bytes, data: svg } : undefined
   const page = await open(`document.querySelector('#turn-msg_image .transcript-message__image-button img')?.complete`)
   try {
     await page.setViewport(1440, 900)
@@ -4670,11 +4671,11 @@ test("Desktop marks Dot-originated steer prompts with a Steer marker beside the 
   prepareImplementedSurface()
   const dots = (delivery: string, origin = "dots-native") => ({ inputOrigin: "direct", dotsInput: { origin, delivery } })
   sceneRead = call => call.route === "/api/session/ses_test/snapshot" ? desktopSnapshot([
-    { id: "msg_human", type: "user", sessionID: "ses_test", text: "Ordinary typed prompt", time: { created: 1 } },
-    { id: "msg_dot_steer", type: "user", sessionID: "ses_test", text: "Steer from the Dot", metadata: dots("steer"), time: { created: 2 } },
-    { id: "msg_dot_queue", type: "user", sessionID: "ses_test", text: "Queued from the Dot", metadata: dots("queue"), time: { created: 3 } },
-    { id: "msg_forged", type: "user", sessionID: "ses_test", text: "Caller-supplied origin", metadata: dots("steer", "remote"), time: { created: 4 } },
-    { id: "msg_dot_synthetic", type: "synthetic", sessionID: "ses_test", description: "Dot steer", text: "Synthetic Dot steer text", time: { created: 5 } },
+    { id: "msg_human", type: "user", text: "Ordinary typed prompt", time: { created: 1 } },
+    { id: "msg_dot_steer", type: "user", text: "Steer from the Dot", metadata: dots("steer"), time: { created: 2 } },
+    { id: "msg_dot_queue", type: "user", text: "Queued from the Dot", metadata: dots("queue"), time: { created: 3 } },
+    { id: "msg_forged", type: "user", text: "Caller-supplied origin", metadata: dots("steer", "remote"), time: { created: 4 } },
+    { id: "msg_dot_synthetic", type: "synthetic", description: "Dot steer", text: "Synthetic Dot steer text", time: { created: 5 } },
     desktopReply,
   ]) : undefined
   const page = await open()

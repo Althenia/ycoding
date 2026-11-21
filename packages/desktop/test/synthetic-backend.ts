@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import type { ConnectionState } from "../src/contract"
+import { createEventStream, createFetch } from "../../tui/test/fixture/tui-client"
 
 export const env = { PATH: "/usr/bin:/bin" }
 
@@ -38,24 +39,14 @@ export function peer(
   handle: (route: string, request: Request) => Promise<Response | undefined> | undefined = () => undefined,
   firstStreamEnds?: Promise<void>,
 ) {
-  let streams = 0
-  return Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    async fetch(request) {
-      const route = new URL(request.url).pathname
-      routes.push(`${request.method} ${route}`)
-      if (route === "/api/health") return Response.json({ healthy: true, version: "synthetic-shared", pid: pid(), sourceEpoch: `epoch-${pid()}` })
-      if (route !== "/api/event") return (await handle(route, request)) ?? new Response(null, { status: 404 })
-      const ends = ++streams === 1 ? firstStreamEnds : undefined
-      return new Response(new ReadableStream<Uint8Array>({
-        async start(stream) {
-          stream.enqueue(new TextEncoder().encode('data: {"type":"server.connected","properties":{}}\n\n'))
-          if (!ends) return
-          await ends
-          stream.close()
-        },
-      }), { headers: { "content-type": "text/event-stream" } })
-    },
-  })
+  const events = createEventStream()
+  const fixture = createFetch(async (url, request) => {
+    const route = url.pathname
+    routes.push(`${request.method} ${route}`)
+    if (route === "/api/health") return Response.json({ healthy: true, version: "synthetic-shared", pid: pid(), sourceEpoch: `epoch-${pid()}` })
+    if (route === "/api/event") return events.connect()
+    return (await handle(route, request)) ?? new Response(null, { status: 404 })
+  }, events)
+  if (firstStreamEnds) void firstStreamEnds.then(() => events.disconnect())
+  return fixture.listen((request) => fixture.fetch(request))
 }

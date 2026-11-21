@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 
-import { runRegexProcess } from "@ycoding-ai/core/tool/regex-process"
+import { runPrivateEntry } from "./private-entry"
 
-if (!runRegexProcess()) {
-  const { InstallationVersion } = await import("@ycoding-ai/core/installation/version")
+if (!await runPrivateEntry()) {
+  const { InstallationVersion } = await import("./version")
   const { Commands } = await import("./commands/commands")
   const { Runtime } = await import("./framework/runtime")
   const { main } = await import("./main")
@@ -11,6 +11,7 @@ if (!runRegexProcess()) {
   const handlers = Runtime.handlers(Commands, {
     "desktop-host": () => import("./commands/handlers/desktop-host"),
     "desktop-client": () => import("./commands/handlers/desktop-client"),
+    "desktop-bridge": () => import("./commands/handlers/desktop-bridge"),
     decision: {
       list: () => import("./commands/handlers/decision/list"),
       watch: () => import("./commands/handlers/decision/watch"),

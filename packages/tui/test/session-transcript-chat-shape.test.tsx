@@ -43,7 +43,7 @@ test.each([60, 100, 140])("user messages mount no cost block and never read prom
 
 test("a user message with a file mounts no cost line and keeps the file chip", async () => {
   const messages: SessionMessageInfo[] = [
-    { id: "msg_file_cost", type: "user", text: "Attached scope", files: [{ name: "notes.md", mime: "text/markdown", content: { digest: "d41d8cd98f00b204e9800998ecf8427e" } }], agents: [], time: { created: 1 } },
+    { id: "msg_file_cost", type: "user", text: "Attached scope", files: [{ name: "notes.md", mime: "text/markdown", content: { type: "managed", digest: "d41d8cd98f00b204e9800998ecf8427e".padEnd(64, "0"), bytes: 1, path: `attachments/sha256/d4/${"d41d8cd98f00b204e9800998ecf8427e".padEnd(64, "0")}` } }], agents: [], time: { created: 1 } },
     { id: "msg_file_reply", type: "assistant", agent: "build", model, content: [{ type: "text", text: "File prompt verified" }], finish: "stop", time: { created: 2, completed: 3 } },
   ] as SessionMessageInfo[]
   const screen = await renderScreen({ width: 100, height: 36, args: { sessionID }, route: routeFor(messages), settle: "File prompt verified" })
@@ -236,6 +236,7 @@ const skillTranscript = [
   {
     id: "msg_skill_loaded",
     type: "skill",
+    skill: "focus-test",
     name: "focus-test",
     text: "Named skill details must be hidden",
     time: { created: 1 },

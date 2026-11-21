@@ -8,7 +8,7 @@ import path from "node:path"
 import { LayerNode } from "../src/effect/layer-node"
 import { KeepAwake } from "../src/keep-awake"
 import { AppProcess } from "../src/process"
-import { ProcessLock } from "../src/util/process-lock"
+import { ProcessLock } from "@ycoding-ai/schema/process-lock"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(LayerNode.compile(AppProcess.node))

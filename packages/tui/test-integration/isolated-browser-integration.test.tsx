@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
-import { YCoding } from "@ycoding-ai/client"
+import { make } from "@ycoding-ai/client/v5"
 import { Effect, Exit, Logger, Scope } from "effect"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { createServer } from "node:net"
@@ -19,7 +19,6 @@ import { ToastProvider } from "../src/ui/toast"
 import { TestTuiContexts } from "../test/fixture/tui-environment"
 import { createTuiResolvedConfig } from "../test/fixture/tui-runtime"
 
-const auth = `Basic ${Buffer.from("ycoding:test-password").toString("base64")}`
 
 test("rendered explicit Start and Stop cross the real Session API and isolated Chrome lifecycle", async () => {
   const root = await mkdtemp(join(tmpdir(), "ycoding-tui-isolated-browser-"))
@@ -35,7 +34,10 @@ test("rendered explicit Start and Stop cross the real Session API and isolated C
     const currentFixture = browserFixture()
     fixture = currentFixture
     server = await startServer({ directory, database: join(root, "ycoding.db") })
-    const client = YCoding.make({ baseUrl: server.base, headers: { authorization: auth } })
+    const client = make({
+      endpoint: { url: server.base, auth: { type: "basic", username: "ycoding", password: "test-password" } },
+      location: { directory },
+    })
     const sessionID = "ses_tui_isolated_integration"
     const session = await client.session.create({ id: sessionID, location: { directory } })
     let app: Awaited<ReturnType<typeof testRender>> | undefined

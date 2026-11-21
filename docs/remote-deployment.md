@@ -14,7 +14,7 @@ Device account aliases require `0008_device_alias.sql` before deploying a Worker
 | -------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | Worker         | `ycoding-cloud`                                                                                                                        |
 | Custom domain  | `ycoding.althenia.app`                                                                                                                 |
-| Durable Object | `DEVICE_RELAY`, class `DeviceRelay`, SQLite storage, one instance per `userId:deviceId`                                                |
+| Durable Object | `DEVICE_RELAY`, class `DeviceRelay`, SQLite storage, separate v4 `userId:deviceId` and v5 `v5:userId:deviceId` instances                 |
 | Durable Object | `PREVIEW_DIRECTORY`, class `PreviewDirectory`, SQLite storage, one instance named `global` (app preview origin bindings, ticket and cookie digests) |
 | Variable       | `PREVIEW_ORIGINS`, empty in the checked-in file, which keeps app preview off                                                           |
 | `workers.dev`  | `workers_dev: true` (the relay's `workers.dev` alias is live); `preview_urls: false`                                                   |
@@ -63,11 +63,11 @@ HTTP `200` returns `{ "outcome": "accepted" | "rejected" | "expired" | "unreacha
 
 Commands below run from the repository root and target the committed configuration with `--config infra/cloudflare/wrangler.jsonc`. Wrangler is pinned to 4.133.0; `bunx wrangler` resolves that local version.
 
-### WebSocket v4 cutover
+### Relay upgrades and rollback
 
-The relay accepts WebSockets only at `/ws/v4/client` and `/ws/v4/agent`. Missing-version, v1, v2, v3, and unknown-version relay paths return `404` before a WebSocket upgrade; there are no aliases or protocol fallbacks. The v4 operation set uses native Forms for remote human input. Enrollment records, device identities, and browser sign-in data remain valid, so this cutover requires no credential or data migration.
+The relay accepts JSON at `/ws/v4/client` and `/ws/v4/agent` and binary protobuf at `/ws/v5/client` and `/ws/v5/agent`. A client and agent must use the same version; the Worker never translates between them. Missing and unsupported WebSocket versions return `404`. Both versions use the same account, browser session and device credentials. No migration is needed to enable v5.
 
-Perform a coordinated release in this order: stop existing `ycoding remote connect` processes; upgrade every installed connector to a build that uses `/ws/v4/agent` and ensure its managed local server runs that same release before reconnecting; deploy the Worker and web assets from the same release; refresh open browser tabs so they use `/ws/v4/client`; then restart each connector and reconnect the existing enrolled identity. If an update leaves an older local server running because Sessions are active, wait for them to finish before restarting the service; an intentional forced restart interrupts running work. The connector requires the local server's `lost` Session-status field and rejects an older backend's status read rather than broadcasting partial status. A v3 connector cannot connect after the Worker cutover, and a v3 browser tab must be refreshed. Existing device enrollment remains valid. Back up the local database before upgrading or rolling back the additive shell ledger; do not downgrade while shell rows still need reconciliation by the newer runtime.
+Deploy the Worker and Web assets from the same release. The current Web build connects to the native Rust connector over v5. Bun v0.12.0 still connects over v4 with a v4 browser client; a v5-only tab cannot control a device running the rolled-back Bun connector. Wait for active Sessions to finish before restarting the local service on either runtime. The relay deployment does not change local stores or require reenrollment.
 
 ### Notification protocol cutover
 
@@ -108,7 +108,7 @@ Real-time logs of `ycoding-preview` contain bootstrap URLs with their one-use ti
 
 D1 stores authentication and device metadata and Web Push subscriptions. Historical MCP authorization tables remain stored but provide no active ingress or authorization route. D1 never stores transcripts, message projections, streaming deltas, tool output, Session contents, or file contents; Session data stays on the user's machine and crosses the relay as live WebSocket frames.
 
-Authenticated `GET /api/devices` and `GET /api/me` return each retained device with `online: boolean`. The Worker reads that value from the owner/device Durable Object's current authenticated agent connection; a revoked device and any failed presence read report `false`. `status`, `lastSeenAt`, and enrollment alone never mark a device online. Offline devices remain in these Settings-facing lists, and revoked devices remain until the owner removes them from Settings, while a connectable-device picker must select only `status: "active"` entries whose `online` value is `true`.
+Authenticated `GET /api/devices` and `GET /api/me` return each retained device with `online: boolean`. The Worker reports v4 presence by default and v5 presence for `?relay=5`, which the current Web build sends. The chosen relay must have an authenticated agent for that owner and device; a revoked device and any failed presence read report `false`. `status`, `lastSeenAt`, and enrollment alone never mark a device online. Offline devices remain in these lists, and revoked devices remain until the owner removes them from Settings. The device picker connects only to active devices that are online for its relay version.
 
 | Table                            | Contents                                                                                                       |
 | -------------------------------- | -------------------------------------------------------------------------------------------------------------- |
@@ -249,4 +249,13 @@ bun run test:integration:remote  # local Worker/D1/Durable Object flow
 bun infra/cloudflare/test/smoke.ts <origin>  # read-only, credential-free auth-boundary checks
 ```
 
-The smoke command exercises the supplied origin's unauthenticated boundaries. The other commands run locally. None proves authenticated production relay traffic, a production migration, or a restore.
+For local compatibility acceptance, set `YCODING_RELAY_ACCEPTANCE_SCRATCH` to an absolute task directory and run `bun infra/cloudflare/test/integration/versioned-relay.ts <phase>`:
+
+| Phase | What it checks | Additional input |
+| --- | --- | --- |
+| `boundary` | The Worker rejects unauthorized clients and mismatched frame types on the v4 and v5 routes. | None |
+| `native` | The Web transport reads Sessions, live events, and HTTP message and attachment bytes through the local Worker and Rust runtime. | `YCODING_RELAY_RUST_CLI` for an extracted release candidate, or `YCODING_RUNTIME_EXECUTABLE` for a locally built runtime. |
+| `usage` | The Web transport reads native Usage summaries, reports, dashboards, and provider Usage without starting a provider. | The same Rust executable as `native`, plus `YCODING_RELAY_USAGE_SEED` for the built `usage_performance_seed` example. |
+| `rollback` | The signed Bun build can enroll and read a Session over v4; an authenticated v5 client cannot read that v4 Session. | `YCODING_RELAY_BUN_CLI` for the extracted signed Bun executable. |
+
+The `native` phase uses a loopback provider to create turns. The `usage` phase writes fixture records to a fresh native store and checks the runtime's published totals over the relay. The smoke command checks the supplied origin's unauthenticated boundaries. These checks do not prove authenticated production traffic, a production migration, or a restore.

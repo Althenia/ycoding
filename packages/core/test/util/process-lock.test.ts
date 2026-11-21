@@ -1,5 +1,5 @@
 import { expect, spyOn } from "bun:test"
-import { ProcessLock } from "@ycoding-ai/core/util/process-lock"
+import { ProcessLock } from "@ycoding-ai/schema/process-lock"
 import { Effect, Exit, Scope } from "effect"
 import fs from "node:fs/promises"
 import filesystem from "node:fs"

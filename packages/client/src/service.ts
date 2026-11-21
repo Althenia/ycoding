@@ -26,6 +26,7 @@ export type EnsureReason = "missing" | "version-mismatch"
 
 /** Options used to ensure the local YCoding service is running. */
 export type EnsureOptions = DiscoverOptions & {
+  readonly existing?: "replace" | "preserve"
   /** Service command and arguments. Defaults to `ycoding serve --service`. */
   readonly command?: ReadonlyArray<string>
   /** Called once before spawning a new service process. */

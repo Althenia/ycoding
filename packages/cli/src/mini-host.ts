@@ -1,6 +1,6 @@
 import type { MiniFrontendInput } from "@ycoding-ai/tui/mini"
 import { createModelPreferenceRepository } from "@ycoding-ai/tui/model-preference"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "./paths"
 import fs from "node:fs"
 import { readFile } from "node:fs/promises"
 import path from "node:path"
@@ -132,9 +132,9 @@ export function createMiniHost(input: {
   paths?: { home: string; state: string; log: string }
 }): MiniHost {
   const paths = input.paths ?? {
-    home: Global.Path.home,
-    state: Global.Path.state,
-    log: Global.Path.log,
+    home: FrontendPaths.Path.home,
+    state: FrontendPaths.Path.state,
+    log: FrontendPaths.Path.log,
   }
   const diagnostics = {
     pid: process.pid,

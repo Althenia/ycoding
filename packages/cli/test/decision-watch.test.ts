@@ -1,9 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import type { DecisionItem, EventSubscribeOutput, SessionLogOutput, SessionSnapshotOutput, SessionSubagentListOutput, SessionTodoListOutput } from "@ycoding-ai/client/promise"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
-import { ClientApi } from "@ycoding-ai/protocol/client"
-import { OpenApi } from "effect/unstable/httpapi"
-import { resolveOperation } from "../src/commands/handlers/api"
+import { namedOperation } from "@ycoding-ai/client/v5"
 import { YCoding } from "@ycoding-ai/client/promise"
 import { watchSession } from "../src/commands/handlers/decision/watch"
 import { followFamily, type FollowReceipt } from "../src/commands/handlers/decision/follow"
@@ -63,7 +61,7 @@ function printedRequest(stdout: string, operation: string) {
   const match = new RegExp(`ycoding api ${operation.replaceAll(".", "\\.")}((?: --param \\S+=\\S+)+)`).exec(stdout)
   expect(match).not.toBeNull()
   const params = Object.fromEntries([...match![1].matchAll(/--param (\w+)=(\S+)/g)].map((item) => [item[1], item[2]]))
-  return { params, request: resolveOperation(JSON.parse(JSON.stringify(OpenApi.fromApi(ClientApi))), operation, params) }
+  return { params, request: namedOperation(operation, params, undefined, new Headers()) }
 }
 
 function work(state: string, extra: Record<string, unknown> & { readonly todos?: { readonly open: number; readonly items: Todo[] } } = {}) {
@@ -1229,7 +1227,9 @@ test("a waiting or running child hidden behind a full page of pinned completed t
   const text = await watch({ log, active: ["ses_target"], tasks: { ses_target: [...pinned, task("ses_hidden", "waiting", 4)] } }, ["ses_target", "--input", "msg_input"])
   expect(text.stdout).toContain("Work needs a decision before it can continue. Add --family to list child Session decisions.")
   expect(text.stdout).toContain("1 more active child task not listed (1 waiting on a decision); run ycoding api session.subagent.list --param parentID=ses_target and follow cursor.next.")
-  expect(printedRequest(text.stdout, "session.subagent.list").request).toEqual({ method: "GET", path: "/api/session/ses_target/subagent" })
+  expect(printedRequest(text.stdout, "session.subagent.list").request).toMatchObject({
+    binding: { method: "session.subagent.list" }, data: { params: { parentID: "ses_target" }, query: {} },
+  })
   expect(text.stdout).not.toContain("ses_hidden")
 
   const running = await watch({ log, tasks: { ses_target: [...pinned, task("ses_hidden", "running", 4)] } }, ["ses_target", "--input", "msg_input", "--json"])
@@ -1273,8 +1273,12 @@ test("bounded child task and todo lists report how many entries were not listed"
   expect(text.stdout).toContain("Child tasks: 12 of 12 active.")
   expect(text.stdout).toContain("2 more active child tasks not listed; run ycoding api session.subagent.list --param parentID=ses_target and follow cursor.next.")
   expect(text.stdout).toContain("3 more not listed; run ycoding api server.session.session.todo.list --param sessionID=ses_target\n")
-  expect(printedRequest(text.stdout, "server.session.session.todo.list").request).toEqual({ method: "GET", path: "/api/session/ses_target/todo" })
-  expect(printedRequest(text.stdout, "session.subagent.list").request).toEqual({ method: "GET", path: "/api/session/ses_target/subagent" })
+  expect(printedRequest(text.stdout, "server.session.session.todo.list").request).toMatchObject({
+    binding: { method: "session.todo.list" }, data: { params: { sessionID: "ses_target" } },
+  })
+  expect(printedRequest(text.stdout, "session.subagent.list").request).toMatchObject({
+    binding: { method: "session.subagent.list" }, data: { params: { parentID: "ses_target" }, query: {} },
+  })
 
   const members = Array.from({ length: 21 }, (_, index) => `ses_member_${String(index).padStart(2, "0")}`)
   const wideScenario: Scenario = {
@@ -1289,8 +1293,9 @@ test("bounded child task and todo lists report how many entries were not listed"
   expect(wideText.stdout).toContain("Child tasks of 2 more family Sessions were not read; run ycoding api session.subagent.list --param parentID=<parent-session-id> for each parent Session in the family, starting with ses_target, and follow cursor.next.")
   const template = printedRequest(wideText.stdout, "session.subagent.list")
   expect(template.params).toEqual({ parentID: "<parent-session-id>" })
-  expect(resolveOperation(JSON.parse(JSON.stringify(OpenApi.fromApi(ClientApi))), "session.subagent.list", { parentID: "ses_member_20" }))
-    .toEqual({ method: "GET", path: "/api/session/ses_member_20/subagent" })
+  expect(namedOperation("session.subagent.list", { parentID: "ses_member_20" }, undefined, new Headers())).toMatchObject({
+    binding: { method: "session.subagent.list" }, data: { params: { parentID: "ses_member_20" }, query: {} },
+  })
 }, 60_000)
 
 const unassessedLine = "Work not assessed: the Session state could not be read before the deadline."

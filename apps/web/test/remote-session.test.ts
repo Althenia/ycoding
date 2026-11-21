@@ -172,20 +172,23 @@ async function fakeConnectionHarness(options: { readonly latencyUploadIntervalMs
         status: () => ({ kind: "open" }),
         request: async (operation, input) => {
           socket.requests.push(operation)
-          if (operation === "session.unsubscribe") socket.unsubscribes.push(String(input?.sessionID))
+          if (operation === "event.subscribe") return { status: "ok", value: { subscription_id: `sub_${input?.sessionID}` } }
+          if (operation === "event.unsubscribe") socket.unsubscribes.push(String(input?.sessionID))
           if (operation === "session.snapshot") {
             return {
               status: "ok",
-              value: {
+              value: { data: {
+                sourceEpoch: "epoch_1",
                 session: { title: "t" },
                 messages: [],
                 watermark: { type: "log.synced", aggregateID: input?.sessionID, seq: 0 },
-              },
+              } },
             }
           }
           if (operation === "notice.subscribe") return { status: "ok", value: { notices: [], total: 0, unavailable: false } }
-          if (operation === "session.list") return { status: "ok", value: { data: [] } }
-          if (operation === "session.active") return { status: "ok", value: { data: {} } }
+          if (operation === "workspace.list") return { status: "ok", value: { data: [] } }
+          if (operation === "session.list") return { status: "ok", value: { data: { data: [], cursor: {} } } }
+          if (operation === "session.status") return { status: "ok", value: { running: [], attention: [] } }
           return { status: "ok", value: { data: {} } }
         },
       }
@@ -210,7 +213,7 @@ async function fakeConnectionHarness(options: { readonly latencyUploadIntervalMs
 
 describe("remote store integration", () => {
   test("undecided consent shows the consent state and holds telemetry uploads", async () => {
-    const test = await harness({ latencyUploadIntervalMs: 20, handler: (request) => request.operation === "machine.telemetry.consent.get"
+    const test = await harness({ latencyUploadIntervalMs: 20, handler: (request) => request.operation === "telemetry.consent.get"
       ? { ok: true, value: { data: { noticeVersion: 1 } } } : "default" })
     try {
       await test.store.load()
@@ -218,14 +221,14 @@ describe("remote store integration", () => {
       test.store.latency.recordClient("prompt.admit", 9)
       await test.flush()
       expect(test.store.state().telemetryConsent.status).toBe("undecided")
-      expect(test.relay.requests.filter((request) => request.operation === "machine.latency.append")).toEqual([])
+      expect(test.relay.requests.filter((request) => request.operation === "telemetry.append")).toEqual([])
     } finally { await test.stop() }
   })
 
   test("telemetry consent writes are one-shot and reflect confirmed decisions", async () => {
     let attempts = 0
     const test = await harness({ handler: (request) => {
-      if (request.operation !== "machine.telemetry.consent.set") return "default"
+      if (request.operation !== "telemetry.consent.set") return "default"
       attempts += 1
       return { ok: false, code: "forbidden", message: "failed" }
     } })
@@ -246,14 +249,14 @@ describe("remote store integration", () => {
       expect(await test.store.setTelemetryConsent(false)).toMatchObject({ status: "ok", consent: { enabled: false, noticeVersion: 1 } })
       expect(test.store.state().telemetryConsent.status).toBe("disabled")
       expect(await test.store.setTelemetryConsent(true)).toMatchObject({ status: "ok", consent: { enabled: true, noticeVersion: 1 } })
-      expect(test.relay.requests.filter((request) => request.operation === "machine.telemetry.consent.set").map((request) => request.input)).toEqual([
+      expect(test.relay.requests.filter((request) => request.operation === "telemetry.consent.set").map((request) => request.input)).toEqual([
         { enabled: false, noticeVersion: 1 }, { enabled: true, noticeVersion: 1 },
       ])
     } finally { await test.stop() }
   })
 
   test("old connector consent operations stay unsupported and telemetry remains unuploaded", async () => {
-    const test = await harness({ latencyUploadIntervalMs: 20, handler: (request) => request.operation === "machine.telemetry.consent.get"
+    const test = await harness({ latencyUploadIntervalMs: 20, handler: (request) => request.operation === "telemetry.consent.get"
       ? { ok: false, code: "unknown_operation", message: "unsupported" } : "default" })
     try {
       await test.store.load()
@@ -261,7 +264,7 @@ describe("remote store integration", () => {
       test.store.latency.recordClient("transcript.load", 8)
       await test.flush()
       expect(test.store.state().telemetryConsent.status).toBe("unsupported")
-      expect(test.relay.requests.filter((request) => request.operation === "machine.latency.append")).toEqual([])
+      expect(test.relay.requests.filter((request) => request.operation === "telemetry.append")).toEqual([])
     } finally { await test.stop() }
   })
 
@@ -269,21 +272,21 @@ describe("remote store integration", () => {
     let consentReads = 0
     let appendAttempted = false
     const test = await harness({ latencyUploadIntervalMs: 20, handler: (request) => {
-      if (request.operation === "machine.telemetry.consent.get") {
+      if (request.operation === "telemetry.consent.get") {
         consentReads += 1
         return { ok: true, value: { data: { noticeVersion: 1, consent: { enabled: !appendAttempted, noticeVersion: 1, decidedAt: 1 } } } }
       }
-      if (request.operation === "machine.latency.append") { appendAttempted = true; return { ok: false, code: "telemetry_disabled", message: "disabled" } }
+      if (request.operation === "telemetry.append") { appendAttempted = true; return { ok: false, code: "telemetry_disabled", message: "disabled" } }
       return "default"
     } })
     try {
       await test.store.load()
       await test.runUntil(() => test.store.state().telemetryConsent.status === "disabled")
       expect(consentReads).toBeGreaterThanOrEqual(2)
-      const attempts = test.relay.requests.filter((request) => request.operation === "machine.latency.append").length
+      const attempts = test.relay.requests.filter((request) => request.operation === "telemetry.append").length
       await test.flush()
       expect(attempts).toBe(1)
-      expect(test.relay.requests.filter((request) => request.operation === "machine.latency.append")).toHaveLength(1)
+      expect(test.relay.requests.filter((request) => request.operation === "telemetry.append")).toHaveLength(1)
     } finally { await test.stop() }
   })
 
@@ -302,16 +305,16 @@ describe("remote store integration", () => {
   })
 
   test("reports an old machine as unsupported without repeatedly uploading the same samples", async () => {
-    const test = await harness({ latencyUploadIntervalMs: 20, handler: (request) => request.operation === "machine.latency.append"
+    const test = await harness({ latencyUploadIntervalMs: 20, handler: (request) => request.operation === "telemetry.append"
       ? { ok: false, code: "unknown_operation", message: "Update YCoding" } : "default" })
     try {
       await test.store.load()
       await test.runUntil(() => test.store.state().latencySync === "unsupported")
-      const attempts = test.relay.requests.filter((request) => request.operation === "machine.latency.append").length
+      const attempts = test.relay.requests.filter((request) => request.operation === "telemetry.append").length
       expect(attempts).toBe(1)
       await test.flush()
       await test.flush()
-      expect(test.relay.requests.filter((request) => request.operation === "machine.latency.append")).toHaveLength(attempts)
+      expect(test.relay.requests.filter((request) => request.operation === "telemetry.append")).toHaveLength(attempts)
     } finally { await test.stop() }
   })
 
@@ -324,7 +327,7 @@ describe("remote store integration", () => {
       socket.timing({ operation: "session.list", outcome: "ok", queueMs: 0, settlementMs: 8, totalMs: 8 })
       test.store.latency.clear()
       await test.flush()
-      expect(socket.requests.filter((operation) => operation === "machine.latency.append")).toEqual([])
+      expect(socket.requests.filter((operation) => operation === "telemetry.append")).toEqual([])
       expect(test.store.latency.snapshot().samples).toEqual([])
     } finally { await test.stop() }
   })
@@ -336,7 +339,7 @@ describe("remote store integration", () => {
     const gate = new Promise<unknown>((resolve) => { release = resolve })
     let lists = 0
     const test = await harness({ handler: (request) => {
-      if (request.operation !== "machine.latency.list") return "default"
+      if (request.operation !== "telemetry.list") return "default"
       lists += 1
       return lists === 1 ? { ok: true, value: { data: [row], cursor: { next: "opaque_1" } } } : gate.then((value) => ({ ok: true, value }))
     } })
@@ -349,27 +352,27 @@ describe("remote store integration", () => {
       test.store.connect("dev_2")
       release({ data: [row], cursor: {} })
       expect((await pending).status).toBe("unavailable")
-      expect(test.relay.requests.filter((request) => request.operation === "machine.latency.list").map((request) => request.input)).toEqual([undefined, { before: "opaque_1" }])
+      expect(test.relay.requests.filter((request) => request.operation === "telemetry.list").map((request) => request.input)).toEqual([undefined, { before: "opaque_1" }])
     } finally { await test.stop() }
   })
 
   test("automatically batches only sanitized selected-machine timings and never records its own upload", async () => {
     const test = await harness({ latencyUploadIntervalMs: 20, handler: (request) =>
-      request.operation === "machine.latency.append" ? { ok: true, value: { accepted: Array.isArray(request.input?.samples) ? request.input.samples.length : 0 } } : "default" })
+      request.operation === "telemetry.append" ? { ok: true, value: { accepted: Array.isArray(request.input?.samples) ? request.input.samples.length : 0 } } : "default" })
     try {
       await test.store.load()
       await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_a"))
-      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "machine.latency.append"))
-      const uploads = test.relay.requests.filter((request) => request.operation === "machine.latency.append")
+      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "telemetry.append"))
+      const uploads = test.relay.requests.filter((request) => request.operation === "telemetry.append")
       const samples = uploads.flatMap((request) => Array.isArray(request.input?.samples) ? request.input.samples : [])
       expect(samples.length).toBeGreaterThan(0)
       expect(samples.length).toBeLessThanOrEqual(20)
       expect(samples.every(isRemoteLatencySample)).toBe(true)
       expect(samples.some((sample) => typeof sample === "object" && sample !== null && "operation" in sample && sample.operation === "account.read")).toBe(false)
-      expect(samples.some((sample) => typeof sample === "object" && sample !== null && "operation" in sample && sample.operation === "machine.latency.append")).toBe(false)
+      expect(samples.some((sample) => typeof sample === "object" && sample !== null && "operation" in sample && sample.operation === "telemetry.append")).toBe(false)
       expect(JSON.stringify(samples)).not.toMatch(/ses_a|dev_1|user_1|"(?:text|input|value|url)":/)
       await test.flush()
-      expect(test.relay.requests.filter((request) => request.operation === "machine.latency.append")).toHaveLength(uploads.length)
+      expect(test.relay.requests.filter((request) => request.operation === "telemetry.append")).toHaveLength(uploads.length)
     } finally { await test.stop() }
   })
 
@@ -530,7 +533,7 @@ describe("remote store integration", () => {
 
   test("a pruned oldest page starting with the checkpoint summary hides it and requests nothing earlier", async () => {
     const test = await harness({ handler: (request) => request.operation === "session.snapshot"
-      ? { ok: true, value: { session: { id: request.sessionID }, watermark: { seq: 10 }, before: "pruned", messages: [
+      ? { ok: true, value: { sourceEpoch: "fixture-epoch", session: { id: request.sessionID }, watermark: { type: "log.synced", aggregateID: request.sessionID, seq: 10 }, before: "pruned", messages: [
         { id: "msg_compaction_abc", type: "synthetic", text: "<conversation-checkpoint>summary</conversation-checkpoint>", description: "Compaction checkpoint", metadata: { compactionCheckpoint: { manifestDigest: "abc", through: 4 } }, time: { created: 1 } },
         { id: "msg_after", type: "user", text: "after", time: { created: 5 } },
       ] } }
@@ -958,7 +961,7 @@ describe("remote store integration", () => {
       await waitFor(() => test.store.state().sessionStatus !== undefined)
       await test.store.selectSession("ses_a")
       test.relay.pushEvent("ses_a", { type: "session.execution.started", data: { sessionID: "ses_a" } })
-      await test.flush()
+      await test.runUntil(() => test.store.state().view?.status === "running")
       expect(test.store.state().view).toMatchObject({ status: "running", executionStarted: 1_000 })
       await test.store.reloadMessages()
       expect(test.store.state().view?.status).toBe("idle")
@@ -2118,14 +2121,19 @@ describe("remote store integration", () => {
 
   test("a revoked device aborts an in-flight attachment image read", async () => {
     let aborted = false
-    const test = await harness({ fetch: async (_url, init) => new Promise<Response>((_resolve, reject) => {
+    let started = false
+    const test = await harness({ handler: (request) => request.operation === "session.attachment.read"
+      ? { wire: (peer, dispatch) => peer.asset(dispatch, Uint8Array.of(1), "image/png", true) } : "default",
+    fetch: async (_url, init) => new Promise<Response>((_resolve, reject) => {
+      started = true
       init?.signal?.addEventListener("abort", () => { aborted = true; reject(new DOMException("Aborted", "AbortError")) })
     }) })
     try {
       await test.store.load()
       await test.runUntil(() => test.store.state().connection.kind === "connected")
       const read = test.store.loadImageSource({ deviceID: "dev_1", sessionID: "ses_a", digest: "a".repeat(64), mime: "image/png" })
-      const settled = read.then(() => false, (error: unknown) => error instanceof DOMException && error.name === "AbortError")
+      const settled = read.then(() => false, () => true)
+      await test.runUntil(() => started)
       test.relay.dropConnections(4403, "device revoked")
       await test.runUntil(() => aborted)
       expect(aborted).toBe(true)
@@ -2778,7 +2786,6 @@ describe("remote store integration", () => {
     let rows: readonly Record<string, unknown>[] = [
       row("msg_p1", "First queued", "queue"),
       { id: "msg_sys", sessionID: "ses_a", admittedSeq: 3, timeCreated: 3, type: "synthetic", delivery: "queue", data: { text: "{\"internal\":true}", description: "Internal", metadata: { contextSource: "session-state" } } },
-      { id: "msg_compact", sessionID: "ses_a", admittedSeq: 4, timeCreated: 4, type: "compaction", delivery: "queue" },
       row("msg_p2", "Second queued", "queue"),
     ]
     const test = await harness({ handler: (request) => {

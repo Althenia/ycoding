@@ -1,6 +1,7 @@
 import fs from "node:fs/promises"
 import { BackendController } from "../src/backend-controller"
 import { env, launch, revision, syntheticBundle } from "./synthetic-backend"
+import { createEventStream, createFetch } from "../../tui/test/fixture/tui-client"
 
 export type SyntheticCall = { method: string; route: string; query: URLSearchParams; body: Record<string, unknown> }
 
@@ -31,11 +32,11 @@ export function populatedTranscript(kind: PopulatedTranscriptKind, tail: string,
       { id: `r7_check_${index}`, type: "tool", name: "shell", state: { status: "error", input: { command: "bun test ./test/cursor-pagination-retained-boundary.test.ts --test-name-pattern 'retains the detached reader across a cursor refresh'" }, content: [{ type: "text", text: "Selected cursor check: 1 passed, 1 failed. The failing case retained its full diagnostic output." }], structured: {}, error: { type: "SyntheticCursorConflict", message: populatedToolError } }, time: { created: 1041 + index * 100, completed: 1080 + index * 100 } },
     ]
     const original = [
-      { id: `r7_prompt_${index}`, sessionID: "ses_test", type: "user", text: `${topic}. ${explanation}\n\nKeep the response substantive and preserve the underlying evidence.`, files: index === 5 ? [{ content: { type: "managed", digest: "a".repeat(64), bytes: 4, path: `attachments/sha256/aa/${"a".repeat(64)}` }, mime: "text/plain", name: populatedDraft.files[0]!.name }] : [], time: { created: 900 + index * 100 } },
-      { id: index === 5 ? "msg_response" : `r7_response_${index}`, sessionID: "ses_test", type: "assistant", agent, model: { id: "synthetic", providerID: "synthetic", variant: "high" }, content: [
-        { id: `r7_reasoning_${index}`, type: "reasoning", text: kind === "thought-heavy" ? `${reasoning}\n\n${reasoning}` : reasoning, time: { created: 1000 + index * 100, completed: 1010 + index * 100 } },
+      { id: `r7_prompt_${index}`, type: "user", text: `${topic}. ${explanation}\n\nKeep the response substantive and preserve the underlying evidence.`, files: index === 5 ? [{ content: { type: "managed", digest: "a".repeat(64), bytes: 4, path: `attachments/sha256/aa/${"a".repeat(64)}` }, mime: "text/plain", name: populatedDraft.files[0]!.name }] : [], time: { created: 900 + index * 100 } },
+      { id: index === 5 ? "msg_response" : `r7_response_${index}`, type: "assistant", agent, model: { id: "synthetic", providerID: "synthetic", variant: "high" }, content: [
+        { type: "reasoning", text: kind === "thought-heavy" ? `${reasoning}\n\n${reasoning}` : reasoning, time: { created: 1000 + index * 100, completed: 1010 + index * 100 } },
         ...(kind === "tool-heavy" || index === 5 ? tools : tools.slice(0, 1)),
-        { id: index === 5 ? "part_response" : `r7_text_${index}`, type: "text", text: `## ${topic}\n\n${explanation}\n\n${index === 5 ? "**Final result:** The retained boundary and the visible reader are separate concerns. Keep successful checks, unsuccessful checks and unverified native behavior distinct.\n\n" : ""}The implementation keeps the full technical record available for review, including the source path, selected check and returned diagnostic.\n\n\`\`\`ts\nexport function retainVisibleMessage(previous, incoming) {\n${populatedLongLine}\n  return { ...incoming, visibleMessageID: previous.visibleMessageID, nextCursor };\n}\n\`\`\`\n\n\`\`\`diff\n-  const boundary = incoming.firstMessage;\n+  const boundary = previous.visibleMessageID;\n+${populatedLongLine}\n\`\`\`\n\n${index === 5 ? tail : "Next: verify the observable result before changing the cursor owner."}`, time: { created: 1081 + index * 100 } },
+        { type: "text", text: `## ${topic}\n\n${explanation}\n\n${index === 5 ? "**Final result:** The retained boundary and the visible reader are separate concerns. Keep successful checks, unsuccessful checks and unverified native behavior distinct.\n\n" : ""}The implementation keeps the full technical record available for review, including the source path, selected check and returned diagnostic.\n\n\`\`\`ts\nexport function retainVisibleMessage(previous, incoming) {\n${populatedLongLine}\n  return { ...incoming, visibleMessageID: previous.visibleMessageID, nextCursor };\n}\n\`\`\`\n\n\`\`\`diff\n-  const boundary = incoming.firstMessage;\n+  const boundary = previous.visibleMessageID;\n+${populatedLongLine}\n\`\`\`\n\n${index === 5 ? tail : "Next: verify the observable result before changing the cursor owner."}`, time: { created: 1081 + index * 100 } },
       ], time: { created: 1000 + index * 100, ...(index === 5 && streaming ? {} : { completed: 1090 + index * 100 }) } },
     ]
     if (index !== 0) return original
@@ -50,7 +51,7 @@ export function populatedTranscript(kind: PopulatedTranscriptKind, tail: string,
       [agent, "synthetic", "reasoning"],
     ] as const).map(([stepAgent, modelID, type], step) => {
       const created = step < 5 ? 910 + step * 10 : 1091 + (step - 5) * 3
-      return { id: `r7_intermediate_${step}`, sessionID: "ses_test", type: "assistant", agent: stepAgent, model: { id: modelID, providerID: "synthetic", variant: "high" }, content: type === "reasoning" ? [{ id: `r7_intermediate_reasoning_${step}`, type: "reasoning", text: `Intermediate reasoning provenance ${step + 1}: inspect the retained cursor without presenting a substantive answer.`, time: { created, completed: created + 1 } }] : [{ ...tools[0]!, id: `r7_intermediate_read_${step}`, state: { ...tools[0]!.state, content: [{ type: "text", text: `Intermediate read provenance ${step + 1}: retained cursor source inspected without changing files.` }] }, time: { created, completed: created + 1 } }], time: { created, completed: created + 2 } }
+      return { id: `r7_intermediate_${step}`, type: "assistant", agent: stepAgent, model: { id: modelID, providerID: "synthetic", variant: "high" }, content: type === "reasoning" ? [{ type: "reasoning", text: `Intermediate reasoning provenance ${step + 1}: inspect the retained cursor without presenting a substantive answer.`, time: { created, completed: created + 1 } }] : [{ ...tools[0]!, id: `r7_intermediate_read_${step}`, state: { ...tools[0]!.state, content: [{ type: "text", text: `Intermediate read provenance ${step + 1}: retained cursor source inspected without changing files.` }] }, time: { created, completed: created + 1 } }], time: { created, completed: created + 2 } }
     })
     return [original[0]!, ...intermediate.slice(0, 5), original[1]!, ...intermediate.slice(5)]
   })
@@ -59,14 +60,10 @@ export function populatedTranscript(kind: PopulatedTranscriptKind, tail: string,
 export async function syntheticDesktop(handle: (call: SyntheticCall) => unknown = () => undefined, options: NonNullable<ConstructorParameters<typeof BackendController>[1]> = {}) {
   const resources = await syntheticBundle()
   const calls: SyntheticCall[] = []
-  const controller = new BackendController(resources, { editor: { read: async () => ({ status: "disabled" }), close: () => {} }, ...options, env, launch, cwd: resources, fetch: Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const request = new Request(input, init)
-    const url = new URL(request.url)
+  const events = createEventStream({ sourceEpoch: "synthetic" })
+  const fixture = createFetch(async (url, request) => {
     if (url.pathname === "/api/health") return Response.json({ healthy: true, version: "synthetic", pid: 101, sourceEpoch: "synthetic" })
-    if (url.pathname === "/api/event") return new Response(new ReadableStream({ start(stream) {
-      stream.enqueue(new TextEncoder().encode('data: {"type":"server.connected","properties":{}}\n\n'))
-      request.signal.addEventListener("abort", () => stream.close(), { once: true })
-    } }), { headers: { "content-type": "text/event-stream" } })
+    if (url.pathname === "/api/event") return events.connect()
     const body: unknown = request.body ? await request.json() : {}
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Synthetic request body must be an object")
     const call = { method: request.method, route: url.pathname, query: url.searchParams, body: { ...body } }
@@ -78,7 +75,8 @@ export async function syntheticDesktop(handle: (call: SyntheticCall) => unknown 
     if (url.pathname === "/api/coordination/settings") return Response.json({ data: { enabled: false, categories: [] } })
     if (url.pathname === "/api/project/inventory") return Response.json({ data: [], cursor: {} })
     return new Response(null, { status: 204 })
-  }, { preconnect: () => {} }) })
+  }, events)
+  const controller = new BackendController(resources, { editor: { read: async () => ({ status: "disabled" }), close: () => {} }, ...options, env, launch, cwd: resources, fetch: fixture.fetch, socket: fixture.fetch.socket })
   try {
     const connected = await controller.connect({ mode: "shared", server: "http://synthetic.invalid" })
     return { controller, calls, resources, revision: revision(connected), async close() { await controller.disconnect(); await fs.rm(resources, { recursive: true, force: true }) } }

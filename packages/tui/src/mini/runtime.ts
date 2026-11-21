@@ -14,9 +14,10 @@ import { loadRunAgents, loadRunCommands, loadRunReferences, waitForDefaultModel 
 import { resolveModelInfo, resolveModelInfoStrict, resolveRunTuiConfig, resolveSessionInfo } from "./runtime.boot"
 import { createRuntimeLifecycle } from "./runtime.lifecycle"
 import { cycleVariant, formatModelLabel, resolveVariant } from "./variant.shared"
-import type { LocalReplayRow, MiniHost, RunInput, RunPrompt, RunProvider, RunTuiConfig, StreamCommit } from "./types"
+import type { LocalReplayRow, MiniHost, RunClient, RunInput, RunPrompt, RunProvider, RunTuiConfig, StreamCommit } from "./types"
 
-type BootContext = Pick<RunInput, "sdk" | "agent" | "model" | "variant"> & {
+type BootContext<Client extends RunClient> = Pick<RunInput, "agent" | "model" | "variant"> & {
+  sdk: Client
   location: LocationRef
 }
 
@@ -27,15 +28,19 @@ type CreateSessionInput = {
   variant: string | undefined
 }
 
-type CreateSession = (sdk: RunInput["sdk"], input: CreateSessionInput, signal?: AbortSignal) => Promise<ResolvedSession>
-type Reconnect = (signal: AbortSignal) => Promise<RunInput["sdk"]>
+type CreateSession<Client extends RunClient> = (
+  sdk: Client,
+  input: CreateSessionInput,
+  signal?: AbortSignal,
+) => Promise<ResolvedSession<Client>>
+type Reconnect<Client extends RunClient> = (signal: AbortSignal) => Promise<Client>
 
-type RunRuntimeInput = {
+type RunRuntimeInput<Client extends RunClient> = {
   host: MiniHost
-  boot: () => Promise<BootContext>
-  resolveSession: (sdk: RunInput["sdk"], signal: AbortSignal) => Promise<ResolvedSession>
-  createSession?: CreateSession
-  reconnect?: Reconnect
+  boot: () => Promise<BootContext<Client>>
+  resolveSession: (sdk: Client, signal: AbortSignal) => Promise<ResolvedSession<Client>>
+  createSession?: CreateSession<Client>
+  reconnect?: Reconnect<Client>
   files: RunInput["files"]
   initialInput?: string
   thinking?: boolean
@@ -45,13 +50,13 @@ type RunRuntimeInput = {
   tuiConfig?: RunTuiConfig | Promise<RunTuiConfig>
 }
 
-export type RunDeferredInput = {
+export type RunDeferredInput<Client extends RunClient = RunClient> = {
   host: MiniHost
-  sdk: RunInput["sdk"]
-  reconnect?: Reconnect
+  sdk: Client
+  reconnect?: Reconnect<Client>
   directory: string
-  target: (sdk: RunInput["sdk"], signal: AbortSignal) => Promise<ResolvedSession>
-  createSession?: CreateSession
+  target: RunRuntimeInput<Client>["resolveSession"]
+  createSession?: CreateSession<Client>
   agent: RunInput["agent"]
   model: RunInput["model"]
   variant: RunInput["variant"]
@@ -81,8 +86,8 @@ type StreamState = {
 
 type RunDemo = ReturnType<(typeof import("./demo"))["createRunDemo"]>
 
-type ResolvedSession = {
-  sdk?: RunInput["sdk"]
+type ResolvedSession<Client extends RunClient> = {
+  sdk?: Client
   sessionID: string
   sessionTitle?: string
   location: RunInput["location"]
@@ -92,8 +97,8 @@ type ResolvedSession = {
   resume?: boolean
 }
 
-type RuntimeState = {
-  sdk: RunInput["sdk"]
+type RuntimeState<Client extends RunClient> = {
+  sdk: Client
   shown: boolean
   aborting: boolean
   model: RunInput["model"]
@@ -179,7 +184,10 @@ function abortable<A>(task: Promise<A>, signal: AbortSignal): Promise<A | undefi
 //
 // Files only attach on the first prompt turn -- after that, includeFiles
 // flips to false so subsequent turns don't re-send attachments.
-async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDeps = {}): Promise<void> {
+async function runInteractiveRuntime<Client extends RunClient>(
+  input: RunRuntimeInput<Client>,
+  deps: RunRuntimeDeps = {},
+): Promise<void> {
   const start = input.host.startup.now()
   const log = input.host.diagnostics.trace
   const tuiConfigTask = resolveRunTuiConfig(input.tuiConfig, input.host.platform)
@@ -192,7 +200,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     variant: undefined as string | undefined,
   }
   const savedVariant = await input.host.preferences.resolveVariant(ctx.model)
-  const state: RuntimeState = {
+  const state: RuntimeState<Client> = {
     sdk: ctx.sdk,
     shown: !session.first,
     aborting: false,
@@ -388,7 +396,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
   let modelLoadQueued = false
   let modelLoadStarted = false
 
-  const updateClient = (sdk: RunInput["sdk"]) => {
+  const updateClient = (sdk: Client) => {
     if (state.sdk === sdk) return
     state.sdk = sdk
     clientGeneration++
@@ -1024,7 +1032,10 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
 
 // Deferred mode paints before session resolution. The caller may back the
 // generated client with a transport that is still acquiring a daemon.
-export async function runInteractiveDeferredMode(input: RunDeferredInput, deps?: RunRuntimeDeps): Promise<void> {
+export async function runInteractiveDeferredMode<Client extends RunClient>(
+  input: RunDeferredInput<Client>,
+  deps?: RunRuntimeDeps,
+): Promise<void> {
   const sdk = input.sdk
 
   return runInteractiveRuntime(

@@ -1,0 +1,187 @@
+{
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "scope": { "enum": ["repository", "knowledge"] },
+        "root": { "type": "string" },
+        "base": { "type": "string" },
+        "knowledgeRoot": { "type": "string" },
+        "repository": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "directory": { "type": "string" },
+            "commonDirectory": { "type": "string" },
+            "worktrees": { "type": "array", "items": { "type": "string" } }
+          },
+          "required": ["id", "directory", "commonDirectory", "worktrees"],
+          "additionalProperties": false
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "path": { "type": "string" },
+            "max_concept_bytes": { "type": "number" },
+            "max_bundle_bytes": { "type": "number" },
+            "max_concepts": { "type": "number" }
+          },
+          "required": ["enabled", "max_concept_bytes", "max_bundle_bytes", "max_concepts"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["enabled", "scope", "root", "base", "knowledgeRoot", "limits"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "concepts": { "type": "array", "items": { "$ref": "#/$defs/Concept" } },
+        "total": { "type": "number" },
+        "warnings": { "type": "array", "items": { "$ref": "#/$defs/Warning" } }
+      },
+      "required": ["concepts", "total", "warnings"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "hits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "type": { "type": "string" },
+              "title": { "type": "string" },
+              "description": { "type": "string" },
+              "tags": { "type": "array", "items": { "type": "string" } },
+              "digest": { "type": "string" },
+              "score": { "type": "number" },
+              "snippet": { "type": "string" }
+            },
+            "required": ["id", "type", "digest", "score", "snippet"],
+            "additionalProperties": false
+          }
+        },
+        "warnings": { "type": "array", "items": { "$ref": "#/$defs/Warning" } }
+      },
+      "required": ["hits", "warnings"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "content": { "type": "string" },
+        "digest": { "type": "string" }
+      },
+      "required": ["id", "content", "digest"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "digest": { "type": "string" },
+        "created": { "type": "boolean" },
+        "warnings": { "type": "array", "items": { "$ref": "#/$defs/Warning" } }
+      },
+      "required": ["id", "digest", "created", "warnings"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "trashID": { "type": "string" },
+        "digest": { "type": "string" },
+        "warnings": { "type": "array", "items": { "$ref": "#/$defs/Warning" } }
+      },
+      "required": ["id", "trashID", "digest", "warnings"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "digest": { "type": "string" },
+        "warnings": { "type": "array", "items": { "$ref": "#/$defs/Warning" } }
+      },
+      "required": ["id", "digest", "warnings"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "entries": { "type": "array", "items": { "$ref": "#/$defs/TrashEntry" } },
+        "total": { "type": "number" },
+        "warnings": { "type": "array", "items": { "$ref": "#/$defs/Warning" } }
+      },
+      "required": ["entries", "total", "warnings"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "trashID": { "type": "string" },
+        "purged": { "type": "boolean" },
+        "warnings": { "type": "array", "items": { "$ref": "#/$defs/Warning" } }
+      },
+      "required": ["trashID", "purged", "warnings"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "dryRun": { "type": "boolean" },
+        "digest": { "type": "string" },
+        "removed": { "type": "array", "items": { "type": "string" } },
+        "warnings": { "type": "array", "items": { "$ref": "#/$defs/Warning" } }
+      },
+      "required": ["dryRun", "digest", "removed", "warnings"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string" },
+        "digest": { "type": "string" },
+        "nodes": { "type": "number" },
+        "edges": { "type": "number" },
+        "warnings": { "type": "array", "items": { "$ref": "#/$defs/Warning" } }
+      },
+      "required": ["path", "digest", "nodes", "edges", "warnings"],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "Concept": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "digest": { "type": "string" }
+      },
+      "required": ["id", "type", "digest"],
+      "additionalProperties": false
+    },
+    "Warning": {
+      "type": "object",
+      "properties": { "id": { "type": "string" }, "code": { "type": "string" } },
+      "required": ["id", "code"],
+      "additionalProperties": false
+    },
+    "TrashEntry": {
+      "type": "object",
+      "properties": { "id": { "type": "string" }, "trashID": { "type": "string" }, "digest": { "type": "string" } },
+      "required": ["id", "trashID", "digest"],
+      "additionalProperties": false
+    }
+  }
+}

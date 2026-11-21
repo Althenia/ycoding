@@ -1,0 +1,1251 @@
+{
+ "description": "Request native approval for an exact Chrome tab or macOS window. Poll status, then observe at the active generation and use only fresh element IDs and revisions. Request confirmation for an exact irreversible action before performing it. Isolated Chrome does not support action confirmation or irreversible actions. Stop on sensitive fields, CAPTCHAs, or uncertain results. A `paused` status or result means the user must act in the target first (bring it forward, pick a file, answer a dialog, solve a CAPTCHA, fill a sensitive field, or finish taking over). Do not retry, observe, or work around a pause: tell the user what the target needs, end your turn, and wait for the user to resume; observe again only after status is `active`. Chrome targets also accept `run` with a fresh revision: `script` mode runs an async function body once in a fresh isolated world, and `code` mode keeps bindings between runs of the same grant until navigation or Stop. A run consumes the revision like an action and is never replayed; observe again before the next action. Sensitive inputs, cookies and web storage are hidden from scripts. Load the browser-use skill before writing scripts. This tool does not return preview pixels. Captures the user sends from the target arrive as user messages.",
+ "inputSchema": {
+  "anyOf": [
+   {
+    "type": "object",
+    "properties": {
+     "operation": {
+      "type": "string",
+      "enum": [
+       "status"
+      ]
+     }
+    },
+    "required": [
+     "operation"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "operation": {
+      "type": "string",
+      "enum": [
+       "request"
+      ]
+     },
+     "selection": {
+      "$ref": "#/$defs/Interaction.Request"
+     }
+    },
+    "required": [
+     "operation",
+     "selection"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "operation": {
+      "type": "string",
+      "enum": [
+       "observe"
+      ]
+     },
+     "generation": {
+      "$ref": "#/$defs/Interaction.Generation"
+     }
+    },
+    "required": [
+     "operation",
+     "generation"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "operation": {
+      "type": "string",
+      "enum": [
+       "perform",
+       "confirm"
+      ]
+     },
+     "generation": {
+      "$ref": "#/$defs/Interaction.Generation"
+     },
+     "revision": {
+      "type": "integer",
+      "allOf": [
+       {
+        "exclusiveMinimum": 0
+       }
+      ]
+     },
+     "action": {
+      "$ref": "#/$defs/Interaction.Action"
+     }
+    },
+    "required": [
+     "operation",
+     "generation",
+     "revision",
+     "action"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "operation": {
+      "type": "string",
+      "enum": [
+       "run"
+      ]
+     },
+     "generation": {
+      "$ref": "#/$defs/Interaction.Generation"
+     },
+     "revision": {
+      "type": "integer",
+      "allOf": [
+       {
+        "exclusiveMinimum": 0
+       }
+      ]
+     },
+     "script": {
+      "$ref": "#/$defs/Interaction.ScriptRequest"
+     }
+    },
+    "required": [
+     "operation",
+     "generation",
+     "revision",
+     "script"
+    ],
+    "additionalProperties": false
+   }
+  ],
+  "$defs": {
+   "Interaction.Request": {
+    "anyOf": [
+     {
+      "type": "object",
+      "properties": {
+       "platform": {
+        "type": "string",
+        "enum": [
+         "macos"
+        ]
+       },
+       "mode": {
+        "not": {}
+       },
+       "url": {
+        "not": {}
+       }
+      },
+      "required": [
+       "platform"
+      ],
+      "additionalProperties": false
+     },
+     {
+      "type": "object",
+      "properties": {
+       "platform": {
+        "type": "string",
+        "enum": [
+         "chrome"
+        ]
+       },
+       "mode": {
+        "type": "string",
+        "enum": [
+         "tab"
+        ]
+       },
+       "url": {
+        "not": {}
+       }
+      },
+      "required": [
+       "platform"
+      ],
+      "additionalProperties": false
+     },
+     {
+      "type": "object",
+      "properties": {
+       "platform": {
+        "type": "string",
+        "enum": [
+         "chrome"
+        ]
+       },
+       "mode": {
+        "type": "string",
+        "enum": [
+         "owned",
+         "isolated"
+        ]
+       },
+       "url": {
+        "type": "string",
+        "allOf": [
+         {
+          "maxLength": 2048
+         },
+         {
+          "pattern": "^https?:\\/\\/(?:\\[[0-9A-Fa-f:.]+\\]|[^/?#@:\\s\\\\]+)(?::[0-9]{1,5})?(?:[/?#][^\\s\\\\]*)?$"
+         }
+        ]
+       }
+      },
+      "required": [
+       "platform",
+       "mode",
+       "url"
+      ],
+      "additionalProperties": false
+     }
+    ]
+   },
+   "Interaction.Generation": {
+    "type": "string",
+    "allOf": [
+     {
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+     }
+    ]
+   },
+   "Interaction.ID": {
+    "type": "string",
+    "allOf": [
+     {
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+     }
+    ]
+   },
+   "Interaction.ChromeAction": {
+    "anyOf": [
+     {
+      "type": "object",
+      "properties": {
+       "platform": {
+        "type": "string",
+        "enum": [
+         "chrome"
+        ]
+       },
+       "destructive": {
+        "type": "boolean",
+        "enum": [
+         true
+        ]
+       },
+       "type": {
+        "type": "string",
+        "enum": [
+         "click"
+        ]
+       },
+       "elementID": {
+        "$ref": "#/$defs/Interaction.ID"
+       }
+      },
+      "required": [
+       "platform",
+       "type",
+       "elementID"
+      ],
+      "additionalProperties": false
+     },
+     {
+      "type": "object",
+      "properties": {
+       "platform": {
+        "type": "string",
+        "enum": [
+         "chrome"
+        ]
+       },
+       "destructive": {
+        "type": "boolean",
+        "enum": [
+         true
+        ]
+       },
+       "type": {
+        "type": "string",
+        "enum": [
+         "fill"
+        ]
+       },
+       "elementID": {
+        "$ref": "#/$defs/Interaction.ID"
+       },
+       "text": {
+        "type": "string",
+        "allOf": [
+         {
+          "maxLength": 4096
+         },
+         {
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+         }
+        ]
+       }
+      },
+      "required": [
+       "platform",
+       "type",
+       "elementID",
+       "text"
+      ],
+      "additionalProperties": false
+     },
+     {
+      "type": "object",
+      "properties": {
+       "platform": {
+        "type": "string",
+        "enum": [
+         "chrome"
+        ]
+       },
+       "destructive": {
+        "type": "boolean",
+        "enum": [
+         true
+        ]
+       },
+       "type": {
+        "type": "string",
+        "enum": [
+         "scroll"
+        ]
+       },
+       "deltaY": {
+        "type": "integer",
+        "allOf": [
+         {
+          "minimum": -10000
+         },
+         {
+          "maximum": 10000
+         }
+        ]
+       }
+      },
+      "required": [
+       "platform",
+       "type",
+       "deltaY"
+      ],
+      "additionalProperties": false
+     },
+     {
+      "type": "object",
+      "properties": {
+       "platform": {
+        "type": "string",
+        "enum": [
+         "chrome"
+        ]
+       },
+       "destructive": {
+        "type": "boolean",
+        "enum": [
+         true
+        ]
+       },
+       "type": {
+        "type": "string",
+        "enum": [
+         "navigate"
+        ]
+       },
+       "url": {
+        "type": "string",
+        "allOf": [
+         {
+          "maxLength": 2048
+         },
+         {
+          "pattern": "^https?:\\/\\/(?:\\[[0-9A-Fa-f:.]+\\]|[^/?#@:\\s\\\\]+)(?::[0-9]{1,5})?(?:[/?#][^\\s\\\\]*)?$"
+         }
+        ]
+       }
+      },
+      "required": [
+       "platform",
+       "type",
+       "url"
+      ],
+      "additionalProperties": false
+     }
+    ]
+   },
+   "Interaction.MacOSAction": {
+    "anyOf": [
+     {
+      "type": "object",
+      "properties": {
+       "platform": {
+        "type": "string",
+        "enum": [
+         "macos"
+        ]
+       },
+       "destructive": {
+        "type": "boolean",
+        "enum": [
+         true
+        ]
+       },
+       "type": {
+        "type": "string",
+        "enum": [
+         "press"
+        ]
+       },
+       "elementID": {
+        "$ref": "#/$defs/Interaction.ID"
+       }
+      },
+      "required": [
+       "platform",
+       "type",
+       "elementID"
+      ],
+      "additionalProperties": false
+     },
+     {
+      "type": "object",
+      "properties": {
+       "platform": {
+        "type": "string",
+        "enum": [
+         "macos"
+        ]
+       },
+       "destructive": {
+        "type": "boolean",
+        "enum": [
+         true
+        ]
+       },
+       "type": {
+        "type": "string",
+        "enum": [
+         "setValue"
+        ]
+       },
+       "elementID": {
+        "$ref": "#/$defs/Interaction.ID"
+       },
+       "text": {
+        "type": "string",
+        "allOf": [
+         {
+          "maxLength": 4096
+         },
+         {
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+         }
+        ]
+       }
+      },
+      "required": [
+       "platform",
+       "type",
+       "elementID",
+       "text"
+      ],
+      "additionalProperties": false
+     },
+     {
+      "type": "object",
+      "properties": {
+       "platform": {
+        "type": "string",
+        "enum": [
+         "macos"
+        ]
+       },
+       "destructive": {
+        "type": "boolean",
+        "enum": [
+         true
+        ]
+       },
+       "type": {
+        "type": "string",
+        "enum": [
+         "scroll"
+        ]
+       },
+       "deltaY": {
+        "type": "integer",
+        "allOf": [
+         {
+          "minimum": -10000
+         },
+         {
+          "maximum": 10000
+         }
+        ]
+       }
+      },
+      "required": [
+       "platform",
+       "type",
+       "deltaY"
+      ],
+      "additionalProperties": false
+     }
+    ]
+   },
+   "Interaction.Action": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/Interaction.ChromeAction"
+     },
+     {
+      "$ref": "#/$defs/Interaction.MacOSAction"
+     }
+    ]
+   },
+   "Interaction.ScriptMode": {
+    "type": "string",
+    "enum": [
+     "script",
+     "code"
+    ]
+   },
+   "Interaction.ScriptRequest": {
+    "type": "object",
+    "properties": {
+     "mode": {
+      "$ref": "#/$defs/Interaction.ScriptMode"
+     },
+     "source": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       },
+       {
+        "maxLength": 65536
+       }
+      ]
+     },
+     "timeoutMs": {
+      "type": "integer",
+      "allOf": [
+       {
+        "minimum": 100
+       },
+       {
+        "maximum": 60000
+       }
+      ]
+     }
+    },
+    "required": [
+     "mode",
+     "source"
+    ],
+    "additionalProperties": false
+   }
+  }
+ },
+ "outputSchema": {
+  "anyOf": [
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "status"
+      ]
+     },
+     "status": {
+      "$ref": "#/$defs/Interaction.Status"
+     }
+    },
+    "required": [
+     "type",
+     "status"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "observation"
+      ]
+     },
+     "observation": {
+      "type": "object",
+      "properties": {
+       "revision": {
+        "type": "integer",
+        "allOf": [
+         {
+          "exclusiveMinimum": 0
+         }
+        ]
+       },
+       "elements": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "id": {
+           "$ref": "#/$defs/Interaction.ID"
+          },
+          "role": {
+           "type": "string",
+           "allOf": [
+            {
+             "maxLength": 256
+            },
+            {
+             "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+            }
+           ]
+          },
+          "label": {
+           "type": "string",
+           "allOf": [
+            {
+             "maxLength": 256
+            },
+            {
+             "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+            }
+           ]
+          },
+          "editable": {
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "id",
+          "role",
+          "label",
+          "editable"
+         ],
+         "additionalProperties": false
+        },
+        "allOf": [
+         {
+          "maxItems": 200
+         }
+        ]
+       }
+      },
+      "required": [
+       "revision",
+       "elements"
+      ],
+      "additionalProperties": false
+     }
+    },
+    "required": [
+     "type",
+     "observation"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "result"
+      ]
+     },
+     "result": {
+      "$ref": "#/$defs/Interaction.ActionResult"
+     }
+    },
+    "required": [
+     "type",
+     "result"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "confirmation_pending"
+      ]
+     }
+    },
+    "required": [
+     "type"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "script"
+      ]
+     },
+     "result": {
+      "$ref": "#/$defs/Interaction.ScriptResult"
+     }
+    },
+    "required": [
+     "type",
+     "result"
+    ],
+    "additionalProperties": false
+   }
+  ],
+  "$defs": {
+   "Interaction.Platform": {
+    "type": "string",
+    "enum": [
+     "chrome",
+     "macos"
+    ]
+   },
+   "Interaction.Generation": {
+    "type": "string",
+    "allOf": [
+     {
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+     }
+    ]
+   },
+   "Interaction.PauseReason": {
+    "type": "string",
+    "enum": [
+     "foreground_required",
+     "file_chooser",
+     "dialog",
+     "captcha",
+     "sensitive",
+     "user_takeover"
+    ]
+   },
+   "Interaction.StopReason": {
+    "type": "string",
+    "enum": [
+     "stopped",
+     "rejected",
+     "expired",
+     "disconnected",
+     "target_lost",
+     "uncertain",
+     "permission",
+     "shutdown"
+    ]
+   },
+   "Interaction.Status": {
+    "anyOf": [
+     {
+      "type": "object",
+      "properties": {
+       "state": {
+        "type": "string",
+        "enum": [
+         "unavailable"
+        ]
+       }
+      },
+      "required": [
+       "state"
+      ],
+      "additionalProperties": false
+     },
+     {
+      "type": "object",
+      "properties": {
+       "state": {
+        "type": "string",
+        "enum": [
+         "pending"
+        ]
+       },
+       "platform": {
+        "$ref": "#/$defs/Interaction.Platform"
+       },
+       "generation": {
+        "$ref": "#/$defs/Interaction.Generation"
+       }
+      },
+      "required": [
+       "state",
+       "platform",
+       "generation"
+      ],
+      "additionalProperties": false
+     },
+     {
+      "type": "object",
+      "properties": {
+       "state": {
+        "type": "string",
+        "enum": [
+         "active"
+        ]
+       },
+       "platform": {
+        "$ref": "#/$defs/Interaction.Platform"
+       },
+       "generation": {
+        "$ref": "#/$defs/Interaction.Generation"
+       },
+       "label": {
+        "type": "string",
+        "allOf": [
+         {
+          "maxLength": 256
+         },
+         {
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+         }
+        ]
+       }
+      },
+      "required": [
+       "state",
+       "platform",
+       "generation",
+       "label"
+      ],
+      "additionalProperties": false
+     },
+     {
+      "type": "object",
+      "properties": {
+       "state": {
+        "type": "string",
+        "enum": [
+         "paused"
+        ]
+       },
+       "platform": {
+        "$ref": "#/$defs/Interaction.Platform"
+       },
+       "generation": {
+        "$ref": "#/$defs/Interaction.Generation"
+       },
+       "label": {
+        "type": "string",
+        "allOf": [
+         {
+          "maxLength": 256
+         },
+         {
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+         }
+        ]
+       },
+       "reason": {
+        "$ref": "#/$defs/Interaction.PauseReason"
+       }
+      },
+      "required": [
+       "state",
+       "platform",
+       "generation",
+       "label",
+       "reason"
+      ],
+      "additionalProperties": false
+     },
+     {
+      "type": "object",
+      "properties": {
+       "state": {
+        "type": "string",
+        "enum": [
+         "stopped"
+        ]
+       },
+       "platform": {
+        "$ref": "#/$defs/Interaction.Platform"
+       },
+       "generation": {
+        "$ref": "#/$defs/Interaction.Generation"
+       },
+       "reason": {
+        "$ref": "#/$defs/Interaction.StopReason"
+       },
+       "cleanup": {
+        "type": "string",
+        "enum": [
+         "pending",
+         "complete",
+         "failed"
+        ]
+       }
+      },
+      "required": [
+       "state",
+       "platform",
+       "generation",
+       "reason",
+       "cleanup"
+      ],
+      "additionalProperties": false
+     }
+    ]
+   },
+   "Interaction.ID": {
+    "type": "string",
+    "allOf": [
+     {
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+     }
+    ]
+   },
+   "Interaction.Refusal": {
+    "type": "string",
+    "enum": [
+     "unsupported",
+     "stale",
+     "sensitive",
+     "captcha",
+     "policy",
+     "permission",
+     "target_lost",
+     "confirmation_required",
+     "busy"
+    ]
+   },
+   "Interaction.ActionResult": {
+    "anyOf": [
+     {
+      "type": "object",
+      "properties": {
+       "outcome": {
+        "type": "string",
+        "enum": [
+         "applied"
+        ]
+       }
+      },
+      "required": [
+       "outcome"
+      ],
+      "additionalProperties": false
+     },
+     {
+      "type": "object",
+      "properties": {
+       "outcome": {
+        "type": "string",
+        "enum": [
+         "refused"
+        ]
+       },
+       "reason": {
+        "$ref": "#/$defs/Interaction.Refusal"
+       }
+      },
+      "required": [
+       "outcome",
+       "reason"
+      ],
+      "additionalProperties": false
+     },
+     {
+      "type": "object",
+      "properties": {
+       "outcome": {
+        "type": "string",
+        "enum": [
+         "uncertain"
+        ]
+       }
+      },
+      "required": [
+       "outcome"
+      ],
+      "additionalProperties": false
+     },
+     {
+      "type": "object",
+      "properties": {
+       "outcome": {
+        "type": "string",
+        "enum": [
+         "paused"
+        ]
+       },
+       "reason": {
+        "$ref": "#/$defs/Interaction.PauseReason"
+       }
+      },
+      "required": [
+       "outcome",
+       "reason"
+      ],
+      "additionalProperties": false
+     }
+    ]
+   },
+   "Interaction.ConsoleEntry": {
+    "type": "object",
+    "properties": {
+     "level": {
+      "type": "string",
+      "enum": [
+       "log",
+       "info",
+       "warn",
+       "error",
+       "debug"
+      ]
+     },
+     "text": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 2048
+       }
+      ]
+     }
+    },
+    "required": [
+     "level",
+     "text"
+    ],
+    "additionalProperties": false
+   },
+   "Interaction.ScriptError": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 128
+       }
+      ]
+     },
+     "message": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 2048
+       }
+      ]
+     },
+     "stack": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 8192
+       }
+      ]
+     }
+    },
+    "required": [
+     "name",
+     "message"
+    ],
+    "additionalProperties": false
+   },
+   "Interaction.ScriptResult": {
+    "anyOf": [
+     {
+      "type": "object",
+      "properties": {
+       "outcome": {
+        "type": "string",
+        "enum": [
+         "completed"
+        ]
+       },
+       "value": {},
+       "valueTruncated": {
+        "type": "boolean",
+        "enum": [
+         true
+        ]
+       },
+       "logs": {
+        "type": "array",
+        "items": {
+         "$ref": "#/$defs/Interaction.ConsoleEntry"
+        },
+        "allOf": [
+         {
+          "maxItems": 200
+         }
+        ]
+       },
+       "logsTruncated": {
+        "type": "boolean",
+        "enum": [
+         true
+        ]
+       }
+      },
+      "required": [
+       "outcome",
+       "logs"
+      ],
+      "additionalProperties": false
+     },
+     {
+      "type": "object",
+      "properties": {
+       "outcome": {
+        "type": "string",
+        "enum": [
+         "error"
+        ]
+       },
+       "error": {
+        "$ref": "#/$defs/Interaction.ScriptError"
+       },
+       "logs": {
+        "type": "array",
+        "items": {
+         "$ref": "#/$defs/Interaction.ConsoleEntry"
+        },
+        "allOf": [
+         {
+          "maxItems": 200
+         }
+        ]
+       },
+       "logsTruncated": {
+        "type": "boolean",
+        "enum": [
+         true
+        ]
+       }
+      },
+      "required": [
+       "outcome",
+       "error",
+       "logs"
+      ],
+      "additionalProperties": false
+     },
+     {
+      "type": "object",
+      "properties": {
+       "outcome": {
+        "type": "string",
+        "enum": [
+         "timeout"
+        ]
+       },
+       "logs": {
+        "type": "array",
+        "items": {
+         "$ref": "#/$defs/Interaction.ConsoleEntry"
+        },
+        "allOf": [
+         {
+          "maxItems": 200
+         }
+        ]
+       },
+       "logsTruncated": {
+        "type": "boolean",
+        "enum": [
+         true
+        ]
+       }
+      },
+      "required": [
+       "outcome",
+       "logs"
+      ],
+      "additionalProperties": false
+     },
+     {
+      "type": "object",
+      "properties": {
+       "outcome": {
+        "type": "string",
+        "enum": [
+         "stopped"
+        ]
+       },
+       "logs": {
+        "type": "array",
+        "items": {
+         "$ref": "#/$defs/Interaction.ConsoleEntry"
+        },
+        "allOf": [
+         {
+          "maxItems": 200
+         }
+        ]
+       },
+       "logsTruncated": {
+        "type": "boolean",
+        "enum": [
+         true
+        ]
+       }
+      },
+      "required": [
+       "outcome",
+       "logs"
+      ],
+      "additionalProperties": false
+     },
+     {
+      "type": "object",
+      "properties": {
+       "outcome": {
+        "type": "string",
+        "enum": [
+         "refused"
+        ]
+       },
+       "reason": {
+        "$ref": "#/$defs/Interaction.Refusal"
+       }
+      },
+      "required": [
+       "outcome",
+       "reason"
+      ],
+      "additionalProperties": false
+     },
+     {
+      "type": "object",
+      "properties": {
+       "outcome": {
+        "type": "string",
+        "enum": [
+         "paused"
+        ]
+       },
+       "reason": {
+        "$ref": "#/$defs/Interaction.PauseReason"
+       }
+      },
+      "required": [
+       "outcome",
+       "reason"
+      ],
+      "additionalProperties": false
+     }
+    ]
+   }
+  }
+ }
+}

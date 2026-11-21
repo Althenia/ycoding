@@ -1,0 +1,193 @@
+[
+  {
+    "escalation": {},
+    "text": "Decision unavailable · diagnostic reason was not recorded · Review this request manually."
+  },
+  {
+    "escalation": {
+      "authority": "baseline"
+    },
+    "text": "Baseline assessment · Decision unavailable · diagnostic reason was not recorded · Review this request manually."
+  },
+  {
+    "escalation": {
+      "authority": "yolo",
+      "grades": []
+    },
+    "text": "YOLO assessment · Decision unavailable · diagnostic reason was not recorded · Review this request manually."
+  },
+  {
+    "escalation": {
+      "authority": "yolo",
+      "grades": [
+        {
+          "choice": "escalate",
+          "confidence": 0.5,
+          "evidence": "The target is unclear."
+        }
+      ]
+    },
+    "text": "YOLO assessment · Decision requires human review · Review this request manually."
+  },
+  {
+    "escalation": {
+      "reason": "unavailable"
+    },
+    "text": "Decision unavailable · the decision model or its authenticated route is unavailable · Review this request manually. No automatic approval was granted."
+  },
+  {
+    "escalation": {
+      "reason": "invalid-request"
+    },
+    "text": "Decision unavailable · the decision request is invalid · Review this request manually. No automatic approval was granted."
+  },
+  {
+    "escalation": {
+      "reason": "provider-failed"
+    },
+    "text": "Decision unavailable · the provider request failed · Review this request manually. No automatic approval was granted."
+  },
+  {
+    "escalation": {
+      "authority": "yolo",
+      "reason": "timeout"
+    },
+    "text": "YOLO assessment · Decision unavailable · the decision request timed out · Review this request manually. No automatic approval was granted."
+  },
+  {
+    "escalation": {
+      "reason": "input-too-large"
+    },
+    "text": "Decision unavailable · the decision input exceeds the supported size · Review this request manually. No automatic approval was granted."
+  },
+  {
+    "escalation": {
+      "reason": "invalid-output",
+      "choice": "allow",
+      "confidence": 0.9
+    },
+    "text": "Decision unavailable · the decision response failed validation · Review this request manually. No automatic approval was granted."
+  },
+  {
+    "escalation": {
+      "reason": "refused"
+    },
+    "text": "Decision unavailable · the provider or model refused the decision request · Review this request manually. No automatic approval was granted."
+  },
+  {
+    "escalation": {
+      "reason": "truncated-output"
+    },
+    "text": "Decision unavailable · the decision response was truncated or did not finish · Review this request manually. No automatic approval was granted."
+  },
+  {
+    "escalation": {
+      "authority": "baseline",
+      "reason": "unsupported-output"
+    },
+    "text": "Baseline assessment · Decision unavailable · the selected route does not support strict structured decisions · Review this request manually, or configure a decision helper on a supported strict structured-output route."
+  },
+  {
+    "escalation": {
+      "reason": "low_confidence",
+      "confidence": 0.71
+    },
+    "text": "Decision requires human review · confidence below the approval threshold · confidence 0.71 · Review this request manually."
+  },
+  {
+    "escalation": {
+      "authority": "baseline",
+      "reason": "low_confidence"
+    },
+    "text": "Baseline assessment · Decision requires human review · confidence below the approval threshold · Review this request manually."
+  },
+  {
+    "escalation": {
+      "reason": "conflicting_grades",
+      "grades": [
+        {
+          "choice": "allow",
+          "confidence": 0.9,
+          "evidence": "The scope is verified."
+        },
+        {
+          "choice": "deny",
+          "confidence": 0.9,
+          "evidence": "The target needs confirmation."
+        }
+      ]
+    },
+    "text": "Decision requires human review · conflicting approval and rejection grades · Review this request manually."
+  },
+  {
+    "escalation": {
+      "authority": "yolo",
+      "reason": "conflicting_grades",
+      "choice": "allow",
+      "confidence": 0.85
+    },
+    "text": "YOLO assessment · Decision requires human review · conflicting approval and rejection grades · choice allow · confidence 0.85 · Review this request manually."
+  },
+  {
+    "escalation": {
+      "reason": "escalated"
+    },
+    "text": "Decision requires human review · Review this request manually."
+  },
+  {
+    "escalation": {
+      "choice": "escalate",
+      "confidence": 0.934567
+    },
+    "text": "Decision model escalated this review · choice escalate · confidence 0.934567 · Review this request manually."
+  },
+  {
+    "escalation": {
+      "authority": "baseline",
+      "reason": "escalated",
+      "choice": "escalate",
+      "confidence": 1
+    },
+    "text": "Baseline assessment · Decision model escalated this review · choice escalate · confidence 1 · Review this request manually."
+  },
+  {
+    "escalation": {
+      "authority": "yolo",
+      "choice": "escalate"
+    },
+    "text": "YOLO assessment · Decision model escalated this review · choice escalate · Review this request manually."
+  },
+  {
+    "escalation": {
+      "choice": "approve",
+      "confidence": 0.7
+    },
+    "text": "Decision requires human review · choice approve · confidence 0.7 · Review this request manually."
+  },
+  {
+    "escalation": {
+      "choice": "deny",
+      "confidence": 0
+    },
+    "text": "Decision requires human review · choice deny · confidence 0 · Review this request manually."
+  },
+  {
+    "escalation": {
+      "confidence": 1e-7
+    },
+    "text": "Decision requires human review · confidence 1e-7 · Review this request manually."
+  },
+  {
+    "escalation": {
+      "confidence": 1e-6
+    },
+    "text": "Decision requires human review · confidence 0.000001 · Review this request manually."
+  },
+  {
+    "escalation": {
+      "confidence": 1.5e-10,
+      "choice": "reject"
+    },
+    "text": "Decision requires human review · choice reject · confidence 1.5e-10 · Review this request manually."
+  }
+]

@@ -26,7 +26,7 @@ import type {
   RemoteTransportHandlers,
   RemoteTransportStatus,
 } from "../src/remote/transport"
-import { RemoteLimits, isRemoteLatencySample, noticePageValue, noticeSequence, type RemoteCapturedChangesPage, type RemoteDeviceInfo, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeFrame, type RemoteNoticeOperation, type RemoteOperation } from "@ycoding-ai/remote"
+import { RemoteLimits, isRemoteLatencySample, noticePageValue, noticeSequence, type RemoteCapturedChangesPage, type RemoteDeviceInfo, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeFrame } from "@ycoding-ai/remote"
 import { remoteScenario, type WireSession } from "./remote-scenarios"
 import { createProviderAuthFixture } from "./provider-auth-fixture"
 import type { Form } from "../../../packages/schema/src/form"
@@ -540,10 +540,7 @@ async function fixtureImage(digest: string) {
   context.fillStyle = "rgb(255 255 255 / .85)"
   context.fillRect(48, 48, 300, 36)
   context.fillRect(48, 112, 220, 24)
-  const bytes = new Uint8Array(await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer())
-  let binary = ""
-  for (let offset = 0; offset < bytes.length; offset += 8_192) binary += String.fromCharCode(...bytes.subarray(offset, offset + 8_192))
-  return Response.json({ mime: "image/png", bytes: bytes.length, data: btoa(binary) })
+  return new Uint8Array(await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer())
 }
 const form = {
   id: "frm_fixture",
@@ -737,6 +734,7 @@ function createFixtureStore(): Fixture {
   let open = true
   let streamed = false
   let nextSeq = 43
+  let nextSubscriptionID = 0
   let snapshotWatermark = 42
   let sourceEpoch = "epoch_fixture"
   let probeStarted = false
@@ -1067,10 +1065,15 @@ function createFixtureStore(): Fixture {
     } })
 
   const outcome = (
-    operation: RemoteOperation | RemoteNoticeOperation,
+    operation: string,
     input?: Readonly<Record<string, unknown>>,
     targetSessionID = sessionID,
   ): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
+    if (operation === "session.attachment.read") {
+      const digest = input?.digest
+      if (typeof digest !== "string" || !imageDigests.includes(digest)) return { status: "failed", error: { code: "not_found", message: "Attachment not found" } }
+      return fixtureImage(digest).then((data) => ({ status: "ok", value: { data, mime: "image/png", release: () => {} } }))
+    }
     if (interaction && operation.startsWith("session.interaction.")) {
       if (targetSessionID !== sessionID) return { status: "failed", error: { code: "session_not_allowed", message: "Session not found" } }
       if (operation === "session.interaction.status") return { status: "ok", value: { data: interaction.status } }
@@ -1323,7 +1326,10 @@ function createFixtureStore(): Fixture {
         const children = targetSessionID === "ses_child"
           ? [{ sessionID: "ses_grandchild", description: "Verify descendant", state: "waiting" }, { sessionID: "ses_grand_sibling", description: "Review sibling work", state: "completed" }]
           : targetSessionID === "ses_grandchild" ? [{ sessionID: "ses_deep", description: "Inspect deeper work", state: "running" }] : []
-        return { status: "ok", value: { data: children.map(child => ({ ...child, parentID: targetSessionID, agent: "builder", model, background: true, revision: 1, time: { created: ago(10), updated: ago(1) }, ...(child.state === "waiting" ? { question: { id: "qst_grandchild", text: "May I proceed?" } } : {}) })), summary: { total: children.length }, cursor: {} } }
+        const data = children.map(child => ({ ...child, parentID: targetSessionID, agent: "builder", model, background: true, revision: 1, time: { created: ago(10), updated: ago(1) }, ...(child.state === "waiting" ? { question: { id: "qst_grandchild", text: "May I proceed?" } } : {}) }))
+        const running = data.filter((task) => task.state === "running").length
+        const waiting = data.filter((task) => task.state === "waiting").length
+        return { status: "ok", value: { data: { data, summary: { total: data.length, active: running + waiting, running, waiting }, cursor: {} } } }
       }
       if (accountParams.get("team") === "unsupported") return { status: "failed", error: { code: "unknown_operation", message: "Unknown operation" } }
       const tasks = targetSessionID === sessionID && accountParams.get("team") !== "none" ? [{
@@ -1346,7 +1352,10 @@ function createFixtureStore(): Fixture {
         state: "running", revision: 1, time: { created: ago(25 - index), updated: ago(3) },
       })) : []
       tasks.push(...officeTasks)
-      return { status: "ok", value: { data: tasks, summary: { total: tasks.length }, cursor: {} } }
+      const running = tasks.filter((task) => task.state === "running" || task.state === "supervising").length
+      const waiting = tasks.filter((task) => task.state === "waiting").length
+      const active = running + waiting + tasks.filter((task) => task.state === "cancelling").length
+      return { status: "ok", value: { data: { data: tasks, summary: { total: tasks.length, active, running, waiting }, cursor: {} } } }
     }
     if (operation === "session.taskCosts") {
       const variant = accountParams.get("taskCosts") ?? "known"
@@ -1401,7 +1410,7 @@ function createFixtureStore(): Fixture {
         if (firstRead && childTranscript === "unavailable") return { status: "unavailable", reason: "request-limit" }
         if (firstRead && childTranscript === "failed") return { status: "failed", error: { code: "unknown_operation", message: "Child snapshots are unavailable on this connector." } }
         const returnedID = firstRead && childTranscript === "mismatched" ? "ses_wrong_child" : targetSessionID
-        return { status: "ok", value: {
+        return { status: "ok", value: { data: {
           sourceEpoch,
           session: { ...sessions.find(item => item.id === targetSessionID), ...(accountParams.has("descendants") && ["ses_grandchild", "ses_grand_sibling", "ses_deep"].includes(targetSessionID) ? { title: `Child: ${targetSessionID}`, parentID: targetSessionID === "ses_deep" ? "ses_grandchild" : "ses_child", agent: "builder", time: { created: ago(10), updated: ago(1) } } : {}), id: returnedID },
           messages: [
@@ -1412,11 +1421,11 @@ function createFixtureStore(): Fixture {
             ], time: { created: ago(2), completed: ago(1) } },
           ],
           watermark: { type: "log.synced", aggregateID: targetSessionID, seq: 0 },
-        } }
+        } } }
       }
       return {
         status: "ok",
-        value: {
+        value: { data: {
           sourceEpoch,
           session: createdSessions.get(targetSessionID) ?? sessions.find((item) => item.id === targetSessionID),
           messages: targetSessionID === "ses_lead" ? [
@@ -1435,7 +1444,7 @@ function createFixtureStore(): Fixture {
             ...(projectChain === undefined ? [] : [{ id: "project_escalated", type: "synthetic", text: "Project notification", description: "Project notification", metadata: { source: "project_notification", groupID: "cgrp_release", memberSessionID: "ses_api", title: "Update checkout API", event: "escalated", requestID: "per_api", kind: "permission", excerpt: "Needs production credentials.", escalatedBy: { sessionID: "ses_driver", title: "Migration agent" } }, time: { created: ago(2) } }]),
           ] : targetSessionID === sessionID ? structuredClone(messages) : targetSessionID === "ses_child" && accountParams.has("childTranscript") ? structuredClone(accountParams.get("childTranscript") === "images" ? messages : defaultMessages) : [],
           watermark: { type: "log.synced", aggregateID: targetSessionID, seq: targetSessionID === sessionID ? snapshotWatermark : 0 },
-        },
+        } },
       }
     }
     if (operation === "session.autonomy.get") {
@@ -1541,7 +1550,7 @@ function createFixtureStore(): Fixture {
       const message = messages.find((item) => item && typeof item === "object" && Reflect.get(item, "id") === messageID)
       if (!message || typeof message !== "object") return { status: "failed", error: { code: "not_found", message: "This message is no longer available." } }
       const time: unknown = Reflect.get(message, "time")
-      if (time && typeof time === "object" && Reflect.has(time, "consumed")) return { status: "failed", error: { code: "message_read", message: "YCoding has already read this message." } }
+      if (time && typeof time === "object" && typeof Reflect.get(time, "consumed") === "number") return { status: "failed", error: { code: "message_read", message: "YCoding has already read this message." } }
       messages = messages.filter((item) => item !== message)
       emitEvent(sessionID, { type: "session.input.deleted", data: { sessionID, inputID: messageID } })
       return { status: "ok", value: null }
@@ -1557,7 +1566,8 @@ function createFixtureStore(): Fixture {
       return { status: "ok", value: null }
     }
     if (operation === "session.pending.list" && (pendingInputs.length > 0 || pendingOperations.length > 0)) return { status: "ok", value: { data: pendingInputs } }
-    if (operation === "session.log") return { status: "ok", value: { data: [] } }
+    if (operation === "event.subscribe") return { status: "ok", value: { subscription_id: `sub_fixture_${++nextSubscriptionID}` } }
+    if (operation === "session.log") return { status: "ok", value: { data: [], watermark: snapshotWatermark } }
     return { status: "ok", value: null }
   }
 
@@ -1579,7 +1589,7 @@ function createFixtureStore(): Fixture {
   let laptopNotices: readonly RemoteNotice[] = [{ id: "ntc_7", category: "agent-completed", sessionID: laptopSession.id, createdAt: ago(1) }]
   const machineStatuses: { readonly deviceID: string; readonly kind: RemoteTransportStatus["kind"] }[] = []
   Object.assign(window, { remoteMachineStatuses: machineStatuses })
-  const laptopOutcome = (operation: RemoteOperation | RemoteNoticeOperation, input: Readonly<Record<string, unknown>> | undefined, targetSessionID: string | undefined,
+  const laptopOutcome = (operation: string, input: Readonly<Record<string, unknown>> | undefined, targetSessionID: string | undefined,
     own: RemoteTransportHandlers): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
     if (operation === "dots.get" || operation === "dots.set" || operation === "dots.attach") return dotsOutcome(operation, input, "dev_laptop")
     if (operation === "notice.subscribe" || operation === "notice.list")
@@ -1595,10 +1605,10 @@ function createFixtureStore(): Fixture {
     if (operation === "session.status") return { status: "ok", value: { running: [], attention: [], failed: [], lost: [] } }
     if (operation === "session.list") return { status: "ok", value: { data: input?.status === undefined || input.status === "idle" ? [laptopSession] : [], cursor: {} } }
     if (operation === "session.get") return { status: "ok", value: { data: laptopSession } }
-    if (operation === "session.snapshot") return { status: "ok", value: { sourceEpoch: "epoch_laptop", session: laptopSession, messages: [
+    if (operation === "session.snapshot") return { status: "ok", value: { data: { sourceEpoch: "epoch_laptop", session: laptopSession, messages: [
       { id: "msg_laptop_user", type: "user", text: "Check the laptop release build.", time: { created: ago(19), consumed: ago(19) } },
       { id: "msg_laptop_assistant", type: "assistant", agent: "god", model, content: [{ type: "text", text: "The laptop release build passed." }], time: { created: ago(18), completed: ago(17) } },
-    ], watermark: { type: "log.synced", aggregateID: laptopSession.id, seq: 0 } } }
+    ], watermark: { type: "log.synced", aggregateID: laptopSession.id, seq: 0 } } } }
     if (operation === "session.subagent.list") return { status: "ok", value: { data: [], summary: { total: 0 }, cursor: {} } }
     if (operation === "session.autonomy.get") return autonomyResponse({ mode: "normal" }, { permissions: "manual", guardrails: "manual", answers: "manual" })
     if (targetSessionID !== undefined && operation.endsWith(".list")) return { status: "ok", value: { data: [], cursor: {} } }
@@ -1653,10 +1663,6 @@ function createFixtureStore(): Fixture {
 
   const store = createRemoteStore({
     http: syntheticHttp,
-    ...((accountParams.get("images") === "1" || ledger) ? { fetch: async (input: string) => {
-      const digest = input.split("/attachments/")[1] ?? ""
-      return imageDigests.includes(digest) ? fixtureImage(digest) : new Response(null, { status: 404 })
-    } } : {}),
     ...(accountParams.has("latencyUploadMs") ? { latencyUploadIntervalMs: Number(accountParams.get("latencyUploadMs")) } : {}),
     ...(transcriptProbe || responseProbe ? { now: () => Date.now() + probeClock, schedule: (callback: () => void, ms: number) => {
       const timer = setTimeout(callback, ms >= 1_000 ? 1 : ms)

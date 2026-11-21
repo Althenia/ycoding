@@ -893,7 +893,7 @@ test("main header clears its stale child count after reconnect without visiting 
   })
   try {
     await screen.waitForEventStream()
-    await waitFor(() => screen.lines()[1]?.includes("waiting · 1 subagent") === true, "active child header")
+    await waitFor(() => screen.lines()[1]?.includes("running background work") === true, "active child header")
     state.settleChildWithoutEvent()
     screen.events.disconnect()
     await waitFor(() => screen.lines()[1]?.includes("ready") === true, "reconciled header")

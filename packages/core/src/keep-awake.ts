@@ -222,7 +222,7 @@ export const make = Effect.fn("KeepAwake.make")(function* (options: Options) {
     if (Option.isNone(yield* Ref.get(lidOwner))) {
       if (!on && !recover && !(yield* hasRecord)) return yield* Ref.set(lid, "off")
       const owner = yield* Scope.make()
-      const acquired = yield* Effect.tryPromise(() => import("./util/process-lock")).pipe(
+      const acquired = yield* Effect.tryPromise(() => import("@ycoding-ai/schema/process-lock")).pipe(
         Effect.flatMap(({ ProcessLock }) => ProcessLock.acquire(lidFile).pipe(
           Effect.provideService(Scope.Scope, owner), Effect.as(true),
           Effect.catchTag("ProcessLockHeldError", () => Effect.succeed(false)),

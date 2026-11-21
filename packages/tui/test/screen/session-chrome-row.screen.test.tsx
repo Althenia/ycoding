@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationVersion } from "../../src/build-version"
 import { docsID, scratchID } from "../fixture/coordination-backend"
 import { mountCoordination, waitForFrame } from "../fixture/coordination-screen"
 

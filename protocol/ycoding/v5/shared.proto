@@ -1,0 +1,612 @@
+syntax = "proto2";
+package ycoding.v5;
+import "ycoding/v5/foundation.proto";
+import "ycoding/v5/operations.proto";
+
+enum Permission_Effect {
+  PERMISSION_EFFECT_ALLOW = 1 [(ycoding.v5.domain_label) = "allow"];
+  PERMISSION_EFFECT_DENY = 2 [(ycoding.v5.domain_label) = "deny"];
+  PERMISSION_EFFECT_ASK = 3 [(ycoding.v5.domain_label) = "ask"];
+}
+
+enum UnauthorizedError__tag {
+  UNAUTHORIZEDERROR__TAG_UNAUTHORIZEDERROR = 1 [(ycoding.v5.domain_label) = "UnauthorizedError"];
+}
+
+enum InvalidRequestError__tag {
+  INVALIDREQUESTERROR__TAG_INVALIDREQUESTERROR = 1 [(ycoding.v5.domain_label) = "InvalidRequestError"];
+}
+
+enum ConflictError__tag {
+  CONFLICTERROR__TAG_CONFLICTERROR = 1 [(ycoding.v5.domain_label) = "ConflictError"];
+}
+
+enum Model_Daybreak {
+  MODEL_DAYBREAK_DAYBREAK_BLUE = 1 [(ycoding.v5.domain_label) = "daybreak_blue"];
+  MODEL_DAYBREAK_DAYBREAK_RED = 2 [(ycoding.v5.domain_label) = "daybreak_red"];
+}
+
+enum ServiceUnavailableError__tag {
+  SERVICEUNAVAILABLEERROR__TAG_SERVICEUNAVAILABLEERROR = 1 [(ycoding.v5.domain_label) = "ServiceUnavailableError"];
+}
+
+enum InvalidCursorError__tag {
+  INVALIDCURSORERROR__TAG_INVALIDCURSORERROR = 1 [(ycoding.v5.domain_label) = "InvalidCursorError"];
+}
+
+enum ProviderRequest_ModelSpend_costProvenance {
+  PROVIDERREQUEST_MODELSPEND_COSTPROVENANCE_RECORDED = 1 [(ycoding.v5.domain_label) = "recorded"];
+  PROVIDERREQUEST_MODELSPEND_COSTPROVENANCE_CURRENT_CATALOG = 2 [(ycoding.v5.domain_label) = "current_catalog"];
+}
+
+enum ProviderRequest_Summary_latestInvalidation {
+  PROVIDERREQUEST_SUMMARY_LATESTINVALIDATION_FIRST_REQUEST = 1 [(ycoding.v5.domain_label) = "first-request"];
+  PROVIDERREQUEST_SUMMARY_LATESTINVALIDATION_COMPACTION_RESET = 2 [(ycoding.v5.domain_label) = "compaction-reset"];
+  PROVIDERREQUEST_SUMMARY_LATESTINVALIDATION_MODEL_SWITCHED = 3 [(ycoding.v5.domain_label) = "model-switched"];
+  PROVIDERREQUEST_SUMMARY_LATESTINVALIDATION_MODEL_VARIANT_SWITCHED = 4 [(ycoding.v5.domain_label) = "model-variant-switched"];
+  PROVIDERREQUEST_SUMMARY_LATESTINVALIDATION_STABLE_HIT = 5 [(ycoding.v5.domain_label) = "stable-hit"];
+  PROVIDERREQUEST_SUMMARY_LATESTINVALIDATION_PREFIX_CHANGED = 6 [(ycoding.v5.domain_label) = "prefix-changed"];
+  PROVIDERREQUEST_SUMMARY_LATESTINVALIDATION_SYSTEM_PREFIX_CHANGED = 7 [(ycoding.v5.domain_label) = "system-prefix-changed"];
+  PROVIDERREQUEST_SUMMARY_LATESTINVALIDATION_TOOL_PREFIX_CHANGED = 8 [(ycoding.v5.domain_label) = "tool-prefix-changed"];
+  PROVIDERREQUEST_SUMMARY_LATESTINVALIDATION_BELOW_MINIMUM = 9 [(ycoding.v5.domain_label) = "below-minimum"];
+  PROVIDERREQUEST_SUMMARY_LATESTINVALIDATION_PROVIDER_NOT_REPORTED = 10 [(ycoding.v5.domain_label) = "provider-not-reported"];
+  PROVIDERREQUEST_SUMMARY_LATESTINVALIDATION_CACHE_DISABLED = 11 [(ycoding.v5.domain_label) = "cache-disabled"];
+  PROVIDERREQUEST_SUMMARY_LATESTINVALIDATION_RETRY_FALLBACK = 12 [(ycoding.v5.domain_label) = "retry-fallback"];
+}
+
+enum ProviderRequest_Report_group {
+  PROVIDERREQUEST_REPORT_GROUP_MODEL = 1 [(ycoding.v5.domain_label) = "model"];
+  PROVIDERREQUEST_REPORT_GROUP_HOUR = 2 [(ycoding.v5.domain_label) = "hour"];
+  PROVIDERREQUEST_REPORT_GROUP_DAY = 3 [(ycoding.v5.domain_label) = "day"];
+  PROVIDERREQUEST_REPORT_GROUP_MONTH = 4 [(ycoding.v5.domain_label) = "month"];
+  PROVIDERREQUEST_REPORT_GROUP_SESSION = 5 [(ycoding.v5.domain_label) = "session"];
+  PROVIDERREQUEST_REPORT_GROUP_PROJECT = 6 [(ycoding.v5.domain_label) = "project"];
+  PROVIDERREQUEST_REPORT_GROUP_AGENT = 7 [(ycoding.v5.domain_label) = "agent"];
+  PROVIDERREQUEST_REPORT_GROUP_PROVIDER = 8 [(ycoding.v5.domain_label) = "provider"];
+  PROVIDERREQUEST_REPORT_GROUP_PROVIDER_PROFILE_MODEL = 9 [(ycoding.v5.domain_label) = "provider-profile-model"];
+  PROVIDERREQUEST_REPORT_GROUP_PROVIDER_MODEL = 10 [(ycoding.v5.domain_label) = "provider-model"];
+  PROVIDERREQUEST_REPORT_GROUP_MODEL_ID = 11 [(ycoding.v5.domain_label) = "model-id"];
+  PROVIDERREQUEST_REPORT_GROUP_PROFILE = 12 [(ycoding.v5.domain_label) = "profile"];
+  PROVIDERREQUEST_REPORT_GROUP_PROMPT = 13 [(ycoding.v5.domain_label) = "prompt"];
+  PROVIDERREQUEST_REPORT_GROUP_TASK = 14 [(ycoding.v5.domain_label) = "task"];
+}
+
+enum ProviderRequest_ReportDimensionsValue1_group {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE1_GROUP_PROVIDER = 1 [(ycoding.v5.domain_label) = "provider"];
+}
+
+enum ProviderRequest_ReportDimensionsValue2_group {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE2_GROUP_PROVIDER_PROFILE_MODEL = 1 [(ycoding.v5.domain_label) = "provider-profile-model"];
+}
+
+enum ProviderRequest_ReportDimensionsValue2_profileState {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE2_PROFILESTATE_RECORDED = 1 [(ycoding.v5.domain_label) = "recorded"];
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE2_PROFILESTATE_PROVIDER_DEFAULT = 2 [(ycoding.v5.domain_label) = "provider-default"];
+}
+
+enum ProviderRequest_ReportDimensionsValue3_group {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE3_GROUP_PROVIDER_MODEL = 1 [(ycoding.v5.domain_label) = "provider-model"];
+}
+
+enum ProviderRequest_ReportDimensionsValue4_group {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE4_GROUP_MODEL_ID = 1 [(ycoding.v5.domain_label) = "model-id"];
+}
+
+enum ProviderRequest_ReportDimensionsValue5_group {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE5_GROUP_PROFILE = 1 [(ycoding.v5.domain_label) = "profile"];
+}
+
+enum ProviderRequest_ReportDimensionsValue5_profileState {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE5_PROFILESTATE_RECORDED = 1 [(ycoding.v5.domain_label) = "recorded"];
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE5_PROFILESTATE_PROVIDER_DEFAULT = 2 [(ycoding.v5.domain_label) = "provider-default"];
+}
+
+enum ProviderRequest_ReportDimensionsValue6_group {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE6_GROUP_PROMPT = 1 [(ycoding.v5.domain_label) = "prompt"];
+}
+
+enum ProviderRequest_ReportDimensionsValue6_attribution {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE6_ATTRIBUTION_COMPLETE = 1 [(ycoding.v5.domain_label) = "complete"];
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE6_ATTRIBUTION_PARTIAL = 2 [(ycoding.v5.domain_label) = "partial"];
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE6_ATTRIBUTION_UNATTRIBUTED = 3 [(ycoding.v5.domain_label) = "unattributed"];
+}
+
+enum ProviderRequest_ReportDimensionsValue7_group {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE7_GROUP_TASK = 1 [(ycoding.v5.domain_label) = "task"];
+}
+
+enum ProviderRequest_ReportDimensionsValue7_attribution {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE7_ATTRIBUTION_COMPLETE = 1 [(ycoding.v5.domain_label) = "complete"];
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE7_ATTRIBUTION_PARTIAL = 2 [(ycoding.v5.domain_label) = "partial"];
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE7_ATTRIBUTION_UNATTRIBUTED = 3 [(ycoding.v5.domain_label) = "unattributed"];
+}
+
+enum ProviderRequest_ReportRow_costProvenance {
+  PROVIDERREQUEST_REPORTROW_COSTPROVENANCE_RECORDED = 1 [(ycoding.v5.domain_label) = "recorded"];
+  PROVIDERREQUEST_REPORTROW_COSTPROVENANCE_CURRENT_CATALOG = 2 [(ycoding.v5.domain_label) = "current_catalog"];
+}
+
+enum ProviderRequest_ReportMetrics_costProvenance {
+  PROVIDERREQUEST_REPORTMETRICS_COSTPROVENANCE_RECORDED = 1 [(ycoding.v5.domain_label) = "recorded"];
+  PROVIDERREQUEST_REPORTMETRICS_COSTPROVENANCE_CURRENT_CATALOG = 2 [(ycoding.v5.domain_label) = "current_catalog"];
+}
+
+enum SessionUsageReportQuery_group {
+  SESSIONUSAGEREPORTQUERY_GROUP_MODEL = 1 [(ycoding.v5.domain_label) = "model"];
+  SESSIONUSAGEREPORTQUERY_GROUP_HOUR = 2 [(ycoding.v5.domain_label) = "hour"];
+  SESSIONUSAGEREPORTQUERY_GROUP_DAY = 3 [(ycoding.v5.domain_label) = "day"];
+  SESSIONUSAGEREPORTQUERY_GROUP_MONTH = 4 [(ycoding.v5.domain_label) = "month"];
+  SESSIONUSAGEREPORTQUERY_GROUP_SESSION = 5 [(ycoding.v5.domain_label) = "session"];
+  SESSIONUSAGEREPORTQUERY_GROUP_PROJECT = 6 [(ycoding.v5.domain_label) = "project"];
+  SESSIONUSAGEREPORTQUERY_GROUP_AGENT = 7 [(ycoding.v5.domain_label) = "agent"];
+  SESSIONUSAGEREPORTQUERY_GROUP_PROVIDER = 8 [(ycoding.v5.domain_label) = "provider"];
+  SESSIONUSAGEREPORTQUERY_GROUP_PROVIDER_PROFILE_MODEL = 9 [(ycoding.v5.domain_label) = "provider-profile-model"];
+  SESSIONUSAGEREPORTQUERY_GROUP_PROVIDER_MODEL = 10 [(ycoding.v5.domain_label) = "provider-model"];
+  SESSIONUSAGEREPORTQUERY_GROUP_MODEL_ID = 11 [(ycoding.v5.domain_label) = "model-id"];
+  SESSIONUSAGEREPORTQUERY_GROUP_PROFILE = 12 [(ycoding.v5.domain_label) = "profile"];
+  SESSIONUSAGEREPORTQUERY_GROUP_PROMPT = 13 [(ycoding.v5.domain_label) = "prompt"];
+  SESSIONUSAGEREPORTQUERY_GROUP_TASK = 14 [(ycoding.v5.domain_label) = "task"];
+}
+
+enum SessionUsageReportQuery_sort {
+  SESSIONUSAGEREPORTQUERY_SORT_KEY = 1 [(ycoding.v5.domain_label) = "key"];
+  SESSIONUSAGEREPORTQUERY_SORT_TOKENS = 2 [(ycoding.v5.domain_label) = "tokens"];
+  SESSIONUSAGEREPORTQUERY_SORT_COST = 3 [(ycoding.v5.domain_label) = "cost"];
+  SESSIONUSAGEREPORTQUERY_SORT_STEPS = 4 [(ycoding.v5.domain_label) = "steps"];
+  SESSIONUSAGEREPORTQUERY_SORT_INPUT = 5 [(ycoding.v5.domain_label) = "input"];
+  SESSIONUSAGEREPORTQUERY_SORT_OUTPUT = 6 [(ycoding.v5.domain_label) = "output"];
+  SESSIONUSAGEREPORTQUERY_SORT_REASONING = 7 [(ycoding.v5.domain_label) = "reasoning"];
+  SESSIONUSAGEREPORTQUERY_SORT_CACHEREAD = 8 [(ycoding.v5.domain_label) = "cacheRead"];
+  SESSIONUSAGEREPORTQUERY_SORT_CACHEWRITE = 9 [(ycoding.v5.domain_label) = "cacheWrite"];
+}
+
+enum SessionUsageReportQuery_order {
+  SESSIONUSAGEREPORTQUERY_ORDER_ASC = 1 [(ycoding.v5.domain_label) = "asc"];
+  SESSIONUSAGEREPORTQUERY_ORDER_DESC = 2 [(ycoding.v5.domain_label) = "desc"];
+}
+
+message LocationQuery {
+  optional LocationQuery_location location = 1;
+}
+
+message LocationQuery_location {
+  optional LosslessString directory = 1;
+  optional LosslessString workspace = 2;
+}
+
+message Location_Info {
+  optional BackendPaths backendPaths = 4;
+  required LosslessString directory = 1;
+  optional LosslessString workspaceID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/location.ts#Location.Info" }];
+  required Location_Info_project project = 3;
+}
+
+message Location_Info_project {
+  required LosslessString id = 1;
+  required LosslessString directory = 2;
+}
+
+message Model_Ref {
+  required LosslessString id = 1;
+  required LosslessString providerID = 2;
+  optional LosslessString variant = 3;
+  optional LosslessString profile = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model.ts#Model.Ref" utf16_min: 1 }];
+}
+
+message Permission_Ruleset {
+  repeated Permission_Rule items = 1;
+}
+
+message Permission_Rule {
+  required LosslessString action = 1;
+  required LosslessString resource = 2;
+  required Permission_Effect effect = 3;
+}
+
+message UnauthorizedError {
+  required UnauthorizedError__tag _tag = 1;
+  required LosslessString message = 2;
+}
+
+message InvalidRequestError {
+  required InvalidRequestError__tag _tag = 1;
+  required LosslessString message = 2;
+  optional LosslessString kind = 3;
+  optional LosslessString field = 4;
+  optional Dots_Rejection rejection = 5;
+}
+
+message Dots_Rejection {
+  optional int64 code = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/dots.ts#Dots.Rejection" integer_min: "-9007199254740991" integer_max: "9007199254740991" }];
+  optional LosslessString errorCode = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/dots.ts#Dots.Rejection" utf16_min: 1 utf16_max: 128 }];
+  optional LosslessString errorType = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/dots.ts#Dots.Rejection" utf16_min: 1 utf16_max: 128 }];
+  optional LosslessString message = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/dots.ts#Dots.Rejection" utf16_min: 1 utf16_max: 1000 }];
+}
+
+message ConflictError {
+  required ConflictError__tag _tag = 1;
+  required LosslessString message = 2;
+  optional LosslessString resource = 3;
+}
+
+message ServiceUnavailableError {
+  required ServiceUnavailableError__tag _tag = 1;
+  required LosslessString message = 2;
+  optional LosslessString service = 3;
+}
+
+message InvalidCursorError {
+  required InvalidCursorError__tag _tag = 1;
+  required LosslessString message = 2;
+}
+
+message ProviderRequest_CostCoverage {
+  required uint64 pricedRequests = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.CostCoverage" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 unpricedRequests = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.CostCoverage" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message Skill_Conflicts {
+  required Skill_Conflicts_skills skills = 1;
+  required Skill_Conflicts_instructions instructions = 2;
+}
+
+message Skill_Conflicts_skills {
+  repeated LosslessString items = 1;
+}
+
+message Skill_Conflicts_instructions {
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/skill.ts#Skill.Conflicts" }];
+}
+
+message ProviderRequest_Summary {
+  required uint64 logical = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Summary" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 physical = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Summary" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 helpers = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Summary" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 continued = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Summary" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 fallback = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Summary" integer_min: "0" integer_max: "9007199254740991" }];
+  optional bool cacheReadReported = 6;
+  optional double cost = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Summary" }];
+  optional ProviderRequest_Summary_models models = 8;
+  required TokenUsage_Info tokens = 9;
+  optional ProviderRequest_Summary_latestInvalidation latestInvalidation = 10;
+  optional LosslessString latestNamespace = 11 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Summary" utf16_min: 8 utf16_max: 8 }];
+  optional ProviderRequest_Timing latestTiming = 12;
+}
+
+message ProviderRequest_Summary_models {
+  repeated ProviderRequest_ModelSpend items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Summary" }];
+}
+
+message ProviderRequest_ModelSpend {
+  required Model_Ref model = 1;
+  required uint64 requests = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ModelSpend" integer_min: "0" integer_max: "9007199254740991" }];
+  required TokenUsage_Info tokens = 3;
+  optional bool cacheReadReported = 4;
+  optional double cost = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ModelSpend" }];
+  optional ProviderRequest_ModelSpend_costProvenance costProvenance = 6;
+}
+
+message TokenUsage_Info {
+  required double input = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/token-usage.ts#TokenUsage.Info" }];
+  required double output = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/token-usage.ts#TokenUsage.Info" }];
+  required double reasoning = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/token-usage.ts#TokenUsage.Info" }];
+  required TokenUsage_Info_cache cache = 4;
+}
+
+message TokenUsage_Info_cache {
+  required double read = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/token-usage.ts#TokenUsage.Info" }];
+  required double write = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/token-usage.ts#TokenUsage.Info" }];
+}
+
+message ProviderRequest_Timing {
+  optional uint64 firstOutputMs = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Timing" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 totalMs = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Timing" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 retryWaitMs = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Timing" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 promptEvalDurationNs = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Timing" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 generationDurationNs = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Timing" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 observedGenerationDurationNs = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Timing" integer_min: "1" integer_max: "9007199254740991" }];
+  optional uint64 generatedTokens = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Timing" integer_min: "1" integer_max: "9007199254740991" }];
+  optional uint64 estimatedTokens = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Timing" integer_min: "1" integer_max: "9007199254740991" }];
+  optional uint64 estimatedGenerationDurationNs = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Timing" integer_min: "1" integer_max: "9007199254740991" }];
+  optional ProviderRequest_Timing_receivedOutput receivedOutput = 11;
+  optional uint64 loadDurationNs = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Timing" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message ProviderRequest_Timing_receivedOutput {
+  required uint64 estimatedTokens = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Timing" integer_min: "1" integer_max: "9007199254740991" }];
+  required uint64 durationNs = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Timing" integer_min: "1" integer_max: "9007199254740991" }];
+}
+
+message ProviderRequest_Report {
+  required ProviderRequest_Report_group group = 1;
+  required ProviderRequest_Report_rows rows = 2;
+  required ProviderRequest_ReportMetrics total = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportMetrics" }];
+  required uint64 rowCount = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Report" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 nextOffset = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Report" integer_min: "0" integer_max: "9007199254740991" }];
+  optional ProviderRequest_Speed speed = 6;
+}
+
+message ProviderRequest_Report_rows {
+  repeated ProviderRequest_ReportRow items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Report" }];
+}
+
+message ProviderRequest_ReportRow {
+  required LosslessString key = 1;
+  required LosslessString label = 2;
+  optional Model_Ref model = 13;
+  optional ProviderRequest_ReportDimensions dimensions = 14;
+  required uint64 logical = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportRow" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 physical = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportRow" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 helpers = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportRow" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 continued = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportRow" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 fallback = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportRow" integer_min: "0" integer_max: "9007199254740991" }];
+  optional ProviderRequest_CostCoverage costCoverage = 15;
+  required TokenUsage_Info tokens = 8;
+  optional double cost = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportRow" }];
+  optional ProviderRequest_ReportRow_costProvenance costProvenance = 10;
+  optional bool cacheReadReported = 11;
+  optional ProviderRequest_Outcomes outcomes = 16;
+  optional ProviderRequest_Speed speed = 12;
+  optional double concurrency = 17 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportRow" }];
+}
+
+message ProviderRequest_ReportDimensions {
+  oneof kind {
+    ProviderRequest_ReportDimensionsValue1 value_1 = 1;
+    ProviderRequest_ReportDimensionsValue2 value_2 = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensions" }];
+    ProviderRequest_ReportDimensionsValue3 value_3 = 3;
+    ProviderRequest_ReportDimensionsValue4 value_4 = 4;
+    ProviderRequest_ReportDimensionsValue5 value_5 = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensions" }];
+    ProviderRequest_ReportDimensionsValue6 value_6 = 6;
+    ProviderRequest_ReportDimensionsValue7 value_7 = 7;
+  }
+}
+
+message ProviderRequest_ReportDimensionsValue1 {
+  required ProviderRequest_ReportDimensionsValue1_group group = 1;
+  required LosslessString providerID = 2;
+}
+
+message ProviderRequest_ReportDimensionsValue2 {
+  required ProviderRequest_ReportDimensionsValue2_group group = 1;
+  required LosslessString providerID = 2;
+  optional LosslessString profile = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensions" utf16_min: 1 }];
+  required ProviderRequest_ReportDimensionsValue2_profileState profileState = 4;
+  required LosslessString modelID = 5;
+}
+
+message ProviderRequest_ReportDimensionsValue3 {
+  required ProviderRequest_ReportDimensionsValue3_group group = 1;
+  required LosslessString providerID = 2;
+  required LosslessString modelID = 3;
+}
+
+message ProviderRequest_ReportDimensionsValue4 {
+  required ProviderRequest_ReportDimensionsValue4_group group = 1;
+  required LosslessString modelID = 2;
+}
+
+message ProviderRequest_ReportDimensionsValue5 {
+  required ProviderRequest_ReportDimensionsValue5_group group = 1;
+  required LosslessString providerID = 2;
+  optional LosslessString profile = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensions" utf16_min: 1 }];
+  required ProviderRequest_ReportDimensionsValue5_profileState profileState = 4;
+}
+
+message ProviderRequest_ReportDimensionsValue6 {
+  required ProviderRequest_ReportDimensionsValue6_group group = 1;
+  optional UsageAnchor_Ref anchor = 2;
+  required ProviderRequest_ReportDimensionsValue6_attribution attribution = 3;
+}
+
+message UsageAnchor_Ref {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-anchor.ts#UsageAnchor.Ref" }];
+  required LosslessString inputID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-anchor.ts#UsageAnchor.Ref" }];
+}
+
+message ProviderRequest_ReportDimensionsValue7 {
+  required ProviderRequest_ReportDimensionsValue7_group group = 1;
+  optional LosslessString sessionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensions" }];
+  required ProviderRequest_ReportDimensionsValue7_attribution attribution = 3;
+}
+
+message ProviderRequest_Outcomes {
+  required uint64 completed = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Outcomes" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 failed = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Outcomes" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 cancelled = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Outcomes" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message ProviderRequest_Speed {
+  required uint64 generationSamples = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" integer_min: "0" integer_max: "9007199254740991" }];
+  optional double generationP50TokensPerSecond = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" }];
+  optional double generationP90TokensPerSecond = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" }];
+  optional double generationP95TokensPerSecond = 12 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" }];
+  optional double meanTokensPerSecond = 13 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" }];
+  required uint64 providerTimedSamples = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 observedSamples = 11 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 firstOutputP50Ms = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 firstOutputP95Ms = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 firstOutputP99Ms = 14 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 totalP50Ms = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 totalP95Ms = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 totalP99Ms = 15 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" integer_min: "0" integer_max: "9007199254740991" }];
+  optional double outputTokensPerSecond = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" }];
+  required uint64 samples = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message ProviderRequest_ReportMetrics {
+  required uint64 logical = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportMetrics" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 physical = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportMetrics" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 helpers = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportMetrics" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 continued = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportMetrics" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 fallback = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportMetrics" integer_min: "0" integer_max: "9007199254740991" }];
+  optional ProviderRequest_CostCoverage costCoverage = 10;
+  required TokenUsage_Info tokens = 6;
+  optional double cost = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportMetrics" }];
+  optional ProviderRequest_ReportMetrics_costProvenance costProvenance = 8;
+  optional bool cacheReadReported = 9;
+  optional ProviderRequest_Outcomes outcomes = 11;
+}
+
+message SessionUsageReportQuery {
+  required SessionUsageReportQuery_group group = 1;
+  optional LosslessString providerID = 2;
+  optional LosslessString profile = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#SessionUsageReportQuery" utf16_min: 1 }];
+  optional LosslessString modelID = 4;
+  optional LosslessString selectedEffort = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#SessionUsageReportQuery" utf16_min: 1 }];
+  optional LosslessString timeZone = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#SessionUsageReportQuery" utf16_min: 1 utf16_max: 128 }];
+  optional uint64 from = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#SessionUsageReportQuery" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 to = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#SessionUsageReportQuery" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 offset = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#SessionUsageReportQuery" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 limit = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#SessionUsageReportQuery" integer_min: "1" integer_max: "200" }];
+  optional SessionUsageReportQuery_sort sort = 11;
+  optional SessionUsageReportQuery_order order = 12;
+}
+
+enum SessionNotFoundError__tag {
+  SESSIONNOTFOUNDERROR__TAG_SESSIONNOTFOUNDERROR = 1 [(ycoding.v5.domain_label) = "SessionNotFoundError"];
+}
+
+enum ForbiddenError__tag {
+  FORBIDDENERROR__TAG_FORBIDDENERROR = 1 [(ycoding.v5.domain_label) = "ForbiddenError"];
+}
+
+enum Pty_status {
+  PTY_STATUS_RUNNING = 1 [(ycoding.v5.domain_label) = "running"];
+  PTY_STATUS_EXITED = 2 [(ycoding.v5.domain_label) = "exited"];
+}
+
+enum Pty_exitReason {
+  PTY_EXITREASON_EXIT = 1 [(ycoding.v5.domain_label) = "exit"];
+  PTY_EXITREASON_TIMEOUT = 2 [(ycoding.v5.domain_label) = "timeout"];
+  PTY_EXITREASON_TERMINATED = 3 [(ycoding.v5.domain_label) = "terminated"];
+}
+
+enum Pty_control_owner {
+  PTY_CONTROL_OWNER_AGENT = 1 [(ycoding.v5.domain_label) = "agent"];
+  PTY_CONTROL_OWNER_USER = 2 [(ycoding.v5.domain_label) = "user"];
+  PTY_CONTROL_OWNER_PAUSED = 3 [(ycoding.v5.domain_label) = "paused"];
+}
+
+enum Shell_Info_status {
+  SHELL_INFO_STATUS_RUNNING = 1 [(ycoding.v5.domain_label) = "running"];
+  SHELL_INFO_STATUS_EXITED = 2 [(ycoding.v5.domain_label) = "exited"];
+  SHELL_INFO_STATUS_TIMEOUT = 3 [(ycoding.v5.domain_label) = "timeout"];
+  SHELL_INFO_STATUS_MEMORY_LIMIT = 4 [(ycoding.v5.domain_label) = "memory-limit"];
+  SHELL_INFO_STATUS_KILLED = 5 [(ycoding.v5.domain_label) = "killed"];
+  reserved 6;
+  reserved "SHELL_INFO_STATUS_QUEUED";
+}
+
+enum FileDiff_Info_status {
+  FILEDIFF_INFO_STATUS_ADDED = 1 [(ycoding.v5.domain_label) = "added"];
+  FILEDIFF_INFO_STATUS_DELETED = 2 [(ycoding.v5.domain_label) = "deleted"];
+  FILEDIFF_INFO_STATUS_MODIFIED = 3 [(ycoding.v5.domain_label) = "modified"];
+}
+
+message SessionNotFoundError {
+  required SessionNotFoundError__tag _tag = 1;
+  required LosslessString sessionID = 2;
+  required LosslessString message = 3;
+}
+
+message ForbiddenError {
+  required ForbiddenError__tag _tag = 1;
+  required LosslessString message = 2;
+}
+
+message Location_Ref {
+  required LosslessString directory = 1;
+  optional LosslessString workspaceID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/location.ts#Location.Ref" }];
+}
+
+message Pty {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/pty.ts#Pty.Info" }];
+  required LosslessString title = 2;
+  required LosslessString command = 3;
+  required Pty_args args = 4;
+  required LosslessString cwd = 5;
+  required LosslessString sessionID = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/pty.ts#Pty.Info" }];
+  required Pty_status status = 7;
+  required uint64 pid = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/pty.ts#Pty.Info" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 exitCode = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/pty.ts#Pty.Info" integer_min: "0" integer_max: "9007199254740991" }];
+  optional Pty_exitReason exitReason = 10;
+  required uint64 generation = 11 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/pty.ts#Pty.Info" integer_min: "1" integer_max: "9007199254740991" }];
+  required Pty_Size size = 12;
+  required Pty_control control = 13;
+  required Pty_output output = 14;
+  required Pty_limits limits = 15;
+}
+
+message Pty_args {
+  repeated LosslessString items = 1;
+}
+
+message Pty_Size {
+  required uint64 rows = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/pty.ts#Pty.Size" integer_min: "1" integer_max: "200" }];
+  required uint64 cols = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/pty.ts#Pty.Size" integer_min: "1" integer_max: "500" }];
+}
+
+message Pty_control {
+  required Pty_control_owner owner = 1;
+  required uint64 fence = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/pty.ts#Pty.Info" integer_min: "1" integer_max: "9007199254740991" }];
+}
+
+message Pty_output {
+  required uint64 startOffset = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/pty.ts#Pty.Info" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 endOffset = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/pty.ts#Pty.Info" integer_min: "0" integer_max: "9007199254740991" }];
+  required bool truncated = 3;
+}
+
+message Pty_limits {
+  required uint64 maxRuntimeSeconds = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/pty.ts#Pty.Info" integer_min: "1" integer_max: "7200" }];
+  required uint64 maxRetainedBytes = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/pty.ts#Pty.Info" integer_min: "1" integer_max: "2097152" }];
+  required uint64 maxInputBytes = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/pty.ts#Pty.Info" integer_min: "1" integer_max: "65536" }];
+}
+
+message Shell_Info {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/shell.ts#Shell.Info" }];
+  required Shell_Info_status status = 2;
+  required LosslessString command = 3;
+  required LosslessString cwd = 4;
+  required LosslessString shell = 5;
+  required LosslessString file = 6;
+  optional uint64 pid = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/shell.ts#Shell.Info" integer_min: "0" integer_max: "9007199254740991" }];
+  optional double exit = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/shell.ts#Shell.Info" }];
+  required Shell_Info_metadata metadata = 9;
+  optional LosslessString toolCallID = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/shell.ts#Shell.Info" utf16_min: 1 }];
+  required Shell_Info_time time = 11;
+  reserved 12;
+  reserved "queuePosition";
+}
+
+message Shell_Info_metadata {
+  repeated Shell_Info_metadataEntry entries = 1;
+}
+
+message Shell_Info_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message Shell_Info_time {
+  required double started = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/shell.ts#Shell.Info" }];
+  optional double completed = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/shell.ts#Shell.Info" }];
+  reserved 3;
+  reserved "queued";
+}
+
+message FileDiff_Info {
+  required LosslessString file = 1;
+  required LosslessString patch = 2;
+  required uint64 additions = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/file-diff.ts#FileDiff.Info" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 deletions = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/file-diff.ts#FileDiff.Info" integer_min: "0" integer_max: "9007199254740991" }];
+  required FileDiff_Info_status status = 5;
+}
+
+message BackendPaths {
+  required LosslessString home = 1;
+  required LosslessString state = 2;
+  required LosslessString worktree = 3;
+  required LosslessString config = 4;
+}

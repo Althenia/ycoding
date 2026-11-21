@@ -254,7 +254,7 @@ test("prompt receipts preserve queue and read facts over late send outcomes", ()
   }
 })
 
-test("the latest user prompt keeps a processing receipt while the session runs", () => {
+test("the latest user prompt keeps a processing receipt until it is read", () => {
   const messages = [{ kind: "user", id: "older" }, { kind: "assistant", id: "reply" }, { kind: "user", id: "latest" }]
   expect(latestPromptProcessing("running", messages, "latest")).toBe(true)
   expect(latestPromptProcessing("running", messages, "older")).toBe(false)

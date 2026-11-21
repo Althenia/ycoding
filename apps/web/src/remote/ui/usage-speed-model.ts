@@ -77,7 +77,7 @@ export function generationFigures(live: UsageLive, monthly: UsageReport | undefi
     { id: "cost", label: "Estimated cost", value: total === undefined ? "" : reportCostText(total),
       note: total?.costProvenance === "current_catalog" ? "Estimate at current catalog prices" : total?.costProvenance === "recorded" ? "Recorded provider cost" : "An estimate, not a bill" },
     { id: "outcomes", label: "Request outcomes", value: outcomes === undefined ? "" : `${grouped.format(outcomes.completed)} completed · ${grouped.format(outcomes.failed)} failed · ${grouped.format(outcomes.cancelled)} cancelled`,
-      note: outcomes === undefined ? "No outcome data recorded" : finished === 0 ? "No finished requests" : `${oneDecimal.format(outcomes.failed / finished * 100)}% failed` },
+      note: outcomes === undefined ? "No outcome data recorded" : finished !== total!.logical ? "Incomplete outcome coverage" : finished === 0 ? "No finished requests" : `${oneDecimal.format(outcomes.failed / finished * 100)}% failed` },
   ]
 }
 
@@ -109,7 +109,7 @@ export function trendDays(report: UsageReport | undefined, now: number, timeZone
       key: day.key, label: day.label, requests: row?.physical ?? 0,
       input: row?.tokens.input ?? 0, output: row?.tokens.output ?? 0, reasoning: row?.tokens.reasoning ?? 0,
       cacheRead: row?.tokens.cache.read ?? 0, cacheWrite: row?.tokens.cache.write ?? 0,
-      ...(outcomes === undefined || finished === 0 ? {} : { errorRate: outcomes.failed / finished * 100 }),
+      ...(outcomes === undefined || finished === 0 || finished !== row!.logical ? {} : { errorRate: outcomes.failed / finished * 100 }),
       ...(row?.speed?.firstOutputP50Ms === undefined ? {} : { ttftP50: row.speed.firstOutputP50Ms }),
       ...(row?.speed?.firstOutputP95Ms === undefined ? {} : { ttftP95: row.speed.firstOutputP95Ms }),
       ...(row?.speed?.totalP50Ms === undefined ? {} : { totalP50: row.speed.totalP50Ms }),

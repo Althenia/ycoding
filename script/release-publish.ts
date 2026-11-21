@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import path from "node:path"
+import { releaseArchives } from "./release-archive"
 
 export type PublishInput = {
   readonly apiURL: string
@@ -17,6 +18,8 @@ export type PublishInput = {
 type RemoteAsset = { id: number; name: string; state: string; size: number; digest: string | null }
 type RemoteRelease = { id: number; name: string | null; body: string | null; draft: boolean; prerelease: boolean }
 type Rename = { id: number; from: string; to: string }
+type LocalAsset = { name: string; content: Uint8Array; sha256: string; size: number }
+type OriginalAsset = RemoteAsset & { sha256: string }
 
 export type Manifest = {
   repository: string
@@ -69,10 +72,12 @@ export async function publish(input: PublishInput) {
   }
   const before = await github.assets(release.id)
   manifest.original = before.map(describe)
-  const leftovers = before.filter((asset) => asset.name.startsWith("staged-") || asset.name.startsWith(`prior-${input.run}-`))
-  if (leftovers.length > 0) {
+  let originals: OriginalAsset[]
+  try {
+    originals = await preflight(github, input, release, before, local)
+  } catch (error) {
     manifest.status = "refused"
-    manifest.error = `Release has unfinished uploads or conflicting archive names: ${leftovers.map((asset) => asset.name).join(", ")}`
+    manifest.error = error instanceof Error ? error.message : String(error)
     manifest.final = manifest.original
     await save()
     return { status: manifest.status, manifest }
@@ -86,9 +91,9 @@ export async function publish(input: PublishInput) {
   await save()
 
   const failure = await stage(github, release.id, local, manifest, save)
-    .then(() => swap(github, before, manifest, save))
+    .then(() => swap(github, originals, manifest, save))
     .then(() => metadata(github, release.id, input))
-    .then(() => verify(github, release.id, input, manifest))
+    .then(() => verify(github, release.id, input, originals, manifest))
     .then(
       () => undefined,
       (error: unknown) => (error instanceof Error ? error.message : String(error)),
@@ -101,7 +106,7 @@ export async function publish(input: PublishInput) {
   }
   manifest.error = failure
   await save()
-  const restored = await restore(github, release, before, manifest).then(
+  const restored = await restore(github, release, originals, manifest).then(
     () => undefined,
     (error: unknown) => (error instanceof Error ? error.message : String(error)),
   )
@@ -112,10 +117,95 @@ export async function publish(input: PublishInput) {
   return { status: manifest.status, manifest }
 }
 
+async function preflight(
+  github: ReturnType<typeof client>,
+  input: PublishInput,
+  release: RemoteRelease,
+  before: ReadonlyArray<RemoteAsset>,
+  local: ReadonlyArray<LocalAsset>,
+) {
+  if (!/^[1-9]\d*-[1-9]\d*$/.test(input.run)) throw new Error("Publication run must include a numeric run ID and attempt")
+  const names = before.map((asset) => asset.name)
+  if (new Set(names).size !== names.length || new Set(before.map((asset) => asset.id)).size !== before.length)
+    throw new Error("Release has duplicate asset identities")
+  const staged = names.filter((name) => name.startsWith("staged-"))
+  if (staged.length) throw new Error(`Release has residual staged assets: ${staged.join(", ")}`)
+  const historical = before.filter((asset) => asset.name.startsWith("prior-"))
+  if (historical.length) {
+    const version = input.tag.slice(1)
+    const covered = [...releaseArchives(version), "LICENSE", "NOTICE"]
+    const checksumName = `ycoding-${version}-checksums.txt`
+    const canonical = [...covered, `${input.tag}.md`, checksumName].sort()
+    const complete = (files: readonly { name: string }[]) =>
+      JSON.stringify(files.map((file) => file.name).sort()) === JSON.stringify(canonical)
+    const current = before.filter((asset) => !asset.name.startsWith("prior-"))
+    if (release.draft || release.prerelease || !complete(current) || !complete(local))
+      throw new Error("Retained backups require a complete public release and a complete successor")
+    validateChecksums(local.find((file) => file.name === checksumName)!.content, local, covered, "successor")
+    const groups = new Map<string, RemoteAsset[]>()
+    for (const asset of historical) {
+      const match = /^prior-([1-9]\d*-[1-9]\d*)-(.+)$/.exec(asset.name)
+      if (!match || match[1] === input.run) throw new Error(`Ambiguous retained asset: ${asset.name}`)
+      const group = groups.get(match[1]!) ?? []
+      group.push({ ...asset, name: match[2]! })
+      groups.set(match[1]!, group)
+    }
+    for (const [run, group] of groups)
+      if (!complete(group)) throw new Error(`Retained asset set ${run} is incomplete`)
+    return (await Promise.all([["current", current] as const, ...groups].map(async ([label, group]) => {
+      const snapshots = await snapshotAssets(github, group)
+      const checksum = snapshots.find((asset) => asset.name === checksumName)!
+      const content = await github.download(checksum.id)
+      if (content.byteLength !== checksum.size || sha256(content) !== checksum.sha256)
+        throw new Error(`Checksum asset for ${label} does not match its recorded digest and size`)
+      validateChecksums(content, snapshots, covered, label)
+      return snapshots.map((asset) => label === "current" ? asset : { ...asset, name: `prior-${label}-${asset.name}` })
+    }))).flat()
+  }
+  return snapshotAssets(github, before)
+}
+
+async function snapshotAssets(github: ReturnType<typeof client>, assets: ReadonlyArray<RemoteAsset>) {
+  return Promise.all(assets.map(async (asset) => {
+    if (asset.state !== "uploaded" || asset.size <= 0) throw new Error(`Release asset is not fully uploaded: ${asset.name}`)
+    return { ...asset, sha256: await remoteSha256(github, asset) }
+  }))
+}
+
+function validateChecksums(content: Uint8Array, assets: readonly { name: string; sha256: string }[], covered: readonly string[], label: string) {
+  const lines = new TextDecoder().decode(content).replace(/\r?\n$/, "").split(/\r?\n/).sort()
+  const expected = covered.map((name) => `${assets.find((asset) => asset.name === name)!.sha256}  ${name}`).sort()
+  if (JSON.stringify(lines) !== JSON.stringify(expected)) throw new Error(`Checksum set for ${label} does not match its assets`)
+}
+
+async function remoteSha256(github: ReturnType<typeof client>, asset: RemoteAsset) {
+  if (asset.digest !== null) {
+    if (!/^sha256:[0-9a-f]{64}$/.test(asset.digest)) throw new Error(`Invalid digest for ${asset.name}`)
+    return asset.digest.slice(7)
+  }
+  const content = await github.download(asset.id)
+  if (content.byteLength !== asset.size) throw new Error(`Downloaded ${asset.name} does not match its recorded size`)
+  return sha256(content)
+}
+
+async function verifyOriginals(
+  github: ReturnType<typeof client>,
+  assets: ReadonlyArray<RemoteAsset>,
+  before: ReadonlyArray<OriginalAsset>,
+  nameFor: (asset: OriginalAsset) => string,
+) {
+  for (const original of before) {
+    const name = nameFor(original)
+    const asset = assets.find((candidate) => candidate.name === name)
+    if (!asset || asset.id !== original.id || asset.size !== original.size || asset.state !== original.state ||
+      await remoteSha256(github, asset) !== original.sha256) throw new Error(`Asset ${name} does not match original asset ${original.id}`)
+  }
+}
+
 async function stage(
   github: ReturnType<typeof client>,
   releaseID: number,
-  local: ReadonlyArray<{ name: string; content: Uint8Array; sha256: string; size: number }>,
+  local: ReadonlyArray<LocalAsset>,
   manifest: Manifest,
   save: () => Promise<number>,
 ) {
@@ -134,9 +224,9 @@ async function stage(
     const asset = current.find((candidate) => candidate.id === entry.id)
     if (!asset || asset.name !== entry.staged || asset.state !== "uploaded" || asset.size !== entry.size)
       throw new Error(`Staged ${entry.name} does not match the prepared file`)
-    const remote = asset.digest ?? `sha256:${sha256(await github.download(asset.id))}`
-    if (remote !== `sha256:${entry.sha256}`)
-      throw new Error(`Staged ${entry.name} has digest ${remote}, expected sha256:${entry.sha256}`)
+    const remote = await remoteSha256(github, asset)
+    if (remote !== entry.sha256)
+      throw new Error(`Staged ${entry.name} has digest sha256:${remote}, expected sha256:${entry.sha256}`)
   }
 }
 
@@ -174,25 +264,30 @@ async function metadata(github: ReturnType<typeof client>, releaseID: number, in
     })
 }
 
-async function verify(github: ReturnType<typeof client>, releaseID: number, input: PublishInput, manifest: Manifest) {
+async function verify(
+  github: ReturnType<typeof client>, releaseID: number, input: PublishInput,
+  before: ReadonlyArray<OriginalAsset>, manifest: Manifest,
+) {
   const release = await github.release()
   if (release.name !== input.title || release.body !== input.notes || release.draft || release.prerelease)
     throw new Error("Release metadata does not match the published title and notes")
   const assets = await github.assets(releaseID)
   for (const entry of manifest.staged) {
     const asset = assets.find((candidate) => candidate.name === entry.name)
-    if (!asset || asset.id !== entry.id)
+    if (!asset || asset.id !== entry.id || asset.state !== "uploaded" || asset.size !== entry.size)
       throw new Error(`Public ${entry.name} does not point at the verified staged asset`)
-    if (asset.digest !== null && asset.digest !== `sha256:${entry.sha256}`)
+    if (await remoteSha256(github, asset) !== entry.sha256)
       throw new Error(`Public ${entry.name} digest changed after the swap`)
   }
+  await verifyOriginals(github, assets, before, (asset) => manifest.renames.find((rename) => rename.id === asset.id)?.to ?? asset.name)
+  if (assets.length !== before.length + manifest.staged.length) throw new Error("Release has unexpected assets after publication")
   if ((await github.latestID()) !== releaseID) throw new Error("Release is not the latest release after publication")
 }
 
 async function restore(
   github: ReturnType<typeof client>,
   release: RemoteRelease,
-  before: ReadonlyArray<RemoteAsset>,
+  before: ReadonlyArray<OriginalAsset>,
   manifest: Manifest,
 ) {
   for (const rename of manifest.renames.toReversed())
@@ -214,13 +309,11 @@ async function restore(
   if (latest !== undefined && (await github.latestID()) !== latest) await github.edit(latest, { make_latest: "true" })
   for (const entry of manifest.staged.filter((staged) => staged.id !== undefined)) await github.remove(entry.id!)
   const assets = await github.assets(release.id)
-  for (const asset of before) {
-    const found = assets.find((candidate) => candidate.name === asset.name)
-    if (!found || found.id !== asset.id)
-      throw new Error(`Public ${asset.name} does not point at original asset ${asset.id}`)
-  }
+  await verifyOriginals(github, assets, before, (asset) => asset.name)
+  if (assets.length !== before.length) throw new Error("Release has unexpected assets after restoration")
   const after = await github.release()
-  if (after.name !== release.name || after.body !== release.body) throw new Error("Release metadata was not restored")
+  if (after.name !== release.name || after.body !== release.body || after.draft !== release.draft || after.prerelease !== release.prerelease ||
+    latest !== undefined && (await github.latestID()) !== latest) throw new Error("Release metadata was not restored")
 }
 
 function client(input: PublishInput) {

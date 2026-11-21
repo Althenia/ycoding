@@ -1,8 +1,7 @@
 import { expect, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
 import { Effect, FileSystem } from "effect"
-import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../src/frontend-paths"
 import { createEventStream, createFetch, directory } from "./fixture/tui-client"
 
 test("the command palette refreshes models and providers for the current location", async () => {
@@ -25,7 +24,7 @@ test("the command palette refreshes models and providers for the current locatio
     refreshes.push(url.searchParams.get("location[directory]") ?? "")
     return new Response(null, { status: 204 })
   }, events)
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  const server = calls.listen()
   const waitForFrame = async (text: string) => {
     const deadline = Date.now() + 10_000
     while (!setup.captureCharFrame().includes(text) && Date.now() < deadline) {
@@ -44,7 +43,7 @@ test("the command palette refreshes models and providers for the current locatio
         args: {},
         terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
         log: () => {},
-      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
+      }).pipe(Effect.provide(FrontendPaths.layer), Effect.provide(FileSystem.layerNoop({}))),
     )
     await ready
     await waitForFrame("Message YCoding…")

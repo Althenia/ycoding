@@ -9,8 +9,8 @@ import { startRelayDouble, waitFor } from "./relay-double"
 const snapshot = { providerID: "openai", label: "Codex", status: "available", source: "provider_api", stability: "stable", updatedAt: 1000, windows: [{ id: "week", label: "Weekly", unit: "percent", used: 40, limit: 100 }] } as const
 const dayReport = { group: "day" as const, limit: 30 }
 
-async function connected(relay: Awaited<ReturnType<typeof startRelayDouble>>) {
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }) })
+async function connected(relay: Awaited<ReturnType<typeof startRelayDouble>>, requestTimeoutMs?: number) {
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers, ...(requestTimeoutMs === undefined ? {} : { requestTimeoutMs }) }) })
   await store.load()
   await waitFor(() => store.state().transport.kind === "open")
   return { store, ...queriesOf(store) }
@@ -27,10 +27,10 @@ test("usage reads are cached per input, refreshed explicitly, and removed on dev
     await fetch(queries.usageReport(scope(), true, dayReport))
     await fetch(queries.usageReport(scope(), true, { limit: 30, group: "day" }))
     expect(usage<{ rowCount: number }>(remoteKeys.usageReport(scope(), dayReport)).data?.rowCount).toBe(1)
-    expect(relay.requests.filter((request) => request.operation === "usage.providers")).toHaveLength(1)
+    expect(relay.requests.filter((request) => request.operation === "providerUsage.list")).toHaveLength(1)
     expect(relay.requests.filter((request) => request.operation === "usage.report")).toHaveLength(1)
     await queries.refreshUsage(scope())
-    expect(relay.requests.filter((request) => request.operation === "usage.providers").at(-1)?.input).toEqual({ refresh: true })
+    expect(relay.requests.filter((request) => request.operation === "providerUsage.list").at(-1)?.input).toEqual({ refresh: true })
     expect(scoped()).toHaveLength(3)
     store.connect("dev_other")
     expect(scoped()).toHaveLength(0)
@@ -66,13 +66,13 @@ test("a connection the browser replaces or disconnects stops reporting open", as
   } finally { store.dispose(); await relay.stop() }
 })
 
-test("old connectors expose unsupported usage rather than empty metrics", async () => {
-  const relay = await startRelayDouble({ handler: (request) => request.operation.startsWith("usage.")
-    ? { ok: false, code: "unknown_operation", message: "Unknown operation" } : "default" })
+test("a failed usage read is an error rather than empty metrics", async () => {
+  const relay = await startRelayDouble({ handler: (request) => request.operation.startsWith("usage.") || request.operation.startsWith("providerUsage.")
+    ? { ok: false, code: "invalid_message", message: "Unknown operation" } : "default" })
   const { store, queries, scope, usage } = await connected(relay)
   try {
-    await store.queryClient.fetchQuery(queries.usageProviders(scope(), true))
-    expect(usage(remoteKeys.usageProviders(scope())).status).toBe("unsupported")
+    await store.queryClient.fetchQuery(queries.usageProviders(scope(), true)).catch(() => undefined)
+    expect(usage(remoteKeys.usageProviders(scope())).status).toBe("error")
   } finally { store.dispose(); await relay.stop() }
 })
 
@@ -120,15 +120,14 @@ test("a report in flight when the socket drops is retried once after reconnect a
 test("agent re-advertisement retries pending read-only Usage panels once while retaining good quotas", async () => {
   const attempts = new Map<string, number>()
   const relay = await startRelayDouble({ handler: (request) => {
-    if (!request.operation.startsWith("usage.")) return "default"
+    if (!request.operation.startsWith("usage.") && !request.operation.startsWith("providerUsage.")) return "default"
     const key = request.operation === "usage.report" ? `${request.operation}:${request.input?.group}:${request.input?.limit}` : request.operation
     const count = (attempts.get(key) ?? 0) + 1
     attempts.set(key, count)
-    if ((request.operation === "usage.providers" || request.operation === "usage.summary") && count === 1) return "default"
-    return count === (request.operation === "usage.report" ? 1 : 2)
-      ? { ok: false, code: "outcome_unknown", message: "Agent disconnected before settling this request" } : "default"
+    if ((request.operation === "providerUsage.list" || request.operation === "usage.get") && count === 1) return "default"
+    return count === (request.operation === "usage.report" ? 1 : 2) ? "silent" : "default"
   } })
-  const { store, queries, scope, usage } = await connected(relay)
+  const { store, queries, scope, usage } = await connected(relay, 250)
   try {
     const fetch = store.queryClient.fetchQuery.bind(store.queryClient)
     await Promise.all([fetch(queries.usageProviders(scope(), true)), fetch(queries.usageSummary(scope(), true))])
@@ -136,13 +135,13 @@ test("agent re-advertisement retries pending read-only Usage panels once while r
     const reports = [{ group: "day" as const, limit: 30 }, { group: "model" as const, limit: 200 }, { group: "model" as const, limit: 25 }]
     void queries.refreshUsage(scope())
     reports.forEach((input) => { void fetch(queries.usageReport(scope(), true, input)).catch(() => {}) })
-    await waitFor(() => attempts.get("usage.report:model:25") === 1 && attempts.get("usage.providers") === 2 && attempts.get("usage.summary") === 2)
+    await waitFor(() => attempts.get("usage.report:model:25") === 1 && attempts.get("providerUsage.list") === 2 && attempts.get("usage.get") === 2)
     expect(usage(remoteKeys.usageProviders(scope()))).toMatchObject({ status: "loading", data: [snapshot] })
     expect(usage(remoteKeys.usageSummary(scope())).status).toBe("loading")
     expect(reports.map((input) => usage(remoteKeys.usageReport(scope(), input)).status)).toEqual(["loading", "loading", "loading"])
     relay.pushSessions([])
     await waitFor(() => usage(remoteKeys.usageProviders(scope())).status === "ready" && reports.every((input) => usage(remoteKeys.usageReport(scope(), input)).status === "ready"))
-    const settled: [string, number][] = [["usage.providers", 3], ["usage.report:day:30", 2], ["usage.report:model:200", 2], ["usage.report:model:25", 2], ["usage.summary", 3]]
+    const settled: [string, number][] = [["providerUsage.list", 3], ["usage.get", 3], ["usage.report:day:30", 2], ["usage.report:model:200", 2], ["usage.report:model:25", 2]]
     expect([...attempts].sort()).toEqual(settled)
     relay.pushStatus([], [])
     await Bun.sleep(25)
@@ -155,9 +154,9 @@ test("a second unknown Usage outcome becomes an error without another automatic 
   const relay = await startRelayDouble({ handler: (request) => {
     if (request.operation !== "usage.report") return "default"
     reads += 1
-    return reads <= 2 ? { ok: false, code: "outcome_unknown", message: "Agent disconnected before settling this request" } : "default"
+    return reads <= 2 ? "silent" : "default"
   } })
-  const { store, queries, scope, usage, observe } = await connected(relay)
+  const { store, queries, scope, usage, observe } = await connected(relay, 250)
   const reports = () => relay.requests.filter((request) => request.operation === "usage.report")
   const observed = observe(queries.usageReport(scope(), true, dayReport))
   try {
@@ -185,9 +184,9 @@ test("a client reconnect retries an unknown Usage report once without a mounted 
   const relay = await startRelayDouble({ handler: (request) => {
     if (request.operation !== "usage.report") return "default"
     reads += 1
-    return reads === 1 ? { ok: false, code: "outcome_unknown", message: "Agent disconnected before settling this request" } : "default"
+    return reads === 1 ? "silent" : "default"
   } })
-  const { store, queries, scope, usage } = await connected(relay)
+  const { store, queries, scope, usage } = await connected(relay, 250)
   try {
     const pending = store.queryClient.fetchQuery(queries.usageReport(scope(), true, dayReport))
     await waitFor(() => reads === 1)
@@ -208,11 +207,11 @@ test("a recovery frame preceding the unknown settlement still retries once, but 
     reads += 1
     if (reads === 1) {
       await gate.promise
-      return { ok: false, code: "outcome_unknown" as const, message: "Agent disconnected before settling this request" }
+      return "silent" as const
     }
     return "default" as const
   } })
-  const { store, queries, scope, usage } = await connected(relay)
+  const { store, queries, scope, usage } = await connected(relay, 250)
   try {
     const pending = store.queryClient.fetchQuery(queries.usageReport(scope(), true, dayReport))
     await waitFor(() => reads === 1)
@@ -223,9 +222,8 @@ test("a recovery frame preceding the unknown settlement still retries once, but 
     expect(reads).toBe(2)
   } finally { gate.resolve(); store.dispose(); await relay.stop() }
 
-  const pendingRelay = await startRelayDouble({ handler: (request) => request.operation === "usage.report"
-    ? { ok: false, code: "outcome_unknown", message: "Agent disconnected before settling this request" } : "default" })
-  const switching = await connected(pendingRelay)
+  const pendingRelay = await startRelayDouble({ handler: (request) => request.operation === "usage.report" ? "silent" : "default" })
+  const switching = await connected(pendingRelay, 250)
   try {
     const waiting = switching.store.queryClient.fetchQuery(switching.queries.usageReport(switching.scope(), true, dayReport)).catch((error: Error) => error)
     await waitFor(() => pendingRelay.requests.some((request) => request.operation === "usage.report"))
@@ -241,13 +239,13 @@ test("a recovery frame preceding the unknown settlement still retries once, but 
 test("a replaced device cannot publish its usage read, and its late answer never paints for the new device", async () => {
   const gate = Promise.withResolvers<void>()
   const relay = await startRelayDouble({ handler: async (request) => {
-    if (request.operation === "usage.providers") { await gate.promise; return { ok: true, value: { data: [snapshot] } } }
+    if (request.operation === "providerUsage.list") { await gate.promise; return { ok: true, value: { location: { directory: "/work", project: { id: "prj_default", directory: "/work" } }, data: [snapshot] } } }
     return "default"
   } })
   const { store, queries, scope, scoped } = await connected(relay)
   try {
     const pending = store.queryClient.fetchQuery(queries.usageProviders(scope(), true)).catch(() => undefined)
-    await waitFor(() => relay.requests.some((request) => request.operation === "usage.providers"))
+    await waitFor(() => relay.requests.some((request) => request.operation === "providerUsage.list"))
     const before = store.state().generation
     store.connect("dev_other")
     gate.resolve()
@@ -282,7 +280,7 @@ test("reconnect refetches active usage while the previous values stay visible un
   const gate = Promise.withResolvers<void>()
   let reads = 0
   const relay = await startRelayDouble({ handler: async (request) => {
-    if (request.operation !== "usage.providers") return "default" as const
+    if (request.operation !== "providerUsage.list") return "default" as const
     reads += 1
     if (reads === 2) await gate.promise
     return "default" as const
@@ -302,7 +300,7 @@ test("reconnect refetches active usage while the previous values stay visible un
 })
 
 test("unreadable usage stays an error and report paging does not reuse a different input", async () => {
-  const relay = await startRelayDouble({ usageProviders: [{ providerID: "openai", windows: "invalid" }], usageReport: (input) => ({
+  const relay = await startRelayDouble({ usageProviders: [{ providerID: "openai", label: "Codex", status: "available", source: "provider_api", stability: "stable", updatedAt: 9007199254740991, windows: [] }], usageReport: (input) => ({
     group: input?.group, rows: [], total: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
     rowCount: 2, nextOffset: input?.offset === 1 ? undefined : 1,
   }) })

@@ -1,6 +1,6 @@
-import { runRegexProcess } from "@ycoding-ai/core/tool/regex-process"
+import { runPrivateEntry } from "../private-entry"
 
-if (!runRegexProcess()) {
+if (!await runPrivateEntry()) {
   await import("./plugin-runtime.promise")
   await import("./plugin-runtime.effect")
 

@@ -8,6 +8,7 @@ import { Credential } from "@ycoding-ai/core/credential"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Integration } from "@ycoding-ai/core/integration"
 import { Location } from "@ycoding-ai/core/location"
+import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { Permission } from "@ycoding-ai/core/permission"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
@@ -167,6 +168,15 @@ function createHarness(options: {
           Layer.provide(IntegrationHandler),
           Layer.provide(
             Layer.mergeAll(
+              Layer.succeed(
+                LocationServiceMap.Service,
+                {
+                  get: () => Layer.succeedContext(locationContext),
+                  contextEffect: () => Effect.succeed(locationContext),
+                  invalidate: () => Effect.void,
+                  loaded: () => Effect.succeed([]),
+                } as unknown as LocationServiceMap.Interface,
+              ),
               Layer.succeedContext(locationContext),
               Layer.succeed(
                 LocationMiddleware,

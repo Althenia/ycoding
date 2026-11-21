@@ -34,6 +34,7 @@ type Options = {
   readonly env?: NodeJS.ProcessEnv
   readonly cwd?: string
   readonly fetch?: typeof globalThis.fetch
+  readonly socket?: Parameters<typeof connectNative>[1]["socket"]
   readonly launch?: Launch
   readonly onEvent?: (event: YCodingEvent) => void | Promise<void>
   readonly onState?: (state: ConnectionState) => void
@@ -598,6 +599,8 @@ export class BackendController {
         const native = await connectNative(endpoint, {
           signal: attempt.abort.signal,
           fetch: this.options.fetch,
+          socket: this.options.socket,
+          directory: this.options.cwd,
           version: selection.mode === "own" ? binary.version : undefined,
           log: this.options.log,
           onEvent: (event) => active() ? this.options.onEvent?.(event) : undefined,

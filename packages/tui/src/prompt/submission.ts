@@ -62,7 +62,12 @@ type Submission = {
 }
 
 export function createPromptSubmissions(input: {
-  api: () => YCodingClient
+  api: () => {
+    session: Pick<
+      YCodingClient["session"],
+      "create" | "autonomy" | "daybreak" | "skill" | "get" | "switchAgent" | "revert" | "switchModel" | "synthetic" | "interrupt" | "command" | "prompt"
+    >
+  }
   admitted: (pending: SessionPendingInfo) => void
   created?: (session: SessionInfo) => void
   promptAdmitted?: (durationMs: number) => void
@@ -281,7 +286,7 @@ export function createPromptSubmissions(input: {
           phase: phase.type === "admission" ? "Sending prompt" : "Prompt admitted · waking session",
         }),
       onAdmitted: async (admitted) => {
-        entry.admitted = admitted
+        update(entry, { admitted })
         entry.resolved = undefined
         payload.files = projectedPromptInput(admitted.data).files?.map((file, index) => ({
           ...file,
@@ -345,7 +350,7 @@ export function createPromptSubmissions(input: {
     )
     if (!entry) return
     const confirmed = entry.admitted !== undefined
-    entry.admitted = pending
+    update(entry, { admitted: pending })
     gates.get(`${pending.sessionID}:${pending.id}`)?.(pending)
     if (entry.state === "attention" && !confirmed) {
       update(entry, { state: "queued", phase: "Prompt admitted" })

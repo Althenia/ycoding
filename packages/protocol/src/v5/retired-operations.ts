@@ -1,0 +1,17 @@
+export const retiredOperations: Readonly<Record<string, number>> = {
+  "remote.mcp.get": 3054,
+  "remote.mcp.set": 3055,
+  "session.dots.targets": 4090,
+  "session.dots.status": 4091,
+  "session.dots.bind": 4092,
+  "session.dots.unbind": 4093,
+  "session.dots.send": 4094,
+  "session.dots.pause": 4095,
+  "session.dots.resume": 4096,
+  "session.dots.exchange.create": 4097,
+  "session.dots.exchange.read": 4098,
+  "session.dots.delegation.status": 4099,
+  "session.dots.delegation.create": 4100,
+  "session.dots.delegation.revoke": 4101,
+  "mcp.request": 5044,
+}

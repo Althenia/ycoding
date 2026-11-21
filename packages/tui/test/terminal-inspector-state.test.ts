@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { PtyProtocol } from "@ycoding-ai/core/pty/protocol"
+import { PtyProtocol } from "../src/pty-protocol"
 import { Pty } from "@ycoding-ai/schema/pty"
 import { Schema } from "effect"
 import { TerminalInspectorState, type TerminalEmulator } from "../src/component/terminal-inspector-state"

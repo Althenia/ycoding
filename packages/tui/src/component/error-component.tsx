@@ -3,7 +3,7 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, ErrorBoundary, For, Show, type ParentProps } from "solid-js"
 import { getScrollAcceleration } from "../util/scroll"
 import { useClipboard } from "../context/clipboard"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationVersion } from "../build-version"
 import { useExit } from "../context/exit"
 import { describeOS, describeTerminal } from "../util/system"
 export function errorSelectionColors(mode?: "dark" | "light") {

@@ -1,0 +1,3323 @@
+use super::{CustomLayer, Evaluation, Paths, decision};
+use crate::coordination::decisions::{
+    Appended, Applicability, Claim, EscalateRequest, Escalated, Prior, Reconsider, Reconsidered,
+    Rejections, Snapshot as RequestSnapshot, append, coordination_decline_feedback,
+    deferred_review, denied_feedback, explicit_rejected, guardrail_matches, id_text, reviewed,
+};
+use crate::coordination::{
+    Error as CoordError,
+    runtime::{Decision, DecisionOutcome},
+};
+use crate::{
+    model_incident::record::{self as incidents, GuardrailInput},
+    session::review::{self, FingerprintInput, GrantKind, OpenInput},
+    tools::code_mode::Cancellation,
+    tools::policy::{
+        Authority, Effect, Publisher, Reviews, SessionAuthority, Wait, permissions::Permissions,
+        state,
+    },
+};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    ops::Bound,
+    sync::{
+        Arc, Mutex, OnceLock, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use tokio::sync::oneshot;
+use ycoding_schema::{
+    DomainDecode, DomainEncode, JsonObject, JsonPath, JsonValue, LosslessString, ObjectDecoder,
+    ObjectEncoder, guardrail, model_incident, schema::NonNegativeInt, session_id::SessionId,
+    session_review, stringify_json,
+};
+use ycoding_store::{
+    IndexOrder, IndexQuery, KeyPart,
+    session::{EventTable, NewEvent},
+    tuple_key,
+};
+
+const APPROVED: &str = "session.guardrail.approved.1";
+
+#[derive(Clone, Debug)]
+pub struct Input {
+    pub session_id: SessionId,
+    pub action: String,
+    pub resources: Vec<LosslessString>,
+    pub metadata: Option<JsonObject>,
+    pub skip_review: bool,
+    pub holder: Option<LosslessString>,
+    pub source: Option<guardrail::Source>,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    pub shells: u64,
+    pub subagents: u64,
+    pub reviews: u64,
+    pub shell_wait: Duration,
+    pub hard_review_expiry: Duration,
+}
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            shells: 8,
+            subagents: 8,
+            reviews: 16,
+            shell_wait: Duration::from_secs(60),
+            hard_review_expiry: Duration::from_secs(1440 * 60),
+        }
+    }
+}
+pub type CustomLayers = Arc<dyn Fn() -> Vec<CustomLayer> + Send + Sync>;
+
+#[derive(Clone)]
+pub struct Settings {
+    pub paths: Paths,
+    pub global_roots: Vec<LosslessString>,
+    pub custom: CustomLayers,
+    pub enabled: bool,
+    pub limits: Limits,
+    pub decide_reviews: bool,
+    pub decide_hard_reviews: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReviewPolicy {
+    pub enabled: bool,
+    pub decide_reviews: bool,
+    pub decide_hard_reviews: bool,
+}
+
+#[derive(Debug)]
+pub enum Error {
+    Authority(state::Error),
+    Permission(crate::tools::policy::permissions::Error),
+    Store(ycoding_store::Error),
+    Publish(String),
+    Blocked(Evaluation),
+    Declined,
+    Corrected(LosslessString),
+    NotFound,
+    Deferred {
+        request_id: guardrail::RequestId,
+        item_id: session_review::Id,
+        rule_ids: Vec<LosslessString>,
+    },
+    ReviewFull {
+        limit: usize,
+    },
+    Review(review::Error),
+    ReviewUnavailable,
+    DeferredReview(Box<DeferredReview>),
+    CapExceeded {
+        root_session_id: SessionId,
+        counter: &'static str,
+        current: u64,
+        limit: u64,
+        holders: Vec<LosslessString>,
+        waited_ms: u64,
+    },
+}
+
+#[derive(Debug)]
+pub struct DeferredReview {
+    pub request_id: guardrail::RequestId,
+    pub session_id: SessionId,
+    pub outcome: review::DeferOutcome,
+    pub action: LosslessString,
+    pub resources: Vec<LosslessString>,
+    pub rule_ids: Vec<LosslessString>,
+    pub hard_review: bool,
+}
+impl From<state::Error> for Error {
+    fn from(value: state::Error) -> Self {
+        Self::Authority(value)
+    }
+}
+impl Error {
+    pub fn review_message(&self) -> Option<String> {
+        match self {
+            Self::Corrected(feedback) => Some(String::from_utf16_lossy(
+                &feedback.code_units().collect::<Vec<_>>(),
+            )),
+            _ => None,
+        }
+    }
+
+    pub fn capacity_message(&self) -> Option<String> {
+        let Self::CapExceeded {
+            counter,
+            current,
+            limit,
+            holders,
+            waited_ms,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let (subject, state, item, setting) = match *counter {
+            "shells" => ("Shell", "running", "shell", "max_concurrent_shells"),
+            "subagents" => (
+                "Subagent",
+                "running",
+                "subagent",
+                "max_concurrent_subagents",
+            ),
+            _ => ("Pending review", "pending", "review", "max_pending_reviews"),
+        };
+        let holders = if holders.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " ({})",
+                holders
+                    .iter()
+                    .map(|holder| String::from_utf16_lossy(
+                        &holder.code_units().collect::<Vec<_>>()
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let waited = if *waited_ms == 0 {
+            String::new()
+        } else {
+            format!("; waited {}s", (*waited_ms as f64 / 1000.0).round() as u64)
+        };
+        Some(format!(
+            "{subject} limit reached: {current}/{limit} {counter} {state} in this session family{holders}{waited}. Wait for or stop a {state} {item}, or raise guardrails.{setting}."
+        ))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+enum Kind {
+    Shell,
+    Subagent,
+    Review,
+}
+impl Kind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Shell => "shells",
+            Self::Subagent => "subagents",
+            Self::Review => "reviews",
+        }
+    }
+    fn limit(self, limits: Limits) -> u64 {
+        match self {
+            Self::Shell => limits.shells,
+            Self::Subagent => limits.subagents,
+            Self::Review => limits.reviews,
+        }
+    }
+}
+
+type Sender = oneshot::Sender<Result<Reservation, Error>>;
+
+struct Pending {
+    order: u64,
+    request: guardrail::Request,
+    sender: Sender,
+    review: Reservation,
+    directories: Vec<LosslessString>,
+    holder: Option<LosslessString>,
+    source: Option<guardrail::Source>,
+    fingerprint: session_review::Fingerprint,
+    expiry: Option<tokio::task::JoinHandle<()>>,
+}
+struct Waiter {
+    id: u64,
+    holder: Option<LosslessString>,
+    request: Option<guardrail::RequestId>,
+    sender: Sender,
+}
+#[derive(Default)]
+struct Pool {
+    slots: Vec<(u64, Option<LosslessString>)>,
+    waiters: VecDeque<Waiter>,
+}
+#[derive(Default)]
+struct State {
+    pending: BTreeMap<guardrail::RequestId, Pending>,
+    deciding: BTreeMap<guardrail::RequestId, (SessionId, Cancellation)>,
+    approvals: BTreeMap<SessionId, u64>,
+    blocked: BTreeMap<SessionId, u64>,
+    sequences: BTreeMap<SessionId, u64>,
+    pools: BTreeMap<(SessionId, Kind), Pool>,
+    next_slot: u64,
+}
+struct Inner {
+    authority: Authority,
+    permissions: Permissions,
+    settings: Settings,
+    publish: Publisher,
+    state: Mutex<State>,
+    reconsidering: Arc<Mutex<BTreeSet<guardrail::RequestId>>>,
+    rejections: Rejections,
+    context: OnceLock<Arc<crate::coordination::decision_context::Service>>,
+    reviews: OnceLock<Reviews>,
+    decision: OnceLock<decision::Adapter>,
+}
+#[derive(Clone)]
+pub struct Guardrails(Arc<Inner>);
+pub struct Admission {
+    pub effect: Effect,
+    pub request: Option<guardrail::Request>,
+    pub reservation: Option<Reservation>,
+    pub wait: Option<Wait<Result<Reservation, Error>>>,
+}
+
+struct Reserved {
+    service: Weak<Inner>,
+    root: SessionId,
+    kind: Option<Kind>,
+    slot: u64,
+    released: AtomicBool,
+}
+#[derive(Clone)]
+pub struct Reservation(Arc<Reserved>);
+impl Reservation {
+    pub fn release(&self) {
+        self.0.release();
+    }
+    fn release_unlocked(&self, state: &mut State) {
+        if self.0.released.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        if let Some(kind) = self.0.kind {
+            release_slot(state, &self.0.service, &self.0.root, kind, self.0.slot);
+        }
+    }
+}
+impl Reserved {
+    fn release(&self) {
+        if self.released.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let (Some(service), Some(kind)) = (self.service.upgrade(), self.kind) else {
+            return;
+        };
+        let mut state = service
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        release_slot(&mut state, &self.service, &self.root, kind, self.slot);
+    }
+}
+impl Drop for Reserved {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+fn advance(state: &mut State, root: &SessionId) {
+    *state.sequences.entry(root.clone()).or_default() += 1;
+}
+fn release_slot(state: &mut State, service: &Weak<Inner>, root: &SessionId, kind: Kind, slot: u64) {
+    let key = (root.clone(), kind);
+    if let Some(pool) = state.pools.get_mut(&key) {
+        pool.slots.retain(|(id, _)| *id != slot);
+        while let Some(waiter) = pool.waiters.pop_front() {
+            pool.slots.push((waiter.id, waiter.holder));
+            let granted = Reservation(Arc::new(Reserved {
+                service: service.clone(),
+                root: root.clone(),
+                kind: Some(kind),
+                slot: waiter.id,
+                released: AtomicBool::new(false),
+            }));
+            let Err(returned) = waiter.sender.send(Ok(granted)) else {
+                break;
+            };
+            if let Ok(abandoned) = returned {
+                abandoned.0.released.store(true, Ordering::Release);
+            }
+            pool.slots.retain(|(id, _)| *id != waiter.id);
+        }
+        if pool.slots.is_empty() && pool.waiters.is_empty() {
+            state.pools.remove(&key);
+        }
+    }
+    advance(state, root);
+}
+fn exceeded(state: &State, root: &SessionId, kind: Kind, limit: u64, waited_ms: u64) -> Error {
+    let slots = state
+        .pools
+        .get(&(root.clone(), kind))
+        .map_or(&[][..], |pool| pool.slots.as_slice());
+    Error::CapExceeded {
+        root_session_id: root.clone(),
+        counter: kind.label(),
+        current: slots.len() as u64,
+        limit,
+        holders: slots
+            .iter()
+            .filter_map(|(_, holder)| holder.clone())
+            .collect(),
+        waited_ms,
+    }
+}
+
+impl Guardrails {
+    pub(crate) fn native_identity(&self) -> usize {
+        Arc::as_ptr(&self.0) as usize
+    }
+    pub(crate) fn reply_native(
+        &self,
+        session: &SessionId,
+        id: &guardrail::RequestId,
+        fingerprint: &str,
+        allow: bool,
+        gate: &crate::dots::authority::Gate,
+    ) -> Result<(), Error> {
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let item = state
+            .pending
+            .get(id)
+            .filter(|item| {
+                &item.request.session_id == session
+                    && crate::dots::authority::fingerprint(&item.request) == fingerprint
+            })
+            .ok_or(Error::NotFound)?;
+        let service = self.clone();
+        let expected = item.request.clone();
+        gate.receipt_checked(
+            &self.0.authority.store,
+            session,
+            ObjectEncoder::new()
+                .field("kind", "guardrail")
+                .field("requestID", id)
+                .field("fingerprint", fingerprint)
+                .finish(),
+            Some(if allow { "once" } else { "reject" }),
+            move || {
+                if !allow {
+                    return Ok(true);
+                }
+                let current = service
+                    .evaluate(&Input {
+                        session_id: expected.session_id.clone(),
+                        action: expected
+                            .action
+                            .to_utf8()
+                            .map_err(|_| "Guardrail action is invalid".to_owned())?,
+                        resources: expected.resources.clone(),
+                        metadata: expected.metadata.clone(),
+                        skip_review: false,
+                        holder: None,
+                        source: None,
+                    })
+                    .map_err(|_| "Guardrail authority is unavailable".to_owned())?;
+                let mut expected_rules = expected.rule_ids.clone();
+                expected_rules.sort();
+                let mut current_rules = current.rule_ids;
+                current_rules.sort();
+                Ok(current.effect != Effect::Deny
+                    && (current.effect == Effect::Allow || current_rules == expected_rules))
+            },
+        )
+        .map_err(Error::Store)?;
+        let item = remove_pending(&mut state, id).expect("pending guardrail held by lock");
+        self.0.rejections.record(
+            Rejections::key(&item.request.session_id, item.fingerprint.as_lossless()),
+            !allow,
+        );
+        let root = item.request.root_session_id.clone();
+        let published = state::emit::<guardrail::Replied>(
+            &self.0.publish,
+            &guardrail::RepliedData {
+                root_session_id: root.clone(),
+                session_id: session.clone(),
+                request_id: id.clone(),
+                reply: if allow {
+                    guardrail::Reply::Once
+                } else {
+                    guardrail::Reply::Reject
+                },
+                decided_by: None,
+                authority: None,
+                choice: None,
+                confidence: None,
+                grades: None,
+            },
+        );
+        if !allow {
+            let recorded = self.reject_incident(&item);
+            let _ = item.sender.send(Err(Error::Declined));
+            published.map_err(Error::Publish)?;
+            return recorded;
+        }
+        *state.approvals.entry(root.clone()).or_default() += 1;
+        advance(&mut state, &root);
+        let kind = match item.request.action.as_str() {
+            Some("shell") => Some(Kind::Shell),
+            Some("subagent") => Some(Kind::Subagent),
+            _ => None,
+        };
+        if kind == Some(Kind::Shell) && self.full(&state, &root, Kind::Shell) {
+            self.queue_shell(
+                &mut state,
+                &root,
+                item.holder,
+                Some(id.clone()),
+                item.sender,
+            );
+        } else {
+            let reservation = self.reserve(&mut state, &root, kind, item.holder);
+            if let Err(Ok(reservation)) = item.sender.send(reservation) {
+                reservation.release_unlocked(&mut state);
+            }
+        }
+        published.map_err(Error::Publish)
+    }
+    pub fn new(
+        authority: Authority,
+        permissions: Permissions,
+        settings: Settings,
+        publish: Publisher,
+    ) -> Self {
+        Self(Arc::new(Inner {
+            authority,
+            permissions,
+            settings,
+            publish,
+            state: Mutex::new(State::default()),
+            reconsidering: Arc::new(Mutex::new(BTreeSet::new())),
+            rejections: Rejections::default(),
+            context: OnceLock::new(),
+            reviews: OnceLock::new(),
+            decision: OnceLock::new(),
+        }))
+    }
+
+    pub fn with_context(
+        self,
+        context: Arc<crate::coordination::decision_context::Service>,
+    ) -> Self {
+        let _ = self.0.context.set(context);
+        self
+    }
+
+    pub fn with_reviews(self, reviews: Reviews) -> Self {
+        let _ = self.0.reviews.set(reviews);
+        self
+    }
+
+    pub fn with_decision(self, evaluator: Arc<dyn decision::Evaluator>) -> Self {
+        let _ = self.0.decision.set(decision::Adapter {
+            evaluator,
+            redact: Arc::new(redact_value),
+            policy: decision::ReviewPolicy {
+                decide_reviews: self.0.settings.decide_reviews,
+                decide_hard_reviews: self.0.settings.decide_hard_reviews,
+            },
+            limits: decision::Limits::default(),
+        });
+        self
+    }
+
+    pub fn review_policy(&self) -> ReviewPolicy {
+        ReviewPolicy {
+            enabled: self.0.settings.enabled,
+            decide_reviews: self.0.settings.decide_reviews,
+            decide_hard_reviews: self.0.settings.decide_hard_reviews,
+        }
+    }
+
+    fn paths(&self, input: &Input) -> Paths {
+        let workdir = input
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get(&"workdir".into()))
+            .and_then(|value| match value {
+                JsonValue::String(value) => Some(value.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| self.0.settings.paths.workdir.clone());
+        Paths {
+            workdir,
+            ..self.0.settings.paths.clone()
+        }
+    }
+
+    pub fn evaluate(&self, input: &Input) -> Result<Evaluation, Error> {
+        Ok(self.classify(input)?.0)
+    }
+
+    fn classify(&self, input: &Input) -> Result<(Evaluation, Vec<LosslessString>), Error> {
+        self.classify_remaining(input, &[])
+    }
+
+    fn classify_remaining(
+        &self,
+        input: &Input,
+        dismissed: &[LosslessString],
+    ) -> Result<(Evaluation, Vec<LosslessString>), Error> {
+        let authority = self.0.authority.session(&input.session_id, None)?;
+        if authority.root_autonomy.can_yolo_guardrail() {
+            return Ok((Evaluation::allow(), vec![]));
+        }
+        let root = authority.root_session_id;
+        let mut paths = self.paths(input);
+        let custom = (self.0.settings.custom)();
+        if !self.0.settings.enabled {
+            let custom = custom
+                .iter()
+                .map(|layer| CustomLayer {
+                    rules: layer
+                        .rules
+                        .iter()
+                        .filter(|rule| rule.decision == guardrail::RuleDecision::HardReview)
+                        .cloned()
+                        .collect(),
+                    invalid_files: vec![],
+                })
+                .collect::<Vec<_>>();
+            let result =
+                super::matched(&input.action, &input.resources, &paths, &custom, dismissed).0;
+            return Ok((
+                if result.effect == Effect::Deny || result.hard_review {
+                    result
+                } else {
+                    Evaluation::allow()
+                },
+                vec![],
+            ));
+        }
+        let (result, evidence) =
+            super::matched(&input.action, &input.resources, &paths, &custom, dismissed);
+        if !result.standard
+            || result.rule_ids.first().and_then(LosslessString::as_str)
+                != Some("standard.review.outside-repo")
+            || input.skip_review
+            || evidence.is_some_and(|evidence| evidence.uncertain_filesystem)
+        {
+            return Ok((result, vec![]));
+        }
+        let mut targets: Vec<super::OutsideTarget> = vec![];
+        for target in input
+            .resources
+            .iter()
+            .flat_map(|resource| super::outside_targets(&input.action, resource, &paths))
+        {
+            match targets
+                .iter_mut()
+                .find(|existing| existing.path == target.path)
+            {
+                Some(existing) => existing.directory |= target.directory,
+                None => targets.push(target),
+            }
+        }
+        let boundary = |target: &super::OutsideTarget| {
+            if target.directory {
+                target.path.clone()
+            } else {
+                super::dirname(&target.path)
+            }
+        };
+        let approved = self.approved_directories(&root)?;
+        let mut trusted = vec![];
+        for target in &targets {
+            if approved
+                .iter()
+                .any(|directory| super::within(&target.path, directory))
+                || super::repository::contains(&self.0.settings.paths.workdir, &target.path)
+                || self
+                    .0
+                    .settings
+                    .global_roots
+                    .iter()
+                    .any(|root| super::within(&target.path, root))
+            {
+                trusted.push(target.path.clone());
+                continue;
+            }
+            let mut resource = boundary(target).code_units().collect::<Vec<_>>();
+            if resource.last() != Some(&47) {
+                resource.push(47);
+            }
+            resource.push(42);
+            let effect = self
+                .0
+                .permissions
+                .evaluate_effective(
+                    &input.session_id,
+                    None,
+                    &"external_directory".into(),
+                    &LosslessString::from_utf16(resource),
+                )
+                .map_err(Error::Permission)?;
+            if effect == Effect::Allow {
+                trusted.push(target.path.clone());
+            }
+        }
+        let mut directories = vec![];
+        for target in targets
+            .iter()
+            .filter(|target| !trusted.contains(&target.path))
+        {
+            let directory = boundary(target);
+            if !directories.contains(&directory) {
+                directories.push(directory);
+            }
+        }
+        paths.trusted_paths.extend(trusted);
+        let resources = super::semantic_resources(&input.action, &input.resources, &paths);
+        if resources
+            .iter()
+            .all(|resource| super::outside_targets(&input.action, resource, &paths).is_empty())
+        {
+            return Ok((Evaluation::allow(), vec![]));
+        }
+        Ok((result, directories))
+    }
+
+    fn approved_directories(&self, root: &SessionId) -> Result<Vec<LosslessString>, Error> {
+        let snapshot = self.0.authority.store.snapshot().map_err(Error::Store)?;
+        let prefix = tuple_key(&[
+            KeyPart::String(root.as_lossless()),
+            KeyPart::String(&APPROVED.into()),
+        ]);
+        let mut after = None;
+        let mut directories = vec![];
+        loop {
+            let rows = snapshot
+                .index_range::<EventTable>(
+                    "event_aggregate_type_seq_idx",
+                    IndexQuery {
+                        lower: Bound::Unbounded,
+                        upper: Bound::Unbounded,
+                        prefix: Some(&prefix),
+                        order: IndexOrder::Ascending,
+                        after: after.as_ref(),
+                        limit: 128,
+                    },
+                )
+                .map_err(Error::Store)?;
+            if rows.is_empty() {
+                return Ok(directories);
+            }
+            after = rows.last().map(|row| row.cursor.clone());
+            for row in rows {
+                let path = JsonPath::default();
+                if let Ok(approved) = ObjectDecoder::new(&row.record.data, &path)
+                    .and_then(|object| object.field::<Vec<LosslessString>>("directories"))
+                {
+                    directories.extend(approved);
+                }
+            }
+        }
+    }
+
+    fn approve(&self, root: &SessionId, directories: &[LosslessString]) -> Result<(), Error> {
+        let event = NewEvent {
+            id: crate::session::projector::random_event_id()
+                .map_err(Error::Store)?
+                .as_lossless()
+                .clone(),
+            aggregate_id: root.as_lossless().clone(),
+            created: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_millis() as i64,
+            type_: APPROVED.into(),
+            data: ObjectEncoder::new()
+                .field("sessionID", root)
+                .field("directories", &directories.to_vec())
+                .finish(),
+        };
+        self.0
+            .authority
+            .store
+            .submit(move |tx| crate::session::projector::append(tx, &event).map(|_| ()))
+            .and_then(|receipt| receipt.wait())
+            .map_err(Error::Store)
+    }
+
+    fn reserve(
+        &self,
+        state: &mut State,
+        root: &SessionId,
+        kind: Option<Kind>,
+        holder: Option<LosslessString>,
+    ) -> Result<Reservation, Error> {
+        let slot = state.next_slot;
+        if let Some(kind) = kind {
+            let limit = kind.limit(self.0.settings.limits);
+            if self.full(state, root, kind) {
+                return Err(exceeded(state, root, kind, limit, 0));
+            }
+            state.next_slot += 1;
+            state
+                .pools
+                .entry((root.clone(), kind))
+                .or_default()
+                .slots
+                .push((slot, holder));
+            advance(state, root);
+        }
+        Ok(Reservation(Arc::new(Reserved {
+            service: Arc::downgrade(&self.0),
+            root: root.clone(),
+            kind,
+            slot,
+            released: AtomicBool::new(false),
+        })))
+    }
+
+    fn full(&self, state: &State, root: &SessionId, kind: Kind) -> bool {
+        state
+            .pools
+            .get(&(root.clone(), kind))
+            .map_or(0, |pool| pool.slots.len() as u64)
+            >= kind.limit(self.0.settings.limits)
+    }
+
+    fn queue_shell(
+        &self,
+        state: &mut State,
+        root: &SessionId,
+        holder: Option<LosslessString>,
+        request: Option<guardrail::RequestId>,
+        sender: Sender,
+    ) -> u64 {
+        let id = state.next_slot;
+        state.next_slot += 1;
+        state
+            .pools
+            .entry((root.clone(), Kind::Shell))
+            .or_default()
+            .waiters
+            .push_back(Waiter {
+                id,
+                holder,
+                request,
+                sender,
+            });
+        let service = Arc::downgrade(&self.0);
+        let root = root.clone();
+        let wait = self.0.settings.limits.shell_wait;
+        tokio::spawn(async move {
+            tokio::time::sleep(wait).await;
+            let Some(service) = service.upgrade() else {
+                return;
+            };
+            let mut state = service
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let Some(waiter) = take_waiter(&mut state, &root, |waiter| waiter.id == id) else {
+                return;
+            };
+            let error = exceeded(
+                &state,
+                &root,
+                Kind::Shell,
+                service.settings.limits.shells,
+                wait.as_millis() as u64,
+            );
+            let _ = waiter.sender.send(Err(error));
+        });
+        id
+    }
+
+    fn abandon(&self, root: &SessionId, id: u64) {
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        take_waiter(&mut state, root, |waiter| waiter.id == id);
+    }
+
+    pub fn assert(&self, input: Input) -> Result<Admission, Error> {
+        self.assert_inner(input, false)
+    }
+
+    pub fn assert_deferred(&self, input: Input) -> Result<Admission, Error> {
+        self.assert_inner(input, true)
+    }
+
+    fn assert_inner(&self, input: Input, deferred: bool) -> Result<Admission, Error> {
+        let (result, directories) = self.classify(&input)?;
+        let authority = self.0.authority.session(&input.session_id, None)?;
+        let ordinary_auto = self.ordinary_auto(&input, &result, &authority, deferred)?;
+        let assessable = !result.hard_review || self.0.settings.decide_hard_reviews;
+        let model_reviews = authority.root_autonomy.can_yolo_guardrail() && assessable;
+        let granted = result.effect == Effect::Ask
+            && !input.skip_review
+            && (result.hard_review || !ordinary_auto)
+            && self.consume(&input, &self.fingerprint(&input, &result, deferred))?;
+        if result.effect == Effect::Ask
+            && !granted
+            && !input.skip_review
+            && (result.hard_review || !ordinary_auto)
+            && model_reviews
+            && self.0.decision.get().is_some()
+        {
+            let cancellation = Cancellation::default();
+            let id: guardrail::RequestId = state::decode_id("grq_", 0);
+            let review = {
+                let mut state = self
+                    .0
+                    .state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                let review = self.reserve(
+                    &mut state,
+                    &authority.root_session_id,
+                    Some(Kind::Review),
+                    None,
+                )?;
+                state
+                    .deciding
+                    .insert(id.clone(), (input.session_id.clone(), cancellation.clone()));
+                review
+            };
+            let (sender, receiver) = oneshot::channel();
+            let service = self.clone();
+            let cancel = cancellation.clone();
+            let cancel_id = id.clone();
+            let task = tokio::spawn(async move {
+                let outcome = service
+                    .decide(&input, result, directories, &cancellation, deferred)
+                    .await;
+                service
+                    .0
+                    .state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .deciding
+                    .remove(&id);
+                review.release();
+                let outcome = match outcome {
+                    Ok((result, directories, grading)) if !cancellation.is_cancelled() => {
+                        match service.admit(
+                            input,
+                            result,
+                            directories,
+                            Some(grading),
+                            false,
+                            deferred,
+                        ) {
+                            Ok(admission) => match admission.wait {
+                                Some(wait) => tokio::select! {
+                                    biased;
+                                    _ = cancellation.cancelled() => Err(Error::Declined),
+                                    settled = wait => settled.unwrap_or(Err(Error::Declined)),
+                                },
+                                None => admission.reservation.ok_or(Error::Declined),
+                            },
+                            Err(error) => Err(error),
+                        }
+                    }
+                    Ok(_) => Err(Error::Declined),
+                    Err(error) => Err(error),
+                };
+                let _ = sender.send(outcome);
+            });
+            let service = self.clone();
+            let task = state::Task::new(task, move || {
+                cancel.cancel();
+                service
+                    .0
+                    .state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .deciding
+                    .remove(&cancel_id);
+            });
+            return Ok(Admission {
+                effect: Effect::Ask,
+                request: None,
+                reservation: None,
+                wait: Some(Wait::new(receiver, move || drop(task))),
+            });
+        }
+        let grading = if result.effect == Effect::Ask
+            && !granted
+            && !input.skip_review
+            && (result.hard_review || !ordinary_auto)
+            && authority.root_autonomy.can_yolo_guardrail()
+        {
+            Some(if !assessable {
+                decision::Grading::Skipped(decision::Skip::Disabled)
+            } else {
+                decision::Grading::Escalated {
+                    reason: session_review::Reason::Unavailable,
+                    provenance: guardrail::Escalation {
+                        authority: Some(guardrail::Authority::Yolo),
+                        reason: Some(guardrail::EscalationReason::Unavailable),
+                        choice: None,
+                        confidence: None,
+                        grades: None,
+                    },
+                }
+            })
+        } else {
+            None
+        };
+        self.admit(input, result, directories, grading, granted, deferred)
+    }
+
+    async fn decide(
+        &self,
+        input: &Input,
+        mut result: Evaluation,
+        mut directories: Vec<LosslessString>,
+        cancellation: &Cancellation,
+        deferred: bool,
+    ) -> Result<(Evaluation, Vec<LosslessString>, decision::Grading), Error> {
+        let adapter = self.0.decision.get().expect("installed decision adapter");
+        let mut dismissed = vec![];
+        loop {
+            let authority = self.0.authority.session(&input.session_id, None)?;
+            let paths = self.paths(input);
+            let evidence = super::matched(
+                &input.action,
+                &input.resources,
+                &paths,
+                &(self.0.settings.custom)(),
+                &dismissed,
+            )
+            .1
+            .filter(|evidence| evidence.verifiable(result.hard_review))
+            .map(|evidence| decision::MatchEvidence {
+                matched_segment: evidence.matched_segment,
+                resolved_targets: evidence.resolved_targets,
+                workdir: paths.workdir.clone(),
+                project: paths.project.clone(),
+            });
+            let key = self.decision_key(input, &result, deferred);
+            let invocation = || crate::resources::decision::Invocation {
+                session_id: &input.session_id,
+                input_id: input.source.as_ref().map(|source| &source.message_id),
+                cancellation,
+                attribution: crate::session::usage_attribution::Attribution::Unset,
+                purpose: None,
+                authority: None,
+                invocation_key: None,
+            };
+            match adapter
+                .verify(
+                    &decision::Match {
+                        action: &input.action,
+                        resources: &input.resources,
+                        evaluation: &result,
+                        skip_review: input.skip_review,
+                        ordinary_auto: self.ordinary_auto(input, &result, &authority, deferred)?,
+                        yolo: authority.root_autonomy.can_yolo_guardrail(),
+                        evidence: evidence.as_ref(),
+                        key: &key,
+                    },
+                    invocation(),
+                )
+                .await
+            {
+                decision::Verification::Cancelled => return Err(Error::Declined),
+                decision::Verification::Dismissed {
+                    rule_id,
+                    confidence,
+                } => {
+                    self.provenance(
+                        &authority.root_session_id,
+                        "session.guardrail.dismissed.1",
+                        ObjectEncoder::new()
+                            .field("sessionID", &authority.root_session_id)
+                            .field("reviewSessionID", &input.session_id)
+                            .field("ruleID", &rule_id)
+                            .field("confidence", &confidence)
+                            .optional("source", &input.source)
+                            .finish(),
+                    )?;
+                    dismissed.push(rule_id);
+                    (result, directories) = self.classify_remaining(input, &dismissed)?;
+                }
+                _ => break,
+            }
+        }
+        let authority = self.0.authority.session(&input.session_id, None)?;
+        let fence = crate::session::autonomy::inherited_in(
+            &self.0.authority.store.snapshot().map_err(Error::Store)?,
+            &authority.root_session_id,
+        )
+        .ok();
+        let key = self.decision_key(input, &result, deferred);
+        let expected = self.fingerprint(input, &result, deferred);
+        let applicability = self
+            .applicability(
+                &input.session_id,
+                input.source.as_ref(),
+                expected.as_lossless(),
+            )
+            .map_err(admission_error)?;
+        let digest = self.context_digest(&input.session_id)?;
+        let ordinary_auto = self.ordinary_auto(input, &result, &authority, deferred)?;
+        let grading = adapter
+            .grade_applicable(
+                &decision::Review {
+                    action: &input.action,
+                    resources: &input.resources,
+                    evaluation: &result,
+                    root_session_id: &authority.root_session_id,
+                    workdir: &self.paths(input).workdir,
+                    skip_review: input.skip_review,
+                    ordinary_auto,
+                    yolo: authority.root_autonomy.can_yolo_guardrail(),
+                    key: &key,
+                },
+                Some(applicability.value()),
+                crate::resources::decision::Invocation {
+                    session_id: &input.session_id,
+                    input_id: input.source.as_ref().map(|source| &source.message_id),
+                    cancellation,
+                    attribution: crate::session::usage_attribution::Attribution::Unset,
+                    purpose: None,
+                    authority: None,
+                    invocation_key: None,
+                },
+            )
+            .await;
+        if matches!(grading, decision::Grading::Cancelled) {
+            return Err(Error::Declined);
+        }
+        let grading = match grading {
+            decision::Grading::Settled { reply, provenance } => {
+                let stale = (provenance.authority == Some(guardrail::Authority::Yolo)
+                    && crate::session::autonomy::inherited_in(
+                        &self.0.authority.store.snapshot().map_err(Error::Store)?,
+                        &authority.root_session_id,
+                    )
+                    .ok()
+                        != fence)
+                    || self
+                        .applicability(
+                            &input.session_id,
+                            input.source.as_ref(),
+                            expected.as_lossless(),
+                        )
+                        .map_err(admission_error)?
+                        .digest()
+                        != applicability.digest()
+                    || self.context_digest(&input.session_id)? != digest;
+                if stale {
+                    decision::Grading::Escalated {
+                        reason: session_review::Reason::Escalated,
+                        provenance: guardrail::Escalation {
+                            authority: provenance.authority,
+                            reason: Some(guardrail::EscalationReason::Escalated),
+                            choice: None,
+                            confidence: None,
+                            grades: None,
+                        },
+                    }
+                } else if reply != guardrail::Reply::Reject && applicability.rejected() {
+                    decision::Grading::Escalated {
+                        reason: session_review::Reason::Escalated,
+                        provenance: guardrail::Escalation {
+                            reason: Some(guardrail::EscalationReason::Escalated),
+                            ..provenance
+                        },
+                    }
+                } else {
+                    decision::Grading::Settled { reply, provenance }
+                }
+            }
+            grading => grading,
+        };
+        Ok((result, directories, grading))
+    }
+
+    fn provenance(&self, session: &SessionId, type_: &str, data: JsonValue) -> Result<(), Error> {
+        let event = NewEvent {
+            id: crate::session::projector::random_event_id()
+                .map_err(Error::Store)?
+                .as_lossless()
+                .clone(),
+            aggregate_id: session.as_lossless().clone(),
+            created: now(),
+            type_: type_.into(),
+            data,
+        };
+        self.0
+            .authority
+            .store
+            .submit(move |tx| crate::session::projector::append(tx, &event).map(|_| ()))
+            .and_then(|receipt| receipt.wait())
+            .map_err(Error::Store)
+    }
+
+    fn admit(
+        &self,
+        input: Input,
+        result: Evaluation,
+        directories: Vec<LosslessString>,
+        grading: Option<decision::Grading>,
+        granted: bool,
+        deferred: bool,
+    ) -> Result<Admission, Error> {
+        let authority = self.0.authority.session(&input.session_id, None)?;
+        let root = authority.root_session_id.clone();
+        let result = if authority.root_autonomy.can_yolo_guardrail() {
+            Evaluation::allow()
+        } else {
+            result
+        };
+        let action_kind = match input.action.as_str() {
+            "shell" => Some(Kind::Shell),
+            "subagent" => Some(Kind::Subagent),
+            _ => None,
+        };
+        let automatic = result.effect == Effect::Allow
+            || input.skip_review
+            || (result.effect == Effect::Ask
+                && !result.hard_review
+                && self.ordinary_auto(&input, &result, &authority, deferred)?);
+        let fingerprint = self.fingerprint(&input, &result, deferred);
+        let granted = granted
+            || (result.effect == Effect::Ask
+                && !automatic
+                && self.consume(&input, &fingerprint)?);
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if result.effect == Effect::Deny {
+            *state.blocked.entry(root.clone()).or_default() += 1;
+            advance(&mut state, &root);
+            state::emit::<guardrail::Decided>(
+                &self.0.publish,
+                &guardrail::DecidedData {
+                    root_session_id: root,
+                    session_id: input.session_id,
+                    action: input.action.into(),
+                    rule_ids: result.rule_ids.clone(),
+                    decision: guardrail::Decision::Deny,
+                },
+            )
+            .map_err(Error::Publish)?;
+            return Err(Error::Blocked(result));
+        }
+        if automatic || granted {
+            let decided = guardrail::DecidedData {
+                root_session_id: root.clone(),
+                session_id: input.session_id,
+                action: input.action.into(),
+                rule_ids: result.rule_ids,
+                decision: guardrail::Decision::Allow,
+            };
+            if action_kind == Some(Kind::Shell) && self.full(&state, &root, Kind::Shell) {
+                state::emit::<guardrail::Decided>(&self.0.publish, &decided)
+                    .map_err(Error::Publish)?;
+                let (sender, receiver) = oneshot::channel();
+                let id = self.queue_shell(&mut state, &root, input.holder, None, sender);
+                let service = self.clone();
+                return Ok(Admission {
+                    effect: Effect::Allow,
+                    request: None,
+                    reservation: None,
+                    wait: Some(Wait::new(receiver, move || service.abandon(&root, id))),
+                });
+            }
+            let reservation = self.reserve(&mut state, &root, action_kind, input.holder)?;
+            if let Err(error) = state::emit::<guardrail::Decided>(&self.0.publish, &decided) {
+                reservation.release_unlocked(&mut state);
+                return Err(Error::Publish(error));
+            }
+            return Ok(Admission {
+                effect: Effect::Allow,
+                request: None,
+                reservation: Some(reservation),
+                wait: None,
+            });
+        }
+        let grading = match grading {
+            Some(decision::Grading::Settled { reply, provenance })
+                if deferred
+                    && reply != guardrail::Reply::Reject
+                    && (!result.standard
+                        || result.hard_review
+                        || result
+                            .rule_ids
+                            .iter()
+                            .any(|id| id.as_str() == Some("configuration.invalid"))) =>
+            {
+                Some(decision::Grading::Escalated {
+                    reason: session_review::Reason::Escalated,
+                    provenance: guardrail::Escalation {
+                        reason: Some(guardrail::EscalationReason::Escalated),
+                        ..provenance
+                    },
+                })
+            }
+            grading => grading,
+        };
+        let mut request = guardrail::Request {
+            id: state::decode_id("grq_", 0),
+            created: Some(NonNegativeInt::new(now()).expect("non-negative timestamp")),
+            root_session_id: root.clone(),
+            session_id: input.session_id,
+            action: input.action.into(),
+            resources: input.resources,
+            rule_ids: result.rule_ids,
+            reason: result
+                .reason
+                .unwrap_or_else(|| "Session guardrail review required".into()),
+            standard: result.standard,
+            hard_review: result.hard_review.then_some(true),
+            risk: None,
+            escalation: None,
+            coordination_escalation: None,
+            metadata: input.metadata,
+            source: input.source.clone(),
+        };
+        if let Some(decision::Grading::Settled { reply, provenance }) = &grading {
+            drop(state);
+            self.provenance(
+                &root,
+                "session.guardrail.decided.1",
+                ObjectEncoder::new()
+                    .field("sessionID", &root)
+                    .field("reviewSessionID", &request.session_id)
+                    .field("requestID", &request.id)
+                    .field("reply", reply)
+                    .optional("authority", &provenance.authority)
+                    .optional("choice", &provenance.choice)
+                    .optional("confidence", &provenance.confidence)
+                    .optional("grades", &provenance.grades)
+                    .field("ruleIDs", &request.rule_ids)
+                    .optional("source", &input.source)
+                    .finish(),
+            )?;
+            state::emit::<guardrail::Replied>(
+                &self.0.publish,
+                &guardrail::RepliedData {
+                    root_session_id: root.clone(),
+                    session_id: request.session_id.clone(),
+                    request_id: request.id.clone(),
+                    reply: *reply,
+                    decided_by: Some(guardrail::DecidedBy::DecisionModel),
+                    authority: provenance.authority,
+                    choice: provenance.choice,
+                    confidence: provenance.confidence,
+                    grades: provenance.grades.clone(),
+                },
+            )
+            .map_err(Error::Publish)?;
+            if *reply == guardrail::Reply::Reject {
+                self.incident(&request, input.source.as_ref(), Some("decision-model"))?;
+                return Err(Error::Corrected(denied_feedback(true, provenance)));
+            }
+            if *reply == guardrail::Reply::Always {
+                self.approve(&root, &directories)?;
+            }
+            let mut state = self
+                .0
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            *state.approvals.entry(root.clone()).or_default() += 1;
+            advance(&mut state, &root);
+            if action_kind == Some(Kind::Shell) && self.full(&state, &root, Kind::Shell) {
+                let (sender, receiver) = oneshot::channel();
+                let id = self.queue_shell(&mut state, &root, input.holder, None, sender);
+                let service = self.clone();
+                return Ok(Admission {
+                    effect: Effect::Allow,
+                    request: None,
+                    reservation: None,
+                    wait: Some(Wait::new(receiver, move || service.abandon(&root, id))),
+                });
+            }
+            return Ok(Admission {
+                effect: Effect::Allow,
+                request: None,
+                reservation: Some(self.reserve(&mut state, &root, action_kind, input.holder)?),
+                wait: None,
+            });
+        }
+        if let Some(decision::Grading::Escalated { provenance, .. }) = &grading {
+            request.escalation = Some(provenance.clone());
+        }
+        if deferred {
+            let reviews = self.0.reviews.get().ok_or(Error::ReviewUnavailable)?;
+            let review = self.reserve(&mut state, &root, Some(Kind::Review), None)?;
+            drop(state);
+            let reason = match &grading {
+                Some(decision::Grading::Escalated { reason, .. }) => *reason,
+                _ => session_review::Reason::Disabled,
+            };
+            let outcome = defer_explicit(
+                &self.0,
+                reviews,
+                Deferring {
+                    request: &request,
+                    source: input.source.as_ref(),
+                    directories: &directories,
+                    fingerprint,
+                    reason,
+                    conversion: false,
+                },
+            );
+            review.release();
+            return Err(outcome);
+        }
+        if (authority.root_autonomy.deferred || authority.autonomy.deferred)
+            && let Some(reviews) = self.0.reviews.get().cloned()
+        {
+            drop(state);
+            let (sender, receiver) = oneshot::channel();
+            let inner = self.0.clone();
+            let deferred = request.clone();
+            let reason = match &grading {
+                Some(decision::Grading::Escalated { reason, .. }) => *reason,
+                Some(decision::Grading::Skipped(decision::Skip::Disabled)) => {
+                    session_review::Reason::Disabled
+                }
+                _ if authority.root_autonomy.can_yolo_guardrail() => session_review::Reason::Error,
+                _ => session_review::Reason::Disabled,
+            };
+            tokio::spawn(async move {
+                let outcome = open_review(
+                    &inner,
+                    &reviews,
+                    Deferring {
+                        request: &deferred,
+                        source: input.source.as_ref(),
+                        directories: &directories,
+                        fingerprint,
+                        reason,
+                        conversion: false,
+                    },
+                )
+                .await;
+                let _ = sender.send(outcome);
+            });
+            return Ok(Admission {
+                effect: Effect::Ask,
+                request: Some(request),
+                reservation: None,
+                wait: Some(Wait::new(receiver, || {})),
+            });
+        }
+        let review = self.reserve(&mut state, &root, Some(Kind::Review), None)?;
+        if let Some(provenance) = &request.escalation {
+            let recorded = self
+                .provenance(
+                    &request.session_id,
+                    "session.guardrail.escalated.1",
+                    ObjectEncoder::new()
+                        .field("sessionID", &request.session_id)
+                        .field("requestID", &request.id)
+                        .optional("authority", &provenance.authority)
+                        .optional("reason", &provenance.reason)
+                        .optional("choice", &provenance.choice)
+                        .optional("confidence", &provenance.confidence)
+                        .optional("grades", &provenance.grades)
+                        .field("ruleIDs", &request.rule_ids)
+                        .optional("source", &input.source)
+                        .finish(),
+                )
+                .and_then(|_| self.incident(&request, input.source.as_ref(), None));
+            if let Err(error) = recorded {
+                review.release_unlocked(&mut state);
+                return Err(error);
+            }
+        }
+        let (sender, receiver) = oneshot::channel();
+        let id = request.id.clone();
+        state.pending.insert(
+            id.clone(),
+            Pending {
+                order: state::next_order(),
+                request: request.clone(),
+                sender,
+                review,
+                directories,
+                holder: input.holder,
+                source: input.source,
+                fingerprint,
+                expiry: None,
+            },
+        );
+        advance(&mut state, &root);
+        if let Err(error) = state::emit::<guardrail::Asked>(&self.0.publish, &request) {
+            remove_pending(&mut state, &id);
+            return Err(Error::Publish(error));
+        }
+        if request.hard_review == Some(true) {
+            let weak = Arc::downgrade(&self.0);
+            let request_id = id.clone();
+            let expiry = self.0.settings.limits.hard_review_expiry;
+            let timer = tokio::spawn(async move {
+                tokio::time::sleep(expiry).await;
+                if let Some(inner) = weak.upgrade() {
+                    let service = Guardrails(inner);
+                    let mut state = service
+                        .0
+                        .state
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    if state.pending.contains_key(&request_id)
+                        && let Err(error) = service.close_pending(
+                            &mut state,
+                            &request_id,
+                            guardrail::ClosedReason::Expired,
+                        )
+                    {
+                        eprintln!("Guardrail expiry settlement failed: {error:?}");
+                    }
+                }
+            });
+            state
+                .pending
+                .get_mut(&id)
+                .expect("pending request held by lock")
+                .expiry = Some(timer);
+        }
+        let service = self.clone();
+        Ok(Admission {
+            effect: Effect::Ask,
+            request: Some(request),
+            reservation: None,
+            wait: Some(Wait::new(receiver, move || {
+                service.cancel(&id);
+            })),
+        })
+    }
+
+    pub async fn defer_pending(&self, session: &SessionId) -> Result<usize, Error> {
+        self.reconcile_autonomy(session)?;
+        let Some(reviews) = self.0.reviews.get().cloned() else {
+            return Ok(0);
+        };
+        let items = {
+            let mut state = self
+                .0
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let ids = state
+                .pending
+                .iter()
+                .filter(|(_, item)| &item.request.session_id == session)
+                .map(|(id, _)| id.clone())
+                .collect::<Vec<_>>();
+            ids.iter()
+                .filter_map(|id| remove_pending(&mut state, id))
+                .collect::<Vec<_>>()
+        };
+        let mut deferred = 0;
+        for item in items {
+            let outcome = open_review(
+                &self.0,
+                &reviews,
+                Deferring {
+                    request: &item.request,
+                    source: item.source.as_ref(),
+                    directories: &item.directories,
+                    fingerprint: item.fingerprint.clone(),
+                    reason: session_review::Reason::DeferEntry,
+                    conversion: true,
+                },
+            )
+            .await;
+            if matches!(outcome, Err(Error::Deferred { .. })) {
+                deferred += 1;
+            }
+            let _ = item.sender.send(outcome);
+        }
+        Ok(deferred)
+    }
+
+    fn decision_key(&self, input: &Input, result: &Evaluation, deferred: bool) -> String {
+        format!(
+            "{}\0{}",
+            stringify_json(&self.fingerprint(input, result, deferred).encode()),
+            input
+                .source
+                .as_ref()
+                .map(|source| stringify_json(&source.encode()))
+                .unwrap_or_default()
+        )
+    }
+
+    fn fingerprint(
+        &self,
+        input: &Input,
+        result: &Evaluation,
+        deferred: bool,
+    ) -> session_review::Fingerprint {
+        let fingerprint = if deferred {
+            review::deferred_fingerprint
+        } else {
+            review::fingerprint
+        };
+        fingerprint(&FingerprintInput {
+            action: input.action.as_str().into(),
+            resources: input.resources.clone(),
+            workdir: self.paths(input).workdir,
+            rule_ids: result.rule_ids.clone(),
+            hard_review: result.hard_review,
+            metadata: input.metadata.clone(),
+        })
+    }
+
+    fn consume(
+        &self,
+        input: &Input,
+        fingerprint: &session_review::Fingerprint,
+    ) -> Result<bool, Error> {
+        let Some(reviews) = self.0.reviews.get() else {
+            return Ok(false);
+        };
+        reviews
+            .service
+            .consume_now(&input.session_id, GrantKind::Guardrail, fingerprint, now())
+            .map_err(Error::Review)
+    }
+
+    fn reject_incident(&self, item: &Pending) -> Result<(), Error> {
+        self.incident(&item.request, item.source.as_ref(), Some("client"))
+    }
+
+    fn incident(
+        &self,
+        request: &guardrail::Request,
+        source: Option<&guardrail::Source>,
+        decided_by: Option<&str>,
+    ) -> Result<(), Error> {
+        let input = GuardrailInput {
+            session_id: request.session_id.clone(),
+            request_id: request.id.clone(),
+            message_id: source.map(|source| source.message_id.clone()),
+            rule_ids: request.rule_ids.clone(),
+            hard_review: request.hard_review == Some(true),
+            time: now(),
+        };
+        let id: model_incident::Id = state::decode_id("inc_", 0);
+        let decided_by = decided_by.map(|value| {
+            model_incident::DecidedBy::decode(&JsonValue::String(value.into()))
+                .expect("guardrail decider")
+        });
+        self.0
+            .authority
+            .store
+            .submit(move |tx| match decided_by {
+                Some(decided_by) => incidents::rejection(tx, &id, &input, &decided_by).map(|_| ()),
+                None => incidents::escalation(tx, &id, &input).map(|_| ()),
+            })
+            .and_then(|receipt| receipt.wait())
+            .map_err(Error::Store)
+    }
+
+    pub fn reconcile_autonomy(&self, session: &SessionId) -> Result<usize, Error> {
+        if !self
+            .0
+            .authority
+            .session(session, None)?
+            .root_autonomy
+            .can_yolo_guardrail()
+        {
+            return Ok(0);
+        }
+        let ids = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .pending
+            .iter()
+            .filter(|(_, item)| &item.request.session_id == session)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        let mut settled = 0;
+        for id in ids {
+            match self.reply_as(
+                session,
+                &id,
+                guardrail::Reply::Once,
+                Some(guardrail::Authority::Yolo),
+            ) {
+                Ok(()) => settled += 1,
+                Err(Error::NotFound) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(settled)
+    }
+
+    pub fn reply(
+        &self,
+        session: &SessionId,
+        id: &guardrail::RequestId,
+        reply: guardrail::Reply,
+    ) -> Result<(), Error> {
+        self.reply_as(session, id, reply, None)
+    }
+
+    fn reply_as(
+        &self,
+        session: &SessionId,
+        id: &guardrail::RequestId,
+        reply: guardrail::Reply,
+        authority: Option<guardrail::Authority>,
+    ) -> Result<(), Error> {
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let current = self.0.authority.session(session, None)?;
+        let root = current.root_session_id;
+        let item = state.pending.get(id).ok_or(Error::NotFound)?;
+        if item.request.root_session_id != root {
+            return Err(Error::NotFound);
+        }
+        if authority == Some(guardrail::Authority::Yolo)
+            && (item.request.session_id != *session || !current.root_autonomy.can_yolo_guardrail())
+        {
+            return Err(Error::NotFound);
+        }
+        let item = remove_pending(&mut state, id).expect("pending request held by lock");
+        let reply = if item.request.hard_review == Some(true) && reply == guardrail::Reply::Always {
+            guardrail::Reply::Reject
+        } else {
+            reply
+        };
+        let yolo = authority == Some(guardrail::Authority::Yolo);
+        if !yolo {
+            self.0.rejections.record(
+                Rejections::key(&item.request.session_id, item.fingerprint.as_lossless()),
+                reply == guardrail::Reply::Reject,
+            );
+        }
+        if yolo
+            && let Err(error) = state::emit::<guardrail::Decided>(
+                &self.0.publish,
+                &guardrail::DecidedData {
+                    root_session_id: root.clone(),
+                    session_id: item.request.session_id.clone(),
+                    action: item.request.action.clone(),
+                    rule_ids: vec![],
+                    decision: guardrail::Decision::Allow,
+                },
+            )
+        {
+            let _ = item.sender.send(Err(Error::Declined));
+            return Err(Error::Publish(error));
+        }
+        if let Err(error) = state::emit::<guardrail::Replied>(
+            &self.0.publish,
+            &guardrail::RepliedData {
+                root_session_id: root.clone(),
+                session_id: item.request.session_id.clone(),
+                request_id: id.clone(),
+                reply,
+                decided_by: None,
+                authority,
+                choice: None,
+                confidence: None,
+                grades: None,
+            },
+        ) {
+            let _ = item.sender.send(Err(Error::Declined));
+            return Err(Error::Publish(error));
+        }
+        if yolo
+            && let Err(error) = self.provenance(
+                &root,
+                "session.guardrail.decided.1",
+                ObjectEncoder::new()
+                    .field("sessionID", &root)
+                    .field("reviewSessionID", &item.request.session_id)
+                    .field("requestID", id)
+                    .field("reply", &reply)
+                    .field("authority", &guardrail::Authority::Yolo)
+                    .field("ruleIDs", &item.request.rule_ids)
+                    .optional("source", &item.request.source)
+                    .finish(),
+            )
+        {
+            let _ = item.sender.send(Err(Error::Declined));
+            return Err(error);
+        }
+        if reply == guardrail::Reply::Reject {
+            let recorded = self.reject_incident(&item);
+            let _ = item.sender.send(Err(Error::Declined));
+            return recorded;
+        }
+        if reply == guardrail::Reply::Always && !item.directories.is_empty() {
+            if let Err(error) = self.approve(&root, &item.directories) {
+                let _ = item.sender.send(Err(Error::Declined));
+                return Err(error);
+            }
+            advance(&mut state, &root);
+        }
+        *state.approvals.entry(root.clone()).or_default() += 1;
+        advance(&mut state, &root);
+        let kind = match item.request.action.as_str() {
+            Some("shell") => Some(Kind::Shell),
+            Some("subagent") => Some(Kind::Subagent),
+            _ => None,
+        };
+        if kind == Some(Kind::Shell) && self.full(&state, &root, Kind::Shell) {
+            self.queue_shell(
+                &mut state,
+                &root,
+                item.holder,
+                Some(id.clone()),
+                item.sender,
+            );
+            return Ok(());
+        }
+        let reservation = self.reserve(&mut state, &root, kind, item.holder);
+        if let Err(Ok(reservation)) = item.sender.send(reservation) {
+            reservation.release_unlocked(&mut state);
+        }
+        Ok(())
+    }
+
+    pub fn cancel(&self, id: &guardrail::RequestId) {
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some((_, cancellation)) = state.deciding.get(id) {
+            cancellation.cancel();
+        }
+        if let Some(item) = remove_pending(&mut state, id) {
+            let _ = item.sender.send(Err(Error::Declined));
+            return;
+        }
+        let queued = state.pools.iter().find_map(|((root, _), pool)| {
+            pool.waiters
+                .iter()
+                .any(|waiter| waiter.request.as_ref() == Some(id))
+                .then(|| root.clone())
+        });
+        if let Some(root) = queued {
+            take_waiter(&mut state, &root, |waiter| {
+                waiter.request.as_ref() == Some(id)
+            });
+        }
+    }
+    pub fn cancel_request(
+        &self,
+        session: &SessionId,
+        id: &guardrail::RequestId,
+    ) -> Result<(), Error> {
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let item = state.pending.get(id).ok_or(Error::NotFound)?;
+        let root = self.0.authority.session(session, None)?.root_session_id;
+        if item.request.root_session_id != root {
+            return Err(Error::NotFound);
+        }
+        self.close_pending(&mut state, id, guardrail::ClosedReason::Cancelled)
+    }
+    pub fn retry_request(
+        &self,
+        session: &SessionId,
+        id: &guardrail::RequestId,
+    ) -> Result<guardrail::Request, Error> {
+        let state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let item = state.pending.get(id).ok_or(Error::NotFound)?;
+        let root = self.0.authority.session(session, None)?.root_session_id;
+        if item.request.root_session_id != root {
+            return Err(Error::NotFound);
+        }
+        state::emit::<guardrail::Asked>(&self.0.publish, &item.request).map_err(Error::Publish)?;
+        Ok(item.request.clone())
+    }
+    fn close_pending(
+        &self,
+        state: &mut State,
+        id: &guardrail::RequestId,
+        reason: guardrail::ClosedReason,
+    ) -> Result<(), Error> {
+        let item = remove_pending(state, id).ok_or(Error::NotFound)?;
+        let request = &item.request;
+        let result = self
+            .provenance(
+                &request.root_session_id,
+                "session.guardrail.decided.1",
+                ObjectEncoder::new()
+                    .field("sessionID", &request.root_session_id)
+                    .field("reviewSessionID", &request.session_id)
+                    .field("requestID", &request.id)
+                    .field("reply", &guardrail::Reply::Reject)
+                    .field("reason", &reason)
+                    .field("ruleIDs", &request.rule_ids)
+                    .optional("source", &item.source)
+                    .finish(),
+            )
+            .and_then(|()| {
+                state::emit::<guardrail::Cancelled>(
+                    &self.0.publish,
+                    &guardrail::CancelledData {
+                        root_session_id: request.root_session_id.clone(),
+                        session_id: request.session_id.clone(),
+                        request_id: request.id.clone(),
+                        reason: Some(reason),
+                    },
+                )
+                .map_err(Error::Publish)
+            });
+        let message = match reason {
+            guardrail::ClosedReason::Cancelled => {
+                "Guardrail review was cancelled. This action did not run.".to_owned()
+            }
+            guardrail::ClosedReason::Expired => format!(
+                "Guardrail review expired after {} minutes without a decision. This action did not run.",
+                self.0.settings.limits.hard_review_expiry.as_secs() / 60
+            ),
+        };
+        let _ = item.sender.send(Err(Error::Corrected(message.into())));
+        result
+    }
+    pub fn request_snapshot(
+        &self,
+        session: &SessionId,
+        id: &guardrail::RequestId,
+    ) -> Result<Option<RequestSnapshot<guardrail::Request>>, CoordError> {
+        self.request_snapshot_in(session, id, std::slice::from_ref(session))
+    }
+    pub fn request_snapshot_in(
+        &self,
+        session: &SessionId,
+        id: &guardrail::RequestId,
+        family: &[SessionId],
+    ) -> Result<Option<RequestSnapshot<guardrail::Request>>, CoordError> {
+        let root = match self.0.authority.session(session, None) {
+            Ok(authority) => authority.root_session_id,
+            Err(state::Error::NotFound(_)) => return Ok(None),
+            Err(error) => return Err(coordination_error(error.into())),
+        };
+        Ok(self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .pending
+            .get(id)
+            .filter(|item| {
+                item.request.root_session_id == root && family.contains(&item.request.session_id)
+            })
+            .map(|item| RequestSnapshot {
+                order: item.order,
+                fingerprint: item.fingerprint.as_lossless().clone(),
+                request: item.request.clone(),
+            }))
+    }
+    pub fn request_snapshots(
+        &self,
+        session: &SessionId,
+        limit: usize,
+    ) -> Result<Vec<RequestSnapshot<guardrail::Request>>, CoordError> {
+        self.request_snapshots_in(session, std::slice::from_ref(session), limit)
+    }
+    pub fn request_snapshots_in(
+        &self,
+        session: &SessionId,
+        family: &[SessionId],
+        limit: usize,
+    ) -> Result<Vec<RequestSnapshot<guardrail::Request>>, CoordError> {
+        let root = match self.0.authority.session(session, None) {
+            Ok(authority) => authority.root_session_id,
+            Err(state::Error::NotFound(_)) => return Ok(vec![]),
+            Err(error) => return Err(coordination_error(error.into())),
+        };
+        let mut snapshots = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .pending
+            .values()
+            .filter(|item| {
+                item.request.root_session_id == root && family.contains(&item.request.session_id)
+            })
+            .map(|item| RequestSnapshot {
+                order: item.order,
+                fingerprint: item.fingerprint.as_lossless().clone(),
+                request: item.request.clone(),
+            })
+            .collect::<Vec<_>>();
+        snapshots.sort_by_key(|snapshot| snapshot.order);
+        snapshots.truncate(limit);
+        Ok(snapshots)
+    }
+    fn evaluation_input(request: &guardrail::Request) -> Result<Input, CoordError> {
+        Ok(Input {
+            session_id: request.session_id.clone(),
+            action: request
+                .action
+                .to_utf8()
+                .map_err(|_| CoordError::refused("Guardrail action is invalid"))?,
+            resources: request.resources.clone(),
+            metadata: request.metadata.clone(),
+            skip_review: false,
+            holder: None,
+            source: request.source.clone(),
+        })
+    }
+    pub async fn reconsider(
+        &self,
+        session: &SessionId,
+        id: &guardrail::RequestId,
+        input: Reconsider<guardrail::Request>,
+    ) -> Result<Reconsidered, CoordError> {
+        let fingerprint = &input.fingerprint;
+        let Some(snapshot) = self
+            .request_snapshot(session, id)?
+            .filter(|snapshot| &snapshot.fingerprint == fingerprint)
+        else {
+            return Ok(Reconsidered::stale(fingerprint));
+        };
+        let (request, order) = (snapshot.request, snapshot.order);
+        let Some(_claim) = Claim::acquire(&self.0.reconsidering, id.clone()) else {
+            return Ok(Reconsidered::escalated(
+                fingerprint,
+                "native-assessment-in-progress",
+            ));
+        };
+        if self
+            .0
+            .authority
+            .session(session, None)
+            .map_err(|error| coordination_error(error.into()))?
+            .root_autonomy
+            .can_yolo_guardrail()
+        {
+            self.reconcile_autonomy(&request.session_id)
+                .map_err(coordination_error)?;
+            return Ok(Reconsidered::settled(
+                fingerprint,
+                DecisionOutcome::Allowed,
+                "yolo",
+            ));
+        }
+        let invalid_configuration = request
+            .rule_ids
+            .iter()
+            .any(|rule| rule.as_str() == Some("configuration.invalid"));
+        if input.decision.is_none() && (request.hard_review == Some(true) || invalid_configuration)
+        {
+            return Ok(Reconsidered::escalated(
+                fingerprint,
+                "explicit-decision:hard-review",
+            ));
+        }
+        if input.decision == Some(Decision::Approve) && invalid_configuration {
+            return Ok(Reconsidered::escalated(
+                fingerprint,
+                "configuration-invalid",
+            ));
+        }
+        if !(input.gate.validate)(request.clone()).await {
+            return Ok(Reconsidered::escalated(fingerprint, "delegation-invalid"));
+        }
+        if input.decision == Some(Decision::Decline) {
+            return self
+                .settle(session, id, order, &input, |_, _, _| {
+                    Ok(Verdict::Settle {
+                        outcome: DecisionOutcome::Denied,
+                        via: "coordination",
+                        reply: guardrail::Reply::Reject,
+                        decided: None,
+                        blocked: false,
+                        provenance: None,
+                    })
+                })
+                .await;
+        }
+        let evaluation = self
+            .classify(&Self::evaluation_input(&request)?)
+            .map_err(coordination_error)?
+            .0;
+        if evaluation.effect != Effect::Ask {
+            return self
+                .settle(session, id, order, &input, |_, evaluation, _| {
+                    Ok(match evaluation.effect {
+                        Effect::Allow => Verdict::Settle {
+                            outcome: DecisionOutcome::Allowed,
+                            via: "guardrail-rules",
+                            reply: guardrail::Reply::Once,
+                            decided: Some(guardrail::Decision::Allow),
+                            blocked: false,
+                            provenance: None,
+                        },
+                        Effect::Deny => Verdict::Settle {
+                            outcome: DecisionOutcome::Denied,
+                            via: "guardrail-rules",
+                            reply: guardrail::Reply::Reject,
+                            decided: Some(guardrail::Decision::Deny),
+                            blocked: true,
+                            provenance: None,
+                        },
+                        Effect::Ask => Verdict::Escalate("guardrail-ask"),
+                    })
+                })
+                .await;
+        }
+        if evaluation.hard_review != (request.hard_review == Some(true))
+            || evaluation.standard != request.standard
+            || evaluation.rule_ids != request.rule_ids
+        {
+            return Ok(Reconsidered::stale(fingerprint));
+        }
+        if evaluation.hard_review {
+            return Ok(Reconsidered::escalated(
+                fingerprint,
+                "explicit-decision:hard-review",
+            ));
+        }
+        if !evaluation.standard {
+            return Ok(Reconsidered::escalated(
+                fingerprint,
+                "explicit-decision:custom-review",
+            ));
+        }
+        if input.decision == Some(Decision::Approve) {
+            return self
+                .settle(session, id, order, &input, |request, evaluation, _| {
+                    Ok(match evaluation.effect {
+                        Effect::Allow => Verdict::Settle {
+                            outcome: DecisionOutcome::Allowed,
+                            via: "guardrail-rules",
+                            reply: guardrail::Reply::Once,
+                            decided: Some(guardrail::Decision::Allow),
+                            blocked: false,
+                            provenance: None,
+                        },
+                        Effect::Deny => Verdict::Settle {
+                            outcome: DecisionOutcome::Denied,
+                            via: "guardrail-rules",
+                            reply: guardrail::Reply::Reject,
+                            decided: Some(guardrail::Decision::Deny),
+                            blocked: true,
+                            provenance: None,
+                        },
+                        Effect::Ask
+                            if evaluation.hard_review != (request.hard_review == Some(true))
+                                || evaluation.standard != request.standard
+                                || evaluation.rule_ids != request.rule_ids =>
+                        {
+                            Verdict::Stale
+                        }
+                        Effect::Ask if evaluation.hard_review => {
+                            Verdict::Escalate("explicit-decision:hard-review")
+                        }
+                        Effect::Ask if !evaluation.standard => {
+                            Verdict::Escalate("explicit-decision:custom-review")
+                        }
+                        Effect::Ask => Verdict::Settle {
+                            outcome: DecisionOutcome::Allowed,
+                            via: "coordination",
+                            reply: guardrail::Reply::Once,
+                            decided: Some(guardrail::Decision::Allow),
+                            blocked: false,
+                            provenance: None,
+                        },
+                    })
+                })
+                .await;
+        }
+        let authority = self
+            .0
+            .authority
+            .session(session, None)
+            .map_err(|error| coordination_error(error.into()))?;
+        if !authority.root_autonomy.can_auto_guardrail() {
+            return Ok(Reconsidered::escalated(
+                fingerprint,
+                "native-assessment-unavailable",
+            ));
+        }
+        let service = self.clone();
+        let key = fingerprint.clone();
+        self.settle(session, id, order, &input, move |request, evaluation, _| {
+            let mut current = evaluation.rule_ids.clone();
+            let mut expected = request.rule_ids.clone();
+            current.sort();
+            expected.sort();
+            if evaluation.effect != Effect::Ask
+                || evaluation.hard_review
+                || !evaluation.standard
+                || current != expected
+            {
+                return Ok(Verdict::Stale);
+            }
+            if service
+                .applicability(&request.session_id, request.source.as_ref(), &key)?
+                .rejected()
+            {
+                return Ok(Verdict::Escalate("explicit-rejected"));
+            }
+            Ok(Verdict::Settle {
+                outcome: DecisionOutcome::Allowed,
+                via: "auto-guardrail",
+                reply: guardrail::Reply::Once,
+                decided: Some(guardrail::Decision::Allow),
+                blocked: false,
+                provenance: None,
+            })
+        })
+        .await
+    }
+    fn applicability(
+        &self,
+        session: &SessionId,
+        source: Option<&guardrail::Source>,
+        expected: &LosslessString,
+    ) -> Result<Applicability, CoordError> {
+        let snapshot = self
+            .0
+            .authority
+            .store
+            .snapshot()
+            .map_err(CoordError::Store)?;
+        let mut same_call = Vec::new();
+        if let Some(source) = source {
+            let message = id_text(&source.message_id);
+            let prefix = tuple_key(&[
+                KeyPart::String(session.as_lossless()),
+                KeyPart::String(&"session.permission.assessed.1".into()),
+            ]);
+            let text = |data: &JsonObject, name: &str| data.get(&name.into()).cloned();
+            let mut after = None;
+            'pages: loop {
+                let page = snapshot
+                    .index_range::<EventTable>(
+                        "event_aggregate_type_seq_idx",
+                        IndexQuery {
+                            lower: Bound::Unbounded,
+                            upper: Bound::Unbounded,
+                            prefix: Some(&prefix),
+                            order: IndexOrder::Ascending,
+                            after: after.as_ref(),
+                            limit: 128,
+                        },
+                    )
+                    .map_err(CoordError::Store)?;
+                let Some(last) = page.last() else {
+                    break;
+                };
+                after = Some(last.cursor.clone());
+                for entry in page {
+                    let JsonValue::Object(data) = &entry.record.data else {
+                        continue;
+                    };
+                    let Some(JsonValue::Object(origin)) = data.get(&"source".into()) else {
+                        continue;
+                    };
+                    if text(origin, "messageID") != Some(JsonValue::String(message.clone()))
+                        || text(origin, "callID") != Some(JsonValue::String(source.call_id.clone()))
+                    {
+                        continue;
+                    }
+                    let (Some(outcome @ JsonValue::String(_)), Some(via @ JsonValue::String(_))) =
+                        (text(data, "outcome"), text(data, "via"))
+                    else {
+                        continue;
+                    };
+                    same_call.push(
+                        ObjectEncoder::new()
+                            .field("gate", "permission")
+                            .field("source", "automated")
+                            .field("outcome", &outcome)
+                            .field("via", &via)
+                            .field("choice", &text(data, "choice").unwrap_or(JsonValue::Null))
+                            .field(
+                                "confidence",
+                                &text(data, "confidence").unwrap_or(JsonValue::Null),
+                            )
+                            .finish(),
+                    );
+                    if same_call.len() == 8 {
+                        break 'pages;
+                    }
+                }
+            }
+            same_call.extend(
+                self.0
+                    .permissions
+                    .call_approvals(session, &message, &source.call_id),
+            );
+        }
+        let prior = self.prior(session, expected)?;
+        Ok(Applicability::new(
+            "guardrail",
+            vec![("sameCall", JsonValue::Array(same_call))],
+            prior,
+        ))
+    }
+    fn prior(
+        &self,
+        session: &SessionId,
+        expected: &LosslessString,
+    ) -> Result<Vec<Prior>, CoordError> {
+        let mut prior = Vec::new();
+        prior.extend(self.0.rejections.prior(&Rejections::key(session, expected)));
+        prior.extend(reviewed(
+            &self
+                .0
+                .authority
+                .store
+                .snapshot()
+                .map_err(CoordError::Store)?,
+            session,
+            session_review::Kind::Guardrail,
+            |payload| guardrail_matches(payload, expected),
+        )?);
+        Ok(prior)
+    }
+
+    fn ordinary_auto(
+        &self,
+        input: &Input,
+        result: &Evaluation,
+        authority: &SessionAuthority,
+        deferred: bool,
+    ) -> Result<bool, Error> {
+        if !(result.standard && authority.root_autonomy.can_auto_guardrail()) {
+            return Ok(false);
+        }
+        if result.effect != Effect::Ask || result.hard_review {
+            return Ok(true);
+        }
+        self.prior(
+            &input.session_id,
+            self.fingerprint(input, result, deferred).as_lossless(),
+        )
+        .map(|prior| !explicit_rejected(&prior))
+        .map_err(admission_error)
+    }
+
+    fn context_digest(&self, session: &SessionId) -> Result<Option<String>, Error> {
+        self.0
+            .context
+            .get()
+            .map(|context| {
+                context
+                    .authority_digest(session)
+                    .map_err(|error| Error::Publish(error.to_string()))
+            })
+            .transpose()
+    }
+    async fn settle(
+        &self,
+        session: &SessionId,
+        id: &guardrail::RequestId,
+        order: u64,
+        input: &Reconsider<guardrail::Request>,
+        decide: impl FnOnce(
+            &guardrail::Request,
+            &Evaluation,
+            &SessionAuthority,
+        ) -> Result<Verdict, CoordError>,
+    ) -> Result<Reconsidered, CoordError> {
+        let fingerprint = &input.fingerprint;
+        let candidate = self
+            .request_snapshot(session, id)?
+            .filter(|snapshot| snapshot.order == order && &snapshot.fingerprint == fingerprint);
+        let Some(candidate) = candidate else {
+            return Ok(Reconsidered::stale(fingerprint));
+        };
+        if !(input.gate.validate)(candidate.request).await {
+            return Ok(Reconsidered::escalated(fingerprint, "delegation-invalid"));
+        }
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let Some(request) = state
+            .pending
+            .get(id)
+            .filter(|item| {
+                item.order == order
+                    && item.fingerprint.as_lossless() == fingerprint
+                    && &item.request.session_id == session
+            })
+            .map(|item| item.request.clone())
+        else {
+            return Ok(Reconsidered::stale(fingerprint));
+        };
+        if !(input.gate.current)() {
+            return Ok(Reconsidered::escalated(fingerprint, "delegation-invalid"));
+        }
+        let (evaluation, _) = self
+            .classify(&Self::evaluation_input(&request)?)
+            .map_err(coordination_error)?;
+        let authority = self
+            .0
+            .authority
+            .session(session, None)
+            .map_err(|error| coordination_error(error.into()))?;
+        let (outcome, via, reply, decided, blocked, provenance) =
+            match decide(&request, &evaluation, &authority)? {
+                Verdict::Escalate(reason) => {
+                    return Ok(Reconsidered::escalated(fingerprint, reason));
+                }
+                Verdict::Stale => return Ok(Reconsidered::stale(fingerprint)),
+                Verdict::Settle {
+                    outcome,
+                    via,
+                    reply,
+                    decided,
+                    blocked,
+                    provenance,
+                } => (outcome, via, reply, decided, blocked, provenance),
+            };
+        let root = request.root_session_id.clone();
+        self.provenance(
+            &root,
+            "session.guardrail.decided.1",
+            ObjectEncoder::new()
+                .field("sessionID", &root)
+                .field("reviewSessionID", &request.session_id)
+                .field("requestID", &request.id)
+                .field("reply", &reply)
+                .optional(
+                    "authority",
+                    &provenance.as_ref().and_then(|item| item.authority),
+                )
+                .optional("choice", &provenance.as_ref().and_then(|item| item.choice))
+                .optional(
+                    "confidence",
+                    &provenance.as_ref().and_then(|item| item.confidence),
+                )
+                .optional(
+                    "grades",
+                    &provenance.as_ref().and_then(|item| item.grades.clone()),
+                )
+                .field("ruleIDs", &request.rule_ids)
+                .optional("source", &request.source)
+                .field("actor", "coordinator")
+                .field("coordinatorSessionID", &input.source.coordinator_session_id)
+                .optional("groupID", &input.source.group_id)
+                .field("rationale", &input.source.rationale)
+                .finish(),
+        )
+        .map_err(coordination_error)?;
+        state::emit::<guardrail::Replied>(
+            &self.0.publish,
+            &guardrail::RepliedData {
+                root_session_id: root.clone(),
+                session_id: request.session_id.clone(),
+                request_id: id.clone(),
+                reply,
+                decided_by: provenance
+                    .as_ref()
+                    .map(|_| guardrail::DecidedBy::DecisionModel),
+                authority: provenance.as_ref().and_then(|item| item.authority),
+                choice: provenance.as_ref().and_then(|item| item.choice),
+                confidence: provenance.as_ref().and_then(|item| item.confidence),
+                grades: provenance.as_ref().and_then(|item| item.grades.clone()),
+            },
+        )
+        .map_err(CoordError::refused)?;
+        if let Some(decision) = decided {
+            state::emit::<guardrail::Decided>(
+                &self.0.publish,
+                &guardrail::DecidedData {
+                    root_session_id: root.clone(),
+                    session_id: request.session_id.clone(),
+                    action: request.action.clone(),
+                    rule_ids: evaluation.rule_ids.clone(),
+                    decision,
+                },
+            )
+            .map_err(CoordError::refused)?;
+        }
+        let item = remove_pending(&mut state, id).expect("pending guardrail held by lock");
+        if blocked {
+            *state.blocked.entry(root.clone()).or_default() += 1;
+            advance(&mut state, &root);
+        }
+        if reply == guardrail::Reply::Reject {
+            let recorded = if provenance.is_some() {
+                self.incident(&item.request, item.source.as_ref(), Some("decision-model"))
+            } else {
+                Ok(())
+            };
+            let error = match (&provenance, via) {
+                (Some(provenance), _) => Error::Corrected(denied_feedback(true, provenance)),
+                (None, "coordination") => {
+                    Error::Corrected(coordination_decline_feedback(true, &input.source.rationale))
+                }
+                _ => Error::Declined,
+            };
+            let _ = item.sender.send(Err(error));
+            recorded.map_err(coordination_error)?;
+        } else {
+            self.grant(&mut state, &root, id, item);
+        }
+        Ok(Reconsidered::settled(fingerprint, outcome, via))
+    }
+    fn grant(&self, state: &mut State, root: &SessionId, id: &guardrail::RequestId, item: Pending) {
+        *state.approvals.entry(root.clone()).or_default() += 1;
+        advance(state, root);
+        let kind = match item.request.action.as_str() {
+            Some("shell") => Some(Kind::Shell),
+            Some("subagent") => Some(Kind::Subagent),
+            _ => None,
+        };
+        if kind == Some(Kind::Shell) && self.full(state, root, Kind::Shell) {
+            let _ = self.queue_shell(state, root, item.holder, Some(id.clone()), item.sender);
+            return;
+        }
+        let reservation = self.reserve(state, root, kind, item.holder);
+        if let Err(Ok(reservation)) = item.sender.send(reservation) {
+            reservation.release_unlocked(state);
+        }
+    }
+    pub fn escalate(
+        &self,
+        id: &guardrail::RequestId,
+        input: EscalateRequest,
+    ) -> Result<Escalated, CoordError> {
+        let root = match self.0.authority.session(&input.session_id, None) {
+            Ok(authority) => authority.root_session_id,
+            Err(state::Error::NotFound(_)) => return Ok(Escalated::stale()),
+            Err(error) => return Err(coordination_error(error.into())),
+        };
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let Some(item) = state.pending.get_mut(id) else {
+            drop(state);
+            return Ok(self
+                .0
+                .reviews
+                .get()
+                .and_then(|reviews| {
+                    deferred_review(reviews, &input.session_id, |payload| match payload {
+                        session_review::Payload::Guardrail(payload)
+                            if &payload.request_id == id
+                                && payload.fingerprint.as_lossless() == &input.fingerprint =>
+                        {
+                            Some(payload.coordination_escalation.clone())
+                        }
+                        _ => None,
+                    })
+                })
+                .unwrap_or_else(Escalated::stale));
+        };
+        if item.request.root_session_id != root
+            || item.request.session_id != input.session_id
+            || item.fingerprint.as_lossless() != &input.fingerprint
+            || !(input.current)()
+        {
+            return Ok(Escalated::stale());
+        }
+        let appended = append(item.request.coordination_escalation.as_ref(), &input.source);
+        let Appended::Added(value) = &appended else {
+            return Ok(Escalated::appended(appended));
+        };
+        item.request.coordination_escalation = Some(value.clone());
+        state::emit::<ycoding_schema::coordination::event::RequestEscalated>(
+            &self.0.publish,
+            &ycoding_schema::coordination::RequestEscalatedData {
+                session_id: input.session_id.clone(),
+                root_session_id: Some(root),
+                kind: ycoding_schema::coordination::RequestKind::Review,
+                request_id: id_text(id),
+                coordination_escalation: value.clone(),
+            },
+        )
+        .map_err(CoordError::refused)?;
+        Ok(Escalated::appended(appended))
+    }
+    pub fn list_ordered(&self) -> Vec<(u64, guardrail::Request)> {
+        let mut pending = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .pending
+            .values()
+            .map(|item| (item.order, item.request.clone()))
+            .collect::<Vec<_>>();
+        pending.sort_by_key(|(order, _)| *order);
+        pending
+    }
+    pub fn for_session(&self, session: &SessionId) -> Result<Vec<guardrail::Request>, Error> {
+        let root = self.0.authority.session(session, None)?.root_session_id;
+        Ok(self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .pending
+            .values()
+            .filter(|item| item.request.root_session_id == root)
+            .map(|item| item.request.clone())
+            .collect())
+    }
+    pub fn cancel_session(&self, session: &SessionId) {
+        let ids = {
+            let state = self
+                .0
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            for (id, cancellation) in state.deciding.values() {
+                if id == session {
+                    cancellation.cancel();
+                }
+            }
+            state
+                .pending
+                .iter()
+                .filter(|(_, item)| &item.request.session_id == session)
+                .map(|(id, _)| id.clone())
+                .collect::<Vec<_>>()
+        };
+        for id in ids {
+            self.cancel(&id);
+        }
+    }
+    pub fn status(&self, session: &SessionId) -> Result<guardrail::Status, Error> {
+        let root = self.0.authority.session(session, None)?.root_session_id;
+        let mut status = self.status_unlocked(
+            &self
+                .0
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+            &root,
+        );
+        self.history_status(&mut status)?;
+        Ok(status)
+    }
+
+    fn history_status(&self, status: &mut guardrail::Status) -> Result<(), Error> {
+        let snapshot = self.0.authority.store.snapshot().map_err(Error::Store)?;
+        let members = crate::session::family::members(
+            &mut crate::session::family::Reader::Snapshot(&snapshot),
+            status.root_session_id.as_lossless(),
+        )
+        .map_err(Error::Store)?;
+        let mut dismissals = vec![];
+        let mut decisions = vec![];
+        for member in members {
+            for type_ in [
+                "session.guardrail.dismissed.1",
+                "session.guardrail.decided.1",
+            ] {
+                let prefix = tuple_key(&[KeyPart::String(&member), KeyPart::String(&type_.into())]);
+                let mut after = None;
+                loop {
+                    let rows = snapshot
+                        .index_range::<EventTable>(
+                            "event_aggregate_type_seq_idx",
+                            IndexQuery {
+                                lower: Bound::Unbounded,
+                                upper: Bound::Unbounded,
+                                prefix: Some(&prefix),
+                                order: IndexOrder::Ascending,
+                                after: after.as_ref(),
+                                limit: 128,
+                            },
+                        )
+                        .map_err(Error::Store)?;
+                    if rows.is_empty() {
+                        break;
+                    }
+                    after = rows.last().map(|row| row.cursor.clone());
+                    for row in rows {
+                        let path = JsonPath::default();
+                        let parsed = (|| {
+                            let object = ObjectDecoder::new(&row.record.data, &path)?;
+                            let session_id = object
+                                .optional("reviewSessionID")?
+                                .unwrap_or(SessionId::decode(&JsonValue::String(member.clone()))?);
+                            let created = NonNegativeInt::decode(&JsonValue::Number(
+                                row.record.created as f64,
+                            ))?;
+                            if type_ == "session.guardrail.dismissed.1" {
+                                let confidence: guardrail::Confidence =
+                                    object.field("confidence")?;
+                                dismissals.push(guardrail::Dismissal {
+                                    session_id,
+                                    created,
+                                    event_id: row.record.id.clone(),
+                                    rule_id: object.field("ruleID")?,
+                                    confidence: confidence.get(),
+                                    source: object.optional("source")?,
+                                });
+                            } else {
+                                decisions.push(guardrail::StatusDecision {
+                                    session_id,
+                                    created,
+                                    request_id: object.field("requestID")?,
+                                    reply: object.field("reply")?,
+                                    authority: object.optional("authority")?,
+                                    choice: object.optional("choice")?,
+                                    confidence: object.optional("confidence")?,
+                                    grades: object.optional("grades")?,
+                                    rule_ids: object.optional("ruleIDs")?,
+                                    source: object.optional("source")?,
+                                    reason: object.optional("reason")?,
+                                });
+                            }
+                            Ok::<_, ycoding_schema::DecodeError>(())
+                        })();
+                        parsed.map_err(|error| {
+                            Error::Store(ycoding_store::Error::Record(Box::new(error)))
+                        })?;
+                    }
+                }
+            }
+        }
+        dismissals.sort_by(|left, right| {
+            (left.created.get(), &left.event_id).cmp(&(right.created.get(), &right.event_id))
+        });
+        decisions.sort_by(|left, right| {
+            (left.created.get(), &left.request_id).cmp(&(right.created.get(), &right.request_id))
+        });
+        status.dismissals = (!dismissals.is_empty()).then_some(dismissals);
+        status.decisions = (!decisions.is_empty()).then_some(decisions);
+        Ok(())
+    }
+    fn status_unlocked(&self, state: &State, root: &SessionId) -> guardrail::Status {
+        let custom = (self.0.settings.custom)();
+        let number =
+            |value: u64| NonNegativeInt::new(value as i64).expect("bounded guardrail count");
+        guardrail::Status {
+            root_session_id: root.clone(),
+            profile: if self.0.settings.enabled {
+                "standard"
+            } else {
+                "disabled"
+            }
+            .into(),
+            custom_rules: number(custom.iter().map(|layer| layer.rules.len() as u64).sum()),
+            approvals: number(state.approvals.get(root).copied().unwrap_or_default()),
+            blocked: number(state.blocked.get(root).copied().unwrap_or_default()),
+            counters: [Kind::Shell, Kind::Subagent, Kind::Review]
+                .iter()
+                .map(|kind| guardrail::Counter {
+                    id: kind.label().into(),
+                    current: number(
+                        state
+                            .pools
+                            .get(&(root.clone(), *kind))
+                            .map_or(0, |pool| pool.slots.len() as u64),
+                    ),
+                    limit: number(kind.limit(self.0.settings.limits)),
+                    scope: guardrail::CounterScope::Family,
+                })
+                .collect(),
+            invalid_files: custom
+                .iter()
+                .flat_map(|layer| layer.invalid_files.clone())
+                .collect(),
+            dismissals: None,
+            decisions: None,
+        }
+    }
+    pub fn snapshot(&self, session: &SessionId) -> Result<Snapshot, Error> {
+        self.with_snapshot(session, |snapshot| snapshot)
+    }
+    pub fn with_snapshot<T>(
+        &self,
+        session: &SessionId,
+        use_snapshot: impl FnOnce(Snapshot) -> T,
+    ) -> Result<T, Error> {
+        let root = self.0.authority.session(session, None)?.root_session_id;
+        let mut approved = self.approved_directories(&root)?;
+        approved.sort();
+        approved.dedup();
+        let state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut status = self.status_unlocked(&state, &root);
+        self.history_status(&mut status)?;
+        status
+            .counters
+            .sort_by(|left, right| left.id.cmp(&right.id));
+        status.invalid_files.sort();
+        let pending = state
+            .pending
+            .values()
+            .filter(|item| item.request.root_session_id == root)
+            .map(|item| {
+                ObjectEncoder::new()
+                    .field("id", &item.request.id)
+                    .field("rootSessionID", &item.request.root_session_id)
+                    .field("sessionID", &item.request.session_id)
+                    .field("action", &item.request.action)
+                    .field("resources", &item.request.resources)
+                    .field("ruleIDs", &item.request.rule_ids)
+                    .field("reason", &item.request.reason)
+                    .field("standard", &item.request.standard)
+                    .field("hardReview", &item.request.hard_review.unwrap_or(false))
+                    .optional("escalation", &item.request.escalation)
+                    .field(
+                        "risk",
+                        &item
+                            .request
+                            .risk
+                            .as_ref()
+                            .map_or(JsonValue::Null, DomainEncode::encode),
+                    )
+                    .field(
+                        "metadata",
+                        &item
+                            .request
+                            .metadata
+                            .as_ref()
+                            .map_or(JsonValue::Null, DomainEncode::encode),
+                    )
+                    .finish()
+            })
+            .collect::<Vec<_>>();
+        let content = ObjectEncoder::new()
+            .field("status", &status)
+            .field("pending", &pending)
+            .field("approvedDirectories", &approved)
+            .finish();
+        let digest = ring::digest::digest(&ring::digest::SHA256, canonical(&content).as_bytes())
+            .as_ref()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        Ok(use_snapshot(Snapshot {
+            sequence: state.sequences.get(&root).copied().unwrap_or_default(),
+            digest,
+        }))
+    }
+    pub fn shutdown(&self) {
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        for (_, cancellation) in state.deciding.values() {
+            cancellation.cancel();
+        }
+        let ids = state.pending.keys().cloned().collect::<Vec<_>>();
+        for id in ids {
+            if let Some(item) = remove_pending(&mut state, &id) {
+                let _ = item.sender.send(Err(Error::Declined));
+            }
+        }
+        for waiter in state
+            .pools
+            .values_mut()
+            .flat_map(|pool| std::mem::take(&mut pool.waiters))
+            .collect::<Vec<_>>()
+        {
+            let _ = waiter.sender.send(Err(Error::Declined));
+        }
+        state.pools.retain(|_, pool| !pool.slots.is_empty());
+    }
+}
+
+enum Verdict {
+    Escalate(&'static str),
+    Stale,
+    Settle {
+        outcome: DecisionOutcome,
+        via: &'static str,
+        reply: guardrail::Reply,
+        decided: Option<guardrail::Decision>,
+        blocked: bool,
+        provenance: Option<guardrail::Escalation>,
+    },
+}
+
+fn admission_error(error: CoordError) -> Error {
+    match error {
+        CoordError::Store(error) => Error::Store(error),
+        other => Error::Publish(other.to_string()),
+    }
+}
+
+fn coordination_error(error: Error) -> CoordError {
+    match error {
+        Error::Store(error) => CoordError::Store(error),
+        other => CoordError::refused(format!("{other:?}")),
+    }
+}
+
+fn take_waiter(
+    state: &mut State,
+    root: &SessionId,
+    matches: impl Fn(&Waiter) -> bool,
+) -> Option<Waiter> {
+    let key = (root.clone(), Kind::Shell);
+    let pool = state.pools.get_mut(&key)?;
+    let waiter = pool.waiters.remove(pool.waiters.iter().position(matches)?);
+    if pool.slots.is_empty() && pool.waiters.is_empty() {
+        state.pools.remove(&key);
+    }
+    waiter
+}
+
+fn remove_pending(state: &mut State, id: &guardrail::RequestId) -> Option<Pending> {
+    let item = state.pending.remove(id)?;
+    if let Some(timer) = &item.expiry {
+        timer.abort();
+    }
+    advance(state, &item.request.root_session_id);
+    item.review.release_unlocked(state);
+    Some(item)
+}
+fn canonical(value: &JsonValue) -> String {
+    match value {
+        JsonValue::Object(object) => {
+            let mut keys = object.iter().map(|(key, _)| key).collect::<Vec<_>>();
+            keys.sort();
+            format!(
+                "{{{}}}",
+                keys.into_iter()
+                    .map(|key| format!(
+                        "{}:{}",
+                        stringify_json(&key.encode()),
+                        canonical(object.get(key).expect("collected key"))
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        }
+        JsonValue::Array(array) => format!(
+            "[{}]",
+            array.iter().map(canonical).collect::<Vec<_>>().join(",")
+        ),
+        _ => stringify_json(value),
+    }
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Snapshot {
+    pub sequence: u64,
+    pub digest: String,
+}
+
+struct Deferring<'a> {
+    request: &'a guardrail::Request,
+    source: Option<&'a guardrail::Source>,
+    directories: &'a [LosslessString],
+    fingerprint: session_review::Fingerprint,
+    reason: session_review::Reason,
+    conversion: bool,
+}
+
+async fn open_review(
+    inner: &Inner,
+    reviews: &Reviews,
+    deferring: Deferring<'_>,
+) -> Result<Reservation, Error> {
+    let request = deferring.request;
+    let opened = reviews
+        .service
+        .open(review_input(reviews, deferring, false)?)
+        .await;
+    let item = match opened {
+        Ok(item) => item,
+        Err(review::Error::Full { limit, .. }) => return Err(Error::ReviewFull { limit }),
+        Err(error) => return Err(Error::Review(error)),
+    };
+    state::emit::<guardrail::Deferred>(
+        &inner.publish,
+        &guardrail::DeferredData {
+            root_session_id: request.root_session_id.clone(),
+            session_id: request.session_id.clone(),
+            request_id: request.id.clone(),
+            item_id: item.deferral.item_id.clone(),
+        },
+    )
+    .map_err(Error::Publish)?;
+    Err(Error::Deferred {
+        request_id: request.id.clone(),
+        item_id: item.deferral.item_id,
+        rule_ids: request.rule_ids.clone(),
+    })
+}
+
+fn defer_explicit(inner: &Inner, reviews: &Reviews, deferring: Deferring<'_>) -> Error {
+    let request = deferring.request;
+    let input = match review_input(reviews, deferring, true) {
+        Ok(input) => input,
+        Err(error) => return error,
+    };
+    let outcome = match reviews.service.defer_open_now(input) {
+        Ok(outcome) => outcome,
+        Err(error) => return Error::Review(error),
+    };
+    if let review::DeferOutcome::Open {
+        item_id,
+        opened: true,
+    } = &outcome
+        && let Err(error) = state::emit::<guardrail::Deferred>(
+            &inner.publish,
+            &guardrail::DeferredData {
+                root_session_id: request.root_session_id.clone(),
+                session_id: request.session_id.clone(),
+                request_id: request.id.clone(),
+                item_id: item_id.clone(),
+            },
+        )
+    {
+        return Error::Publish(error);
+    }
+    Error::DeferredReview(Box::new(DeferredReview {
+        request_id: request.id.clone(),
+        session_id: request.session_id.clone(),
+        outcome,
+        action: request.action.clone(),
+        resources: request.resources.iter().map(redact).collect(),
+        rule_ids: request.rule_ids.clone(),
+        hard_review: request.hard_review == Some(true),
+    }))
+}
+
+fn review_input(
+    reviews: &Reviews,
+    deferring: Deferring<'_>,
+    executor: bool,
+) -> Result<OpenInput, Error> {
+    let request = deferring.request;
+    let origin = match deferring.source {
+        Some(source) if !executor => session_review::Origin::Tool {
+            message_id: source.message_id.clone(),
+            call_id: source.call_id.clone(),
+        },
+        _ => session_review::Origin::Request {
+            request_id: match request.id.encode() {
+                JsonValue::String(id) => id,
+                _ => {
+                    return Err(Error::Store(ycoding_store::Error::Rejected(
+                        "guardrail request ID",
+                    )));
+                }
+            },
+            executor,
+        },
+    };
+    Ok(OpenInput {
+        session_id: request.session_id.clone(),
+        kind: session_review::Kind::Guardrail,
+        reason: deferring.reason,
+        choice: request
+            .escalation
+            .as_ref()
+            .and_then(|value| value.choice)
+            .map(|choice| match choice.encode() {
+                JsonValue::String(value) => value,
+                _ => unreachable!("choice is text"),
+            }),
+        confidence: request
+            .escalation
+            .as_ref()
+            .and_then(|value| value.confidence),
+        grades: request
+            .escalation
+            .as_ref()
+            .and_then(|value| value.grades.clone()),
+        origin,
+        payload: session_review::Payload::Guardrail(session_review::GuardrailPayload {
+            action: redact(&request.action),
+            resources: request.resources.iter().map(redact).collect(),
+            rule_ids: request.rule_ids.clone(),
+            reason: request.reason.clone(),
+            hard_review: request.hard_review == Some(true),
+            directories: deferring.directories.to_vec(),
+            fingerprint: deferring.fingerprint,
+            request_id: request.id.clone(),
+            coordination_escalation: redacted_escalation(request.coordination_escalation.as_ref()),
+        }),
+        limit: reviews.limit,
+        conversion: deferring.conversion,
+        created: now(),
+    })
+}
+
+fn now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_millis() as i64
+}
+
+const REDACTED: &str = "[redacted]";
+
+pub(crate) fn redacted_escalation(
+    escalation: Option<&ycoding_schema::coordination::Escalation>,
+) -> Option<ycoding_schema::coordination::Escalation> {
+    escalation.map(|escalation| ycoding_schema::coordination::Escalation {
+        reasons: escalation
+            .reasons
+            .iter()
+            .map(|item| ycoding_schema::coordination::EscalationReason {
+                session_id: item.session_id.clone(),
+                reason: LosslessString::from_utf16(
+                    redact(&item.reason).code_units().take(500).collect(),
+                ),
+            })
+            .collect(),
+    })
+}
+
+pub(crate) fn redact_value(value: &JsonValue) -> JsonValue {
+    match value {
+        JsonValue::String(value) => JsonValue::String(redact(value)),
+        JsonValue::Array(values) => JsonValue::Array(values.iter().map(redact_value).collect()),
+        JsonValue::Object(values) => JsonValue::Object(values.iter().fold(
+            JsonObject::new(),
+            |mut object, (key, value)| {
+                object.insert(
+                    key.clone(),
+                    if sensitive(
+                        &String::from_utf16_lossy(&key.code_units().collect::<Vec<_>>()),
+                        &SENSITIVE,
+                    ) {
+                        JsonValue::String(REDACTED.into())
+                    } else {
+                        redact_value(value)
+                    },
+                );
+                object
+            },
+        )),
+        value => value.clone(),
+    }
+}
+const SENSITIVE: [&str; 7] = [
+    "password",
+    "secret",
+    "token",
+    "credential",
+    "authorization",
+    "apikey",
+    "privatekey",
+];
+const ASSIGNED: [&str; 6] = [
+    "password",
+    "secret",
+    "token",
+    "apikey",
+    "authorization",
+    "credential",
+];
+
+fn redact(value: &LosslessString) -> LosslessString {
+    let mut text = String::from_utf16_lossy(&value.code_units().collect::<Vec<_>>());
+    for (_, secret) in std::env::vars()
+        .filter(|(key, secret)| secret.chars().count() >= 4 && sensitive(key, &SENSITIVE))
+    {
+        text = text.replace(&secret, REDACTED);
+    }
+    text = redact_private_keys(&text);
+    text = redact_assignments(&text);
+    text = redact_bearer(&text);
+    redact_url_credentials(&text).into()
+}
+
+fn sensitive(name: &str, words: &[&str]) -> bool {
+    let folded = name
+        .chars()
+        .filter(|character| !matches!(character, '-' | '_'))
+        .collect::<String>()
+        .to_ascii_lowercase();
+    words.iter().any(|word| folded.contains(word))
+}
+
+fn redact_private_keys(text: &str) -> String {
+    let mut output = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("-----BEGIN ") {
+        let Some(header) = rest[start..].find("PRIVATE KEY-----") else {
+            break;
+        };
+        let after_header = start + header + "PRIVATE KEY-----".len();
+        let Some(end) = rest[after_header..].find("-----END ") else {
+            break;
+        };
+        let footer_start = after_header + end;
+        let Some(footer) = rest[footer_start..].find("PRIVATE KEY-----") else {
+            break;
+        };
+        output.push_str(&rest[..start]);
+        output.push_str(REDACTED);
+        rest = &rest[footer_start + footer + "PRIVATE KEY-----".len()..];
+    }
+    output.push_str(rest);
+    output
+}
+
+fn word(character: char) -> bool {
+    character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+}
+
+fn redact_assignments(text: &str) -> String {
+    let characters = text.char_indices().collect::<Vec<_>>();
+    let mut output = String::new();
+    let mut copied = 0;
+    let mut index = 0;
+    while index < characters.len() {
+        let (start, character) = characters[index];
+        if !word(character) || (index > 0 && word(characters[index - 1].1)) {
+            index += 1;
+            continue;
+        }
+        let mut end = index;
+        while end < characters.len() && word(characters[end].1) {
+            end += 1;
+        }
+        let name = &text[start..characters.get(end).map_or(text.len(), |entry| entry.0)];
+        if !sensitive(name, &ASSIGNED) {
+            index = end;
+            continue;
+        }
+        let mut cursor = end;
+        if cursor < characters.len() && matches!(characters[cursor].1, '"' | '\'') {
+            cursor += 1;
+        }
+        let spaced =
+            |position: usize| position < characters.len() && characters[position].1.is_whitespace();
+        let before = cursor;
+        while spaced(cursor) {
+            cursor += 1;
+        }
+        if cursor < characters.len() && matches!(characters[cursor].1, '=' | ':') {
+            cursor += 1;
+        } else if cursor == before {
+            index = end;
+            continue;
+        }
+        while spaced(cursor) {
+            cursor += 1;
+        }
+        if cursor >= characters.len() {
+            index = end;
+            continue;
+        }
+        let value_start = characters[cursor].0;
+        let quote = characters[cursor].1;
+        let value_end = if matches!(quote, '"' | '\'') {
+            let mut closing = cursor + 1;
+            while closing < characters.len()
+                && characters[closing].1 != quote
+                && characters[closing].1 != '\n'
+            {
+                closing += 1;
+            }
+            if closing < characters.len() && characters[closing].1 == quote {
+                closing + 1
+            } else {
+                index = end;
+                continue;
+            }
+        } else {
+            let mut closing = cursor;
+            while closing < characters.len()
+                && !characters[closing].1.is_whitespace()
+                && characters[closing].1 != ';'
+            {
+                closing += 1;
+            }
+            closing
+        };
+        if value_end == cursor {
+            index = end;
+            continue;
+        }
+        output.push_str(&text[copied..value_start]);
+        output.push_str(REDACTED);
+        copied = characters
+            .get(value_end)
+            .map_or(text.len(), |entry| entry.0);
+        index = value_end;
+    }
+    output.push_str(&text[copied..]);
+    output
+}
+
+fn redact_bearer(text: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    let mut output = String::new();
+    let mut copied = 0;
+    let mut search = 0;
+    while let Some(found) = lower[search..].find("bearer") {
+        let start = search + found;
+        let boundary = start == 0 || !word(text[..start].chars().next_back().unwrap_or(' '));
+        let after = start + "bearer".len();
+        let spaces = text[after..]
+            .chars()
+            .take_while(|character| character.is_whitespace())
+            .map(char::len_utf8)
+            .sum::<usize>();
+        let token = text[after + spaces..]
+            .chars()
+            .take_while(|character| !character.is_whitespace() && !matches!(character, '"' | '\''))
+            .map(char::len_utf8)
+            .sum::<usize>();
+        if !boundary || spaces == 0 || token == 0 {
+            search = after;
+            continue;
+        }
+        output.push_str(&text[copied..after]);
+        output.push(' ');
+        output.push_str(REDACTED);
+        copied = after + spaces + token;
+        search = copied;
+    }
+    output.push_str(&text[copied..]);
+    output
+}
+
+fn redact_url_credentials(text: &str) -> String {
+    let mut output = String::new();
+    let mut rest = text;
+    while let Some(scheme) = ["http://", "https://"]
+        .iter()
+        .filter_map(|scheme| {
+            rest.to_ascii_lowercase()
+                .find(scheme)
+                .map(|index| (index, scheme.len()))
+        })
+        .min()
+    {
+        let authority = scheme.0 + scheme.1;
+        let span = rest[authority..]
+            .find(|character: char| character.is_whitespace() || character == '/')
+            .unwrap_or(rest.len() - authority);
+        let host = &rest[authority..authority + span];
+        output.push_str(&rest[..authority]);
+        match host.rfind('@') {
+            Some(at) if at > 0 => {
+                output.push_str(REDACTED);
+                output.push_str(&host[at..]);
+            }
+            _ => output.push_str(host),
+        }
+        rest = &rest[authority + span..];
+    }
+    output.push_str(rest);
+    output
+}

@@ -87,7 +87,7 @@ test("task progress leaves the palette idle across ticks while an answered quest
     for (let index = 0; index < 12; index++) {
       taskUpdate(`evt_progress_${index}`, index % 2 === 0 ? "ses_run_child" : "ses_task_child", 10 + index, {
         type: "progressed",
-        progress: { text: `step ${index}` },
+        progress: { text: `step ${index}`, time: now },
       })
       await Bun.sleep(40)
     }
@@ -96,7 +96,7 @@ test("task progress leaves the palette idle across ticks while an answered quest
 
     taskWaitState = "running"
     liveRunning = [...liveRunning, "ses_task_wait"]
-    taskUpdate("evt_task_child_answered", "ses_task_child", 60, { type: "question_answered", answer: { text: "go" } })
+    taskUpdate("evt_task_child_answered", "ses_task_child", 60, { type: "question_answered", answer: { questionID: "qst_task", text: "go" } })
     await app.waitFor(() => decisionReadCount > before.decisions)
     await app.waitForFrame((frame) => {
       const running = frame.indexOf("Running")
@@ -146,10 +146,11 @@ test("a root created in another project and then pinned appears in the pinned gr
       id: "evt_created_remote",
       created: now,
       type: "session.created",
-      durable: { aggregateID: "ses_created_remote", seq: 0, version: 1 },
+      durable: { aggregateID: "ses_created_remote", seq: 0, version: 2 },
       data: {
         sessionID: "ses_created_remote",
         projectID: "proj_other",
+        scope: "bound",
         location: { directory: "/tmp/otherproj" },
         title: "Created remote",
         agent: "build",
@@ -575,7 +576,7 @@ test("an outstanding payload without running still groups waiting roots without 
   const { app } = await renderGroups({
     onRequest: (url) =>
       url.pathname === "/api/session/outstanding"
-        ? json({ data: ["ses_task_wait"], waiting: ["ses_task_wait"] })
+        ? json({ data: ["ses_task_wait"], waiting: ["ses_task_wait"], running: [], failed: [], lost: [] })
         : undefined,
   })
   try {
@@ -844,7 +845,7 @@ async function renderGroups(
     if (url.pathname === "/api/decision") return json({ data: liveDecisions })
     if (url.pathname === "/api/session/ses_task_wait/subagent")
       return json({
-        data: [{ sessionID: "ses_task_child", parentID: "ses_task_wait", state: taskWaitState }],
+        data: [{ sessionID: "ses_task_child", parentID: "ses_task_wait", description: "Task child", agent: "build", model: base.model, background: true, revision: 1, state: taskWaitState, time: { created: now, updated: now } }],
         summary: { total: 1, active: 1, running: taskWaitState === "running" ? 1 : 0, waiting: taskWaitState === "waiting" ? 1 : 0 },
         cursor: {},
       })
@@ -970,11 +971,12 @@ function Providers(props: {
 
 const base = {
   projectID: "proj_test",
+  scope: "bound",
   location: { directory: location.directory },
   agent: "build",
   model: { providerID: "anthropic", id: "claude-opus-5" },
 }
-const remote = { projectID: "proj_other", location: { directory: "/tmp/otherproj" } }
+const remote = { projectID: "proj_other", scope: "bound", location: { directory: "/tmp/otherproj" } }
 const row = (
   id: string,
   title: string,

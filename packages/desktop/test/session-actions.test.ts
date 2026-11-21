@@ -16,6 +16,29 @@ const writes = (calls: readonly SyntheticCall[]) => calls.filter((call) => call.
 const compaction = (jobID: string, sessionID = id) => ({ data: { id: jobID, sessionID, trigger: "manual", status: "ended", requestedThrough: { messageID: "msg_1", seq: 3 }, timeCreated: 1 } })
 const preferences = { path: "/synthetic/preferences", read: async () => ({}), save: async () => {}, validate: () => ({ mode: "own" as const }) }
 
+test("message actions use canonical pending and sent operations and fence sent deletion by revision", async () => {
+  const owned = await syntheticDesktop((call) => {
+    if (call.route === `/api/session/${id}/message/msg_read`) return Response.json({ _tag: "MessageDeleteRefusedError", sessionID: id, messageID: "msg_read", reason: "read", message: "YCoding has already read this message." }, { status: 409 })
+    if (call.route.includes("/pending/") || call.route === `/api/session/${id}/message/msg_unread`) return new Response(null, { status: 204 })
+    return undefined
+  })
+  try {
+    const rpc = createDesktopRPC(owned.controller, preferences)
+    await rpc.steerPending({ sessionID: id, messageID: "msg_queue" })
+    await rpc.removePending({ sessionID: id, messageID: "msg_queue" })
+    await rpc.deleteMessage({ sessionID: id, messageID: "msg_unread", revision: owned.revision })
+    expect(writes(owned.calls)).toEqual([
+      `POST /api/session/${id}/pending/msg_queue/steer`,
+      `DELETE /api/session/${id}/pending/msg_queue`,
+      `DELETE /api/session/${id}/message/msg_unread`,
+    ])
+    await expect(rpc.deleteMessage({ sessionID: id, messageID: "msg_read", revision: owned.revision })).rejects.toThrow("already read")
+    expect(writes(owned.calls)).toHaveLength(4)
+    for (const revision of [undefined, -1, owned.revision + 1]) await expect(owned.controller.deleteMessage({ sessionID: id, messageID: "msg_unread", revision })).rejects.toThrow()
+    expect(writes(owned.calls)).toHaveLength(4)
+  } finally { await owned.close() }
+})
+
 test("prompts forward an explicit queue or steer delivery and keep the canonical default when absent", async () => {
   let override: string | undefined
   const owned = await syntheticDesktop((call) => call.route === `/api/session/${id}/prompt` ? admitted(call, override) : undefined)

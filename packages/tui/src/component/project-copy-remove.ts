@@ -5,8 +5,13 @@ import { errorMessage } from "../util/error"
 import { isRecord } from "../util/record"
 import { DialogWorkspaceFileChanges } from "./dialog-workspace-file-changes"
 
+type ProjectCopyClient = {
+  vcs: Pick<YCodingClient["vcs"], "status">
+  projectCopy: Pick<YCodingClient["projectCopy"], "remove">
+}
+
 export async function removeProjectCopy(input: {
-  client: YCodingClient
+  client: ProjectCopyClient
   dialog: DialogContext
   toast: ToastContext
   projectID: string
@@ -34,7 +39,7 @@ export async function removeProjectCopy(input: {
 }
 
 function remove(
-  input: { client: YCodingClient; projectID: string; location: string; directory: string },
+  input: { client: Pick<ProjectCopyClient, "projectCopy">; projectID: string; location: string; directory: string },
   force: boolean,
 ) {
   return input.client.projectCopy

@@ -5,7 +5,7 @@ import { createHash } from "node:crypto"
 import { chmod, cp, mkdir, mkdtemp, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { build } from "vite"
+import { build, mergeConfig } from "vite"
 import { Script } from "@ycoding-ai/script"
 import pkg from "../package.json"
 import { modelsData } from "./generate"
@@ -16,6 +16,10 @@ import { NODE_BINARY, platformBinary } from "../src/binary"
 import { computerHelperBuildAvailable } from "./computer-use"
 import { packageMacOSInteraction, verifyMacOSInteractionPackage } from "./package-macos-interaction"
 import { copyChromeExtension } from "./chrome-extension"
+import { buildRuntime } from "./runtime"
+import { nativeBuildTarget } from "./native-target"
+import { pluginSDKAssetConfig, pluginSDKAssetKey, runtimeAssetKey } from "./runtime-asset"
+import { buildUserAppLibrary, buildUserAppPackage, userAppPackageMetadata } from "./user-app-package"
 import { interactionApplication } from "../src/update/interaction-layout"
 
 const NODE_VERSION = "26.4.0"
@@ -29,41 +33,19 @@ if (outdir === path.join(dir, "dist-node")) {
   throw new Error("--outdir must not be dist-node because it contains temporary files")
 }
 const bundleOnly = process.argv.includes("--bundle-only")
-const single = process.argv.includes("--single")
 const skipInstall = process.argv.includes("--skip-install")
-const requested = process.argv.find((arg) => arg.startsWith("--target="))?.slice("--target=".length)
-const allTargets = [
-  nodeTarget("linux", "arm64"),
-  nodeTarget("linux", "x64"),
-  nodeTarget("darwin", "arm64"),
-  nodeTarget("win32", "arm64"),
-  nodeTarget("win32", "x64"),
-]
-const requestedTargets = requested
-  ? allTargets.filter((target) => targetName(target) === requested)
-  : single || bundleOnly
-    ? [nodeTarget(process.platform, process.arch)]
-    : allTargets
-
-if (requestedTargets.length === 0) {
-  if (requested === "darwin-x64") throw new Error("Node 26.4 SEA does not support macOS x64")
-  throw new Error(`Unknown Node target: ${requested}`)
-}
-if (!bundleOnly && requestedTargets.some((target) => target.platform === "darwin" && target.arch === "x64")) {
+const targetArgs = process.argv.filter((arg) => arg.startsWith("--target="))
+if (targetArgs.length > 1) throw new Error("Target must be specified once")
+const requested = targetArgs[0]?.slice("--target=".length)
+const selected = nativeBuildTarget({ os: process.platform, arch: process.arch, target: requested })
+const target = nodeTarget(selected.os, selected.arch)
+if (!bundleOnly && target.platform === "darwin" && target.arch === "x64") {
   throw new Error("Node 26.4 SEA does not support macOS x64")
 }
-const unavailableTargets = bundleOnly
-  ? []
-  : requestedTargets.filter((target) => !computerHelperBuildAvailable(target, process.platform))
-if (requested && unavailableTargets.length > 0) {
-  throw new Error(`A complete ${requested} artifact requires a macOS host`)
-}
-if (unavailableTargets.length > 0) {
-  console.warn(
-    `Skipping ${unavailableTargets.map(targetName).join(", ")}: complete macOS artifacts require a macOS host`,
-  )
-}
-const targets = requestedTargets.filter((target) => !unavailableTargets.includes(target))
+if (!bundleOnly && !computerHelperBuildAvailable(target, process.platform))
+  throw new Error("A complete artifact requires a matching native host")
+const targets = [target]
+const { PluginSDKAsset } = await import("./plugin-sdk")
 
 process.chdir(dir)
 if (!skipInstall) run(process.execPath, ["install", "--os=*", "--cpu=*"])
@@ -73,60 +55,102 @@ const builder =
     ? await resolveHostNode()
     : undefined
 
-for (const target of targets) {
-  console.log(`building cli-node-${targetName(target)}`)
-  const assets = await collectNodeAssets(target)
-  await rm("dist-node", { recursive: true, force: true })
-  const assetHash = await hashNodeAssets(assets)
-  const input = { version: Script.version, channel: Script.channel, models: modelsData, assetHash, target }
-  await build(mainConfig(input))
-  await copyNodeAssets(assets)
-
-  const host = target.platform === process.platform && target.arch === process.arch
-  if (host) {
-    if (!builder) throw new Error("Node SEA builder is unavailable")
-    run(builder, [...nodeExecArgv, "dist-node/ycoding.mjs", "--version"])
-    run(builder, [...nodeExecArgv, "dist-node/ycoding.mjs", "--help"])
-  }
-  if (bundleOnly) continue
-
-  const name = `cli-node-${targetName(target)}`
-  const binary = platformBinary(NODE_BINARY, target.platform)
-  const output = path.join(outdir, name, "bin", binary)
-  if (!builder) throw new Error("Node SEA builder is unavailable")
-  await mkdir(path.dirname(output), { recursive: true })
-  const config = {
-    main: "dist-node/ycoding.mjs",
-    mainFormat: "module",
-    executable: await resolveTargetNode(target, builder),
-    output: path.relative(dir, output),
-    disableExperimentalSEAWarning: true,
-    useSnapshot: false,
-    useCodeCache: false,
-    execArgv: nodeExecArgv,
-    execArgvExtension: "none",
-    assets: await seaAssetMap(),
-  }
-  await writeFile("dist-node/sea.json", `${JSON.stringify(config, null, 2)}\n`)
-  run(builder, ["--build-sea", "dist-node/sea.json"])
-  if (target.platform !== "win32") await chmod(output, 0o755)
-  if (target.platform === "darwin") await packageMacOSInteraction(output, target.arch)
-  await copyChromeExtension(path.dirname(output))
-  await writeFile(
-    path.join(outdir, name, "package.json"),
-    `${JSON.stringify(
-      {
-        name: `@ycoding-ai/${name}`,
+const pluginSDKAsset = await PluginSDKAsset.build(path.resolve(dir, "../.."), outdir)
+try {
+  for (const target of targets) {
+    console.log(`building cli-node-${targetName(target)}`)
+    const runtimeAsset = await buildRuntime({ os: target.platform, arch: target.arch })
+    try {
+      const assets = [
+        ...(await collectNodeAssets(target)),
+        { key: runtimeAssetKey, source: runtimeAsset.path },
+        { key: pluginSDKAssetKey, source: pluginSDKAsset.path },
+      ]
+      await rm("dist-node", { recursive: true, force: true })
+      const assetHash = await hashNodeAssets(assets)
+      const input = {
         version: Script.version,
-        license: pkg.license,
-        os: [target.platform],
-        cpu: [target.arch],
-      },
-      null,
-      2,
-    )}\n`,
-  )
-  if (host) await smoke(output, target)
+        channel: Script.channel,
+        models: modelsData,
+        assetHash,
+        target,
+        runtimeAsset,
+      }
+      await build(mergeConfig(mainConfig(input), pluginSDKAssetConfig(pluginSDKAsset)))
+      await copyNodeAssets(assets)
+      if (bundleOnly)
+        await buildUserAppLibrary({
+          directory: path.resolve(dir, "dist-node/lib"),
+          version: Script.version,
+          channel: Script.channel,
+          runtimeAsset,
+          pluginSDKAsset,
+        })
+
+      const host = target.platform === process.platform && target.arch === process.arch
+      if (host) {
+        if (!builder) throw new Error("Node SEA builder is unavailable")
+        run(builder, [...nodeExecArgv, "dist-node/ycoding.mjs", "--version"])
+        run(builder, [...nodeExecArgv, "dist-node/ycoding.mjs", "--help"])
+      }
+      if (bundleOnly) continue
+
+      const name = `cli-node-${targetName(target)}`
+      const binary = platformBinary(NODE_BINARY, target.platform)
+      const output = path.join(outdir, name, "bin", binary)
+      if (!builder) throw new Error("Node SEA builder is unavailable")
+      await mkdir(path.dirname(output), { recursive: true })
+      const config = {
+        main: "dist-node/ycoding.mjs",
+        mainFormat: "module",
+        executable: await resolveTargetNode(target, builder),
+        output: path.relative(dir, output),
+        disableExperimentalSEAWarning: true,
+        useSnapshot: false,
+        useCodeCache: false,
+        execArgv: nodeExecArgv,
+        execArgvExtension: "none",
+        assets: await seaAssetMap(),
+      }
+      await writeFile("dist-node/sea.json", `${JSON.stringify(config, null, 2)}\n`)
+      run(builder, ["--build-sea", "dist-node/sea.json"])
+      if (target.platform !== "win32") await chmod(output, 0o755)
+      if (target.platform === "darwin") await packageMacOSInteraction(output, target.arch)
+      await copyChromeExtension(path.dirname(output))
+      await buildUserAppPackage({
+        directory: path.join(outdir, name, "lib"),
+        packageDirectory: dir,
+        selection: { requested, targets: targets.map((target) => ({ os: target.platform, arch: target.arch })) },
+        frontend: output,
+        os: target.platform,
+        arch: target.arch,
+        version: Script.version,
+        channel: Script.channel,
+        runtimeAsset,
+        pluginSDKAsset,
+      })
+      await writeFile(
+        path.join(outdir, name, "package.json"),
+        `${JSON.stringify(
+          {
+            name: `@ycoding-ai/${name}`,
+            version: Script.version,
+            license: pkg.license,
+            os: [target.platform],
+            cpu: [target.arch],
+            ...userAppPackageMetadata(true),
+          },
+          null,
+          2,
+        )}\n`,
+      )
+      if (host) await smoke(output, target)
+    } finally {
+      await runtimeAsset.dispose()
+    }
+  }
+} finally {
+  await rm(path.dirname(pluginSDKAsset.path), { recursive: true, force: true })
 }
 
 async function resolveHostNode() {

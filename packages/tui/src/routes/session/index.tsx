@@ -52,8 +52,7 @@ import type {
   SessionReviewDecision,
   SessionReviewItem,
 } from "@ycoding-ai/client"
-import { capturedChildSessionIDs, capturedPartPatches, capturedPatch, groupCapturedPatches, summarizeCapturedChanges } from "@ycoding-ai/client/file-change-summary"
-import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
+import { capturedChangeSendID, capturedChildSessionIDs, capturedPartPatches, capturedPatch, groupCapturedPatches, summarizeCapturedChanges } from "@ycoding-ai/client/file-change-summary"
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
 import { contextCompositionBar } from "../../util/provider-usage"
@@ -252,7 +251,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     summarizeCapturedChanges(
       messages(),
       new Map(capturedChildren.ids().map((sessionID) => [sessionID, data.session.message.list(sessionID)])),
-      (assistantMessageID, callID) => SessionOrchestrationIdentity.send(route.sessionID, assistantMessageID, callID),
+      (assistantMessageID, callID) => capturedChangeSendID(route.sessionID, assistantMessageID, callID),
     ),
   )
   const location = createMemo(() => session()?.location)

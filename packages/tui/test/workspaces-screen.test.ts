@@ -4,7 +4,7 @@ import { Effect, FileSystem } from "effect"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../src/frontend-paths"
 import type { ProjectInventoryEntry } from "@ycoding-ai/client"
 import { createEventStream, createFetch, directory, json, worktree, type FetchHandler } from "./fixture/tui-client"
 
@@ -88,7 +88,7 @@ async function launch(input: { width: number; handler?: FetchHandler }) {
     if (url.pathname === "/api/project/inventory") return json({ data: inventory, cursor: {} })
     return undefined
   }, events)
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  const server = calls.listen()
   const { run } = await import("../src/app")
   const task = Effect.runPromise(
     run({
@@ -98,7 +98,7 @@ async function launch(input: { width: number; handler?: FetchHandler }) {
       args: {},
       terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
       log: () => {},
-    }).pipe(Effect.provide(Global.layerWith({ state })), Effect.provide(FileSystem.layerNoop({}))),
+    }).pipe(Effect.provide(FrontendPaths.layerWith({ state })), Effect.provide(FileSystem.layerNoop({}))),
   )
   await ready
   await Bun.sleep(100)

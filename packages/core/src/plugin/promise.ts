@@ -92,6 +92,17 @@ export function fromPromise(plugin: Plugin) {
             subscribe: () => Stream.toAsyncIterable(host.event.subscribe().pipe(Stream.map(wireEvent))),
           },
           integration: {
+            accountSkills: {
+              read: (input) =>
+                run(
+                  host.integration.accountSkills.read({
+                    ...input,
+                    integrationID: Integration.ID.make(input.integrationID),
+                    sessionID: input.sessionID === undefined ? undefined : Session.ID.make(input.sessionID),
+                    agent: input.agent === undefined ? undefined : Agent.ID.make(input.agent),
+                  }),
+                ),
+            },
             list: (input) => run(host.integration.list(input)),
             get: (input) =>
               run(host.integration.get({ ...input, integrationID: Integration.ID.make(input.integrationID) })).then(

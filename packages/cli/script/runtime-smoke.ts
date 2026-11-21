@@ -3,7 +3,7 @@
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { YCoding } from "@ycoding-ai/client/promise"
+import { V5ClientError, YCoding } from "@ycoding-ai/client/v5"
 import { BUN_BINARY, platformBinary } from "../src/binary"
 
 const KEY = "runtime-smoke-openrouter-key"
@@ -20,6 +20,26 @@ const GOAL_STEER_START = "User-proxy steer: begin with the safest database defau
 const GOAL_STEER_CONTINUED = "User-proxy steer: finish the task on the user's behalf"
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+export function assertUnsentSubagentDescription(error: unknown) {
+  if (
+    !(error instanceof V5ClientError) ||
+    error.status !== "unsent" ||
+    error.operation !== "session.subagent.launch" ||
+    error.reason !== "Input cannot be represented by v5"
+  )
+    throw new Error("Oversized subagent description was not rejected by the v5 client before transmission")
+}
+
+function failureDetail(error: unknown) {
+  if (error instanceof Error) return error.message
+  if (typeof error !== "object" || error === null) return String(error)
+  return JSON.stringify(
+    Object.fromEntries(
+      Object.entries(error).filter(([key]) => ["_tag", "message", "reason", "code", "operation"].includes(key)),
+    ),
+  )
+}
 
 function assertClose(actual: number | undefined, expected: number, label: string) {
   if (actual === undefined || Math.abs(actual - expected) > 1e-12)
@@ -55,7 +75,7 @@ function eventStream(...events: ReadonlyArray<Record<string, unknown>>) {
   return events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")
 }
 
-function streamResponse(input: {
+export function streamResponse(input: {
   index: number
   content: string
   cached?: number
@@ -66,38 +86,25 @@ function streamResponse(input: {
   const cacheWrite = input.cacheWrite ?? (input.index === 1 ? 100 : 0)
   const prompt = input.prompt ?? (input.index === 1 ? 1000 : 1200)
   const id = `runtime-smoke-${input.index}`
-  const chunks = [
+  return eventStream(
+    { type: "response.output_text.delta", item_id: `${id}-message`, delta: input.content },
     {
-      id,
-      object: "chat.completion.chunk",
-      created: Math.floor(Date.now() / 1000),
-      model: MODEL_ID,
-      provider: "Smoke",
-      choices: [
-        { index: 0, delta: { role: "assistant", content: input.content }, finish_reason: null, native_finish_reason: null },
-      ],
-    },
-    {
-      id,
-      object: "chat.completion.chunk",
-      created: Math.floor(Date.now() / 1000),
-      model: MODEL_ID,
-      provider: "Smoke",
-      choices: [{ index: 0, delta: { content: "" }, finish_reason: "stop", native_finish_reason: "stop" }],
-      usage: {
-        prompt_tokens: prompt,
-        completion_tokens: 10,
-        total_tokens: prompt + 10,
-        cost: 0.001,
-        prompt_tokens_details: { cached_tokens: cached, cache_write_tokens: cacheWrite },
-        completion_tokens_details: { reasoning_tokens: 5 },
+      type: "response.completed",
+      response: {
+        id,
+        usage: {
+          input_tokens: prompt,
+          output_tokens: 10,
+          total_tokens: prompt + 10,
+          input_tokens_details: { cached_tokens: cached, cache_write_tokens: cacheWrite },
+          output_tokens_details: { reasoning_tokens: 5 },
+        },
       },
     },
-  ]
-  return chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n"
+  )
 }
 
-function toolCallResponse(input: {
+export function toolCallResponse(input: {
   index: number
   callID: string
   name: string
@@ -107,57 +114,31 @@ function toolCallResponse(input: {
   cacheWrite: number
 }) {
   const id = `runtime-smoke-${input.index}`
+  const item = {
+    type: "function_call",
+    id: `${id}-function`,
+    call_id: input.callID,
+    name: input.name,
+    arguments: JSON.stringify(input.arguments),
+  }
   return eventStream(
+    { type: "response.output_item.added", item: { ...item, arguments: "" } },
+    { type: "response.function_call_arguments.delta", item_id: item.id, delta: item.arguments },
+    { type: "response.output_item.done", item },
     {
-      id,
-      object: "chat.completion.chunk",
-      created: Math.floor(Date.now() / 1000),
-      model: MODEL_ID,
-      provider: "Smoke",
-      choices: [
-        {
-          index: 0,
-          delta: {
-            role: "assistant",
-            content: null,
-            tool_calls: [
-              {
-                index: 0,
-                id: input.callID,
-                type: "function",
-                function: { name: input.name, arguments: JSON.stringify(input.arguments) },
-              },
-            ],
-          },
-          finish_reason: null,
-          native_finish_reason: null,
+      type: "response.completed",
+      response: {
+        id,
+        usage: {
+          input_tokens: input.prompt,
+          output_tokens: 10,
+          total_tokens: input.prompt + 10,
+          input_tokens_details: { cached_tokens: input.cached, cache_write_tokens: input.cacheWrite },
+          output_tokens_details: { reasoning_tokens: 5 },
         },
-      ],
-    },
-    {
-      id,
-      object: "chat.completion.chunk",
-      created: Math.floor(Date.now() / 1000),
-      model: MODEL_ID,
-      provider: "Smoke",
-      choices: [
-        {
-          index: 0,
-          delta: { role: "assistant", content: "" },
-          finish_reason: "tool_calls",
-          native_finish_reason: "tool_calls",
-        },
-      ],
-      usage: {
-        prompt_tokens: input.prompt,
-        completion_tokens: 10,
-        total_tokens: input.prompt + 10,
-        cost: 0.001,
-        prompt_tokens_details: { cached_tokens: input.cached, cache_write_tokens: input.cacheWrite },
-        completion_tokens_details: { reasoning_tokens: 5 },
       },
     },
-  ) + "data: [DONE]\n\n"
+  )
 }
 
 function responsesToolCall(responseID: string) {
@@ -299,7 +280,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       })
       const index = requests.length
 
-      if (url.pathname.endsWith("/responses")) {
+      if (url.pathname === "/openai/v1/responses") {
         const input = Array.isArray(body.input) ? body.input : []
         const serializedInput = JSON.stringify(input)
         const previousResponseID =
@@ -329,10 +310,11 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         })
       }
 
-      const messages = Array.isArray(body.messages) ? body.messages : []
+      if (url.pathname !== "/api/v1/responses") return new Response("Unexpected provider route", { status: 404 })
+      const messages = Array.isArray(body.input) ? body.input : []
       const toolResults = messages.filter(
         (message) =>
-          typeof message === "object" && message !== null && "role" in message && message.role === "tool",
+          typeof message === "object" && message !== null && "type" in message && message.type === "function_call_output",
       ).length
       if (text.includes("runtime-smoke-tool-chain")) {
         if (toolResults === 0)
@@ -436,7 +418,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       providers: {
         openrouter: {
           name: "OpenRouter",
-          package: "aisdk:@openrouter/ai-sdk-provider",
+          package: "@ycoding-ai/ai/providers/openrouter",
           settings: { baseURL: providerUrl },
           models: {
             [MODEL_ID]: {
@@ -484,7 +466,12 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     XDG_CACHE_HOME: cache,
     XDG_STATE_HOME: state,
     YCODING_PASSWORD: PASSWORD,
+    YCODING_DB: undefined,
+    YCODING_CONFIG_DIR: path.join(config, "ycoding"),
+    YCODING_CONFIG: undefined,
+    YCODING_CONFIG_CONTENT: undefined,
     YCODING_DISABLE_CHANNEL_DB: "1",
+    YCODING_CONFIG_PROJECT_DISABLE: "0",
   }
   const server = Bun.spawn([binary, "serve", "--stdio", "--port", "0"], {
     stdin: "pipe",
@@ -505,13 +492,11 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   if (!line) throw new Error("Runtime smoke server produced no readiness line")
   const ready = JSON.parse(line) as { url?: unknown }
   if (typeof ready.url !== "string") throw new Error(`Invalid readiness payload: ${line}`)
-  const serverURL = ready.url
 
-  const clientHeaders = {
-    authorization: `Basic ${Buffer.from(`ycoding:${PASSWORD}`).toString("base64")}`,
-    "x-ycoding-directory": project,
-  }
-  const client = YCoding.make({ baseUrl: serverURL, headers: clientHeaders })
+  const client = YCoding.make({
+    endpoint: { url: ready.url, auth: { type: "basic", username: "ycoding", password: PASSWORD } },
+    location: { directory: project },
+  })
 
   let phase = "integration readiness"
   let lastDiagnostics: unknown
@@ -853,20 +838,21 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       model: { providerID: PROVIDER_ID, id: MODEL_ID },
       location: { directory: project },
     })
-    const oversizedSubagent = await fetch(new URL(`/api/session/${subagentParent.id}/subagent`, serverURL), {
-      method: "POST",
-      headers: { ...clientHeaders, "content-type": "application/json" },
-      body: JSON.stringify({
+    const oversizedSubagent = await client.session.subagent
+      .launch({
+        parentID: subagentParent.id,
         parentAssistantMessageID: "msg_runtime_smoke_oversized",
         toolCallID: "call_runtime_smoke_oversized",
         agent: "reviewer",
         description: "d".repeat(4 * 1024 + 1),
         prompt: "must be rejected before persistence",
         background: true,
-      }),
-    })
-    if (oversizedSubagent.status !== 400)
-      throw new Error(`Oversized subagent payload returned ${oversizedSubagent.status}, expected 400`)
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      )
+    assertUnsentSubagentDescription(oversizedSubagent)
     if ((await client.session.subagent.list({ parentID: subagentParent.id })).data.length !== 0)
       throw new Error("Oversized subagent payload persisted a task")
 
@@ -875,10 +861,12 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       parentAssistantMessageID: "msg_runtime_smoke_parent",
       toolCallID: "call_runtime_smoke_child",
       agent: "reviewer",
-      description: "Runtime smoke child",
+      description: "d".repeat(4 * 1024),
       prompt: "runtime-smoke-subagent-block",
       background: true,
     })
+    if (launchedSubagent.description !== "d".repeat(4 * 1024))
+      throw new Error("The boundary-length subagent description was not preserved")
     await eventually(async () => {
       const task = (await client.session.subagent.list({ parentID: subagentParent.id })).data.find(
         (item) => item.sessionID === launchedSubagent.sessionID,
@@ -912,7 +900,11 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       )
     if (evidenceSessionID !== undefined)
       console.error(
-        `Runtime smoke session evidence: pending=${await probe(() => client.session.pending.list({ sessionID: evidenceSessionID! }))} active=${await probe(() => client.session.active())} outstanding=${await probe(() => client.session.outstanding({}))} review=${await probe(() => fetch(new URL(`/api/session/${evidenceSessionID}/review`, serverURL), { headers: clientHeaders }).then((response) => response.text()))} log=${await probe(() => fetch(new URL(`/api/experimental/session/${evidenceSessionID}/log`, serverURL), { headers: clientHeaders }).then(async (response) => (await response.text()).match(/"type":"session\.[a-z.]+"/g)?.map((match) => match.slice(15, -1))))}`,
+        `Runtime smoke session evidence: pending=${await probe(() => client.session.pending.list({ sessionID: evidenceSessionID! }))} active=${await probe(() => client.session.active())} outstanding=${await probe(() => client.session.outstanding({}))} review=${await probe(() => client.review.list({ sessionID: evidenceSessionID! }))} log=${await probe(async () => {
+          const types: string[] = []
+          for await (const event of client.session.log({ sessionID: evidenceSessionID!, follow: false })) types.push(event.type)
+          return types
+        })}`,
       )
     console.error(
       `Runtime smoke failure evidence during ${phase}: diagnostics=${JSON.stringify(lastDiagnostics)?.slice(0, 2000)} requests=${JSON.stringify(
@@ -925,8 +917,9 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         })),
       )}`,
     )
-    throw new Error(`Runtime smoke failed during ${phase}`, { cause: error })
+    throw new Error(`Runtime smoke failed during ${phase}: ${failureDetail(error)}`, { cause: error })
   } finally {
+    client.transport.close()
     await cleanupRuntimeSmoke(provider, server, root)
   }
   console.log(summary)

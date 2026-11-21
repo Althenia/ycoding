@@ -1,0 +1,22 @@
+[package]
+name = "openssl-src"
+version = "300.5.7+3.5.7"
+edition = "2021"
+license = "MIT/Apache-2.0"
+description = "Source of OpenSSL and logic to build it."
+
+[dependencies]
+cc = "1.0"
+
+[features]
+default = []
+camellia = []
+force-engine = []
+idea = []
+ktls = []
+legacy = []
+no-dso = []
+seed = []
+ssl3 = []
+weak-crypto = []
+

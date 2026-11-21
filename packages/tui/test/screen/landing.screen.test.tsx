@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../../src/frontend-paths"
 import { mkdir, rm } from "node:fs/promises"
 import path from "path"
 import { renderScreen } from "./harness"
@@ -155,7 +155,7 @@ async function expectLandingScreen(viewport: typeof DESIGN_VIEWPORT) {
 }
 
 async function selectModelVariant() {
-  const file = path.join(Global.make().state, "model.json")
+  const file = path.join(FrontendPaths.make().state, "model.json")
   const previous = Bun.file(file)
   const content = (await previous.exists()) ? await previous.text() : undefined
   await Bun.write(file, JSON.stringify({ recent: [], favorite: [], variant: { "provider/landing-model": "max" } }))

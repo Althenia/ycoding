@@ -30,11 +30,17 @@ describe("remote HTTP integration", () => {
       { id: "dev_clear", name: "second.local", alias: null, createdAt: 1, status: "active", online: true },
       { id: "dev_plain", name: "third.local", createdAt: 1, status: "active", online: true },
     ] as const
-    const http = createRemoteHttp({ fetch: Object.assign(async (input: RequestInfo | URL) =>
-      Response.json(String(input) === "/api/me" ? { user: { id: "owner" }, session: { expiresAt: 100 }, devices } : { devices }), { preconnect: () => {} }) })
+    const paths: string[] = []
+    const http = createRemoteHttp({ fetch: Object.assign(async (input: RequestInfo | URL) => {
+      const path = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+      paths.push(path)
+      return Response.json(new URL(path, "https://relay.test").pathname === "/api/me"
+        ? { user: { id: "owner" }, session: { expiresAt: 100 }, devices } : { devices })
+    }, { preconnect: () => {} }) })
     const me = await http.me()
     expect(me.ok && me.value.devices).toEqual(devices)
     expect(await http.devices()).toEqual({ ok: true, value: devices })
+    expect(paths).toEqual(["/api/me?relay=5", "/api/devices?relay=5"])
   })
 
   test("updates and clears an alias through the same-origin device endpoint and validates its identity", async () => {

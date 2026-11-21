@@ -1,0 +1,3 @@
+pub fn row(id: &str) -> serde_json::Value {
+    serde_json::json!({"id":id,"metadata":{"muse-code":{"name":"Muse Wonder","family":"muse-wonder","release_date":"2026-09-02","is_hidden":false,"tool_call":true,"modalities":{"input":["text","image"],"output":["text"]},"limit":{"context":1007997,"output":128000},"options":{"reasoningEffort":"high","temperature":0.9,"top_p":0.9},"variants":{"minimal":{"reasoningEffort":"minimal"},"low":{"reasoningEffort":"low"},"medium":{"reasoningEffort":"medium"},"high":{"reasoningEffort":"high"},"xhigh":{"reasoningEffort":"xhigh"},"max":{"reasoningEffort":"max"},"ultra":{"reasoningEffort":"ultra"}}}}})
+}

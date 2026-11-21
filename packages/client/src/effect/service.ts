@@ -95,7 +95,7 @@ export const ensure = Effect.fn("service.ensure")(function* (options: EnsureOpti
     })
   })
   const found = yield* Effect.gen(function* () {
-    const registration = yield* registered(options.file, true)
+    const registration = yield* registered(options.file, true, options.existing === "preserve")
     const info = registration.info
     const service = registration.service
     if (service !== undefined) {
@@ -103,6 +103,11 @@ export const ensure = Effect.fn("service.ensure")(function* (options: EnsureOpti
       spawnDelay = 5_000
       const compatible = !service.legacy && (options.version === undefined || service.version === options.version)
       if (compatible && service.state === "ready") return Option.some(service)
+      if (options.existing === "preserve") {
+        if (!compatible) return yield* Effect.fail(new Error("Background server version does not match this client"))
+        if (service.state === "failed")
+          return yield* Effect.fail(new Error("Existing background service failed to start"))
+      }
       if (compatible && service.state === "failed") {
         if (failedReplacement) return yield* Effect.fail(new Error("Background service failed to start"))
         failedReplacement = true
@@ -131,6 +136,8 @@ export const ensure = Effect.fn("service.ensure")(function* (options: EnsureOpti
     // Keep one candidate plus one lock probe so a pre-lock stall cannot block recovery.
     if (contenders.size < 2 && Date.now() - lastSpawn >= spawnDelay) {
       yield* announce("missing")
+      if (options.existing === "preserve" && (yield* registered(options.file, false, true)).info !== undefined)
+        return Option.none<LocalService>()
       contenders.add(yield* spawnContender)
       lastSpawn = Date.now()
     }
@@ -213,13 +220,22 @@ const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(Info))
 const decodeHealth = Schema.decodeUnknownOption(ServiceStatus.Health)
 const decodeLegacyHealth = Schema.decodeUnknownOption(Schema.Struct({ healthy: Schema.Literal(true) }))
 
-// A missing or corrupt file means no valid info; callers treat both
-// the same (the registering server self-evicts, clients rediscover).
-const read = Effect.fnUntraced(function* (file?: string) {
+const read = Effect.fnUntraced(function* (file?: string, preserve = false) {
   const fs = yield* FileSystem.FileSystem
-  const text = yield* fs.readFileString(file ?? fallback()).pipe(Effect.option)
-  if (Option.isNone(text)) return undefined
-  return yield* decode(text.value).pipe(Effect.option, Effect.map(Option.getOrUndefined))
+  const text = yield* fs.readFileString(file ?? fallback()).pipe(
+    Effect.catch((cause) => {
+      if (!preserve || cause.reason._tag === "NotFound") return Effect.succeed(undefined)
+      return Effect.fail(new Error("Could not read background service registration", { cause }))
+    }),
+  )
+  if (text === undefined) return undefined
+  if (!preserve) return yield* decode(text).pipe(Effect.option, Effect.map(Option.getOrUndefined))
+  const info = yield* decode(text).pipe(
+    Effect.mapError((cause) => new Error("Invalid background service registration", { cause })),
+  )
+  if (!info.id || !info.version || !info.url)
+    return yield* Effect.fail(new Error("Invalid background service registration"))
+  return info
 })
 
 type LocalService = {
@@ -245,7 +261,7 @@ export const registration = Effect.fn("service.registration")(function* (options
   return info === undefined ? undefined : registeredEndpoint(info)
 })
 
-const probe = Effect.fnUntraced(function* (info: Info, allowLegacy = false) {
+const probe = Effect.fnUntraced(function* (info: Info, allowLegacy = false, preserve = false) {
   const endpoint = registeredEndpoint(info)
   const response = yield* Effect.tryPromise(() =>
     fetch(new URL("/api/health", info.url), {
@@ -257,6 +273,8 @@ const probe = Effect.fnUntraced(function* (info: Info, allowLegacy = false) {
   const body = yield* Effect.tryPromise(() => response.json()).pipe(Effect.option, Effect.map(Option.getOrUndefined))
   const health = decodeHealth(body)
   if (Option.isSome(health)) {
+    if (preserve && (health.value.sourceEpoch !== info.id || ![200, 500, 503].includes(response.status)))
+      return undefined
     if (health.value.pid !== info.pid) return undefined
     if (info.version !== undefined && health.value.version !== info.version) return undefined
     return {
@@ -276,10 +294,18 @@ const probe = Effect.fnUntraced(function* (info: Info, allowLegacy = false) {
   return { info, endpoint, state: "ready", legacy: true } satisfies LocalService
 })
 
-const registered = Effect.fnUntraced(function* (file?: string, allowLegacy = false) {
-  const info = yield* read(file)
+const registered = Effect.fnUntraced(function* (file?: string, allowLegacy = false, preserve = false) {
+  const info = yield* read(file, preserve)
   if (info === undefined) return { info: undefined, service: undefined }
-  return { info, service: yield* probe(info, allowLegacy) }
+  const service = yield* probe(info, allowLegacy, preserve)
+  if (preserve) {
+    if (service === undefined)
+      return yield* Effect.fail(new Error("Existing background service could not be authenticated"))
+    const current = yield* read(file, true)
+    if (current === undefined || !same(info, current) || info.password !== current.password)
+      return yield* Effect.fail(new Error("Background service registration changed during verification"))
+  }
+  return { info, service }
 })
 
 // Health-checked lookup without the version gate: lifecycle operations must be

@@ -1,5 +1,5 @@
 import { Effect, FileSystem, Option } from "effect"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../../../paths"
 import { RemoteAgent } from "../../../remote-bridge"
 import { RemoteConfig } from "../../../remote-config"
 import { RemoteCredentials } from "../../../remote-credentials"
@@ -35,10 +35,10 @@ export const makeRemoteConnector = Effect.fn("cli.remote.connector")(function* (
     try: () => privateLocalServer(input.endpoint),
     catch: (error) => new RemoteSetupError(error instanceof Error ? error.message : "Invalid local remote backend"),
   })
-  const services = yield* Effect.context<FileSystem.FileSystem | Global.Service>()
-  const run = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Global.Service>) =>
+  const services = yield* Effect.context<FileSystem.FileSystem | FrontendPaths.Service>()
+  const run = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | FrontendPaths.Service>) =>
     Effect.runPromise(effect.pipe(Effect.provide(services)))
-  const global = yield* Global.Service
+  const global = yield* FrontendPaths.Service
   const notice = `Connecting ${identity.name} to ${relayURL}; all backend Sessions are available to its owner.`
   return createRemoteConnector({
     directory: global.data,

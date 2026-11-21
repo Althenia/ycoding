@@ -1,6 +1,6 @@
 export * as RemoteConfig from "./remote-config"
 
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "./paths"
 import { RemoteWebSocketPath } from "@ycoding-ai/remote"
 import { Effect, FileSystem, Schema } from "effect"
 import path from "node:path"
@@ -30,7 +30,7 @@ const empty = (): Config => ({ sessions: [] })
 
 const decodeConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(Config))
 const file = Effect.gen(function* () {
-  const global = yield* Global.Service
+  const global = yield* FrontendPaths.Service
   return path.join(global.config, filename)
 })
 

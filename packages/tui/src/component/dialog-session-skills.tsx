@@ -1,6 +1,6 @@
 import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core"
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../frontend-paths"
 import { createMemo, createResource, createSignal, For, Match, onMount, Show, Switch } from "solid-js"
 import { useClient } from "../context/client"
 import { useDialog } from "../ui/dialog"
@@ -55,7 +55,7 @@ export function DialogSessionSkills(props: DialogSessionSkillsProps) {
   const scoped = createMemo(() => {
     const locations = new Map((skillInfo()?.data ?? []).map((skill) => [skill.id, skill.location]))
     const projectDirectory = skillInfo()?.location.project.directory
-    const globalConfigDirectory = process.env.YCODING_CONFIG_DIR ?? Global.Path.config
+    const globalConfigDirectory = process.env.YCODING_CONFIG_DIR ?? FrontendPaths.Path.config
     return (skills() ?? []).map((skill) => ({
       ...skill,
       scope: sessionSkillScope({

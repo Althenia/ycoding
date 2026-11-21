@@ -6,7 +6,6 @@ import { setTimeout } from "node:timers/promises"
 import { MeetingCommand } from "../meeting"
 import { Runtime } from "../../framework/runtime"
 import { Standalone } from "../../services/standalone"
-import { selfCommand } from "../../util/process"
 
 type Control = (input: unknown) => Promise<unknown>
 
@@ -22,7 +21,7 @@ export default Runtime.handler(
   MeetingCommand,
   Effect.fn("cli.meeting")(function* (input) {
     const directory = path.resolve(Option.getOrElse(input.directory, () => process.cwd()))
-    const { connectControl } = yield* Effect.promise(() => import("@ycoding-ai/meeting/discovery"))
+    const { connectControl } = yield* Effect.promise(() => import("../../services/meeting"))
     const flags: MeetingFlags = {
       meet: Option.getOrUndefined(input.meet),
       title: Option.getOrUndefined(input.title),
@@ -51,7 +50,7 @@ export default Runtime.handler(
       return
     }
 
-    const endpoint = yield* Standalone.start({ command: [...selfCommand(), "serve", "--meeting"] })
+    const endpoint = yield* Standalone.start({ meeting: true })
     const client = YCoding.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) })
     yield* Effect.tryPromise(() => client.agent.list({ location: { directory } }))
     const control = yield* Effect.tryPromise(() => controllable(() => connectControl(directory)))

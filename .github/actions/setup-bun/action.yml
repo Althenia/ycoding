@@ -24,8 +24,26 @@ runs:
       run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-install-cache" >> "$GITHUB_ENV"
 
     - name: Install setuptools for distutils compatibility
-      run: python3 -m pip install setuptools || pip install setuptools || true
+      run: python3 -c "import setuptools" 2>/dev/null || python3 -m pip install setuptools || pip install setuptools || true
       shell: bash
+
+    - name: Cache Bun packages
+      if: runner.os != 'Windows'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.bun/install/cache
+        key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ hashFiles('bun.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-bun-
+
+    - name: Cache Bun packages on Windows
+      if: runner.os == 'Windows'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/bun-install-cache
+        key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ hashFiles('bun.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-bun-
 
     - name: Install dependencies
       run: |

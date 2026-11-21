@@ -1,5 +1,7 @@
 import { expect, spyOn, test } from "bun:test"
-import { YCoding, type YCodingEvent } from "@ycoding-ai/client"
+import type { YCodingEvent } from "@ycoding-ai/client"
+import { YCoding } from "@ycoding-ai/client/v5"
+import { createFetch } from "../../tui/test/fixture/tui-client"
 import * as ChildProcess from "node:child_process"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -13,7 +15,7 @@ const task = process.env.YCODING_DESKTOP_TEST_TASK
 if (!task || !path.isAbsolute(task)) throw new Error("A private native-bootstrap test Task is required")
 const health = { healthy: true as const, version: "1.0.0", pid: 1, sourceEpoch: "synthetic" }
 const connected: YCodingEvent = { id: "evt_synthetic", sourceEpoch: health.sourceEpoch, type: "server.connected", data: {} }
-const endpoint = { pid: 1, url: "http://127.0.0.1:1/", auth: { type: "basic", username: "fixture", password: "synthetic" } }
+const endpoint = { pid: 1, url: "http://127.0.0.1:1/", auth: { type: "basic" as const, username: "fixture", password: "synthetic" } }
 
 function control(holdClose = false) {
   const child = new ChildProcess.ChildProcess()
@@ -76,24 +78,8 @@ for (const kind of ["own first-event gate", "own same-turn acquisition", "shared
     const transport: typeof fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
       const request = new Request(input, init)
       expect(request.headers.get("authorization")).toBe("Basic " + Buffer.from("fixture:synthetic").toString("base64"))
-      if (new URL(request.url).pathname === "/api/health") return Response.json(health)
-      expect(new URL(request.url).pathname).toBe("/api/event")
-      const firstStream = ++requests === 1
-      return new Response(new ReadableStream<Uint8Array>({
-        start(stream) {
-          let ended = false
-          const abort = () => {
-            if (ended) return
-            ended = true
-            request.signal.removeEventListener("abort", abort)
-            if (firstStream) firstTransportClosed = true
-            stream.close()
-          }
-          request.signal.addEventListener("abort", abort, { once: true })
-          stream.enqueue(new TextEncoder().encode("data: " + JSON.stringify(connected) + "\n\n"))
-          if (request.signal.aborted) abort()
-        },
-      }), { headers: { "content-type": "text/event-stream" } })
+      expect(new URL(request.url).pathname).toBe("/api/health")
+      return Response.json(health)
     }, fetch)
     const realNative = NativeClient.connectNative
     const instrument = (native: Awaited<ReturnType<typeof NativeClient.connectNative>>, index: number) => {
@@ -116,6 +102,12 @@ for (const kind of ["own first-event gate", "own same-turn acquisition", "shared
     })
     const controller = new BackendController(root, {
       fetch: transport,
+      socket: () => {
+        const socket = createFetch().fetch.socket()
+        const first = ++requests === 1
+        socket.addEventListener("close", () => { if (first) firstTransportClosed = true }, { once: true })
+        return socket
+      },
       onState: (state) => { states.push(state) },
       onEvent: (event) => {
         events.push(event.type)
@@ -132,7 +124,10 @@ for (const kind of ["own first-event gate", "own same-turn acquisition", "shared
     try {
       await admitted.promise
       const beforeEvents = [...events]
-      if (sameTurn) nativeGate.resolve(instrument({ health, api: YCoding.make({ baseUrl: endpoint.url, fetch: transport }), close: async () => {} }, 0))
+      if (sameTurn) {
+        const api = YCoding.make({ endpoint, location: { directory: task }, socket: createFetch().fetch.socket })
+        nativeGate.resolve(instrument({ health, api, close: async () => { api.transport.close() } }, 0))
+      }
       if (retirementInterval) first.retire()
       else first.close()
       if (sameTurn) {

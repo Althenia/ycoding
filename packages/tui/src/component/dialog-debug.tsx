@@ -1,5 +1,5 @@
 import { createMemo, createSignal } from "solid-js"
-import { InstallationChannel, InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationChannel, InstallationVersion } from "../build-version"
 import { useDialog } from "../ui/dialog"
 import { useRoute } from "../context/route"
 import { useLocal } from "../context/local"

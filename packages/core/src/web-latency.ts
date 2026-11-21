@@ -1,6 +1,6 @@
 export * as WebLatency from "./web-latency"
 
-import { and, desc, gte, lt } from "drizzle-orm"
+import { and, desc, gte, inArray, lt, sql } from "drizzle-orm"
 import { Clock, Effect, Schema } from "effect"
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
 import type { Database } from "./database/database"
@@ -25,31 +25,36 @@ export const prune = Effect.fn("WebLatency.prune")(function* (db: Db, days = 30)
     .pipe(Effect.orDie)
 })
 
-export const append = Effect.fn("WebLatency.append")(function* (db: Db, samples: readonly Telemetry.Sample[], days = 30) {
+export const append = Effect.fn("WebLatency.append")(function* (
+  db: Db,
+  samples: readonly Telemetry.Sample[],
+  days = 30,
+) {
   const retentionMs = days * 86_400_000
   const receivedAt = yield* Clock.currentTimeMillis
   yield* db
-    .transaction((tx) =>
-      Effect.gen(function* () {
-        const consent = yield* TelemetryConsent.make(tx)
-        if (!(yield* consent.enabled())) return yield* new Telemetry.TelemetryDisabled()
-        yield* tx
-          .delete(WebLatencyTable)
-          .where(lt(WebLatencyTable.received_at, receivedAt - retentionMs))
-          .run()
-        yield* tx
-          .insert(WebLatencyTable)
-          .values(samples.map((sample) => ({ received_at: receivedAt, sample })))
-          .run()
-        const oldestRetained = yield* tx
-          .select({ id: WebLatencyTable.id })
-          .from(WebLatencyTable)
-          .orderBy(desc(WebLatencyTable.id))
-          .limit(1)
-          .offset(maxRows - 1)
-          .get()
-        if (oldestRetained) yield* tx.delete(WebLatencyTable).where(lt(WebLatencyTable.id, oldestRetained.id)).run()
-      }),
+    .transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const consent = yield* TelemetryConsent.make(tx)
+          if (!(yield* consent.enabled())) return yield* new Telemetry.TelemetryDisabled()
+          yield* tx
+            .delete(WebLatencyTable)
+            .where(lt(WebLatencyTable.received_at, receivedAt - retentionMs))
+            .run()
+          yield* tx
+            .insert(WebLatencyTable)
+            .values(samples.map((sample) => ({ received_at: receivedAt, sample })))
+            .run()
+          const oldestRetained = yield* tx
+            .select({ id: WebLatencyTable.id })
+            .from(WebLatencyTable)
+            .orderBy(desc(WebLatencyTable.id))
+            .limit(1)
+            .offset(maxRows - 1)
+            .get()
+          if (oldestRetained) yield* tx.delete(WebLatencyTable).where(lt(WebLatencyTable.id, oldestRetained.id)).run()
+        }),
       { behavior: "immediate" },
     )
     .pipe(Effect.catchTag("SqlError", Effect.die), Effect.catchTag("EffectDrizzleQueryError", Effect.die))
@@ -74,6 +79,10 @@ export const list = Effect.fn("WebLatency.list")(function* (
       and(
         gte(WebLatencyTable.received_at, receivedAt - retentionMs),
         before === undefined ? undefined : lt(WebLatencyTable.id, before),
+        sql`(json_extract(${WebLatencyTable.sample}, '$.kind') IS NOT 'request' OR ${inArray(
+          sql`json_extract(${WebLatencyTable.sample}, '$.operation')`,
+          Telemetry.Operation.literals,
+        )})`,
       ),
     )
     .orderBy(desc(WebLatencyTable.id))

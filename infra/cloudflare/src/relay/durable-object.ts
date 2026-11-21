@@ -1,11 +1,3 @@
-/**
- * `DeviceRelay` Durable Object: one object per `<ownerID>:<deviceID>`.
- *
- * The object is a thin adapter over `relay/core.ts`: it owns the sockets, the
- * per-connection attachment and the expiry alarm. It
- * holds no session content and never executes session work.
- */
-
 import { DurableObject } from "cloudflare:workers"
 import { randomToken } from "../auth/crypto"
 import { RemoteCloseCode, RemoteLimits, isSessionID, parseAgentMessage, parsePreviewInput, parsePreviewOrigins, type RemotePriorityMode } from "../../../../packages/remote/src/index"
@@ -16,7 +8,8 @@ import { createD1PushStore } from "../push/d1-store"
 import { sendPush, sendPushToOwner } from "../push/send"
 import { createNoticeStore } from "./notice-store"
 import { createQuotaClaims, parseQuotaClaimRequest, parseQuotaReservation, type QuotaClaimRequest } from "./quota-claims"
-import { createRelay, type RelayAuthority, type RelayConnection } from "./core"
+import { createRelay, type RelayAuthority, type RelayConnection, type RelayDeps } from "./core"
+import { BinaryRelayAdapter, binaryRelaySocketTag } from "./binary-adapter"
 import { readBoundedText } from "../http"
 import { PreviewRelayError, createPreviewRelay } from "./preview"
 import { previewDirectoryName } from "../preview/directory-store"
@@ -54,114 +47,163 @@ type MessageStream = {
 }
 
 export class DeviceRelay extends DurableObject<WorkerEnv> {
-  readonly #service = createAuthService(createD1AuthStore(this.env.DB))
-  readonly #messageStreams = new Map<string, MessageStream>()
-  readonly #quotaClaims = createQuotaClaims(this.ctx.storage.kv, Date.now)
-  readonly #notices = createNoticeStore({
-    sql: this.ctx.storage.sql,
-    kv: this.ctx.storage.kv,
-    transactionSync: (operation) => this.ctx.storage.transactionSync(operation),
-  })
-  readonly #preview = createPreviewRelay({
-    origins: parsePreviewOrigins(this.env.PREVIEW_ORIGINS),
-    directory: {
-      allocate: (input) => this.env.PREVIEW_DIRECTORY.getByName(previewDirectoryName).allocate(input),
-      register: (input) => this.env.PREVIEW_DIRECTORY.getByName(previewDirectoryName).register(input),
-      revoke: (input) => this.env.PREVIEW_DIRECTORY.getByName(previewDirectoryName).revoke(input),
-    },
-    send: (agentID, frame) => {
-      const socket = this.#socketFor(agentID)
-      if (!socket || socket.readyState !== webSocketOpen) throw new Error("Agent socket is not open")
-      socket.send(frame)
-    },
-    persist: (agentID, enabled) => this.#patchAttachment(agentID, (current) => ({ ...current, preview: enabled })),
-    authorizeDevice: async (agent) => {
-      const outcome = await this.#service.authorizeAgentCommand(agent.deviceID)
-      return outcome.ok && outcome.value.userID === agent.ownerID
-    },
-  })
-  readonly #relay = createRelay({
-    now: () => Date.now(),
-    newID: () => randomToken(9),
-    send: (connectionID, message) => {
-      if (this.#messageStreams.has(connectionID)) { this.#streamFrame(connectionID, message); return }
-      const socket = this.#socketFor(connectionID)
-      if (socket && socket.readyState === webSocketOpen) socket.send(message)
-    },
-    close: (connectionID, code, reason) => {
-      this.#releasePreview(connectionID)
-      if (this.#messageStreams.has(connectionID)) { this.#finishMessageStream(connectionID, code === 4401 ? 401 : code === 4403 ? 403 : 503); return }
-      this.#socketFor(connectionID)?.close(code, reason)
-    },
-    saveSubscriptions: (connectionID, subscriptions) =>
-      this.#patchAttachment(connectionID, (attachment) => ({ ...attachment, subscriptions })),
-    savePending: (connectionID, pending) => this.#patchAttachment(connectionID, (attachment) => ({ ...attachment, pending })),
-    loadStatus: () => this.ctx.storage.get("lastStatus"),
-    saveStatus: (status) => this.ctx.storage.put("lastStatus", status),
-    loadOfflineCheck: () => this.ctx.storage.get("offlineCheck"),
+  readonly #adapter: JsonRelayAdapter | BinaryRelayAdapter
+
+  constructor(ctx: DurableObjectState, env: WorkerEnv) {
+    super(ctx, env)
+    const service = createAuthService(createD1AuthStore(env.DB))
+    const delivery = relayDelivery(ctx, env)
+    const name = ctx.id.name
+    const binary = name === undefined ? ctx.getWebSockets(binaryRelaySocketTag).length > 0 : name.startsWith("v5:")
+    this.#adapter = binary
+      ? new BinaryRelayAdapter(ctx, env.DEVICE_RELAY, service, delivery)
+      : new JsonRelayAdapter(ctx, env, service, delivery)
+  }
+
+  override fetch(request: Request): Promise<Response> {
+    return this.#adapter.fetch(request)
+  }
+
+  override webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    return this.#adapter.webSocketMessage(socket, message)
+  }
+
+  override webSocketClose(socket: WebSocket): Promise<void> {
+    return this.#adapter.webSocketClose(socket)
+  }
+
+  override webSocketError(socket: WebSocket): Promise<void> {
+    return this.#adapter.webSocketClose(socket)
+  }
+
+  override alarm(): Promise<void> {
+    return this.#adapter.alarm()
+  }
+}
+
+type RelayDelivery = Pick<RelayDeps, "notices" | "loadOfflineCheck" | "saveOfflineCheck" | "notifyPush" | "quota">
+
+function relayDelivery(ctx: DurableObjectState, env: WorkerEnv): RelayDelivery {
+  return {
+    notices: createNoticeStore({
+      sql: ctx.storage.sql,
+      kv: ctx.storage.kv,
+      transactionSync: (operation) => ctx.storage.transactionSync(operation),
+    }),
+    loadOfflineCheck: () => ctx.storage.get("offlineCheck"),
     saveOfflineCheck: async (check) => {
-      if (check === undefined) await this.ctx.storage.delete("offlineCheck")
-      else await this.ctx.storage.put("offlineCheck", check)
-    },
-    savePriority: (connectionID, priority) =>
-      this.#patchAttachment(connectionID, (attachment) => ({ ...attachment, priority })),
-    notices: this.#notices,
-    saveNoticeSubscription: (connectionID, noticesSubscribed) =>
-      this.#patchAttachment(connectionID, (attachment) => ({ ...attachment, noticesSubscribed })),
-    authorizeClientCommand: async (sessionID, deviceID) =>
-      toAuthority(await this.#service.authorizeClientCommand(sessionID, deviceID)),
-    authorizeAgentCommand: async (deviceID) => toAuthority(await this.#service.authorizeAgentCommand(deviceID)),
-    authorityTtlMs: authorityTtlMs,
-    agentHeartbeatAt: (connectionID) => {
-      const socket = this.#socketFor(connectionID)
-      return socket === undefined ? undefined : this.ctx.getWebSocketAutoResponseTimestamp(socket)?.getTime()
+      if (check === undefined) await ctx.storage.delete("offlineCheck")
+      else await ctx.storage.put("offlineCheck", check)
     },
     notifyPush: (accountID, event) => {
-      const publicKey = this.env.VAPID_PUBLIC_KEY
-      const privateKey = this.env.VAPID_PRIVATE_KEY
-      const subject = this.env.VAPID_SUBJECT
+      const publicKey = env.VAPID_PUBLIC_KEY
+      const privateKey = env.VAPID_PRIVATE_KEY
+      const subject = env.VAPID_SUBJECT
       if (!publicKey || !privateKey || !subject) {
         console.info(JSON.stringify({ component: "web-push", category: event.category, host: "none", targetCount: 0, errorClass: "configuration_missing" }))
         return Promise.resolve([])
       }
-      return sendPushToOwner({ store: createD1PushStore(this.env.DB), accountID, event,
+      return sendPushToOwner({ store: createD1PushStore(env.DB), accountID, event,
         publicKey, privateKey, subject, now: Date.now, fetch: (input, init) => globalThis.fetch(input, init) }).catch((cause: unknown) => {
         console.error(JSON.stringify({ component: "web-push", category: event.category, host: "unknown", targetCount: null, errorClass: "dispatch_error" }))
         throw cause
       })
     },
     quota: {
-      subscriptions: async (ownerID) => vapidKeys(this.env) === undefined ? [] : createD1PushStore(this.env.DB).list(ownerID),
+      subscriptions: async (ownerID) => vapidKeys(env) === undefined ? [] : createD1PushStore(env.DB).list(ownerID),
       reserve: async (ownerID, key, until, members) => {
-        const reservation = parseQuotaReservation(await this.#claimQuota(ownerID, { op: "reserve", key, until, members }))
+        const reservation = parseQuotaReservation(await claimQuota(env, ownerID, { op: "reserve", key, until, members }))
         if (reservation === undefined) throw new Error("Quota claim coordinator answered an invalid reservation")
         return reservation
       },
-      release: async (ownerID, key, members) => { await this.#claimQuota(ownerID, { op: "release", key, members }) },
+      release: async (ownerID, key, members) => { await claimQuota(env, ownerID, { op: "release", key, members }) },
       push: async (_ownerID, event, subscriptions) => {
-        const keys = vapidKeys(this.env)
+        const keys = vapidKeys(env)
         if (keys === undefined) return []
-        return sendPush({ store: createD1PushStore(this.env.DB), event, subscriptions, ...keys, now: Date.now, fetch: (input, init) => globalThis.fetch(input, init) })
+        return sendPush({ store: createD1PushStore(env.DB), event, subscriptions, ...keys, now: Date.now, fetch: (input, init) => globalThis.fetch(input, init) })
       },
     },
-  })
+  }
+}
+
+class JsonRelayAdapter {
+  readonly #messageStreams = new Map<string, MessageStream>()
+  readonly #quotaClaims: ReturnType<typeof createQuotaClaims>
+  readonly #preview: ReturnType<typeof createPreviewRelay>
+  readonly #relay: ReturnType<typeof createRelay>
   readonly #attached = new Set<string>()
   #lastDeadline: number | undefined
 
-  constructor(ctx: DurableObjectState, env: WorkerEnv) {
-    super(ctx, env)
+  constructor(
+    private readonly ctx: DurableObjectState,
+    env: WorkerEnv,
+    service: ReturnType<typeof createAuthService>,
+    private readonly delivery: RelayDelivery,
+  ) {
+    this.#quotaClaims = createQuotaClaims(ctx.storage.kv, Date.now)
+    this.#preview = createPreviewRelay({
+      origins: parsePreviewOrigins(env.PREVIEW_ORIGINS),
+      directory: {
+        allocate: (input) => env.PREVIEW_DIRECTORY.getByName(previewDirectoryName).allocate(input),
+        register: (input) => env.PREVIEW_DIRECTORY.getByName(previewDirectoryName).register(input),
+        revoke: (input) => env.PREVIEW_DIRECTORY.getByName(previewDirectoryName).revoke(input),
+      },
+      send: (agentID, frame) => {
+        const socket = this.#socketFor(agentID)
+        if (!socket || socket.readyState !== webSocketOpen) throw new Error("Agent socket is not open")
+        socket.send(frame)
+      },
+      persist: (agentID, enabled) => this.#patchAttachment(agentID, (current) => ({ ...current, preview: enabled })),
+      authorizeDevice: async (agent) => {
+        const outcome = await service.authorizeAgentCommand(agent.deviceID)
+        return outcome.ok && outcome.value.userID === agent.ownerID
+      },
+    })
+    this.#relay = createRelay({
+      ...delivery,
+      now: () => Date.now(),
+      newID: () => randomToken(9),
+      send: (connectionID, message) => {
+        if (this.#messageStreams.has(connectionID)) { this.#streamFrame(connectionID, message); return }
+        const socket = this.#socketFor(connectionID)
+        if (socket && socket.readyState === webSocketOpen) socket.send(message)
+      },
+      close: (connectionID, code, reason) => {
+        this.#releasePreview(connectionID)
+        if (this.#messageStreams.has(connectionID)) { this.#finishMessageStream(connectionID, code === 4401 ? 401 : code === 4403 ? 403 : 503); return }
+        this.#socketFor(connectionID)?.close(code, reason)
+      },
+      saveSubscriptions: (connectionID, subscriptions) =>
+        this.#patchAttachment(connectionID, (attachment) => ({ ...attachment, subscriptions })),
+      savePending: (connectionID, pending) => this.#patchAttachment(connectionID, (attachment) => ({ ...attachment, pending })),
+      loadStatus: () => this.ctx.storage.get("lastStatus"),
+      saveStatus: (status) => this.ctx.storage.put("lastStatus", status),
+      savePriority: (connectionID, priority) =>
+        this.#patchAttachment(connectionID, (attachment) => ({ ...attachment, priority })),
+      saveNoticeSubscription: (connectionID, noticesSubscribed) =>
+        this.#patchAttachment(connectionID, (attachment) => ({ ...attachment, noticesSubscribed })),
+      authorizeClientCommand: async (sessionID, deviceID) =>
+        toAuthority(await service.authorizeClientCommand(sessionID, deviceID)),
+      authorizeAgentCommand: async (deviceID) => toAuthority(await service.authorizeAgentCommand(deviceID)),
+      authorityTtlMs: authorityTtlMs,
+      agentHeartbeatAt: (connectionID) => {
+        const socket = this.#socketFor(connectionID)
+        return socket === undefined ? undefined : this.ctx.getWebSocketAutoResponseTimestamp(socket)?.getTime()
+      },
+    })
     // Heartbeats are answered by the runtime so an idle connection never wakes the object.
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(heartbeatRequest, heartbeatResponse))
     this.ctx.blockConcurrencyWhile(() => this.#restoreConnections())
   }
 
-  override async fetch(request: Request): Promise<Response> {
+  async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
     if (url.pathname === "/_ycoding/preview") return this.#forwardPreview(request)
     if (url.pathname.startsWith("/_ycoding/")) return this.#internal(url, request)
 
     const trusted = trustedConnection(request)
-    if (!trusted) return new Response("Invalid relay connection", { status: 400 })
+    const protocol = request.headers.get("x-ycoding-protocol")
+    if (!trusted || (protocol !== null && protocol !== "4")) return new Response("Invalid relay connection", { status: 400 })
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
       return new Response("WebSocket upgrade required", { status: 426 })
 
@@ -185,7 +227,7 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     return new Response(null, { status: 101, webSocket: pair[0] })
   }
 
-  override async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
+  async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
     const attachment = readAttachment(socket)
     if (!attachment) {
       socket.close(1003, "Connection metadata is missing")
@@ -208,7 +250,7 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     await this.#relay.settleDeliveries()
   }
 
-  override async webSocketClose(socket: WebSocket): Promise<void> {
+  async webSocketClose(socket: WebSocket): Promise<void> {
     const attachment = readAttachment(socket)
     if (!attachment) return
     this.#attached.delete(attachment.connectionID)
@@ -218,11 +260,7 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     await this.#armAlarm()
   }
 
-  override async webSocketError(socket: WebSocket): Promise<void> {
-    await this.webSocketClose(socket)
-  }
-
-  override async alarm(): Promise<void> {
+  async alarm(): Promise<void> {
     await this.#restoreConnections()
     this.#relay.sweep()
     await this.#relay.confirmOffline()
@@ -264,7 +302,7 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     if (url.pathname === "/_ycoding/close-device") {
       this.#relay.closeDevice()
       await this.ctx.storage.delete("lastStatus")
-      this.#notices.clear()
+      this.delivery.notices.clear()
       await this.#armAlarm()
       return new Response(null, { status: 204 })
     }
@@ -290,13 +328,6 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
       return Response.json({})
     }
     return Response.json(this.#quotaClaims.reserve(claim.key, claim.until, claim.members))
-  }
-
-  async #claimQuota(ownerID: string, claim: QuotaClaimRequest): Promise<unknown> {
-    const response = await this.env.DEVICE_RELAY.getByName(`${ownerID}:quota`).fetch(new Request("https://relay.internal/_ycoding/quota", {
-      method: "POST", headers: { "x-ycoding-internal": "1", "content-type": "application/json" }, body: JSON.stringify(claim) }))
-    if (!response.ok) throw new Error("Quota claim coordinator is unavailable")
-    return response.json()
   }
 
   async #streamContent(request: Request, message: boolean): Promise<Response> {
@@ -496,6 +527,13 @@ function vapidKeys(env: WorkerEnv): { readonly publicKey: string; readonly priva
   const privateKey = env.VAPID_PRIVATE_KEY
   const subject = env.VAPID_SUBJECT
   return publicKey && privateKey && subject ? { publicKey, privateKey, subject } : undefined
+}
+
+async function claimQuota(env: WorkerEnv, ownerID: string, claim: QuotaClaimRequest): Promise<unknown> {
+  const response = await env.DEVICE_RELAY.getByName(`${ownerID}:quota`).fetch(new Request("https://relay.internal/_ycoding/quota", {
+    method: "POST", headers: { "x-ycoding-internal": "1", "content-type": "application/json" }, body: JSON.stringify(claim) }))
+  if (!response.ok) throw new Error("Quota claim coordinator is unavailable")
+  return response.json()
 }
 
 function toAuthority(outcome: { readonly ok: true } | { readonly ok: false; readonly reason: string }): RelayAuthority {

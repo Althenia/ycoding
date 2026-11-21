@@ -254,7 +254,10 @@ describe("SkillTool", () => {
                 recover: unavailable(),
                 resolveRecovery: unavailable,
               },
-              location: { agent: { list: unavailable } },
+              location: {
+                agent: { list: unavailable },
+                integration: { accountSkills: { read: unavailable } },
+              },
             }),
           )
           const skillToolLayer = AppNodeBuilder.build(

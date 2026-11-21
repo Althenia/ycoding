@@ -26,8 +26,8 @@ const wireContext = (context: Dots.CoordinationContext) =>
 
 async function withMessages(messages: SessionMessageInfo[], width: number, run: (frame: string) => void) {
   const { renderScreen } = await import("./harness")
-  const { Global } = await import("@ycoding-ai/core/global")
-  assertTestPaths(Global.Path)
+  const { FrontendPaths } = await import("../../src/frontend-paths")
+  assertTestPaths(FrontendPaths.Path)
   const state: { data?: ReturnType<typeof useData> } = {}
   const screen = await renderScreen({
     width,
@@ -216,13 +216,16 @@ const states: { context: Dots.CoordinationContext; summary: string }[] = [
 for (const width of [60, 120]) {
   for (const { context, summary } of states) {
     test(`structured ${context.state === "enabled" ? "enabled" : context.reason} notice is readable at ${width} columns`, async () => {
-      const { DotsContext } = await import("@ycoding-ai/core/dots/context")
       await withMessages(
         [
           {
             id: "msg_state",
             type: "system",
-            text: context.state === "disabled" ? DotsContext.render(context) : "Dots coordination enabled.",
+            text:
+              context.state === "disabled"
+                ? "Dots coordination disabled. Earlier enabled observations do not authorize reporting.\n" +
+                  JSON.stringify({ state: context.state, generation: context.generation, reason: context.reason })
+                : "Dots coordination enabled.",
             metadata: { contextSource: "dots", dotsCoordination: wireContext(context) },
             time: { created: 1 },
           },

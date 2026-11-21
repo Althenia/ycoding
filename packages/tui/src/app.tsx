@@ -1,9 +1,8 @@
 import { render, TimeToFirstDraw, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { registerYCodingSpinner } from "./component/register-spinner"
-import { Deferred, Effect } from "effect"
-import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
-import { YCoding } from "@ycoding-ai/client"
-import { Global } from "@ycoding-ai/core/global"
+import { Deferred, Effect, Option } from "effect"
+import { YCoding, type Discovery } from "@ycoding-ai/client/v5"
+import { FrontendPaths } from "./frontend-paths"
 import { ClipboardProvider, useClipboard, type ClipboardService } from "./context/clipboard"
 import type { Plugin } from "@ycoding-ai/plugin/tui"
 import { LogProvider, useLog, type LogSink } from "./context/log"
@@ -155,9 +154,9 @@ const appBindingCommands = [
 
 export type TuiInput = {
   server: {
-    endpoint: Endpoint
+    endpoint: Discovery
     service?: {
-      reconnect: (signal: AbortSignal) => Promise<Endpoint>
+      reconnect: (signal: AbortSignal) => Promise<Discovery>
       restart: () => Promise<void>
     }
   }
@@ -184,31 +183,34 @@ export type TuiInput = {
 
 export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   const log = input.log ?? (() => {})
-  const global = yield* Global.Service
+  const frontend = Option.getOrElse(yield* Effect.serviceOption(FrontendPaths.Service), () => FrontendPaths.make())
   const config = Config.resolve(yield* Effect.tryPromise(() => input.config.get()), {
     terminalSuspend: process.platform !== "win32",
   })
-  const clientOptions = { baseUrl: input.server.endpoint.url, headers: Service.headers(input.server.endpoint) }
-  const api = YCoding.make(clientOptions)
-  const directory = yield* Effect.tryPromise(() => api.file.list({ location: { directory: process.cwd() } })).pipe(
-    Effect.map((response) => response.location.directory),
-    Effect.catch(() => Effect.tryPromise(() => api.location.get()).pipe(Effect.map((response) => response.directory))),
-  )
-  const handoff = input.terminalHandoff ? yield* Effect.promise(input.terminalHandoff) : undefined
-  const managed = input.server.service
-  const service = managed
-    ? {
-        reconnect: async (signal: AbortSignal) => {
-          const endpoint = await managed.reconnect(signal)
-          const next = { baseUrl: endpoint.url, headers: Service.headers(endpoint) }
-          return { api: YCoding.make(next), baseUrl: next.baseUrl }
-        },
-        restart: managed.restart,
-      }
-    : undefined
-  const exit = { epilogue: undefined as string | undefined, reason: undefined as unknown }
   const result = yield* Effect.scoped(
     Effect.gen(function* () {
+      const api = yield* Effect.acquireRelease(
+        Effect.sync(() => YCoding.make({ endpoint: input.server.endpoint, location: { directory: process.cwd() } })),
+        (client) => Effect.sync(() => client.transport.close()),
+      )
+      const directory = yield* Effect.tryPromise(() => api.file.list({ location: { directory: process.cwd() } })).pipe(
+        Effect.map((response) => response.location.directory),
+        Effect.catch(() => Effect.tryPromise(() => api.location.get()).pipe(Effect.map((response) => response.directory))),
+      )
+      const handoff = input.terminalHandoff ? yield* Effect.promise(input.terminalHandoff) : undefined
+      const backend = yield* Effect.tryPromise(() => api.location.get({ location: { directory } }))
+      const managed = input.server.service
+      const service = managed
+        ? {
+            reconnect: async (signal: AbortSignal) => {
+              const endpoint = await managed.reconnect(signal)
+              return { api: YCoding.make({ endpoint, location: { directory } }), baseUrl: endpoint.url }
+            },
+            restart: managed.restart,
+          }
+        : undefined
+      const exit = { epilogue: undefined as string | undefined, reason: undefined as unknown }
+      return yield* Effect.gen(function* () {
       yield* Effect.acquireRelease(
         Effect.sync(() => logProcessWarnings(log)),
         (dispose) => Effect.sync(dispose),
@@ -301,9 +303,9 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                     <TuiPathsProvider
                       value={{
                         cwd: process.cwd(),
-                        home: global.home,
-                        state: global.state,
-                        worktree: global.data + "/worktree",
+                        home: backend.backendPaths?.home ?? "",
+                        state: frontend.state,
+                        worktree: backend.backendPaths?.worktree ?? "",
                       }}
                     >
                       <TuiLifecycleProvider
@@ -347,7 +349,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                       <UpdateNotice message={input.updateNotice} />
                                       <RouteProvider>
                                         <PluginRuntimeProvider value={pluginRuntime}>
-                                          <ClientProvider api={api} baseUrl={clientOptions.baseUrl} service={service}>
+                                          <ClientProvider api={api} baseUrl={input.server.endpoint.url} service={service}>
                                             <TelemetryProvider>
                                               <TelemetryDataProvider>
                                                 <LocationProvider>
@@ -416,6 +418,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
       })
       yield* Deferred.await(shutdown)
       return { epilogue: exit.epilogue, reason: exit.reason }
+      })
     }),
   )
   yield* Effect.sync(() => {
@@ -859,7 +862,7 @@ function App(props: { pair?: DialogPairCredentials; started: number; onData?: Tu
             dialog.clear()
             const current = data.location.default()
             const locationRef = { directory: current.directory, workspace: current.workspaceID }
-            void saveCustomEndpoint(Global.Path.config, result, {
+            void saveCustomEndpoint(FrontendPaths.Path.config, result, {
               syncRegistration: () => data.location.integration.sync(),
               registered: (providerID) => (data.location.integration.list() ?? []).some(
                 (integration) => integration.id === providerID && integration.methods.some((method) => method.type === "key"),

@@ -1,5 +1,5 @@
 /**
- * Local Wrangler integration: real worker, real local D1 (with migrations), real
+ * Local Wrangler integration: real worker, fresh local D1, real
  * Durable Object, real WebSockets, and a local Google OIDC stand-in.
  *
  * This is not a unit test. It starts `wrangler dev` in local mode, drives the full
@@ -14,15 +14,25 @@
 
 import { spawn, type Subprocess } from "bun"
 import { readdirSync } from "node:fs"
-import { RemoteCloseCode, RemoteWebSocketPath, deviceSignaturePayload } from "../../../../packages/remote/src/index"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { RemoteCloseCode, deviceSignaturePayload } from "../../../../packages/remote/src/index"
 import { base64UrlEncode, sha256Hex } from "../../src/auth/crypto"
+import { isolatedEnvironment } from "./versioned-relay-worker"
 
 const repositoryRoot = new URL("../../../../", import.meta.url).pathname
 const wranglerBin = `${repositoryRoot}node_modules/.bin/wrangler`
 const configPath = "infra/cloudflare/wrangler.jsonc"
-const workerPort = 8799
+const RemoteWebSocketPath = { agent: "/ws/v4/agent", client: "/ws/v4/client" } as const
+const portReservation = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } })
+const workerPort = portReservation.port
+portReservation.stop(true)
 const workerOrigin = `http://127.0.0.1:${workerPort}`
 const socketOrigin = `ws://127.0.0.1:${workerPort}`
+const scratch = await mkdtemp(join(process.env.YCODING_RELAY_ACCEPTANCE_SCRATCH ?? tmpdir(), "v4-relay-local-"))
+const persist = join(scratch, "state")
+const wranglerEnv = { ...isolatedEnvironment(scratch), WRANGLER_SEND_METRICS: "false", WRANGLER_HIDE_BANNER: "true", CI: "1" }
 
 const checks: string[] = []
 let wrangler: Subprocess | undefined
@@ -32,6 +42,7 @@ try {
   const identity = await rsaIdentity()
   const idTokenHolder: { value: string } = { value: "" }
   google = Bun.serve({
+    hostname: "127.0.0.1",
     port: 0,
     fetch: async (request) => {
       const url = new URL(request.url)
@@ -44,13 +55,22 @@ try {
   })
   const googleOrigin = `http://127.0.0.1:${google.port}`
 
-  await run(wranglerBin, ["d1", "migrations", "apply", "ycoding-prod-db", "--local", "--config", configPath])
+  const ddl = "infra/cloudflare/migrations"
+  for (const file of readdirSync(join(repositoryRoot, ddl)).filter((name) => name.endsWith(".sql")).sort())
+    await run(wranglerBin, ["d1", "execute", "ycoding-prod-db", "--local", "--config", configPath, "--file", join(ddl, file)])
   wrangler = spawn(
     [
       wranglerBin,
       "dev",
+      "--local",
       "--config",
       configPath,
+      "--persist-to",
+      persist,
+      "--ip",
+      "127.0.0.1",
+      "--inspector-port",
+      "0",
       "--port",
       String(workerPort),
       "--var",
@@ -71,13 +91,13 @@ try {
       "--var",
       `GOOGLE_JWKS_URI:${googleOrigin}/certs`,
     ],
-    { cwd: repositoryRoot, stdout: "inherit", stderr: "inherit" },
+    { cwd: repositoryRoot, env: wranglerEnv, stdout: "inherit", stderr: "inherit" },
   )
   await waitForWorker()
 
   const health = await fetch(`${workerOrigin}/health`)
   expect(health.status === 200, `health returned ${health.status}`)
-  checks.push("migrated local D1 answers /health")
+  checks.push("fresh local D1 answers /health")
 
   /* ----------------------------------------------- public web + API routing */
 
@@ -344,19 +364,28 @@ try {
   const conflict = await competingAgent.closed
   expect(conflict.code === RemoteCloseCode.agentConflict, `competing agent was not refused: ${JSON.stringify(conflict)}`)
   first.send({ type: "request", id: "live-after-conflict", operation: "session.get", sessionID: "ses_a" })
-  const survivingRequest = await agent.next()
-  expect(survivingRequest.operation === "session.get", "the existing agent did not retain its connection")
+  let survivingRequest = await agent.next()
+  while (survivingRequest.type === "subscriptions") survivingRequest = await agent.next()
+  expect(survivingRequest.operation === "session.get", `the existing agent did not receive session.get: ${String(survivingRequest.type)}`)
   agent.send({ type: "response", id: survivingRequest.id, ok: true, value: { data: { id: "ses_a" } } })
-  expect((await first.next()).ok === true, "the existing agent did not settle the request after a connector conflict")
+  let survivingResponse = await first.next()
+  while (survivingResponse.type === "sessions") survivingResponse = await first.next()
+  expect(
+    survivingResponse.type === "response" && survivingResponse.id === "live-after-conflict" && survivingResponse.ok === true,
+    `the existing agent did not settle the request after a connector conflict: ${String(survivingResponse.type)}`,
+  )
   checks.push("a competing connector was refused while the live connector continued serving requests")
   await agent.close()
   const replacementAgent = connect(`${socketOrigin}${RemoteWebSocketPath.agent}`, {
     authorization: `Bearer ${tokens.accessToken}`,
   })
   await replacementAgent.opened
-  const retained = await replacementAgent.next()
+  const retained = [await replacementAgent.next(), await replacementAgent.next()]
   expect(
-    retained.type === "subscriptions" && JSON.stringify(retained.sessionIDs) === '["ses_a"]',
+    retained.every((frame) => frame.type === "subscriptions") &&
+      new Set(retained.map((frame) => frame.clientID)).size === 2 &&
+      retained.some((frame) => JSON.stringify(frame.sessionIDs) === '[]') &&
+      retained.some((frame) => JSON.stringify(frame.sessionIDs) === '["ses_a"]'),
     "fresh agent did not receive retained browser subscriptions",
   )
   agent = replacementAgent
@@ -553,7 +582,9 @@ try {
   console.log("Local Wrangler auth + relay integration passed")
 } finally {
   wrangler?.kill()
-  google?.stop(true)
+  await google?.stop(true)
+  await wrangler?.exited
+  await rm(scratch, { recursive: true, force: true })
 }
 
 /* ------------------------------------------------------------------ helpers */
@@ -563,7 +594,7 @@ function expect(condition: boolean, message: string): void {
 }
 
 async function run(command: string, args: string[]): Promise<string> {
-  const process = spawn([command, ...args], { cwd: repositoryRoot, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+  const process = spawn([command, ...args, "--persist-to", persist], { cwd: repositoryRoot, env: wranglerEnv, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
   const [stdout, stderr, code] = await Promise.all([
     new Response(process.stdout).text(),
     new Response(process.stderr).text(),
@@ -599,10 +630,6 @@ async function queryD1(command: string): Promise<string> {
     }
   }
   return ""
-}
-
-function sleep(milliseconds: number): Promise<void> {
-  return Bun.sleep(milliseconds)
 }
 
 /** Runs one read query and returns the first row as a string map. */

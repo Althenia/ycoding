@@ -1,17 +1,18 @@
 import { expect, spyOn, test } from "bun:test"
 import { Effect, Option } from "effect"
 import { NodeFileSystem } from "@effect/platform-node"
-import { Global } from "@ycoding-ai/core/global"
 import path from "node:path"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcessSpawner } from "effect/unstable/process"
 import handler from "../src/commands/handlers/desktop-host"
+import { NativeProcess } from "../src/native-process"
+import { FrontendPaths } from "../src/paths"
 import { ServerConnection } from "../src/services/server-connection"
 import { Standalone } from "../src/services/standalone"
 
 const root = process.env.YCODING_DESKTOP_TEST_TASK
 if (!root) throw new Error("A private containment-test Task is required")
 const run = (input: Parameters<typeof handler>[0]) => Effect.runPromiseExit(handler(input).pipe(
-  Effect.provide(Global.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
+  Effect.provide(FrontendPaths.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
   Effect.provide(NodeFileSystem.layer),
 ))
 
@@ -57,27 +58,16 @@ test("desktop terminal observation follows the owned connection scope release", 
 
 for (const detached of [undefined, false]) {
   test(`Standalone forwards ${detached === undefined ? "the existing default" : "explicit non-detached mode"} without changing its stdin lease`, async () => {
-    const make = ChildProcess.make
-    const calls: ChildProcess.CommandOptions[] = []
-    function intercept(file: string, options?: ChildProcess.CommandOptions): ChildProcess.StandardCommand
-    function intercept(file: string, args: readonly string[], options?: ChildProcess.CommandOptions): ChildProcess.StandardCommand
-    function intercept(options: ChildProcess.CommandOptions): (template: TemplateStringsArray, ...expressions: readonly ChildProcess.TemplateExpression[]) => ChildProcess.StandardCommand
-    function intercept(template: TemplateStringsArray, ...expressions: readonly ChildProcess.TemplateExpression[]): ChildProcess.StandardCommand
-    function intercept(...values: readonly unknown[]): unknown {
-      const options = values[2]
-      if (typeof values[0] !== "string" || !Array.isArray(values[1]) || (options !== undefined && (typeof options !== "object" || options === null)))
-        throw new Error("Expected an explicit private executable and command options")
-      calls.push(options ?? {})
-      return make("/synthetic/missing-owned-child", [], { ...options, env: { HOME: process.env.HOME!, PATH: process.env.PATH! }, extendEnv: false })
-    }
-    const command = spyOn(ChildProcess, "make").mockImplementation(intercept)
+    const stop = new Error("synthetic native start stop")
+    const start = spyOn(NativeProcess, "start").mockImplementation(() => Effect.fail(stop))
     try {
       await Effect.runPromiseExit(Effect.scoped(Standalone.owned({ command: ["/synthetic/ycoding", "serve"], ...(detached === undefined ? {} : { detached }) })))
-      expect(calls).toHaveLength(1)
-      expect(calls[0]?.detached).toBe(detached)
-      expect(calls[0]?.stdin).toBe("pipe")
-      expect(calls[0]?.forceKillAfter).toBe("3 seconds")
-    } finally { command.mockRestore() }
+      expect(start).toHaveBeenCalledTimes(1)
+      const options = start.mock.calls[0]?.[0]
+      expect(options?.detached).toBe(detached)
+      expect(options?.mode).toBe("stdio")
+      expect(options?.command).toEqual(["/synthetic/ycoding", "serve"])
+    } finally { start.mockRestore() }
   })
 }
 

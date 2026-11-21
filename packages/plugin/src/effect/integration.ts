@@ -73,7 +73,7 @@ export interface IntegrationDraft {
   }
 }
 
-export interface IntegrationDomain extends Omit<IntegrationApi<unknown>, "wellknown" | "accountSkills"> {
+export interface IntegrationDomain extends Omit<IntegrationApi<unknown>, "wellknown"> {
   readonly transform: Transform<IntegrationDraft>
   readonly reload: () => Effect.Effect<void>
   readonly connection: {

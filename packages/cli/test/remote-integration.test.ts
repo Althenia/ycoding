@@ -133,6 +133,12 @@ function createRelay(): Relay {
   }
 }
 
+const toAgentOperation = (operation: string) => operation === "event.subscribe" ? "session.subscribe" : operation === "event.unsubscribe" ? "session.unsubscribe" : operation
+const toWebValue = (operation: string, id: string, value: unknown) =>
+  operation === "event.subscribe" ? { ...(typeof value === "object" && value !== null ? value : {}), subscription_id: `sub-${id}` }
+    : operation === "session.list" ? { data: value }
+    : value
+
 async function waitFor<Value>(check: () => Value | undefined | Promise<Value | undefined>, timeout = 15_000) {
   const deadline = Date.now() + timeout
   for (;;) {
@@ -394,12 +400,12 @@ test("a disconnected connector reconciles a promoted prompt from the real server
       setPriority: () => {},
       request: async (operation, options) => {
         const id = `req_pending_${++nextID}`
-        relay.deliver(request(id, operation, options?.sessionID, options?.input ? { ...options.input } : undefined))
+        relay.deliver(request(id, toAgentOperation(operation), options?.sessionID, options?.input ? { ...options.input } : undefined))
         const response = await answer(relay, id).catch(() => undefined)
         if (response === undefined) return { status: "unknown", error: { code: "outcome_unknown", message: "The request did not settle before the timeout" } }
-        if (response.ok && operation === "session.subscribe" && options?.sessionID)
+        if (response.ok && operation === "event.subscribe" && options?.sessionID)
           relay.deliver({ type: "subscriptions", clientID: "client-pending", sessionIDs: [options.sessionID] })
-        return response.ok ? { status: "ok", value: response.value } : { status: "failed", error: response.error }
+        return response.ok ? { status: "ok", value: toWebValue(operation, id, response.value) } : { status: "failed", error: response.error }
       },
     }
   } })
@@ -424,6 +430,7 @@ test("a disconnected connector reconciles a promoted prompt from the real server
     await waitFor(() => store.state().view?.messages.some((message) => message.id === messageID && message.kind === "user" && message.state === "pending") ? true : undefined)
     relay.dropEvents(true)
     relay.input().onClose(1012, "Disconnected")
+    handlers?.onStatus?.({ kind: "closed", code: 1012, reason: "Disconnected", retryable: true })
     const resumed = await prompt(true)
     expect(resumed.status, await resumed.clone().text()).toBe(200)
     await waitFor(async () => {
@@ -436,6 +443,8 @@ test("a disconnected connector reconciles a promoted prompt from the real server
     expect(store.state().view?.messages.filter((message) => message.id === messageID)).toMatchObject([{ kind: "user", state: "pending" }])
     relay.dropEvents(false)
     relay.input().onOpen()
+    handlers?.onStatus?.({ kind: "open" })
+    handlers?.onSessions?.()
     relay.deliver({ type: "subscriptions", clientID: "client-pending", sessionIDs: [sessionID] })
     await waitFor(() => store.state().view?.messages.some((message) => message.id === messageID && message.kind === "user" && message.state !== "pending") ? true : undefined)
     expect(store.state().view?.messages.filter((message) => message.id === messageID)).toHaveLength(1)
@@ -475,12 +484,12 @@ test("a real finished run reaches the web activity store without changing Sessio
       setPriority: () => {},
       request: async (operation, options) => {
         const id = `req_active_${++nextID}`
-        relay.deliver(request(id, operation, options?.sessionID, options?.input ? { ...options.input } : undefined))
+        relay.deliver(request(id, toAgentOperation(operation), options?.sessionID, options?.input ? { ...options.input } : undefined))
         const response = await answer(relay, id).catch(() => undefined)
         if (response === undefined) return { status: "unknown", error: { code: "outcome_unknown", message: "The request did not settle before the timeout" } }
-        if (response.ok && operation === "session.subscribe" && options?.sessionID)
+        if (response.ok && operation === "event.subscribe" && options?.sessionID)
           relay.deliver({ type: "subscriptions", clientID: "client-active", sessionIDs: [options.sessionID] })
-        return response.ok ? { status: "ok", value: response.value } : { status: "failed", error: response.error }
+        return response.ok ? { status: "ok", value: toWebValue(operation, id, response.value) } : { status: "failed", error: response.error }
       },
     }
   } })

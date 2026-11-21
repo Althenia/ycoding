@@ -35,7 +35,7 @@ async function harness(options: {
   handler?: (request: { operation: string; input?: Readonly<Record<string, unknown>>; sessionID?: string }) => RelayHandlerResult
   messages?: Record<string, readonly unknown[]>
   activeSessions?: Record<string, { type: "running" }>
-  fetch?: (input: string, init?: RequestInit) => Promise<Response>
+  fetch?: (relay: RelayDouble, input: string, init?: RequestInit) => Promise<Response>
   onRequestTiming?: (timing: RemoteRequestTiming) => void
 } = {}): Promise<Harness> {
   const relay = await startRelayDouble({
@@ -69,7 +69,7 @@ async function harness(options: {
     batchMs: 20,
     now: () => 1_000,
     createMessageID: () => "msg_local_1",
-    ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+    fetch: (input, init) => options.fetch?.(relay, input, init) ?? Promise.resolve(relay.readHttp(input)),
   })
   const runUntil = async (predicate: () => boolean, attempts = 100) => {
     for (let index = 0; index < attempts && !predicate(); index += 1) {
@@ -387,15 +387,19 @@ describe("windowed history", () => {
 })
 
 describe("oversized live invalidations", () => {
+  const projected = (id: string, text: string) => ({ id, type: "user", text, time: { created: 1 } })
+  const missing = { ok: false, code: "not_found", message: "Message not found" } as const
+  const body = (id: string, text: string): RelayHandlerOutcome => ({ wire: (peer, request) => peer.httpResult(request, { data: projected(id, text) }) })
+
   test("surfaces an update-required notice when an older connector rejects the streamed read", async () => {
     const test = await harness({ messages: { ses_a: [{ id: "msg_1", type: "user", text: "Projected", time: { created: 1 } }] },
-      fetch: async () => new Response(JSON.stringify({ error: { code: "unknown_operation" } }), { status: 503, headers: { "content-type": "application/json" } }),
+      handler: (request) => request.operation === "session.message" ? { ok: false, code: "invalid_message", message: "Unsupported operation" } : "default",
     })
     try {
       await test.store.load()
       await test.runUntil(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
-      test.relay.pushEvent("ses_a", { type: "session.remote.oversized", data: { sessionID: "ses_a", messageID: "msg_1" }, durable: { aggregateID: "ses_a", seq: 1, version: 1 } })
+      test.relay.pushResync("ses_a", "msg_1")
       await test.runUntil(() => test.store.state().view?.messages.some((message) => message.kind === "oversized" && message.state === "error") === true)
       expect(test.store.state().notice).toContain("Update the connected device")
     } finally { await test.stop() }
@@ -403,13 +407,13 @@ describe("oversized live invalidations", () => {
 
   test("treats 404 for an already projected message as a retryable error", async () => {
     const test = await harness({ messages: { ses_a: [{ id: "msg_1", type: "user", text: "Projected", time: { created: 1 } }] },
-      fetch: async () => new Response(null, { status: 404 }),
+      handler: (request) => request.operation === "session.message" ? missing : "default",
     })
     try {
       await test.store.load()
       await test.runUntil(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
-      test.relay.pushEvent("ses_a", { type: "session.remote.oversized", data: { sessionID: "ses_a", messageID: "msg_1" }, durable: { aggregateID: "ses_a", seq: 1, version: 1 } })
+      test.relay.pushResync("ses_a", "msg_1")
       await test.runUntil(() => test.store.state().view?.messages.some((message) => message.kind === "oversized" && message.state === "error") === true)
       expect(test.store.state().view?.messages[0]).toMatchObject({ kind: "oversized", projected: true, state: "error" })
     } finally { await test.stop() }
@@ -417,23 +421,20 @@ describe("oversized live invalidations", () => {
 
   test("retains an admitted-input placeholder after 404 and resolves it when promotion projects the same ID", async () => {
     let reads = 0
-    const test = await harness({ fetch: async () => {
-      reads += 1
-      return reads === 1 ? new Response(null, { status: 404 })
-        : new Response(JSON.stringify({ id: "msg_new", type: "user", text: "Promoted content", time: { created: 2 } }))
-    } })
+    const test = await harness({ handler: (request) => request.operation !== "session.message" ? "default"
+      : ++reads === 1 ? missing : { ok: true, value: projected("msg_new", "Promoted content") } })
     try {
       await test.store.load()
       await test.runUntil(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
-      test.relay.pushEvent("ses_a", { type: "session.remote.oversized", data: { sessionID: "ses_a", messageID: "msg_new" }, durable: { aggregateID: "ses_a", seq: 1, version: 1 } })
+      test.relay.pushResync("ses_a", "msg_new")
       await test.runUntil(() => test.store.state().view?.messages.some((message) => message.kind === "oversized" && message.state === "pending") === true)
       expect(test.store.state().view?.messages[0]).toMatchObject({ kind: "oversized", id: "msg_new", state: "pending" })
       expect(reads).toBe(1)
-      test.relay.pushEvent("ses_a", { type: "session.input.promoted", data: { sessionID: "ses_a", inputID: "msg_new" }, durable: { aggregateID: "ses_a", seq: 2, version: 1 } })
+      test.relay.pushEvent("ses_a", { type: "session.input.promoted", data: { sessionID: "ses_a", inputID: "msg_new" }, durable: { aggregateID: "ses_a", seq: 1, version: 1 } })
       await test.runUntil(() => test.store.state().view?.messages.some((message) => message.kind === "user" && message.id === "msg_new") === true)
       expect(test.store.state().view?.messages[0]).toMatchObject({ kind: "user", text: "Promoted content" })
-      expect(test.store.state().view?.watermark).toBe(2)
+      expect(test.store.state().view?.watermark).toBe(1)
       expect(reads).toBe(2)
     } finally { await test.stop() }
   })
@@ -443,16 +444,13 @@ describe("oversized live invalidations", () => {
     let watermark = 0
     const test = await harness({ handler: (request) => request.operation === "session.snapshot" ? { ok: true, value: {
       sourceEpoch: "epoch_1", session: { id: "ses_a" }, messages: [], watermark: { aggregateID: "ses_a", seq: watermark },
-    } } : "default", fetch: async () => {
-      reads += 1
-      return reads === 1 ? new Response(null, { status: 404 })
-        : new Response(JSON.stringify({ id: "msg_new", type: "user", text: "After refresh", time: { created: 2 } }))
-    } })
+    } } : request.operation !== "session.message" ? "default"
+      : ++reads === 1 ? missing : { ok: true, value: projected("msg_new", "After refresh") } })
     try {
       await test.store.load()
       await test.runUntil(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
-      test.relay.pushEvent("ses_a", { type: "session.remote.oversized", data: { sessionID: "ses_a", messageID: "msg_new" }, durable: { aggregateID: "ses_a", seq: 1, version: 1 } })
+      test.relay.pushResync("ses_a", "msg_new")
       await test.runUntil(() => test.store.state().view?.messages.some((message) => message.kind === "oversized" && message.state === "pending") === true)
       watermark = 1
       await test.store.reloadMessages()
@@ -464,15 +462,20 @@ describe("oversized live invalidations", () => {
 
   test("cancels an in-flight full-message read when another Session takes ownership", async () => {
     let aborted = false
+    let started = false
     const test = await harness({ messages: { ses_a: [{ id: "msg_1", type: "user", text: "private", time: { created: 1 } }] },
-      fetch: (_url, init) => new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => { aborted = true; reject(new Error("aborted")) }, { once: true })),
+      handler: (request) => request.operation === "session.message" ? body("msg_1", "private") : "default",
+      fetch: (_relay, _url, init) => new Promise<Response>((_resolve, reject) => {
+        started = true
+        init?.signal?.addEventListener("abort", () => { aborted = true; reject(new Error("aborted")) }, { once: true })
+      }),
     })
     try {
       await test.store.load()
       await test.runUntil(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
-      test.relay.pushEvent("ses_a", { type: "session.remote.oversized", data: { sessionID: "ses_a", messageID: "msg_1" }, durable: { aggregateID: "ses_a", seq: 1, version: 1 } })
-      await test.runUntil(() => test.store.state().view?.messages[0]?.kind === "oversized")
+      test.relay.pushResync("ses_a", "msg_1")
+      await test.runUntil(() => started)
       await test.store.selectSession("ses_b")
       expect(aborted).toBe(true)
       expect(test.store.state().view?.id).toBe("ses_b")
@@ -481,25 +484,34 @@ describe("oversized live invalidations", () => {
   })
 
   test("advances the durable watermark and replaces only the indexed message after its streamed HTTP read", async () => {
-    let finish!: (response: Response) => void
-    const read = new Promise<Response>((resolve) => { finish = resolve })
+    const permit = Promise.withResolvers<void>()
     const calls: { readonly path: string; readonly credentials?: RequestCredentials }[] = []
-    const test = await harness({ messages: { ses_a: [{ id: "msg_1", type: "user", text: "before", time: { created: 1 } }] },
-      fetch: (url, init) => { calls.push({ path: url, credentials: init?.credentials }); return read },
+    const output = "After: 日本語 🌍".repeat(7500)
+    let watermark = 0
+    const test = await harness({ snapshot: () => ({ session: { id: "ses_a" }, sourceEpoch: "epoch_1", messages: [projected("msg_1", "before"), projected("msg_other", "unchanged")], watermark: { seq: watermark } }),
+      handler: (request) => request.operation === "session.message" ? body("msg_1", output) : "default",
+      fetch: async (relay, url, init) => { calls.push({ path: url, credentials: init?.credentials }); await permit.promise; return relay.readHttp(url) },
     })
     try {
       await test.store.load()
       await test.runUntil(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
-      test.relay.pushEvent("ses_a", { type: "session.remote.oversized", data: { sessionID: "ses_a", messageID: "msg_1" }, durable: { aggregateID: "ses_a", seq: 1, version: 1 } })
-      await test.runUntil(() => test.store.state().view?.messages[0]?.kind === "oversized")
+      watermark = 1
+      test.relay.pushResync("ses_a", "msg_1")
+      await test.runUntil(() => calls.length === 1)
       expect(test.store.state().view?.watermark).toBe(1)
       expect(test.store.state().view?.unhandledEvents).toBe(0)
       expect(test.store.state().view?.messages[0]).toMatchObject({ kind: "oversized", id: "msg_1", state: "loading" })
-      expect(calls).toEqual([{ path: "/api/remote/devices/dev_1/sessions/ses_a/messages/msg_1", credentials: "same-origin" }])
-      finish(new Response(JSON.stringify({ id: "msg_1", type: "user", text: "after", time: { created: 1 } }), { status: 200 }))
+      expect(test.relay.requests).toContainEqual(expect.objectContaining({ operation: "session.message", sessionID: "ses_a", input: { messageID: "msg_1" } }))
+      expect(calls).toHaveLength(1)
+      const url = new URL(calls[0]!.path, test.relay.httpURL)
+      expect(url.pathname).toBe("/api/remote/devices/dev_1/sessions/ses_a/messages/msg_1")
+      expect([...url.searchParams.keys()]).toEqual(["connectionEpoch", "requestID", "transferID"])
+      for (const value of url.searchParams.values()) expect(value).not.toBe("")
+      expect(calls[0]!.credentials).toBe("same-origin")
+      permit.resolve()
       await test.runUntil(() => test.store.state().view?.messages[0]?.kind === "user")
-      expect(test.store.state().view?.messages[0]).toMatchObject({ kind: "user", id: "msg_1", text: "after" })
+      expect(test.store.state().view?.messages).toMatchObject([{ kind: "user", id: "msg_1", text: output }, { id: "msg_other", text: "unchanged" }])
     } finally { await test.stop() }
   })
 
@@ -508,18 +520,21 @@ describe("oversized live invalidations", () => {
     let newest = "before"
     const test = await harness({ handler: (request) => request.operation === "session.snapshot"
       ? { ok: true, value: { sourceEpoch: "epoch_1", session: { id: "ses_a" }, messages: [{ id: "msg_1", type: "user", text: newest, time: { created: 1 } }], watermark: { seq: newest === "after" ? 3 : 0 } } }
-      : "default", fetch: async () => { reads += 1; return reads === 1 ? new Response(null, { status: 503 }) : new Response(JSON.stringify({ id: "msg_1", type: "user", text: "recovered", time: { created: 1 } })) } })
+      : request.operation === "session.message" ? body("msg_1", "recovered") : "default",
+      fetch: async (relay, url) => ++reads === 1 ? new Response(null, { status: 503 }) : relay.readHttp(url) })
     try {
       await test.store.load()
       await test.runUntil(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
-      test.relay.pushEvent("ses_a", { type: "session.remote.oversized", data: { sessionID: "ses_a", messageID: "msg_1" }, durable: { aggregateID: "ses_a", seq: 1, version: 1 } })
+      test.relay.pushResync("ses_a", "msg_1")
       await test.runUntil(() => test.store.state().view?.messages.some((message) => message.kind === "oversized" && message.state === "error") === true)
       expect(test.store.state().view?.messages[0]).toMatchObject({ kind: "oversized", id: "msg_1", state: "error" })
-      await test.store.loadOversizedMessage("msg_1")
+      const retry = test.store.loadOversizedMessage("msg_1")
+      await test.runUntil(() => test.store.state().view?.messages[0]?.kind === "user")
+      await retry
       expect(test.store.state().view?.messages[0]).toMatchObject({ kind: "user", text: "recovered" })
       newest = "after"
-      test.relay.pushEvent("ses_a", { type: "session.remote.oversized", data: { sessionID: "ses_a" }, durable: { aggregateID: "ses_a", seq: 3, version: 1 } })
+      test.relay.pushResync("ses_a")
       await test.runUntil(() => test.store.state().view?.messages.some((message) => message.kind === "user" && message.text === "after") === true)
       expect(test.store.state().view?.watermark).toBe(3)
     } finally { await test.stop() }

@@ -3,11 +3,10 @@ import type {
   CommandListOutput,
   LocationRef,
   ModelListOutput,
-  YCodingClient,
   ProviderListOutput,
   SkillListOutput,
 } from "@ycoding-ai/client/promise"
-import type { RunAgent, RunCommand, RunProvider, RunReference } from "./types"
+import type { RunAgent, RunClient, RunCommand, RunProvider, RunReference } from "./types"
 
 type CurrentAgent = AgentListOutput["data"][number]
 type CurrentCommand = CommandListOutput["data"][number]
@@ -92,7 +91,7 @@ export function runProviders(providers: CurrentProvider[], models: CurrentModel[
 }
 
 export async function waitForDefaultModel(input: {
-  sdk: YCodingClient
+  sdk: RunClient
   location: LocationRef
   timeoutMs?: number
   requestTimeoutMs?: number
@@ -158,13 +157,13 @@ function wait(delay: number, signal?: AbortSignal) {
   })
 }
 
-export async function loadRunAgents(sdk: YCodingClient, ref: LocationRef, signal?: AbortSignal): Promise<RunAgent[]> {
+export async function loadRunAgents(sdk: RunClient, ref: LocationRef, signal?: AbortSignal): Promise<RunAgent[]> {
   const result = await sdk.agent.list(location(ref), ...requestOptions(signal))
   return result.data.map(runAgent)
 }
 
 export async function loadRunCommands(
-  sdk: YCodingClient,
+  sdk: RunClient,
   ref: LocationRef,
   signal?: AbortSignal,
 ): Promise<RunCommand[]> {
@@ -176,7 +175,7 @@ export async function loadRunCommands(
 }
 
 export async function loadRunReferences(
-  sdk: YCodingClient,
+  sdk: RunClient,
   ref: LocationRef,
   signal?: AbortSignal,
 ): Promise<RunReference[]> {
@@ -185,7 +184,7 @@ export async function loadRunReferences(
 }
 
 export async function loadRunProviders(
-  sdk: YCodingClient,
+  sdk: RunClient,
   ref: LocationRef,
   signal?: AbortSignal,
 ): Promise<RunProvider[]> {

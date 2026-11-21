@@ -2,7 +2,7 @@
 import { RGBA } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { describe, expect, test } from "bun:test"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationVersion } from "../src/build-version"
 import type { JSX } from "solid-js"
 import { ConfigProvider } from "../src/config"
 import { ClientProvider } from "../src/context/client"

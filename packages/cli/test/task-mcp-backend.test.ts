@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { YCoding } from "@ycoding-ai/client/promise"
-import { TaskMCPTasks } from "@ycoding-ai/core/task-mcp/tasks"
+import { TaskMCPTasks } from "../src/task-mcp/tasks"
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -362,6 +362,69 @@ describe("task MCP backend", () => {
     expect(input.requests.filter((request) => request.url.pathname === reply)).toHaveLength(1)
     expect(input.requests.find((request) => request.url.pathname === reply)?.body).toEqual({ answers: [["A"]] })
   })
+
+  test.each(["question", "review"] as const)(
+    "accepts frozen ordered answers and preserves validation for %s",
+    async (kind) => {
+      const input = await fixture()
+      const questions = [
+        {
+          header: "Choices",
+          question: "Which items?",
+          options: [{ label: "A", description: "First" }, { label: "B", description: "Second" }],
+          multiple: true,
+          custom: false,
+        },
+        {
+          header: "Next",
+          question: "Which next?",
+          options: [{ label: "C", description: "Third" }],
+          custom: false,
+        },
+      ]
+      const pending = `/api/session/${input.sessionID}/${kind}`
+      const endpoint = `${pending}/${kind === "question" ? "que_frozen/reply" : "rev_frozen/decide"}`
+      input.responses.set(pending, {
+        data: kind === "question"
+          ? [{ id: "que_frozen", sessionID: input.sessionID, questions }]
+          : [{
+              kind: "question",
+              payload: { type: "question", questions },
+              itemID: "rev_frozen",
+              sessionID: input.sessionID,
+              rootSessionID: input.sessionID,
+              sessionTitle: "Task",
+              created: 1,
+              reason: "sleep_entry",
+              origin: { requestID: "req_frozen" },
+            }],
+      })
+      input.responses.set(endpoint, new Response(null, { status: 204 }))
+      const item = (await input.backend.interactions(input.sessionID, input.workspace)).items[0]
+      for (const values of [[['A', 'A'], ['C']], [['X'], ['C']], [['A']]]) {
+        const answers = Object.freeze(values.map((answer) => Object.freeze(answer)))
+        await expect(input.backend.respond(input.sessionID, input.workspace, {
+          interactionId: item.interactionId,
+          revision: item.revision,
+          response: { action: "question", answers },
+        })).rejects.toBeInstanceOf(TaskMCPTasks.InteractionRejected)
+      }
+      expect(input.requests.every((request) => request.method === "GET")).toBe(true)
+      const answers = Object.freeze([Object.freeze(["B", "A"]), Object.freeze(["C"])])
+      await input.backend.respond(input.sessionID, input.workspace, {
+        interactionId: item.interactionId,
+        revision: item.revision,
+        response: Object.freeze({ action: "question", answers }),
+      })
+      const sent = input.requests.filter((request) => request.method === "POST")
+      expect(sent.map((request) => request.url.pathname)).toEqual([endpoint])
+      expect(sent[0]?.body).toEqual(kind === "question"
+        ? { answers: [["B", "A"], ["C"]] }
+        : { decision: { kind: "question", answers: [["B", "A"], ["C"]] } })
+      expect(sent[0]?.headers.get("x-ycoding-directory")).toBe(encodeURIComponent(input.workspace))
+      expect(answers).toEqual([["B", "A"], ["C"]])
+    },
+  )
 
   test("requires the current request revision and valid exact answer selections before any reply", async () => {
     const input = await fixture()

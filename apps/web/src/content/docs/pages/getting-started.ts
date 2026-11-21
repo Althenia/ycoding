@@ -37,7 +37,7 @@ export const gettingStartedPages: readonly DocPage[] = [
           {
             kind: "list",
             items: [
-              "Use a supported release platform: macOS arm64 or x64, Linux x64, or Windows x64.",
+              "Use a supported release platform: macOS arm64 or x64, or Linux x64. Windows release builds are paused until the native runtime supports Windows.",
               "Have credentials for a model provider you can use. YCoding's `/connect` flow stores a provider profile; provider access and model availability come from that provider.",
               "Start YCoding in the repository or project folder you want to work in. The current directory supplies the local project context.",
             ],
@@ -104,7 +104,7 @@ export const gettingStartedPages: readonly DocPage[] = [
     slug: "installation",
     title: "Installation",
     group: "Get started",
-    description: "Install a verified YCoding release on macOS, Linux, or Windows and learn how updates work.",
+    description: "Install a verified YCoding release on macOS or Linux and learn how updates work.",
     sections: [
       {
         heading: "Requirements",
@@ -116,7 +116,6 @@ export const gettingStartedPages: readonly DocPage[] = [
               ["macOS Apple silicon", "arm64", "Shell installer or release archive."],
               ["macOS Intel", "x64", "Shell installer or release archive."],
               ["Linux", "x64", "Shell installer or release archive."],
-              ["Windows", "x64", "Download and extract the release ZIP."],
             ],
           },
           {
@@ -166,25 +165,6 @@ export const gettingStartedPages: readonly DocPage[] = [
         ],
       },
       {
-        heading: "Install on Windows",
-        blocks: [
-          {
-            kind: "steps",
-            items: [
-              { title: "Download the Windows x64 ZIP", text: "Open the latest YCoding release and download the asset named `ycoding-<version>-windows-x64.zip`. The release also publishes a checksum file for its archives." },
-              { title: "Extract the archive", text: "Save the ZIP in your Downloads folder and use the PowerShell command below. It extracts into a `ycoding` folder under your home directory; the archive contains `ycoding.exe` and the Chrome extension folder." },
-              { title: "Run the executable", text: "Open PowerShell in the extracted folder and run `./ycoding.exe --version`. To start YCoding, run `./ycoding.exe` from your project directory." },
-            ],
-          },
-          { kind: "code", language: "powershell", label: "Extract the downloaded archive", code: 'Expand-Archive -Path "$HOME\\Downloads\\ycoding-0.7.2-windows-x64.zip" -DestinationPath "$HOME\\ycoding"' },
-          { kind: "code", language: "powershell", label: "Verify from the extracted folder", code: '& "$HOME\\ycoding\\ycoding.exe" --version' },
-          {
-            kind: "paragraph",
-            text: "Replace `0.7.2` in the extraction command with the version number in the ZIP you downloaded. Expected result: PowerShell prints `ycoding` and the installed version. If extraction says the file cannot be found, check the Downloads filename and update the version in `-Path`. The Windows release is x64; to use `ycoding` without typing its full path, add the extracted folder to your user PATH and open a new PowerShell window.",
-          },
-        ],
-      },
-      {
         heading: "Update an installation",
         blocks: [
           {
@@ -192,6 +172,10 @@ export const gettingStartedPages: readonly DocPage[] = [
             tone: "warning",
             title: "Move to v0.12.0 with the installer",
             text: "On macOS or Linux, use the shell installer above to move to v0.12.0 from v0.11.12 or earlier, v0.12.1 through v0.12.3, or v0.12.4. The `ycoding update` command in those versions cannot install the v0.12.0 archive, and v0.12.4 is numbered above v0.12.0. On Windows, close YCoding and replace it with the contents of the release ZIP.",
+          },
+          {
+            kind: "paragraph",
+            text: "If you already have the Bun-based v0.12.0, let active Sessions finish, then use the same installer to switch to Rust. `ycoding update` does not replace a binary at the same version. The first Rust start imports Bun Session history if the default Rust store is empty and leaves the Bun database intact.",
           },
           {
             kind: "paragraph",

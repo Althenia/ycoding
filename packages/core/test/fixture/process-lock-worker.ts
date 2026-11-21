@@ -1,4 +1,4 @@
-import { ProcessLock } from "@ycoding-ai/core/util/process-lock"
+import { ProcessLock } from "@ycoding-ai/schema/process-lock"
 import { Effect, Schema } from "effect"
 import fs from "node:fs/promises"
 

@@ -308,10 +308,10 @@ describe("router: browser session routes", () => {
     expect(response.headers.get("set-cookie")).toContain("Max-Age=0")
     expect((await h.service.resolveBrowserSession(session.token)).ok).toBe(false)
     expect(h.relayCalls.map((call) => call.name).sort()).toEqual(
-      [`${session.userID}:${first.deviceID}`, `${session.userID}:${second.deviceID}`].sort(),
+      [first.deviceID, second.deviceID].flatMap((id) => [`${session.userID}:${id}`, `v5:${session.userID}:${id}`]).sort(),
     )
     for (const call of h.relayCalls) {
-      expect(new URL(call.request.url).pathname).toBe("/_ycoding/revoke-session")
+      expect(new URL(call.request.url).pathname).toBe(call.name.startsWith("v5:") ? "/_ycoding/v5/revoke-session" : "/_ycoding/revoke-session")
       expect(call.request.headers.get("x-ycoding-target-session")).toBe(session.sessionID)
     }
   })
@@ -339,8 +339,8 @@ describe("router: browser session routes", () => {
       }),
     )
     expect(rotated.status).toBe(200)
-    expect(h.relayCalls.map((call) => call.name)).toEqual([`${session.userID}:${device.deviceID}`])
-    expect(h.relayCalls[0]!.request.headers.get("x-ycoding-target-session")).toBe(session.sessionID)
+    expect(h.relayCalls.map((call) => call.name)).toEqual([`${session.userID}:${device.deviceID}`, `v5:${session.userID}:${device.deviceID}`])
+    for (const call of h.relayCalls) expect(call.request.headers.get("x-ycoding-target-session")).toBe(session.sessionID)
   })
 
   test("keeps the session read-only on GET while rotation is a mutation", async () => {
@@ -375,7 +375,7 @@ describe("router: browser session routes", () => {
       relay: {
         getByName: (name) => ({
           fetch: async (request) =>
-            new URL(request.url).pathname === "/_ycoding/presence"
+            /^\/_ycoding\/(?:v5\/)?presence$/.test(new URL(request.url).pathname)
               ? Response.json({ online: online.has(name) })
               : new Response(null, { status: 204 }),
         }),
@@ -383,8 +383,9 @@ describe("router: browser session routes", () => {
     })
     const owner = await signIn(h, "owner")
     const first = await enrollDevice(h, owner.userID)
-    const second = await enrollDevice(h, owner.userID, "Offline Mac")
+    const second = await enrollDevice(h, owner.userID, "Native Mac")
     online.add(`${owner.userID}:${first.deviceID}`)
+    online.add(`v5:${owner.userID}:${second.deviceID}`)
 
     const response = await h.router(new Request(`${origin}/api/devices`, { headers: sessionCookie(owner.token) }))
     const body = (await response.json()) as { devices: { id: string; online: boolean }[] }
@@ -394,6 +395,11 @@ describe("router: browser session routes", () => {
         [second.deviceID, false],
       ]),
     )
+    for (const endpoint of ["/api/devices", "/api/me"]) {
+      const response = await h.router(new Request(`${origin}${endpoint}?relay=5`, { headers: sessionCookie(owner.token) }))
+      const body = (await response.json()) as { devices: { id: string; online: boolean }[] }
+      expect(new Map(body.devices.map((device) => [device.id, device.online]))).toEqual(new Map([[first.deviceID, false], [second.deviceID, true]]))
+    }
   })
 })
 
@@ -550,8 +556,10 @@ describe("router: device enrollment and credentials", () => {
       }),
     )
     expect(revoked.status).toBe(200)
-    expect(h.relayCalls.at(-1)?.name).toBe(`${owner.userID}:${device.deviceID}`)
-    expect(new URL(h.relayCalls.at(-1)?.request.url ?? "").pathname).toBe("/_ycoding/close-device")
+    expect(h.relayCalls.map(({ name, request }) => [name, new URL(request.url).pathname])).toEqual([
+      [`${owner.userID}:${device.deviceID}`, "/_ycoding/close-device"],
+      [`v5:${owner.userID}:${device.deviceID}`, "/_ycoding/v5/close-device"],
+    ])
     expect((await h.service.createChallenge(device.deviceID)).ok).toBe(false)
     const listed = (await (
       await h.router(new Request(`${origin}/api/devices`, { headers: sessionCookie(owner.token) }))
@@ -594,12 +602,15 @@ describe("router: device enrollment and credentials", () => {
   })
 })
 
-describe("router: websocket upgrades", () => {
+describe.each([4, 5])("router: websocket upgrades v%i", (protocol) => {
+  const clientPath = `/ws/v${protocol}/client`
+  const agentPath = `/ws/v${protocol}/agent`
+
   test("requires a same-origin Origin on the browser socket", async () => {
     const h = await harness()
     const session = await signIn(h)
     const device = await enrollDevice(h, session.userID)
-    const url = `${origin}${RemoteWebSocketPath.client}?device=${device.deviceID}`
+    const url = `${origin}${clientPath}?device=${device.deviceID}`
     const upgrade = { upgrade: "websocket" }
 
     expect((await h.router(new Request(url))).status).toBe(426)
@@ -616,6 +627,12 @@ describe("router: websocket upgrades", () => {
       (await h.router(new Request(url, { headers: { ...upgrade, ...sessionCookie(session.token) } }))).status,
     ).toBe(403)
     expect((await h.router(new Request(url, { headers: upgrade }))).status).toBe(403)
+    expect((await h.router(new Request(url, { headers: { ...upgrade, origin } }))).status).toBe(401)
+    expect((await h.router(new Request(url, { headers: { ...upgrade, origin, ...sessionCookie("invalid") } }))).status).toBe(401)
+    const issued = await h.service.issueCredentials(device.deviceID)
+    if (!issued.ok) throw new Error("issue failed")
+    expect((await h.router(new Request(url, { headers: { ...upgrade, origin, authorization: `Bearer ${issued.value.accessToken}` } }))).status).toBe(401)
+    expect(h.relayCalls).toEqual([])
   })
 
   test("forwards trusted relay headers and strips browser-supplied ones", async () => {
@@ -623,7 +640,7 @@ describe("router: websocket upgrades", () => {
     const session = await signIn(h)
     const device = await enrollDevice(h, session.userID)
     const response = await h.router(
-      new Request(`${origin}${RemoteWebSocketPath.client}?device=${device.deviceID}`, {
+      new Request(`${origin}${clientPath}?device=${device.deviceID}`, {
         headers: {
           upgrade: "websocket",
           origin,
@@ -636,7 +653,7 @@ describe("router: websocket upgrades", () => {
     )
     expect(response.status).toBe(200)
     const called = h.relayCalls.at(-1)!
-    expect(called.name).toBe(`${session.userID}:${device.deviceID}`)
+    expect(called.name).toBe(`${protocol === 5 ? "v5:" : ""}${session.userID}:${device.deviceID}`)
     expect(called.request.headers.get("x-ycoding-role")).toBe("client")
     expect(called.request.headers.get("x-ycoding-owner")).toBe(session.userID)
     expect(called.request.headers.get("x-ycoding-device")).toBe(device.deviceID)
@@ -654,7 +671,7 @@ describe("router: websocket upgrades", () => {
     expect(
       (
         await h.router(
-          new Request(`${origin}${RemoteWebSocketPath.client}?device=${device.deviceID}`, {
+          new Request(`${origin}${clientPath}?device=${device.deviceID}`, {
             headers: { ...upgrade, ...sessionCookie(intruder.token) },
           }),
         )
@@ -663,12 +680,12 @@ describe("router: websocket upgrades", () => {
     expect(
       (
         await h.router(
-          new Request(`${origin}${RemoteWebSocketPath.client}?device=dev_unknown`, { headers: { ...upgrade, ...sessionCookie(owner.token) } }),
+          new Request(`${origin}${clientPath}?device=dev_unknown`, { headers: { ...upgrade, ...sessionCookie(owner.token) } }),
         )
       ).status,
     ).toBe(404)
     expect(
-      (await h.router(new Request(`${origin}${RemoteWebSocketPath.client}`, { headers: { ...upgrade, ...sessionCookie(owner.token) } }))).status,
+      (await h.router(new Request(`${origin}${clientPath}`, { headers: { ...upgrade, ...sessionCookie(owner.token) } }))).status,
     ).toBe(400)
   })
 
@@ -678,10 +695,11 @@ describe("router: websocket upgrades", () => {
     const device = await enrollDevice(h, owner.userID)
     const issued = await h.service.issueCredentials(device.deviceID)
     if (!issued.ok) throw new Error("issue failed")
-    const url = `${origin}${RemoteWebSocketPath.agent}`
+    const url = `${origin}${agentPath}`
     const upgrade = { upgrade: "websocket" }
 
     expect((await h.router(new Request(url))).status).toBe(426)
+    expect((await h.router(new Request(url, { headers: upgrade }))).status).toBe(401)
     expect((await h.router(new Request(url, { headers: { ...upgrade, authorization: "Bearer short" } }))).status).toBe(401)
     expect(
       (
@@ -697,7 +715,7 @@ describe("router: websocket upgrades", () => {
     const accepted = await h.router(new Request(url, { headers: { ...upgrade, authorization: `Bearer ${issued.value.accessToken}` } }))
     expect(accepted.status).toBe(200)
     const called = h.relayCalls.at(-1)!
-    expect(called.name).toBe(`${owner.userID}:${device.deviceID}`)
+    expect(called.name).toBe(`${protocol === 5 ? "v5:" : ""}${owner.userID}:${device.deviceID}`)
     expect(called.request.headers.get("x-ycoding-role")).toBe("agent")
     expect(called.request.headers.get("authorization")).toBe(`Bearer ${issued.value.accessToken}`)
   })
@@ -710,22 +728,24 @@ describe("router: websocket upgrades", () => {
     if (!issued.ok) throw new Error("issue failed")
     await h.service.revokeDevice({ deviceID: device.deviceID, userID: owner.userID })
     const response = await h.router(
-      new Request(`${origin}${RemoteWebSocketPath.agent}`, {
+      new Request(`${origin}${agentPath}`, {
         headers: { upgrade: "websocket", authorization: `Bearer ${issued.value.accessToken}` },
       }),
     )
     expect(response.status).toBe(401)
     expect(h.relayCalls).toEqual([])
   })
+})
 
+describe("router: websocket upgrades", () => {
   test("rejects missing and unknown WebSocket protocol routes before upgrade", async () => {
     const h = await harness()
-    for (const path of ["/ws/client", "/ws/agent", "/ws/v1/client", "/ws/v1/agent", "/ws/v2/client", "/ws/v2/agent", "/ws/v5/client", "/ws/v5/agent"])
+    for (const path of ["/ws/client", "/ws/agent", "/ws/v1/client", "/ws/v1/agent", "/ws/v2/client", "/ws/v2/agent", "/ws/v6/client", "/ws/v6/agent"])
       expect((await h.router(new Request(`${origin}${path}`, { headers: { upgrade: "websocket" } }))).status).toBe(404)
     expect(h.relayCalls).toEqual([])
   })
 
-  test("rejects v3 and forwards only authenticated v4 browser and agent sockets", async () => {
+  test("routes authenticated v4 and v5 sockets to separate relay objects", async () => {
     const h = await harness()
     const owner = await signIn(h, "version-owner")
     const device = await enrollDevice(h, owner.userID)
@@ -739,11 +759,15 @@ describe("router: websocket upgrades", () => {
       (await h.router(new Request(`${origin}/ws/v3/agent`, { headers: agentHeaders }))).status,
       (await h.router(new Request(`${origin}/ws/v4/client?device=${device.deviceID}`, { headers: clientHeaders }))).status,
       (await h.router(new Request(`${origin}/ws/v4/agent`, { headers: agentHeaders }))).status,
+      (await h.router(new Request(`${origin}/ws/v5/client?device=${device.deviceID}`, { headers: { ...clientHeaders, "x-ycoding-protocol": "4" } }))).status,
+      (await h.router(new Request(`${origin}/ws/v5/agent`, { headers: agentHeaders }))).status,
     ]
-    expect(statuses).toEqual([404, 404, 200, 200])
-    expect(h.relayCalls.map((call) => ({ name: call.name, role: call.request.headers.get("x-ycoding-role") }))).toEqual([
-      { name: `${owner.userID}:${device.deviceID}`, role: "client" },
-      { name: `${owner.userID}:${device.deviceID}`, role: "agent" },
+    expect(statuses).toEqual([404, 404, 200, 200, 200, 200])
+    expect(h.relayCalls.map(({ name, request }) => [name, request.headers.get("x-ycoding-role"), request.headers.get("x-ycoding-protocol")])).toEqual([
+      [`${owner.userID}:${device.deviceID}`, "client", "4"],
+      [`${owner.userID}:${device.deviceID}`, "agent", "4"],
+      [`v5:${owner.userID}:${device.deviceID}`, "client", "5"],
+      [`v5:${owner.userID}:${device.deviceID}`, "agent", "5"],
     ])
   })
 })
@@ -773,6 +797,32 @@ test("cookie-authenticated same-origin message stream forwards only an owned dev
   expect((await h.router(new Request(url, { headers: { ...sessionCookie(owner.token), "sec-fetch-site": "same-origin" } }))).status).toBe(200)
   expect((await h.router(new Request(url.replace("msg_large", "../private"), { headers: { ...sessionCookie(owner.token), origin } }))).status).toBe(404)
   expect((await h.router(new Request(url, { headers: { origin } }))).status).toBe(401)
+})
+
+test("v5 message and attachment bulk selectors stay on the authenticated device relay", async () => {
+  const h = await harness()
+  const owner = await signIn(h, "bulk-owner")
+  const intruder = await signIn(h, "bulk-intruder")
+  const device = await enrollDevice(h, owner.userID)
+  const session = `${origin}/api/remote/devices/${device.deviceID}/sessions/ses_stream`
+  const headers = { ...sessionCookie(owner.token), origin, "x-ycoding-connection-epoch": "spoofed" }
+  const selectors = "connectionEpoch=epoch_1&requestID=123&transferID=transfer_1"
+  for (const [content, stream] of [["messages/msg_large", "message"], [`attachments/${"a".repeat(64)}`, "attachment"]]) {
+    const url = `${session}/${content}`
+    expect((await h.router(new Request(`${url}?${selectors}`, { headers }))).status).toBe(200)
+    const call = h.relayCalls.at(-1)!
+    expect(call.name).toBe(`v5:${owner.userID}:${device.deviceID}`)
+    expect(new URL(call.request.url).pathname).toBe(`/_ycoding/v5/stream-${stream}`)
+    expect(call.request.headers.get("x-ycoding-browser-session")).toBe(owner.sessionID)
+    expect(call.request.headers.get("x-ycoding-connection-epoch")).toBe("epoch_1")
+    expect(call.request.headers.get("x-ycoding-request-id")).toBe("123")
+    expect(call.request.headers.get("x-ycoding-transfer-id")).toBe("transfer_1")
+    const count = h.relayCalls.length
+    for (const invalid of ["requestID=1", `${selectors}&connectionEpoch=other`, selectors.replace("123", "0"), selectors.replace("123", "18446744073709551616")])
+      expect((await h.router(new Request(`${url}?${invalid}`, { headers }))).status).toBe(400)
+    expect((await h.router(new Request(`${url}?${selectors}`, { headers: { ...sessionCookie(intruder.token), origin } }))).status).toBe(403)
+    expect(h.relayCalls).toHaveLength(count)
+  }
 })
 
 describe("router: google client id", () => {

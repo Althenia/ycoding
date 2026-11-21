@@ -1,12 +1,12 @@
 import { NodeFileSystem } from "@effect/platform-node"
 import { Service } from "@ycoding-ai/client/effect/service"
-import { Global } from "@ycoding-ai/core/global"
 import { expect, spyOn, test } from "bun:test"
 import { Effect } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { FrontendPaths } from "../src/paths"
 import { ServerConnection } from "../src/services/server-connection"
 import { ServiceConfig } from "../src/services/service-config"
 import { Standalone } from "../src/services/standalone"
@@ -18,7 +18,7 @@ test("desktop shared managed discovery starts a missing service with the bundled
   const args = { managedCommand: ["/synthetic/resources/ycoding", "serve", "--service"] }
   try {
     const result = await Effect.runPromise(ServerConnection.resolve(args).pipe(
-      Effect.provide(Global.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
+      Effect.provide(FrontendPaths.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
       Effect.provide(NodeFileSystem.layer),
       Effect.scoped,
     ))
@@ -37,7 +37,7 @@ test("desktop shared managed discovery reuses a compatible service", async () =>
   const ensure = spyOn(Service, "ensure").mockImplementation(() => Effect.fail(new Error("Unexpected service startup")))
   try {
     const result = await Effect.runPromise(ServerConnection.resolve({ managedCommand: ["/synthetic/resources/ycoding", "serve", "--service"] }).pipe(
-      Effect.provide(Global.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
+      Effect.provide(FrontendPaths.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
       Effect.provide(NodeFileSystem.layer),
       Effect.scoped,
     ))
@@ -56,7 +56,7 @@ test("desktop shared managed discovery leaves an incompatible service running", 
   const ensure = spyOn(Service, "ensure").mockImplementation(() => Effect.fail(new Error("Unexpected service startup")))
   try {
     await expect(Effect.runPromise(ServerConnection.resolve({ mismatch: "error", managedCommand: ["/synthetic/resources/ycoding", "serve", "--service"] }).pipe(
-      Effect.provide(Global.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
+      Effect.provide(FrontendPaths.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
       Effect.provide(NodeFileSystem.layer),
       Effect.scoped,
     ))).rejects.toThrow("version does not match")
@@ -81,7 +81,7 @@ test("desktop private resolution forwards its explicit bundled backend command",
   const args = { standalone: true, privateServer }
   try {
     const result = await Effect.runPromise(ServerConnection.resolve(args).pipe(
-      Effect.provide(Global.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
+      Effect.provide(FrontendPaths.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
       Effect.provide(NodeFileSystem.layer),
       Effect.scoped,
     ))
@@ -110,7 +110,7 @@ test("desktop shared managed discovery with mismatch ignore attaches to a runnin
       mismatch: "ignore",
       managedCommand: ["/synthetic/resources/ycoding", "serve", "--service"],
     }).pipe(
-      Effect.provide(Global.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
+      Effect.provide(FrontendPaths.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
       Effect.provide(NodeFileSystem.layer),
       Effect.scoped,
     ))
@@ -139,7 +139,7 @@ test("desktop shared managed discovery with mismatch ignore starts the bundled s
       mismatch: "ignore",
       managedCommand,
     }).pipe(
-      Effect.provide(Global.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
+      Effect.provide(FrontendPaths.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
       Effect.provide(NodeFileSystem.layer),
       Effect.scoped,
     ))
@@ -196,7 +196,7 @@ test("dead loopback sharedEndpoint falls back to local managed service with regi
       managedCommand: ["/synthetic/resources/ycoding", "serve", "--service"] as const,
     }
     const result = await Effect.runPromise(ServerConnection.resolve(resolveArgs as unknown as ServerConnection.Args).pipe(
-      Effect.provide(Global.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: stateDir })),
+      Effect.provide(FrontendPaths.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: stateDir })),
       Effect.provide(NodeFileSystem.layer),
       Effect.scoped,
     ))
@@ -235,7 +235,7 @@ test("unauthorized loopback sharedEndpoint falls back to local managed service i
       managedCommand,
     }
     const result = await Effect.runPromise(ServerConnection.resolve(resolveArgs as unknown as ServerConnection.Args).pipe(
-      Effect.provide(Global.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
+      Effect.provide(FrontendPaths.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
       Effect.provide(NodeFileSystem.layer),
       Effect.scoped,
     ))
@@ -270,7 +270,7 @@ test("non-loopback server never falls back to local Service.ensure even when all
       managedCommand: ["/synthetic/resources/ycoding", "serve", "--service"] as const,
     }
     await expect(Effect.runPromise(ServerConnection.resolve(resolveArgs as unknown as ServerConnection.Args).pipe(
-      Effect.provide(Global.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
+      Effect.provide(FrontendPaths.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
       Effect.provide(NodeFileSystem.layer),
       Effect.scoped,
     ))).rejects.toThrow("Could not reach server at https://example.invalid/")

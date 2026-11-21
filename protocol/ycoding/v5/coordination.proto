@@ -1,0 +1,435 @@
+syntax = "proto2";
+package ycoding.v5;
+import "ycoding/v5/foundation.proto";
+import "ycoding/v5/operations.proto";
+import "ycoding/v5/shared.proto";
+
+option (ycoding.v5.operation_range) = { first: 6000 last: 6099 };
+
+enum Coordination_RequestKind {
+  COORDINATION_REQUESTKIND_QUESTION = 1 [(ycoding.v5.domain_label) = "question"];
+  COORDINATION_REQUESTKIND_PERMISSION = 2 [(ycoding.v5.domain_label) = "permission"];
+  COORDINATION_REQUESTKIND_REVIEW = 3 [(ycoding.v5.domain_label) = "review"];
+}
+
+enum CoordinationError__tag {
+  COORDINATIONERROR__TAG_COORDINATIONERROR = 1 [(ycoding.v5.domain_label) = "CoordinationError"];
+}
+
+enum Coordination_PausedReason {
+  COORDINATION_PAUSEDREASON_INTERRUPTED = 1 [(ycoding.v5.domain_label) = "interrupted"];
+  COORDINATION_PAUSEDREASON_RESTART = 2 [(ycoding.v5.domain_label) = "restart"];
+}
+
+enum Coordination_MemberState {
+  COORDINATION_MEMBERSTATE_IDLE = 1 [(ycoding.v5.domain_label) = "idle"];
+  COORDINATION_MEMBERSTATE_RUNNING = 2 [(ycoding.v5.domain_label) = "running"];
+  COORDINATION_MEMBERSTATE_WAITING = 3 [(ycoding.v5.domain_label) = "waiting"];
+  COORDINATION_MEMBERSTATE_FAILED = 4 [(ycoding.v5.domain_label) = "failed"];
+}
+
+message coordination_settings_Request {
+
+}
+
+message coordination_settings_Result {
+  required Coordination_Settings data = 1;
+}
+
+message Coordination_Settings {
+  required bool enabled = 1;
+  required Coordination_Settings_categories categories = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.Settings" }];
+  optional Coordination_Settings_actions actions = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.Settings" }];
+  optional Coordination_Settings_resources resources = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.Settings" }];
+  optional uint64 expiresAt = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.Settings" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message Coordination_Settings_categories {
+  repeated Coordination_RequestKind items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.Settings" count_max: 3 }];
+}
+
+message Coordination_Settings_actions {
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.Settings" utf16_min: 1 utf16_max: 512 count_max: 32 }];
+}
+
+message Coordination_Settings_resources {
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.Settings" utf16_min: 1 utf16_max: 512 count_max: 32 }];
+}
+
+message CoordinationError {
+  required CoordinationError__tag _tag = 1;
+  required LosslessString reason = 2;
+  required LosslessString message = 3;
+}
+
+message coordination_list_Request {
+
+}
+
+message coordination_list_Result {
+  required coordination_list_Result_data data = 1;
+}
+
+message coordination_list_Result_data {
+  repeated Coordination_GroupSummary items = 1;
+}
+
+message Coordination_GroupSummary {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.GroupID" utf16_min: 6 utf16_max: 96 }];
+  required LosslessString name = 2;
+  required uint64 revision = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.Revision" integer_min: "0" integer_max: "9007199254740991" }];
+  required bool active = 4;
+  optional Coordination_PausedReason pausedReason = 5;
+  required LosslessString masterSessionID = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-id.ts#SessionID" }];
+  required uint64 memberCount = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.GroupSummary" integer_min: "0" integer_max: "9007199254740991" }];
+  required Coordination_GroupSettings settings = 8;
+  required Coordination_GroupSummary_time time = 9;
+}
+
+message Coordination_GroupSettings {
+  required Coordination_GroupSettings_concurrency concurrency = 1;
+  optional Coordination_DelegatedDecisions delegatedDecisions = 2;
+}
+
+message Coordination_GroupSettings_concurrency {
+  oneof kind {
+    uint64 value_1 = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.GroupSettings" integer_min: "1" integer_max: "9007199254740991" }];
+    Empty clear = 2;
+  }
+}
+
+message Coordination_DelegatedDecisions {
+  required Coordination_DelegatedDecisions_categories categories = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.DelegatedDecisions" }];
+  optional Coordination_DelegatedDecisions_actions actions = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.DelegatedDecisions" }];
+  optional Coordination_DelegatedDecisions_resources resources = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.DelegatedDecisions" }];
+  optional uint64 expiresAt = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.DelegatedDecisions" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message Coordination_DelegatedDecisions_categories {
+  repeated Coordination_RequestKind items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.DelegatedDecisions" count_max: 3 }];
+}
+
+message Coordination_DelegatedDecisions_actions {
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.DelegatedDecisions" utf16_min: 1 utf16_max: 512 count_max: 32 }];
+}
+
+message Coordination_DelegatedDecisions_resources {
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.DelegatedDecisions" utf16_min: 1 utf16_max: 512 count_max: 32 }];
+}
+
+message Coordination_GroupSummary_time {
+  required uint64 created = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.GroupSummary" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 updated = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.GroupSummary" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message Coordination_CreateInput {
+  required LosslessString name = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.CreateInput" utf16_min: 1 utf16_max: 120 }];
+  required LosslessString masterSessionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-id.ts#SessionID" }];
+  required Coordination_CreateInput_memberSessionIDs memberSessionIDs = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.CreateInput" }];
+}
+
+message Coordination_CreateInput_memberSessionIDs {
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.CreateInput" count_max: 64 }];
+}
+
+message coordination_create_Request {
+  required Coordination_CreateInput payload = 1;
+}
+
+message coordination_create_Result {
+  required Coordination_Info data = 1;
+}
+
+message Coordination_Info {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.GroupID" utf16_min: 6 utf16_max: 96 }];
+  required LosslessString name = 2;
+  required uint64 revision = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.Revision" integer_min: "0" integer_max: "9007199254740991" }];
+  required bool active = 4;
+  optional Coordination_PausedReason pausedReason = 5;
+  required Coordination_Participant master = 6;
+  required Coordination_Info_members members = 7;
+  required Coordination_GroupSettings settings = 8;
+  required Coordination_Info_time time = 9;
+}
+
+message Coordination_Participant {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-id.ts#SessionID" }];
+  required LosslessString title = 2;
+  required Location_Ref location = 3;
+  required Coordination_MemberState state = 4;
+  required uint64 lastActivity = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.Participant" integer_min: "0" integer_max: "9007199254740991" }];
+  required Coordination_Participant_pending pending = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.Participant" }];
+  optional Coordination_Participant_drivenBy drivenBy = 7;
+  optional Coordination_Participant_owner owner = 8;
+}
+
+message Coordination_Participant_pending {
+  repeated Coordination_PendingRequest items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.Participant" count_max: 50 }];
+}
+
+message Coordination_PendingRequest {
+  required Coordination_RequestKind kind = 1;
+  required LosslessString requestID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.PendingRequest" utf16_min: 1 utf16_max: 256 }];
+  required LosslessString fingerprint = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.PendingRequest" utf16_min: 1 utf16_max: 256 }];
+  required LosslessString summary = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.PendingRequest" utf16_max: 500 }];
+  optional LosslessString requestSessionID = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.PendingRequest" }];
+}
+
+message Coordination_Participant_drivenBy {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-id.ts#SessionID" }];
+  required LosslessString title = 2;
+}
+
+message Coordination_Participant_owner {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-id.ts#SessionID" }];
+  required LosslessString title = 2;
+}
+
+message Coordination_Info_members {
+  repeated Coordination_Participant items = 1;
+}
+
+message Coordination_Info_time {
+  required uint64 created = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.Info" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 updated = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.Info" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message coordination_get_Request_params {
+  required LosslessString groupID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.GroupID" utf16_min: 6 utf16_max: 96 }];
+}
+
+message coordination_get_Request {
+  required coordination_get_Request_params params = 1;
+}
+
+message coordination_get_Result {
+  required Coordination_Info data = 1;
+}
+
+message coordination_update_Request_params {
+  required LosslessString groupID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.GroupID" utf16_min: 6 utf16_max: 96 }];
+}
+
+message Coordination_UpdateInput {
+  required uint64 revision = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.Revision" integer_min: "0" integer_max: "9007199254740991" }];
+  optional LosslessString name = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.UpdateInput" utf16_min: 1 utf16_max: 120 }];
+  optional LosslessString masterSessionID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.UpdateInput" }];
+  optional Coordination_UpdateInput_memberSessionIDs memberSessionIDs = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.UpdateInput" }];
+  optional Coordination_GroupSettings settings = 5;
+}
+
+message Coordination_UpdateInput_memberSessionIDs {
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.UpdateInput" count_max: 64 }];
+}
+
+message coordination_update_Request {
+  required coordination_update_Request_params params = 1;
+  required Coordination_UpdateInput payload = 2;
+}
+
+message coordination_update_Result {
+  required Coordination_Info data = 1;
+}
+
+message coordination_delete_Request_params {
+  required LosslessString groupID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.GroupID" utf16_min: 6 utf16_max: 96 }];
+}
+
+message coordination_delete_Request {
+  required coordination_delete_Request_params params = 1;
+}
+
+message coordination_delete_Result {
+  required Empty data = 1;
+}
+
+message coordination_attach_Request_params {
+  required LosslessString groupID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.GroupID" utf16_min: 6 utf16_max: 96 }];
+}
+
+message Coordination_AttachInput {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-id.ts#SessionID" }];
+  optional LosslessString ownerSessionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.AttachInput" }];
+}
+
+message coordination_attach_Request {
+  required coordination_attach_Request_params params = 1;
+  required Coordination_AttachInput payload = 2;
+}
+
+message coordination_attach_Reply {
+  required Coordination_AttachResult data = 1;
+}
+
+message Coordination_AttachResult {
+  required LosslessString groupID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.GroupID" utf16_min: 6 utf16_max: 96 }];
+  required LosslessString sessionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-id.ts#SessionID" }];
+  required Location_Ref location = 3;
+  required LosslessString ownerSessionID = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-id.ts#SessionID" }];
+  required bool reconciled = 5;
+}
+
+message coordination_detach_Request_params {
+  required LosslessString groupID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.GroupID" utf16_min: 6 utf16_max: 96 }];
+  required LosslessString sessionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-id.ts#SessionID" }];
+}
+
+message coordination_detach_Request {
+  required coordination_detach_Request_params params = 1;
+}
+
+message coordination_detach_Result {
+  required coordination_detach_Result_data data = 1;
+}
+
+message coordination_detach_Result_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-id.ts#SessionID" }];
+  required bool removed = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/coordination.ts#CoordinationGroup" }];
+}
+
+service server_coordination {
+  rpc coordination_settings(coordination_settings_Request) returns (coordination_settings_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 6000
+      diagnostic_name: "coordination.settings"
+      error_types: "ycoding.v5.CoordinationError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc coordination_list(coordination_list_Request) returns (coordination_list_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 6001
+      diagnostic_name: "coordination.list"
+      error_types: "ycoding.v5.CoordinationError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc coordination_create(coordination_create_Request) returns (coordination_create_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 6002
+      diagnostic_name: "coordination.create"
+      error_types: "ycoding.v5.CoordinationError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc coordination_get(coordination_get_Request) returns (coordination_get_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 6003
+      diagnostic_name: "coordination.get"
+      error_types: "ycoding.v5.CoordinationError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc coordination_update(coordination_update_Request) returns (coordination_update_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 6004
+      diagnostic_name: "coordination.update"
+      error_types: "ycoding.v5.CoordinationError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc coordination_delete(coordination_delete_Request) returns (coordination_delete_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 6005
+      diagnostic_name: "coordination.delete"
+      error_types: "ycoding.v5.CoordinationError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc coordination_attach(coordination_attach_Request) returns (coordination_attach_Reply) {
+    option (ycoding.v5.operation) = {
+      operation_id: 6006
+      diagnostic_name: "coordination.attach"
+      error_types: "ycoding.v5.CoordinationError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc coordination_detach(coordination_detach_Request) returns (coordination_detach_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 6007
+      diagnostic_name: "coordination.detach"
+      error_types: "ycoding.v5.CoordinationError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}

@@ -12,6 +12,8 @@ import { EventRuntime } from "../event"
 import type { Global } from "../global"
 import { Integration } from "../integration"
 import { Location } from "../location"
+import { AbsolutePath } from "../schema"
+import { Workspace } from "../workspace"
 import { CatalogModel } from "../model"
 import type { ModelsDev } from "../models-dev"
 import type { Npm } from "../npm"
@@ -50,12 +52,23 @@ export interface Contribution<R = Requirements> {
 export const define = <R extends Requirements>(plugin: Contribution<R>) => plugin
 
 const mutable = <T>(value: T) => value as DeepMutable<T>
-export const make = Effect.fn("PluginCatalogHost.make")(function* () {
+export const make = Effect.fn("PluginCatalogHost.make")(function* (): Effect.fn.Return<
+  Context,
+  never,
+  | AISDK.Service
+  | Catalog.Service
+  | EventRuntime.Service
+  | Integration.Service
+  | Location.Service
+  | PluginRuntime.Service
+> {
   const aisdk = yield* AISDK.Service
   const catalog = yield* Catalog.Service
   const events = yield* EventRuntime.Service
   const integration = yield* Integration.Service
   const location = yield* Location.Service
+  const { PluginRuntime } = yield* Effect.promise(() => import("./runtime"))
+  const runtime = yield* PluginRuntime.Service
   const response = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
       Effect.map((data) => ({
@@ -158,6 +171,22 @@ export const make = Effect.fn("PluginCatalogHost.make")(function* () {
       subscribe: () => events.subscribe().pipe(Stream.filter(EventManifest.isServer)),
     },
     integration: {
+      accountSkills: {
+        read: (input) =>
+          runtime.location.integration.accountSkills.read(
+            Location.Ref.make({
+              directory:
+                input.location?.directory === undefined
+                  ? location.directory
+                  : AbsolutePath.make(input.location.directory),
+              workspaceID:
+                input.location?.workspace === undefined
+                  ? location.workspaceID
+                  : Workspace.ID.make(input.location.workspace),
+            }),
+            input,
+          ),
+      },
       list: () => response(integration.list()),
       get: (input) => response(integration.get(Integration.ID.make(input.integrationID))),
       connect: {

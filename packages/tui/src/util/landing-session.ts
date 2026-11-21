@@ -1,6 +1,8 @@
 import type { LocationRef, ModelDaybreak, ModelRef, SessionAutonomyView, YCodingClient } from "@ycoding-ai/client"
 import { autonomyMode, autonomyCategories, type AutonomyChange } from "./session-autonomy"
 
+type LandingClient = { session: Pick<YCodingClient["session"], "create" | "autonomy" | "daybreak"> }
+
 export type LandingAutonomy = Required<AutonomyChange> & { goal?: string }
 
 export type LandingAutonomyPayload = Required<AutonomyChange> | { goal: string }
@@ -30,7 +32,7 @@ function requestOptions(signal: AbortSignal | undefined) {
 }
 
 export function createLandingSession(
-  api: YCodingClient,
+  api: { session: Pick<YCodingClient["session"], "create"> },
   input: { id: string; location: LocationRef; agent: string; model: ModelRef; signal?: AbortSignal },
 ) {
   return api.session.create(
@@ -40,14 +42,14 @@ export function createLandingSession(
 }
 
 export function persistLandingAutonomy(
-  api: YCodingClient,
+  api: { session: Pick<YCodingClient["session"], "autonomy"> },
   input: { sessionID: string; payload: LandingAutonomyPayload; signal?: AbortSignal },
 ) {
   return api.session.autonomy.set({ sessionID: input.sessionID, payload: input.payload }, requestOptions(input.signal))
 }
 
 export function persistLandingDaybreak(
-  api: YCodingClient,
+  api: { session: Pick<YCodingClient["session"], "daybreak"> },
   input: { sessionID: string; daybreak: ModelDaybreak; signal?: AbortSignal },
 ) {
   return api.session.daybreak.set(
@@ -57,7 +59,7 @@ export function persistLandingDaybreak(
 }
 
 export async function establishLandingSession(input: {
-  api: YCodingClient
+  api: LandingClient
   id: string
   location: LocationRef
   agent: string

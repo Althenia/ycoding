@@ -61,21 +61,33 @@ const scope: QueryScope = { deviceID: "dev_1", generation: 1 }
 
 describe("descendant reads", () => {
   const child = (sessionID = "ses_grandchild", parentID = "ses_child") => ({ sessionID, parentID, description: "Nested task", state: "waiting", revision: 1, time: { created: 1, updated: 2 }, question: { id: "qst_nested", text: "Proceed?" } })
+  test("reads one v5 snapshot envelope and rejects another Session's history", async () => {
+    const snapshot = { session: { id: "ses_child" }, messages: [], watermark: { aggregateID: "ses_child", seq: 4 }, sourceEpoch: "epoch_child" }
+    const h = incidents(() => ({ status: "ok", value: { data: snapshot } }))
+    expect(await h.client.fetchQuery(h.queries.childSnapshot(scope, true, "ses_child", 1))).toMatchObject({ sessionID: "ses_child", watermark: 4, sourceEpoch: "epoch_child", messages: [] })
+    expect(h.calls).toEqual([{ operation: "session.snapshot", scope, request: { sessionID: "ses_child", input: { limit: 40 } } }])
+    h.client.clear()
+    for (const value of [snapshot, { data: { ...snapshot, session: { id: "ses_other" } } }, { data: { ...snapshot, watermark: { aggregateID: "ses_other", seq: 4 } } }]) {
+      const invalid = incidents(() => ({ status: "ok", value }))
+      await expect(invalid.client.fetchQuery(invalid.queries.childSnapshot(scope, true, "ses_child", 1))).rejects.toThrow("different or unreadable")
+      invalid.client.clear()
+    }
+  })
   test("requests a bounded page from the owning parent, with its opaque cursor", async () => {
-    const h = incidents(() => ({ status: "ok", value: { data: [child()], cursor: { next: "next-page" } } }))
+    const h = incidents(() => ({ status: "ok", value: { data: { data: [child()], cursor: { next: "next-page" } } } }))
     const first = await h.client.fetchQuery(h.queries.childTeam(scope, true, "ses_root", "ses_child"))
     expect(first).toMatchObject({ tasks: [{ sessionID: "ses_grandchild", parentID: "ses_child", question: { id: "qst_nested" } }], next: "next-page" })
     expect(h.calls).toEqual([{ operation: "session.subagent.list", scope, request: { sessionID: "ses_child" } }])
     await h.client.fetchQuery(h.queries.childTeam(scope, true, "ses_root", "ses_child"))
     expect(h.calls).toHaveLength(1)
-    const next = incidents(() => ({ status: "ok", value: { data: [], cursor: {} } }))
+    const next = incidents(() => ({ status: "ok", value: { data: { data: [], cursor: {} } } }))
     expect(await next.client.fetchQuery(next.queries.childTeam(scope, true, "ses_root", "ses_child", "next-page"))).toEqual({ tasks: [] })
     expect(next.calls[0]?.request).toEqual({ sessionID: "ses_child", input: { cursor: "next-page" } })
     h.client.clear(); next.client.clear()
   })
   test("unrelated, malformed, duplicate and cyclic pages are errors, never empty success", async () => {
     for (const value of [{ data: [child("ses_root")] }, { data: [child("ses_child")] }, { data: [child("ses_other", "ses_wrong")] }, { data: [child(), child()] }, { data: [{}] }, { data: [], cursor: null }, { data: [], cursor: { next: 9 } }, { data: [], cursor: { next: "x".repeat(1_025) } }, { data: [], cursor: { next: "same" } }]) {
-      const h = incidents(() => ({ status: "ok", value }))
+      const h = incidents(() => ({ status: "ok", value: { data: value } }))
       await expect(h.client.fetchQuery(h.queries.childTeam(scope, true, "ses_root", "ses_child", "same"))).rejects.toThrow("unreadable or unrelated")
       h.client.clear()
     }
@@ -86,12 +98,12 @@ describe("descendant reads", () => {
   test("late parent answers remain separate from a new parent, family, device and connection", async () => {
     const held = Promise.withResolvers<RemoteRequestOutcome>()
     const client = createRemoteQueryClient()
-    const queries = createRemoteQueries({ recoveries: () => 0, recovered: async () => false, request: async (_scope, _operation, request) => request?.sessionID === "ses_child" ? held.promise : { status: "ok", value: { data: [child("ses_deep", "ses_grandchild")], cursor: {} } } }, client)
+    const queries = createRemoteQueries({ recoveries: () => 0, recovered: async () => false, request: async (_scope, _operation, request) => request?.sessionID === "ses_child" ? held.promise : { status: "ok", value: { data: { data: [child("ses_deep", "ses_grandchild")], cursor: {} } } } }, client)
     const first = queries.childTeam(scope, true, "ses_root", "ses_child")
     const current = queries.childTeam(scope, true, "ses_root", "ses_grandchild")
     const old = client.fetchQuery(first)
     await client.fetchQuery(current)
-    held.resolve({ status: "ok", value: { data: [child()], cursor: {} } })
+    held.resolve({ status: "ok", value: { data: { data: [child()], cursor: {} } } })
     await old
     expect(client.getQueryData(current.queryKey)).toMatchObject({ tasks: [{ sessionID: "ses_deep" }] })
     for (const key of [remoteKeys.childTeam(scope, "ses_other_family", "ses_child"), remoteKeys.childTeam({ ...scope, deviceID: "dev_other" }, "ses_root", "ses_child"), remoteKeys.childTeam({ ...scope, generation: 2 }, "ses_root", "ses_child")]) expect(client.getQueryData(key)).toBeUndefined()
@@ -110,12 +122,12 @@ test("Usage refresh starts its cached forecast without waiting for provider quot
     recoveries: () => 0,
     recovered: async () => false,
     request: async (_scope, operation) => {
-      if (operation === "usage.providers") {
+      if (operation === "providerUsage.list") {
         providerReads++
         if (providerReads > 1) return providerGate.promise
         return { status: "ok", value: { data: [] } }
       }
-      if (operation === "usage.forecast") {
+      if (operation === "providerUsage.forecast") {
         forecastReads++
         if (forecastReads > 1) forecastStarted.resolve()
         return { status: "ok", value: { data: { asOf: 1, localScope: "backend", localRates: [], quotas: [] } } }
@@ -175,15 +187,15 @@ describe("incident queries", () => {
     await expect(mismatched.client.fetchQuery(mismatched.queries.incidentReport(scope, true, { group: "model" }))).rejects.toThrow("unreadable")
   })
 
-  test("recent reads forward the model filter and settle unknown operations as unsupported", async () => {
+  test("recent reads forward the model filter and failed incident reads stay errors", async () => {
     const { calls, client, queries } = incidents()
     const input = { provider: "p", model: "m", agent: "build", limit: 20 }
     expect(await client.fetchQuery(queries.incidentRecent(scope, true, input))).toEqual({ status: "ready", data: recent })
     expect(calls).toEqual([{ operation: "incident.recent", request: { input }, scope }])
-    const old = incidents(() => ({ status: "failed", error: { code: "unknown_operation", message: "Unknown operation" } }))
-    expect(await old.client.fetchQuery(old.queries.incidentRecent(scope, true, { provider: "p", model: "m" }))).toEqual({ status: "unsupported" })
-    expect(await old.client.fetchQuery(old.queries.incidentReport(scope, true, { group: "model" }))).toEqual({ status: "unsupported" })
-    expect(await old.client.fetchQuery(old.queries.incidentGuidance(scope, true, { provider: "p", model: "m" }))).toEqual({ status: "unsupported" })
+    const old = incidents(() => ({ status: "failed", error: { code: "invalid_message", message: "Unknown operation" } }))
+    await expect(old.client.fetchQuery(old.queries.incidentRecent(scope, true, { provider: "p", model: "m" }))).rejects.toThrow("Unknown operation")
+    await expect(old.client.fetchQuery(old.queries.incidentReport(scope, true, { group: "model" }))).rejects.toThrow("Unknown operation")
+    await expect(old.client.fetchQuery(old.queries.incidentGuidance(scope, true, { provider: "p", model: "m" }))).rejects.toThrow("Unknown operation")
   })
 
   test("guidance reads address the optional Session at the frame, never in the input, and key on it", async () => {
@@ -192,9 +204,9 @@ describe("incident queries", () => {
     expect(await client.fetchQuery(queries.incidentGuidance(scope, true, { provider: "p", model: "m", sessionID: "ses_1" }))).toEqual({ status: "ready", data: note })
     expect(await client.fetchQuery(queries.incidentGuidance(scope, true, { provider: "p", model: "m", sessionID: "ses_2" }))).toEqual({ status: "ready", data: note })
     expect(calls.map((call) => [call.operation, call.request])).toEqual([
-      ["incident.guidance", { input: { provider: "p", model: "m" } }],
-      ["incident.guidance", { input: { provider: "p", model: "m" }, sessionID: "ses_1" }],
-      ["incident.guidance", { input: { provider: "p", model: "m" }, sessionID: "ses_2" }],
+      ["incident.guidance.get", { input: { provider: "p", model: "m" } }],
+      ["incident.guidance.get", { input: { provider: "p", model: "m" }, sessionID: "ses_1" }],
+      ["incident.guidance.get", { input: { provider: "p", model: "m" }, sessionID: "ses_2" }],
     ])
   })
 
@@ -202,7 +214,7 @@ describe("incident queries", () => {
     const cleared = { enabled: true, clearedAt: 12 }
     const { calls, client, queries } = incidents((operation) => ({
       status: "ok",
-      value: { data: operation === "incident.guidance.clear" ? cleared : operation === "incident.guidance" ? note : operation === "incident.report" ? report : recent },
+      value: { data: operation === "incident.guidance.clear" ? cleared : operation === "incident.guidance.get" ? note : operation === "incident.report" ? report : recent },
     }))
     const model = { provider: "p", model: "m" }
     const other = { provider: "p", model: "other" }
@@ -256,7 +268,7 @@ describe("incident queries", () => {
     expect(calls.slice(6)).toEqual([{ operation: "incident.report", request: { input }, scope }])
     await queries.retryIncidentRecent(scope, recentInput)
     await queries.retryIncidentGuidance(scope, guidanceInput)
-    expect(calls.slice(7).map((call) => call.operation)).toEqual(["incident.recent", "incident.guidance"])
+    expect(calls.slice(7).map((call) => call.operation)).toEqual(["incident.recent", "incident.guidance.get"])
     expect(await client.fetchQuery(queries.incidentReport(scope, true, input))).toEqual({ status: "ready", data: report })
     expect(await client.fetchQuery(queries.incidentRecent(scope, true, recentInput))).toEqual({ status: "ready", data: recent })
     expect(await client.fetchQuery(queries.incidentGuidance(scope, true, guidanceInput))).toEqual({ status: "ready", data: note })
@@ -288,7 +300,7 @@ describe("incident queries", () => {
     await client.fetchQuery(queries.incidentGuidance(scope, true, model))
     await expect(queries.clearIncidentGuidance(scope, model)).rejects.toThrow("Socket closed")
     await queries.retryIncidentGuidance(scope, model)
-    expect(calls.map((call) => call.operation)).toEqual(["incident.guidance", "incident.guidance.clear", "incident.guidance"])
+    expect(calls.map((call) => call.operation)).toEqual(["incident.guidance.get", "incident.guidance.clear", "incident.guidance.get"])
   })
 
   test("a replaced connection reads under its own generation and a late clear never invalidates the new one", async () => {
@@ -327,10 +339,10 @@ describe("Projects reads and changes", () => {
     expect(calls.find((call) => call.operation === "coordination.get")?.request?.input).toEqual({ groupID: "cgrp_1" })
   })
 
-  test("an older connector reads as unsupported and an unreadable central policy stays unavailable", async () => {
-    const unknown: RemoteRequestOutcome = { status: "failed", error: { code: "unknown_operation", message: "unknown" } }
+  test("a failed project list read fails and an unreadable central policy stays unavailable", async () => {
+    const unknown: RemoteRequestOutcome = { status: "failed", error: { code: "invalid_message", message: "unknown" } }
     const older = incidents(answers({ "coordination.list": unknown }))
-    expect(await older.client.fetchQuery(older.queries.coordination(scope, true))).toEqual({ status: "unsupported" })
+    await expect(older.client.fetchQuery(older.queries.coordination(scope, true))).rejects.toThrow("Projects: unknown")
     const noSettings = incidents(answers({ "coordination.settings": unknown }))
     expect(await noSettings.client.fetchQuery(noSettings.queries.coordination(scope, true))).toMatchObject({ status: "ready", central: undefined })
     const garbled = incidents(answers({ "coordination.settings": { status: "ok", value: { data: { enabled: "maybe" } } } }))
@@ -371,17 +383,17 @@ describe("Projects reads and changes", () => {
     expect(calls.filter((call) => call.operation === "coordination.list")).toHaveLength(2)
   })
 
-  test("a connector without the operation says to update instead of failing generically", async () => {
-    const { client, queries } = incidents(answers({ "coordination.delete": { status: "failed", error: { code: "unknown_operation", message: "unknown" } } }))
+  test("a failed project change reports the device answer after rereading", async () => {
+    const { client, queries } = incidents(answers({ "coordination.delete": { status: "failed", error: { code: "invalid_message", message: "unknown" } } }))
     await client.fetchQuery(queries.coordination(scope, true))
-    expect(await queries.changeCoordination(scope, "coordination.delete", { groupID: "cgrp_1" })).toEqual({ reached: false, message: "Update YCoding on this machine to manage Projects from here." })
+    expect(await queries.changeCoordination(scope, "coordination.delete", { groupID: "cgrp_1" })).toEqual({ reached: false, message: "Projects: unknown" })
   })
 
   test("deleting a Session sends the Session delete for that Session alone and rereads the projects", async () => {
     const { calls, client, queries } = incidents(answers())
     await client.fetchQuery(queries.coordination(scope, true))
     expect(await queries.deleteProjectSession(scope, "ses_w1")).toEqual({ reached: true })
-    const sent = calls.filter((call) => call.operation === "session.delete")
+    const sent = calls.filter((call) => call.operation === "session.remove")
     expect(sent).toHaveLength(1)
     expect(sent[0]?.request?.sessionID).toBe("ses_w1")
     expect(calls.filter((call) => call.operation === "coordination.list")).toHaveLength(2)
@@ -391,11 +403,11 @@ describe("Projects reads and changes", () => {
     const created = answers({ "session.create": { status: "ok", value: { data: { id: "ses_new", title: "New", location: { directory: "/work/web" }, time: { created: 1, updated: 1 } } } } })
     const { calls, queries } = incidents(created)
     expect(await queries.createProjectSession(scope, { workspace: "wsp_web" }, "ses_new")).toEqual({ reached: true, sessionID: "ses_new" })
-    expect(calls.filter((call) => call.operation === "session.create").map((call) => call.request?.input)).toEqual([{ id: "ses_new", workspace: "wsp_web" }])
+    expect(calls.filter((call) => call.operation === "session.create").map((call) => call.request)).toEqual([{ workspaceID: "wsp_web", input: { id: "ses_new" } }])
     expect(await queries.createProjectSession(scope, { workspace: "wsp_web" }, "ses_new", "Release train")).toEqual({ reached: true, sessionID: "ses_new" })
-    expect(calls.filter((call) => call.operation === "session.create").map((call) => call.request?.input)).toEqual([{ id: "ses_new", workspace: "wsp_web" }, { id: "ses_new", workspace: "wsp_web", title: "Release train" }])
+    expect(calls.filter((call) => call.operation === "session.create").map((call) => call.request)).toEqual([{ workspaceID: "wsp_web", input: { id: "ses_new" } }, { workspaceID: "wsp_web", input: { id: "ses_new", title: "Release train" } }])
     expect(await queries.createProjectSession(scope, { directory: "~/new/app" }, "ses_new", "Typed")).toEqual({ reached: true, sessionID: "ses_new" })
-    expect(calls.filter((call) => call.operation === "session.create").at(-1)?.request?.input).toEqual({ id: "ses_new", directory: "~/new/app", title: "Typed" })
+    expect(calls.filter((call) => call.operation === "session.create").at(-1)?.request).toEqual({ input: { id: "ses_new", location: { directory: "~/new/app" }, title: "Typed" } })
     const mismatch = incidents(answers({ "session.create": { status: "ok", value: { data: { id: "ses_other" } } } }))
     expect(await mismatch.queries.createProjectSession(scope, { workspace: "wsp_web" }, "ses_new")).toEqual({ reached: false, message: "The device returned a different Session than the one requested. Check Sessions before trying again." })
     const unknown = incidents(answers({ "session.create": { status: "unknown", error: { code: "outcome_unknown", message: "Request timed out" } } }))
@@ -509,9 +521,9 @@ describe("usage dashboard query", () => {
     expect(calls.every((call) => call.operation === "usage.dashboard")).toBe(true)
   })
 
-  test("an old connector is unsupported without any fallback read, and unreadable answers fail", async () => {
-    const old = dashboard(() => ({ status: "failed", error: { code: "unknown_operation", message: "Unknown operation" } }) as RemoteRequestOutcome)
-    expect(await old.client.fetchQuery(old.queries.usageDashboard(scope, true, input))).toEqual({ status: "unsupported" })
+  test("a failed dashboard read fails without any fallback read, and unreadable answers fail", async () => {
+    const old = dashboard(() => ({ status: "failed", error: { code: "invalid_message", message: "Unknown operation" } }) as RemoteRequestOutcome)
+    await expect(old.client.fetchQuery(old.queries.usageDashboard(scope, true, input))).rejects.toThrow("Unknown operation")
     expect(old.calls.map((call) => call.operation)).toEqual(["usage.dashboard"])
     const { breakdown: _breakdown, ...incomplete } = ready
     for (const value of [incomplete, { ...ready, status: "stale" }, { status: "error" }, { ...ready, daily: reportOf("month") }, { ...ready, asOf: -1 }, { ...ready, revision: 1 }]) {

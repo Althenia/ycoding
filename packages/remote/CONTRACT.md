@@ -40,6 +40,10 @@ vocabulary changes the contract for all three at once.
 | `DELETE` | `/api/devices/revoked` | browser session | same-origin required | Remove every revoked device record of this account |
 | `GET` | `/ws/v4/client` | browser session cookie | same-origin required | Browser/phone relay connection |
 | `GET` | `/ws/v4/agent` | device access token | not required | Local agent relay connection |
+| `GET` | `/ws/v5/client` | browser session cookie | same-origin required | Binary browser relay connection |
+| `GET` | `/ws/v5/agent` | device access token | not required | Binary native connector relay connection |
+| `GET` | `/api/remote/devices/:deviceID/sessions/:sessionID/messages/:messageID` | browser session cookie | same-origin required | Read one projected message |
+| `GET` | `/api/remote/devices/:deviceID/sessions/:sessionID/attachments/:digest` | browser session cookie | same-origin required | Read one Session attachment |
 | `GET` | `/health` | none | not required | Database liveness probe |
 
 `RemoteDeviceInfo.alias` is optional and nullable account-owned metadata. An alias is a trimmed single-line string of 1–48 characters; null clears it. Device `name` remains the real hostname. Alias requests accept only `alias`, never an owner, hostname, or replacement identity. The update is conditional on the stable device ID, authenticated owner, and absence of revocation in one database statement. Unknown, foreign, and revoked devices return the same `404`; absent or expired browser authentication returns `401`, failed origin checks return `403`, malformed input returns `400`, and methods other than PATCH return `405`. Device credentials do not authorize this route. Reads through `/api/me` and `/api/devices` expose the canonical alias only to the owning account. Saving an alias does not change credentials, presence, enrollment, or relay connections.
@@ -86,7 +90,7 @@ built assets (the current build has none).
 Origin policy (browsers omit `Origin` on ordinary same-origin `GET`, and
 JavaScript cannot set it):
 
-- Read-only `GET /api/*` routes **never** require `Origin` and never mutate state.
+- Read-only account `GET` routes do not require `Origin` and do not mutate state. Session content reads require a matching `Origin`, or `Sec-Fetch-Site: same-origin` when the browser omits `Origin`. An explicit cross-site request is rejected.
 - Mutating cookie-authenticated routes (`POST /api/auth/session/refresh`,
   `POST /api/auth/logout`, `POST /api/devices/enrollments`,
   `POST /api/auth/invite`, `POST /api/auth/key`,
@@ -94,12 +98,12 @@ JavaScript cannot set it):
   `DELETE /api/devices/revoked`) require a present, exactly matching
   `Origin` (`https://<host>` for `https`, `http://<host>` on localhost
   development) and additionally reject `Sec-Fetch-Site: cross-site`.
-- Browser WebSocket upgrade `/ws/v4/client` requires the same exact same-origin
+- Browser WebSocket upgrades at `/ws/v4/client` and `/ws/v5/client` require an exact same-origin
   `Origin`; a missing `Origin` is rejected.
 - `/api/auth/google/start` and `/api/auth/google/callback` are navigations and
   require no `Origin`; they are protected by the one-use transaction cookie,
   `state`, PKCE, and the ID token binding.
-- Agent routes (`POST /api/devices/enroll|challenge|token|refresh`, `/ws/v4/agent`)
+- Agent routes (`POST /api/devices/enroll|challenge|token|refresh`, `/ws/v4/agent`, `/ws/v5/agent`)
   carry no browser cookie and never require an `Origin`; they are rate limited.
 
 `GET /api/*` responses and authentication responses are `Cache-Control: no-store`. No `GET` route writes
@@ -243,21 +247,17 @@ than trusting the connection's upgrade state for its lifetime.
 
 ### 3.1 Connections
 
-- `GET /ws/v4/client?device=<deviceID>` requires a valid browser session cookie, a
-  present same-origin `Origin`, and a device the owner owns and has not revoked. It
-  connects to the Durable Object named `<ownerID>:<deviceID>`.
-- `GET /ws/v4/agent` requires `Authorization: Bearer <accessToken>`. The token must be
-  an unexpired, unrevoked `access` credential whose device is not revoked. The same
-  `<ownerID>:<deviceID>` Durable Object is used.
+- `/ws/v4/client` and `/ws/v5/client` require a valid browser session cookie, a present same-origin `Origin`, and a `device` query that names a non-revoked device belonging to the signed-in owner.
+- `/ws/v4/agent` and `/ws/v5/agent` require `Authorization: Bearer <accessToken>`. The token must be an unexpired, unrevoked `access` credential for a non-revoked device.
+- The Worker derives the owner and device from authorization. Version 4 uses the existing `<ownerID>:<deviceID>` Durable Object; version 5 uses `v5:<ownerID>:<deviceID>`. Neither object pairs peers or forwards frames across versions. Missing or unsupported versions return `404` before upgrade.
 - The worker strips every inbound `x-ycoding-*` header and re-derives trusted relay
   headers itself. Browser-supplied internal headers are never honored.
-- `/ws/v4/client` never accepts a bearer token, and `/ws/v4/agent` never accepts the
-  browser cookie, so one role cannot impersonate the other.
-- One agent connection is authoritative per device. A newer agent connection closes
-  the previous one with `1012`.
+- Device access tokens cannot authenticate a client socket. Browser cookies cannot authenticate an agent socket. Missing or invalid authentication returns `401`; a missing or foreign client `Origin` and a device belonging to another owner return `403`.
+- One agent connection is authoritative per device and relay version. The relay refuses a competing
+  connection while the current agent is live. An agent that has gone stale can be replaced; the
+  relay closes its old connection with `1012`.
 - Browser-session logout and rotation, and device revocation, push a close to every
-  Durable Object the owner may hold sockets in; logout and rotation notify each
-  owned device object, not a single one.
+  Durable Object the owner may hold sockets in. Both versions are notified for each owned device.
 - Revocation is also enforced without the push: a restored connection re-validates
   authority when the object wakes. Commands and Session-event delivery reuse a
   successful session/device check for at most `5s`. Status and every notice fanout
@@ -267,9 +267,17 @@ than trusting the connection's upgrade state for its lifetime.
   sends no status or notice frame. An authority lookup failure does not mark
   notice storage unavailable.
 
-### 3.2 Envelope
+### 3.1a Binary v5
 
-One JSON object per WebSocket frame, discriminated by `type`.
+Each WebSocket message contains one binary `ycoding.v5.Frame`. The canonical connection rules, roles and operations are defined by `packages/protocol/src/v5` and the matching Rust protocol. The relay rejects text, malformed frames and invalid version or role negotiation before dispatching an operation. The v4 socket rejects binary frames and retains the JSON contract below.
+
+A v5 message or attachment read starts on the authenticated WebSocket as `session.message` or `session.attachment.read`. An HTTP bulk declaration carries a connection epoch, request ID and transfer ID. The browser sends those values as `connectionEpoch`, `requestID` and `transferID` on the matching Session content URL. Each value must occur once. The binary relay validates the declaration against the live connection, browser session, device, Session and content ID. A request with incomplete or invalid selectors never falls back to v4. Requests without any of those selectors retain the v4 JSON read behavior.
+
+`GET /api/me` and `GET /api/devices` return v4 `online` status by default. `?relay=5` selects v5 presence with the same response schema.
+
+### 3.2 JSON v4 envelope
+
+Version 4 uses one JSON object per WebSocket frame, discriminated by `type`.
 
 | `type` | Direction | Shape |
 | --- | --- | --- |
@@ -1291,4 +1299,4 @@ Verification limits, stated so they are not mistaken for covered behaviour:
 - No public native Dots task or decision transport; only global access and status
   administration crosses HTTP and the browser relay.
 - No transcript, event, or delta persistence anywhere in D1.
-- No browser credentials on `/ws/v4/agent` and no device credentials on `/ws/v4/client`.
+- Neither version accepts browser credentials on its agent socket or device credentials on its client socket.

@@ -1,0 +1,10 @@
+pub const NOW: &str = "2026-01-01T00:00:00.000Z";
+pub const MEETING: &str = r#"{"id":"m","title":"Design meeting","sessionID":"session","status":"ready","createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z"}"#;
+pub const SEGMENT: &str = r#"{"id":"s","meetingID":"m","sequence":1,"source":"remote","speakerID":"remote","startMs":100,"endMs":400,"rawText":"  สวัสดี  ","text":"สวัสดี","state":"final","model":"whisper","createdAt":"2026-01-01T00:00:00.000Z"}"#;
+pub const FINDING: &str = r#"{"id":"z","meetingID":"m","kind":"decision","summary":"Use separate storage","sourceSegmentIds":["s"],"confidence":0.9,"status":"confirmed","createdAt":"2026-01-01T00:00:00.000Z"}"#;
+pub const CHECKPOINT: &str = r#"{"id":"c","meetingID":"m","throughSequence":1,"summary":"Summary","final":true,"createdAt":"2026-01-01T00:00:00.000Z","latencyMs":50}"#;
+pub const PROPOSAL: &str = r#"{"id":"p","meetingID":"m","server":"wiki","target":"page","operation":"replace","existingContent":"Old","suggestedContent":"New","explanation":"Agreed","sourceSegmentIds":["s"],"references":[{"server":"wiki","target":"page","revision":"1","content":"Old","retrievedAt":"2026-01-01T00:00:00.000Z"}],"expectedRevision":"1","confidence":0.9,"status":"applying","createdAt":"2026-01-01T00:00:00.000Z"}"#;
+pub const PLAN: &str = r#"{"meetingID":"m","content":"Plan","findingIds":["z"],"sourceSegmentIds":["s"],"status":"approved","createdAt":"2026-01-01T00:00:00.000Z"}"#;
+pub const APPROVAL: &str = r#"{"id":"a","meetingID":"m","targetID":"p","decision":"approve","detail":"Reviewed","createdAt":"2026-01-01T00:00:00.000Z"}"#;
+pub const JOB: &str = r#"{"id":"j","meetingID":"m","kind":"knowledge","status":"running","attempts":1,"updatedAt":"2026-01-01T00:00:00.000Z"}"#;
+pub const REFERENCE: &str = r#"{"server":"wiki","target":"page","revision":"1","content":"Original\u0000\ud800","retrievedAt":"2026-01-01T00:00:00.000Z"}"#;

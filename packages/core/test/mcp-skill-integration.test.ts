@@ -247,7 +247,7 @@ describe("MCP skill model-facing integration", () => {
                 recover: unavailable(),
                 resolveRecovery: unavailable,
               },
-              location: { agent: { list: unavailable } },
+              location: { agent: { list: unavailable }, integration: { accountSkills: { read: unavailable } } },
             }),
           )
           const layer = AppNodeBuilder.build(

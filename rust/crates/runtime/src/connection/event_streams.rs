@@ -1,0 +1,506 @@
+use super::{Driver, Progress};
+use crate::{convert, ephemeral, event_subscribe, log};
+use prost::{Message, Name};
+use std::sync::Arc;
+use ycoding_core::event_feed::{Item, Payload, Subscriber};
+use ycoding_core::session::log::Entry;
+use ycoding_core::ycoding_schema::{
+    DomainDecode, JsonValue, LosslessString, session, session_message,
+};
+use ycoding_protocol::{
+    connection::{Direction, EventMetadata, ProtocolError},
+    v5,
+};
+
+pub(super) struct Stream {
+    request_id: String,
+    pub(super) sub_id: String,
+    scope: v5::Scope,
+    subscriber: Subscriber,
+    accepted: bool,
+    result_handed: bool,
+    held: Option<Arc<Item>>,
+}
+
+fn public_event(item: v5::SessionLogItem) -> Result<v5::PublicEvent, ProtocolError> {
+    use v5::session_log_item::Kind;
+    let kind = match item.kind.ok_or(ProtocolError::Malformed)? {
+        Kind::Value1(event) => v5::public_event::Kind::SessionCreated(event),
+        Kind::Value2(event) => v5::public_event::Kind::SessionAgentSelected(event),
+        Kind::Value3(event) => v5::public_event::Kind::SessionModelSelected(event),
+        Kind::Value4(event) => v5::public_event::Kind::SessionDaybreakSet(event),
+        Kind::Value5(event) => v5::public_event::Kind::SessionProjectArtifactsEnded(event),
+        Kind::Value6(event) => v5::public_event::Kind::SessionMoved(event),
+        Kind::Value7(event) => v5::public_event::Kind::SessionRenamed(event),
+        Kind::Value8(event) => v5::public_event::Kind::SessionDeleted(event),
+        Kind::Value9(event) => v5::public_event::Kind::SessionArchived(event),
+        Kind::Value10(event) => v5::public_event::Kind::SessionUnarchived(event),
+        Kind::Value11(event) => v5::public_event::Kind::SessionPinned(event),
+        Kind::Value12(event) => v5::public_event::Kind::SessionUnpinned(event),
+        Kind::Value13(event) => v5::public_event::Kind::SessionForked(event),
+        Kind::Value14(event) => v5::public_event::Kind::SessionInputPromoted(event),
+        Kind::Value15(event) => v5::public_event::Kind::SessionInputAdmitted(event),
+        Kind::Value16(event) => v5::public_event::Kind::SessionInputConsumed(event),
+        Kind::Value17(event) => v5::public_event::Kind::SessionExecutionStarted(event),
+        Kind::Value18(event) => v5::public_event::Kind::SessionExecutionSucceeded(event),
+        Kind::Value19(event) => v5::public_event::Kind::SessionExecutionFailed(event),
+        Kind::Value20(event) => v5::public_event::Kind::SessionExecutionInterrupted(event),
+        Kind::Value21(event) => v5::public_event::Kind::SessionWorkCompleted(event),
+        Kind::Value22(event) => v5::public_event::Kind::SessionInstructionsUpdated(event),
+        Kind::Value23(event) => v5::public_event::Kind::SessionContextObserved(event),
+        Kind::Value24(event) => v5::public_event::Kind::SessionTaskUpdated(event),
+        Kind::Value25(event) => v5::public_event::Kind::SessionSynthetic(event),
+        Kind::Value26(event) => v5::public_event::Kind::SessionSkillActivated(event),
+        Kind::Value27(event) => v5::public_event::Kind::SessionSkillDeactivated(event),
+        Kind::Value28(event) => v5::public_event::Kind::SessionShellStarted(event),
+        Kind::Value29(event) => v5::public_event::Kind::SessionShellEnded(event),
+        Kind::Value30(event) => v5::public_event::Kind::SessionStepStarted(event),
+        Kind::Value31(event) => v5::public_event::Kind::SessionStepEnded(event),
+        Kind::Value32(event) => v5::public_event::Kind::SessionStepFailed(event),
+        Kind::Value33(event) => v5::public_event::Kind::SessionTextStarted(event),
+        Kind::Value34(event) => v5::public_event::Kind::SessionTextEnded(event),
+        Kind::Value35(event) => v5::public_event::Kind::SessionReasoningStarted(event),
+        Kind::Value36(event) => v5::public_event::Kind::SessionReasoningEnded(event),
+        Kind::Value37(event) => v5::public_event::Kind::SessionToolInputStarted(event),
+        Kind::Value38(event) => v5::public_event::Kind::SessionToolInputEnded(event),
+        Kind::Value39(event) => v5::public_event::Kind::SessionToolCalled(event),
+        Kind::Value41(event) => v5::public_event::Kind::SessionToolSuccess(event),
+        Kind::Value42(event) => v5::public_event::Kind::SessionToolFailed(event),
+        Kind::Value43(event) => v5::public_event::Kind::SessionFileChangeRecorded(event),
+        Kind::Value44(event) => v5::public_event::Kind::SessionRetryScheduled(event),
+        Kind::Value45(event) => v5::public_event::Kind::SessionCompactionAdmitted(event),
+        Kind::Value46(event) => v5::public_event::Kind::SessionCompactionStarted(event),
+        Kind::Value47(event) => v5::public_event::Kind::SessionCompactionEnded(event),
+        Kind::Value48(event) => v5::public_event::Kind::SessionCompactionFailed(event),
+        Kind::Value49(event) => v5::public_event::Kind::SessionRevertStaged(event),
+        Kind::Value50(event) => v5::public_event::Kind::SessionRevertCleared(event),
+        Kind::Value51(event) => v5::public_event::Kind::SessionRevertCommitted(event),
+        Kind::Value52(_) => return Err(ProtocolError::Malformed),
+        Kind::Value53(event) => v5::public_event::Kind::SessionGuardrailDismissed(event),
+        Kind::Value54(event) => v5::public_event::Kind::SessionGuardrailEscalated(event),
+        Kind::Value55(event) => v5::public_event::Kind::SessionGuardrailDecided(event),
+        Kind::Value56(event) => v5::public_event::Kind::SessionReviewDeferred(event),
+        Kind::Value57(event) => v5::public_event::Kind::SessionReviewDecided(event),
+        Kind::Value58(event) => v5::public_event::Kind::SessionReviewWithdrawn(event),
+        Kind::Value59(event) => v5::public_event::Kind::SessionReviewConsumed(event),
+        Kind::Value60(event) => v5::public_event::Kind::SessionStepRerouted(event),
+        Kind::Value61(event) => v5::public_event::Kind::SessionDecisionAudited(event),
+        Kind::Value62(event) => v5::public_event::Kind::SessionPermissionAssessed(event),
+        Kind::Value63(event) => v5::public_event::Kind::SessionDotsExchangeCreated(event),
+        Kind::Value64(event) => v5::public_event::Kind::SessionDotsInstructionRejected(event),
+        Kind::Value65(event) => v5::public_event::Kind::SessionDotsReportRecorded(event),
+        Kind::Value66(event) => v5::public_event::Kind::SessionToolInvocationSettled(event),
+        Kind::Value67(event) => v5::public_event::Kind::SessionDotsAccessChanged(event),
+        Kind::Value68(event) => v5::public_event::Kind::SessionDotsBindingBound(event),
+        Kind::Value69(event) => v5::public_event::Kind::SessionDotsBindingUnbound(event),
+        Kind::Value70(event) => v5::public_event::Kind::SessionDotsDeviceDelegationCreated(event),
+        Kind::Value71(event) => v5::public_event::Kind::SessionDotsDeviceDelegationRevoked(event),
+        Kind::Value72(event) => v5::public_event::Kind::SessionDotsDecisionSettled(event),
+        Kind::Value73(event) => v5::public_event::Kind::SessionInputWithdrawn(event),
+        Kind::Value74(event) => v5::public_event::Kind::SessionInputSteered(event),
+        Kind::Value75(event) => v5::public_event::Kind::SessionInputDeleted(event),
+    };
+    Ok(v5::PublicEvent { kind: Some(kind) })
+}
+
+impl Driver {
+    pub(super) fn open_event_stream(&mut self, request_id: String, result: &v5::Result) {
+        let Some(scope) = self.pending_events.remove(&request_id) else {
+            return;
+        };
+        let Some(v5::result::Outcome::Success(payload)) = &result.outcome else {
+            return;
+        };
+        let Ok(answer) = v5::EventSubscribeResult::decode(payload.payload.as_slice()) else {
+            return;
+        };
+        let Ok(sub_id) = convert::domain(&answer.subscription_id)
+            .map_err(|_| ())
+            .and_then(|id| id.to_utf8().map_err(|_| ()))
+        else {
+            return;
+        };
+        let (Ok(target), Some(core)) = (
+            event_subscribe::target(&scope),
+            &self.shared.environment.services.core,
+        ) else {
+            return;
+        };
+        let wake = self.wake.clone();
+        let Ok(subscriber) = core
+            .events
+            .subscribe(target, None, move || wake.notify_one())
+        else {
+            return;
+        };
+        self.shared
+            .environment
+            .subscriptions
+            .arm(&self.epoch, sub_id.clone());
+        self.streams.push(Stream {
+            request_id,
+            sub_id,
+            scope,
+            subscriber,
+            accepted: false,
+            result_handed: false,
+            held: None,
+        });
+    }
+
+    pub(super) fn note_stream_handed(&mut self, request_id: &str) {
+        for stream in self
+            .streams
+            .iter_mut()
+            .filter(|stream| stream.request_id == request_id)
+        {
+            stream.result_handed = true;
+        }
+    }
+
+    pub(super) fn feed_streams(&mut self) {
+        let mut position = 0;
+        while position < self.streams.len() && self.close.is_none() {
+            match self.advance_stream(position) {
+                Progress::Blocked | Progress::Live => position += 1,
+                Progress::Done => {
+                    self.streams.remove(position);
+                }
+                Progress::Failed(error) => self.fail_with(ycoding_protocol::connection::Close {
+                    code: 1002,
+                    category: error,
+                }),
+            }
+        }
+    }
+
+    pub(super) fn accept_stream(
+        &mut self,
+        request_id: &str,
+        sub_id: &str,
+        scope: &v5::Scope,
+    ) -> Result<bool, ProtocolError> {
+        let now = self.now();
+        match self.connection.accept_subscription(
+            request_id,
+            sub_id.into(),
+            scope.clone(),
+            now,
+            Direction::Send,
+            None,
+        ) {
+            Ok(()) => Ok(true),
+            Err(ProtocolError::Unknown) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(super) fn end_stream(&mut self, sub_id: &str) -> Progress {
+        let body = v5::frame::Body::StreamEnd(v5::StreamEnd {
+            subscription_id: sub_id.into(),
+        });
+        let reserved = self.reserve(v5::LedgerClass::Event, body.clone());
+        let now = self.now();
+        match self.connection.enqueue(body, reserved, now) {
+            Ok(()) => {
+                self.shared
+                    .environment
+                    .subscriptions
+                    .remove(&self.epoch, sub_id);
+                Progress::Done
+            }
+            Err(ProtocolError::Limit) => Progress::Blocked,
+            Err(error) => Progress::Failed(error),
+        }
+    }
+
+    fn advance_stream(&mut self, position: usize) -> Progress {
+        let (request_id, sub_id, scope) = {
+            let stream = &self.streams[position];
+            (
+                stream.request_id.clone(),
+                stream.sub_id.clone(),
+                stream.scope.clone(),
+            )
+        };
+        if self
+            .shared
+            .environment
+            .subscriptions
+            .ended(&self.epoch, &sub_id)
+            == Some(true)
+        {
+            return self.end_stream(&sub_id);
+        }
+        if !self.streams[position].accepted {
+            if !self.streams[position].result_handed {
+                return Progress::Blocked;
+            }
+            match self.accept_stream(&request_id, &sub_id, &scope) {
+                Ok(true) => self.streams[position].accepted = true,
+                Ok(false) => return Progress::Blocked,
+                Err(error) => return Progress::Failed(error),
+            }
+        }
+        loop {
+            let item = match self.streams[position].held.take() {
+                Some(item) => item,
+                None => match self.streams[position].subscriber.next() {
+                    Ok(Some(item)) => item,
+                    Ok(None) => return Progress::Live,
+                    Err(_) => return Progress::Failed(ProtocolError::Limit),
+                },
+            };
+            let record = match event_record(
+                &item,
+                &self.source_epoch(),
+                self.shared.environment.services.core.as_ref(),
+            ) {
+                Ok(Some(record)) => record,
+                Ok(None) => continue,
+                Err(error) => return Progress::Failed(error),
+            };
+            match self.enqueue_record(&scope, &sub_id, record) {
+                Ok(()) => {}
+                Err(ProtocolError::Limit) => {
+                    self.streams[position].held = Some(item);
+                    return Progress::Blocked;
+                }
+                Err(error) => return Progress::Failed(error),
+            }
+        }
+    }
+}
+
+pub(crate) fn event_record(
+    item: &Item,
+    source_epoch: &LosslessString,
+    core: Option<&crate::Core>,
+) -> Result<Option<v5::EventRecord>, ProtocolError> {
+    let event = match &item.payload {
+        Payload::Durable(event) => event,
+        Payload::Ephemeral(event) => {
+            return ephemeral::record(event, source_epoch)
+                .map(Some)
+                .map_err(|_| ProtocolError::Malformed);
+        }
+    };
+    let Some(type_) = event.type_.as_str() else {
+        return Err(ProtocolError::Malformed);
+    };
+    if !type_.starts_with("session.") || log::excluded(type_) {
+        return Ok(None);
+    }
+    let session = session::Id::decode(&JsonValue::String(event.aggregate_id.clone()))
+        .map_err(|_| ProtocolError::Malformed)?;
+    let mut entry = Entry::from_event(event)
+        .inspect_err(|_| tracing::warn!(position = item.position, "feed event is not decodable"))
+        .map_err(|_| ProtocolError::Malformed)?;
+    if type_ == "session.shell.started.1" {
+        let core = core.ok_or(ProtocolError::Malformed)?;
+        if let Some((owner, session_message::Info::Shell(shell))) = core
+            .sessions
+            .message(&session_message::Id::from_event(&entry.event.0.id))
+            .map_err(|_| ProtocolError::Malformed)?
+            && owner == session
+        {
+            entry.event.0.metadata = shell.metadata;
+        }
+    }
+    let record = log::record(&entry, &session, source_epoch)
+        .inspect_err(|error| {
+            tracing::debug!(
+                event_type = ?event.type_.as_str(),
+                reason = error.0,
+                "feed event has no v5 wire shape"
+            );
+        })
+        .map_err(|_| ProtocolError::Malformed)?;
+    Ok(Some(v5::EventRecord {
+        event_id: record.event_id,
+        created_ms: record.created_ms,
+        durable: Some(v5::DurablePosition {
+            aggregate_id: event
+                .aggregate_id
+                .to_utf8()
+                .map_err(|_| ProtocolError::Malformed)?,
+            sequence: record.seq,
+            version: record.version,
+        }),
+        event: v5::TypedPayload {
+            type_name: v5::PublicEvent::full_name(),
+            payload: public_event(record.item)?.encode_to_vec(),
+        },
+    }))
+}
+
+impl Driver {
+    fn enqueue_record(
+        &mut self,
+        scope: &v5::Scope,
+        sub_id: &str,
+        event: v5::EventRecord,
+    ) -> Result<(), ProtocolError> {
+        let now = self.now();
+        self.connection.enqueue_event(
+            event,
+            EventMetadata {
+                subscription_id: sub_id.into(),
+                scope: scope.clone(),
+                source_epoch: self
+                    .shared
+                    .environment
+                    .services
+                    .identity
+                    .source_epoch
+                    .clone(),
+                message_id: None,
+                priority: v5::PriorityMode::Interactive,
+            },
+            now,
+        )
+    }
+
+    pub(super) fn ensure_follow_feed(&mut self) -> bool {
+        if self.follow.is_some() {
+            return true;
+        }
+        let Some(core) = &self.shared.environment.services.core else {
+            return false;
+        };
+        let wake = self.wake.clone();
+        self.follow = core
+            .events
+            .subscribe(ycoding_core::event_feed::Scope::Global, None, move || {
+                wake.notify_one()
+            })
+            .ok();
+        self.follow.is_some()
+    }
+
+    pub(super) fn drain_follow_feed(&mut self) {
+        let Some(follow) = &self.follow else {
+            return;
+        };
+        let mut overflowed = false;
+        loop {
+            match follow.next() {
+                Ok(Some(item)) => {
+                    if let Payload::Durable(event) = &item.payload {
+                        self.subs
+                            .iter_mut()
+                            .filter(|sub| {
+                                sub.follow && sub.session.as_lossless() == &event.aggregate_id
+                            })
+                            .for_each(|sub| sub.dirty = true);
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => {
+                    overflowed = true;
+                    break;
+                }
+            }
+        }
+        if overflowed {
+            self.follow = None;
+            self.ensure_follow_feed();
+            self.subs.iter_mut().for_each(|sub| sub.dirty = true);
+        }
+        if !self.subs.iter().any(|sub| sub.follow) {
+            self.follow = None;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn review_guardrail_reroute_and_dots_log_items_keep_their_public_event_branch_and_bytes() {
+        use v5::{public_event::Kind as Public, session_log_item::Kind as Log};
+        let cases = [
+            (
+                Log::Value53(Default::default()),
+                Public::SessionGuardrailDismissed(Default::default()),
+                104,
+            ),
+            (
+                Log::Value54(Default::default()),
+                Public::SessionGuardrailEscalated(Default::default()),
+                105,
+            ),
+            (
+                Log::Value55(Default::default()),
+                Public::SessionGuardrailDecided(Default::default()),
+                106,
+            ),
+            (
+                Log::Value56(Default::default()),
+                Public::SessionReviewDeferred(Default::default()),
+                107,
+            ),
+            (
+                Log::Value57(Default::default()),
+                Public::SessionReviewDecided(Default::default()),
+                108,
+            ),
+            (
+                Log::Value58(Default::default()),
+                Public::SessionReviewWithdrawn(Default::default()),
+                109,
+            ),
+            (
+                Log::Value59(Default::default()),
+                Public::SessionReviewConsumed(Default::default()),
+                110,
+            ),
+            (
+                Log::Value60(Default::default()),
+                Public::SessionStepRerouted(Default::default()),
+                111,
+            ),
+            (
+                Log::Value61(Default::default()),
+                Public::SessionDecisionAudited(Default::default()),
+                118,
+            ),
+            (
+                Log::Value62(Default::default()),
+                Public::SessionPermissionAssessed(Default::default()),
+                119,
+            ),
+            (
+                Log::Value63(Default::default()),
+                Public::SessionDotsExchangeCreated(Default::default()),
+                124,
+            ),
+            (
+                Log::Value64(Default::default()),
+                Public::SessionDotsInstructionRejected(Default::default()),
+                125,
+            ),
+            (
+                Log::Value65(Default::default()),
+                Public::SessionDotsReportRecorded(Default::default()),
+                126,
+            ),
+        ];
+        for (item, expected, tag) in cases {
+            let event = public_event(v5::SessionLogItem { kind: Some(item) }).unwrap();
+            assert_eq!(event.kind, Some(expected));
+            let bytes = event.encode_to_vec();
+            assert_eq!(
+                ((bytes[0] as u32 & 0x7f) | (bytes[1] as u32) << 7) >> 3,
+                tag
+            );
+        }
+        assert!(matches!(
+            public_event(v5::SessionLogItem {
+                kind: Some(Log::Value52(Default::default()))
+            }),
+            Err(ProtocolError::Malformed)
+        ));
+    }
+}

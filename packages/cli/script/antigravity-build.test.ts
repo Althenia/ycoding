@@ -1,14 +1,17 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { mkdtemp, rm } from "node:fs/promises"
+import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises"
 import { createRequire } from "node:module"
 import os from "node:os"
 import path from "node:path"
 import { build } from "vite"
-import { nodeExecArgv, nodeTarget } from "../src/node/target"
+import { nodeExecArgv, nodeTarget, photonWasmAsset } from "../src/node/target"
 import { antigravityBuildDefinitions } from "./antigravity-build-env"
 
 const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-antigravity-build-"))
+const photon = path.join(directory, "assets", photonWasmAsset)
+await mkdir(path.dirname(photon), { recursive: true })
+await copyFile(createRequire(path.resolve(import.meta.dirname, "../../core/package.json")).resolve(photonWasmAsset), photon)
 const require = createRequire(import.meta.url)
 const variables = ["YCODING_ANTIGRAVITY_CLIENT_ID", "YCODING_ANTIGRAVITY_CLIENT_SECRET"] as const
 const originalEnvironment = variables.map((name) => ({
@@ -131,6 +134,7 @@ async function bundle(kind: "bun" | "node", env: Record<string, string | undefin
       minify: true,
       compile: { outfile: output, autoloadDotenv: false, autoloadBunfig: false },
     })
+    Bun.gc(true)
     expect(result.success, result.logs.map(String).join("\n")).toBe(true)
     return [output]
   }
@@ -138,6 +142,7 @@ async function bundle(kind: "bun" | "node", env: Record<string, string | undefin
   if (!productionOutput || Array.isArray(productionOutput)) throw new Error("Expected one Node output configuration")
   await build({
     ...config,
+    plugins: (config.plugins ?? []).filter((plugin) => !(plugin && typeof plugin === "object" && "name" in plugin && plugin.name === "ycoding:frontend-graph")),
     configFile: false,
     envFile: false,
     logLevel: "silent",
@@ -147,9 +152,10 @@ async function bundle(kind: "bun" | "node", env: Record<string, string | undefin
       target: "node24",
       outDir: directory,
       emptyOutDir: false,
-      rollupOptions: { output: { ...productionOutput, entryFileNames: path.basename(output) } },
+      rollupOptions: { ...config.build?.rollupOptions, output: { ...productionOutput, entryFileNames: path.basename(output) } },
     },
   })
+  Bun.gc(true)
   return ["node", ...nodeExecArgv.filter((argument) => argument.startsWith("--disable-warning=")), output]
 }
 

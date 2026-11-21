@@ -1,7 +1,7 @@
 import { readFile, readdir, stat } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { Mime } from "@ycoding-ai/core/mime"
+import { Mime } from "@ycoding-ai/schema/mime"
 import { mimeTypes } from "../component/prompt/local-attachment"
 
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024

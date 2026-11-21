@@ -68,7 +68,7 @@ const ScopeID = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(25
 const ClientID = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(2048),
-  Schema.isPattern(/^[^\r\n\0]+$/),
+  Schema.isPattern(/^[^\r\n\x00]+$/),
 )
 
 export interface RequestContext extends Schema.Schema.Type<typeof RequestContext> {}
@@ -144,12 +144,8 @@ export const State = Schema.Literals([
 ]).annotate({ identifier: "McpEvents.State" })
 export type State = typeof State.Type
 
-const Identifier = Schema.String.check(
-  Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/),
-)
-const Category = Schema.String.check(
-  Schema.isPattern(/^[a-z0-9][a-z0-9._-]{0,63}$/),
-)
+const Identifier = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/))
+const Category = Schema.String.check(Schema.isPattern(/^[a-z0-9][a-z0-9._-]{0,63}$/))
 
 const AttentionKindValues = ["guardrail", "permission", "question", "form", "subagent_question", "recovery"] as const
 export const AttentionKind = Schema.Literals(AttentionKindValues)

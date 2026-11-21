@@ -14,6 +14,13 @@
     ".": "./src/index.ts",
     "./*": "./src/*.ts"
   },
+  "imports": {
+    "#process-lock-ffi": {
+      "bun": "./src/process-lock-ffi.bun.ts",
+      "node": "./src/process-lock-ffi.node.ts",
+      "default": "./src/process-lock-ffi.bun.ts"
+    }
+  },
   "scripts": {
     "build": "bun run script/build.ts",
     "typecheck": "bun check"

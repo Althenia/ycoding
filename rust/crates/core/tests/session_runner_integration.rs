@@ -1,0 +1,5223 @@
+use std::sync::Arc;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+    sync::mpsc,
+};
+use ycoding_core::{
+    resources::{
+        agent, attachment_store,
+        catalog::{Catalog, models_dev},
+        credential, model,
+    },
+    session::{
+        execution::Runner,
+        run_coordinator::Coordinator,
+        runner::{Local, Services, WallClock},
+        skill::{InstructionsFuture, Resolver, SkillsFuture},
+        store::Service,
+    },
+    tools::registry::Registry,
+};
+use ycoding_schema::{
+    DomainDecode, DomainEncode, parse_json, session, session_message, session_pending, skill,
+};
+
+#[path = "session_support/guardrails.rs"]
+mod guardrails;
+#[path = "report_support/prepared.rs"]
+mod prepared_support;
+#[path = "report_support/mod.rs"]
+mod report_support;
+#[path = "session_support/mod.rs"]
+mod support;
+
+#[path = "session_support/request_assembly.rs"]
+mod request_assembly;
+
+#[path = "session_support/checkpoint.rs"]
+mod checkpoint;
+
+#[path = "session_support/coordination_model.rs"]
+mod coordination_model;
+
+#[tokio::test]
+async fn pruning_changes_neither_next_provider_request_nor_live_state() {
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT]).await;
+    let mut outbound = Vec::new();
+    for prune in [false, true] {
+        let store = support::store();
+        let service = Service::new(store.client());
+        checkpoint::session(&store.client(), "ses_one");
+        checkpoint::user(&service, "ses_one", "First request", 1).await;
+        checkpoint::run(
+            &service,
+            "ses_one",
+            "First answer",
+            checkpoint::Outcome::Succeeded,
+            1,
+        )
+        .await;
+        checkpoint::user(&service, "ses_one", "Second request", 1).await;
+        let boundary = checkpoint::run(
+            &service,
+            "ses_one",
+            "Covered answer",
+            checkpoint::Outcome::Succeeded,
+            1,
+        )
+        .await;
+        checkpoint::compaction(
+            &store.client(),
+            &service,
+            "ses_one",
+            &boundary,
+            checkpoint::Compaction::Ended,
+            1,
+        )
+        .await;
+        let id = checkpoint::id("ses_one");
+        let before =
+            ycoding_core::session::live_state::capture(&store.snapshot().unwrap(), &id).unwrap();
+        if prune {
+            assert!(
+                service
+                    .prune_compacted(&id, 2, Vec::new)
+                    .await
+                    .unwrap()
+                    .messages
+                    > 0
+            );
+        }
+        assert_eq!(
+            ycoding_core::session::live_state::capture(&store.snapshot().unwrap(), &id).unwrap(),
+            before
+        );
+        admit_input(&service, "next", "Next request", "steer").await;
+        let coordinator = Coordinator::new(Arc::new(local_clock(
+            &store,
+            &endpoint,
+            registry(),
+            Arc::new(ImmediateClock(Default::default())),
+        )));
+        coordinator.run(&id).await.unwrap();
+        let request = requests.recv().await.unwrap();
+        let text = ycoding_schema::stringify_json(&request);
+        assert!(text.contains("conversation-checkpoint"));
+        assert!(text.contains("Next request"));
+        assert!(!text.contains("Covered answer"));
+        assert!(
+            !service
+                .log(&id, None, 512)
+                .unwrap()
+                .events
+                .iter()
+                .any(
+                    |event| ycoding_schema::stringify_json(&event.event.encode())
+                        .contains("session.execution.failed")
+                )
+        );
+        outbound.push(request);
+        coordinator.shutdown().await.unwrap();
+    }
+    server.await.unwrap();
+    assert_eq!(outbound[0], outbound[1]);
+}
+
+include!("tool_fixture.rs");
+
+async fn server(
+    replies: Vec<&'static str>,
+) -> (
+    String,
+    mpsc::UnboundedReceiver<ycoding_schema::JsonValue>,
+    tokio::task::JoinHandle<()>,
+) {
+    server_status(replies.into_iter().map(|reply| (200, reply)).collect()).await
+}
+
+async fn server_status(
+    replies: Vec<(u16, &'static str)>,
+) -> (
+    String,
+    mpsc::UnboundedReceiver<ycoding_schema::JsonValue>,
+    tokio::task::JoinHandle<()>,
+) {
+    server_headers(
+        replies
+            .into_iter()
+            .map(|(status, reply)| (status, "", reply))
+            .collect(),
+    )
+    .await
+}
+
+async fn server_headers(
+    replies: Vec<(u16, &'static str, &'static str)>,
+) -> (
+    String,
+    mpsc::UnboundedReceiver<ycoding_schema::JsonValue>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let (send, receive) = mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        for (status, extra, reply) in replies {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 4096];
+            let boundary = loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                assert!(read > 0);
+                request.extend_from_slice(&buffer[..read]);
+                if let Some(boundary) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                    break boundary + 4;
+                }
+            };
+            let header = std::str::from_utf8(&request[..boundary]).unwrap();
+            let length = header
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .map(|value| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap();
+            while request.len() - boundary < length {
+                let read = stream.read(&mut buffer).await.unwrap();
+                assert!(read > 0);
+                request.extend_from_slice(&buffer[..read]);
+            }
+            let mut body =
+                parse_json(std::str::from_utf8(&request[boundary..boundary + length]).unwrap())
+                    .unwrap();
+            if let ycoding_schema::JsonValue::Object(body) = &mut body {
+                body.insert(
+                    "_testAuthorization".into(),
+                    ycoding_schema::JsonValue::String(
+                        std::str::from_utf8(&request[..boundary])
+                            .unwrap()
+                            .lines()
+                            .find_map(|line| {
+                                line.split_once(':')
+                                    .filter(|(key, _)| key.eq_ignore_ascii_case("authorization"))
+                                    .map(|(_, value)| value.trim())
+                            })
+                            .unwrap_or("")
+                            .into(),
+                    ),
+                );
+            }
+            if let (ycoding_schema::JsonValue::Object(body), Some(variant)) = (
+                &mut body,
+                std::str::from_utf8(&request[..boundary])
+                    .unwrap()
+                    .lines()
+                    .find_map(|line| {
+                        line.split_once(':')
+                            .filter(|(key, _)| key.eq_ignore_ascii_case("x-fixture-variant"))
+                            .map(|(_, value)| value.trim().to_owned())
+                    }),
+            ) {
+                body.insert(
+                    "_testVariant".into(),
+                    ycoding_schema::JsonValue::String(variant.into()),
+                );
+            }
+            send.send(body).unwrap();
+            let response = format!(
+                "HTTP/1.1 {status} Response\r\nContent-Type: {}\r\nContent-Length: {}\r\n{extra}Connection: close\r\n\r\n{reply}",
+                if status == 200 {
+                    "text/event-stream"
+                } else {
+                    "application/json"
+                },
+                reply.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+    });
+    (address, receive, task)
+}
+
+fn local(store: &ycoding_store::Store, endpoint: &str, registry: Arc<Registry>) -> Local {
+    local_clock(store, endpoint, registry, Arc::new(WallClock))
+}
+
+fn local_clock(
+    store: &ycoding_store::Store,
+    endpoint: &str,
+    registry: Arc<Registry>,
+    clock: Arc<dyn ycoding_core::session::runner::Clock>,
+) -> Local {
+    local_sources(store, endpoint, registry, clock, Vec::new())
+}
+
+fn local_sources(
+    store: &ycoding_store::Store,
+    endpoint: &str,
+    registry: Arc<Registry>,
+    clock: Arc<dyn ycoding_core::session::runner::Clock>,
+    instructions: Vec<ycoding_core::instructions::Source>,
+) -> Local {
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    local_services(
+        store,
+        catalog,
+        vec![agent::empty("build".into())],
+        registry,
+        clock,
+        instructions,
+    )
+}
+
+fn local_services(
+    store: &ycoding_store::Store,
+    catalog: Catalog,
+    agents: Vec<ycoding_schema::agent::Info>,
+    registry: Arc<Registry>,
+    clock: Arc<dyn ycoding_core::session::runner::Clock>,
+    instructions: Vec<ycoding_core::instructions::Source>,
+) -> Local {
+    local_services_with_skill_resolver(store, catalog, agents, registry, clock, instructions, None)
+}
+
+fn local_services_with_skill_resolver(
+    store: &ycoding_store::Store,
+    catalog: Catalog,
+    agents: Vec<ycoding_schema::agent::Info>,
+    registry: Arc<Registry>,
+    clock: Arc<dyn ycoding_core::session::runner::Clock>,
+    instructions: Vec<ycoding_core::instructions::Source>,
+    skill_resolver: Option<Arc<dyn Resolver>>,
+) -> Local {
+    Local::new(Services {
+        skill_resolver,
+        ..fixture_services(store, catalog, agents, registry, clock, instructions)
+    })
+}
+
+fn local_hosted(
+    store: &ycoding_store::Store,
+    catalog: Catalog,
+    agents: Vec<ycoding_schema::agent::Info>,
+    registry: Arc<Registry>,
+    clock: Arc<dyn ycoding_core::session::runner::Clock>,
+    instructions: Vec<ycoding_core::instructions::Source>,
+    cursor: Option<ycoding_core::resources::cursor::route::Host>,
+) -> Local {
+    Local::new(Services {
+        cursor,
+        ..fixture_services(store, catalog, agents, registry, clock, instructions)
+    })
+}
+
+fn fixture_services(
+    store: &ycoding_store::Store,
+    catalog: Catalog,
+    agents: Vec<ycoding_schema::agent::Info>,
+    registry: Arc<Registry>,
+    clock: Arc<dyn ycoding_core::session::runner::Clock>,
+    instructions: Vec<ycoding_core::instructions::Source>,
+) -> Services {
+    Services {
+        generation: ycoding_core::generation_activity::Service::new(clock.now(), clock.nanos()),
+        store: Service::new(store.client()),
+        events: ycoding_core::event_feed::Feed::attach(&store.client()),
+        location: ycoding_schema::location::Ref::decode(
+            &parse_json(r#"{"directory":"/project"}"#).unwrap(),
+        )
+        .unwrap(),
+        models: Arc::new(model::Resolver::new(catalog)),
+        agents: ycoding_core::resources::domain_state::DomainState::new(agent::Service::new(
+            agents,
+        )),
+        credentials: credential::Service::new(store.client()),
+        tools: registry,
+        attachments: Arc::new(
+            attachment_store::Store::new(std::env::temp_dir().join("ycoding-runner-attachments"))
+                .unwrap(),
+        ),
+        instructions,
+        analysis: None,
+        clock,
+        executor: Arc::new(ycoding_ai::route::Executor::new(
+            ycoding_ai::route::Executor::http_client().unwrap(),
+        )),
+        compaction: Default::default(),
+        guardrails: guardrails::guardrails(store),
+        helpers: Default::default(),
+        cursor: None,
+        skill_resolver: None,
+        snapshots: None,
+        configuration: None,
+        image_analyzer: None,
+        extensions: Vec::new(),
+        session_tools: None,
+        claude: None,
+        auth: None,
+    }
+}
+
+#[tokio::test]
+async fn composed_builtin_file_and_entry_sources_render_updates_and_removal_from_admitted_values() {
+    let root = std::env::temp_dir().join(format!(
+        "ycoding-instructions-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("AGENTS.md"), "Ambient file requirement").unwrap();
+    let store = support::store();
+    let service = Service::new(store.client());
+    let id = session::Id::new("ses_one").unwrap();
+    let entry = ycoding_schema::instruction_entry::Info::decode(
+        &parse_json(r#"{"key":"task-context","value":"Original context"}"#).unwrap(),
+    )
+    .unwrap();
+    service
+        .put_instruction_entry(&id, entry.clone(), 1)
+        .await
+        .unwrap();
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT, TEXT]).await;
+    let mut sources = ycoding_core::instructions::builtins::load(
+        ycoding_core::instructions::builtins::Environment {
+            directory: "/project".into(),
+            project_root: "/project".into(),
+            git: true,
+            platform: "darwin".into(),
+            data: "/data/ycoding".into(),
+        },
+        Arc::new(|| 1791763200000),
+        ycoding_schema::session_scope::Scope::Bound,
+    );
+    sources.push(ycoding_core::session::instruction_sources::ambient(
+        ycoding_core::resources::instruction_discovery::Options {
+            directory: root.clone(),
+            project_root: root.clone(),
+            global_config: root.join("global"),
+            project: true,
+            max_bytes: None,
+        },
+    ));
+    let coordinator = Coordinator::new(Arc::new(local_sources(
+        &store,
+        &endpoint,
+        registry(),
+        Arc::new(WallClock),
+        sources,
+    )));
+    coordinator.run(&id).await.unwrap();
+    let first = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(first.contains("Working directory: /project"));
+    assert!(first.contains("Today's date:"));
+    assert!(first.contains("Before launching a subagent"));
+    assert!(first.contains("Ambient file requirement"));
+    assert!(first.contains("Original context"));
+    service
+        .put_instruction_entry(
+            &id,
+            ycoding_schema::instruction_entry::Info::decode(
+                &parse_json(r#"{"key":"task-context","value":"Changed context"}"#).unwrap(),
+            )
+            .unwrap(),
+            2,
+        )
+        .await
+        .unwrap();
+    std::fs::write(root.join("AGENTS.md"), "Updated ambient requirement").unwrap();
+    coordinator.run(&id).await.unwrap();
+    let second = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(second.contains("changed and supersedes the previous value"));
+    assert!(second.contains("Changed context"));
+    assert!(
+        second.contains("These instructions replace all previously loaded ambient instructions")
+    );
+    assert!(second.contains("Updated ambient requirement"));
+    service
+        .remove_instruction_entry(&id, &entry.key, 3)
+        .await
+        .unwrap();
+    coordinator.run(&id).await.unwrap();
+    let third = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(third.contains("no longer applies. Disregard it."));
+    assert!(service.instruction_entries(&id).unwrap().is_empty());
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+struct ImmediateClock(Arc<std::sync::Mutex<Vec<u64>>>);
+impl ycoding_core::session::runner::Clock for ImmediateClock {
+    fn now(&self) -> i64 {
+        10
+    }
+    fn sleep(
+        &self,
+        milliseconds: u64,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        self.0.lock().unwrap().push(milliseconds);
+        Box::pin(async {})
+    }
+}
+
+#[tokio::test]
+async fn rate_limit_retries_one_logical_step_with_a_second_physical_request() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server_status(vec![
+        (429, r#"{"error":{"message":"rate limited"}}"#),
+        (200, TEXT),
+    ])
+    .await;
+    let delays = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let coordinator = Coordinator::new(Arc::new(local_clock(
+        &store,
+        &endpoint,
+        registry(),
+        Arc::new(ImmediateClock(delays.clone())),
+    )));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(*delays.lock().unwrap(), vec![2000]);
+    requests.recv().await.unwrap();
+    requests.recv().await.unwrap();
+    let history = service
+        .context(&session::Id::new("ses_one").unwrap())
+        .unwrap();
+    assert_eq!(
+        history
+            .iter()
+            .filter(|message| matches!(
+                message,
+                ycoding_schema::session_message::Info::Assistant(_)
+            ))
+            .count(),
+        1
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+fn registry() -> Arc<Registry> {
+    Arc::new(Registry::new(
+        Arc::new(ycoding_core::resources::tool_output_store::Store::new(
+            &ycoding_core::resources::config::Roots::development(
+                &std::env::temp_dir().join("ycoding-runner-output"),
+            )
+            .unwrap(),
+        )),
+        None,
+        Default::default(),
+        Arc::new(|left, right| left.cmp(right)),
+    ))
+}
+
+async fn admit(service: &Service) {
+    admit_input(service, "input", "Answer the prompt", "steer").await;
+}
+
+async fn admit_input(service: &Service, name: &str, text: &str, delivery: &str) {
+    service
+        .admit(ycoding_core::session::pending::Request {
+            id: session_message::Id::new(format!("msg_{name}")).unwrap(),
+            session_id: session::Id::new("ses_one").unwrap(),
+            input: session_pending::Message::decode(
+                &parse_json(&format!(
+                    r#"{{"type":"user","data":{{"text":"{text}"}},"delivery":"{delivery}"}}"#
+                ))
+                .unwrap(),
+            )
+            .unwrap(),
+            event_id: ycoding_schema::event::Id::new(format!("evt_{name}")).unwrap(),
+            created: 1,
+        })
+        .await
+        .unwrap();
+}
+
+fn assistants(service: &Service) -> Vec<ycoding_schema::session_message::Assistant> {
+    service
+        .context(&session::Id::new("ses_one").unwrap())
+        .unwrap()
+        .into_iter()
+        .filter_map(|message| match message {
+            ycoding_schema::session_message::Info::Assistant(assistant) => {
+                Some((*assistant).clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn last_assistant(service: &Service) -> ycoding_schema::session_message::Assistant {
+    let history = service
+        .context(&session::Id::new("ses_one").unwrap())
+        .unwrap();
+    let ycoding_schema::session_message::Info::Assistant(assistant) = history.last().unwrap()
+    else {
+        panic!()
+    };
+    (**assistant).clone()
+}
+
+fn event_types(store: &ycoding_store::Store) -> Vec<String> {
+    let prefix = ycoding_store::tuple_key(&[ycoding_store::KeyPart::String(&"ses_one".into())]);
+    store
+        .snapshot()
+        .unwrap()
+        .index_range::<ycoding_store::session::EventTable>(
+            "event_aggregate_seq_idx",
+            ycoding_store::IndexQuery {
+                lower: std::ops::Bound::Unbounded,
+                upper: std::ops::Bound::Unbounded,
+                prefix: Some(&prefix),
+                order: ycoding_store::IndexOrder::Ascending,
+                after: None,
+                limit: 1000,
+            },
+        )
+        .unwrap()
+        .into_iter()
+        .map(|event| event.record.type_.as_str().unwrap().to_string())
+        .collect()
+}
+
+const TEXT: &str = "data: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Answer\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n";
+const EMPTY: &str = "data: {\"id\":\"empty\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+const TOOL: &str = "data: {\"id\":\"tool\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_fixture\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"value\\\":\\\"observed\\\"}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"tool\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n";
+const REASONING_STOP: &str = "data: {\"id\":\"reasoning\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"Thinking\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"reasoning\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+const REASONING_UNKNOWN: &str = "data: {\"id\":\"reasoning\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"Thinking\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"reasoning\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"other\"}]}\n\ndata: [DONE]\n\n";
+const REASONING_RECOVERY: &str = "data: {\"id\":\"reasoning\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"RecoveryThought\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"reasoning\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+
+struct FixtureSkills(Vec<skill::Info>);
+impl Resolver for FixtureSkills {
+    fn list(&self) -> SkillsFuture<'_> {
+        let skills = self.0.clone();
+        Box::pin(async move { Ok(skills) })
+    }
+
+    fn instructions<'a>(&'a self, info: &'a skill::Info) -> InstructionsFuture<'a> {
+        Box::pin(async move {
+            Ok(format!(
+                "<skill_content name=\"{}\">\n{}\nBase directory: /skills/{}/\n</skill_content>",
+                info.name.as_str().unwrap(),
+                info.content.as_str().unwrap(),
+                info.id.as_str().unwrap()
+            )
+            .into())
+        })
+    }
+}
+
+fn fixture_skill(id: &str, name: &str, content: &str) -> skill::Info {
+    skill::Info::decode(
+        &parse_json(&format!(
+            r#"{{"id":"{id}","name":"{name}","location":"/skills/{id}/SKILL.md","content":"{content}"}}"#
+        ))
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+fn skill_local(store: &ycoding_store::Store, endpoint: &str, skills: Vec<skill::Info>) -> Local {
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    local_services_with_skill_resolver(
+        store,
+        catalog,
+        vec![agent::empty("build".into())],
+        registry(),
+        Arc::new(WallClock),
+        Vec::new(),
+        Some(Arc::new(FixtureSkills(skills))),
+    )
+}
+
+async fn admit_selected_skill(
+    service: &Service,
+    id: &str,
+    text: &str,
+    delivery: &str,
+    selected: &str,
+    created: i64,
+) {
+    service
+        .admit(ycoding_core::session::pending::Request {
+            id: session_message::Id::new(id).unwrap(),
+            session_id: session::Id::new("ses_one").unwrap(),
+            input: session_pending::Message::decode(
+                &parse_json(&format!(
+                    r#"{{"type":"user","data":{{"text":"{text}","metadata":{{"skills":[{{"id":"{selected}"}}]}}}},"delivery":"{delivery}"}}"#
+                ))
+                .unwrap(),
+            )
+            .unwrap(),
+            event_id: ycoding_schema::event::Id::new(format!("evt_{id}")).unwrap(),
+            created,
+        })
+        .await
+        .unwrap();
+}
+
+fn skill_history_order(messages: &[session_message::Info]) -> Vec<String> {
+    messages
+        .iter()
+        .filter_map(|message| match message {
+            session_message::Info::User(user) => Some(user.text.to_utf8().unwrap()),
+            session_message::Info::Skill(skill) => Some(skill.text.to_utf8().unwrap()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn promotion_skill_order(events: &[String]) -> Vec<&str> {
+    events
+        .iter()
+        .filter_map(|event| match event.as_str() {
+            "session.input.promoted.1" => Some("user"),
+            "session.skill.activated.1" => Some("skill"),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn skill_mentions_and_selected_ids_activate_after_promotion_before_request() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT]).await;
+    let skills = Arc::new(FixtureSkills(vec![
+        fixture_skill("audit", "Audit", "Audit all changed boundaries."),
+        fixture_skill("selected", "Selected", "Explicit selection instructions."),
+    ]));
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    let local = local_services_with_skill_resolver(
+        &store,
+        catalog,
+        vec![agent::empty("build".into())],
+        registry(),
+        Arc::new(WallClock),
+        Vec::new(),
+        Some(skills),
+    );
+    let input = session_pending::Message::decode(
+        &parse_json(r#"{"type":"user","data":{"text":"Review $audit, then report","metadata":{"source":"test"}},"delivery":"steer"}"#).unwrap(),
+    )
+    .unwrap();
+    let input = Runner::prepare_input(&local, input).await.unwrap();
+    assert!(
+        ycoding_schema::stringify_json(&input.encode())
+            .contains(r#""skills":[{"id":"audit","name":"Audit"}]"#)
+    );
+    service
+        .admit(ycoding_core::session::pending::Request {
+            id: session_message::Id::new("msg_mention").unwrap(),
+            session_id: session::Id::new("ses_one").unwrap(),
+            input,
+            event_id: ycoding_schema::event::Id::new("evt_mention").unwrap(),
+            created: 10,
+        })
+        .await
+        .unwrap();
+    let coordinator = Coordinator::new(Arc::new(local));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    assert!(
+        ycoding_schema::stringify_json(&requests.recv().await.unwrap())
+            .contains("Audit all changed boundaries.")
+    );
+    service
+        .admit_input(ycoding_core::session::pending::Request {
+            id: session_message::Id::new("msg_selected").unwrap(),
+            session_id: session::Id::new("ses_one").unwrap(),
+            input: session_pending::Message::decode(
+                &parse_json(r#"{"type":"user","data":{"text":"Use the selected guidance","metadata":{"skills":[{"id":"selected"}]}},"delivery":"steer"}"#).unwrap(),
+            )
+            .unwrap(),
+            event_id: ycoding_schema::event::Id::new("evt_selected").unwrap(),
+            created: 20,
+        })
+        .await
+        .unwrap();
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    assert!(
+        ycoding_schema::stringify_json(&requests.recv().await.unwrap())
+            .contains("Explicit selection instructions.")
+    );
+    let events = event_types(&store);
+    let activations = events
+        .iter()
+        .enumerate()
+        .filter_map(|(index, event)| (event == "session.skill.activated.1").then_some(index))
+        .collect::<Vec<_>>();
+    let promotions = events
+        .iter()
+        .enumerate()
+        .filter_map(|(index, event)| (event == "session.input.promoted.1").then_some(index))
+        .collect::<Vec<_>>();
+    assert_eq!(activations.len(), 2);
+    assert_eq!(promotions.len(), 2);
+    assert!(promotions[0] < activations[0]);
+    assert!(promotions[1] < activations[1]);
+    let messages = service
+        .context(&session::Id::new("ses_one").unwrap())
+        .unwrap();
+    let skills = messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| {
+            matches!(message, session_message::Info::Skill(_)).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let users = messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| {
+            matches!(message, session_message::Info::User(_)).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(skills.len(), 2);
+    assert_eq!(users.len(), 2);
+    assert!(users[0] < skills[0]);
+    assert!(users[1] < skills[1]);
+    let statuses = service
+        .skills(&session::Id::new("ses_one").unwrap(), &[])
+        .unwrap();
+    assert_eq!(statuses.len(), 2);
+    assert!(
+        statuses
+            .iter()
+            .all(|status| status.state == ycoding_schema::session_skill_status::State::Active)
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn steer_batch_promotes_and_activates_each_input_in_admission_order_before_request() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let (endpoint, mut requests, server) = server(vec![TEXT]).await;
+    let local = skill_local(
+        &store,
+        &endpoint,
+        vec![
+            fixture_skill("first-skill", "First", "FIRST-SKILL-INSTRUCTIONS"),
+            fixture_skill("second-skill", "Second", "SECOND-SKILL-INSTRUCTIONS"),
+        ],
+    );
+    admit_selected_skill(
+        &service,
+        "msg_first_steer",
+        "FIRST-USER-INPUT",
+        "steer",
+        "first-skill",
+        10,
+    )
+    .await;
+    admit_selected_skill(
+        &service,
+        "msg_second_steer",
+        "SECOND-USER-INPUT",
+        "steer",
+        "second-skill",
+        20,
+    )
+    .await;
+    let coordinator = Coordinator::new(Arc::new(local));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    let request = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    let positions = [
+        request.find("FIRST-USER-INPUT").unwrap(),
+        request.find("FIRST-SKILL-INSTRUCTIONS").unwrap(),
+        request.find("SECOND-USER-INPUT").unwrap(),
+        request.find("SECOND-SKILL-INSTRUCTIONS").unwrap(),
+    ];
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    assert_eq!(
+        promotion_skill_order(&event_types(&store)),
+        ["user", "skill", "user", "skill"]
+    );
+    assert_eq!(
+        skill_history_order(
+            &service
+                .context(&session::Id::new("ses_one").unwrap())
+                .unwrap()
+        ),
+        [
+            "FIRST-USER-INPUT",
+            r#"<skill_content name="First">
+FIRST-SKILL-INSTRUCTIONS
+Base directory: /skills/first-skill/
+</skill_content>"#,
+            "SECOND-USER-INPUT",
+            r#"<skill_content name="Second">
+SECOND-SKILL-INSTRUCTIONS
+Base directory: /skills/second-skill/
+</skill_content>"#,
+        ]
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn later_steer_skill_failure_keeps_only_that_and_later_inputs_pending() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let local = skill_local(
+        &store,
+        "http://127.0.0.1:1",
+        vec![
+            fixture_skill("first-skill", "First", "FIRST-SKILL-INSTRUCTIONS"),
+            fixture_skill("last-skill", "Last", "LAST-SKILL-INSTRUCTIONS"),
+        ],
+    );
+    admit_selected_skill(
+        &service,
+        "msg_first_steer",
+        "FIRST-USER-INPUT",
+        "steer",
+        "first-skill",
+        10,
+    )
+    .await;
+    admit_selected_skill(
+        &service,
+        "msg_missing_steer",
+        "MISSING-USER-INPUT",
+        "steer",
+        "missing-skill",
+        20,
+    )
+    .await;
+    admit_selected_skill(
+        &service,
+        "msg_last_steer",
+        "LAST-USER-INPUT",
+        "steer",
+        "last-skill",
+        30,
+    )
+    .await;
+    let coordinator = Coordinator::new(Arc::new(local));
+    let error = coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap_err();
+    let ycoding_core::session::run_coordinator::Error::Runner(failure) = error else {
+        panic!("skill failure was not a runner error")
+    };
+    assert_eq!(failure.r#type.as_str(), Some("skill.unavailable"));
+    assert_eq!(
+        failure.message.as_str(),
+        Some("Skill unavailable: missing-skill")
+    );
+    assert_eq!(
+        service
+            .pending_list(&session::Id::new("ses_one").unwrap())
+            .unwrap()
+            .iter()
+            .map(|pending| pending.id.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["msg_missing_steer", "msg_last_steer"]
+    );
+    assert_eq!(
+        promotion_skill_order(&event_types(&store)),
+        ["user", "skill"]
+    );
+    assert_eq!(
+        skill_history_order(
+            &service
+                .context(&session::Id::new("ses_one").unwrap())
+                .unwrap()
+        ),
+        [
+            "FIRST-USER-INPUT",
+            r#"<skill_content name="First">
+FIRST-SKILL-INSTRUCTIONS
+Base directory: /skills/first-skill/
+</skill_content>"#,
+        ]
+    );
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn queued_input_is_promoted_and_activated_before_the_following_steers() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let (endpoint, mut requests, server) = server(vec![TEXT]).await;
+    let local = skill_local(
+        &store,
+        &endpoint,
+        vec![
+            fixture_skill("queued-skill", "Queued", "QUEUED-SKILL-INSTRUCTIONS"),
+            fixture_skill("steer-skill", "Steer", "STEER-SKILL-INSTRUCTIONS"),
+        ],
+    );
+    admit_selected_skill(
+        &service,
+        "msg_queued",
+        "QUEUED-USER-INPUT",
+        "queue",
+        "queued-skill",
+        10,
+    )
+    .await;
+    admit_selected_skill(
+        &service,
+        "msg_steer",
+        "STEER-USER-INPUT",
+        "steer",
+        "steer-skill",
+        20,
+    )
+    .await;
+    let coordinator = Coordinator::new(Arc::new(local));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    let request = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    let positions = [
+        request.find("QUEUED-USER-INPUT").unwrap(),
+        request.find("QUEUED-SKILL-INSTRUCTIONS").unwrap(),
+        request.find("STEER-USER-INPUT").unwrap(),
+        request.find("STEER-SKILL-INSTRUCTIONS").unwrap(),
+    ];
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    assert_eq!(
+        promotion_skill_order(&event_types(&store)),
+        ["user", "skill", "user", "skill"]
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn denied_selected_skills_remain_pending_without_activation_or_provider_requests() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(r#"{"model":{"providerID":"openai","model":"gpt-reasoning"},"providers":{"openai":{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{"apiKey":"fixture","baseURL":"http://127.0.0.1:1"}}}}"#).unwrap()]).unwrap();
+    let mut agent = agent::empty("build".into());
+    agent.permissions = ycoding_schema::permission::Ruleset::decode(
+        &parse_json(r#"[{"action":"skill","resource":"audit","effect":"deny"}]"#).unwrap(),
+    )
+    .unwrap();
+    let local = local_services_with_skill_resolver(
+        &store,
+        catalog,
+        vec![agent],
+        registry(),
+        Arc::new(WallClock),
+        Vec::new(),
+        Some(Arc::new(FixtureSkills(vec![fixture_skill(
+            "audit",
+            "Audit",
+            "Audit all changed boundaries.",
+        )]))),
+    );
+    service
+        .admit( ycoding_core::session::pending::Request {
+            id: session_message::Id::new("msg_denied").unwrap(),
+            session_id: session::Id::new("ses_one").unwrap(),
+            input: session_pending::Message::decode(
+                &parse_json(r#"{"type":"user","data":{"text":"Audit this","metadata":{"skills":[{"id":"audit"}]}},"delivery":"steer"}"#).unwrap(),
+            )
+            .unwrap(),
+            event_id: ycoding_schema::event::Id::new("evt_denied").unwrap(),
+            created: 10,
+        })
+        .await
+        .unwrap();
+    let coordinator = Coordinator::new(Arc::new(local));
+    let error = coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Permission denied: skill (audit)")
+    );
+    assert_eq!(
+        service
+            .pending_list(&session::Id::new("ses_one").unwrap())
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        service
+            .context(&session::Id::new("ses_one").unwrap())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !event_types(&store)
+            .iter()
+            .any(|event| event == "session.skill.activated.1")
+    );
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn unavailable_selected_skills_remain_pending_without_activation_or_provider_requests() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(r#"{"model":{"providerID":"openai","model":"gpt-reasoning"},"providers":{"openai":{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{"apiKey":"fixture","baseURL":"http://127.0.0.1:1"}}}}"#).unwrap()]).unwrap();
+    let local = local_services_with_skill_resolver(
+        &store,
+        catalog,
+        vec![agent::empty("build".into())],
+        registry(),
+        Arc::new(WallClock),
+        Vec::new(),
+        Some(Arc::new(FixtureSkills(Vec::new()))),
+    );
+    service
+        .admit( ycoding_core::session::pending::Request {
+            id: session_message::Id::new("msg_unavailable").unwrap(),
+            session_id: session::Id::new("ses_one").unwrap(),
+            input: session_pending::Message::decode(
+                &parse_json(r#"{"type":"user","data":{"text":"Audit this","metadata":{"skills":[{"id":"missing"}]}},"delivery":"steer"}"#).unwrap(),
+            )
+            .unwrap(),
+            event_id: ycoding_schema::event::Id::new("evt_unavailable").unwrap(),
+            created: 10,
+        })
+        .await
+        .unwrap();
+    let coordinator = Coordinator::new(Arc::new(local));
+    let error = coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("Skill unavailable: missing"));
+    assert_eq!(
+        service
+            .pending_list(&session::Id::new("ses_one").unwrap())
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        service
+            .context(&session::Id::new("ses_one").unwrap())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !event_types(&store)
+            .iter()
+            .any(|event| event == "session.skill.activated.1")
+    );
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn actual_location_runner_streams_one_physical_request_and_projects_a_terminal_assistant() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server(vec![TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry())));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    let request = requests.recv().await.unwrap();
+    assert!(ycoding_schema::stringify_json(&request).contains("Answer the prompt"));
+    let history = service
+        .context(&session::Id::new("ses_one").unwrap())
+        .unwrap();
+    let ycoding_schema::session_message::Info::Assistant(assistant) = history.last().unwrap()
+    else {
+        panic!()
+    };
+    assert!(assistant.time.completed.is_some());
+    let ycoding_schema::session_message::AssistantContent::Text(text) = &assistant.content[0]
+    else {
+        panic!()
+    };
+    assert_eq!(text.text.as_str(), Some("Answer"));
+    assert_eq!(assistant.tokens.as_ref().unwrap().output.get(), 2.0);
+    assert!(
+        service
+            .pending_list(&session::Id::new("ses_one").unwrap())
+            .unwrap()
+            .is_empty()
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn session_instruction_entries_are_admitted_before_promotion_and_rendered_in_the_first_request()
+ {
+    let store = support::store();
+    let service = Service::new(store.client());
+    store
+        .submit(|tx| {
+            ycoding_store::session::InstructionEntryTable::insert(
+                tx,
+                &ycoding_store::session::InstructionEntry {
+                    session_id: "ses_one".into(),
+                    key: "task-context".into(),
+                    value: Some(ycoding_store::session::Document::new(
+                        parse_json(r#"{"requirement":"Use the durable task context"}"#).unwrap(),
+                    )?),
+                    removed: 0,
+                    time_created: 1,
+                    time_updated: 1,
+                },
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server(vec![TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry())));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    let request = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(request.contains("<context key=\\\"task-context\\\">"));
+    assert!(request.contains("Use the durable task context"));
+    let snapshot = store.snapshot().unwrap();
+    let prefix = ycoding_store::tuple_key(&[ycoding_store::KeyPart::String(&"ses_one".into())]);
+    let events = snapshot
+        .index_range::<ycoding_store::session::EventTable>(
+            "event_aggregate_seq_idx",
+            ycoding_store::IndexQuery {
+                lower: std::ops::Bound::Unbounded,
+                upper: std::ops::Bound::Unbounded,
+                prefix: Some(&prefix),
+                order: ycoding_store::IndexOrder::Ascending,
+                after: None,
+                limit: 100,
+            },
+        )
+        .unwrap();
+    let instructions = events
+        .iter()
+        .find(|event| event.record.type_.as_str() == Some("session.instructions.updated.2"))
+        .unwrap();
+    assert!(ycoding_schema::stringify_json(&instructions.record.data).contains("api/task-context"));
+    assert!(
+        !ycoding_schema::stringify_json(&instructions.record.data)
+            .contains("Use the durable task context")
+    );
+    assert!(
+        instructions.record.seq
+            < events
+                .iter()
+                .find(|event| event.record.type_.as_str() == Some("session.input.promoted.1"))
+                .unwrap()
+                .record
+                .seq
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn profile_creation_commits_binding_with_creation_and_dispatches_the_selected_account() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let credentials = credential::Service::new(store.client());
+    let key = |value: &str| {
+        ycoding_store::resources::Secret::new(
+            ycoding_schema::ObjectEncoder::new()
+                .field("type", "key")
+                .field("key", value)
+                .finish(),
+        )
+        .unwrap()
+    };
+    let selected = credentials
+        .create(
+            "cred_create_work".into(),
+            "openai".into(),
+            Some("Work".into()),
+            key("fixture-work-key"),
+            1,
+        )
+        .await
+        .unwrap();
+    credentials
+        .create(
+            "cred_create_default".into(),
+            "openai".into(),
+            Some("Default".into()),
+            key("fixture-default-key"),
+            2,
+        )
+        .await
+        .unwrap();
+    let batches = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = batches.clone();
+    store.client().observe_events(move |events| {
+        let created = events
+            .iter()
+            .filter(|event| event.aggregate_id.as_str() == Some("ses_created"))
+            .map(|event| event.type_.clone())
+            .collect::<Vec<_>>();
+        if !created.is_empty() {
+            observed.lock().unwrap().push(created);
+        }
+        true
+    });
+    let (endpoint, mut requests, server) = server(vec![TEXT]).await;
+    let local = local(&store, &endpoint, registry());
+    let created = local.create(ycoding_store::session::NewEvent {
+        id: "evt_profile_create".into(),
+        aggregate_id: "ses_created".into(),
+        created: 3,
+        type_: "session.created.2".into(),
+        data: parse_json(r#"{"sessionID":"ses_created","projectID":"prj_one","location":{"directory":"/project"},"model":{"providerID":"openai","id":"gpt-reasoning","profile":"Work"},"title":"Profile creation","created":3}"#).unwrap(),
+    }, None).await.unwrap();
+    assert_eq!(
+        *batches.lock().unwrap(),
+        vec![vec![
+            "session.created.2".into(),
+            "session.profile.bound.1".into()
+        ]]
+    );
+    let binding = service.profile_binding(&created.id).unwrap().unwrap();
+    assert_eq!(binding.credential_id.0, *selected.id());
+    service
+        .admit(ycoding_core::session::pending::Request {
+            id: session_message::Id::new("msg_created_input").unwrap(),
+            session_id: created.id.clone(),
+            input: session_pending::Message::decode(
+                &parse_json(
+                    r#"{"type":"user","data":{"text":"Answer the prompt"},"delivery":"steer"}"#,
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            event_id: ycoding_schema::event::Id::new("evt_created_input").unwrap(),
+            created: 4,
+        })
+        .await
+        .unwrap();
+    let coordinator = Coordinator::new(Arc::new(local));
+    coordinator.run(&created.id).await.unwrap();
+    let ycoding_schema::JsonValue::Object(request) = requests.recv().await.unwrap() else {
+        panic!("expected a provider request")
+    };
+    assert_eq!(
+        request.get(&"_testAuthorization".into()),
+        Some(&ycoding_schema::JsonValue::String(
+            "Bearer fixture-work-key".into()
+        ))
+    );
+    assert_eq!(service.profile_binding(&created.id).unwrap(), Some(binding));
+    assert_eq!(
+        ycoding_store::resources::requests(
+            &store.snapshot().unwrap(),
+            created.id.as_lossless(),
+            ycoding_store::IndexOrder::Ascending,
+            None,
+            50
+        )
+        .unwrap()
+        .len(),
+        1
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    credentials.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn named_profile_pins_the_selected_account_and_rejects_replacement_before_another_request() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let credentials = credential::Service::new(store.client());
+    let key = |value: &str| {
+        ycoding_store::resources::Secret::new(
+            ycoding_schema::ObjectEncoder::new()
+                .field("type", "key")
+                .field("key", value)
+                .finish(),
+        )
+        .unwrap()
+    };
+    let selected = credentials
+        .create(
+            "cred_work".into(),
+            "openai".into(),
+            Some("Work".into()),
+            key("fixture-work-key"),
+            1,
+        )
+        .await
+        .unwrap();
+    credentials
+        .create(
+            "cred_personal".into(),
+            "openai".into(),
+            Some("Personal".into()),
+            key("fixture-personal-key"),
+            2,
+        )
+        .await
+        .unwrap();
+    store
+        .submit(|tx| {
+            let mut row = tx
+                .get::<ycoding_store::session::SessionTable>(&ycoding_store::tuple_key(&[
+                    ycoding_store::KeyPart::String(&"ses_one".into()),
+                ]))?
+                .unwrap();
+            row.model = Some(ycoding_store::session::Document::new(
+                parse_json(r#"{"providerID":"openai","id":"gpt-reasoning","profile":"Work"}"#)
+                    .unwrap(),
+            )?);
+            ycoding_store::session::SessionTable::put(tx, &row)
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry())));
+    let id = session::Id::new("ses_one").unwrap();
+    coordinator.run(&id).await.unwrap();
+    let request = requests.recv().await.unwrap();
+    let ycoding_schema::JsonValue::Object(request) = request else {
+        panic!()
+    };
+    assert_eq!(
+        request.get(&"_testAuthorization".into()),
+        Some(&ycoding_schema::JsonValue::String(
+            "Bearer fixture-work-key".into()
+        ))
+    );
+    let row = store
+        .snapshot()
+        .unwrap()
+        .get::<ycoding_store::session::SessionTable>(&ycoding_store::tuple_key(&[
+            ycoding_store::KeyPart::String(&"ses_one".into()),
+        ]))
+        .unwrap()
+        .unwrap();
+    let binding = row.profile_binding.unwrap().domain().unwrap();
+    assert_eq!(binding.credential_id.0, *selected.id());
+    assert_eq!(
+        provider_requests(&store)[0]
+            .connection_identity_digest
+            .as_ref()
+            .and_then(|digest| digest.as_str()),
+        Some(
+            ycoding_core::session::prompt_cache::sha256(&format!(
+                r#"{{"integrationID":"openai","credentialID":"cred_work","accountGeneration":{}}}"#,
+                selected.account_generation()
+            ))
+            .as_str()
+        )
+    );
+    credentials
+        .create(
+            "cred_replacement".into(),
+            "openai".into(),
+            Some("Work".into()),
+            key("fixture-replacement-key"),
+            3,
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(coordinator.run(&id).await, Err(ycoding_core::session::run_coordinator::Error::Runner(error)) if error.r#type.as_str() == Some("model.profile"))
+    );
+    assert!(requests.try_recv().is_err());
+    service.publish(ycoding_store::session::NewEvent { id: "evt_reselected".into(), aggregate_id: "ses_one".into(), created: 4, type_: "session.model.selected.1".into(), data: parse_json(r#"{"sessionID":"ses_one","model":{"providerID":"openai","id":"gpt-reasoning","profile":"Work"}}"#).unwrap() }).await.unwrap();
+    coordinator.run(&id).await.unwrap();
+    let ycoding_schema::JsonValue::Object(request) = requests.recv().await.unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        request.get(&"_testAuthorization".into()),
+        Some(&ycoding_schema::JsonValue::String(
+            "Bearer fixture-replacement-key".into()
+        ))
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    credentials.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn settled_empty_output_gets_one_text_only_recovery_without_an_extra_user_prompt() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server(vec![EMPTY, TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry())));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    let history = service
+        .context(&session::Id::new("ses_one").unwrap())
+        .unwrap();
+    assert_eq!(
+        history
+            .iter()
+            .filter(|message| matches!(
+                message,
+                ycoding_schema::session_message::Info::Assistant(_)
+            ))
+            .count(),
+        2
+    );
+    assert_eq!(
+        history
+            .iter()
+            .filter(|message| matches!(message, ycoding_schema::session_message::Info::User(_)))
+            .count(),
+        1
+    );
+    assert!(
+        !history
+            .iter()
+            .any(|message| matches!(message, ycoding_schema::session_message::Info::Synthetic(_)))
+    );
+    requests.recv().await.unwrap();
+    let recovery = requests.recv().await.unwrap();
+    assert!(!ycoding_schema::stringify_json(&recovery).contains("\"tools\""));
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn repeated_explicit_empty_stop_ends_as_a_silent_reply_without_a_third_step() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server(vec![EMPTY, EMPTY]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry())));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    requests.recv().await.unwrap();
+    requests.recv().await.unwrap();
+    assert!(requests.try_recv().is_err());
+    let history = assistants(&service);
+    assert_eq!(history.len(), 2);
+    for assistant in &history {
+        assert!(assistant.time.completed.is_some());
+        assert!(assistant.error.is_none());
+        assert_eq!(
+            assistant
+                .finish
+                .as_ref()
+                .and_then(|finish| finish.0.as_str()),
+            Some("stop")
+        );
+        assert!(assistant.content.is_empty());
+    }
+    let types = event_types(&store);
+    assert_eq!(
+        types
+            .iter()
+            .filter(|type_| *type_ == "session.step.started.1")
+            .count(),
+        2
+    );
+    assert!(!types.iter().any(|type_| type_ == "session.step.failed.1"));
+    assert!(
+        !types
+            .iter()
+            .any(|type_| type_ == "session.execution.failed.1")
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reasoning_only_unknown_finish_recovers_once_then_closes_incomplete() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server(vec![REASONING_UNKNOWN, REASONING_UNKNOWN]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry())));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    requests.recv().await.unwrap();
+    requests.recv().await.unwrap();
+    assert!(requests.try_recv().is_err());
+    let history = assistants(&service);
+    assert_eq!(history.len(), 2);
+    assert_eq!(
+        history[0]
+            .finish
+            .as_ref()
+            .and_then(|finish| finish.0.as_str()),
+        Some("unknown")
+    );
+    assert!(history[0].error.is_none());
+    assert!(matches!(
+        history[0].content[0],
+        ycoding_schema::session_message::AssistantContent::Reasoning(_)
+    ));
+    let error = history[1].error.as_ref().unwrap();
+    assert_eq!(error.r#type.as_str(), Some("provider.invalid-output"));
+    assert_eq!(
+        error.message.as_str(),
+        Some(
+            "The provider returned no answer after text-only recovery. Retry the request or choose another model."
+        )
+    );
+    assert_eq!(
+        history[1]
+            .finish
+            .as_ref()
+            .and_then(|finish| finish.0.as_str()),
+        Some("error")
+    );
+    assert!(history.iter().all(|assistant| {
+        !assistant.content.iter().any(|part| {
+            matches!(
+                part,
+                ycoding_schema::session_message::AssistantContent::Text(_)
+            )
+        })
+    }));
+    let types = event_types(&store);
+    assert_eq!(
+        types
+            .iter()
+            .filter(|type_| *type_ == "session.step.failed.1")
+            .count(),
+        1
+    );
+    assert!(
+        !types
+            .iter()
+            .any(|type_| type_ == "session.execution.failed.1")
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reasoning_only_ending_answers_through_one_recovery_without_the_unfinished_tail() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server(vec![REASONING_UNKNOWN, TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry())));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    requests.recv().await.unwrap();
+    let recovery = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(!recovery.contains("Thinking"));
+    let history = assistants(&service);
+    assert_eq!(history.len(), 2);
+    assert_eq!(
+        history[0]
+            .finish
+            .as_ref()
+            .and_then(|finish| finish.0.as_str()),
+        Some("unknown")
+    );
+    assert!(matches!(
+        history[1].content[0],
+        ycoding_schema::session_message::AssistantContent::Text(_)
+    ));
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn answerless_recovery_ending_is_omitted_from_later_requests() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) =
+        server(vec![REASONING_STOP, REASONING_RECOVERY, TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry())));
+    let id = session::Id::new("ses_one").unwrap();
+    coordinator.run(&id).await.unwrap();
+    requests.recv().await.unwrap();
+    requests.recv().await.unwrap();
+    let history = assistants(&service);
+    assert_eq!(history.len(), 2);
+    assert!(history[1].error.is_some());
+    admit_input(&service, "later", "Continue", "steer").await;
+    coordinator.run(&id).await.unwrap();
+    let later = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(!later.contains("RecoveryThought"));
+    assert!(later.contains("Continue"));
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn text_only_recovery_keeps_tool_definitions_on_responses_routes() {
+    let store = support::store();
+    initial_context(&store);
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (registry, _registration) = responses_registry(calls.clone());
+    let (endpoint, mut requests, server) = server(vec![RESPONSES_EMPTY, RESPONSES]).await;
+    let coordinator = Coordinator::new(Arc::new(responses_local_with_registry(
+        &store, &endpoint, registry,
+    )));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    let first = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(first.contains("\"name\":\"echo\""), "{first}");
+    let recovery = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(recovery.contains("\"name\":\"echo\""), "{recovery}");
+    assert!(recovery.contains("\"tool_choice\":\"none\""), "{recovery}");
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+const RECOVERY_TOOLS_DISABLED: &str = "Tools are disabled for terminal response recovery";
+const NO_ANSWER_AFTER_RECOVERY: &str = "The provider returned no answer after text-only recovery. Retry the request or choose another model.";
+const PARTIAL_TEXT_TWO_TOOLS: &str = "data: {\"id\":\"tools\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Partial answer\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"tools\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_one\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"value\\\":\\\"one\\\"}\"}},{\"index\":1,\"id\":\"call_two\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"value\\\":\\\"two\\\"}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"tools\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n";
+const WHITESPACE_TEXT: &str = "data: {\"id\":\"blank\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" \\n\\t\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"blank\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+const WHITESPACE_REASONING: &str = "data: {\"id\":\"blank\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\" \\n\\t\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"blank\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+
+fn assert_rejected_recovery_tool(
+    part: &ycoding_schema::session_message::AssistantContent,
+    call_id: &str,
+) {
+    let ycoding_schema::session_message::AssistantContent::Tool(tool) = part else {
+        panic!("expected a tool part, found {part:?}");
+    };
+    assert_eq!(tool.id.as_str(), Some(call_id));
+    assert_eq!(tool.executed, Some(false));
+    let ycoding_schema::session_message::ToolState::Error(state) = &tool.state else {
+        panic!("expected an errored tool, found {:?}", tool.state);
+    };
+    assert_eq!(state.error.message.as_str(), Some(RECOVERY_TOOLS_DISABLED));
+}
+
+fn assert_incomplete_after_recovery(assistant: &ycoding_schema::session_message::Assistant) {
+    let error = assistant.error.as_ref().unwrap();
+    assert_eq!(error.r#type.as_str(), Some("provider.invalid-output"));
+    assert_eq!(error.message.as_str(), Some(NO_ANSWER_AFTER_RECOVERY));
+    assert_eq!(
+        assistant
+            .finish
+            .as_ref()
+            .and_then(|finish| finish.0.as_str()),
+        Some("error")
+    );
+}
+
+#[tokio::test]
+async fn tool_call_during_text_only_recovery_is_rejected_without_execution() {
+    let store = support::store();
+    initial_context(&store);
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (registry, _registration) = responses_registry(calls.clone());
+    let (endpoint, mut requests, server) = server(vec![RESPONSES_EMPTY, RESPONSES_TOOL]).await;
+    let coordinator = Coordinator::new(Arc::new(responses_local_with_registry(
+        &store, &endpoint, registry,
+    )));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    requests.recv().await.unwrap();
+    requests.recv().await.unwrap();
+    assert!(requests.try_recv().is_err());
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let last = last_assistant(&service);
+    assert_incomplete_after_recovery(&last);
+    assert_eq!(last.content.len(), 1);
+    assert_rejected_recovery_tool(&last.content[0], "call_recovery");
+    let types = event_types(&store);
+    assert!(
+        !types
+            .iter()
+            .any(|type_| type_ == "session.execution.failed.1")
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn recovery_tools_and_partial_text_after_an_unknown_ending_settle_incomplete_without_another_request()
+ {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) =
+        server(vec![REASONING_UNKNOWN, PARTIAL_TEXT_TWO_TOOLS]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry())));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    requests.recv().await.unwrap();
+    requests.recv().await.unwrap();
+    assert!(requests.try_recv().is_err());
+    let history = assistants(&service);
+    assert_eq!(history.len(), 2);
+    assert_eq!(
+        history[0]
+            .finish
+            .as_ref()
+            .and_then(|finish| finish.0.as_str()),
+        Some("unknown")
+    );
+    assert_incomplete_after_recovery(&history[1]);
+    assert_eq!(history[1].content.len(), 3);
+    assert!(matches!(
+        &history[1].content[0],
+        ycoding_schema::session_message::AssistantContent::Text(text) if text.text.as_str() == Some("Partial answer")
+    ));
+    assert_rejected_recovery_tool(&history[1].content[1], "call_one");
+    assert_rejected_recovery_tool(&history[1].content[2], "call_two");
+    let types = event_types(&store);
+    assert_eq!(
+        types
+            .iter()
+            .filter(|type_| *type_ == "session.step.failed.1")
+            .count(),
+        1
+    );
+    assert!(
+        !types
+            .iter()
+            .any(|type_| type_ == "session.execution.failed.1")
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn whitespace_only_recovery_output_settles_incomplete_without_a_third_request() {
+    for (reply, reasoning) in [(WHITESPACE_TEXT, false), (WHITESPACE_REASONING, true)] {
+        let store = support::store();
+        let service = Service::new(store.client());
+        admit(&service).await;
+        let (endpoint, mut requests, server) = server(vec![EMPTY, reply]).await;
+        let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry())));
+        coordinator
+            .run(&session::Id::new("ses_one").unwrap())
+            .await
+            .unwrap();
+        requests.recv().await.unwrap();
+        requests.recv().await.unwrap();
+        assert!(requests.try_recv().is_err());
+        let last = last_assistant(&service);
+        assert_incomplete_after_recovery(&last);
+        match (&last.content[..], reasoning) {
+            ([ycoding_schema::session_message::AssistantContent::Reasoning(part)], true) => {
+                assert_eq!(part.text.as_str(), Some(" \n\t"))
+            }
+            ([ycoding_schema::session_message::AssistantContent::Text(part)], false) => {
+                assert_eq!(part.text.as_str(), Some(" \n\t"))
+            }
+            other => panic!("unexpected content {other:?}"),
+        }
+        assert!(
+            !event_types(&store)
+                .iter()
+                .any(|type_| type_ == "session.execution.failed.1")
+        );
+        server.await.unwrap();
+        coordinator.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn explicit_skill_activation_records_its_source_directory() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let (endpoint, mut requests, server) = server(vec![TEXT]).await;
+    let local = skill_local(
+        &store,
+        &endpoint,
+        vec![fixture_skill(
+            "selected",
+            "Selected",
+            "Explicit selection instructions.",
+        )],
+    );
+    admit_selected_skill(&service, "msg_selected", "Use it", "steer", "selected", 5).await;
+    let coordinator = Coordinator::new(Arc::new(local));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    requests.recv().await.unwrap();
+    let history = service
+        .context(&session::Id::new("ses_one").unwrap())
+        .unwrap();
+    let skill = history
+        .iter()
+        .find_map(|message| match message {
+            ycoding_schema::session_message::Info::Skill(skill) => Some(skill),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        skill
+            .directory
+            .as_ref()
+            .and_then(|directory| directory.as_str()),
+        Some("/skills/selected")
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn durable_state_updates_extend_the_request_prefix_without_rewriting_it() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry())));
+    let id = session::Id::new("ses_one").unwrap();
+    coordinator.run(&id).await.unwrap();
+    let first = requests.recv().await.unwrap();
+    store
+        .submit(|tx| {
+            ycoding_store::session::TodoTable::insert(
+                tx,
+                &ycoding_store::session::Todo {
+                    session_id: "ses_one".into(),
+                    content: "Ship the observation".into(),
+                    status: "pending".into(),
+                    priority: "high".into(),
+                    position: 0,
+                    time_created: 1,
+                    time_updated: 1,
+                },
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    admit_input(&service, "changed", "Once more", "steer").await;
+    coordinator.run(&id).await.unwrap();
+    let second = requests.recv().await.unwrap();
+    let messages = |body: &ycoding_schema::JsonValue| {
+        let ycoding_schema::JsonValue::Object(body) = body else {
+            panic!()
+        };
+        match body.get(&"messages".into()) {
+            Some(ycoding_schema::JsonValue::Array(messages)) => messages.clone(),
+            _ => panic!(),
+        }
+    };
+    let first_messages = messages(&first);
+    let second_messages = messages(&second);
+    assert!(second_messages.len() > first_messages.len());
+    assert_eq!(second_messages[..first_messages.len()], first_messages[..]);
+    let states = second_messages
+        .iter()
+        .filter(|message| ycoding_schema::stringify_json(message).contains(STATE_PREFIX))
+        .count();
+    assert_eq!(states, 2);
+    assert!(ycoding_schema::stringify_json(&second).contains("Ship the observation"));
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn registered_tool_settlement_is_reloaded_into_the_next_real_provider_request() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let registry = registry();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let called = calls.clone();
+    let _registration = registry.register(vec![("echo".into(), Arc::new(ycoding_core::tools::registry::DynamicTool::new("Echo input", parse_json(r#"{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}"#).unwrap(), None, None, move |input, context| {
+        let called = called.clone();
+        Box::pin(async move { assert_eq!(context.session_id.as_lossless().as_str(), Some("ses_one")); assert_eq!(context.call_id.as_str(), Some("call_fixture")); called.fetch_add(1, std::sync::atomic::Ordering::SeqCst); Ok(ycoding_ai::llm::ToolOutput { structured: input, content: Vec::new() }) })
+    })))], ycoding_core::tools::registry::Options::direct()).unwrap();
+    let (endpoint, mut requests, server) = server(vec![TOOL, TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry)));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(
+        ycoding_schema::stringify_json(&requests.recv().await.unwrap())
+            .contains("\"name\":\"echo\"")
+    );
+    let continuation = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(continuation.contains("\"role\":\"tool\""));
+    assert!(continuation.contains("observed"));
+    let history = service
+        .context(&session::Id::new("ses_one").unwrap())
+        .unwrap();
+    assert_eq!(
+        history
+            .iter()
+            .filter(|message| matches!(
+                message,
+                ycoding_schema::session_message::Info::Assistant(_)
+            ))
+            .count(),
+        2
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn interruption_joins_owned_tool_work_and_closes_the_step_before_the_waiter_settles() {
+    struct Dropped(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let registry = registry();
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let drop_flag = dropped.clone();
+    let (started, mut begin) = mpsc::unbounded_channel();
+    let _registration = registry
+        .register(
+            vec![(
+                "echo".into(),
+                Arc::new(ycoding_core::tools::registry::DynamicTool::new(
+                    "Wait for cancellation",
+                    parse_json(r#"{"type":"object"}"#).unwrap(),
+                    None,
+                    None,
+                    move |_, context| {
+                        let started = started.clone();
+                        let dropped = drop_flag.clone();
+                        Box::pin(async move {
+                            let _dropped = Dropped(dropped);
+                            started.send(()).unwrap();
+                            context.cancellation.cancelled().await;
+                            Err(ycoding_core::tools::registry::Failure::Cancelled)
+                        })
+                    },
+                )),
+            )],
+            ycoding_core::tools::registry::Options::direct(),
+        )
+        .unwrap();
+    let (endpoint, _requests, server) = server(vec![TOOL]).await;
+    let services = snapshot_services(&store, &endpoint, registry, Arc::new(WallClock));
+    let generation = services.generation.clone();
+    let clock = services.clock.clone();
+    let coordinator = Coordinator::new(Arc::new(Local::new(services)));
+    let running = coordinator.clone();
+    let task =
+        tokio::spawn(async move { running.run(&session::Id::new("ses_one").unwrap()).await });
+    begin.recv().await.unwrap();
+    assert_eq!(
+        activity_number(&generation.snapshot(clock.nanos()), "active"),
+        0.0
+    );
+    coordinator
+        .interrupt(
+            &session::Id::new("ses_one").unwrap(),
+            ycoding_core::session::run_coordinator::InterruptReason::User,
+        )
+        .await
+        .unwrap();
+    assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(matches!(
+        task.await.unwrap(),
+        Err(ycoding_core::session::run_coordinator::Error::Interrupted(
+            _
+        ))
+    ));
+    let history = service
+        .context(&session::Id::new("ses_one").unwrap())
+        .unwrap();
+    let ycoding_schema::session_message::Info::Assistant(assistant) = history.last().unwrap()
+    else {
+        panic!()
+    };
+    assert!(assistant.time.completed.is_some());
+    assert_eq!(
+        assistant.error.as_ref().unwrap().r#type.as_str(),
+        Some("aborted")
+    );
+    assert!(
+        matches!(&assistant.content[0], ycoding_schema::session_message::AssistantContent::Tool(tool) if matches!(tool.state, ycoding_schema::session_message::ToolState::Error(_)))
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+const CACHED_ZERO: &str = "data: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Answer\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":0}}}\n\ndata: [DONE]\n\n";
+const MALFORMED: &str = "data: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Partial\"},\"finish_reason\":null}]}\n\ndata: {not json}\n\n";
+const RATE_LIMITED: &str = r#"{"error":{"message":"rate limited"}}"#;
+const ONE_HOUR: &str = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"role\":\"assistant\",\"usage\":{\"input_tokens\":100,\"cache_creation_input_tokens\":1000,\"cache_read_input_tokens\":0,\"cache_creation\":{\"ephemeral_5m_input_tokens\":600,\"ephemeral_1h_input_tokens\":400},\"output_tokens\":1}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Answer\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":50}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+const IMPOSSIBLE_ONE_HOUR: &str = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_2\",\"role\":\"assistant\",\"usage\":{\"input_tokens\":100,\"cache_creation_input_tokens\":1000,\"cache_read_input_tokens\":0,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":2000},\"output_tokens\":1}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Answer\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":50}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+
+fn count(types: &[String], kind: &str) -> usize {
+    types
+        .iter()
+        .filter(|event| event.strip_suffix(".1") == Some(kind))
+        .count()
+}
+
+fn admitting_echo(
+    store: &ycoding_store::Store,
+    inputs: Vec<(&'static str, &'static str, &'static str)>,
+) -> (Arc<Registry>, Box<dyn std::any::Any>) {
+    let registry = registry();
+    let service = Service::new(store.client());
+    let registration = registry
+        .register(
+            vec![(
+                "echo".into(),
+                Arc::new(ycoding_core::tools::registry::DynamicTool::new(
+                    "Echo input",
+                    parse_json(
+                        r#"{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}"#,
+                    )
+                    .unwrap(),
+                    None,
+                    None,
+                    move |input, _| {
+                        let service = service.clone();
+                        let inputs = inputs.clone();
+                        Box::pin(async move {
+                            for (name, text, delivery) in inputs {
+                                admit_input(&service, name, text, delivery).await;
+                            }
+                            Ok(ycoding_ai::llm::ToolOutput {
+                                structured: input,
+                                content: Vec::new(),
+                            })
+                        })
+                    },
+                )),
+            )],
+            ycoding_core::tools::registry::Options::direct(),
+        )
+        .unwrap();
+    (registry, Box::new(registration))
+}
+
+#[tokio::test]
+async fn provider_cache_diagnostics_separate_unreported_telemetry_from_a_reported_zero() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, _requests, server) = server(vec![TEXT, CACHED_ZERO]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry())));
+    let id = session::Id::new("ses_one").unwrap();
+    coordinator.run(&id).await.unwrap();
+    let first = last_assistant(&service);
+    let diagnostics = first.diagnostics.as_ref().unwrap();
+    let cache = diagnostics.provider_cache.as_ref().unwrap();
+    assert_eq!(cache.mechanism.0.as_str(), Some("openai-prefix-cache"));
+    assert!(!cache.read_reported);
+    assert!(!cache.write_reported);
+    assert_eq!(diagnostics.context_limit.as_ref().unwrap().get(), 128000);
+    assert_eq!(first.tokens.as_ref().unwrap().cache.read.get(), 0.0);
+    admit_input(&service, "second", "Again", "steer").await;
+    coordinator.run(&id).await.unwrap();
+    let cache = last_assistant(&service)
+        .diagnostics
+        .unwrap()
+        .provider_cache
+        .unwrap();
+    assert!(cache.read_reported);
+    assert!(!cache.write_reported);
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn one_hour_cache_writes_bill_at_twice_input_and_impossible_metadata_keeps_the_five_minute_rate()
+ {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, _requests, server) = server(vec![ONE_HOUR, IMPOSSIBLE_ONE_HOUR]).await;
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(r#"{"anthropic":{"id":"anthropic","name":"Anthropic","env":["ANTHROPIC_API_KEY"],"npm":"@ai-sdk/anthropic","api":"https://api.anthropic.com/v1","models":{"claude-priced":{"id":"claude-priced","name":"Claude Priced","release_date":"2026-01-01","attachment":false,"reasoning":false,"temperature":true,"tool_call":true,"limit":{"context":200000,"output":8192},"cost":{"input":3,"output":15,"cache_read":0.3,"cache_write":3.75}}}}}"#).unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"anthropic","model":"claude-priced"}},"providers":{{"anthropic":{{"package":"@ai-sdk/anthropic","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    let coordinator = Coordinator::new(Arc::new(local_services(
+        &store,
+        catalog,
+        vec![agent::empty("build".into())],
+        registry(),
+        Arc::new(WallClock),
+        Vec::new(),
+    )));
+    let id = session::Id::new("ses_one").unwrap();
+    coordinator.run(&id).await.unwrap();
+    let first = last_assistant(&service);
+    let tokens = first.tokens.as_ref().unwrap();
+    assert_eq!(tokens.input.get(), 100.0);
+    assert_eq!(tokens.output.get(), 50.0);
+    assert_eq!(tokens.cache.write.get(), 1000.0);
+    assert!((first.cost.unwrap().get() - 0.0057).abs() < 1e-9);
+    let cache = first.diagnostics.unwrap().provider_cache.unwrap();
+    assert_eq!(cache.mechanism.0.as_str(), Some("anthropic-cache-control"));
+    assert!(cache.read_reported);
+    assert!(cache.write_reported);
+    admit_input(&service, "second", "Again", "steer").await;
+    coordinator.run(&id).await.unwrap();
+    assert!((last_assistant(&service).cost.unwrap().get() - 0.0048).abs() < 1e-9);
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_malformed_provider_stream_after_output_publishes_exactly_one_terminal_step_failure() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, _requests, server) = server(vec![MALFORMED]).await;
+    let services = snapshot_services(&store, &endpoint, registry(), Arc::new(WallClock));
+    let generation = services.generation.clone();
+    let clock = services.clock.clone();
+    let coordinator = Coordinator::new(Arc::new(Local::new(services)));
+    assert!(
+        matches!(coordinator.run(&session::Id::new("ses_one").unwrap()).await, Err(ycoding_core::session::run_coordinator::Error::Runner(error)) if error.r#type.as_str().is_some_and(|kind| kind.starts_with("provider.")))
+    );
+    let types = event_types(&store);
+    assert_eq!(
+        activity_number(&generation.snapshot(clock.nanos()), "active"),
+        0.0
+    );
+    assert_eq!(count(&types, "session.step.started"), 1);
+    assert_eq!(count(&types, "session.step.failed"), 1);
+    assert_eq!(count(&types, "session.step.ended"), 0);
+    assert!(last_assistant(&service).error.is_some());
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn retry_ceiling_stops_after_ten_physical_attempts_with_one_terminal_failure() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server_status(vec![(429, RATE_LIMITED); 10]).await;
+    let delays = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let services = snapshot_services(
+        &store,
+        &endpoint,
+        registry(),
+        Arc::new(ImmediateClock(delays.clone())),
+    );
+    let generation = services.generation.clone();
+    let clock = services.clock.clone();
+    let coordinator = Coordinator::new(Arc::new(Local::new(services)));
+    assert!(
+        matches!(coordinator.run(&session::Id::new("ses_one").unwrap()).await, Err(ycoding_core::session::run_coordinator::Error::Runner(error)) if error.r#type.as_str() == Some("provider.rate-limit"))
+    );
+    assert_eq!(
+        *delays.lock().unwrap(),
+        vec![
+            2000, 4000, 8000, 16000, 32000, 64000, 120000, 120000, 120000
+        ]
+    );
+    for _ in 0..10 {
+        requests.recv().await.unwrap();
+    }
+    assert_eq!(
+        activity_number(&generation.snapshot(clock.nanos()), "active"),
+        0.0
+    );
+    let types = event_types(&store);
+    assert_eq!(count(&types, "session.retry.scheduled"), 9);
+    assert_eq!(count(&types, "session.step.started"), 1);
+    assert_eq!(count(&types, "session.step.failed"), 1);
+    assert_eq!(count(&types, "session.step.ended"), 0);
+    assert!(last_assistant(&service).error.is_some());
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn provider_retry_after_extends_but_never_shortens_the_exponential_backoff() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, _requests, server) = server_headers(vec![
+        (429, "retry-after-ms: 500\r\n", RATE_LIMITED),
+        (429, "", RATE_LIMITED),
+        (429, "retry-after-ms: 1000\r\n", RATE_LIMITED),
+        (429, "retry-after-ms: 30000\r\n", RATE_LIMITED),
+        (200, "", TEXT),
+    ])
+    .await;
+    let delays = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let coordinator = Coordinator::new(Arc::new(local_clock(
+        &store,
+        &endpoint,
+        registry(),
+        Arc::new(ImmediateClock(delays.clone())),
+    )));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(*delays.lock().unwrap(), vec![2000, 4000, 8000, 30000]);
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn interruption_during_retry_backoff_closes_the_step_with_one_aborted_failure() {
+    struct Stalled(mpsc::UnboundedSender<u64>);
+    impl ycoding_core::session::runner::Clock for Stalled {
+        fn now(&self) -> i64 {
+            10
+        }
+        fn sleep(
+            &self,
+            milliseconds: u64,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+            self.0.send(milliseconds).unwrap();
+            Box::pin(std::future::pending())
+        }
+    }
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, _requests, server) = server_status(vec![(429, RATE_LIMITED)]).await;
+    let (slept, mut backoff) = mpsc::unbounded_channel();
+    let services = snapshot_services(&store, &endpoint, registry(), Arc::new(Stalled(slept)));
+    let generation = services.generation.clone();
+    let clock = services.clock.clone();
+    let coordinator = Coordinator::new(Arc::new(Local::new(services)));
+    let running = coordinator.clone();
+    let task =
+        tokio::spawn(async move { running.run(&session::Id::new("ses_one").unwrap()).await });
+    assert_eq!(backoff.recv().await.unwrap(), 2000);
+    assert_eq!(
+        activity_number(&generation.snapshot(clock.nanos()), "active"),
+        0.0
+    );
+    coordinator
+        .interrupt(
+            &session::Id::new("ses_one").unwrap(),
+            ycoding_core::session::run_coordinator::InterruptReason::User,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        task.await.unwrap(),
+        Err(ycoding_core::session::run_coordinator::Error::Interrupted(
+            _
+        ))
+    ));
+    let types = event_types(&store);
+    assert_eq!(count(&types, "session.retry.scheduled"), 1);
+    assert_eq!(count(&types, "session.step.started"), 1);
+    assert_eq!(count(&types, "session.step.failed"), 1);
+    assert_eq!(count(&types, "session.step.ended"), 0);
+    let assistant = last_assistant(&service);
+    assert_eq!(
+        activity_number(&generation.snapshot(clock.nanos()), "active"),
+        0.0
+    );
+    assert!(assistant.time.completed.is_some());
+    assert_eq!(
+        assistant.error.as_ref().unwrap().r#type.as_str(),
+        Some("aborted")
+    );
+    let rows = provider_requests(&store);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].attempts, 1);
+    assert_eq!(rows[0].invalidation.as_str(), Some("provider-not-reported"));
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn steers_promote_at_the_next_step_while_a_queued_input_waits_for_idle() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (registry, _registration) = admitting_echo(
+        &store,
+        vec![
+            ("queued", "Queued question", "queue"),
+            ("steered", "Steered question", "steer"),
+        ],
+    );
+    let (endpoint, mut requests, server) = server(vec![TOOL, TEXT, TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry)));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    let first = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    let second = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    let third = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(!first.contains("Steered question") && !first.contains("Queued question"));
+    assert!(second.contains("Steered question"));
+    assert!(!second.contains("Queued question"));
+    assert!(third.contains("Steered question") && third.contains("Queued question"));
+    assert!(
+        service
+            .pending_list(&session::Id::new("ses_one").unwrap())
+            .unwrap()
+            .is_empty()
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn promoting_new_user_input_resets_the_step_allowance() {
+    let allowance = |steps: i64| {
+        let mut build = agent::empty("build".into());
+        build.steps = Some(ycoding_schema::schema::PositiveInt::new(steps).unwrap());
+        vec![build]
+    };
+    let catalog = |endpoint: &str| {
+        let mut catalog = Catalog::new(
+            models_dev::normalize(
+                &parse_json(include_str!(
+                    "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+                ))
+                .unwrap(),
+            )
+            .unwrap(),
+        );
+        catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+        catalog
+    };
+
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (registry_without_input, _registration) = admitting_echo(&store, Vec::new());
+    let (endpoint, mut requests, server_without_input) = server(vec![TOOL, TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(local_services(
+        &store,
+        catalog(&endpoint),
+        allowance(2),
+        registry_without_input,
+        Arc::new(WallClock),
+        Vec::new(),
+    )));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    assert!(ycoding_schema::stringify_json(&requests.recv().await.unwrap()).contains("\"tools\""));
+    assert!(!ycoding_schema::stringify_json(&requests.recv().await.unwrap()).contains("\"tools\""));
+    server_without_input.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (registry_with_input, _registration) =
+        admitting_echo(&store, vec![("steered", "Steered question", "steer")]);
+    let (endpoint, mut requests, server_with_input) = server(vec![TOOL, TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(local_services(
+        &store,
+        catalog(&endpoint),
+        allowance(2),
+        registry_with_input,
+        Arc::new(WallClock),
+        Vec::new(),
+    )));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    assert!(ycoding_schema::stringify_json(&requests.recv().await.unwrap()).contains("\"tools\""));
+    let second = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(second.contains("Steered question"));
+    assert!(second.contains("\"tools\""));
+    server_with_input.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    drop(service);
+}
+
+#[tokio::test]
+async fn a_failed_step_after_a_settled_answer_keeps_usage_cost_and_cache_diagnostics() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let unanswered = Box::leak(
+        REASONING_UNKNOWN
+            .replace(
+                "\"finish_reason\":\"other\"}]}",
+                "\"finish_reason\":\"other\"}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":0}}",
+            )
+            .into_boxed_str(),
+    );
+    let (endpoint, _requests, server) = server(vec![unanswered, unanswered]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry())));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(count(&event_types(&store), "session.step.failed"), 1);
+    let assistant = last_assistant(&service);
+    assert!(assistant.error.is_some());
+    assert_eq!(assistant.tokens.as_ref().unwrap().input.get(), 5.0);
+    assert!(assistant.cost.is_some());
+    let diagnostics = assistant.diagnostics.as_ref().unwrap();
+    assert_eq!(diagnostics.context_limit.as_ref().unwrap().get(), 128000);
+    assert!(!diagnostics.provider_cache.as_ref().unwrap().read_reported);
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn step_limit_notice_and_its_reset_are_durable_system_observations() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (registry, _registration) = admitting_echo(&store, Vec::new());
+    let mut build = agent::empty("build".into());
+    build.steps = Some(ycoding_schema::schema::PositiveInt::new(2).unwrap());
+    let (endpoint, mut requests, server) = server(vec![TOOL, TEXT, TEXT]).await;
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    let coordinator = Coordinator::new(Arc::new(local_services(
+        &store,
+        catalog,
+        vec![build],
+        registry,
+        Arc::new(WallClock),
+        Vec::new(),
+    )));
+    let id = session::Id::new("ses_one").unwrap();
+    coordinator.run(&id).await.unwrap();
+    let first = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    let limited = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(!first.contains("MAXIMUM STEPS REACHED"));
+    assert!(limited.contains("CRITICAL - MAXIMUM STEPS REACHED"));
+    assert!(!limited.contains("\"tools\""));
+    admit_input(&service, "again", "Again", "steer").await;
+    coordinator.run(&id).await.unwrap();
+    let reset = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(reset.contains("CRITICAL - MAXIMUM STEPS REACHED"));
+    assert!(
+        reset.contains("The maximum-step constraint from an earlier user input no longer applies")
+    );
+    assert!(reset.contains("\"tools\""));
+    assert_eq!(
+        observed(&store)
+            .iter()
+            .filter(|source| *source == "step-limit")
+            .count(),
+        2
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+const CACHED_HIT: &str = "data: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Answer\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":2}}}\n\ndata: [DONE]\n\n";
+
+fn provider_requests(store: &ycoding_store::Store) -> Vec<ycoding_store::resources::Request> {
+    ycoding_store::resources::requests(
+        &store.snapshot().unwrap(),
+        &"ses_one".into(),
+        ycoding_store::IndexOrder::Ascending,
+        None,
+        50,
+    )
+    .unwrap()
+    .into_iter()
+    .map(|entry| entry.record)
+    .collect()
+}
+
+#[tokio::test]
+async fn each_logical_step_records_one_provider_request_with_attempts_cache_and_usage() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, _requests, server) = server_status(vec![
+        (429, RATE_LIMITED),
+        (200, CACHED_ZERO),
+        (200, CACHED_HIT),
+    ])
+    .await;
+    let delays = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let coordinator = Coordinator::new(Arc::new(local_clock(
+        &store,
+        &endpoint,
+        registry(),
+        Arc::new(ImmediateClock(delays)),
+    )));
+    let id = session::Id::new("ses_one").unwrap();
+    coordinator.run(&id).await.unwrap();
+    let first_assistant = last_assistant(&service);
+    admit_input(&service, "second", "Again", "steer").await;
+    coordinator.run(&id).await.unwrap();
+    let rows = provider_requests(&store);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].request, 1);
+    assert_eq!(rows[0].attempts, 2);
+    assert_eq!(rows[0].source.as_str(), Some("step"));
+    assert_eq!(rows[0].route_id.as_str(), Some("openai-compatible-chat"));
+    assert_eq!(rows[0].invalidation.as_str(), Some("first-request"));
+    assert_eq!(rows[0].continuation.as_str(), Some("full"));
+    assert_eq!(rows[0].cache_read_reported, Some(1));
+    assert_eq!(
+        rows[0]
+            .assistant_message_id
+            .as_ref()
+            .and_then(|id| id.as_str()),
+        Some(first_assistant.id.as_lossless().as_str().unwrap())
+    );
+    for digest in [
+        rows[0].connection_identity_digest.as_ref().unwrap(),
+        &rows[0].prompt_cache_key,
+        &rows[0].system_digest,
+        &rows[0].tool_digest,
+    ] {
+        assert_eq!(digest.as_str().unwrap().len(), 64);
+    }
+    assert_eq!(rows[1].request, 2);
+    assert_eq!(rows[1].attempts, 1);
+    assert_eq!(rows[1].invalidation.as_str(), Some("stable-hit"));
+    assert_eq!(rows[1].prompt_cache_key, rows[0].prompt_cache_key);
+    assert_eq!(rows[1].tokens.domain().unwrap().cache.read.get(), 2.0);
+    let usage = store
+        .snapshot()
+        .unwrap()
+        .get::<ycoding_store::resources::UsageTable>(&ycoding_store::tuple_key(&[
+            ycoding_store::KeyPart::String(&"ses_one".into()),
+            ycoding_store::KeyPart::String(&r#"["openai","gpt-reasoning",null,null]"#.into()),
+        ]))
+        .unwrap()
+        .unwrap();
+    assert_eq!((usage.logical, usage.physical), (2, 3));
+    assert_eq!(usage.cache_read, 2);
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_step_that_fails_before_settlement_records_a_not_reported_zero_usage_request() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, _requests, server) = server(vec![MALFORMED]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry())));
+    assert!(
+        coordinator
+            .run(&session::Id::new("ses_one").unwrap())
+            .await
+            .is_err()
+    );
+    let rows = provider_requests(&store);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].invalidation.as_str(), Some("provider-not-reported"));
+    assert_eq!(rows[0].cache_read_reported, None);
+    assert_eq!(rows[0].cost, None);
+    assert_eq!(rows[0].tokens.domain().unwrap().input.get(), 0.0);
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+const THINKING: &str = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_t\",\"role\":\"assistant\",\"usage\":{\"input_tokens\":10,\"output_tokens\":1}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"Plan the answer\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"sig_fixture\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"Answer\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+
+fn anthropic_local(store: &ycoding_store::Store, endpoint: &str, api_key: &str) -> Local {
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(r#"{"anthropic":{"id":"anthropic","name":"Anthropic","env":["ANTHROPIC_API_KEY"],"npm":"@ai-sdk/anthropic","api":"https://api.anthropic.com/v1","models":{"claude-priced":{"id":"claude-priced","name":"Claude Priced","release_date":"2026-01-01","attachment":false,"reasoning":false,"temperature":true,"tool_call":true,"limit":{"context":200000,"output":8192}}}}}"#).unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"anthropic","model":"claude-priced"}},"providers":{{"anthropic":{{"package":"@ai-sdk/anthropic","settings":{{"apiKey":"{api_key}","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    local_services(
+        store,
+        catalog,
+        vec![agent::empty("build".into())],
+        registry(),
+        Arc::new(WallClock),
+        Vec::new(),
+    )
+}
+
+#[tokio::test]
+async fn provider_executed_error_result_settles_the_tool_and_step_and_replays() {
+    const ERROR: &str = concat!(
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"server_tool_use\",\"id\":\"search_1\",\"name\":\"web_search\",\"input\":{}}}\n\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"web_search_tool_result\",\"tool_use_id\":\"search_1\",\"content\":{\"type\":\"web_search_tool_result_error\",\"error_code\":\"max_uses_exceeded\"}}}\n\n",
+        "data: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"text\",\"text\":\"Search unavailable\"}}\n\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":2}\n\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server(vec![ERROR, ONE_HOUR]).await;
+    let coordinator = Coordinator::new(Arc::new(anthropic_local(&store, &endpoint, "fixture")));
+    let id = session::Id::new("ses_one").unwrap();
+    let result = coordinator.run(&id).await;
+    assert!(
+        result.is_ok(),
+        "provider tool error must not fail the Step: {result:?}"
+    );
+    let assistant = last_assistant(&service);
+    assert!(assistant.error.is_none());
+    assert!(assistant.time.completed.is_some());
+    let session_message::AssistantContent::Tool(tool) = &assistant.content[0] else {
+        panic!("missing provider tool")
+    };
+    assert_eq!(tool.executed, Some(true));
+    assert!(tool.time.completed.is_some());
+    assert_eq!(
+        tool.provider_result_state.as_ref().unwrap().encode(),
+        parse_json(r#"{"blockType":"web_search_tool_result"}"#).unwrap()
+    );
+    let session_message::ToolState::Error(failed) = &tool.state else {
+        panic!("provider error was not projected as a failed tool")
+    };
+    let payload =
+        parse_json(r#"{"type":"web_search_tool_result_error","error_code":"max_uses_exceeded"}"#)
+            .unwrap();
+    assert_eq!(failed.result.as_ref(), Some(&payload));
+    assert_eq!(failed.error.r#type.as_str(), Some("tool.execution"));
+    assert_eq!(
+        failed.error.message,
+        ycoding_schema::stringify_json(&payload).into()
+    );
+    let types = event_types(&store);
+    assert_eq!(
+        types
+            .iter()
+            .filter(|kind| kind.as_str() == "session.tool.failed.1")
+            .count(),
+        1
+    );
+    assert_eq!(
+        types
+            .iter()
+            .filter(|kind| kind.as_str() == "session.step.ended.1")
+            .count(),
+        1
+    );
+    assert!(!types.iter().any(|kind| matches!(
+        kind.as_str(),
+        "session.step.failed.1" | "session.tool.success.1"
+    )));
+    requests.recv().await.unwrap();
+    admit_input(&service, "retry_search", "Continue", "steer").await;
+    coordinator.run(&id).await.unwrap();
+    let ycoding_schema::JsonValue::Object(replay) = requests.recv().await.unwrap() else {
+        panic!("request is not an object")
+    };
+    let Some(ycoding_schema::JsonValue::Array(messages)) = replay.get(&"messages".into()) else {
+        panic!("missing replay messages")
+    };
+    let result = messages
+        .iter()
+        .filter_map(|message| match message {
+            ycoding_schema::JsonValue::Object(message) => message.get(&"content".into()),
+            _ => None,
+        })
+        .filter_map(|content| match content {
+            ycoding_schema::JsonValue::Array(content) => Some(content),
+            _ => None,
+        })
+        .flatten()
+        .find(|part| match part {
+            ycoding_schema::JsonValue::Object(part) => {
+                part.get(&"tool_use_id".into())
+                    == Some(&ycoding_schema::JsonValue::String("search_1".into()))
+            }
+            _ => false,
+        });
+    assert_eq!(
+        result,
+        Some(&parse_json(r#"{"type":"web_search_tool_result","tool_use_id":"search_1","content":{"type":"web_search_tool_result_error","error_code":"max_uses_exceeded"}}"#).unwrap())
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn captured_reasoning_state_replays_only_for_the_same_model_and_account() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server(vec![THINKING, ONE_HOUR, ONE_HOUR]).await;
+    let id = session::Id::new("ses_one").unwrap();
+    let same = Coordinator::new(Arc::new(anthropic_local(&store, &endpoint, "fixture")));
+    same.run(&id).await.unwrap();
+    let assistant = last_assistant(&service);
+    let ycoding_schema::session_message::AssistantContent::Reasoning(reasoning) =
+        &assistant.content[0]
+    else {
+        panic!()
+    };
+    assert_eq!(
+        reasoning.state.as_ref().unwrap().get(&"signature".into()),
+        Some(&ycoding_schema::JsonValue::String("sig_fixture".into()))
+    );
+    requests.recv().await.unwrap();
+    admit_input(&service, "second", "Again", "steer").await;
+    same.run(&id).await.unwrap();
+    let replayed = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(replayed.contains("\"type\":\"thinking\""));
+    assert!(replayed.contains("\"signature\":\"sig_fixture\""));
+    same.shutdown().await.unwrap();
+
+    let other = Coordinator::new(Arc::new(anthropic_local(&store, &endpoint, "rotated")));
+    admit_input(&service, "third", "Once more", "steer").await;
+    other.run(&id).await.unwrap();
+    let refused = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(!refused.contains("sig_fixture"));
+    assert!(!refused.contains("\"type\":\"thinking\""));
+    assert!(refused.contains("Plan the answer"));
+    server.await.unwrap();
+    other.shutdown().await.unwrap();
+}
+
+const RESPONSES: &str = include_str!("../../ai/tests/fixtures/openai-responses-reasoning.sse");
+const RESPONSE_ID: &str = "resp_05f7e55dc1d2d743016a1235e5bb3c8193b4c0e30fa316700c";
+
+fn responses_local(
+    store: &ycoding_store::Store,
+    endpoint: &str,
+    api_key: &str,
+    model: &str,
+) -> Local {
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(&format!(r#"{{"openai":{{"id":"openai","name":"OpenAI","env":["OPENAI_API_KEY"],"npm":"@ai-sdk/openai","api":"https://api.openai.com/v1","models":{{"{model}":{{"id":"{model}","name":"Responses Model","release_date":"2026-01-01","attachment":false,"reasoning":false,"temperature":true,"tool_call":true,"limit":{{"context":128000,"output":8192}}}}}}}}}}"#)).unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"{model}"}},"providers":{{"openai":{{"package":"@ai-sdk/openai","settings":{{"apiKey":"{api_key}","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    local_services(
+        store,
+        catalog,
+        vec![agent::empty("build".into())],
+        registry(),
+        Arc::new(WallClock),
+        Vec::new(),
+    )
+}
+
+const RESPONSES_EMPTY: &str = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0,\"total_tokens\":1}}}\n\n";
+const RESPONSES_TOOL: &str = "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"fc_recovery\",\"call_id\":\"call_recovery\",\"type\":\"function_call\",\"name\":\"echo\",\"arguments\":\"\",\"status\":\"in_progress\"}}\n\ndata: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_recovery\",\"delta\":\"{\\\"value\\\":\\\"must-not-run\\\"}\"}\n\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"fc_recovery\",\"call_id\":\"call_recovery\",\"type\":\"function_call\",\"name\":\"echo\",\"arguments\":\"{\\\"value\\\":\\\"must-not-run\\\"}\",\"status\":\"completed\"}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_tool\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n";
+
+fn responses_registry(
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+) -> (Arc<Registry>, ycoding_core::tools::registry::Registration) {
+    let registry = registry();
+    let registration = registry.register(vec![("echo".into(), Arc::new(ycoding_core::tools::registry::DynamicTool::new("Echo input", parse_json(r#"{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}"#).unwrap(), None, None, move |input, _context| {
+        let calls = calls.clone();
+        Box::pin(async move { calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst); Ok(ycoding_ai::llm::ToolOutput { structured: input, content: Vec::new() }) })
+    })))], ycoding_core::tools::registry::Options::direct()).unwrap();
+    (registry, registration)
+}
+
+fn responses_local_with_registry(
+    store: &ycoding_store::Store,
+    endpoint: &str,
+    registry: Arc<Registry>,
+) -> Local {
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(r#"{"openai":{"id":"openai","name":"OpenAI","env":["OPENAI_API_KEY"],"npm":"@ai-sdk/openai","api":"https://api.openai.com/v1","models":{"gpt-5.5":{"id":"gpt-5.5","name":"Responses Model","release_date":"2026-01-01","attachment":false,"reasoning":false,"temperature":true,"tool_call":true,"limit":{"context":128000,"output":8192}}}}}"#).unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-5.5"}},"providers":{{"openai":{{"package":"@ai-sdk/openai","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    local_services(
+        store,
+        catalog,
+        vec![agent::empty("build".into())],
+        registry,
+        Arc::new(WallClock),
+        Vec::new(),
+    )
+}
+
+fn initial_context(store: &ycoding_store::Store) {
+    store
+        .submit(|tx| {
+            ycoding_store::session::RevisionTable::insert(
+                tx,
+                &ycoding_store::session::Revision {
+                    session_id: "ses_one".into(),
+                    revision: 0,
+                    parent_revision: None,
+                    manifest_digest: None,
+                    covered_through_message_id: None,
+                    covered_through_seq: None,
+                    activation_event_id: None,
+                    activation_sequence: None,
+                    time_created: 0,
+                },
+            )?;
+            ycoding_store::session::ContextStateTable::insert(
+                tx,
+                &ycoding_store::session::ContextState {
+                    session_id: "ses_one".into(),
+                    status: "active".into(),
+                    revision: 0,
+                    manifest_digest: None,
+                    covered_through_message_id: None,
+                    covered_through_seq: None,
+                    activated_event_id: None,
+                    time_activated: None,
+                    error_code: None,
+                },
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+}
+
+fn wire_key(body: &str) -> String {
+    let marker = "\"prompt_cache_key\":\"";
+    let start = body.find(marker).unwrap() + marker.len();
+    body[start..start + 64].to_string()
+}
+
+#[tokio::test]
+async fn responses_continuation_reuses_the_stored_response_only_for_the_same_account() {
+    let store = support::store();
+    initial_context(&store);
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server(vec![RESPONSES, RESPONSES, RESPONSES]).await;
+    let id = session::Id::new("ses_one").unwrap();
+    let same = Coordinator::new(Arc::new(responses_local(
+        &store, &endpoint, "fixture", "gpt-5.5",
+    )));
+    same.run(&id).await.unwrap();
+    let first = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(!first.contains("previous_response_id"));
+    assert!(first.contains("\"store\":true"));
+    admit_input(&service, "second", "Again", "steer").await;
+    same.run(&id).await.unwrap();
+    let continued = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(continued.contains(&format!("\"previous_response_id\":\"{RESPONSE_ID}\"")));
+    assert!(continued.contains("Again"));
+    assert!(!continued.contains("Answer the prompt"));
+    same.shutdown().await.unwrap();
+
+    let other = Coordinator::new(Arc::new(responses_local(
+        &store, &endpoint, "rotated", "gpt-5.5",
+    )));
+    admit_input(&service, "third", "Once more", "steer").await;
+    other.run(&id).await.unwrap();
+    let refused = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(!refused.contains("previous_response_id"));
+    assert!(refused.contains("Answer the prompt"));
+    assert!(refused.contains("Once more"));
+    let rows = provider_requests(&store);
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.continuation.as_str().unwrap().to_string())
+            .collect::<Vec<_>>(),
+        vec!["full", "continued", "full"]
+    );
+    assert_ne!(
+        wire_key(&first),
+        rows[0].prompt_cache_key.as_str().unwrap().to_string()
+    );
+    assert_eq!(wire_key(&first), wire_key(&continued));
+    server.await.unwrap();
+    other.shutdown().await.unwrap();
+}
+
+fn stateless_local(store: &ycoding_store::Store, endpoint: &str, api_key: &str) -> Local {
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(r#"{"llama":{"id":"llama","name":"Llama","env":["LLAMA_API_KEY"],"npm":"@ai-sdk/openai-compatible","api":"https://api.llama.com/v1","models":{"gpt-5.5":{"id":"gpt-5.5","name":"Responses Model","release_date":"2026-01-01","attachment":false,"reasoning":false,"temperature":true,"tool_call":true,"limit":{"context":128000,"output":8192}}}}}"#).unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"llama","model":"gpt-5.5"}},"providers":{{"llama":{{"package":"@ycoding-ai/ai/providers/openai-compatible/responses","settings":{{"apiKey":"{api_key}","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    local_services(
+        store,
+        catalog,
+        vec![agent::empty("build".into())],
+        registry(),
+        Arc::new(WallClock),
+        Vec::new(),
+    )
+}
+
+fn with_compaction_item() -> &'static str {
+    let item = "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"compaction\",\"id\":\"cmp_stream\",\"encrypted_content\":\"OPAQUE-ENCRYPTED\"}}\n\n";
+    let at = RESPONSES.find("event: response.output_item.added").unwrap();
+    Box::leak(format!("{}{item}{}", &RESPONSES[..at], &RESPONSES[at..]).into_boxed_str())
+}
+
+fn reasoning_ended(store: &ycoding_store::Store) -> Vec<String> {
+    let prefix = ycoding_store::tuple_key(&[ycoding_store::KeyPart::String(&"ses_one".into())]);
+    store
+        .snapshot()
+        .unwrap()
+        .index_range::<ycoding_store::session::EventTable>(
+            "event_aggregate_seq_idx",
+            ycoding_store::IndexQuery {
+                lower: std::ops::Bound::Unbounded,
+                upper: std::ops::Bound::Unbounded,
+                prefix: Some(&prefix),
+                order: ycoding_store::IndexOrder::Ascending,
+                after: None,
+                limit: 1000,
+            },
+        )
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.record.type_.as_str() == Some("session.reasoning.ended.1"))
+        .map(|event| ycoding_schema::stringify_json(&event.record.data))
+        .collect()
+}
+
+#[tokio::test]
+async fn an_opaque_compaction_item_is_captured_redacted_and_replayed_only_for_the_same_account() {
+    let store = support::store();
+    initial_context(&store);
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) =
+        server(vec![with_compaction_item(), RESPONSES, RESPONSES]).await;
+    let id = session::Id::new("ses_one").unwrap();
+    let same = Coordinator::new(Arc::new(stateless_local(&store, &endpoint, "fixture")));
+    same.run(&id).await.unwrap();
+    let first = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(!first.contains("OPAQUE-ENCRYPTED"));
+
+    let ended = reasoning_ended(&store);
+    assert_eq!(ended.len(), 2);
+    assert!(
+        ended
+            .iter()
+            .all(|event| !event.contains("OPAQUE-ENCRYPTED"))
+    );
+    assert!(
+        ended
+            .iter()
+            .all(|event| !event.contains("opaqueCompactionItem"))
+    );
+
+    let snapshot = store.snapshot().unwrap();
+    let links = snapshot
+        .index_range::<ycoding_store::resources::StateLinkTable>(
+            "session_provider_state_link_revision_idx",
+            ycoding_store::IndexQuery {
+                lower: std::ops::Bound::Unbounded,
+                upper: std::ops::Bound::Unbounded,
+                prefix: Some(&ycoding_store::tuple_key(&[
+                    ycoding_store::KeyPart::String(&"ses_one".into()),
+                ])),
+                order: ycoding_store::IndexOrder::Ascending,
+                after: None,
+                limit: 10,
+            },
+        )
+        .unwrap();
+    let [link] = links.as_slice() else {
+        panic!("expected exactly one captured provider state link")
+    };
+    let link = &link.record;
+    assert_eq!(link.part_ordinal, 0);
+    assert_eq!(link.part_kind.as_str(), Some("reasoning"));
+    assert_eq!(link.provider.as_str(), Some("llama"));
+    assert_eq!(link.model_id.as_str(), Some("gpt-5.5"));
+    assert_eq!(link.context_revision, 0);
+    assert_eq!(
+        ycoding_schema::JsonValue::String(link.message_id.clone()),
+        ycoding_schema::DomainEncode::encode(&last_assistant(&service).id)
+    );
+    let blob = snapshot
+        .get::<ycoding_store::resources::StateBlobTable>(&ycoding_store::tuple_key(&[
+            ycoding_store::KeyPart::String(&link.blob_digest),
+        ]))
+        .unwrap()
+        .unwrap();
+    assert_eq!(blob.item_type.as_str(), Some("compaction"));
+    let item = parse_json(
+        r#"{"type":"compaction","id":"cmp_stream","encrypted_content":"OPAQUE-ENCRYPTED"}"#,
+    )
+    .unwrap();
+    assert_eq!(blob.content.value(), &item);
+    assert_eq!(
+        link.blob_digest.as_str(),
+        Some(
+            ycoding_core::session::prompt_cache::sha256(
+                &ycoding_core::session::prompt_cache::canonical_json(&item)
+            )
+            .as_str()
+        )
+    );
+
+    admit_input(&service, "second", "Again", "steer").await;
+    same.run(&id).await.unwrap();
+    let replayed = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(replayed.contains("\"store\":false"));
+    assert!(replayed.contains(
+        "{\"type\":\"compaction\",\"id\":\"cmp_stream\",\"encrypted_content\":\"OPAQUE-ENCRYPTED\"}"
+    ));
+    same.shutdown().await.unwrap();
+
+    let other = Coordinator::new(Arc::new(stateless_local(&store, &endpoint, "rotated")));
+    admit_input(&service, "third", "Once more", "steer").await;
+    other.run(&id).await.unwrap();
+    let refused = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(refused.contains("Once more"));
+    assert!(!refused.contains("OPAQUE-ENCRYPTED"));
+    server.await.unwrap();
+    other.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn prompt_cache_options_follow_the_model_family_and_anthropic_policy() {
+    let store = support::store();
+    initial_context(&store);
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server(vec![RESPONSES, RESPONSES, ONE_HOUR]).await;
+    let modern = Coordinator::new(Arc::new(responses_local(
+        &store, &endpoint, "fixture", "gpt-5.6",
+    )));
+    modern
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    let modern_body = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(
+        modern_body.contains("\"prompt_cache_options\":{\"mode\":\"implicit\",\"ttl\":\"30m\"}")
+    );
+    assert!(!modern_body.contains("prompt_cache_retention"));
+    modern.shutdown().await.unwrap();
+
+    let store = support::store();
+    initial_context(&store);
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let legacy = Coordinator::new(Arc::new(responses_local(
+        &store, &endpoint, "fixture", "gpt-5.5",
+    )));
+    legacy
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    let legacy_body = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(legacy_body.contains("\"prompt_cache_key\""));
+    assert!(!legacy_body.contains("prompt_cache_options"));
+    legacy.shutdown().await.unwrap();
+
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let anthropic = Coordinator::new(Arc::new(anthropic_local(&store, &endpoint, "fixture")));
+    anthropic
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    let anthropic_body = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(anthropic_body.contains("\"cache_control\":{\"type\":\"ephemeral\"}"));
+    server.await.unwrap();
+    anthropic.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn request_latency_requires_consent_while_generation_counts_are_always_reported() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, _requests, server) = server(vec![TEXT, TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry())));
+    let id = session::Id::new("ses_one").unwrap();
+    coordinator.run(&id).await.unwrap();
+    store
+        .submit(|tx| {
+            ycoding_store::resources::ConsentTable::insert(
+                tx,
+                &ycoding_store::resources::Consent {
+                    id: 1,
+                    enabled: 1,
+                    notice_version: 1,
+                    decided_at: 1,
+                },
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    admit_input(&service, "second", "Again", "steer").await;
+    coordinator.run(&id).await.unwrap();
+    let rows = provider_requests(&store);
+    let unconsented = rows[0].timing.as_ref().unwrap().domain().unwrap();
+    assert!(unconsented.first_output_ms.is_none());
+    assert!(unconsented.total_ms.is_none());
+    assert!(unconsented.retry_wait_ms.is_none());
+    assert_eq!(unconsented.generated_tokens.unwrap().get(), 2);
+    assert!(unconsented.observed_generation_duration_ns.unwrap().get() > 0);
+    let timing = rows[1].timing.as_ref().unwrap().domain().unwrap();
+    assert!(timing.first_output_ms.is_some());
+    assert!(timing.total_ms.is_some());
+    assert_eq!(timing.retry_wait_ms.unwrap().get(), 0);
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+const INVALID_PREVIOUS: &str = r#"{"error":{"message":"Previous response with id 'resp_x' not found.","type":"invalid_request_error","param":"previous_response_id","code":"previous_response_not_found"}}"#;
+
+struct SnapshotProject(std::path::PathBuf);
+
+impl SnapshotProject {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "ycoding-step-snapshots-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(path.join("project")).unwrap();
+        std::fs::write(path.join("project/tracked.txt"), "original\n").unwrap();
+        std::fs::write(path.join("project/.gitignore"), "ignored.txt\n").unwrap();
+        for args in [vec!["init"], vec!["add", "."]] {
+            assert!(
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(path.join("project"))
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        }
+        Self(path)
+    }
+
+    fn snapshots(&self) -> Arc<ycoding_core::session::snapshot::GitSnapshots> {
+        Arc::new(ycoding_core::session::snapshot::GitSnapshots::new(
+            Arc::new(ycoding_core::platform::git::Service::new(16 * 1024 * 1024)),
+            self.0.join("data"),
+            "prj_one".into(),
+            self.0.join("project"),
+            self.0.join("project"),
+            true,
+        ))
+    }
+}
+
+impl Drop for SnapshotProject {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).unwrap();
+    }
+}
+
+fn snapshot_services(
+    store: &ycoding_store::Store,
+    endpoint: &str,
+    tools: Arc<Registry>,
+    clock: Arc<dyn ycoding_core::session::runner::Clock>,
+) -> Services {
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    fixture_services(
+        store,
+        catalog,
+        vec![agent::empty("build".into())],
+        tools,
+        clock,
+        Vec::new(),
+    )
+}
+
+#[tokio::test]
+async fn runner_snapshots_restore_shell_and_external_tool_edits_through_revert_clear_and_commit() {
+    use ycoding_core::session::revert;
+    let project = SnapshotProject::new();
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let tools = registry();
+    let directory = project.0.join("project");
+    let _registration = tools.register(vec![("echo".into(), Arc::new(ycoding_core::tools::registry::DynamicTool::new("External edit", parse_json(r#"{"type":"object"}"#).unwrap(), None, None, move |_, _| {
+        let directory = directory.clone();
+        Box::pin(async move {
+            assert!(std::process::Command::new("/bin/sh").args(["-c", "printf 'shell edit\\n' > tracked.txt; printf 'created\\n' > added.txt; printf 'ignored\\n' > ignored.txt"]).current_dir(&directory).output().unwrap().status.success());
+            std::fs::write(directory.join("external.txt"), "external edit\n").unwrap();
+            Ok(ycoding_ai::llm::ToolOutput { structured: ycoding_schema::JsonValue::Null, content: Vec::new() })
+        })
+    })))], ycoding_core::tools::registry::Options::direct()).unwrap();
+    let (endpoint, _requests, server) = server(vec![TOOL, TEXT]).await;
+    let snapshots = project.snapshots();
+    let mut services = snapshot_services(&store, &endpoint, tools, Arc::new(WallClock));
+    services.snapshots = Some(snapshots.clone());
+    let coordinator = Coordinator::new(Arc::new(Local::new(services)));
+    let id = session::Id::new("ses_one").unwrap();
+    coordinator.run(&id).await.unwrap();
+    let assistants = service
+        .context(&id)
+        .unwrap()
+        .into_iter()
+        .filter_map(|message| match message {
+            session_message::Info::Assistant(assistant) => Some(assistant),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(assistants.len(), 2);
+    let captured = assistants[0].snapshot.as_ref().unwrap();
+    assert!(captured.start.is_some());
+    assert!(captured.end.is_some());
+    assert_eq!(
+        captured
+            .files
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|file| file.as_lossless().to_utf8().unwrap())
+            .collect::<Vec<_>>(),
+        ["added.txt", "external.txt", "tracked.txt"]
+    );
+    assert!(
+        assistants[1]
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .files
+            .as_ref()
+            .unwrap()
+            .is_empty()
+    );
+    let boundary = session_message::Id::new("msg_input").unwrap();
+    let plan = revert::plan(&store.snapshot().unwrap(), &id, &boundary).unwrap();
+    assert_eq!(plan.len(), 3);
+    let session = service.get(&id).unwrap().unwrap();
+    revert::stage(&service, snapshots.as_ref(), &session, &boundary, true, 3)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(project.0.join("project/tracked.txt")).unwrap(),
+        "original\n"
+    );
+    assert!(!project.0.join("project/added.txt").exists());
+    assert!(!project.0.join("project/external.txt").exists());
+    assert!(project.0.join("project/ignored.txt").exists());
+    revert::clear(
+        &service,
+        snapshots.as_ref(),
+        &service.get(&id).unwrap().unwrap(),
+        4,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(project.0.join("project/tracked.txt")).unwrap(),
+        "shell edit\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.0.join("project/external.txt")).unwrap(),
+        "external edit\n"
+    );
+    revert::stage(
+        &service,
+        snapshots.as_ref(),
+        &service.get(&id).unwrap().unwrap(),
+        &boundary,
+        true,
+        5,
+    )
+    .await
+    .unwrap();
+    revert::commit(&service, &service.get(&id).unwrap().unwrap(), 6)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(project.0.join("project/tracked.txt")).unwrap(),
+        "original\n"
+    );
+    assert!(service.message(&assistants[0].id).unwrap().is_none());
+    assert!(matches!(
+        revert::plan(&store.snapshot().unwrap(), &id, &boundary),
+        Err(revert::Error::MessageNotFound { .. })
+    ));
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_failed_step_still_captures_tool_side_effects_for_revert() {
+    let project = SnapshotProject::new();
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let tools = registry();
+    let target = project.0.join("project/tracked.txt");
+    let _registration = tools
+        .register(
+            vec![(
+                "echo".into(),
+                Arc::new(ycoding_core::tools::registry::DynamicTool::new(
+                    "External edit",
+                    parse_json(r#"{"type":"object"}"#).unwrap(),
+                    None,
+                    None,
+                    move |_, _| {
+                        let target = target.clone();
+                        Box::pin(async move {
+                            std::fs::write(target, "edited\n").unwrap();
+                            panic!("synthetic external tool failure");
+                        })
+                    },
+                )),
+            )],
+            ycoding_core::tools::registry::Options::direct(),
+        )
+        .unwrap();
+    let (endpoint, _requests, server) = server(vec![TOOL]).await;
+    let snapshots = project.snapshots();
+    let mut services = snapshot_services(&store, &endpoint, tools, Arc::new(WallClock));
+    services.snapshots = Some(snapshots.clone());
+    let coordinator = Coordinator::new(Arc::new(Local::new(services)));
+    let id = session::Id::new("ses_one").unwrap();
+    assert!(coordinator.run(&id).await.is_err());
+    let assistant = last_assistant(&service);
+    assert!(assistant.error.is_some());
+    assert_eq!(
+        assistant.snapshot.unwrap().files.unwrap()[0]
+            .as_lossless()
+            .as_str(),
+        Some("tracked.txt")
+    );
+    let types = event_types(&store);
+    assert_eq!(count(&types, "session.step.started"), 1);
+    assert_eq!(count(&types, "session.step.failed"), 1);
+    assert_eq!(count(&types, "session.step.ended"), 0);
+    let boundary = session_message::Id::new("msg_input").unwrap();
+    ycoding_core::session::revert::stage(
+        &service,
+        snapshots.as_ref(),
+        &service.get(&id).unwrap().unwrap(),
+        &boundary,
+        true,
+        3,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(project.0.join("project/tracked.txt")).unwrap(),
+        "original\n"
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+struct GenerationClock(std::sync::atomic::AtomicU64);
+
+struct ActivityClock(std::sync::atomic::AtomicU64);
+impl ycoding_core::session::runner::Clock for ActivityClock {
+    fn now(&self) -> i64 {
+        1 + (self.0.load(std::sync::atomic::Ordering::SeqCst) / 1_000_000) as i64
+    }
+    fn nanos(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    fn sleep(&self, _: u64) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(async {})
+    }
+}
+
+fn activity_number(value: &ycoding_schema::JsonValue, key: &str) -> f64 {
+    let ycoding_schema::JsonValue::Object(value) = value else {
+        panic!("expected activity object")
+    };
+    match value.get(&key.into()) {
+        Some(ycoding_schema::JsonValue::Number(value)) => *value,
+        _ => panic!("expected activity number"),
+    }
+}
+
+#[tokio::test]
+async fn overlapping_step_and_helper_ordinals_follow_initiation_not_settlement_order() {
+    use axum::{
+        Router,
+        body::{Body, to_bytes},
+        extract::{Request, State},
+        response::Response,
+        routing::any,
+    };
+    use ycoding_core::session::helper_generation::Generate;
+    type ActivityState = (
+        Arc<std::sync::atomic::AtomicU64>,
+        mpsc::UnboundedSender<ycoding_schema::JsonValue>,
+        Arc<tokio::sync::Notify>,
+        ycoding_core::generation_activity::Service,
+        Arc<dyn ycoding_core::session::runner::Clock>,
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let clock = Arc::new(ActivityClock(std::sync::atomic::AtomicU64::new(0)));
+    let time: Arc<dyn ycoding_core::session::runner::Clock> = clock.clone();
+    let services = snapshot_services(&store, &endpoint, registry(), time.clone());
+    let generation = services.generation.clone();
+    let held = Arc::new(tokio::sync::Notify::new());
+    let gate = held.clone();
+    let (sent, mut received) = mpsc::unbounded_channel();
+    let app = Router::new()
+        .fallback(any(
+            |State((counter, sent, gate, generation, clock)): State<ActivityState>,
+             request: Request| async move {
+                to_bytes(request.into_body(), 1_048_576).await.unwrap();
+                let first = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0;
+                sent.send(generation.snapshot(clock.nanos())).unwrap();
+                if first {
+                    gate.notified().await;
+                }
+                Response::builder()
+                    .header("content-type", "text/event-stream")
+                    .body(Body::from(TEXT))
+                    .unwrap()
+            },
+        ))
+        .with_state((
+            Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            sent,
+            gate,
+            generation.clone(),
+            time,
+        ));
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                stopped.await.unwrap();
+            })
+            .await
+            .unwrap();
+    });
+    let local = Arc::new(Local::new(services));
+    let coordinator = Arc::new(Coordinator::new(local.clone()));
+    let owner = coordinator.clone();
+    let id = session::Id::new("ses_one").unwrap();
+    let running_id = id.clone();
+    let step = tokio::spawn(async move { owner.run(&running_id).await });
+    let waiting = tokio::time::timeout(std::time::Duration::from_secs(5), received.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(activity_number(&waiting, "active"), 1.0);
+    assert_eq!(activity_number(&waiting, "streaming"), 0.0);
+    clock
+        .0
+        .store(1_000_000_000, std::sync::atomic::Ordering::SeqCst);
+    let session = service.get(&id).unwrap().unwrap();
+    let agent = agent::empty("build".into());
+    let cancellation = ycoding_core::tools::code_mode::Cancellation::default();
+    let helper = local.generate(ycoding_core::session::helper_generation::Request {
+        session: &session,
+        role: ycoding_core::tools::policy::helper::Role::Prediction,
+        source: "prediction",
+        agent: &agent,
+        user: "Suggest".into(),
+        character_limit: 100,
+        cancellation: &cancellation,
+        attribution: ycoding_core::session::usage_attribution::Attribution::Unset,
+    });
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), helper)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("Answer")
+    );
+    let overlapping = received.recv().await.unwrap();
+    assert_eq!(activity_number(&overlapping, "active"), 2.0);
+    assert_eq!(activity_number(&overlapping, "streaming"), 0.0);
+    let helper_finished = generation.snapshot(1_000_000_000);
+    assert_eq!(activity_number(&helper_finished, "active"), 1.0);
+    assert_eq!(
+        activity_number(&helper_finished, "outputTokensPerSecond"),
+        2.0 / 5.0
+    );
+    let early = provider_requests(&store);
+    assert_eq!(early.len(), 1);
+    assert_eq!(early[0].request, 2);
+    assert_eq!(early[0].source.as_str(), Some("prediction"));
+    clock
+        .0
+        .store(2_000_000_000, std::sync::atomic::Ordering::SeqCst);
+    held.notify_one();
+    step.await.unwrap().unwrap();
+    let finished = generation.snapshot(2_000_000_000);
+    assert_eq!(activity_number(&finished, "active"), 0.0);
+    assert_eq!(activity_number(&finished, "streaming"), 0.0);
+    assert_eq!(
+        activity_number(&finished, "outputTokensPerSecond"),
+        4.0 / 5.0
+    );
+    let rows = provider_requests(&store);
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.request, row.source.as_str().unwrap()))
+            .collect::<Vec<_>>(),
+        [(1, "step"), (2, "prediction")]
+    );
+    coordinator.shutdown().await.unwrap();
+    stop.send(()).unwrap();
+    server.await.unwrap();
+}
+#[tokio::test]
+async fn cancelling_a_helper_while_its_stream_opens_retires_its_physical_activity() {
+    use axum::{
+        Router,
+        body::{Body, to_bytes},
+        extract::{Request, State},
+        response::Response,
+        routing::any,
+    };
+    use ycoding_core::session::helper_generation::Generate;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let held = Arc::new(tokio::sync::Notify::new());
+    let (sent, mut received) = mpsc::unbounded_channel();
+    let app = Router::new()
+        .fallback(any(
+            |State((sent, gate)): State<(mpsc::UnboundedSender<()>, Arc<tokio::sync::Notify>)>,
+             request: Request| async move {
+                to_bytes(request.into_body(), 1_048_576).await.unwrap();
+                sent.send(()).unwrap();
+                gate.notified().await;
+                Response::builder()
+                    .header("content-type", "text/event-stream")
+                    .body(Body::from(TEXT))
+                    .unwrap()
+            },
+        ))
+        .with_state((sent, held.clone()));
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                stopped.await.unwrap();
+            })
+            .await
+            .unwrap();
+    });
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let services = snapshot_services(
+        &store,
+        &endpoint,
+        registry(),
+        Arc::new(ActivityClock(std::sync::atomic::AtomicU64::new(0))),
+    );
+    let generation = services.generation.clone();
+    let local = Local::new(services);
+    let id = session::Id::new("ses_one").unwrap();
+    let session = service.get(&id).unwrap().unwrap();
+    let agent = agent::empty("build".into());
+    let cancellation = ycoding_core::tools::code_mode::Cancellation::default();
+    let generated = local.generate(ycoding_core::session::helper_generation::Request {
+        session: &session,
+        role: ycoding_core::tools::policy::helper::Role::Prediction,
+        source: "prediction",
+        agent: &agent,
+        user: "Suggest".into(),
+        character_limit: 100,
+        cancellation: &cancellation,
+        attribution: ycoding_core::session::usage_attribution::Attribution::Unset,
+    });
+    let interrupt = async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), received.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(activity_number(&generation.snapshot(0), "active"), 1.0);
+        assert_eq!(activity_number(&generation.snapshot(0), "streaming"), 0.0);
+        cancellation.cancel();
+    };
+    let (answer, ()) = tokio::join!(generated, interrupt);
+    assert!(answer.is_none());
+    assert_eq!(activity_number(&generation.snapshot(0), "active"), 0.0);
+    assert!(generation.live(&id).is_none());
+    let rows = provider_requests(&store);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].attempts, 1);
+    assert_eq!(
+        rows[0].outcome.as_ref().and_then(|value| value.as_str()),
+        Some("cancelled")
+    );
+    held.notify_one();
+    stop.send(()).unwrap();
+    server.await.unwrap();
+}
+
+impl ycoding_core::session::runner::Clock for GenerationClock {
+    fn now(&self) -> i64 {
+        2
+    }
+    fn nanos(&self) -> u64 {
+        self.0
+            .fetch_add(1_000_000_000, std::sync::atomic::Ordering::Relaxed)
+    }
+    fn sleep(&self, _: u64) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(async {})
+    }
+}
+
+#[tokio::test]
+async fn runner_records_generation_speed_without_telemetry_consent_and_rehydrates_snapshot_diagnostics()
+ {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let streamed = "data: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Ans\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"wer\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n";
+    let (endpoint, _requests, server) = server(vec![streamed]).await;
+    let services = snapshot_services(
+        &store,
+        &endpoint,
+        registry(),
+        Arc::new(GenerationClock(std::sync::atomic::AtomicU64::new(0))),
+    );
+    let generation = services.generation.clone();
+    let coordinator = Coordinator::new(Arc::new(Local::new(services)));
+    let id = session::Id::new("ses_one").unwrap();
+    coordinator.run(&id).await.unwrap();
+    let diagnostics = service
+        .diagnostics(&id, None, &generation)
+        .unwrap()
+        .unwrap();
+    let requests = diagnostics.requests.unwrap();
+    assert_eq!((requests.logical.get(), requests.physical.get()), (1, 1));
+    let timing = requests.latest_timing.unwrap();
+    assert_eq!(timing.generated_tokens.unwrap().get(), 2);
+    let observed = timing.observed_generation_duration_ns.unwrap().get();
+    assert!(observed >= 1_000_000_000);
+    assert!(timing.received_output.is_some());
+    assert!(timing.first_output_ms.is_none());
+    assert!(timing.total_ms.is_none());
+    let speed = diagnostics.generation_speed.unwrap();
+    let latest = speed.latest.as_ref().unwrap();
+    assert_eq!(
+        (latest.tokens.get(), latest.duration_ns.get()),
+        (2, observed)
+    );
+    assert_eq!(latest.tokens_per_second, 2e9 / observed as f64);
+    assert!(latest.estimated.is_none());
+    assert_eq!(
+        service
+            .snapshot(&id, 100, None, &generation)
+            .unwrap()
+            .generation_speed,
+        Some(speed.clone())
+    );
+    assert_eq!(
+        Service::new(store.client())
+            .diagnostics(&id, None, &generation)
+            .unwrap()
+            .unwrap()
+            .generation_speed,
+        Some(speed)
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn step_finish_emits_scoped_request_diagnostics_before_owned_tools_settle() {
+    use ycoding_core::event_feed::{Data, Payload, Scope};
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let tools = registry();
+    let held = Arc::new(tokio::sync::Notify::new());
+    let release = held.clone();
+    let _registration = tools
+        .register(
+            vec![(
+                "echo".into(),
+                Arc::new(ycoding_core::tools::registry::DynamicTool::new(
+                    "Held external tool",
+                    parse_json(r#"{"type":"object"}"#).unwrap(),
+                    None,
+                    None,
+                    move |_, _| {
+                        let held = held.clone();
+                        Box::pin(async move {
+                            held.notified().await;
+                            Ok(ycoding_ai::llm::ToolOutput {
+                                structured: parse_json(r#"{"observed":true}"#).unwrap(),
+                                content: Vec::new(),
+                            })
+                        })
+                    },
+                )),
+            )],
+            ycoding_core::tools::registry::Options::direct(),
+        )
+        .unwrap();
+    let used = Box::leak(TOOL.replace("data: [DONE]\n\n", "data: {\"id\":\"tool\",\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n").into_boxed_str());
+    let (endpoint, mut requests, server) = server(vec![used, TEXT]).await;
+    let services = snapshot_services(
+        &store,
+        &endpoint,
+        tools,
+        Arc::new(GenerationClock(std::sync::atomic::AtomicU64::new(0))),
+    );
+    let generation = services.generation.clone();
+    let feed = services.events.clone();
+    let location = services.location.clone();
+    let id = session::Id::new("ses_one").unwrap();
+    let wake = Arc::new(tokio::sync::Notify::new());
+    let signal = wake.clone();
+    let scoped = feed
+        .subscribe(Scope::Session(id.clone()), None, move || {
+            signal.notify_one()
+        })
+        .unwrap();
+    let other = feed
+        .subscribe(
+            Scope::Session(session::Id::new("ses_two").unwrap()),
+            None,
+            || {},
+        )
+        .unwrap();
+    let coordinator = Coordinator::new(Arc::new(Local::new(services)));
+    let owner = coordinator.clone();
+    let running_id = id.clone();
+    let running = tokio::spawn(async move { owner.run(&running_id).await });
+    let observed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            while let Some(item) = scoped.next().unwrap() {
+                if matches!(&item.payload, Payload::Ephemeral(event) if matches!(&event.data, Data::SessionDiagnosticsUpdated(_))) {
+                    return item;
+                }
+            }
+            wake.notified().await;
+        }
+    }).await.expect("valid StepFinish emits while the tool is held");
+    let Payload::Ephemeral(event) = &observed.payload else {
+        panic!()
+    };
+    assert_eq!(event.session.as_ref(), Some(&id));
+    assert_eq!(event.location.as_ref(), Some(&location));
+    let Data::SessionDiagnosticsUpdated(updated) = &event.data else {
+        panic!()
+    };
+    assert_eq!(updated.session_id, id);
+    let diagnostics = &updated.diagnostics;
+    assert_eq!(diagnostics.model.provider_id.0.as_str(), Some("openai"));
+    assert_eq!(diagnostics.model.id.as_str(), Some("gpt-reasoning"));
+    assert_eq!(
+        (
+            diagnostics.tokens.uncached_input.get(),
+            diagnostics.tokens.output.get(),
+            diagnostics.context.total.get()
+        ),
+        (3, 2, 5)
+    );
+    assert_eq!(diagnostics.context.limit.unwrap().get(), 128000);
+    assert!(diagnostics.context_breakdown.as_ref().unwrap().tools.get() > 0);
+    assert_eq!(
+        diagnostics.cache.mechanism.0.as_str(),
+        Some("openai-prefix-cache")
+    );
+    assert!(!diagnostics.cache.read_reported);
+    assert!(!diagnostics.cache.write_reported);
+    assert!(diagnostics.cache.hit_ratio.is_none());
+    assert!(diagnostics.requests.is_none());
+    let speed = diagnostics.generation_speed.as_ref().unwrap();
+    assert!(speed.latest.is_none());
+    assert!(speed.recent.is_empty());
+    assert!(last_assistant(&service).time.completed.is_none());
+    assert!(provider_requests(&store).is_empty());
+    assert!(!running.is_finished());
+    assert!(other.next().unwrap().is_none());
+    release.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(10), running)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    requests.recv().await.unwrap();
+    requests.recv().await.unwrap();
+    let remainder = std::iter::from_fn(|| scoped.next().unwrap()).collect::<Vec<_>>();
+    let next_diagnostics = remainder.iter().filter(|item| matches!(&item.payload, Payload::Ephemeral(event) if matches!(&event.data, Data::SessionDiagnosticsUpdated(_)))).count();
+    assert_eq!(next_diagnostics, 1);
+    let terminal = remainder.iter().find(|item| matches!(&item.payload, Payload::Durable(event) if event.type_.as_str() == Some("session.step.ended.1"))).unwrap();
+    assert!(observed.position < terminal.position);
+    let types = event_types(&store);
+    assert_eq!(count(&types, "session.step.ended"), 2);
+    assert_eq!(count(&types, "session.diagnostics.updated"), 0);
+    assert_eq!(
+        service
+            .diagnostics(&id, None, &generation)
+            .unwrap()
+            .unwrap()
+            .requests
+            .unwrap()
+            .logical
+            .get(),
+        2
+    );
+    assert!(other.next().unwrap().is_none());
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+async fn assert_fallback(rejection: &'static str) {
+    let store = support::store();
+    initial_context(&store);
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) =
+        server_status(vec![(200, RESPONSES), (400, rejection), (200, RESPONSES)]).await;
+    let coordinator = Coordinator::new(Arc::new(responses_local(
+        &store, &endpoint, "fixture", "gpt-5.5",
+    )));
+    let id = session::Id::new("ses_one").unwrap();
+    coordinator.run(&id).await.unwrap();
+    requests.recv().await.unwrap();
+    admit_input(&service, "second", "Again", "steer").await;
+    coordinator.run(&id).await.unwrap();
+    let rejected = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    let replay = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(rejected.contains("previous_response_id"));
+    assert!(!replay.contains("previous_response_id"));
+    assert!(replay.contains("Answer the prompt"));
+    assert!(replay.contains("Again"));
+    let rows = provider_requests(&store);
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.continuation.as_str().unwrap().to_string())
+            .collect::<Vec<_>>(),
+        vec!["full", "fallback"]
+    );
+    assert_eq!(rows[1].attempts, 2);
+    assert_eq!(rows[1].invalidation.as_str(), Some("retry-fallback"));
+    assert!(last_assistant(&service).error.is_none());
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_rejected_previous_response_falls_back_to_one_full_replay_and_records_it() {
+    assert_fallback(INVALID_PREVIOUS).await;
+}
+
+#[tokio::test]
+async fn a_missing_previous_response_without_an_error_type_still_falls_back() {
+    assert_fallback(r#"{"error":{"message":"Previous response with id 'resp_x' not found."}}"#)
+        .await;
+}
+
+fn analysis_local(
+    store: &ycoding_store::Store,
+    endpoint: &str,
+    analysis: Arc<ycoding_core::session::analysis::Analysis>,
+) -> Local {
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    let clock: Arc<dyn ycoding_core::session::runner::Clock> = Arc::new(WallClock);
+    Local::new(Services {
+        generation: ycoding_core::generation_activity::Service::new(clock.now(), clock.nanos()),
+        store: Service::new(store.client()),
+        events: ycoding_core::event_feed::Feed::attach(&store.client()),
+        location: ycoding_schema::location::Ref::decode(
+            &parse_json(r#"{"directory":"/project"}"#).unwrap(),
+        )
+        .unwrap(),
+        models: Arc::new(model::Resolver::new(catalog)),
+        agents: ycoding_core::resources::domain_state::DomainState::new(agent::Service::new(vec![
+            agent::empty("build".into()),
+            ycoding_core::session::analysis::analysis_agent(),
+        ])),
+        credentials: credential::Service::new(store.client()),
+        tools: registry(),
+        attachments: Arc::new(
+            attachment_store::Store::new(std::env::temp_dir().join("ycoding-runner-attachments"))
+                .unwrap(),
+        ),
+        instructions: Vec::new(),
+        analysis: Some(analysis),
+        clock,
+        executor: Arc::new(ycoding_ai::route::Executor::new(
+            ycoding_ai::route::Executor::http_client().unwrap(),
+        )),
+        compaction: Default::default(),
+        guardrails: guardrails::guardrails(store),
+        helpers: Default::default(),
+        cursor: None,
+        skill_resolver: None,
+        snapshots: None,
+        configuration: None,
+        image_analyzer: None,
+        extensions: Vec::new(),
+        session_tools: None,
+        claude: None,
+        auth: None,
+    })
+}
+
+#[tokio::test]
+async fn meeting_analysis_generates_through_a_bounded_toolless_child_session() {
+    use ycoding_core::session::analysis::{Analysis, Generator, SYSTEM};
+    let store = support::store();
+    let service = Service::new(store.client());
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT]).await;
+    let analysis = Analysis::new(60);
+    let coordinator = Coordinator::new(Arc::new(analysis_local(
+        &store,
+        &endpoint,
+        analysis.clone(),
+    )));
+    let location =
+        ycoding_schema::location::Ref::decode(&parse_json(r#"{"directory":"/project"}"#).unwrap())
+            .unwrap();
+    let generator = Arc::new(Generator::new(
+        Service::new(store.client()),
+        coordinator.clone(),
+        analysis,
+        location,
+        ycoding_schema::project::Id::new("prj_one").unwrap(),
+        None,
+    ));
+    let generate: ycoding_core::meeting::intelligence::Generate = {
+        let generator = generator.clone();
+        Arc::new(move |session, prompt| {
+            let generator = generator.clone();
+            Box::pin(async move { generator.generate(&session, &prompt).await })
+        })
+    };
+    let parent = generator.create_session(Some("ses_one")).await.unwrap();
+    let info = service
+        .get(&session::Id::new(parent.as_str()).unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        info.agent.as_ref().and_then(|agent| agent.as_str()),
+        Some("meeting-intelligence")
+    );
+    assert_eq!(
+        info.parent_id
+            .as_ref()
+            .and_then(|id| id.as_lossless().as_str()),
+        Some("ses_one")
+    );
+    assert_eq!(
+        generate(parent.clone(), "First meeting data".into())
+            .await
+            .unwrap(),
+        "Answer"
+    );
+    assert_eq!(
+        generate(parent.clone(), "Second meeting data".into())
+            .await
+            .unwrap(),
+        "Answer"
+    );
+    let first = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    let second = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(first.contains(SYSTEM) && second.contains(SYSTEM));
+    assert!(first.contains("First meeting data"));
+    assert!(second.contains("Second meeting data"));
+    assert!(!second.contains("First meeting data"));
+    assert!(!first.contains("\"tools\"") && !second.contains("\"tools\""));
+    let oversized = "x".repeat(61);
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            generate(parent.clone(), oversized)
+        )
+        .await
+        .unwrap()
+        .unwrap_err()
+        .contains("bounded")
+    );
+    assert!(
+        generate("ses_unknown".into(), "Data".into())
+            .await
+            .unwrap_err()
+            .contains("Unknown analysis Session")
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn meeting_analysis_refuses_a_parent_from_another_location() {
+    use ycoding_core::session::analysis::{Analysis, Generator};
+    let store = support::store();
+    store
+        .submit(|tx| {
+            let mut row = tx
+                .get::<ycoding_store::session::SessionTable>(&ycoding_store::tuple_key(&[
+                    ycoding_store::KeyPart::String(&"ses_two".into()),
+                ]))?
+                .unwrap();
+            row.directory = "/elsewhere".into();
+            ycoding_store::session::SessionTable::put(tx, &row)
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    let (endpoint, _requests, server) = server(Vec::new()).await;
+    let analysis = Analysis::new(60);
+    let coordinator = Coordinator::new(Arc::new(analysis_local(
+        &store,
+        &endpoint,
+        analysis.clone(),
+    )));
+    let generator = Generator::new(
+        Service::new(store.client()),
+        coordinator.clone(),
+        analysis,
+        ycoding_schema::location::Ref::decode(&parse_json(r#"{"directory":"/project"}"#).unwrap())
+            .unwrap(),
+        ycoding_schema::project::Id::new("prj_one").unwrap(),
+        None,
+    );
+    assert!(
+        generator
+            .create_session(Some("ses_two"))
+            .await
+            .unwrap_err()
+            .contains("Open the source Session's Location")
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+fn cursor_host() -> ycoding_core::resources::cursor::route::Host {
+    ycoding_core::resources::cursor::route::Host {
+        identity: ycoding_ai::cursor::headers::Identity {
+            machine_id: "machine".into(),
+            mac_machine_id: None,
+            client_version: "1.0.0".into(),
+        },
+        context: ycoding_ai::cursor::provider::RequestContext::new(vec![0x22, 0x00]).unwrap(),
+        runtime: Arc::new(
+            ycoding_ai::cursor::provider::Runtime::new(
+                ycoding_ai::cursor::transport::Options::default(),
+            )
+            .unwrap(),
+        ),
+        known_mcp_servers: vec![],
+        extensions: Default::default(),
+    }
+}
+
+fn cursor_catalog(endpoint: &str) -> Catalog {
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    ycoding_core::resources::cursor::catalog::sync(
+        &mut catalog,
+        ycoding_core::resources::cursor::models::from_cursor(&[ycoding_ai::cursor::models::Info {
+            id: "composer-2.5".into(),
+            display_name: "Composer 2.5".into(),
+            supports_thinking: false,
+            supports_agent: true,
+            supports_images: None,
+            max_context: None,
+            max_context_max_mode: None,
+            supports_max_mode: false,
+            variants: vec![],
+        }]),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"cursor","model":"composer-2.5"}},"providers":{{"cursor":{{"settings":{{"apiKey":"cursor-fixture-access","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    catalog
+}
+
+#[tokio::test]
+async fn cursor_model_resolves_through_the_host_route_and_carries_the_non_cursor_identity_instruction()
+ {
+    use ycoding_core::resources::cursor::system::INSTRUCTION;
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let coordinator = Coordinator::new(Arc::new(local_hosted(
+        &store,
+        cursor_catalog("http://127.0.0.1:1"),
+        vec![agent::empty("build".into())],
+        registry(),
+        Arc::new(ImmediateClock(Default::default())),
+        Vec::new(),
+        Some(cursor_host()),
+    )));
+    let _ = coordinator.run(&session::Id::new("ses_one").unwrap()).await;
+    let rows = provider_requests(&store);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].route_id.as_str(), Some("cursor-connect"));
+    assert_eq!(
+        rows[0].system_digest.as_str(),
+        Some(
+            ycoding_core::session::prompt_cache::system_digest(&[
+                BASE_PROMPT.into(),
+                INSTRUCTION.into()
+            ])
+            .as_str()
+        )
+    );
+    coordinator.shutdown().await.unwrap();
+}
+
+const BASE_PROMPT: &str =
+    include_str!("../../../../packages/core/src/session/runner/prompt/base.txt");
+const GEMINI_PROMPT: &str =
+    include_str!("../../../../packages/core/src/plugin/system-prompt/gemini.txt");
+
+fn prompt_catalog(endpoint: &str, id: &str, model_id: &str) -> Catalog {
+    let mut catalog = Catalog::new(models_dev::normalize(&parse_json(&format!(r#"{{"openai":{{"id":"openai","name":"Fixture","env":[],"npm":"@ycoding-ai/ai/providers/openai-compatible","api":"https://example.test/v1","models":{{"{id}":{{"id":"{model_id}","name":"Fixture","release_date":"2026-01-01","attachment":false,"reasoning":false,"temperature":true,"tool_call":true,"modalities":{{"input":["text"],"output":["text"]}},"limit":{{"context":128000,"output":8192}}}}}}}}}}"#)).unwrap()).unwrap());
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"{id}"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    catalog
+}
+
+fn prompt_cases() -> [(
+    ycoding_schema::agent::Info,
+    &'static str,
+    &'static str,
+    &'static str,
+); 3] {
+    let mut configured = agent::empty("build".into());
+    configured.system = Some("Agent prompt".into());
+    [
+        (
+            agent::empty("build".into()),
+            "fixture-alias",
+            "gemini-2.5-pro",
+            GEMINI_PROMPT,
+        ),
+        (
+            agent::empty("build".into()),
+            "fixture-model",
+            "fixture-model",
+            BASE_PROMPT,
+        ),
+        (
+            configured,
+            "fixture-alias",
+            "gemini-2.5-pro",
+            "Agent prompt",
+        ),
+    ]
+}
+
+fn system_text(body: &ycoding_schema::JsonValue) -> String {
+    let body: serde_json::Value =
+        serde_json::from_str(&ycoding_schema::stringify_json(body)).unwrap();
+    assert_eq!(body["messages"][0]["role"], "system");
+    match &body["messages"][0]["content"] {
+        serde_json::Value::String(text) => text.clone(),
+        content => content[0]["text"].as_str().unwrap().to_owned(),
+    }
+}
+
+#[tokio::test]
+async fn session_steps_send_the_agent_or_model_family_prompt_before_initial_instructions() {
+    for (selected, id, model_id, expected) in prompt_cases() {
+        let store = support::store();
+        let service = Service::new(store.client());
+        admit(&service).await;
+        let (endpoint, mut requests, server) = server(vec![TEXT]).await;
+        let coordinator = Coordinator::new(Arc::new(local_services(
+            &store,
+            prompt_catalog(&endpoint, id, model_id),
+            vec![selected],
+            registry(),
+            Arc::new(WallClock),
+            vec![ycoding_core::instructions::constant(
+                "fixture/initial",
+                "Initial instructions",
+            )],
+        )));
+        coordinator
+            .run(&session::Id::new("ses_one").unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            system_text(&requests.recv().await.unwrap()),
+            format!("{expected}\nInitial instructions"),
+            "{id}"
+        );
+        assert_eq!(
+            provider_requests(&store)[0].system_digest.as_str(),
+            Some(
+                ycoding_core::session::prompt_cache::system_digest(&[
+                    expected.into(),
+                    "Initial instructions".into()
+                ])
+                .as_str()
+            ),
+            "{id}"
+        );
+        server.await.unwrap();
+        coordinator.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn session_generation_sends_the_agent_or_model_family_prompt_before_initial_instructions() {
+    for (selected, id, model_id, expected) in prompt_cases() {
+        let store = support::store();
+        let service = Service::new(store.client());
+        let (endpoint, mut requests, server) = server(vec![TEXT]).await;
+        let generate = ycoding_core::session::generate::Service {
+            store: service.clone(),
+            location: service
+                .get(&session::Id::new("ses_one").unwrap())
+                .unwrap()
+                .unwrap()
+                .location,
+            agents: ycoding_core::resources::domain_state::DomainState::new(agent::Service::new(
+                vec![selected],
+            )),
+            models: Arc::new(ycoding_core::tools::policy::helper::Models {
+                standalone: None,
+                models: Arc::new(model::Resolver::new(prompt_catalog(
+                    &endpoint, id, model_id,
+                ))),
+                credentials: credential::Service::new(store.client()),
+                auth: Default::default(),
+                cursor: None,
+                claude: None,
+                store: service.clone(),
+                settings: Default::default(),
+            }),
+            executor: Arc::new(ycoding_ai::route::Executor::new(
+                ycoding_ai::route::Executor::http_client().unwrap(),
+            )),
+            attachments: Arc::new(
+                attachment_store::Store::new(
+                    std::env::temp_dir().join("ycoding-runner-attachments"),
+                )
+                .unwrap(),
+            ),
+            instructions: vec![ycoding_core::instructions::constant(
+                "fixture/initial",
+                "Initial instructions",
+            )],
+            instruction_context: None,
+            refresh: None,
+            extensions: Vec::new(),
+        };
+        assert_eq!(
+            generate
+                .generate(
+                    &session::Id::new("ses_one").unwrap(),
+                    "Summarize privately".into(),
+                    &Default::default(),
+                )
+                .await
+                .unwrap()
+                .as_str(),
+            Some("Answer")
+        );
+        assert_eq!(
+            system_text(&requests.recv().await.unwrap()),
+            format!("{expected}\nInitial instructions"),
+            "{id}"
+        );
+        server.await.unwrap();
+    }
+}
+
+fn observed(store: &ycoding_store::Store) -> Vec<String> {
+    let prefix = ycoding_store::tuple_key(&[ycoding_store::KeyPart::String(&"ses_one".into())]);
+    store
+        .snapshot()
+        .unwrap()
+        .index_range::<ycoding_store::session::EventTable>(
+            "event_aggregate_seq_idx",
+            ycoding_store::IndexQuery {
+                lower: std::ops::Bound::Unbounded,
+                upper: std::ops::Bound::Unbounded,
+                prefix: Some(&prefix),
+                order: ycoding_store::IndexOrder::Ascending,
+                after: None,
+                limit: 1000,
+            },
+        )
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.record.type_.as_str() == Some("session.context.observed.1"))
+        .filter_map(|event| match event.record.data {
+            ycoding_schema::JsonValue::Object(data) => match data.get(&"source".into()) {
+                Some(ycoding_schema::JsonValue::String(source)) => {
+                    source.as_str().map(str::to_owned)
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+fn child_task(state: &str, revision: i64) -> ycoding_store::session::Task {
+    ycoding_store::session::Task {
+        session_id: "ses_two".into(),
+        parent_id: "ses_one".into(),
+        parent_assistant_message_id: "msg_assistant".into(),
+        tool_call_id: "call".into(),
+        input_id: "msg_input".into(),
+        description: "child work".into(),
+        agent: "build".into(),
+        model: ycoding_store::session::Document::new(
+            parse_json(r#"{"providerID":"local","id":"test"}"#).unwrap(),
+        )
+        .unwrap(),
+        prompt_digest: "e".repeat(64).into(),
+        background: 1,
+        delivery: "steer".into(),
+        state: state.into(),
+        progress: None,
+        progress_time: None,
+        question_id: None,
+        question: None,
+        question_data: None,
+        question_time: None,
+        attempt_started: 0,
+        owner_pid: None,
+        owner_started: None,
+        revision,
+        time_created: 1,
+        time_updated: 1,
+        usage_anchor: None,
+    }
+}
+
+const STATE_PREFIX: &str = "Authoritative current Session state (JSON):";
+
+#[tokio::test]
+async fn session_state_is_observed_as_a_system_message_only_when_it_changes() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT, TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry())));
+    let id = session::Id::new("ses_one").unwrap();
+    coordinator.run(&id).await.unwrap();
+    let first = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(first.contains(STATE_PREFIX));
+    assert_eq!(observed(&store), vec!["session-state"]);
+    admit_input(&service, "unchanged", "Again", "steer").await;
+    coordinator.run(&id).await.unwrap();
+    let second = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(second.contains(STATE_PREFIX));
+    assert_eq!(observed(&store), vec!["session-state"]);
+    store
+        .submit(|tx| {
+            ycoding_store::session::TodoTable::insert(
+                tx,
+                &ycoding_store::session::Todo {
+                    session_id: "ses_one".into(),
+                    content: "Ship the observation".into(),
+                    status: "pending".into(),
+                    priority: "high".into(),
+                    position: 0,
+                    time_created: 1,
+                    time_updated: 1,
+                },
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    admit_input(&service, "changed", "Once more", "steer").await;
+    coordinator.run(&id).await.unwrap();
+    let third = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(third.contains("Ship the observation"));
+    assert_eq!(observed(&store), vec!["session-state", "session-state"]);
+    let history = service.context(&id).unwrap();
+    let states = history
+        .iter()
+        .filter(|message| {
+            matches!(message, session_message::Info::System(system)
+                if system.text.as_str().is_some_and(|text| text.starts_with(STATE_PREFIX)))
+        })
+        .count();
+    assert_eq!(states, 2);
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn team_view_is_observed_as_user_context_and_an_emptied_team_is_announced_once() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    store
+        .submit(|tx| ycoding_store::session::TaskTable::insert(tx, &child_task("running", 1)))
+        .unwrap()
+        .wait()
+        .unwrap();
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT, TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry())));
+    let id = session::Id::new("ses_one").unwrap();
+    coordinator.run(&id).await.unwrap();
+    let first = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(first.contains("Internal orchestration context (JSON)"));
+    assert!(first.contains("child work"));
+    assert_eq!(observed(&store), vec!["session-state", "team-view"]);
+    let history = service.context(&id).unwrap();
+    assert!(history.iter().any(|message| matches!(
+        message,
+        session_message::Info::Synthetic(synthetic)
+            if synthetic.description.as_ref().and_then(|text| text.as_str()) == Some("TeamView update")
+    )));
+    store
+        .submit(|tx| {
+            tx.delete::<ycoding_store::session::TaskTable>(&ycoding_store::tuple_key(&[
+                ycoding_store::KeyPart::String(&"ses_two".into()),
+            ]))
+            .map(|_| ())
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    admit_input(&service, "emptied", "Again", "steer").await;
+    coordinator.run(&id).await.unwrap();
+    let second = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(second.contains(r#"\"children\":[]"#));
+    assert_eq!(
+        observed(&store),
+        vec!["session-state", "team-view", "team-view"]
+    );
+    admit_input(&service, "settled", "Third", "steer").await;
+    coordinator.run(&id).await.unwrap();
+    requests.recv().await.unwrap();
+    assert_eq!(
+        observed(&store),
+        vec!["session-state", "team-view", "team-view"]
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+const MCP_TOOL: &str = "data: {\"id\":\"tool\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_mcp\",\"type\":\"function\",\"function\":{\"name\":\"jobs_run_job\",\"arguments\":\"{\\\"background\\\":true}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"tool\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n";
+
+#[tokio::test]
+async fn a_backgrounded_mcp_completion_is_admitted_as_a_steer_input_and_wakes_the_next_step() {
+    use ycoding_core::{
+        job::{Jobs, Status},
+        resources::{
+            config::Entry,
+            mcp::{Service as Mcp, client::Hooks},
+        },
+        session::{
+            orchestration::{Execution, Service as Orchestration},
+            run_coordinator::{Outcome, RunFuture},
+            runner::mcp_notifier,
+        },
+        tools::{
+            builtin::mcp::{Background, McpTools},
+            context::policy::LeafPolicy,
+            policy::{Authority, Publisher, permissions::Permissions},
+        },
+    };
+    let root = std::env::temp_dir().join(format!("ycoding-runner-mcp-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("jobs.json");
+    std::fs::write(
+        &state,
+        serde_json::json!({
+            "capabilities": {"tools": {"listChanged": true}},
+            "responses": {"tools/list": {"": {"tools": [{"name": "run_job", "description": "Run a job", "inputSchema": {"type": "object", "properties": {}}}]}}},
+            "calls": {"run_job": {"delay": 0.3, "result": {"content": [{"type": "text", "text": "done"}]}}},
+            "log": root.join("jobs.log"),
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let entries = [Entry::Document {
+        path: None,
+        info: parse_json(
+            &serde_json::json!({"mcp": {"servers": {"jobs": {
+                "type": "local",
+                "codemode": false,
+                "command": ["python3", concat!(env!("CARGO_MANIFEST_DIR"), "/tests/mcp_table.py"), state],
+            }}}})
+            .to_string(),
+        )
+        .unwrap(),
+    }];
+    let mcp = Arc::new(
+        Mcp::new(
+            &entries,
+            root.clone(),
+            "1".into(),
+            Default::default(),
+            Hooks::default(),
+        )
+        .unwrap(),
+    );
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let allow = ycoding_schema::permission::Rule {
+        action: "*".into(),
+        resource: "*".into(),
+        effect: ycoding_schema::permission::Effect("allow".into()),
+    };
+    let authority = Authority {
+        store: store.client(),
+        agents: Arc::new({
+            let allow = allow.clone();
+            move |agent| {
+                Some((
+                    agent.cloned().unwrap_or_else(|| "build".into()),
+                    vec![allow.clone()],
+                ))
+            }
+        }),
+    };
+    let publisher: Publisher = Arc::new(|_| Ok(()));
+    let policy = Arc::new(LeafPolicy {
+        permissions: Permissions::new(
+            authority,
+            ycoding_schema::project_id::ProjectId::new("prj_one").unwrap(),
+            publisher,
+        ),
+        guardrails: guardrails::guardrails(&store),
+    });
+    let cell = Arc::new(std::sync::OnceLock::<Coordinator>::new());
+    struct Installed(Arc<std::sync::OnceLock<Coordinator>>);
+    impl Execution for Installed {
+        fn wake(&self, id: &session::Id) -> Outcome {
+            self.0.get().expect("coordinator is installed").wake(id)
+        }
+        fn resume(&self, _: &session::Id) -> RunFuture {
+            panic!("unexpected explicit resumption")
+        }
+        fn interrupt(&self, _: &session::Id) -> RunFuture {
+            panic!("unexpected interruption")
+        }
+    }
+    let orchestration = Orchestration::new(
+        Service::new(store.client()),
+        Arc::new(Installed(cell.clone())),
+    );
+    let jobs = Jobs::new();
+    let registry = registry();
+    let tools = McpTools::start(
+        mcp.clone(),
+        registry.clone(),
+        policy,
+        Some(Background {
+            jobs: jobs.clone(),
+            notifier: mcp_notifier(orchestration),
+        }),
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        while !registry
+            .materialize(&[])
+            .definitions
+            .iter()
+            .any(|definition| definition.name.as_str() == Some("jobs_run_job"))
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("MCP tool registered");
+    let (endpoint, mut requests, server) = server(vec![MCP_TOOL, TEXT, TEXT]).await;
+    let mut build = agent::empty("build".into());
+    build.permissions = vec![allow];
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    let coordinator = Coordinator::new(Arc::new(local_services(
+        &store,
+        catalog,
+        vec![build],
+        registry,
+        Arc::new(WallClock),
+        Vec::new(),
+    )));
+    assert!(cell.set(coordinator.clone()).is_ok());
+    let id = session::Id::new("ses_one").unwrap();
+    coordinator.run(&id).await.unwrap();
+    requests.recv().await.unwrap();
+    let second = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(
+        second.contains("The MCP tool was moved to the background."),
+        "{second}"
+    );
+    let woken = tokio::time::timeout(std::time::Duration::from_secs(15), requests.recv())
+        .await
+        .expect("completion wakes the Session")
+        .unwrap();
+    let woken = ycoding_schema::stringify_json(&woken);
+    assert!(woken.contains(r#"<mcp id=\"call_mcp\" state=\"completed\" tool=\"jobs_run_job\">"#));
+    assert!(woken.contains("done"));
+    assert_eq!(jobs.get("call_mcp").unwrap().status, Status::Completed);
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    let history = service.context(&id).unwrap();
+    assert!(history.iter().any(|message| matches!(
+        message,
+        session_message::Info::Synthetic(synthetic)
+            if synthetic.description.as_ref().and_then(|text| text.as_str()) == Some("run_job")
+                && synthetic.metadata.as_ref().is_some_and(|metadata| metadata.get(&"source".into())
+                    == Some(&ycoding_schema::JsonValue::String("mcp".into())))
+    )));
+    let moved = history
+        .iter()
+        .find_map(|message| match message {
+            session_message::Info::Assistant(assistant) => {
+                assistant.content.iter().find_map(|part| match part {
+                    session_message::AssistantContent::Tool(tool) => match &tool.state {
+                        session_message::ToolState::Completed(state) => {
+                            Some(state.structured.clone())
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                })
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        ycoding_schema::stringify_json(&ycoding_schema::JsonValue::Object(moved)),
+        r#"{"value":null}"#
+    );
+    tools.stop().await.unwrap();
+    mcp.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+fn w40_ref(session: &str, input: &str) -> ycoding_schema::usage_anchor::Ref {
+    ycoding_schema::usage_anchor::Ref::decode(
+        &parse_json(&format!(
+            r#"{{"sessionID":"{session}","inputID":"{input}"}}"#
+        ))
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+fn w40_request(session: &str, input: &str, body: &str) -> ycoding_core::session::pending::Request {
+    ycoding_core::session::pending::Request {
+        id: session_message::Id::new(input).unwrap(),
+        session_id: session::Id::new(session).unwrap(),
+        input: ycoding_schema::session_pending::Message::decode(&parse_json(body).unwrap())
+            .unwrap(),
+        event_id: ycoding_schema::event::Id::new(format!("evt_{input}")).unwrap(),
+        created: 1,
+    }
+}
+
+#[tokio::test]
+async fn tool_progress_is_live_only_and_absent_from_durable_history() {
+    use ycoding_core::event_feed::{Data, Payload, Scope};
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let tools = registry();
+    let _registration = tools
+        .register(
+            vec![(
+                "echo".into(),
+                Arc::new(ycoding_core::tools::registry::DynamicTool::new(
+                    "Progress tool",
+                    parse_json(r#"{"type":"object"}"#).unwrap(),
+                    None,
+                    None,
+                    |input, context| {
+                        Box::pin(async move {
+                            let ycoding_schema::JsonValue::Object(structured) =
+                                parse_json(r#"{"stage":"working"}"#).unwrap()
+                            else {
+                                panic!()
+                            };
+                            context
+                                .report(ycoding_core::tools::context::Progress {
+                                    structured,
+                                    content: Vec::new(),
+                                })
+                                .await;
+                            Ok(ycoding_ai::llm::ToolOutput {
+                                structured: input,
+                                content: Vec::new(),
+                            })
+                        })
+                    },
+                )),
+            )],
+            ycoding_core::tools::registry::Options::direct(),
+        )
+        .unwrap();
+    let (endpoint, _requests, server) = server(vec![TOOL, TEXT]).await;
+    let services = snapshot_services(&store, &endpoint, tools, Arc::new(WallClock));
+    let id = session::Id::new("ses_one").unwrap();
+    let events = services
+        .events
+        .subscribe(Scope::Session(id.clone()), None, || {})
+        .unwrap();
+    let other = services
+        .events
+        .subscribe(
+            Scope::Session(session::Id::new("ses_two").unwrap()),
+            None,
+            || {},
+        )
+        .unwrap();
+    let coordinator = Coordinator::new(Arc::new(Local::new(services)));
+    coordinator.run(&id).await.unwrap();
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    let observed = std::iter::from_fn(|| events.next().unwrap()).collect::<Vec<_>>();
+    assert_eq!(observed.iter().filter(|item| matches!(&item.payload, Payload::Ephemeral(event) if matches!(event.data, Data::SessionToolProgress(_)))).count(), 1);
+    assert!(!observed.iter().any(|item| matches!(&item.payload, Payload::Durable(event) if event.type_.as_str() == Some("session.tool.progress.1"))));
+    assert!(other.next().unwrap().is_none());
+    assert_eq!(count(&event_types(&store), "session.tool.progress"), 0);
+    assert!(
+        service
+            .log(&id, None, 100)
+            .unwrap()
+            .events
+            .iter()
+            .all(|entry| entry.event.0.event_type.as_str() != Some("session.tool.progress"))
+    );
+}
+
+async fn w40_tool_context(
+    resolves: bool,
+) -> (
+    Vec<ycoding_core::session::usage_attribution::Attribution>,
+    Vec<ycoding_core::session::usage_attribution::Attribution>,
+    Vec<Option<ycoding_schema::usage_anchor::Ref>>,
+) {
+    use ycoding_core::session::usage_attribution::entry;
+    let store = support::store();
+    let service = Service::new(store.client());
+    let user = r#"{"type":"user","data":{"text":"Prompt"},"delivery":"steer"}"#;
+    service
+        .admit_input(w40_request("ses_two", "msg_origin", user))
+        .await
+        .unwrap();
+    service
+        .admit_attributed(
+            w40_request("ses_one", "msg_input", user),
+            (!resolves).then(|| w40_ref("ses_two", "msg_missing")),
+        )
+        .await
+        .unwrap();
+    let registry = registry();
+    let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let current = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (seen, now_current, sessions, client) = (
+        observed.clone(),
+        current.clone(),
+        service.clone(),
+        store.client(),
+    );
+    let _registration = registry
+        .register(
+            vec![(
+                "echo".into(),
+                Arc::new(ycoding_core::tools::registry::DynamicTool::new(
+                    "Echo input",
+                    parse_json(r#"{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}"#).unwrap(),
+                    None,
+                    None,
+                    move |input, context| {
+                        let (seen, now_current, sessions, client) = (
+                            seen.clone(),
+                            now_current.clone(),
+                            sessions.clone(),
+                            client.clone(),
+                        );
+                        Box::pin(async move {
+                            seen.lock().unwrap().push(context.attribution.clone());
+                            let ses_one = session::Id::new("ses_one").unwrap();
+                            sessions
+                                .admit_input_attributed(
+                                    w40_request(
+                                        "ses_one",
+                                        "msg_note",
+                                        r#"{"type":"synthetic","data":{"text":"note","description":"note","metadata":{}},"delivery":"steer"}"#,
+                                    ),
+                                    Some(w40_ref("ses_two", "msg_origin")),
+                                )
+                                .await
+                                .unwrap();
+                            sessions
+                                .promote_input(
+                                    &ses_one,
+                                    session_message::Id::new("msg_note").unwrap().as_lossless(),
+                                    2,
+                                )
+                                .await
+                                .unwrap();
+                            let current = entry(&client, ses_one.as_lossless()).await.unwrap();
+                            now_current.lock().unwrap().push(current);
+                            Ok(ycoding_ai::llm::ToolOutput {
+                                structured: input,
+                                content: Vec::new(),
+                            })
+                        })
+                    },
+                )),
+            )],
+            ycoding_core::tools::registry::Options::direct(),
+        )
+        .unwrap();
+    let (endpoint, _requests, server) = server(vec![TOOL, TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry)));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    let ledger = ycoding_store::resources::requests(
+        &store.snapshot().unwrap(),
+        &"ses_one".into(),
+        ycoding_store::IndexOrder::Ascending,
+        None,
+        10,
+    )
+    .unwrap()
+    .into_iter()
+    .map(|entry| {
+        entry
+            .record
+            .usage_anchor
+            .and_then(|anchor| anchor.domain().ok())
+    })
+    .collect();
+    let observed = observed.lock().unwrap().clone();
+    let current = current.lock().unwrap().clone();
+    (observed, current, ledger)
+}
+
+#[tokio::test]
+async fn w40_tools_receive_the_anchor_captured_when_their_step_request_began() {
+    use ycoding_core::session::usage_attribution::Attribution;
+    let (observed, current, ledger) = w40_tool_context(true).await;
+    assert_eq!(
+        observed,
+        vec![Attribution::Anchored(w40_ref("ses_one", "msg_input"))]
+    );
+    assert_eq!(
+        current,
+        vec![Attribution::Anchored(w40_ref("ses_two", "msg_origin"))]
+    );
+    assert_eq!(
+        ledger,
+        vec![
+            Some(w40_ref("ses_one", "msg_input")),
+            Some(w40_ref("ses_two", "msg_origin"))
+        ]
+    );
+}
+
+#[tokio::test]
+async fn w40_tools_receive_a_resolved_none_capture_even_after_a_prompt_becomes_current() {
+    use ycoding_core::session::usage_attribution::Attribution;
+    let (observed, current, ledger) = w40_tool_context(false).await;
+    assert_eq!(observed, vec![Attribution::Unanchored]);
+    assert_eq!(
+        current,
+        vec![Attribution::Anchored(w40_ref("ses_two", "msg_origin"))]
+    );
+    assert_eq!(ledger, vec![None, Some(w40_ref("ses_two", "msg_origin"))]);
+}
+
+fn prompt_status(
+    service: &Service,
+    client: &ycoding_store::Client,
+    views: &ycoding_core::usage_view::Service,
+) -> (String, i64) {
+    prepared_support::publish(client, views);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let costs = service
+        .prompt_costs(
+            &session::Id::new("ses_one").unwrap(),
+            &ycoding_schema::usage_accounting::PromptInput::decode(
+                &parse_json(r#"{"inputIDs":["msg_input"]}"#).unwrap(),
+            )
+            .unwrap(),
+            &ycoding_core::session::usage_accounting::Context {
+                now,
+                records_days: 7,
+                active: &std::collections::BTreeSet::new(),
+            },
+        )
+        .unwrap();
+    let unit = &costs.units[0];
+    (
+        unit.status.0.as_str().unwrap().to_owned(),
+        unit.total.requests.get(),
+    )
+}
+
+#[tokio::test]
+async fn a_completed_real_prompt_settles_its_cost_status_while_the_runner_and_service_stay_alive() {
+    let store = support::store();
+    let client = store.client();
+    let reports = report_support::start(client.clone());
+    let service = Service::new(client.clone());
+    let views = ycoding_core::usage_view::Service::new(service.clone(), None);
+    admit(&service).await;
+    let registry = registry();
+    let observed = Arc::new(std::sync::Mutex::new(None));
+    let during = observed.clone();
+    let reader = Service::new(client.clone());
+    let reader_client = client.clone();
+    let reader_views = views.clone();
+    let _registration = registry
+        .register(
+            vec![(
+                "echo".into(),
+                Arc::new(ycoding_core::tools::registry::DynamicTool::new(
+                    "Echo input",
+                    parse_json(r#"{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}"#).unwrap(),
+                    None,
+                    None,
+                    move |input, _| {
+                        *during.lock().unwrap() =
+                            Some(prompt_status(&reader, &reader_client, &reader_views));
+                        Box::pin(async move {
+                            Ok(ycoding_ai::llm::ToolOutput {
+                                structured: input,
+                                content: Vec::new(),
+                            })
+                        })
+                    },
+                )),
+            )],
+            ycoding_core::tools::registry::Options::direct(),
+        )
+        .unwrap();
+    let (endpoint, _requests, server) = server(vec![TOOL, TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry)));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    server.await.unwrap();
+    assert_eq!(
+        observed.lock().unwrap().clone(),
+        Some(("so-far".to_owned(), 0))
+    );
+    assert_eq!(
+        prompt_status(&service, &client, &views),
+        ("settled".to_owned(), 2)
+    );
+    assert_eq!(
+        prompt_status(&Service::new(client.clone()), &client, &views),
+        ("settled".to_owned(), 2)
+    );
+    coordinator.shutdown().await.unwrap();
+    drop(reports);
+    store.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn shared_historical_skill_mentions_never_activate_but_task_mentions_do() {
+    use ycoding_core::session::shared_context;
+    use ycoding_schema::ObjectEncoder;
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT, TEXT, TEXT]).await;
+    for prepare in [false, true] {
+        for explicit in [false, true] {
+            let store = support::store();
+            let service = Service::new(store.client());
+            let local = skill_local(
+                &store,
+                &endpoint,
+                vec![fixture_skill("audit", "Audit", "AUDIT_SKILL_INSTRUCTIONS")],
+            );
+            let snapshot = shared_context::resolve(&session::Id::new("ses_parent").unwrap(), &shared_context::Selection { message_ids: vec![session_message::Id::new("msg_history").unwrap()] }, |_| {
+                Ok(Some(session_message::Info::decode(&parse_json(r#"{"type":"user","id":"msg_history","text":"Previously someone mentioned $audit","time":{"created":1}}"#).unwrap()).unwrap()))
+            }).unwrap();
+            let data = shared_context::compose(
+                if explicit {
+                    "Now use $audit for this task"
+                } else {
+                    "Now report the evidence"
+                },
+                &snapshot,
+            )
+            .unwrap();
+            let mut input = session_pending::Message::decode(
+                &ObjectEncoder::new()
+                    .field("type", "user")
+                    .field("data", &data)
+                    .field("delivery", "steer")
+                    .finish(),
+            )
+            .unwrap();
+            if prepare {
+                input = Runner::prepare_input(&local, input).await.unwrap();
+                let selected =
+                    ycoding_schema::stringify_json(&input.encode()).contains(r#""skills":["#);
+                assert_eq!(
+                    selected, explicit,
+                    "admission preparation must ignore historical mentions"
+                );
+            }
+            service
+                .admit(ycoding_core::session::pending::Request {
+                    id: session_message::Id::new("msg_shared").unwrap(),
+                    session_id: session::Id::new("ses_one").unwrap(),
+                    input,
+                    event_id: ycoding_schema::event::Id::new("evt_shared").unwrap(),
+                    created: 10,
+                })
+                .await
+                .unwrap();
+            Coordinator::new(Arc::new(local))
+                .run(&session::Id::new("ses_one").unwrap())
+                .await
+                .unwrap();
+            let sent = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+            assert!(sent.contains("Previously someone mentioned $audit"));
+            assert_eq!(
+                sent.contains("AUDIT_SKILL_INSTRUCTIONS"),
+                explicit,
+                "runner promotion must use only current task mentions"
+            );
+            assert_eq!(
+                event_types(&store)
+                    .iter()
+                    .filter(|event| event.as_str() == "session.skill.activated.1")
+                    .count(),
+                usize::from(explicit)
+            );
+        }
+    }
+    server.await.unwrap();
+}

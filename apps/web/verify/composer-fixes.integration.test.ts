@@ -533,6 +533,31 @@ describe("pending tray", () => {
     row("msg_q3", "Third queued message"),
     row("msg_steer", "Steer prompt about to be promoted", "steer"),
   ]
+  test.each([390, 1440])("fits pending previews and both actions at %i pixels", async (width) => {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, 900)
+      await page.navigate(shell("&queued=0"))
+      await wait(page, `typeof window.remoteSetPendingInputs === 'function' && document.querySelector('.composer-resident .composer__input')`)
+      await page.evaluate(`window.remoteSetPendingInputs(${JSON.stringify([
+        row("msg_long", "Synthetic pending preview ".repeat(90).trim()), row("msg_short", "Short preview"),
+      ])}).then(() => true)`)
+      await wait(page, `document.querySelector('.pending-tray__preview')?.textContent.endsWith('..')`)
+      await click(page, ".pending-tray__toggle")
+      await wait(page, `document.querySelectorAll('.pending-tray__item').length === 2 && document.querySelector('.pending-tray__text')?.textContent.endsWith('..')`)
+      expect(await page.evaluate(`(() => {
+        const [long, short] = document.querySelectorAll('.pending-tray__text');
+        return long.textContent.endsWith('..') && !long.textContent.includes('…') && short.textContent === 'Short preview' && Array.from(document.querySelectorAll('.pending-tray__item')).every(row => {
+          const bounds = row.getBoundingClientRect();
+          return ['Steer now', 'Delete'].every(label => {
+            const button = row.querySelector('[aria-label="' + label + '"]');
+            const b = button?.getBoundingClientRect();
+            return !!b && b.width > 0 && b.left >= bounds.left && b.right <= Math.min(innerWidth, bounds.right);
+          });
+        });
+      })()`)).toBe(true)
+    } finally { await page.close() }
+  }, 40_000)
   const itemTexts = (page: Page) => page.evaluate(`[...document.querySelectorAll('.pending-tray__item .pending-tray__text')].map((node) => node.textContent)`)
   const operations = async (page: Page) => decodeArray(decodeRecord)(await page.evaluate(`window.remotePendingOperations.map((entry) => ({ operation: entry.operation, messageID: entry.input.messageID }))`))
 
@@ -621,7 +646,9 @@ test("sent message actions delete unread messages and retain a newly read messag
     await page.setViewport(1440, 900)
     await page.navigate(shell("&queued=0"))
     await wait(page, `typeof window.remoteSetSentMessages === 'function' && document.querySelector('.composer-resident .composer__input')`)
-    await page.evaluate(`window.remoteSetSentMessages(${JSON.stringify(fixture)}); void 0`)
+    await wait(page, `document.body.textContent.includes('Updated the session sync and verified the targeted tests.')`)
+    await page.evaluate(`window.remoteSetSentMessages(${JSON.stringify(fixture)}).then(() => true)`)
+    await wait(page, `document.body.textContent.includes('Synthetic delete before read')`)
     await wait(page, `document.querySelectorAll('.message-delete__menu-button').length === 2`)
     expect(await page.evaluate(`document.querySelectorAll('.transcript-message--user .delivery-status[data-state="read"]').length`)).toBe(1)
     await page.evaluate(`document.querySelectorAll('.message-delete__menu-button')[0].click()`)

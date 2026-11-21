@@ -119,7 +119,6 @@ test("every machine state keeps the macOS and lifetime caveats visible", () => {
   for (const keepAwake of [
     { read: "idle" },
     { read: "loading" },
-    { read: "outdated" },
     { read: "unanswered" },
     { read: "error" },
     ready("unsupported"),
@@ -137,10 +136,7 @@ test("every machine state keeps the macOS and lifetime caveats visible", () => {
   }
 })
 
-test("an older or silent machine is asked to update instead of showing Off, and an outright failure offers Retry", () => {
-  const outdated = keepAwakeView({ keepAwake: { read: "outdated" }, reachable: true })
-  expect(outdated).toMatchObject({ checked: false, disabled: true, retry: false })
-  expect(outdated.detail).toMatch(/update YCoding on this machine/i)
+test("a silent machine is asked to update instead of showing Off, and an outright failure offers Retry", () => {
   const silent = keepAwakeView({ keepAwake: { read: "unanswered" }, reachable: true })
   expect(silent).toMatchObject({ disabled: true, retry: true })
   expect(silent.detail).toMatch(/did not answer/i)

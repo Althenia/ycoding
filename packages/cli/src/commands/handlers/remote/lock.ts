@@ -2,7 +2,7 @@ import { link, lstat, mkdir, readFile, unlink, writeFile } from "node:fs/promise
 import { readFileSync, unlinkSync } from "node:fs"
 import path from "node:path"
 import { Effect } from "effect"
-import { ProcessLock } from "@ycoding-ai/core/util/process-lock"
+import { ProcessLock } from "@ycoding-ai/schema/process-lock"
 
 export function remoteLockPath(directory: string) {
   return path.join(directory, "remote-connector.lock")

@@ -1,9 +1,7 @@
-import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { Global } from "@ycoding-ai/core/global"
-import { Npm } from "@ycoding-ai/core/npm"
 import { run } from "@ycoding-ai/tui"
 import { Context, Deferred, Effect, FileSystem, Option } from "effect"
 import { Config } from "../../config"
+import { resolveFrontendPackage } from "../../services/frontend-package"
 import { ServerConnection } from "../../services/server-connection"
 import { UpdatePreflight } from "../../services/update-preflight"
 import { Updater } from "../../services/updater"
@@ -43,7 +41,6 @@ export const runTui = Effect.fnUntraced(function* (input: Input) {
     .pipe(Effect.ensuring(Deferred.succeed(updateNotice, undefined)), Effect.forkScoped)
   preflight.loading()
   const config = yield* Config.Service
-  const npm = yield* Npm.Service
   const fileSystem = yield* FileSystem.FileSystem
   const runServicePromise = Effect.runPromiseWith(Context.make(FileSystem.FileSystem, fileSystem))
   const context = yield* Effect.context<FileSystem.FileSystem>()
@@ -79,9 +76,9 @@ export const runTui = Effect.fnUntraced(function* (input: Input) {
       update: (update) => runPromise(config.update(update)),
     },
     packages: {
-      resolve: (spec) => runPromise(npm.add(spec, { subpaths: ["tui"] }).pipe(Effect.map((result) => result.entrypoint))),
+      resolve: (spec) => resolveFrontendPackage(server.endpoint, spec),
     },
     terminalHandoff: () => preflight.finish(),
     log,
-  }).pipe(Effect.provide(LayerNode.compile(Global.node)))
+  })
 })

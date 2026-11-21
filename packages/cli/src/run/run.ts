@@ -1,6 +1,6 @@
 import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
 import { YCoding, type YCodingClient, type SessionMessageAssistantTool } from "@ycoding-ai/client/promise"
-import { FSUtil } from "@ycoding-ai/core/fs-util"
+import { lookup } from "mime-types"
 import { open } from "node:fs/promises"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
@@ -212,7 +212,7 @@ export async function prepareRunFile(input: string, directory: string): Promise<
     return {
       url: pathToFileURL(file).href,
       filename: path.basename(file),
-      mime: FSUtil.mimeType(file),
+      mime: lookup(file) || "application/octet-stream",
     }
   } finally {
     await handle.close()

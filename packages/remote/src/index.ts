@@ -1,42 +1,17 @@
-/**
- * YCoding remote transport contract.
- *
- * This module is the single source of truth shared by the Cloudflare relay
- * (`infra/cloudflare`), the local agent transport, and the remote web client.
- * It depends on nothing outside the standard library so it can run unchanged in
- * workerd and in the browser.
- *
- * Two WebSocket surfaces use one envelope vocabulary:
- *
- * - Browser: `GET /ws/v4/client?device=<deviceID>` authenticated by the browser
- *   session cookie, then device selection. Client frames are `request` and `ping`
- *   (plus the `pong` heartbeat reply).
- * - Local agent: `GET /ws/v4/agent` authenticated by `Authorization: Bearer <access
- *   token>` from the device challenge flow. Agent frames are `response`, `event`,
- *   `sessions`, and `ping`/`pong`.
- *
- * The relay never invents session semantics: it authenticates both sides,
- * enforces authenticated device ownership, bounds work, and forwards
- * frames. Authorization decisions for individual operations remain with the
- * local YCoding server that serves `packages/protocol`.
- *
- * Parsing here is deliberately hand-written and strict, mirroring the existing
- * `packages/cli/src/remote-transport.ts` precedent for this same wire.
- */
-
-/** Envelope revision. Bump only with a coordinated relay/agent/client release. */
 import { parseProviderAuthInput, providerAuthOperations } from "./provider-auth.ts"
 import { isSessionDirectoryPath } from "./session-directory.ts"
 export { parseProviderAuthInput, providerAuthOperations, isProviderAuthorizationURL, type ProviderAuthOperation, type ProviderAuthInput, type ProviderAuthTarget, type ProviderAuthInfo, type ProviderAuthAttempt, type ProviderAuthStatus, type ProviderAuthRefresh, type ProviderAuthPrompt } from "./provider-auth.ts"
+export { RemoteProtocolVersion, RemoteWebSocketPath, RelayLimits, remoteDescriptors, relayDescriptors, remoteEventTypes, createRelayConnection, receiveBinary, frameReservation, handoffBinary, Connection, ReservationBudget, FailureCategory, PeerRole, WireLimit } from "./binary"
+export { takeAsset } from "./asset"
+export { httpBulkQuery, readHttpBulk } from "./http"
+export { quotaFromWire, quotaToWire } from "./quota"
+export { createRemoteConnection, remotePayloadCodecs, encodeRemoteRequest, decodeRemoteResult, decodeRemoteEvent, encodeRemoteScope, decodeRemoteScope } from "./client"
+export type { RemoteConnectionOptions, RemotePayload } from "./client"
+export * from "./payloads"
+export type { Decision, Options, EventMetadata, Prepared, Incoming } from "@ycoding-ai/protocol/v5/connection"
+export { create, encodeStrict, decodeStrict, encodeLossless, decodeLossless, FrameSchema, ScopeSchema, LosslessStringSchema, ControlSchema, TypedPayloadSchema, ResultSchema, PublicEventSchema, SessionLogItemSchema, EventRecordSchema, EventBatchSchema, StreamEndSchema, BulkStartSchema, BulkPieceSchema, BulkEndSchema, LedgerClass, ContentKind, Streaming, MutationClass, Settlement, ScopeKind, PriorityMode, AttentionNeed, NoticeCategory } from "@ycoding-ai/protocol/v5"
+export type { Frame, Scope, LosslessString, Control, TypedPayload, PublicEvent, SessionLogItem, EventRecord, EventBatch, BulkStart, BulkPiece, BulkEnd, AssetMetadataResult, OperationDescriptor, Notice, Presentation, Status, Completion } from "@ycoding-ai/protocol/v5"
 export { isSessionDirectoryPath } from "./session-directory.ts"
-
-export const RemoteProtocolVersion = 4
-
-/** Versioned WebSocket routes derived from the envelope revision. */
-export const RemoteWebSocketPath = {
-  client: `/ws/v${RemoteProtocolVersion}/client`,
-  agent: `/ws/v${RemoteProtocolVersion}/agent`,
-} as const
 
 /** Operations the relay proxies. Every other operation is rejected. */
 export const remoteOperations = [
@@ -1032,6 +1007,7 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
   if (operation.startsWith("coordination.")) return validCoordinationInput(operation, input)
   if (operation === "session.list") return input === undefined || isRecord(input) &&
     (input.status === undefined || input.status === "waiting" || input.status === "running" || input.status === "idle") &&
+    (input.background === undefined || input.background === "include" || input.background === "exclude") &&
     (input.around === undefined && input.before === undefined || isSessionID(input.around) && input.order === "active" && input.cursor === undefined &&
       (input.limit === undefined || typeof input.limit === "number" && Number.isSafeInteger(input.limit) && input.limit >= 1 && input.limit <= RemoteLimits.maxSessionListPage) &&
       (input.before === undefined || typeof input.before === "number" && Number.isSafeInteger(input.before) && input.before >= 0 && input.before < (typeof input.limit === "number" ? input.limit : 50)))

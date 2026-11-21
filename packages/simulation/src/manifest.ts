@@ -1,7 +1,7 @@
 import { homedir } from "node:os"
 import { isAbsolute, join } from "node:path"
 import { Config, Effect, FileSystem, Schema } from "effect"
-import { PositiveInt } from "@ycoding-ai/core/schema"
+const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0))
 
 const InstanceName = Schema.String.check(
   Schema.makeFilter((value) =>

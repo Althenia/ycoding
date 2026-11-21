@@ -4,14 +4,49 @@ import os from "node:os"
 import path from "node:path"
 
 const script = path.join(import.meta.dir, "release-archive.ts")
-const version = "0.11.12"
-const targets = ["darwin-arm64", "darwin-x64", "linux-x64", "windows-x64"] as const
+const version = "0.12.0"
+const targets = ["darwin-arm64", "darwin-x64", "linux-x64"] as const
 const extension = ["icons/ycoding-128.png", "icons/ycoding-16.png", "icons/ycoding-32.png", "icons/ycoding-48.png", "manifest.json", "popup.css", "popup.html", "popup.js", "protocol.js", "service-worker.js"]
 const app = "YCoding Computer Use.app"
 const interactionFiles = ["icons/active-16.png", "icons/active-32.png", "icons/idle-128.png", "icons/idle-16.png", "icons/idle-32.png", "icons/idle-48.png",
   "manifest.json", "panel.css", "panel.html", "panel.js", "popup.css", "popup.html", "popup.js", "service-worker.js"]
 const desktop = "YCoding Desktop.app"
 const desktopArchive = `YCoding-Desktop-v${version}-darwin-arm64.zip`
+const windowsArchive = `ycoding-${version}-windows-x64.zip`
+
+async function windowsFixture(root: string) {
+  const source = path.join(root, "windows-x64")
+  await Bun.write(path.join(source, "ycoding.exe"), "synthetic Windows executable\n")
+  for (const file of interactionFiles) await Bun.write(path.join(source, "ycoding-chrome-extension", file), "synthetic extension\n")
+  return source
+}
+
+test("Windows archive create yields a ZIP with ycoding.exe and exactly the fourteen compatible extension files", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-windows-release-"))
+  try {
+    const source = await windowsFixture(root)
+    const result = execute(root, ["create", "windows-x64", version, source, "prepared"])
+    expect(result.exitCode, result.stderr.toString()).toBe(0)
+    expect(await fs.readdir(path.join(root, "prepared"))).toEqual([windowsArchive])
+    const archive = path.join(root, "prepared", windowsArchive)
+    const listing = Bun.spawnSync(["unzip", "-Z1", archive], { stdout: "pipe" })
+    expect(listing.exitCode).toBe(0)
+    expect(listing.stdout.toString().trim().split("\n").sort()).toEqual([
+      "ycoding.exe", "ycoding-chrome-extension/", "ycoding-chrome-extension/icons/",
+      ...interactionFiles.map((name) => `ycoding-chrome-extension/${name}`),
+    ].sort())
+    const extract = path.join(root, "extracted")
+    expect(Bun.spawnSync(["unzip", "-q", archive, "-d", extract]).exitCode).toBe(0)
+    expect(await Bun.file(path.join(extract, "ycoding.exe")).text()).toBe("synthetic Windows executable\n")
+    for (const file of interactionFiles) expect(await Bun.file(path.join(extract, "ycoding-chrome-extension", file)).text()).toBe("synthetic extension\n")
+    await fs.rename(path.join(source, "ycoding.exe"), path.join(source, "ycoding"))
+    const missing = execute(root, ["create", "windows-x64", version, source, "missing"])
+    expect(missing.exitCode).not.toBe(0)
+    expect(missing.stderr.toString()).toContain("unexpected or missing entries")
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
 
 test("Interaction archives use the replacement extension and reject a coexistence payload", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-interaction-archive-"))
@@ -65,18 +100,23 @@ function execute(root: string, args: string[]) {
   return Bun.spawnSync([process.execPath, script, ...args], { cwd: root, stdout: "pipe", stderr: "pipe" })
 }
 
-async function fixture(root: string, target: string) {
+async function fixture(root: string, target: string, release = "0.11.12") {
+  const current = release === version
+  const application = current ? "YCoding Interaction.app" : app
+  const helper = current ? "ycoding-interaction" : "ycoding-computer-use"
+  const display = current ? "YCoding Interaction" : "YCoding Computer Use"
+  const identifier = current ? "app.ycoding.interaction" : "app.ycoding.computer-use"
   const source = path.join(root, target)
   await fs.mkdir(source)
-  await Bun.write(path.join(source, target === "windows-x64" ? "ycoding.exe" : "ycoding"), "synthetic executable\n")
-  await fs.chmod(path.join(source, target === "windows-x64" ? "ycoding.exe" : "ycoding"), 0o755)
-  for (const file of extension) await Bun.write(path.join(source, "ycoding-chrome-extension", file), "synthetic extension\n")
+  await Bun.write(path.join(source, "ycoding"), "synthetic executable\n")
+  await fs.chmod(path.join(source, "ycoding"), 0o755)
+  for (const file of current ? interactionFiles : extension) await Bun.write(path.join(source, "ycoding-chrome-extension", file), "synthetic extension\n")
   if (target.startsWith("darwin")) {
-    await Bun.write(path.join(source, app, "Contents/MacOS/ycoding-computer-use"), "synthetic helper\n")
-    await fs.chmod(path.join(source, app, "Contents/MacOS/ycoding-computer-use"), 0o755)
-    await Bun.write(path.join(source, app, "Contents/Resources/YCoding.icns"), "synthetic icon\n")
-    await Bun.write(path.join(source, app, "Contents/_CodeSignature/CodeResources"), "synthetic signature\n")
-    await Bun.write(path.join(source, app, "Contents/Info.plist"), "<key>CFBundleIdentifier</key><string>app.ycoding.computer-use</string><key>CFBundleDisplayName</key><string>YCoding Computer Use</string><key>CFBundleIconFile</key><string>YCoding.icns</string>")
+    await Bun.write(path.join(source, application, `Contents/MacOS/${helper}`), "synthetic helper\n")
+    await fs.chmod(path.join(source, application, `Contents/MacOS/${helper}`), 0o755)
+    await Bun.write(path.join(source, application, "Contents/Resources/YCoding.icns"), "synthetic icon\n")
+    await Bun.write(path.join(source, application, "Contents/_CodeSignature/CodeResources"), "synthetic signature\n")
+    await Bun.write(path.join(source, application, "Contents/Info.plist"), `<key>CFBundleIdentifier</key><string>${identifier}</string><key>CFBundleDisplayName</key><string>${display}</string><key>CFBundleIconFile</key><string>YCoding.icns</string>`)
   }
   return source
 }
@@ -98,20 +138,21 @@ async function archives(root: string) {
   const input = path.join(root, "downloaded")
   await fs.mkdir(input)
   for (const target of targets) {
-    const source = await fixture(root, target)
-    const filename = path.join(input, `ycoding-${version}-${target}.${target === "windows-x64" ? "zip" : "tar.gz"}`)
-    const result = target === "windows-x64"
-      ? Bun.spawnSync(["zip", "-qr", filename, "ycoding.exe", "ycoding-chrome-extension"], { cwd: source })
-      : Bun.spawnSync(["tar", "-czf", filename, "ycoding", "ycoding-chrome-extension", ...(target.startsWith("darwin") ? [app] : [])], { cwd: source, env: { ...process.env, COPYFILE_DISABLE: "1" } })
+    const source = await fixture(root, target, version)
+    const filename = path.join(input, `ycoding-${version}-${target}.tar.gz`)
+    const result = Bun.spawnSync(["tar", "-czf", filename, "ycoding", "ycoding-chrome-extension", ...(target.startsWith("darwin") ? ["YCoding Interaction.app"] : [])], { cwd: source, env: { ...process.env, COPYFILE_DISABLE: "1" } })
     expect(result.exitCode).toBe(0)
   }
+  const windows = await windowsFixture(root)
+  expect(Bun.spawnSync(["zip", "-qr", path.join(input, windowsArchive), "ycoding.exe", "ycoding-chrome-extension"], { cwd: windows }).exitCode).toBe(0)
   await desktopFixture(root)
   expect(Bun.spawnSync(["zip", "-qr", path.join(input, desktopArchive), desktop], { cwd: path.join(root, "desktop") }).exitCode).toBe(0)
   return input
 }
 
-for (const target of targets.filter((target) => target !== "windows-x64"))
+for (const target of targets)
   test(`native archive create preserves the complete ${target} payload and executable modes`, async () => {
+    const version = "0.11.12"
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-native-archive-"))
     try {
       const source = await fixture(root, target)
@@ -144,6 +185,7 @@ for (const [release, included] of [["0.7.0", false], ["0.7.1-rc.1", false], ["0.
   })
 
 if (process.platform === "darwin") test("native archive create excludes macOS extended-attribute metadata", async () => {
+  const version = "0.11.12"
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-native-xattr-"))
   try {
     const source = await fixture(root, "darwin-arm64")
@@ -202,6 +244,7 @@ for (const invalid of ["nonexecutable launcher", "extra file", "missing icon", "
 
 for (const invalid of ["missing executable", "nonexecutable", "extra LICENSE", "extra NOTICE", "extra unknown", "extra nested extension", "extra app file", "missing icon", "empty signature", "invalid plist", "symlink"])
   test(`native archive create rejects ${invalid} before writing an archive`, async () => {
+    const version = "0.11.12"
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-native-invalid-"))
     try {
       const source = await fixture(root, "darwin-arm64")
@@ -234,7 +277,7 @@ test("native archive finalize needs no installed dependencies and publishes only
     const result = Bun.spawnSync([process.execPath, path.join(checkout, "script/release-archive.ts"), "finalize", version, input, "release"], { cwd: root, stdout: "pipe", stderr: "pipe" })
     expect(result.exitCode, result.stderr.toString()).toBe(0)
     const files = await fs.readdir(path.join(root, "release"))
-    expect(files.sort()).toEqual(["LICENSE", "NOTICE", `ycoding-${version}-checksums.txt`, desktopArchive, ...targets.map((target) => `ycoding-${version}-${target}.${target === "windows-x64" ? "zip" : "tar.gz"}`)].sort())
+    expect(files.sort()).toEqual(["LICENSE", "NOTICE", `ycoding-${version}-checksums.txt`, desktopArchive, windowsArchive, ...targets.map((target) => `ycoding-${version}-${target}.tar.gz`)].sort())
     const lines = (await Bun.file(path.join(root, "release", `ycoding-${version}-checksums.txt`)).text()).trim().split("\n")
     expect(lines).toHaveLength(7)
     for (const line of lines) {
@@ -247,12 +290,12 @@ test("native archive finalize needs no installed dependencies and publishes only
   }
 })
 
-for (const target of [...targets, "desktop"])
+for (const target of [...targets, "windows-x64", "desktop"])
   test(`native archive finalize rejects the missing ${target} target`, async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-native-missing-"))
     try {
       const input = await archives(root)
-      await fs.unlink(path.join(input, target === "desktop" ? desktopArchive : `ycoding-${version}-${target}.${target === "windows-x64" ? "zip" : "tar.gz"}`))
+      await fs.unlink(path.join(input, target === "desktop" ? desktopArchive : target === "windows-x64" ? windowsArchive : `ycoding-${version}-${target}.tar.gz`))
       const result = execute(root, ["finalize", version, input, "release"])
       expect(result.exitCode).not.toBe(0)
       expect(result.stderr.toString()).toContain("Expected exactly five release archives")
@@ -262,7 +305,7 @@ for (const target of [...targets, "desktop"])
     }
   })
 
-for (const invalid of ["wrong version", "extra file", "corrupt archive", "nonexecutable archive", "missing archive app", "extra archive entry", "oversized archive listing", "symlink archive entry", "linked archive", "nonempty output", "extra desktop entry", "nonexecutable desktop launcher", "desktop payload hash mismatch", "unsigned desktop bundle"])
+for (const invalid of ["wrong version", "extra file", "corrupt archive", "nonexecutable archive", "missing archive app", "extra archive entry", "oversized archive listing", "symlink archive entry", "linked archive", "nonempty output", "extra windows entry", "symlink windows entry", "extra desktop entry", "nonexecutable desktop launcher", "desktop payload hash mismatch", "unsigned desktop bundle"])
   test(`native archive finalize rejects ${invalid} without a checksum manifest`, async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-native-received-"))
     try {
@@ -291,6 +334,17 @@ for (const invalid of ["wrong version", "extra file", "corrupt archive", "nonexe
         await fs.symlink(path.join(root, "outside.tar.gz"), linux)
       }
       if (invalid === "nonempty output") await Bun.write(path.join(root, "release/private.json"), "{}")
+      if (invalid.includes("windows")) {
+        const cwd = path.join(root, "windows-x64")
+        const archive = path.join(input, windowsArchive)
+        await fs.unlink(archive)
+        if (invalid === "extra windows entry") await Bun.write(path.join(cwd, "ycoding-chrome-extension/extra.js"), "unexpected\n")
+        else {
+          await fs.unlink(path.join(cwd, "ycoding.exe"))
+          await fs.symlink("ycoding-chrome-extension/manifest.json", path.join(cwd, "ycoding.exe"))
+        }
+        expect(Bun.spawnSync(["zip", "-qry", archive, "ycoding.exe", "ycoding-chrome-extension"], { cwd }).exitCode).toBe(0)
+      }
       if (invalid.includes("desktop")) {
         const source = path.join(root, "desktop", desktop)
         if (invalid === "extra desktop entry") await Bun.write(path.join(source, "Contents/Resources/update.json"), "{}")

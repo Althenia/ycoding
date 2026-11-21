@@ -10,7 +10,7 @@ type KeepAwakeChange = {
 }
 
 export type KeepAwakeState = {
-  readonly read: "idle" | "loading" | "ready" | "outdated" | "unanswered" | "error"
+  readonly read: "idle" | "loading" | "ready" | "unanswered" | "error"
   readonly status?: KeepAwakeStatus
   readonly message?: string
   readonly change?: KeepAwakeChange
@@ -51,7 +51,6 @@ export function keepAwakeAnswer(outcome: RemoteRequestOutcome, kept: Pick<KeepAw
       ? { read: "error", message: "Keep machine awake: the machine returned an unreadable answer.", ...kept }
       : { read: "ready", status, ...kept }
   }
-  if (outcome.status === "failed" && outcome.error.code === "unknown_operation") return { read: "outdated", ...kept }
   if (outcome.status === "unknown") return { read: "unanswered", ...kept }
   return { read: "error", message: describeOutcome(outcome, "Keep machine awake"), ...kept }
 }
@@ -117,8 +116,6 @@ function baseView(input: {
     case "idle":
     case "loading":
       return view({ label: "Checking", busy: true, detail: "Checking this machine…" })
-    case "outdated":
-      return view({ label: "Unavailable", detail: updateAdvice })
     case "unanswered":
       return view({ label: "Unavailable", retry: true, detail: `This machine did not answer. ${updateAdvice}` })
     case "error":

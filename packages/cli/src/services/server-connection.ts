@@ -1,6 +1,6 @@
 import { Service, type Endpoint, type EnsureOptions } from "@ycoding-ai/client/effect/service"
 import { ClientError, isUnauthorizedError, YCoding } from "@ycoding-ai/client/promise"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationVersion } from "../version"
 import { Effect, Redacted } from "effect"
 import { Env } from "../env"
 import { ServiceConfig } from "./service-config"

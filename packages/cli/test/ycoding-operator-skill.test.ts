@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { createHash } from "node:crypto"
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { NodeServices } from "@effect/platform-node"
@@ -25,6 +26,8 @@ import type { Spec } from "../src/framework/spec"
 import { emptyMcpLayer } from "../../core/test/fixture/mcp"
 import { location } from "../../core/test/fixture/location"
 import { host } from "../../core/test/plugin/host"
+
+const permissionTest = process.platform === "win32" ? test.skip : test
 
 const directories: string[] = []
 afterEach(async () => {
@@ -124,6 +127,117 @@ test("operator Library instructions select only the private process channel and 
   const example = ycodingOperatorSkill.match(/\{"uploads":\[\{"local_path":"\/approved\/output.png"[^\n]+/)
   expect(example).not.toBeNull()
   expect(JSON.parse(example![0])).toEqual({ uploads: [{ local_path: "/approved/output.png", purpose: "create_library_file" }] })
+})
+
+test("the exported operator skill equals the pinned shared Markdown bytes", async () => {
+  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const markdown = await readFile(path.join(import.meta.dir, "..", "src", "remote-control", "ycoding-operator.md"), "utf8")
+  expect(ycodingOperatorSkill).toBe(markdown)
+  const bytes = new TextEncoder().encode(ycodingOperatorSkill)
+  expect(bytes.byteLength).toBe(28_784)
+  expect(createHash("sha256").update(bytes).digest("hex")).toBe("48e35aa5dff6c72239824e747730772d7f0cc4b2ec86c942941790fa0373e604")
+  expect(ycodingOperatorSkill.endsWith("\n")).toBe(true)
+  const source = await readFile(path.join(import.meta.dir, "..", "src", "remote-control", "ycoding-operator-skill.ts"), "utf8")
+  expect(source).toContain('from "./ycoding-operator.md" with { type: "text" }')
+  expect(source).not.toContain("# YCoding Operator")
+})
+
+test("ensure writes an absent operator skill under the Dots root", async () => {
+  const { ensureYcodingOperatorSkill, ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-operator-absent-"))
+  directories.push(root)
+  const data = path.join(root, "data")
+  await ensureYcodingOperatorSkill(data)
+  expect(await readFile(path.join(data, "dots", "skills", "ycoding-operator", "SKILL.md"), "utf8")).toBe(ycodingOperatorSkill)
+})
+
+test("ensure leaves an equal operator skill untouched", async () => {
+  const { ensureYcodingOperatorSkill, ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-operator-equal-"))
+  directories.push(root)
+  const file = path.join(root, "data", "dots", "skills", "ycoding-operator", "SKILL.md")
+  await mkdir(path.dirname(file), { recursive: true })
+  await writeFile(file, ycodingOperatorSkill, "utf8")
+  const modified = new Date(1_000_000_000_000)
+  await utimes(file, modified, modified)
+  await ensureYcodingOperatorSkill(path.join(root, "data"))
+  expect(await readFile(file, "utf8")).toBe(ycodingOperatorSkill)
+  expect((await stat(file)).mtimeMs).toBe(modified.getTime())
+})
+
+test("ensure replaces stale operator skill bytes", async () => {
+  const { ensureYcodingOperatorSkill, ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-operator-stale-"))
+  directories.push(root)
+  const file = path.join(root, "data", "dots", "skills", "ycoding-operator", "SKILL.md")
+  await mkdir(path.dirname(file), { recursive: true })
+  await writeFile(file, "synthetic stale operator skill\n", "utf8")
+  await ensureYcodingOperatorSkill(path.join(root, "data"))
+  expect(await readFile(file, "utf8")).toBe(ycodingOperatorSkill)
+})
+
+test("ensure propagates a non-missing read failure", async () => {
+  const { ensureYcodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-operator-read-error-"))
+  directories.push(root)
+  const file = path.join(root, "data", "dots", "skills", "ycoding-operator", "SKILL.md")
+  await mkdir(file, { recursive: true })
+  const read = await readFile(file, "utf8").then(() => undefined, (error: unknown) => error)
+  const failure = await ensureYcodingOperatorSkill(path.join(root, "data")).then(() => undefined, (error: unknown) => error)
+  expect(read).toBeDefined()
+  expect((failure as { code?: string }).code).toBe((read as { code?: string }).code)
+  expect((failure as { code?: string }).code).not.toBe("ENOENT")
+})
+
+test("ensure propagates a blocked-ancestor read failure without reaching directory creation", async () => {
+  const { ensureYcodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-operator-blocked-ancestor-"))
+  directories.push(root)
+  const blockedRoot = path.join(root, "blocked-root")
+  await writeFile(blockedRoot, "synthetic file in place of the data directory\n", "utf8")
+  const file = path.join(blockedRoot, "dots", "skills", "ycoding-operator", "SKILL.md")
+  const read = await readFile(file, "utf8").then(() => undefined, (error: unknown) => error)
+  const failure = await ensureYcodingOperatorSkill(blockedRoot).then(() => undefined, (error: unknown) => error)
+  expect(read).toBeDefined()
+  expect((failure as { code?: string }).code).toBe((read as { code?: string }).code)
+  expect((failure as { code?: string }).code).not.toBe("ENOENT")
+})
+
+permissionTest("ensure propagates a directory-creation failure after a missing read", async () => {
+  const { ensureYcodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-operator-mkdir-error-"))
+  directories.push(root)
+  const data = path.join(root, "data")
+  await mkdir(data)
+  const file = path.join(data, "dots", "skills", "ycoding-operator", "SKILL.md")
+  const read = await readFile(file, "utf8").then(() => undefined, (error: unknown) => error)
+  expect((read as { code?: string }).code).toBe("ENOENT")
+  await chmod(data, 0o555)
+  try {
+    const probe = await mkdir(path.join(data, "probe")).then(() => undefined, (error: unknown) => error)
+    expect((probe as { code?: string }).code).toBe("EACCES")
+    const failure = await ensureYcodingOperatorSkill(data).then(() => undefined, (error: unknown) => error)
+    expect((failure as { code?: string }).code).toBe("EACCES")
+  } finally {
+    await chmod(data, 0o755)
+  }
+})
+
+permissionTest("ensure propagates a write failure and keeps the stale bytes", async () => {
+  const { ensureYcodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-operator-write-error-"))
+  directories.push(root)
+  const file = path.join(root, "data", "dots", "skills", "ycoding-operator", "SKILL.md")
+  await mkdir(path.dirname(file), { recursive: true })
+  await writeFile(file, "synthetic stale operator skill\n", "utf8")
+  await chmod(file, 0o444)
+  try {
+    const failure = await ensureYcodingOperatorSkill(path.join(root, "data")).then(() => undefined, (error: unknown) => error)
+    expect((failure as { code?: string }).code).toBe("EACCES")
+    expect(await readFile(file, "utf8")).toBe("synthetic stale operator skill\n")
+  } finally {
+    await chmod(file, 0o644)
+  }
 })
 
 test("operator API operation ids and example bodies match the current Protocol", async () => {

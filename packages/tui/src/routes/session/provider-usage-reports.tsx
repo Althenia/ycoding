@@ -474,7 +474,7 @@ function UsageDetails(props: { row: UsageReportOutput["rows"][number]; group: Us
         <DetailLine text={joined([labelled("Total tokens", tokenTotalLabel(props.row, formatNumber)), labelled(props.group === "task" ? "Cost (inclusive)" : "Cost", costLabel(props.row))])} />
         <DetailLine text={labelled("First output", joined([labelled("p50", latency(props.row.speed?.firstOutputP50Ms)), labelled("p95", latency(props.row.speed?.firstOutputP95Ms))]))} />
         <DetailLine text={joined([labelled("Total", joined([labelled("p50", latency(props.row.speed?.totalP50Ms)), labelled("p95", latency(props.row.speed?.totalP95Ms))])), labelled("Aggregate", throughput(props.row.speed?.outputTokensPerSecond))])} />
-        <DetailLine text={outcomeLine(props.row.outcomes)} />
+        <DetailLine text={outcomeLine(props.row.outcomes, props.row.logical)} />
         <UsageSpeedDetails speed={props.row.speed} />
         <DetailLine text={props.row.costCoverage && `${props.row.costCoverage.pricedRequests} priced · ${props.row.costCoverage.unpricedRequests} unpriced`} />
         <Show when={props.row.model?.variant}><text>Selected effort {props.row.model?.variant}</text></Show>
@@ -799,7 +799,7 @@ function WideReportRow(props: {
       <span style={{ fg: theme.text.subdued }}>{latency(props.row.speed?.totalP95Ms).padStart(geometry.speed)}</span>{" "}
       <span style={{ fg: theme.text.subdued }}>{rate(props.row.speed?.meanTokensPerSecond).padStart(geometry.speed)}</span>{" "}
       <span style={{ fg: theme.text.subdued }}>{rate(props.row.speed?.outputTokensPerSecond).padStart(geometry.speed)}</span>{" "}
-      <span style={{ fg: theme.text.subdued }}>{errorRateText(props.row.outcomes).padStart(geometry.speed)}</span>
+      <span style={{ fg: theme.text.subdued }}>{errorRateText(props.row.outcomes, props.row.logical).padStart(geometry.speed)}</span>
       </Show>
     </text>
   )

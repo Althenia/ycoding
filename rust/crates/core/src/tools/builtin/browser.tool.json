@@ -1,0 +1,4581 @@
+{
+ "description": "Work inside web pages in the paired Chrome profile with the user's existing logins: read page text and controls (including content inside cross-origin iframes, such as embedded third-party widgets), click, type, fill forms, select options, check boxes, hover, navigate, go back/forward, reload, press keys, scroll, wait for elements, URLs, load states, or text, capture screenshots, search history, use the clipboard, upload files, wait for downloads, read console logs, export pages as MHTML, and list or invoke native page WebMCP tools when present. Prefer this tool over computer for anything inside a web page. This choice is between the computer and browser tools only; it does not forbid another browser route the user explicitly authorizes, such as Playwright connectOverCDP to an existing Chrome DevTools endpoint, which stays subject to the same permission, guardrail, credential and confirmation rules. Observations return readable text plus semantic elements, and an element's optional frame field names the iframe page it came from (frames lists child frames and whether each was observed). Use status once, then tabs. Reuse returned tabID, generation, documentGeneration, and observationRevision fences exactly as numbers; never invent refs. Observe for semantic refs, then act only by a returned ref; each element also carries a stable locator (role and accessible name), and click, type, fill, select, check, hover, upload, and wait accept that locator instead of a ref when the same element must be found again after re-observing; wait also accepts a locator for an element that has not appeared yet. Observe with diff:true to receive only elements added or changed since the previous observation, with removed locators listed in delta; the first observation is always full. Action results return updated tab fences, not a semantic observation; carry those fences forward for actions without refs, and observe again before another ref-based action because each action invalidates prior refs. Capture only when semantic observation is insufficient; capture accepts a clip rectangle, fullPage:true for the whole page, or a ref to capture one element. Fill replaces a field's text (text:'' clears it); select picks options of a native select by values, labels, or indexes, or one option of an open listbox by label or index; check sets a checkbox, radio, or switch to checked:true or checked:false and does nothing when it already matches; hover moves the pointer over an element without clicking. These return the control's resulting state. Upload takes absolute file paths and a file input, including one listed as a hidden file input, or the element that opens a file chooser; no native file dialog opens, and a page picker without a file input cannot receive files; isolated mode rejects upload. Elements report checked, pressed, expanded, selected, and the value of ordinary fields; sensitive:true marks a password, one-time-code, or payment field whose value is withheld and which no action may fill. Wait takes one condition: a ref or locator with state attached, visible, hidden, or detached (default visible for a locator, attached for a ref); url, a pattern over the page origin and path where * matches any characters; load: domcontentloaded, load, or networkidle (no network request pending for 500 ms; on a paired tab attached while requests were already running, only requests started after attach are seen); or text that must appear on the page. timeoutMs is at most 30,000; wait without a condition waits for load. key checks the active focus in profile, owned, and isolated modes. Only Tab, Shift+Tab, Escape, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, and PageDown bypass active-focus inspection, with no Ctrl, Meta, or Alt and Shift allowed only for Tab. Every other supported key requires verified focus, including printable characters with Shift or Alt, Space, Enter, Backspace, Delete, Insert, Shift+Insert, and all Ctrl or Meta chords, including V and X. Focus inspection refuses sensitive password, one-time-code, payment, or secret-named fields, file inputs, and unverified focus (including closed shadow roots and unreachable cross-origin frames) before any key event with dispatched:false. Do not use key to bypass a sensitive-field refusal in any mode. If a page opens a JavaScript dialog, other actions stall until it is answered: use action {type:'dialog'} to read it and {type:'dialog', accept:true or false, text} to respond. Mark an owned tab that holds the work product with operation:'deliver' so it stays open in Chrome for the user instead of closing when control ends. Ask the user before irreversible submissions, purchases, payments, deletions, sending messages, or accepting legal terms; proceed without asking for reading, navigation, and reversible input that does not submit anything. Never solve CAPTCHAs, enter passwords, one-time codes, or payment secrets: stop and hand the page to the user. On a stale-fence error, observe once and retry once; never replay an uncertain mutation—observe first. Prefer mode:'owned' background tabs for new work so user tabs stay untouched. Paired Chrome is the default; mode:'profile' selects it explicitly, and mode:'isolated' uses the user-started temporary headless browser. Profile tabs can group or ungroup granted inactive tabs. The first observe or action claims a profile tab for this Session; lease:'other' means another Session controls it, so choose another tab or wait. Call operation:'release' with mode:'profile' when finished with a tab; control also ends when the Session goes idle. Owned mode only creates and closes its own tabs. Focus emulation keeps controlled pages visible and unthrottled while attached; it ends when the debugger detaches.",
+ "inputSchema": {
+  "anyOf": [
+   {
+    "type": "object",
+    "properties": {
+     "operation": {
+      "type": "string",
+      "enum": [
+       "status"
+      ]
+     },
+     "mode": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "isolated",
+         "owned",
+         "profile"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "operation"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "operation": {
+      "type": "string",
+      "enum": [
+       "tabs"
+      ]
+     },
+     "mode": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "isolated",
+         "owned",
+         "profile"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "operation"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "operation": {
+      "type": "string",
+      "enum": [
+       "observe"
+      ]
+     },
+     "mode": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "owned",
+         "profile"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "tabID": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^btab_"
+       }
+      ]
+     },
+     "generation": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "allOf": [
+         {
+          "exclusiveMinimum": 0
+         }
+        ]
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "diff": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "operation",
+     "tabID",
+     "generation"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "operation": {
+      "type": "string",
+      "enum": [
+       "observe"
+      ]
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "isolated"
+      ]
+     },
+     "tabID": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^btab_"
+       }
+      ]
+     },
+     "generation": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "allOf": [
+         {
+          "exclusiveMinimum": 0
+         }
+        ]
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "diff": {
+      "type": "boolean"
+     },
+     "instanceID": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^ibrowser_"
+       }
+      ]
+     }
+    },
+    "required": [
+     "operation",
+     "mode",
+     "tabID",
+     "generation",
+     "instanceID"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "operation": {
+      "type": "string",
+      "enum": [
+       "action"
+      ]
+     },
+     "mode": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "owned",
+         "profile"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "tabID": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^btab_"
+       }
+      ]
+     },
+     "generation": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "allOf": [
+         {
+          "exclusiveMinimum": 0
+         }
+        ]
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "documentGeneration": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "allOf": [
+         {
+          "exclusiveMinimum": 0
+         }
+        ]
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "observationRevision": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "allOf": [
+         {
+          "minimum": 0
+         }
+        ]
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "action": {
+      "anyOf": [
+       {
+        "anyOf": [
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "navigate"
+            ]
+           },
+           "url": {
+            "type": "string",
+            "allOf": [
+             {
+              "maxLength": 8192
+             },
+             {
+              "maxLength": 8192
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "url"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "click"
+            ]
+           },
+           "ref": {
+            "type": "string",
+            "allOf": [
+             {
+              "pattern": "^b[1-9][0-9]{0,3}$"
+             }
+            ]
+           },
+           "locator": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 512
+             }
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "type"
+            ]
+           },
+           "ref": {
+            "type": "string",
+            "allOf": [
+             {
+              "pattern": "^b[1-9][0-9]{0,3}$"
+             }
+            ]
+           },
+           "locator": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 512
+             }
+            ]
+           },
+           "text": {
+            "type": "string",
+            "allOf": [
+             {
+              "maxLength": 8192
+             },
+             {
+              "maxLength": 8192
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "text"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "fill"
+            ]
+           },
+           "ref": {
+            "type": "string",
+            "allOf": [
+             {
+              "pattern": "^b[1-9][0-9]{0,3}$"
+             }
+            ]
+           },
+           "locator": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 512
+             }
+            ]
+           },
+           "text": {
+            "type": "string",
+            "allOf": [
+             {
+              "maxLength": 8192
+             },
+             {
+              "maxLength": 8192
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "text"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "select"
+            ]
+           },
+           "ref": {
+            "type": "string",
+            "allOf": [
+             {
+              "pattern": "^b[1-9][0-9]{0,3}$"
+             }
+            ]
+           },
+           "locator": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 512
+             }
+            ]
+           },
+           "values": {
+            "type": "array",
+            "items": {
+             "type": "string",
+             "allOf": [
+              {
+               "maxLength": 1024
+              }
+             ]
+            },
+            "allOf": [
+             {
+              "minItems": 1
+             },
+             {
+              "maxItems": 32
+             }
+            ]
+           },
+           "labels": {
+            "type": "array",
+            "items": {
+             "type": "string",
+             "allOf": [
+              {
+               "maxLength": 1024
+              }
+             ]
+            },
+            "allOf": [
+             {
+              "minItems": 1
+             },
+             {
+              "maxItems": 32
+             }
+            ]
+           },
+           "indexes": {
+            "anyOf": [
+             {
+              "type": "array",
+              "items": {
+               "anyOf": [
+                {
+                 "type": "integer",
+                 "allOf": [
+                  {
+                   "minimum": 0
+                  }
+                 ]
+                },
+                {
+                 "type": "string"
+                }
+               ]
+              },
+              "allOf": [
+               {
+                "minItems": 1
+               },
+               {
+                "maxItems": 32
+               }
+              ]
+             },
+             {
+              "type": "null"
+             }
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false,
+          "allOf": [
+           {
+            "maxProperties": 6
+           }
+          ]
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "check"
+            ]
+           },
+           "ref": {
+            "type": "string",
+            "allOf": [
+             {
+              "pattern": "^b[1-9][0-9]{0,3}$"
+             }
+            ]
+           },
+           "locator": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 512
+             }
+            ]
+           },
+           "checked": {
+            "type": "boolean"
+           }
+          },
+          "required": [
+           "type",
+           "checked"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "hover"
+            ]
+           },
+           "ref": {
+            "type": "string",
+            "allOf": [
+             {
+              "pattern": "^b[1-9][0-9]{0,3}$"
+             }
+            ]
+           },
+           "locator": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 512
+             }
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "scroll"
+            ]
+           },
+           "deltaY": {
+            "anyOf": [
+             {
+              "type": "integer",
+              "allOf": [
+               {
+                "minimum": -10000
+               },
+               {
+                "maximum": 10000
+               }
+              ]
+             },
+             {
+              "type": "string"
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "deltaY"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "capture"
+            ]
+           },
+           "ref": {
+            "type": "string",
+            "allOf": [
+             {
+              "pattern": "^b[1-9][0-9]{0,3}$"
+             }
+            ]
+           },
+           "clip": {
+            "type": "object",
+            "properties": {
+             "x": {
+              "type": "integer",
+              "allOf": [
+               {
+                "minimum": 0
+               },
+               {
+                "maximum": 100000
+               }
+              ]
+             },
+             "y": {
+              "type": "integer",
+              "allOf": [
+               {
+                "minimum": 0
+               },
+               {
+                "maximum": 100000
+               }
+              ]
+             },
+             "width": {
+              "type": "integer",
+              "allOf": [
+               {
+                "minimum": 1
+               },
+               {
+                "maximum": 100000
+               }
+              ]
+             },
+             "height": {
+              "type": "integer",
+              "allOf": [
+               {
+                "minimum": 1
+               },
+               {
+                "maximum": 100000
+               }
+              ]
+             }
+            },
+            "required": [
+             "x",
+             "y",
+             "width",
+             "height"
+            ],
+            "additionalProperties": false
+           },
+           "fullPage": {
+            "type": "boolean"
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "group"
+            ]
+           },
+           "tabIDs": {
+            "type": "array",
+            "items": {
+             "type": "string",
+             "allOf": [
+              {
+               "pattern": "^btab_"
+              }
+             ]
+            },
+            "allOf": [
+             {
+              "minItems": 1
+             },
+             {
+              "maxItems": 8
+             }
+            ]
+           },
+           "title": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 64
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "tabIDs",
+           "title"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "group_control"
+            ]
+           },
+           "tabIDs": {
+            "type": "array",
+            "items": {
+             "type": "string",
+             "allOf": [
+              {
+               "pattern": "^btab_"
+              }
+             ]
+            },
+            "allOf": [
+             {
+              "minItems": 1
+             },
+             {
+              "maxItems": 8
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "tabIDs"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "ungroup"
+            ]
+           },
+           "tabIDs": {
+            "type": "array",
+            "items": {
+             "type": "string",
+             "allOf": [
+              {
+               "pattern": "^btab_"
+              }
+             ]
+            },
+            "allOf": [
+             {
+              "minItems": 1
+             },
+             {
+              "maxItems": 8
+             }
+            ]
+           },
+           "groupID": {
+            "anyOf": [
+             {
+              "type": "integer",
+              "allOf": [
+               {
+                "minimum": 0
+               }
+              ]
+             },
+             {
+              "type": "string"
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "tabIDs",
+           "groupID"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "back"
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "forward"
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "reload"
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "key"
+            ]
+           },
+           "key": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 32
+             }
+            ]
+           },
+           "modifiers": {
+            "type": "array",
+            "items": {
+             "type": "string",
+             "enum": [
+              "Alt",
+              "Control",
+              "Meta",
+              "Shift"
+             ]
+            },
+            "allOf": [
+             {
+              "maxItems": 4
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "key"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "wait"
+            ]
+           },
+           "ref": {
+            "type": "string",
+            "allOf": [
+             {
+              "pattern": "^b[1-9][0-9]{0,3}$"
+             }
+            ]
+           },
+           "locator": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 512
+             }
+            ]
+           },
+           "state": {
+            "type": "string",
+            "enum": [
+             "attached",
+             "visible",
+             "hidden",
+             "detached"
+            ]
+           },
+           "url": {
+            "type": "string",
+            "allOf": [
+             {
+              "maxLength": 2048
+             },
+             {
+              "maxLength": 2048
+             },
+             {
+              "minLength": 1
+             }
+            ]
+           },
+           "load": {
+            "type": "string",
+            "enum": [
+             "domcontentloaded",
+             "load",
+             "networkidle"
+            ]
+           },
+           "text": {
+            "type": "string",
+            "allOf": [
+             {
+              "maxLength": 1024
+             },
+             {
+              "maxLength": 1024
+             },
+             {
+              "minLength": 1
+             }
+            ]
+           },
+           "timeoutMs": {
+            "anyOf": [
+             {
+              "anyOf": [
+               {
+                "type": "integer",
+                "allOf": [
+                 {
+                  "minimum": 0
+                 },
+                 {
+                  "maximum": 30000
+                 }
+                ]
+               },
+               {
+                "type": "string"
+               }
+              ]
+             },
+             {
+              "type": "null"
+             }
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false,
+          "allOf": [
+           {
+            "maxProperties": 8
+           }
+          ]
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "clipboard_read"
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "clipboard_write"
+            ]
+           },
+           "text": {
+            "type": "string",
+            "allOf": [
+             {
+              "maxLength": 65536
+             },
+             {
+              "maxLength": 65536
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "text"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "upload"
+            ]
+           },
+           "ref": {
+            "type": "string",
+            "allOf": [
+             {
+              "pattern": "^b[1-9][0-9]{0,3}$"
+             }
+            ]
+           },
+           "locator": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 512
+             }
+            ]
+           },
+           "paths": {
+            "type": "array",
+            "items": {
+             "type": "string",
+             "allOf": [
+              {
+               "maxLength": 4096
+              },
+              {
+               "maxLength": 4096
+              }
+             ]
+            },
+            "allOf": [
+             {
+              "minItems": 1
+             },
+             {
+              "maxItems": 8
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "paths"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "download"
+            ]
+           },
+           "timeoutMs": {
+            "anyOf": [
+             {
+              "anyOf": [
+               {
+                "type": "integer",
+                "allOf": [
+                 {
+                  "minimum": 0
+                 },
+                 {
+                  "maximum": 30000
+                 }
+                ]
+               },
+               {
+                "type": "string"
+               }
+              ]
+             },
+             {
+              "type": "null"
+             }
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "logs"
+            ]
+           },
+           "limit": {
+            "anyOf": [
+             {
+              "anyOf": [
+               {
+                "type": "integer",
+                "allOf": [
+                 {
+                  "minimum": 1
+                 },
+                 {
+                  "maximum": 100
+                 }
+                ]
+               },
+               {
+                "type": "string"
+               }
+              ]
+             },
+             {
+              "type": "null"
+             }
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "export"
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "webmcp_list"
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "webmcp_invoke"
+            ]
+           },
+           "name": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 128
+             }
+            ]
+           },
+           "arguments": {}
+          },
+          "required": [
+           "type",
+           "name"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "dialog"
+            ]
+           },
+           "accept": {
+            "type": "boolean"
+           },
+           "text": {
+            "type": "string",
+            "allOf": [
+             {
+              "maxLength": 4096
+             },
+             {
+              "maxLength": 4096
+             }
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         }
+        ]
+       },
+       {
+        "type": "string"
+       }
+      ]
+     }
+    },
+    "required": [
+     "operation",
+     "tabID",
+     "generation",
+     "documentGeneration",
+     "observationRevision",
+     "action"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "operation": {
+      "type": "string",
+      "enum": [
+       "action"
+      ]
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "isolated"
+      ]
+     },
+     "tabID": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^btab_"
+       }
+      ]
+     },
+     "generation": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "allOf": [
+         {
+          "exclusiveMinimum": 0
+         }
+        ]
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "documentGeneration": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "allOf": [
+         {
+          "exclusiveMinimum": 0
+         }
+        ]
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "observationRevision": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "allOf": [
+         {
+          "minimum": 0
+         }
+        ]
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "action": {
+      "anyOf": [
+       {
+        "anyOf": [
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "navigate"
+            ]
+           },
+           "url": {
+            "type": "string",
+            "allOf": [
+             {
+              "maxLength": 8192
+             },
+             {
+              "maxLength": 8192
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "url"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "click"
+            ]
+           },
+           "ref": {
+            "type": "string",
+            "allOf": [
+             {
+              "pattern": "^b[1-9][0-9]{0,3}$"
+             }
+            ]
+           },
+           "locator": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 512
+             }
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "type"
+            ]
+           },
+           "ref": {
+            "type": "string",
+            "allOf": [
+             {
+              "pattern": "^b[1-9][0-9]{0,3}$"
+             }
+            ]
+           },
+           "locator": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 512
+             }
+            ]
+           },
+           "text": {
+            "type": "string",
+            "allOf": [
+             {
+              "maxLength": 8192
+             },
+             {
+              "maxLength": 8192
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "text"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "fill"
+            ]
+           },
+           "ref": {
+            "type": "string",
+            "allOf": [
+             {
+              "pattern": "^b[1-9][0-9]{0,3}$"
+             }
+            ]
+           },
+           "locator": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 512
+             }
+            ]
+           },
+           "text": {
+            "type": "string",
+            "allOf": [
+             {
+              "maxLength": 8192
+             },
+             {
+              "maxLength": 8192
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "text"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "select"
+            ]
+           },
+           "ref": {
+            "type": "string",
+            "allOf": [
+             {
+              "pattern": "^b[1-9][0-9]{0,3}$"
+             }
+            ]
+           },
+           "locator": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 512
+             }
+            ]
+           },
+           "values": {
+            "type": "array",
+            "items": {
+             "type": "string",
+             "allOf": [
+              {
+               "maxLength": 1024
+              }
+             ]
+            },
+            "allOf": [
+             {
+              "minItems": 1
+             },
+             {
+              "maxItems": 32
+             }
+            ]
+           },
+           "labels": {
+            "type": "array",
+            "items": {
+             "type": "string",
+             "allOf": [
+              {
+               "maxLength": 1024
+              }
+             ]
+            },
+            "allOf": [
+             {
+              "minItems": 1
+             },
+             {
+              "maxItems": 32
+             }
+            ]
+           },
+           "indexes": {
+            "anyOf": [
+             {
+              "type": "array",
+              "items": {
+               "anyOf": [
+                {
+                 "type": "integer",
+                 "allOf": [
+                  {
+                   "minimum": 0
+                  }
+                 ]
+                },
+                {
+                 "type": "string"
+                }
+               ]
+              },
+              "allOf": [
+               {
+                "minItems": 1
+               },
+               {
+                "maxItems": 32
+               }
+              ]
+             },
+             {
+              "type": "null"
+             }
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false,
+          "allOf": [
+           {
+            "maxProperties": 6
+           }
+          ]
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "check"
+            ]
+           },
+           "ref": {
+            "type": "string",
+            "allOf": [
+             {
+              "pattern": "^b[1-9][0-9]{0,3}$"
+             }
+            ]
+           },
+           "locator": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 512
+             }
+            ]
+           },
+           "checked": {
+            "type": "boolean"
+           }
+          },
+          "required": [
+           "type",
+           "checked"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "hover"
+            ]
+           },
+           "ref": {
+            "type": "string",
+            "allOf": [
+             {
+              "pattern": "^b[1-9][0-9]{0,3}$"
+             }
+            ]
+           },
+           "locator": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 512
+             }
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "scroll"
+            ]
+           },
+           "deltaY": {
+            "anyOf": [
+             {
+              "type": "integer",
+              "allOf": [
+               {
+                "minimum": -10000
+               },
+               {
+                "maximum": 10000
+               }
+              ]
+             },
+             {
+              "type": "string"
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "deltaY"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "capture"
+            ]
+           },
+           "ref": {
+            "type": "string",
+            "allOf": [
+             {
+              "pattern": "^b[1-9][0-9]{0,3}$"
+             }
+            ]
+           },
+           "clip": {
+            "type": "object",
+            "properties": {
+             "x": {
+              "type": "integer",
+              "allOf": [
+               {
+                "minimum": 0
+               },
+               {
+                "maximum": 100000
+               }
+              ]
+             },
+             "y": {
+              "type": "integer",
+              "allOf": [
+               {
+                "minimum": 0
+               },
+               {
+                "maximum": 100000
+               }
+              ]
+             },
+             "width": {
+              "type": "integer",
+              "allOf": [
+               {
+                "minimum": 1
+               },
+               {
+                "maximum": 100000
+               }
+              ]
+             },
+             "height": {
+              "type": "integer",
+              "allOf": [
+               {
+                "minimum": 1
+               },
+               {
+                "maximum": 100000
+               }
+              ]
+             }
+            },
+            "required": [
+             "x",
+             "y",
+             "width",
+             "height"
+            ],
+            "additionalProperties": false
+           },
+           "fullPage": {
+            "type": "boolean"
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "group"
+            ]
+           },
+           "tabIDs": {
+            "type": "array",
+            "items": {
+             "type": "string",
+             "allOf": [
+              {
+               "pattern": "^btab_"
+              }
+             ]
+            },
+            "allOf": [
+             {
+              "minItems": 1
+             },
+             {
+              "maxItems": 8
+             }
+            ]
+           },
+           "title": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 64
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "tabIDs",
+           "title"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "group_control"
+            ]
+           },
+           "tabIDs": {
+            "type": "array",
+            "items": {
+             "type": "string",
+             "allOf": [
+              {
+               "pattern": "^btab_"
+              }
+             ]
+            },
+            "allOf": [
+             {
+              "minItems": 1
+             },
+             {
+              "maxItems": 8
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "tabIDs"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "ungroup"
+            ]
+           },
+           "tabIDs": {
+            "type": "array",
+            "items": {
+             "type": "string",
+             "allOf": [
+              {
+               "pattern": "^btab_"
+              }
+             ]
+            },
+            "allOf": [
+             {
+              "minItems": 1
+             },
+             {
+              "maxItems": 8
+             }
+            ]
+           },
+           "groupID": {
+            "anyOf": [
+             {
+              "type": "integer",
+              "allOf": [
+               {
+                "minimum": 0
+               }
+              ]
+             },
+             {
+              "type": "string"
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "tabIDs",
+           "groupID"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "back"
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "forward"
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "reload"
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "key"
+            ]
+           },
+           "key": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 32
+             }
+            ]
+           },
+           "modifiers": {
+            "type": "array",
+            "items": {
+             "type": "string",
+             "enum": [
+              "Alt",
+              "Control",
+              "Meta",
+              "Shift"
+             ]
+            },
+            "allOf": [
+             {
+              "maxItems": 4
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "key"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "wait"
+            ]
+           },
+           "ref": {
+            "type": "string",
+            "allOf": [
+             {
+              "pattern": "^b[1-9][0-9]{0,3}$"
+             }
+            ]
+           },
+           "locator": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 512
+             }
+            ]
+           },
+           "state": {
+            "type": "string",
+            "enum": [
+             "attached",
+             "visible",
+             "hidden",
+             "detached"
+            ]
+           },
+           "url": {
+            "type": "string",
+            "allOf": [
+             {
+              "maxLength": 2048
+             },
+             {
+              "maxLength": 2048
+             },
+             {
+              "minLength": 1
+             }
+            ]
+           },
+           "load": {
+            "type": "string",
+            "enum": [
+             "domcontentloaded",
+             "load",
+             "networkidle"
+            ]
+           },
+           "text": {
+            "type": "string",
+            "allOf": [
+             {
+              "maxLength": 1024
+             },
+             {
+              "maxLength": 1024
+             },
+             {
+              "minLength": 1
+             }
+            ]
+           },
+           "timeoutMs": {
+            "anyOf": [
+             {
+              "anyOf": [
+               {
+                "type": "integer",
+                "allOf": [
+                 {
+                  "minimum": 0
+                 },
+                 {
+                  "maximum": 30000
+                 }
+                ]
+               },
+               {
+                "type": "string"
+               }
+              ]
+             },
+             {
+              "type": "null"
+             }
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false,
+          "allOf": [
+           {
+            "maxProperties": 8
+           }
+          ]
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "clipboard_read"
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "clipboard_write"
+            ]
+           },
+           "text": {
+            "type": "string",
+            "allOf": [
+             {
+              "maxLength": 65536
+             },
+             {
+              "maxLength": 65536
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "text"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "upload"
+            ]
+           },
+           "ref": {
+            "type": "string",
+            "allOf": [
+             {
+              "pattern": "^b[1-9][0-9]{0,3}$"
+             }
+            ]
+           },
+           "locator": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 512
+             }
+            ]
+           },
+           "paths": {
+            "type": "array",
+            "items": {
+             "type": "string",
+             "allOf": [
+              {
+               "maxLength": 4096
+              },
+              {
+               "maxLength": 4096
+              }
+             ]
+            },
+            "allOf": [
+             {
+              "minItems": 1
+             },
+             {
+              "maxItems": 8
+             }
+            ]
+           }
+          },
+          "required": [
+           "type",
+           "paths"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "download"
+            ]
+           },
+           "timeoutMs": {
+            "anyOf": [
+             {
+              "anyOf": [
+               {
+                "type": "integer",
+                "allOf": [
+                 {
+                  "minimum": 0
+                 },
+                 {
+                  "maximum": 30000
+                 }
+                ]
+               },
+               {
+                "type": "string"
+               }
+              ]
+             },
+             {
+              "type": "null"
+             }
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "logs"
+            ]
+           },
+           "limit": {
+            "anyOf": [
+             {
+              "anyOf": [
+               {
+                "type": "integer",
+                "allOf": [
+                 {
+                  "minimum": 1
+                 },
+                 {
+                  "maximum": 100
+                 }
+                ]
+               },
+               {
+                "type": "string"
+               }
+              ]
+             },
+             {
+              "type": "null"
+             }
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "export"
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "webmcp_list"
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "webmcp_invoke"
+            ]
+           },
+           "name": {
+            "type": "string",
+            "allOf": [
+             {
+              "minLength": 1
+             },
+             {
+              "maxLength": 128
+             }
+            ]
+           },
+           "arguments": {}
+          },
+          "required": [
+           "type",
+           "name"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "enum": [
+             "dialog"
+            ]
+           },
+           "accept": {
+            "type": "boolean"
+           },
+           "text": {
+            "type": "string",
+            "allOf": [
+             {
+              "maxLength": 4096
+             },
+             {
+              "maxLength": 4096
+             }
+            ]
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "additionalProperties": false
+         }
+        ]
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "instanceID": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^ibrowser_"
+       }
+      ]
+     }
+    },
+    "required": [
+     "operation",
+     "mode",
+     "tabID",
+     "generation",
+     "documentGeneration",
+     "observationRevision",
+     "action",
+     "instanceID"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "operation": {
+      "type": "string",
+      "enum": [
+       "control"
+      ]
+     },
+     "mode": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "isolated"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "action": {
+      "type": "string",
+      "enum": [
+       "pause",
+       "resume"
+      ]
+     }
+    },
+    "required": [
+     "operation",
+     "action"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "operation": {
+      "type": "string",
+      "enum": [
+       "stop"
+      ]
+     },
+     "mode": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "isolated"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "operation"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "operation": {
+      "type": "string",
+      "enum": [
+       "open"
+      ]
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "owned"
+      ]
+     },
+     "generation": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "allOf": [
+         {
+          "exclusiveMinimum": 0
+         }
+        ]
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "url": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 8192
+       },
+       {
+        "maxLength": 8192
+       }
+      ]
+     }
+    },
+    "required": [
+     "operation",
+     "mode",
+     "generation",
+     "url"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "operation": {
+      "type": "string",
+      "enum": [
+       "close"
+      ]
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "owned"
+      ]
+     },
+     "tabID": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^btab_"
+       }
+      ]
+     },
+     "generation": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "allOf": [
+         {
+          "exclusiveMinimum": 0
+         }
+        ]
+       },
+       {
+        "type": "string"
+       }
+      ]
+     }
+    },
+    "required": [
+     "operation",
+     "mode",
+     "tabID",
+     "generation"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "operation": {
+      "type": "string",
+      "enum": [
+       "deliver"
+      ]
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "owned"
+      ]
+     },
+     "tabID": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^btab_"
+       }
+      ]
+     },
+     "generation": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "allOf": [
+         {
+          "exclusiveMinimum": 0
+         }
+        ]
+       },
+       {
+        "type": "string"
+       }
+      ]
+     }
+    },
+    "required": [
+     "operation",
+     "mode",
+     "tabID",
+     "generation"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "operation": {
+      "type": "string",
+      "enum": [
+       "release"
+      ]
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "profile"
+      ]
+     },
+     "tabID": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^btab_"
+       }
+      ]
+     },
+     "generation": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "allOf": [
+         {
+          "exclusiveMinimum": 0
+         }
+        ]
+       },
+       {
+        "type": "string"
+       }
+      ]
+     }
+    },
+    "required": [
+     "operation",
+     "mode",
+     "tabID",
+     "generation"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "operation": {
+      "type": "string",
+      "enum": [
+       "history"
+      ]
+     },
+     "mode": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "owned",
+         "profile"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "generation": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "allOf": [
+         {
+          "exclusiveMinimum": 0
+         }
+        ]
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "query": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 256
+       }
+      ]
+     },
+     "limit": {
+      "anyOf": [
+       {
+        "anyOf": [
+         {
+          "type": "integer",
+          "allOf": [
+           {
+            "minimum": 1
+           },
+           {
+            "maximum": 100
+           }
+          ]
+         },
+         {
+          "type": "string"
+         }
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "startTime": {
+      "anyOf": [
+       {
+        "anyOf": [
+         {
+          "type": "integer",
+          "allOf": [
+           {
+            "minimum": 0
+           }
+          ]
+         },
+         {
+          "type": "string"
+         }
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "endTime": {
+      "anyOf": [
+       {
+        "anyOf": [
+         {
+          "type": "integer",
+          "allOf": [
+           {
+            "minimum": 0
+           }
+          ]
+         },
+         {
+          "type": "string"
+         }
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "operation",
+     "generation"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "operation": {
+      "type": "string",
+      "enum": [
+       "history"
+      ]
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "isolated"
+      ]
+     },
+     "instanceID": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^ibrowser_"
+       }
+      ]
+     },
+     "generation": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "allOf": [
+         {
+          "exclusiveMinimum": 0
+         }
+        ]
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "query": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 256
+       }
+      ]
+     },
+     "limit": {
+      "anyOf": [
+       {
+        "anyOf": [
+         {
+          "type": "integer",
+          "allOf": [
+           {
+            "minimum": 1
+           },
+           {
+            "maximum": 100
+           }
+          ]
+         },
+         {
+          "type": "string"
+         }
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "startTime": {
+      "anyOf": [
+       {
+        "anyOf": [
+         {
+          "type": "integer",
+          "allOf": [
+           {
+            "minimum": 0
+           }
+          ]
+         },
+         {
+          "type": "string"
+         }
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "endTime": {
+      "anyOf": [
+       {
+        "anyOf": [
+         {
+          "type": "integer",
+          "allOf": [
+           {
+            "minimum": 0
+           }
+          ]
+         },
+         {
+          "type": "string"
+         }
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "operation",
+     "mode",
+     "instanceID",
+     "generation"
+    ],
+    "additionalProperties": false
+   }
+  ]
+ },
+ "outputSchema": {
+  "anyOf": [
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "status"
+      ]
+     },
+     "status": {
+      "$ref": "#/$defs/IsolatedBrowser.Status"
+     }
+    },
+    "required": [
+     "type",
+     "status"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "status"
+      ]
+     },
+     "status": {
+      "$ref": "#/$defs/Browser.Status"
+     }
+    },
+    "required": [
+     "type",
+     "status"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "tabs"
+      ]
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "isolated"
+      ]
+     },
+     "tabs": {
+      "type": "array",
+      "items": {
+       "$ref": "#/$defs/Browser.Tab"
+      }
+     }
+    },
+    "required": [
+     "type",
+     "mode",
+     "tabs"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "tabs"
+      ]
+     },
+     "tabs": {
+      "type": "array",
+      "items": {
+       "$ref": "#/$defs/Browser.Tab"
+      }
+     }
+    },
+    "required": [
+     "type",
+     "tabs"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "tabs"
+      ]
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "owned"
+      ]
+     },
+     "tabs": {
+      "type": "array",
+      "items": {
+       "$ref": "#/$defs/Browser.Tab"
+      }
+     }
+    },
+    "required": [
+     "type",
+     "mode",
+     "tabs"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "tabs"
+      ]
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "profile"
+      ]
+     },
+     "tabs": {
+      "type": "array",
+      "items": {
+       "$ref": "#/$defs/Browser.Tab"
+      }
+     }
+    },
+    "required": [
+     "type",
+     "mode",
+     "tabs"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "opened"
+      ]
+     },
+     "tab": {
+      "$ref": "#/$defs/Browser.Tab"
+     }
+    },
+    "required": [
+     "type",
+     "tab"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "closed"
+      ]
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "owned"
+      ]
+     }
+    },
+    "required": [
+     "type",
+     "mode"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "delivered"
+      ]
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "owned"
+      ]
+     },
+     "tab": {
+      "$ref": "#/$defs/Browser.Tab"
+     }
+    },
+    "required": [
+     "type",
+     "mode",
+     "tab"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "released"
+      ]
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "profile"
+      ]
+     }
+    },
+    "required": [
+     "type",
+     "mode"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "observation"
+      ]
+     },
+     "observation": {
+      "$ref": "#/$defs/IsolatedBrowser.Observation"
+     }
+    },
+    "required": [
+     "type",
+     "observation"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "observation"
+      ]
+     },
+     "observation": {
+      "$ref": "#/$defs/Browser.Observation"
+     }
+    },
+    "required": [
+     "type",
+     "observation"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "action"
+      ]
+     },
+     "result": {
+      "$ref": "#/$defs/IsolatedBrowser.ActionResult"
+     }
+    },
+    "required": [
+     "type",
+     "result"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "action"
+      ]
+     },
+     "result": {
+      "$ref": "#/$defs/Browser.ActionResult"
+     }
+    },
+    "required": [
+     "type",
+     "result"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "history"
+      ]
+     },
+     "result": {
+      "$ref": "#/$defs/Browser.HistoryResult"
+     }
+    },
+    "required": [
+     "type",
+     "result"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "stopped"
+      ]
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "isolated"
+      ]
+     }
+    },
+    "required": [
+     "type",
+     "mode"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "stopped"
+      ]
+     }
+    },
+    "required": [
+     "type"
+    ],
+    "additionalProperties": false
+   }
+  ],
+  "$defs": {
+   "Browser.Page": {
+    "type": "object",
+    "properties": {
+     "origin": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^https?:\\/\\/(?:\\[[0-9A-Fa-f:.]+\\]|[^/?#@:]+)(?::[0-9]+)?$"
+       }
+      ]
+     },
+     "path": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^\\/[^?#]*$"
+       }
+      ]
+     }
+    },
+    "required": [
+     "origin",
+     "path"
+    ],
+    "additionalProperties": false
+   },
+   "Browser.Tab": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^btab_"
+       }
+      ]
+     },
+     "sessionID": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^ses"
+       }
+      ]
+     },
+     "title": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 512
+       }
+      ]
+     },
+     "page": {
+      "$ref": "#/$defs/Browser.Page"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "shared",
+       "paused",
+       "unavailable"
+      ]
+     },
+     "generation": {
+      "type": "integer",
+      "allOf": [
+       {
+        "exclusiveMinimum": 0
+       }
+      ]
+     },
+     "documentGeneration": {
+      "type": "integer",
+      "allOf": [
+       {
+        "exclusiveMinimum": 0
+       }
+      ]
+     },
+     "observationRevision": {
+      "type": "integer",
+      "allOf": [
+       {
+        "minimum": 0
+       }
+      ]
+     },
+     "pauseReason": {
+      "type": "string",
+      "enum": [
+       "user_active",
+       "requested",
+       "uncertain",
+       "disconnected"
+      ]
+     },
+     "uncertainCallID": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       },
+       {
+        "maxLength": 512
+       }
+      ]
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "owned",
+       "profile"
+      ]
+     },
+     "lease": {
+      "type": "string",
+      "enum": [
+       "self",
+       "other"
+      ]
+     },
+     "groupID": {
+      "type": "integer",
+      "allOf": [
+       {
+        "minimum": 0
+       }
+      ]
+     },
+     "deliverable": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "id",
+     "sessionID",
+     "title",
+     "page",
+     "status",
+     "generation",
+     "documentGeneration",
+     "observationRevision"
+    ],
+    "additionalProperties": false
+   },
+   "IsolatedBrowser.Status": {
+    "type": "object",
+    "properties": {
+     "mode": {
+      "type": "string",
+      "enum": [
+       "isolated"
+      ]
+     },
+     "state": {
+      "type": "string",
+      "enum": [
+       "unavailable",
+       "starting",
+       "ready",
+       "paused",
+       "stopped"
+      ]
+     },
+     "reason": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 1024
+       }
+      ]
+     },
+     "instanceID": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^ibrowser_"
+       }
+      ]
+     },
+     "tab": {
+      "$ref": "#/$defs/Browser.Tab"
+     }
+    },
+    "required": [
+     "mode",
+     "state"
+    ],
+    "additionalProperties": false
+   },
+   "Browser.Status": {
+    "type": "object",
+    "properties": {
+     "state": {
+      "type": "string",
+      "enum": [
+       "unavailable",
+       "pairing",
+       "connected",
+       "paused"
+      ]
+     },
+     "paired": {
+      "type": "boolean"
+     },
+     "profileGranted": {
+      "type": "boolean"
+     },
+     "generation": {
+      "type": "integer",
+      "allOf": [
+       {
+        "exclusiveMinimum": 0
+       }
+      ]
+     },
+     "pairingExpiresAt": {
+      "type": "integer",
+      "allOf": [
+       {
+        "minimum": 0
+       }
+      ]
+     },
+     "extensionID": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^[a-p]{32}$"
+       }
+      ]
+     },
+     "pendingCallID": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       },
+       {
+        "maxLength": 512
+       }
+      ]
+     }
+    },
+    "required": [
+     "state"
+    ],
+    "additionalProperties": false
+   },
+   "Browser.Element": {
+    "type": "object",
+    "properties": {
+     "ref": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^b[1-9][0-9]{0,3}$"
+       }
+      ]
+     },
+     "role": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 64
+       }
+      ]
+     },
+     "name": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 1024
+       }
+      ]
+     },
+     "description": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 1024
+       }
+      ]
+     },
+     "disabled": {
+      "type": "boolean"
+     },
+     "checked": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "string",
+        "enum": [
+         "mixed"
+        ]
+       }
+      ]
+     },
+     "pressed": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "string",
+        "enum": [
+         "mixed"
+        ]
+       }
+      ]
+     },
+     "expanded": {
+      "type": "boolean"
+     },
+     "selected": {
+      "type": "boolean"
+     },
+     "value": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 1024
+       }
+      ]
+     },
+     "sensitive": {
+      "type": "boolean",
+      "enum": [
+       true
+      ]
+     },
+     "locator": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 512
+       }
+      ]
+     },
+     "destination": {
+      "$ref": "#/$defs/Browser.Page"
+     },
+     "frame": {
+      "$ref": "#/$defs/Browser.Page"
+     }
+    },
+    "required": [
+     "ref",
+     "role",
+     "name"
+    ],
+    "additionalProperties": false
+   },
+   "Browser.Text": {
+    "type": "object",
+    "properties": {
+     "role": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 64
+       }
+      ]
+     },
+     "name": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 1024
+       }
+      ]
+     },
+     "frame": {
+      "$ref": "#/$defs/Browser.Page"
+     }
+    },
+    "required": [
+     "role",
+     "name"
+    ],
+    "additionalProperties": false
+   },
+   "Browser.Frame": {
+    "type": "object",
+    "properties": {
+     "page": {
+      "$ref": "#/$defs/Browser.Page"
+     },
+     "observed": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "page",
+     "observed"
+    ],
+    "additionalProperties": false
+   },
+   "IsolatedBrowser.Observation": {
+    "type": "object",
+    "properties": {
+     "tabID": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^btab_"
+       }
+      ]
+     },
+     "generation": {
+      "type": "integer",
+      "allOf": [
+       {
+        "exclusiveMinimum": 0
+       }
+      ]
+     },
+     "documentGeneration": {
+      "type": "integer",
+      "allOf": [
+       {
+        "exclusiveMinimum": 0
+       }
+      ]
+     },
+     "revision": {
+      "type": "integer",
+      "allOf": [
+       {
+        "minimum": 0
+       }
+      ]
+     },
+     "title": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 512
+       }
+      ]
+     },
+     "page": {
+      "$ref": "#/$defs/Browser.Page"
+     },
+     "elements": {
+      "type": "array",
+      "items": {
+       "$ref": "#/$defs/Browser.Element"
+      },
+      "allOf": [
+       {
+        "maxItems": 200
+       }
+      ]
+     },
+     "texts": {
+      "type": "array",
+      "items": {
+       "$ref": "#/$defs/Browser.Text"
+      },
+      "allOf": [
+       {
+        "maxItems": 100
+       }
+      ]
+     },
+     "frames": {
+      "type": "array",
+      "items": {
+       "$ref": "#/$defs/Browser.Frame"
+      },
+      "allOf": [
+       {
+        "maxItems": 32
+       }
+      ]
+     },
+     "delta": {
+      "type": "object",
+      "properties": {
+       "baseRevision": {
+        "type": "integer",
+        "allOf": [
+         {
+          "minimum": 0
+         }
+        ]
+       },
+       "removed": {
+        "type": "array",
+        "items": {
+         "type": "string",
+         "allOf": [
+          {
+           "maxLength": 512
+          }
+         ]
+        },
+        "allOf": [
+         {
+          "maxItems": 200
+         }
+        ]
+       }
+      },
+      "required": [
+       "baseRevision",
+       "removed"
+      ],
+      "additionalProperties": false
+     },
+     "truncated": {
+      "type": "boolean"
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "isolated"
+      ]
+     },
+     "instanceID": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^ibrowser_"
+       }
+      ]
+     }
+    },
+    "required": [
+     "tabID",
+     "generation",
+     "documentGeneration",
+     "revision",
+     "title",
+     "page",
+     "elements",
+     "truncated",
+     "mode",
+     "instanceID"
+    ],
+    "additionalProperties": false
+   },
+   "Browser.Observation": {
+    "type": "object",
+    "properties": {
+     "tabID": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^btab_"
+       }
+      ]
+     },
+     "generation": {
+      "type": "integer",
+      "allOf": [
+       {
+        "exclusiveMinimum": 0
+       }
+      ]
+     },
+     "documentGeneration": {
+      "type": "integer",
+      "allOf": [
+       {
+        "exclusiveMinimum": 0
+       }
+      ]
+     },
+     "revision": {
+      "type": "integer",
+      "allOf": [
+       {
+        "minimum": 0
+       }
+      ]
+     },
+     "title": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 512
+       }
+      ]
+     },
+     "page": {
+      "$ref": "#/$defs/Browser.Page"
+     },
+     "elements": {
+      "type": "array",
+      "items": {
+       "$ref": "#/$defs/Browser.Element"
+      },
+      "allOf": [
+       {
+        "maxItems": 200
+       }
+      ]
+     },
+     "texts": {
+      "type": "array",
+      "items": {
+       "$ref": "#/$defs/Browser.Text"
+      },
+      "allOf": [
+       {
+        "maxItems": 100
+       }
+      ]
+     },
+     "frames": {
+      "type": "array",
+      "items": {
+       "$ref": "#/$defs/Browser.Frame"
+      },
+      "allOf": [
+       {
+        "maxItems": 32
+       }
+      ]
+     },
+     "delta": {
+      "type": "object",
+      "properties": {
+       "baseRevision": {
+        "type": "integer",
+        "allOf": [
+         {
+          "minimum": 0
+         }
+        ]
+       },
+       "removed": {
+        "type": "array",
+        "items": {
+         "type": "string",
+         "allOf": [
+          {
+           "maxLength": 512
+          }
+         ]
+        },
+        "allOf": [
+         {
+          "maxItems": 200
+         }
+        ]
+       }
+      },
+      "required": [
+       "baseRevision",
+       "removed"
+      ],
+      "additionalProperties": false
+     },
+     "truncated": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "tabID",
+     "generation",
+     "documentGeneration",
+     "revision",
+     "title",
+     "page",
+     "elements",
+     "truncated"
+    ],
+    "additionalProperties": false
+   },
+   "Browser.CaptureOutput": {
+    "type": "object",
+    "properties": {
+     "mediaType": {
+      "type": "string",
+      "enum": [
+       "image/png"
+      ]
+     },
+     "data": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 1398110
+       },
+       {
+        "pattern": "^[A-Za-z0-9+/]*={0,2}$"
+       }
+      ]
+     },
+     "bytes": {
+      "type": "integer",
+      "allOf": [
+       {
+        "minimum": 0
+       },
+       {
+        "maximum": 1048576
+       }
+      ]
+     }
+    },
+    "required": [
+     "mediaType",
+     "data",
+     "bytes"
+    ],
+    "additionalProperties": false
+   },
+   "Browser.LogEntry": {
+    "type": "object",
+    "properties": {
+     "level": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 16
+       }
+      ]
+     },
+     "text": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 1024
+       }
+      ]
+     },
+     "frame": {
+      "$ref": "#/$defs/Browser.Page"
+     }
+    },
+    "required": [
+     "level",
+     "text"
+    ],
+    "additionalProperties": false
+   },
+   "Browser.SavedFile": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 4096
+       }
+      ]
+     },
+     "bytes": {
+      "type": "integer",
+      "allOf": [
+       {
+        "minimum": 0
+       }
+      ]
+     }
+    },
+    "required": [
+     "path",
+     "bytes"
+    ],
+    "additionalProperties": false
+   },
+   "Browser.WebMcpTool": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 128
+       }
+      ]
+     },
+     "description": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 1024
+       }
+      ]
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "additionalProperties": false
+   },
+   "Browser.DialogInfo": {
+    "type": "object",
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "alert",
+       "confirm",
+       "prompt",
+       "beforeunload"
+      ]
+     },
+     "message": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 1024
+       }
+      ]
+     },
+     "defaultPrompt": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 1024
+       }
+      ]
+     }
+    },
+    "required": [
+     "kind",
+     "message"
+    ],
+    "additionalProperties": false
+   },
+   "Browser.SelectedOption": {
+    "type": "object",
+    "properties": {
+     "value": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 1024
+       }
+      ]
+     },
+     "label": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 1024
+       }
+      ]
+     },
+     "index": {
+      "type": "integer",
+      "allOf": [
+       {
+        "minimum": 0
+       }
+      ]
+     }
+    },
+    "required": [
+     "label",
+     "index"
+    ],
+    "additionalProperties": false
+   },
+   "Browser.ControlState": {
+    "type": "object",
+    "properties": {
+     "checked": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "string",
+        "enum": [
+         "mixed"
+        ]
+       }
+      ]
+     },
+     "value": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 1024
+       }
+      ]
+     },
+     "selected": {
+      "type": "array",
+      "items": {
+       "$ref": "#/$defs/Browser.SelectedOption"
+      },
+      "allOf": [
+       {
+        "maxItems": 32
+       }
+      ]
+     },
+     "sensitive": {
+      "type": "boolean",
+      "enum": [
+       true
+      ]
+     }
+    },
+    "additionalProperties": false
+   },
+   "IsolatedBrowser.ActionResult": {
+    "type": "object",
+    "properties": {
+     "mode": {
+      "type": "string",
+      "enum": [
+       "isolated"
+      ]
+     },
+     "instanceID": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^ibrowser_"
+       }
+      ]
+     },
+     "callID": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       },
+       {
+        "maxLength": 512
+       }
+      ]
+     },
+     "tab": {
+      "$ref": "#/$defs/Browser.Tab"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "completed",
+       "rejected",
+       "uncertain"
+      ]
+     },
+     "message": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 1024
+       }
+      ]
+     },
+     "capture": {
+      "$ref": "#/$defs/Browser.CaptureOutput"
+     },
+     "text": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 65536
+       },
+       {
+        "maxLength": 65536
+       }
+      ]
+     },
+     "logs": {
+      "type": "array",
+      "items": {
+       "$ref": "#/$defs/Browser.LogEntry"
+      },
+      "allOf": [
+       {
+        "maxItems": 100
+       }
+      ]
+     },
+     "savedFile": {
+      "$ref": "#/$defs/Browser.SavedFile"
+     },
+     "webmcpTools": {
+      "type": "array",
+      "items": {
+       "$ref": "#/$defs/Browser.WebMcpTool"
+      },
+      "allOf": [
+       {
+        "maxItems": 100
+       }
+      ]
+     },
+     "dialog": {
+      "$ref": "#/$defs/Browser.DialogInfo"
+     },
+     "control": {
+      "$ref": "#/$defs/Browser.ControlState"
+     },
+     "frame": {
+      "$ref": "#/$defs/Browser.Page"
+     }
+    },
+    "required": [
+     "mode",
+     "instanceID",
+     "callID",
+     "tab",
+     "status"
+    ],
+    "additionalProperties": false
+   },
+   "Browser.DownloadInfo": {
+    "type": "object",
+    "properties": {
+     "filename": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 1024
+       }
+      ]
+     },
+     "state": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 32
+       }
+      ]
+     },
+     "bytesReceived": {
+      "type": "integer",
+      "allOf": [
+       {
+        "minimum": 0
+       }
+      ]
+     },
+     "totalBytes": {
+      "type": "integer",
+      "allOf": [
+       {
+        "minimum": 0
+       }
+      ]
+     },
+     "mime": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 128
+       }
+      ]
+     }
+    },
+    "required": [
+     "filename",
+     "state"
+    ],
+    "additionalProperties": false
+   },
+   "Browser.ActionResult": {
+    "type": "object",
+    "properties": {
+     "callID": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       },
+       {
+        "maxLength": 512
+       }
+      ]
+     },
+     "tab": {
+      "$ref": "#/$defs/Browser.Tab"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "completed",
+       "paused",
+       "rejected",
+       "uncertain"
+      ]
+     },
+     "message": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 1024
+       }
+      ]
+     },
+     "capture": {
+      "$ref": "#/$defs/Browser.CaptureOutput"
+     },
+     "groupID": {
+      "type": "integer",
+      "allOf": [
+       {
+        "minimum": 0
+       }
+      ]
+     },
+     "text": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 65536
+       },
+       {
+        "maxLength": 65536
+       }
+      ]
+     },
+     "download": {
+      "$ref": "#/$defs/Browser.DownloadInfo"
+     },
+     "logs": {
+      "type": "array",
+      "items": {
+       "$ref": "#/$defs/Browser.LogEntry"
+      },
+      "allOf": [
+       {
+        "maxItems": 100
+       }
+      ]
+     },
+     "savedFile": {
+      "$ref": "#/$defs/Browser.SavedFile"
+     },
+     "webmcpTools": {
+      "type": "array",
+      "items": {
+       "$ref": "#/$defs/Browser.WebMcpTool"
+      },
+      "allOf": [
+       {
+        "maxItems": 100
+       }
+      ]
+     },
+     "dialog": {
+      "$ref": "#/$defs/Browser.DialogInfo"
+     },
+     "control": {
+      "$ref": "#/$defs/Browser.ControlState"
+     },
+     "frame": {
+      "$ref": "#/$defs/Browser.Page"
+     }
+    },
+    "required": [
+     "callID",
+     "tab",
+     "status"
+    ],
+    "additionalProperties": false
+   },
+   "Browser.HistoryEntry": {
+    "type": "object",
+    "properties": {
+     "url": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 2048
+       },
+       {
+        "maxLength": 2048
+       }
+      ]
+     },
+     "title": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 512
+       }
+      ]
+     },
+     "lastVisitTime": {
+      "type": "integer",
+      "allOf": [
+       {
+        "minimum": 0
+       }
+      ]
+     },
+     "visitCount": {
+      "type": "integer",
+      "allOf": [
+       {
+        "minimum": 0
+       }
+      ]
+     }
+    },
+    "required": [
+     "url",
+     "title",
+     "lastVisitTime"
+    ],
+    "additionalProperties": false
+   },
+   "Browser.HistoryResult": {
+    "type": "object",
+    "properties": {
+     "entries": {
+      "type": "array",
+      "items": {
+       "$ref": "#/$defs/Browser.HistoryEntry"
+      },
+      "allOf": [
+       {
+        "maxItems": 100
+       }
+      ]
+     }
+    },
+    "required": [
+     "entries"
+    ],
+    "additionalProperties": false
+   }
+  }
+ }
+}

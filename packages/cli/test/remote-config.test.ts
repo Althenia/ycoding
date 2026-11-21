@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { NodeFileSystem } from "@effect/platform-node"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../src/paths"
 import { Effect } from "effect"
 import fs from "node:fs/promises"
 import os from "node:os"
@@ -21,7 +21,7 @@ function provide(root: string) {
     Effect.runPromise(
       effect.pipe(
         Effect.provide(
-          Global.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") }),
+          FrontendPaths.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") }),
         ),
         Effect.provide(NodeFileSystem.layer),
       ) as Effect.Effect<A, E, never>,
@@ -49,8 +49,8 @@ describe("relay URL resolution", () => {
       await expect(provide(root)(relayURL({ flag: "https://relay.example/ws/agent" }))).rejects.toThrow(/without a path/)
       expect(await provide(root)(relayURL({ flag: "https://relay.example/" }))).toBe("https://relay.example")
       expect(await provide(root)(relayURL({ flag: "http://127.0.0.1:8787" }))).toBe("http://127.0.0.1:8787")
-      expect(agentURL("https://relay.example")).toBe("wss://relay.example/ws/v4/agent")
-      expect(agentURL("http://127.0.0.1:8787")).toBe("ws://127.0.0.1:8787/ws/v4/agent")
+      expect(agentURL("https://relay.example")).toBe("wss://relay.example/ws/v5/agent")
+      expect(agentURL("http://127.0.0.1:8787")).toBe("ws://127.0.0.1:8787/ws/v5/agent")
       expect(assertEnrolledRelay({ requested: "https://relay.example", enrolled: "https://relay.example/" })).toBe(
         "https://relay.example",
       )

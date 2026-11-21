@@ -1,8 +1,7 @@
 import { expect, spyOn, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
 import { Effect, FileSystem } from "effect"
-import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../src/frontend-paths"
 import { createEventStream, createFetch, directory, json, sessionSnapshot } from "./fixture/tui-client"
 
 test("SIGHUP clears title and disposes scoped resources once", async () => {
@@ -21,7 +20,7 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
   const listeners = new Set(process.listeners("SIGHUP"))
   const events = createEventStream()
   const calls = createFetch(undefined, events)
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  const server = calls.listen()
   const warnings = process.listeners("warning").filter((listener) => listener.name === "onWarning")
   const output: string[] = []
   const logs: Array<{ level: string; message: string; tags: Readonly<Record<string, unknown>> }> = []
@@ -41,7 +40,7 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
         log: (level, message, tags) => {
           logs.push({ level, message, tags })
         },
-      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
+      }).pipe(Effect.provide(FrontendPaths.layer), Effect.provide(FileSystem.layerNoop({}))),
     )
     await ready
     const warning = new Error("Synthetic lifecycle warning")
@@ -80,7 +79,7 @@ test("Escape never exits and Ctrl+C requires two presses", async () => {
   }
   const events = createEventStream()
   const calls = createFetch(undefined, events)
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  const server = calls.listen()
 
   try {
     const { run } = await import("../src/app")
@@ -93,7 +92,7 @@ test("Escape never exits and Ctrl+C requires two presses", async () => {
         args: {},
         terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
         log: () => {},
-      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
+      }).pipe(Effect.provide(FrontendPaths.layer), Effect.provide(FileSystem.layerNoop({}))),
     ).then(() => {
       resolved = true
     })
@@ -161,7 +160,7 @@ test("session lifecycle updates the terminal title and prints the epilogue after
     if (url.pathname === "/api/vcs/branch") return json({ location: { directory }, data: {} })
     return undefined
   }, events)
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  const server = calls.listen()
   const originalWrite = process.stdout.write.bind(process.stdout)
   let stdout = ""
   process.stdout.write = ((chunk: string | Uint8Array) => {
@@ -179,7 +178,7 @@ test("session lifecycle updates the terminal title and prints the epilogue after
         args: { sessionID: "dummy" },
         terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
         log: () => {},
-      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
+      }).pipe(Effect.provide(FrontendPaths.layer), Effect.provide(FileSystem.layerNoop({}))),
     )
 
     await initialTitleSet
@@ -307,7 +306,7 @@ test("explicit session bootstrap restores its location-scoped model without an i
     if (url.pathname === "/api/form/request") return json({ location, data: [] })
     return undefined
   }, events)
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  const server = calls.listen()
 
   let titled!: () => void
   const titleReady = new Promise<void>((resolve) => {
@@ -329,7 +328,7 @@ test("explicit session bootstrap restores its location-scoped model without an i
         args: { sessionID: "ses_resume" },
         terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
         log: () => {},
-      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
+      }).pipe(Effect.provide(FrontendPaths.layer), Effect.provide(FileSystem.layerNoop({}))),
     )
 
     await titleReady

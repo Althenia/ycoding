@@ -131,7 +131,7 @@ for (const change of ["cancel", "child", "text"] as const) it.effect(`the subage
     Effect.provideService(Permission.Service, permission), Effect.provide(Layer.succeed(PluginRuntime.Service, PluginRuntime.Service.of({
       orchestration, session: sessions,
       job: { start: unavailable, wait: unavailable, block: unavailable, background: unavailable, cancel: unavailable, noticeAdmitted: unavailable },
-      location: { agent: { list: unavailable } },
+      location: { agent: { list: unavailable }, integration: { accountSkills: { read: unavailable } } },
     }))))
   const original = { action: "send", sessionID: fixture.child.id, text: "Approved input", delivery: "steer" }
   const changed = change === "cancel" ? { action: "cancel", sessionID: fixture.child.id }
@@ -165,7 +165,7 @@ it.effect("the subagent control tool never exposes an authorization cause throug
     Effect.provideService(Permission.Service, permission), Effect.provide(Layer.succeed(PluginRuntime.Service, PluginRuntime.Service.of({
       orchestration: { ...orchestration, switchModel: () => Effect.fail(authorization) }, session: sessions,
       job: { start: unavailable, wait: unavailable, block: unavailable, background: unavailable, cancel: unavailable, noticeAdmitted: unavailable },
-      location: { agent: { list: unavailable } },
+      location: { agent: { list: unavailable }, integration: { accountSkills: { read: unavailable } } },
     }))))
   const settlement = yield* settleTool(registry, { sessionID: fixture.root.id, ...toolIdentity,
     call: { type: "tool-call", id: "call_auth_switch", name: "auth_control",
@@ -191,7 +191,7 @@ it.effect("the subagent control tool reports bounded corrected permission feedba
     Effect.provideService(Permission.Service, permission), Effect.provide(Layer.succeed(PluginRuntime.Service, PluginRuntime.Service.of({
       orchestration: { ...orchestration, switchModel: () => Effect.fail(corrected) }, session: sessions,
       job: { start: unavailable, wait: unavailable, block: unavailable, background: unavailable, cancel: unavailable, noticeAdmitted: unavailable },
-      location: { agent: { list: unavailable } },
+      location: { agent: { list: unavailable }, integration: { accountSkills: { read: unavailable } } },
     }))))
   const settlement = yield* settleTool(registry, { sessionID: fixture.root.id, ...toolIdentity,
     call: { type: "tool-call", id: "call_corrected_switch", name: "corrected_control",

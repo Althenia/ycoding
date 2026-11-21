@@ -1,9 +1,9 @@
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../paths"
 import {
   InstallationChannel,
   InstallationLocal,
   InstallationVersion,
-} from "@ycoding-ai/core/installation/version"
+} from "../version"
 import { Context, Effect, FileSystem, Layer } from "effect"
 import { parse, type ParseError } from "jsonc-parser"
 import path from "node:path"
@@ -58,7 +58,7 @@ export const layerWith = (options: Options = {}) =>
     Service,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
-      const global = yield* Global.Service
+      const global = yield* FrontendPaths.Service
       const local = options.local ?? InstallationLocal
       const version = options.version ?? InstallationVersion
       const disabled = ["1", "true"].includes(process.env.YCODING_DISABLE_AUTOUPDATE?.toLowerCase() ?? "")

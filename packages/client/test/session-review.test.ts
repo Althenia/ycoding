@@ -33,7 +33,9 @@ test("promise review methods serialize the family path and kind-tagged decision"
     fetch: async (input, init) => {
       const request = input instanceof Request ? input : new Request(input, init)
       requests.push(request)
-      return request.method === "GET" ? Response.json({ data: [item, { ...item, reason: "disabled" }] }) : new Response(null, { status: 204 })
+      return request.method === "GET"
+        ? Response.json({ data: [item, { ...item, reason: "disabled" }] })
+        : new Response(null, { status: 204 })
     },
   })
   expect(await client.review.list({ sessionID: "ses_root" })).toEqual([item, { ...item, reason: "disabled" }])
@@ -56,7 +58,9 @@ test("Effect review methods decode item contracts and serialize the same decisio
     return Effect.succeed(
       HttpClientResponse.fromWeb(
         request,
-        request.method === "GET" ? Response.json({ data: [item, { ...item, reason: "disabled" }] }) : new Response(null, { status: 204 }),
+        request.method === "GET"
+          ? Response.json({ data: [item, { ...item, reason: "disabled" }] })
+          : new Response(null, { status: 204 }),
       ),
     )
   })

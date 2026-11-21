@@ -9,7 +9,15 @@ test("native builds enable bytecode while retaining minified code-split ESM", as
     const preload = path.join(directory, "capture.js")
     await Bun.write(
       preload,
-      `Bun.build = async (options) => {
+      `import { mock } from "bun:test"
+      import path from "node:path"
+      mock.module(path.join(process.cwd(), "script/runtime.ts"), () => ({
+        buildRuntime: async () => ({ path: "/fixture/runtime.br", sha256: "runtime-hash", payloadSha256: "payload-hash", dispose: async () => {} }),
+      }))
+      mock.module(path.join(process.cwd(), "script/plugin-sdk.ts"), () => ({
+        PluginSDKAsset: { build: async () => ({ path: "/fixture/sdk.mjs", digest: "sdk-hash" }) },
+      }))
+      Bun.build = async (options) => {
         console.log("BUILD_OPTIONS=" + JSON.stringify({
           bytecode: options.bytecode,
           format: options.format,

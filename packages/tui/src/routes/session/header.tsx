@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show, useContext } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationVersion } from "../../build-version"
 import type { ModelDaybreak, SessionMessageAssistant } from "@ycoding-ai/client"
 import { useData } from "../../context/data"
 import { Keymap } from "../../context/keymap"

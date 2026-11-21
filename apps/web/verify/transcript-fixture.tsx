@@ -188,21 +188,7 @@ const longMessages = (prefix: string, count: number): readonly RemoteMessageView
   { kind: "assistant", id: `${prefix}_answer_${index}`, agent: "god", parts: [{ kind: "text", ordinal: 0, text: `Response ${index}\n\n${Array.from({ length: 1 + index % 5 }, () => "A detailed paragraph of work. ".repeat(6)).join("\n\n")}` }], created: index * 2 + 1, completed: index * 2 + 2 },
 ]).flat()
 let imageFetches = 0
-if (imagesMode) {
-  const originalFetch = window.fetch.bind(window)
-  window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input
-    if (url.endsWith(`/attachments/${"a".repeat(64)}`)) {
-      imageFetches += 1
-      await new Promise((resolve) => setTimeout(resolve, 35))
-      return new Response(JSON.stringify({ mime: "image/png", bytes: 4_096, data: plot.toDataURL("image/png").split(",")[1] }), { headers: { "content-type": "application/json" } })
-    }
-    if (url.endsWith(`/attachments/${"c".repeat(64)}`)) return new Response(null, { status: 404 })
-    if (new URLSearchParams(location.search).has("imageCache") && /\/attachments\/[a-f0-9]{64}$/.test(url))
-      return Response.json({ mime: "image/png", bytes: 4_096, data: plot.toDataURL("image/png").split(",")[1] })
-    return originalFetch(input, init)
-  }, { preconnect: window.fetch.preconnect })
-}
+const imageBytes = Uint8Array.from(atob(plot.toDataURL("image/png").split(",")[1]!), (char) => char.charCodeAt(0))
 let streamedImageText = ""
 const imageSnapshot = () => readSnapshot({ sourceEpoch: "epoch_1", session: { id: "ses_a" }, watermark: { type: "log.synced", aggregateID: "ses_a", seq: 12 }, messages: [
   { id: "msg_image", type: "user", text: "Review these files", time: { created: 1, consumed: 2 }, files: [
@@ -233,7 +219,28 @@ function syntheticMessages(compacted: boolean): readonly RemoteMessageView[] {
 }
 const root = document.getElementById("app")
 if (!root) throw new Error("Missing transcript root")
-const store = createRemoteStore({ http: createRemoteHttp({ fetch: Object.assign(async () => new Response(null, { status: 401 }), { preconnect: () => {} }) }), createTransport: () => { throw new Error("Fixture transport must not connect") } })
+const store = createRemoteStore({
+  http: createRemoteHttp({ fetch: Object.assign(async () => imagesMode
+    ? Response.json({ user: { id: "user_fixture" }, session: { expiresAt: Date.now() + 60_000 }, devices: [{ id: "dev_1", name: "Fixture", createdAt: 1, status: "active", online: true }] })
+    : new Response(null, { status: 401 }), { preconnect: () => {} }) }),
+  createTransport: (_id, handlers) => {
+    if (!imagesMode) throw new Error("Fixture transport must not connect")
+    return {
+      connect: () => handlers.onStatus?.({ kind: "open" }), close: () => {}, setPriority: () => {}, status: () => ({ kind: "open" }),
+      request: async (operation, input) => {
+        const digest = input?.input?.digest
+        if (operation !== "session.attachment.read" || typeof digest !== "string" || digest === "c".repeat(64))
+          return { status: "failed", error: { code: "not_found", message: "Attachment not found" } }
+        if (digest === "a".repeat(64)) {
+          imageFetches++
+          await new Promise((resolve) => setTimeout(resolve, 35))
+        }
+        return { status: "ok", value: { data: imageBytes, mime: "image/png", release: () => {} } }
+      },
+    }
+  },
+})
+if (imagesMode) store.connect("dev_1")
 const fixtureState = { ...store.state(), activeSessionID: "ses_a", activeDeviceID: "dev_1" }
 const fixtureSnapshot = () => ({ ...fixtureState, history: history(), view: costsMode ? { ...createSessionView("ses_a"), messages: messages(), promptCosts: [costUnit("msg_cost_known", false), costUnit("msg_cost_partial", true)], promptCostState: "ready" as const } : fileChangesMode ? { ...createSessionView("ses_a"), status: fileChangeStatus(), messages: messages(), capturedChanges } : compactionMode ? { ...createSessionView("ses_a"), compactionHistory: compactionHistory() } : fileChangeStatus() === "running" ? { ...createSessionView("ses_a"), status: fileChangeStatus(), messages: messages() } : fixtureState.view })
 Object.defineProperty(store, "container", { value: new Store(fixtureSnapshot()) })

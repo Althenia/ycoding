@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationVersion } from "../../src/build-version"
 import { directory as defaultDirectory, json, sessionSnapshot } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT } from "../viewport"
 import { renderScreen } from "./harness"

@@ -4,7 +4,7 @@ import { Readable } from "node:stream"
 import { createGunzip } from "node:zlib"
 import semver from "semver"
 import type { UpdateProgress } from "./progress"
-import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
+import { BrowserExtension } from "../assets"
 import { interactionApplication, interactionCLIIdentifier, interactionExtensionFiles, interactionSigningRequirement, usesInteractionLayout } from "./interaction-layout"
 
 const repository = "Althenia/ycoding"

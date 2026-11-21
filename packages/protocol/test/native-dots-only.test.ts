@@ -1,9 +1,18 @@
 import { expect, test } from "bun:test"
 import { HttpApiMiddleware, OpenApi } from "effect/unstable/httpapi"
 import { makeApi } from "../src/api.js"
+import { Telemetry } from "@ycoding-ai/schema/telemetry"
+import { Schema } from "effect"
 
 class Location extends HttpApiMiddleware.Service<Location>()("native-only-location") {}
-const api = makeApi({ definitions: [], locationMiddleware: Location, catalogLocationMiddleware: Location, formLocationMiddleware: Location, sessionLocationMiddleware: Location, permissionLocationMiddleware: Location })
+const api = makeApi({
+  definitions: [],
+  locationMiddleware: Location,
+  catalogLocationMiddleware: Location,
+  formLocationMiddleware: Location,
+  sessionLocationMiddleware: Location,
+  permissionLocationMiddleware: Location,
+})
 
 test("native Dots exposes global access, computer administration and the Dot conversation over HTTP", () => {
   expect(Object.keys(api.groups["server.dots"].endpoints).sort()).toEqual([
@@ -26,4 +35,26 @@ test("the HTTP contract retires incoming MCP control while retaining ordinary MC
   expect(document.paths["/api/remote/mcp"]).toBeUndefined()
   const prompt = document.paths["/api/session/{sessionID}/prompt"]
   expect(JSON.stringify(prompt)).not.toContain("remoteSource")
+})
+
+test("HTTP telemetry pages and batch ingestion accept only current operations", () => {
+  const sample = {
+    kind: "request",
+    at: "2024-01-01T00:00:00.000Z",
+    operation: "session.dots.send",
+    outcome: "ok",
+    queueMs: 0,
+    totalMs: 0,
+  } as const
+  const page = { data: [{ receivedAt: 0, sample }], cursor: {} }
+  expect(() => Schema.decodeUnknownSync(Telemetry.Page)(page)).toThrow()
+  expect(() => Schema.decodeUnknownSync(Telemetry.Batch)({ samples: [sample] })).toThrow()
+  expect(() =>
+    Schema.decodeUnknownSync(Telemetry.Page)({
+      ...page,
+      data: [{ receivedAt: 0, sample: { ...sample, operation: "session.nonexistent" } }],
+    }),
+  ).toThrow()
+  const current = { samples: [{ ...sample, operation: "dots.get" as const }] }
+  expect(Schema.encodeSync(Telemetry.Batch)(Schema.decodeUnknownSync(Telemetry.Batch)(current))).toEqual(current)
 })

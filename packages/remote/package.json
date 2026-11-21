@@ -12,6 +12,9 @@
     "test": "bun test test/*.test.ts",
     "typecheck": "bun check -p tsconfig.json"
   },
+  "dependencies": {
+    "@ycoding-ai/protocol": "workspace:*"
+  },
   "devDependencies": {
     "@types/bun": "catalog:",
     "typescript": "catalog:"

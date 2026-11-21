@@ -105,7 +105,6 @@ export function detachConfirmationValid(input: { readonly status?: RemoteDotsSta
 
 export function keepAwakeIndicator(awake: KeepAwakeState): { readonly label: string; readonly tone: "success" | "danger" | "attention"; readonly detail?: string } | undefined {
   if (awake.read === "idle" || awake.read === "loading") return
-  if (awake.read === "outdated") return { label: "keep-awake unsupported", tone: "attention" }
   if (awake.read !== "ready") return { label: "keep-awake error", tone: "danger", detail: awake.message }
   const status = awake.status
   if (status === undefined || status.state === "off") return
