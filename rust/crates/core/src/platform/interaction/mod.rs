@@ -161,6 +161,7 @@ pub struct Authority {
 }
 struct Platforms {
     macos: Option<Arc<macos::Adapter>>,
+    #[cfg(unix)]
     isolated: Arc<isolated::Isolated>,
     profiles: std::path::PathBuf,
     chrome: Option<Arc<chrome::Transport>>,
@@ -202,15 +203,20 @@ impl Authority {
         if let Some(macos) = &macos {
             macos.mount(self)?;
         }
-        let isolated = isolated::Isolated::installed(macos.clone());
-        if let Err(error) = isolated.mount(self) {
-            if let Some(macos) = &macos {
-                macos.shutdown().await?;
+        #[cfg(unix)]
+        let isolated = {
+            let isolated = isolated::Isolated::installed(macos.clone());
+            if let Err(error) = isolated.mount(self) {
+                if let Some(macos) = &macos {
+                    macos.shutdown().await?;
+                }
+                return Err(error);
             }
-            return Err(error);
-        }
+            isolated
+        };
         *self.platforms.lock().unwrap_or_else(|e| e.into_inner()) = Some(Platforms {
             macos,
+            #[cfg(unix)]
             isolated,
             profiles,
             chrome: None,
@@ -498,10 +504,11 @@ impl Authority {
             self.retire(&session, None, "shutdown");
         }
         let drained = self.drain().await;
-        let isolated = match &platforms {
+        #[cfg(unix)]
+        let drained = drained.and(match &platforms {
             Some(platforms) => platforms.isolated.shutdown().await,
             None => Ok(()),
-        };
+        });
         let macos = match platforms.and_then(|p| p.macos) {
             Some(macos) => macos.shutdown().await,
             None => Ok(()),
@@ -511,7 +518,7 @@ impl Authority {
             .unwrap_or_else(|e| e.into_inner())
             .drivers
             .clear();
-        drained.and(isolated).and(macos)
+        drained.and(macos)
     }
     fn begin(
         self: &Arc<Self>,

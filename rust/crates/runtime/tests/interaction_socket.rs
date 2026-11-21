@@ -112,6 +112,11 @@ async fn absent_native_helper_never_grants_isolated_consent() {
             .unwrap(),
         )
         .unwrap();
+    if !cfg!(unix) {
+        assert_eq!(status["state"], "unavailable");
+        authority.shutdown().await.unwrap();
+        return;
+    }
     let generation = status["generation"].as_str().unwrap().to_owned();
     tokio::time::timeout(support::WAIT, async {
         loop {
