@@ -4,10 +4,7 @@ mod contract_hash;
 mod operation_generation;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?)
-        .join("../../..")
-        .canonicalize()?;
-    let source = root.join("protocol");
+    let source = PathBuf::from("../../../protocol");
     println!(
         "cargo:rerun-if-changed={}",
         source.join("ycoding/v5").display()
