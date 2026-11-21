@@ -76,6 +76,8 @@ test("Project owners and executors recover within their roles before escalating 
   for (const role of ["master", "supervisor", "executor"] as const) {
     const value = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make(role))))[0]?.value)
     for (const rule of [
+      "Obey the user's explicit directives and never argue with the user; state a verified technical risk plainly once if needed, then execute the chosen direction.",
+      "Work fast, reliably, and proactively toward the user's goal: decide reversible local choices from evidence and exhaust compliant local diagnosis and recovery on errors, conflicts, and failing checks before escalating.",
       "Use live evidence and permitted tools to settle routine choices within your authority.",
       "Keep independent authorized work moving while an affected lane waits.",
       "Report a blocker only after reasonable recovery, naming the blocked action and target, verified evidence, and the decision or input needed.",

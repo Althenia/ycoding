@@ -78,7 +78,7 @@ describe("SystemPromptPlugin", () => {
         ["o3", "You are YCoding, You and the user share the same workspace"],
         ["gpt-5-codex", "## Editing constraints"],
         ["gemini-2.5-pro", "# Core Mandates"],
-        ["claude-sonnet-4", "# Professional objectivity"],
+        ["claude-sonnet-4", "# Autonomy, obedience, and delivery"],
         ["kimi-k2", "# Prompt and Tool Use"],
         ["trinity", "what command should I run to list files"],
         ["meta/muse-spark-1.1", "YCoding powered by Meta Muse Spark"],
@@ -164,6 +164,46 @@ describe("SystemPromptPlugin", () => {
       expect(physicalOpenAI.system[0]?.text).toContain("You are YCoding, You and the user share the same workspace")
       expect(physicalCustom.system[0]?.text).toBe(fallback)
       expect(familyOpenAI.system[0]?.text).toContain("## Editing constraints")
+    }),
+  )
+
+  it.effect("harnesses every model-family and base prompt for obedience, autonomous decisions, and minimal escalation", () =>
+    Effect.gen(function* () {
+      const hooks = yield* PluginHooks.Service
+      const pluginHost = yield* makeHost
+      yield* Effect.forEach(SystemPromptPlugin.Plugins, (plugin) => plugin.effect(pluginHost), {
+        discard: true,
+      })
+      const modelIDs = [
+        "gpt-5",
+        "gpt-5-codex",
+        "gemini-2.5-pro",
+        "claude-sonnet-4",
+        "kimi-k2",
+        "trinity",
+        "meta/muse-spark-1.1",
+        "llama-3.3",
+      ] as const
+      const removed = [
+        "disagrees when necessary",
+        "Should I proceed?\nuser: Yes",
+        "Use one tool per message",
+        "When the user's request is vague, use the question tool",
+        "Obtain user approval for the proposed plan",
+        "Ask the user for clarification if there is anything unclear",
+        "If unsure, ask the user",
+        "Which one would you like to start with",
+      ]
+      for (const id of modelIDs) {
+        const event = context(id)
+        yield* hooks.trigger("session", "context", event)
+        const text = event.system[0]?.text ?? ""
+        expect(text).toMatch(/never argue|without arguing/i)
+        expect(text).toMatch(/obey the user's explicit goals/i)
+        expect(text).toMatch(/irreconcilable blocker|before treating anything as a blocker/i)
+        expect(text).toContain("Write natural, plain human prose in documents, notes, comments, commit messages, and replies")
+        for (const stale of removed) expect(text).not.toContain(stale)
+      }
     }),
   )
 })

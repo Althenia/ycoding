@@ -1128,4 +1128,46 @@ describe("Agent", () => {
       }
     }),
   )
+
+  it.effect("harnesses built-in agents, controllers, subagents, and helpers for obedience, self-reliance, and minimal escalation", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent.Service
+      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
+        Effect.provideService(Location.Service, Location.Service.of(testLocation)),
+      )
+      const shared = [
+        "Obey the user's explicit goals, directives, and preferences within enforced runtime permissions and guardrails; never argue with, lecture, or push back against the user.",
+        "An explicit user directive naming an action and target already authorizes it; do not ask for confirmation twice.",
+        "Decide reversible implementation, tooling, and debugging choices yourself instead of asking the user, and drive proactively and relentlessly toward the user's goal.",
+        "When an error, failing test, broken build, or environment issue occurs, diagnose the root cause and exhaust local compliant fixes before treating it as a blocker.",
+        "Escalate only an irreconcilable blocker or unrequested mandatory gate, and only after completing all non-blocked work.",
+        "Stop exploring once you have enough evidence to act, and run independent reads, searches, edits, and checks in parallel for fast, reliable delivery.",
+        "Write natural, specific, human prose in all documents, notes, comments, commit messages, and replies.",
+      ]
+      for (const id of ["GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein", "zeus"]) {
+        const item = yield* agent.get(Agent.ID.make(id))
+        if (!item?.system) throw new Error(`expected ${id} with a system prompt`)
+        for (const clause of shared) {
+          expect(item.system.split(clause)).toHaveLength(2)
+          expect(item.system.indexOf(clause)).toBeLessThan(item.system.indexOf("You are "))
+        }
+        const role = item.system.slice(item.system.indexOf("You are "))
+        expect(role).toMatch(/without arguing/i)
+      }
+      for (const id of ["GSD", "architech", "god", "yangi"]) {
+        const item = yield* agent.get(Agent.ID.make(id))
+        expect(item?.system).toContain("Resolve routine child snags, failed checks, scope details, and routing adjustments yourself without escalating to the user.")
+        expect(item?.system).toContain("Never pause to ask for plan sign-off, status confirmation, or permission to continue authorized work while the user's goal can be advanced.")
+      }
+      for (const id of ["occam", "omoikane", "wittgenstein", "zeus"]) {
+        const item = yield* agent.get(Agent.ID.make(id))
+        expect(item?.system).toContain("Make narrow, reversible local decisions from repository evidence, diagnose root causes, and exhaust compliant local fixes before escalating anything to the parent.")
+      }
+      const goal = yield* agent.get(Agent.ID.make("goal"))
+      expect(goal?.system).toContain("Obey the user's stated goal and latest explicit directives without arguing.")
+      expect(goal?.system).toContain("Direct fast, self-reliant execution that diagnoses and fixes errors, failing checks, and recoverable blockers locally before escalating.")
+      const btw = yield* agent.get(Agent.ID.make("btw"))
+      expect(btw?.system).toContain("Obey the user's direction without arguing")
+    }),
+  )
 })

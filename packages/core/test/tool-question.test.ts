@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
 import { Config } from "@ycoding-ai/core/config"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -306,4 +306,10 @@ describe("QuestionTool", () => {
     expect(settled.result.value).not.toContain("User has answered")
     expect(settled.output?.structured).toMatchObject({ answers: [["Careful"]], source })
   }))
+
+  test("reserves the question tool for genuinely blocked underivable input", () => {
+    expect(QuestionTool.description).toContain("Use this tool only as a last resort when progress is genuinely blocked")
+    expect(QuestionTool.description).toContain("Do not use it for routine preferences, minor ambiguities, reversible implementation choices")
+    expect(QuestionTool.description).not.toContain("Gather user preferences or requirements")
+  })
 })

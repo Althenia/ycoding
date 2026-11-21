@@ -14,13 +14,9 @@ import { Tool } from "./tool"
 
 export const name = "question"
 
-export const description = `Use this tool when you need to ask the user questions during execution. This allows you to:
-1. Gather user preferences or requirements
-2. Clarify ambiguous instructions
-3. Get decisions on implementation choices as you work
-4. Offer choices to the user about what direction to take.
+export const description = `Use this tool only as a last resort when progress is genuinely blocked on underivable user input that cannot be inferred from the repository, conventions, or reversible defaults. Do not use it for routine preferences, minor ambiguities, reversible implementation choices, or permission to continue authorized work. Decide those yourself and keep moving.
 
-When progress requires user input, a decision, or review, call this tool instead of ending with a prose-only request. Include the blocker and the minimum actionable question, then continue after the reply. Do not use task_complete while blocked. Keep permission and guardrail approvals on their native request paths.
+When progress requires user input, a decision, or review, call this tool instead of ending with a prose-only request, after finishing all independent non-blocked work first. Include the blocker and the minimum actionable question, then continue immediately after the reply. Do not use task_complete while blocked. Keep permission and guardrail approvals on their native request paths.
 
 Usage notes:
 - For required free-text input, use an empty options array
