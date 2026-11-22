@@ -67,6 +67,13 @@ impl Service {
                 display(&selected.id)
             )));
         }
+        if !catalog.model_runnable(&selected) {
+            return Err(provider_error(
+                input.model.is_some(),
+                model::Error::UnsupportedPackage,
+                &selected,
+            ));
+        }
         let integration = catalog
             .provider(&selected.provider_id)
             .and_then(|provider| provider.integration_id.as_ref())
@@ -202,28 +209,8 @@ impl Service {
                 self.cursor.as_deref(),
             )
             .await;
-        let model = loaded.map_err(|error| {
-            let message = if error == model::Error::UnsupportedPackage {
-                format!(
-                    "Unsupported package for {}/{}: {}",
-                    display(&selected.provider_id.0),
-                    display(&selected.id),
-                    contextual
-                        .package
-                        .as_ref()
-                        .map_or("unknown".into(), display)
-                )
-            } else {
-                error.to_string()
-            };
-            if input.model.is_some() {
-                return Error::Selection(message);
-            }
-            Error::Unavailable {
-                message,
-                service: Some(selected.provider_id.0.clone()),
-            }
-        })?;
+        let model =
+            loaded.map_err(|error| provider_error(input.model.is_some(), error, &contextual))?;
         let mut request = llm::Request::new(model);
         request.messages.push(llm::Message::user(input.prompt));
         let response = self
@@ -245,6 +232,30 @@ impl Service {
                 })
                 .collect::<Vec<_>>(),
         ))
+    }
+}
+
+fn provider_error(
+    explicit: bool,
+    error: model::Error,
+    selected: &ycoding_schema::model::Info,
+) -> Error {
+    let message = if error == model::Error::UnsupportedPackage {
+        format!(
+            "Unsupported package for {}/{}: {}",
+            display(&selected.provider_id.0),
+            display(&selected.id),
+            selected.package.as_ref().map_or("unknown".into(), display)
+        )
+    } else {
+        error.to_string()
+    };
+    if explicit {
+        return Error::Selection(message);
+    }
+    Error::Unavailable {
+        message,
+        service: Some(selected.provider_id.0.clone()),
     }
 }
 

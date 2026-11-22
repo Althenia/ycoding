@@ -38,7 +38,6 @@ import {
 } from "./context/runtime"
 import { DialogProvider, useDialog } from "./ui/dialog"
 import { DialogIntegration } from "./component/dialog-integration"
-import { DialogCustomEndpoint } from "./component/dialog-custom-endpoint"
 import { ErrorComponent, FatalCrashGuard } from "./component/error-component"
 import { PluginRouteMissing } from "./component/plugin-route-missing"
 import { EditorContextProvider } from "./context/editor"
@@ -94,7 +93,6 @@ import { win32DisableProcessedInput, win32FlushInputBuffer } from "./terminal-wi
 import { destroyRenderer } from "./util/renderer"
 import { cliErrorMessage, errorFormat, errorMessage } from "./util/error"
 import { writeHeapSnapshot } from "node:v8"
-import { saveCustomEndpoint } from "./custom-endpoint-save"
 import { KeepAwakeProvider, type KeepAwakeStatus } from "./keep-awake"
 import { RemoteProvider, type RemoteStatus } from "./remote-connector"
 import path from "node:path"
@@ -858,46 +856,8 @@ function App(props: { pair?: DialogPairCredentials; started: number; onData?: Tu
         suggested: !connected(),
         slash: { name: "connect" },
         run: () => {
-          const saveEndpoint = (result: Parameters<typeof saveCustomEndpoint>[1]) => {
-            dialog.clear()
-            const current = data.location.default()
-            const locationRef = { directory: current.directory, workspace: current.workspaceID }
-            void saveCustomEndpoint(FrontendPaths.Path.config, result, {
-              syncRegistration: () => data.location.integration.sync(),
-              registered: (providerID) => (data.location.integration.list() ?? []).some(
-                (integration) => integration.id === providerID && integration.methods.some((method) => method.type === "key"),
-              ),
-              connectKey: ({ integrationID, key, label }) => client.api.integration.connect.key({ integrationID, location: locationRef, key, label }),
-              activate: (credentialID) => client.api.credential.activate({ credentialID, location: locationRef }),
-              refresh: () => Promise.all([
-                data.location.integration.sync(), data.location.model.sync(), data.location.provider.sync(),
-              ]),
-            })
-              .then(({ credentialConnected }) => toast.show({ variant: "success", message: credentialConnected
-                ? "Endpoint saved and credential profile connected" : "Endpoint saved to YCoding config",
-              }))
-              .catch(toast.error)
-          }
           dialog.replace(() => (
-            <DialogIntegration
-              onConnected={(providerID) => dialog.replace(() => <DialogModel providerID={providerID} />)}
-              onRunpodEndpoint={() => dialog.replace(() => (
-                <DialogCustomEndpoint kind="runpod" onComplete={saveEndpoint} />
-              ))}
-              onCustomEndpoint={() => dialog.replace(() => (
-                <DialogCustomEndpoint
-                  providerOptions={(data.location.integration.list() ?? []).map((integration) => ({
-                    id: integration.id,
-                    name: integration.name,
-                    profiles: integration.connections.flatMap((connection) => connection.type === "credential"
-                      ? [{ id: connection.id, label: connection.label, active: connection.active }]
-                      : []),
-                  }))}
-                  onComplete={saveEndpoint}
-                  onCancel={() => dialog.clear()}
-                />
-              ))}
-            />
+            <DialogIntegration onConnected={(providerID) => dialog.replace(() => <DialogModel providerID={providerID} />)} />
           ))
         },
         category: "Integration",

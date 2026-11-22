@@ -27,6 +27,63 @@ fn id() -> session::Id {
 }
 
 #[tokio::test]
+async fn overlapping_initial_observations_remain_quiet_until_instructions_change() {
+    use ycoding_core::instructions;
+    let store = support::store();
+    store
+        .submit(|tx| {
+            ycoding_store::session::SessionTable::insert(tx, &support::record("ses_three"))
+        })
+        .unwrap()
+        .await
+        .unwrap();
+    let service = Service::new(store.client());
+    let sources = vec![instructions::constant("api/task", "Initial instructions")];
+    let changed = vec![instructions::constant("api/task", "Changed instructions")];
+    let ids: Vec<_> = ["ses_one", "ses_two", "ses_three"]
+        .into_iter()
+        .map(|id| session::Id::new(id).unwrap())
+        .collect();
+    for id in &ids {
+        let first = service.observe_instructions(id, &sources).await.unwrap();
+        let overlapping = service.observe_instructions(id, &sources).await.unwrap();
+        service.commit_instructions(first, 1).await.unwrap();
+        service.commit_instructions(overlapping, 2).await.unwrap();
+        service.prepare_instructions(id, &sources, 3).await.unwrap();
+        assert!(service.transcript(id).unwrap().is_empty());
+        let assembly = service.assemble_instructions(id, &sources).unwrap();
+        assert!(
+            assembly
+                .initial
+                .to_utf8()
+                .unwrap()
+                .contains("Initial instructions")
+        );
+    }
+    let first = service
+        .observe_instructions(&ids[1], &changed)
+        .await
+        .unwrap();
+    let overlapping = service
+        .observe_instructions(&ids[1], &changed)
+        .await
+        .unwrap();
+    service.commit_instructions(first, 4).await.unwrap();
+    service.commit_instructions(overlapping, 4).await.unwrap();
+    service
+        .prepare_instructions(&ids[1], &changed, 5)
+        .await
+        .unwrap();
+    let transcript = service.transcript(&ids[1]).unwrap();
+    assert_eq!(transcript.len(), 1);
+    assert!(
+        matches!(&transcript[0], ycoding_schema::session_message::Info::System(message) if message.text.as_str() == Some("Instructions updated: api/task"))
+    );
+    assert!(service.transcript(&ids[0]).unwrap().is_empty());
+    assert!(service.transcript(&ids[2]).unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn disabled_guidance_publishes_removed_and_reenables_by_same_key() {
     use ycoding_core::instructions;
     let store = support::store();

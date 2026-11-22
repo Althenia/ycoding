@@ -186,6 +186,22 @@ impl Service {
         let event_id = projector::random_event_id()?;
         self.client
             .submit(move |tx| {
+                let state = instruction_state::current(tx, &observation.session_id)?;
+                let current = state
+                    .as_ref()
+                    .map(|state| state.current_values.domain())
+                    .transpose()?;
+                let mut delta = JsonObject::new();
+                for (key, value) in observation.delta.0.iter() {
+                    let previous = current.as_ref().and_then(|current| current.0.get(key));
+                    let removed = matches!(value, JsonValue::String(value) if value.as_str() == Some("removed"));
+                    if if removed { previous.is_some() } else { previous != Some(value) } {
+                        delta.insert(key.clone(), value.clone());
+                    }
+                }
+                if state.is_some() && delta.is_empty() {
+                    return Ok(());
+                }
                 for (hash, value) in observation.blobs {
                     if instructions::hash(&value).encode() != JsonValue::String(hash.clone()) {
                         return Err(ycoding_store::Error::Rejected(
@@ -214,7 +230,7 @@ impl Service {
                         type_: "session.instructions.updated.2".into(),
                         data: ObjectEncoder::new()
                             .field("sessionID", &observation.session_id)
-                            .field("delta", &observation.delta)
+                            .field("delta", &instruction::Delta(delta))
                             .finish(),
                     },
                 )?;

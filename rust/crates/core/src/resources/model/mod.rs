@@ -1,5 +1,5 @@
 use super::{
-    catalog::{Catalog, merge_headers, merge_settings},
+    catalog::{Catalog, credential_matches_model, merge_headers, merge_settings},
     credential,
 };
 use std::fmt;
@@ -15,6 +15,8 @@ mod route;
 pub(crate) use route::from_catalog_model_base;
 pub use route::{ClaudeHost, from_catalog_model, from_catalog_model_with_claude};
 pub const UPSTREAM_PROVIDER_ID: &str = "opencode"; // YCODING_EXTERNAL_OPENCODE
+pub(crate) const BUILTIN_PROVIDER_IDS: [&str; 4] =
+    ["openai", "anthropic", "antigravity", "openrouter"];
 pub fn account_identity(credential: &credential::Info) -> LosslessString {
     let material = super::catalog::object(&[
         ("integrationID", credential.integration_id().encode()),
@@ -105,6 +107,12 @@ pub(crate) fn resolve_catalog(
     let provider = catalog
         .provider(&selection.provider_id)
         .ok_or(Error::ModelUnavailable)?;
+    if !catalog.provider_permitted(&selection.provider_id) {
+        return Err(Error::ModelUnavailable);
+    }
+    if !catalog.provider_runnable(&selection.provider_id) {
+        return Err(Error::UnsupportedPackage);
+    }
     if !catalog.provider_available(provider, saved) {
         return Err(Error::ModelUnavailable);
     }
@@ -120,6 +128,12 @@ pub(crate) fn resolve_catalog(
         } else {
             Error::ModelUnavailable
         })?;
+    if !catalog.model_runnable(&model) {
+        return Err(Error::UnsupportedPackage);
+    }
+    if connection.is_some_and(|credential| !credential_matches_model(&model, credential)) {
+        return Err(Error::ProfileUnavailable);
+    }
     let info = catalog
         .for_connection(&model, connection)
         .ok_or(Error::ModelUnavailable)?;

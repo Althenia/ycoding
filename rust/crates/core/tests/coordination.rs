@@ -394,6 +394,76 @@ fn role_instruction_revocation_is_explicit() {
     );
 }
 
+#[tokio::test]
+async fn coordination_instruction_release_text_matches_every_role_and_revocation() {
+    use ycoding_core::instructions::Observation;
+    let digest = |text: &LosslessString| {
+        ring::digest::digest(&ring::digest::SHA256, text.to_utf8().unwrap().as_bytes())
+            .as_ref()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    let cases = [
+        (
+            Role::Master,
+            false,
+            "b53045fc990c9ccea479c7fe978a965ed6fea8fdc2075eec2a191b8773ab88e0",
+        ),
+        (
+            Role::Master,
+            true,
+            "b53045fc990c9ccea479c7fe978a965ed6fea8fdc2075eec2a191b8773ab88e0",
+        ),
+        (
+            Role::Supervisor,
+            false,
+            "d1fce3602cc74069b7fb96fff7b708e9300b2fce8a5ec782b1957b7232e079a0",
+        ),
+        (
+            Role::Supervisor,
+            true,
+            "d1fce3602cc74069b7fb96fff7b708e9300b2fce8a5ec782b1957b7232e079a0",
+        ),
+        (
+            Role::Executor,
+            false,
+            "37a97c8fb06d37f374a265e6254dbab7ea7eb5c0e09a7bca64f8fcc749ea7ecf",
+        ),
+        (
+            Role::Executor,
+            true,
+            "3a0a9b4b59b0ded0661266ec9965b4a35f278a7afb7cfa29a1840291acf3d65f",
+        ),
+    ];
+    let master = coordination::instructions::initial(Role::Master, false);
+    for (role, coordinating, expected) in cases {
+        let source = coordination::instructions::source(role, coordinating);
+        let Observation::Value(value) = (source.read)().await.unwrap() else {
+            panic!()
+        };
+        let initial = (source.initial)(&value).unwrap();
+        assert_eq!(digest(&initial), expected, "{role:?}, {coordinating}");
+        assert_eq!((source.changed)(&value, &value).unwrap(), initial);
+        if role == Role::Executor {
+            let previous = ycoding_schema::JsonValue::String(master.clone());
+            let expected = if coordinating {
+                "c041987d38cfa740ce9e90c29299b41eaa18739ac350226615b89c0276e3d410"
+            } else {
+                "8536cfa6ff24dd29a406614f717a8fad861e3e301b7da70ca52c5d0695bd39ee"
+            };
+            assert_eq!(
+                digest(&(source.changed)(&previous, &value).unwrap()),
+                expected
+            );
+        }
+        assert_eq!(
+            digest(&(source.removed.as_ref().unwrap())(&value).unwrap()),
+            "4f028f721afa1d5f93762294ffe477e63c075a6fca47a4a0ffa99732a12d4c49"
+        );
+    }
+}
+
 fn once(value: &LosslessString, text: &str) {
     assert_eq!(
         (text, value.as_str().unwrap().split(text).count()),
@@ -452,9 +522,9 @@ fn coordination_guidance_preserves_owner_routing_native_gates_and_complete_deliv
         for clause in [
             "When the coordinator is instructed to do project work, delegate it.",
             "As Master, decompose the user's work into independent scopes without waiting to be asked and delegate each scope (including single-member work) to the appropriate supervisor/owner, using `assign` to establish or transfer supervisor ownership.",
-            "When member placement is specified, use `directory` for a chosen folder or `projectID` for an existing repository Project's canonical directory.",
-            "Use an absolute or home-relative path with `directory`, including for non-Git folders and repository subdirectories.",
-            "Use `name` with optional `repository` only for an explicitly requested managed worktree.",
+            "The supervising owner resolves the target Project folder or designated worktree before enrollment.",
+            "Pass exactly one placement: `directory` with an absolute or home-relative path for an explicit folder, including a non-Git folder or repository subdirectory; `projectID` for a repository Project's canonical checkout; or `name` with an explicit `repository` for a new managed worktree.",
+            "The Master performs the required native `project create` with the resolved placement and `ownerSessionID`, without a `prompt`.",
             "Settle routine member requests through `project answer` within recorded authority in every autonomy mode, Manual included.",
             "Safety and platform human gates, requests marked `requireExplicitDecision: true`, and hard or custom-rule guardrail approvals require an explicit human decision through their native controls.",
             "Deny rules and permission ceilings still hold",
@@ -501,7 +571,7 @@ fn coordination_guidance_preserves_owner_routing_native_gates_and_complete_deliv
             .split("\n\n")
             .next()
             .unwrap()
-            .contains("assign and transfer supervisor ownership")
+            .contains("Assign and transfer supervisor ownership")
     );
     let supervisor = coordination::instructions::initial(Role::Supervisor, false);
     assert!(
@@ -554,7 +624,7 @@ fn project_owners_and_executors_recover_within_their_roles_before_escalating_unr
 fn coordination_routes_member_lifecycle_through_the_owner_and_excludes_standalone_storage() {
     let master = coordination::instructions::initial(Role::Master, false);
     for text in [
-        "Coordinate all Project work through the established authorized owner route rather than directly creating, steering, updating, attaching, releasing, or removing member Sessions at the Master; use `assign` only to establish or transfer supervisor ownership to a live supervisor subagent the Master launched, and keep read-only oversight, escalations, and integration review at the Master.",
+        "Use `assign` only to establish or transfer ownership to a live supervisor subagent the Master launched; keep read-only oversight, escalations and integration review at the Master.",
         "A supervisor cannot call the `project` tool's Master-only create, attach, assign (including transfers), release, or remove operations; within authorized routes, a supervisor reuses a suitable owned member when available and steers, updates, or acts on owned member Sessions via `send`, `model`, `answer`, `inspect`, `escalate`, `interrupt`, and `list`.",
         "Sessions with `scope: standalone` are internal restricted storage, never Project members.",
     ] {
@@ -572,9 +642,7 @@ fn coordination_routes_member_lifecycle_through_the_owner_and_excludes_standalon
             .unwrap();
         value[..value.find("Coordinate and supervise only").unwrap()].to_owned()
     };
-    assert!(
-        prefix(Role::Master).contains("Coordinate through the established authorized owner route")
-    );
+    assert!(prefix(Role::Master).contains("Route Project work through recorded owners"));
     assert!(!prefix(Role::Supervisor).contains("`attach`"));
     assert!(
         !coordination::instructions::initial(Role::Executor, false)

@@ -122,21 +122,21 @@ async fn offered(
     let catalogs = catalog::services(invocation, location).await?;
     let providers = catalogs.models.catalog().integrations();
     let registry = registry(invocation, location)?;
-    let integrations = registry
-        .list_by(|a, b| {
-            ycoding_core::platform::filesystem::collation::compare(
-                &a.code_units().collect::<Vec<_>>(),
-                &b.code_units().collect::<Vec<_>>(),
-            )
-        })
-        .map_err(|_| target::error(10, "Integration registry unavailable"))?
-        .into_iter()
-        .filter(|integration| {
-            providers
-                .iter()
-                .any(|provider| provider.integration_id == integration.id)
-        })
-        .collect();
+    let mut integrations = Vec::new();
+    for provider in &providers {
+        if integrations
+            .iter()
+            .any(|item: &integration::Info| item.id == provider.integration_id)
+        {
+            continue;
+        }
+        if let Some(integration) = registry
+            .get(provider.integration_id.as_lossless())
+            .map_err(|_| target::error(10, "Integration registry unavailable"))?
+        {
+            integrations.push(integration);
+        }
+    }
     Ok((registry, integrations, providers))
 }
 

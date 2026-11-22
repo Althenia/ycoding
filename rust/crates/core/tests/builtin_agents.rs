@@ -53,7 +53,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.6,
             "#e67e22",
             include_str!("../src/resources/agent/prompts/GSD.md"),
-            "3c850e53c3038c9bfb319740159fd808f5f083f48d69e69344e617d799588925",
+            "25af778ddc2dddbbb43c6cbc6fb4e1630fbc8dc61620b48378bc8ac1ea05cd74",
         ),
         (
             "architech",
@@ -62,7 +62,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.5,
             "#3498db",
             include_str!("../src/resources/agent/prompts/architech.md"),
-            "844f078ec090a24b3ff7ec356819884313402ba20deeefb0b6fc283b6d00bcbc",
+            "fb1b23930a779c988db732735ecf1114049c0c2f42aca60b5892f2913e03833e",
         ),
         (
             "god",
@@ -71,7 +71,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.6,
             "#f1c40f",
             include_str!("../src/resources/agent/prompts/god.md"),
-            "b1434b9608127e0d8c1207a9f49d58baa7cea36729fdb1628916acc89236ade9",
+            "6ed63283d7ec52562e8f97a7594035d1e9dfd36c648968afa38005f34940b6bc",
         ),
         (
             "yangi",
@@ -80,7 +80,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.5,
             "#2ecc71",
             include_str!("../src/resources/agent/prompts/yangi.md"),
-            "72dede1259d2e3660417d6061fb4145d1ab58e203695a0a945cb8de5ae91db88",
+            "d6d13ac1ecebbd9956325d9db1a61a5dbfddb9822f50ca5b584a8d4fcd285167",
         ),
         (
             "occam",
@@ -89,7 +89,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.4,
             "#2ecc71",
             include_str!("../src/resources/agent/prompts/occam.md"),
-            "057e5a652ac9c94287eaaff275c40243999a0cfb894a55ce0f5a7ffcda04873f",
+            "e84d1a416027842ed5da0aec56d6c41c96bb74c65544a5e87e6f801f7553279d",
         ),
         (
             "omoikane",
@@ -98,7 +98,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.5,
             "#3498db",
             include_str!("../src/resources/agent/prompts/omoikane.md"),
-            "a378133023715b1becbdc259c524509230848e7a292f1a639409f096c85a53b2",
+            "19b22f627bf5f3b4ed025c257a88d93d7e251ce222c031577108f1a50567318c",
         ),
         (
             "wittgenstein",
@@ -107,7 +107,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.4,
             "#95a5a6",
             include_str!("../src/resources/agent/prompts/wittgenstein.md"),
-            "ac9e9b330cf5724c7bcb6f3c8b15d451c442bef1603da828b26dbf80f1e645e6",
+            "8989de8e82230b00aa8c6f6c828edf17bebb2b38af508726c1fd0b28c00c85e2",
         ),
         (
             "zeus",
@@ -116,7 +116,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.6,
             "#f1c40f",
             include_str!("../src/resources/agent/prompts/zeus.md"),
-            "604a9b5e16f38220dd9154d991175fc61877053adfff2ab054d1f8dd64e36bd3",
+            "e29fc22ed6f96905801f9e9d0a8fe4bdb8a114fda9ddab741081ecf1af6a4b84",
         ),
     ];
     for (id, name, mode, temperature, color, source, digest) in fixtures {
@@ -802,7 +802,8 @@ fn helper_and_delivery_prompts_keep_verified_execution_and_cleanup_explicit() {
     assert!(prompts::BTW.contains("Obey the user's direction without arguing"));
     assert!(prompts::PROJECT.contains("Done includes cleanup:"));
     assert!(prompts::PROJECT.contains("git merge-base --is-ancestor <branch> <target>"));
-    assert!(prompts::PROJECT.contains("git branch -d (never force-delete)"));
+    assert!(prompts::PROJECT.contains("git branch -d <branch>, without force"));
+    assert!(prompts::PROJECT.contains("repository and tool-managed caches"));
     assert!(prompts::MAIN.contains("Resolve routine child snags, failed checks, scope details, and routing adjustments yourself without escalating to the user."));
     assert!(prompts::MAIN.contains("Never pause to ask for plan sign-off, status confirmation, or permission to continue authorized work while the user's goal can be advanced."));
     assert!(prompts::CHILD.contains("Make narrow, reversible local decisions from repository evidence, diagnose root causes, and exhaust compliant local fixes before escalating anything to the parent."));

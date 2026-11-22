@@ -1,4 +1,4 @@
-use super::{config::Configuration, credential};
+use super::{config::Configuration, credential, model as routing};
 use crate::tools::policy::{Policy, PolicyEffect, Statement};
 use std::collections::BTreeSet;
 use ycoding_schema::{
@@ -33,6 +33,8 @@ pub struct Catalog {
     pub event_source: crate::event_feed::EventSource,
     pub providers: Vec<ProviderRecord>,
     default: Option<model::Ref>,
+    upstream: BTreeSet<provider::Id>,
+    compatible_endpoints: BTreeSet<provider::Id>,
     accounts: Vec<Account>,
     contextual: BTreeSet<provider::Id>,
     connected: BTreeSet<LosslessString>,
@@ -52,15 +54,33 @@ struct Generated {
 
 impl Catalog {
     pub fn integrations(&self) -> Vec<provider::IntegrationRef> {
-        self.providers
+        let builtins = routing::BUILTIN_PROVIDER_IDS
             .iter()
-            .filter(|record| self.provider_permitted(&record.provider.id))
-            .map(|record| provider::IntegrationRef {
-                provider_id: record.provider.id.clone(),
-                integration_id: record.provider.integration_id.clone().unwrap_or_else(|| {
-                    ycoding_schema::integration::Id::new(record.provider.id.0.clone())
-                        .expect("integration ID")
-                }),
+            .map(|id| provider::Id((*id).into()))
+            .filter(|id| self.provider_permitted(id));
+        let custom = self
+            .compatible_endpoints
+            .iter()
+            .filter(|id| id.0.as_str() != Some("openai") && self.provider_runnable(id))
+            .cloned();
+        builtins
+            .chain(custom)
+            .map(|provider_id| provider::IntegrationRef {
+                integration_id: self
+                    .provider(&provider_id)
+                    .and_then(|provider| provider.integration_id.clone())
+                    .filter(|integration| {
+                        provider_id
+                            .0
+                            .as_str()
+                            .is_none_or(|id| !routing::BUILTIN_PROVIDER_IDS.contains(&id))
+                            || integration.as_lossless() == &provider_id.0
+                    })
+                    .unwrap_or_else(|| {
+                        ycoding_schema::integration::Id::new(provider_id.0.clone())
+                            .expect("integration ID")
+                    }),
+                provider_id,
             })
             .collect()
     }
@@ -99,6 +119,10 @@ impl Catalog {
             .collect();
         Self {
             unsupported_temperature,
+            upstream: snapshots
+                .iter()
+                .map(|snapshot| snapshot.info.id.clone())
+                .collect(),
             event_source: Default::default(),
             providers: snapshots
                 .into_iter()
@@ -260,13 +284,61 @@ impl Catalog {
             })
             .map(|a| a.models.as_slice())
     }
+    pub fn provider_runnable(&self, id: &provider::Id) -> bool {
+        let package_allowed = |package| self.package_runnable(id, package);
+        self.provider_permitted(id)
+            && self
+                .providers
+                .iter()
+                .find(|record| &record.provider.id == id)
+                .is_some_and(|record| {
+                    record
+                        .provider
+                        .integration_id
+                        .as_ref()
+                        .is_none_or(|integration| {
+                            integration.as_lossless() == &id.0
+                                || self.compatible_endpoints.contains(id)
+                                    && id.0.as_str() != Some("openai")
+                                    && integration.as_lossless().as_str().is_some_and(|name| {
+                                        !routing::BUILTIN_PROVIDER_IDS.contains(&name)
+                                    })
+                        })
+                        && (package_allowed(&record.provider.package)
+                            || record
+                                .models
+                                .iter()
+                                .any(|model| model.package.as_ref().is_some_and(package_allowed)))
+                })
+    }
+    pub(crate) fn model_runnable(&self, model: &model::Info) -> bool {
+        self.provider_runnable(&model.provider_id)
+            && model
+                .package
+                .as_ref()
+                .is_some_and(|package| self.package_runnable(&model.provider_id, package))
+    }
+    fn package_runnable(&self, id: &provider::Id, package: &provider::Package) -> bool {
+        use routing::ProviderFamily::{Anthropic, Compatible, Google, OpenAI, OpenRouter};
+        match (id.0.as_str(), routing::family(package)) {
+            (Some("openai"), Ok(OpenAI))
+            | (Some("anthropic"), Ok(Anthropic))
+            | (Some("openrouter"), Ok(OpenRouter)) => true,
+            (Some("antigravity"), Ok(Google)) => package.as_str() == Some("aisdk:@ai-sdk/google"),
+            (_, Ok(Compatible)) => self.compatible_endpoints.contains(id),
+            _ => false,
+        }
+    }
     pub fn provider_available(
         &self,
         provider: &provider::Info,
         saved: &[credential::Info],
     ) -> bool {
-        if !self.provider_permitted(&provider.id) {
+        if !self.provider_runnable(&provider.id) {
             return false;
+        }
+        if self.compatible_endpoints.contains(&provider.id) {
+            return true;
         }
         if provider
             .overlays
@@ -366,6 +438,7 @@ impl Catalog {
             .or_else(|| relevant.last().copied());
         let effective = selected.or(active);
         let contextual = self.contextual.contains(&provider.id);
+        let enabled = model.enabled;
         if let Some(effective) = effective {
             let contextual_model = self
                 .account(effective, &provider.id)
@@ -376,6 +449,7 @@ impl Catalog {
             if contextual {
                 model.enabled = contextual_model.is_some_and(|m| m.enabled);
             }
+            model.enabled &= credential_matches_model(&model, effective);
         }
         model.profiles = Some(
             relevant
@@ -393,9 +467,10 @@ impl Catalog {
                         .account(credential, &provider.id)
                         .and_then(|models| models.iter().find(|m| m.id == model.id));
                     if !(if contextual {
-                        account_model.is_some_and(|m| m.enabled)
+                        account_model
+                            .is_some_and(|m| m.enabled && credential_matches_model(m, credential))
                     } else {
-                        model.enabled
+                        enabled && credential_matches_model(&model, credential)
                     }) {
                         return None;
                     }
@@ -437,7 +512,10 @@ impl Catalog {
             Some(models) => models.iter().find(|m| m.id == model.id)?,
             None => model,
         };
-        if !selected.enabled {
+        if !selected.enabled
+            || !self.model_runnable(selected)
+            || credential.is_some_and(|credential| !credential_matches_model(selected, credential))
+        {
             return None;
         }
         Some(if account_models.is_some() {
@@ -478,6 +556,7 @@ impl Catalog {
             .filter(|m| {
                 self.provider(&m.provider_id)
                     .is_some_and(|p| self.provider_available(p, saved))
+                    && self.model_runnable(m)
                     && (m.enabled || m.profiles.as_ref().is_some_and(|p| !p.is_empty()))
             })
             .collect()
@@ -493,6 +572,7 @@ impl Catalog {
                     selection.profile.as_ref(),
                     saved,
                 )
+                && self.model_runnable(&model)
                 && selection.profile.as_ref().map_or(model.enabled, |p| {
                     model
                         .profiles
@@ -502,25 +582,17 @@ impl Catalog {
             {
                 return Some(model);
             }
-            if selection.profile.is_some() {
-                return None;
-            }
+            return None;
         }
         self.available(saved).into_iter().find(|m| m.enabled)
     }
     pub fn default_selection(&self, saved: &[credential::Info]) -> Option<model::Ref> {
-        if let Some(selection) = &self.default
-            && selection.profile.is_some()
-        {
+        if let Some(selection) = &self.default {
             return Some(selection.clone());
         }
         let model = self.default_model(saved)?;
         Some(model::Ref {
-            variant: self
-                .default
-                .as_ref()
-                .filter(|s| s.provider_id == model.provider_id && s.id == model.id)
-                .and_then(|s| s.variant.clone()),
+            variant: None,
             provider_id: model.provider_id,
             id: model.id,
             profile: None,
@@ -668,6 +740,34 @@ impl Catalog {
                     &["name", "package", "settings", "headers", "body"],
                 );
                 record.provider = provider::Info::decode(&encoded)?;
+                if (provider_id.0.as_str() == Some("openai")
+                    || !configured.upstream.contains(&provider_id)
+                        && provider_id
+                            .0
+                            .as_str()
+                            .is_some_and(|id| !routing::BUILTIN_PROVIDER_IDS.contains(&id)))
+                    && !matches!(
+                        provider_id.0.as_str(),
+                        Some("cursor" | "muse" | "runpod" | "opencode" | "opencode-go" | "ycoding")
+                    )
+                    && routing::family(&record.provider.package)
+                        == Ok(routing::ProviderFamily::Compatible)
+                    && record
+                        .provider
+                        .overlays
+                        .settings
+                        .as_ref()
+                        .and_then(|settings| get(&settings.0, "baseURL"))
+                        .and_then(models_dev::text)
+                        .and_then(|base| url::Url::parse(base).ok())
+                        .is_some_and(|url| {
+                            matches!(url.scheme(), "http" | "https") && url.has_host()
+                        })
+                {
+                    configured.compatible_endpoints.insert(provider_id.clone());
+                } else {
+                    configured.compatible_endpoints.remove(&provider_id);
+                }
                 if record.provider.integration_id.is_none()
                     && (super::model::family(&record.provider.package).is_ok()
                         || field(item, "env").is_some())
@@ -814,6 +914,18 @@ impl Catalog {
             eprintln!("Catalog event publication failed");
         }
     }
+}
+
+pub(crate) fn credential_matches_model(model: &model::Info, credential: &credential::Info) -> bool {
+    model
+        .package
+        .as_ref()
+        .and_then(|package| routing::family(package).ok())
+        != Some(routing::ProviderFamily::Compatible)
+        || matches!(
+            credential.secret().domain(),
+            Ok(ycoding_schema::credential::Value::Key(_))
+        )
 }
 
 fn selection_ref(value: &JsonValue) -> Result<model::Ref, models_dev::Error> {

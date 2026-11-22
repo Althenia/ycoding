@@ -290,7 +290,7 @@ export function DialogCustomEndpoint(props: {
 
   return (
     <box paddingTop={1} paddingBottom={1}>
-      <DialogHeader title={<DialogTitle>{props.kind === "runpod" ? "Runpod Serverless Endpoint" : "Custom OpenAI-Compatible Endpoint"}</DialogTitle>} />
+      <DialogHeader title={<DialogTitle>{props.kind === "runpod" ? "Runpod Serverless Endpoint" : "Custom OpenAI-compatible Endpoint"}</DialogTitle>} />
       <box flexDirection="column" paddingTop={1} paddingLeft={6} paddingRight={4}>
         <box flexDirection="column">
           <text fg={theme.text.default} attributes={TextAttributes.BOLD}>

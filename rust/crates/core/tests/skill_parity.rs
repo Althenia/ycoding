@@ -9,7 +9,7 @@ use ycoding_schema::{
     skill::{Info, Source},
 };
 
-const YCODING: &str = include_str!("../../../../packages/core/src/plugin/skill/ycoding.md");
+const YCODING: &str = include_str!("../src/resources/skill/ycoding.md");
 const REPORT: &str = include_str!("../../../../packages/core/src/plugin/skill/report.md");
 const CHATGPT_CONNECTORS: &str =
     include_str!("../../../../packages/core/src/plugin/skill/chatgpt-connectors.md");
@@ -261,6 +261,21 @@ async fn bundled_skills_lead_the_catalog_with_reference_metadata_and_content() {
             content: YCODING.into(),
         }
     );
+    let ycoding = skills[0].content.to_utf8().unwrap();
+    for guidance in [
+        "rust/crates/core",
+        "rust/crates/runtime",
+        "rust/crates/protocol",
+        "ycoding api session.get --param sessionID=<id>",
+        "cargo build --locked -p ycoding-runtime --bin ycoding-runtime",
+        "cargo test --locked -p <crate> --test <target> -- <case> --exact",
+    ] {
+        assert!(
+            ycoding.contains(guidance),
+            "missing native guidance: {guidance}"
+        );
+    }
+    assert!(!ycoding.contains("bun run"));
     assert_eq!(
         Info {
             content: "".into(),

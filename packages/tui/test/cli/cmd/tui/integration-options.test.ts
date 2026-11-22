@@ -1,10 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import type { IntegrationInfo } from "@ycoding-ai/client"
+import { customEndpointChoice, providerChoices, type IntegrationInfo } from "@ycoding-ai/client"
 import {
   connectionSummary,
   connectMethods,
   credentialConnections,
-  integrationOptions,
   profileFallback,
 } from "../../../../src/component/dialog-integration"
 
@@ -14,16 +13,20 @@ const integration = (value: Partial<IntegrationInfo> & Pick<IntegrationInfo, "id
   ...value,
 })
 
-describe("integrationOptions", () => {
-  test("keeps popular integrations first and sorts the rest alphabetically", () => {
-    expect(
-      integrationOptions([
-        integration({ id: "mistral", name: "Mistral" }),
-        integration({ id: "openai", name: "OpenAI" }),
-        integration({ id: "custom-z", name: "Zebra" }),
-        integration({ id: "anthropic", name: "Anthropic" }),
-      ]).map((item) => item.id),
-    ).toEqual(["openai", "anthropic", "mistral", "custom-z"])
+describe("providerChoices", () => {
+  test("shows the four built-ins in order and groups verified endpoints under the fifth choice", () => {
+    const choices = providerChoices([
+      integration({ id: "mistral", name: "Mistral" }),
+      integration({ id: "openrouter", name: "OpenRouter" }),
+      integration({ id: "openai", name: "OpenAI" }),
+      integration({ id: "custom-z", name: "Zebra" }),
+      integration({ id: "anthropic", name: "Anthropic" }),
+      integration({ id: "antigravity", name: "Antigravity" }),
+    ], new Set(["openai", "anthropic", "antigravity", "openrouter", "custom-z"]))
+    expect([...choices.builtIn, customEndpointChoice].map(({ name }) => name)).toEqual([
+      "OpenAI", "Claude", "Antigravity", "OpenRouter", "Custom OpenAI-compatible Endpoint",
+    ])
+    expect(choices.custom.map(({ id }) => id)).toEqual(["custom-z"])
   })
 })
 

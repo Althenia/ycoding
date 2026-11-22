@@ -96,7 +96,7 @@ pub(crate) fn prepare(
                     != account
                 || historical_model.provider_id != selection.provider_id
                 || historical_model.id != selection.id
-                || historical_model.profile != selection.profile
+                || (account.is_none() && historical_model.profile != selection.profile)
             {
                 continue;
             }
@@ -113,7 +113,10 @@ pub(crate) fn prepare(
             let setting = variants
                 .entry(historical_model.variant.clone())
                 .or_insert_with(|| {
-                    let historical = llm::Request::new(resolve(&historical_model)?);
+                    let historical = llm::Request::new(resolve(&model::Ref {
+                        variant: historical_model.variant.clone(),
+                        ..selection.clone()
+                    })?);
                     (effort::mechanism(&historical) == Some(provider))
                         .then(|| effort::selected(&historical, provider))
                 });
@@ -444,13 +447,18 @@ mod tests {
             .unwrap();
         let session = session::Id::new("ses_one").unwrap();
         let snapshot = store.snapshot().unwrap();
-        for (account, namespace, available, expected) in [
-            (Some("account"), "namespace", true, 4),
-            (Some("other"), "namespace", true, 3),
-            (None, "namespace", true, 3),
-            (Some("account"), "changed", true, 3),
-            (Some("account"), "namespace", false, 3),
+        for (profile, account, namespace, available, reuses_prefix) in [
+            (None, Some("account"), "namespace", true, true),
+            (Some("Named"), Some("account"), "namespace", true, true),
+            (Some("Named"), Some("other"), "namespace", true, false),
+            (Some("Named"), None, "namespace", true, false),
+            (None, Some("account"), "changed", true, false),
+            (None, Some("account"), "namespace", false, false),
         ] {
+            let mut selected = selected.clone();
+            selected.profile = profile.map(|profile| {
+                model::ProfileName::decode(&JsonValue::String(profile.into())).unwrap()
+            });
             let mut request = request("gpt-6-sol", Some("high"));
             prepare(
                 &snapshot,
@@ -463,6 +471,7 @@ mod tests {
                     if !available {
                         return None;
                     }
+                    assert_eq!(historical.profile, selected.profile);
                     assert_eq!(historical.variant.as_ref().unwrap().as_str(), Some("low"));
                     let mut model = ycoding_ai::route::Route::openai_responses().model("gpt-6-sol");
                     model.defaults.provider_options =
@@ -471,7 +480,18 @@ mod tests {
                 },
             )
             .unwrap();
-            assert_eq!(request.messages.len(), expected);
+            let wire = request.model.route.prepare(&request).unwrap().encoded_body;
+            if reuses_prefix {
+                assert!(wire.contains(r#""effort":"low""#), "{profile:?}: {wire}");
+                assert!(
+                    wire.contains(
+                        r#"{"type":"configuration_update","reasoning":{"effort":"high"}}"#
+                    )
+                );
+            } else {
+                assert!(wire.contains(r#""effort":"high""#), "{wire}");
+                assert!(!wire.contains("configuration_update"));
+            }
         }
         drop(snapshot);
         store

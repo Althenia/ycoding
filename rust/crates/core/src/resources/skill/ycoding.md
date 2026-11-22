@@ -1,94 +1,41 @@
 # YCoding
 
-Use this guide for work involving YCoding itself: configuration, terminal behavior, plugins, hooks, providers, agents, commands, skills, project artifacts, sessions, subagents, and the local API.
+Use this guide to diagnose, configure, or contribute to the Rust runtime that powers YCoding's terminal client and local service.
 
-## Authority
+## Find the owner
 
-YCoding is terminal-first with one current runtime. Use sources in this order:
+Start with the running service and a focused test. Use the native source that owns the behavior:
 
-1. Current executable behavior and targeted tests.
-2. Public shapes in `packages/schema`.
-3. HTTP operations in `packages/protocol` and handlers in `packages/server`.
-4. Runtime behavior in `packages/core`.
-5. Terminal behavior in `packages/tui` and CLI ownership in `packages/cli`.
-6. Root documentation in `docs` and contracts in `specs`.
-7. Historical upstream material only when a migration or comparison explicitly requires it.
+- `rust/crates/runtime`: `ycoding-runtime` executable, service startup, operation dispatch, and handlers.
+- `rust/crates/core`: Location-scoped configuration and resources, Session admission and runner, agents, tools, permissions, extensions, and Project coordination.
+- `rust/crates/ai`: provider request encoding, streaming, and usage. Core resolves the provider, model, credential profile, and route before calling the adapter.
+- `rust/crates/store`: durable state and event storage. `rust/crates/schema` and `rust/crates/protocol` enforce domain and wire contracts.
+- `packages/schema` and `packages/protocol`: shared schema and operation descriptor sources. Check the Rust decoder and dispatcher before assuming that the native service implements a declared operation.
+- `packages/cli` and `packages/tui`: client commands and terminal UI. Trace client symptoms across the native operation before changing either side.
 
-Do not use removed V1, Electron, browser-product, console, website, or legacy SDK paths as current behavior.
+Use Bun releases only as comparison baselines for runtime behavior. Identify the installed version with `ycoding --version`; confirm the service and its supported commands with `ycoding service status` and `ycoding --help`. Use `/help` for terminal commands.
 
-## Product identity
+## Configuration and extensions
 
-Use:
+Use `ycoding.json` or `ycoding.jsonc`. Global configuration lives in the platform configuration directory under `ycoding`; project configuration can also live under `.ycoding/`. Check the native configuration resolver for precedence, scope, and supported fields. Preserve unrelated settings. Do not add a `$schema` URL without verifying the endpoint.
 
-- `YCoding` in product prose.
-- `ycoding` for the executable, process, package slugs, paths, and configuration values.
-- `YCODING_*` for environment variables.
-- `.ycoding` for repository configuration and project extensions.
-- `ycoding.json` or `ycoding.jsonc` for configuration files.
-- `x-ycoding-directory` and `x-ycoding-workspace` for location headers.
+Inspect the native catalog and saved profile binding before diagnosing provider availability. Keep credentials out of commands and diagnostic output. Verify extension activation, capabilities, and permission checks in `rust/crates/core/src/extension` before documenting a plugin or hook. Verify discovery and activation for agents, commands, skills, MCP, and Project artifacts against their native owners. Do not infer support from a Bun plugin entrypoint.
 
-OpenCode Zen and OpenCode Go remain unchanged only where they identify the external provider integration. See `docs/ycoding-migration.md`.
+Use `YCoding` in prose, `ycoding` in commands and configuration, and `YCODING_*` for environment variables. Preserve protocol names such as `x-ycoding-directory` and `x-ycoding-workspace`.
 
-## Configuration
+## Sessions and operations
 
-YCoding configuration uses JSON or JSONC. Do not add an external `$schema` URL unless a real YCoding schema endpoint exists.
+Read a Session with `ycoding api session.get --param sessionID=<id>`. Verify operation inputs in Protocol and read durable events when diagnosing admission, instructions, compaction, or resume. Do not replay a pending input to inspect its status. Subagents run in background child Sessions; check parent notifications and TeamView without opening the child. Project coordination has its own roles and write boundaries; do not infer control from Session ancestry.
 
-Global configuration lives under the platform configuration directory in the `ycoding` namespace. Project configuration can use `ycoding.json`, `ycoding.jsonc`, `.ycoding/ycoding.json`, or `.ycoding/ycoding.jsonc`.
+## Verify native changes
 
-Configuration merges from broader scope to narrower scope. Preserve unrelated settings when editing an existing file. Verify field names and shapes in current config Schema and tests instead of guessing.
-
-Common areas include models, default agents, permissions, agents, commands, plugins, providers, MCP, skills, instructions, references, formatters, LSPs, terminal behavior, and attention settings.
-
-## Plugins, hooks, and project artifacts
-
-Plugins are loaded through the current Effect or Promise plugin entrypoints in `packages/plugin`. Project artifacts can supply agents, commands, skills, and plugin drafts. Verify package exports, configuration adapters, validation, and persistence before documenting or changing an extension point.
-
-Do not describe an unimplemented hook or compatibility bridge as available.
-
-## Sessions and subagents
-
-Sessions are durable aggregates. Prompt admission, autonomy state, goals, instructions, orchestration, subagents, compaction, and transcript history must survive restart and rehydration according to current tests.
-
-Subagents are durable child sessions and run in the background. Parent notification and status projection must not depend on opening the child session in the TUI.
-
-## Terminal application
-
-The terminal application is the primary product surface. Build the terminal application with:
+From `rust/`, run the smallest named case and the affected static checks. Replace placeholders with the owning crate, test target, and case:
 
 ```sh
-bun run build:tui
+cargo test --locked -p <crate> --test <target> -- <case> --exact
+cargo check --locked -p <crate> --all-targets
+cargo fmt --all -- --check
+cargo build --locked -p ycoding-runtime --bin ycoding-runtime
 ```
 
-Run the artifact smoke check and runtime smoke check with:
-
-```sh
-bun run smoke:tui
-bun run smoke:runtime
-```
-
-For user help, use the TUI `/help` command or `ycoding --help`.
-
-## Local service and API
-
-YCoding uses a local client-server architecture. The TUI discovers or starts the background service. Service commands include:
-
-```sh
-ycoding service status
-ycoding service restart
-```
-
-Use the current Protocol and generated Client for the names and inputs of native operations. For example, `ycoding api session.get --param sessionID=<id>` reads one Session.
-
-## Verification
-
-Run the smallest targeted tests first, then the relevant repository checks:
-
-```sh
-bun run check:ycoding-workspace
-bun run check:ycoding-brand
-bun run typecheck
-bun run lint
-bun run lint:effect-patterns
-```
-
-Never report a check as passing unless it completed successfully on the final diff.
+Run the runtime build when the executable is affected. Use the configured toolchain and compile targets. Distinguish a Cargo build from the installed service, and report local checks separately from live verification. Do not restart the installed service to validate a local edit unless the restart is authorized.

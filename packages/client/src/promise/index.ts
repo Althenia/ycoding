@@ -1,3 +1,4 @@
+export { customEndpointChoice, isBuiltInProvider, providerChoices } from "@ycoding-ai/protocol/provider-choices"
 export * from "./generated/index"
 export type {
   AgentApi,

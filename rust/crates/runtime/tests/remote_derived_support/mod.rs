@@ -307,7 +307,10 @@ impl Fixture {
             })
             .unwrap();
         let mut catalog = Catalog::default();
-        catalog.providers = vec![ProviderRecord { provider: ycoding_core::ycoding_schema::provider::Info::decode(&parse_json(&format!(r#"{{"id":"fixture","integrationID":"{integration}","name":"Fixture","package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"synthetic-provider-secret"}}}}"#)).unwrap()).unwrap(), models: vec![ycoding_core::ycoding_schema::model::Info::decode(&parse_json(r#"{"id":"code","modelID":"api-code","providerID":"fixture","name":"Code","package":"@ycoding-ai/ai/providers/openai-compatible","capabilities":{"tools":true,"input":["text"],"output":["text"]},"variants":[{"id":"high"}],"time":{"released":1},"cost":[],"status":"active","enabled":true,"limit":{"context":4096,"output":96}}"#).unwrap()).unwrap()], environment: vec![] }];
+        catalog.providers = vec![ProviderRecord { provider: ycoding_core::ycoding_schema::provider::Info::decode(&parse_json(&format!(r#"{{"id":"fixture","integrationID":"{integration}","name":"Fixture","package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"synthetic-provider-secret","baseURL":"http://localhost:1234/v1"}}}}"#)).unwrap()).unwrap(), models: vec![ycoding_core::ycoding_schema::model::Info::decode(&parse_json(r#"{"id":"code","modelID":"api-code","providerID":"fixture","name":"Code","package":"@ycoding-ai/ai/providers/openai-compatible","capabilities":{"tools":true,"input":["text"],"output":["text"]},"variants":[{"id":"high"}],"time":{"released":1},"cost":[],"status":"active","enabled":true,"limit":{"context":4096,"output":96}}"#).unwrap()).unwrap()], environment: vec![] }];
+        catalog
+            .configure(&[parse_json(r#"{"providers":{"fixture":{}}}"#).unwrap()])
+            .unwrap();
         let models = Arc::new(model::Resolver::new(catalog));
         let roots = Roots::development(&path).unwrap();
         let catalogs = CatalogServices {

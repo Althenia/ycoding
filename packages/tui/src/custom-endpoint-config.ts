@@ -1,6 +1,7 @@
 import { access, mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { applyEdits, modify, parse, type ParseError } from "jsonc-parser"
+import { isBuiltInProvider } from "@ycoding-ai/client"
 
 export async function writeCustomEndpoint(configDir: string, result: {
   baseURL: string
@@ -30,6 +31,7 @@ export async function writeCustomEndpoint(configDir: string, result: {
   if (errors.length || !current || typeof current !== "object" || Array.isArray(current)) throw new Error("Unable to parse YCoding config")
 
   const providerID = result.provider?.trim() || (result.worker ? "runpod" : "custom-openai")
+  if (isBuiltInProvider(providerID)) throw new Error("Choose a name other than a built-in provider ID")
   if (result.worker && !/^https:\/\/api\.runpod\.ai\/v2\/[a-zA-Z0-9_-]+$/.test(result.baseURL))
     throw new Error("Runpod Jobs endpoint must be https://api.runpod.ai/v2/<ENDPOINT_ID>")
   const providers = recordAt(current, "providers")

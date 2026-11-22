@@ -16,6 +16,45 @@ fn response(parser: &mut dyn StreamParser, frames: &[&str]) -> Result<Response, 
 }
 
 #[test]
+fn direct_api_key_cache_recording_preserves_cold_and_warm_token_counts() {
+    let recording: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../packages/ai/test/fixtures/recordings/openai-responses-cache/reports-cached-tokens-on-identical-second-call.json"
+    )).unwrap();
+    let interactions = recording["interactions"].as_array().unwrap();
+    assert_eq!(interactions.len(), 2);
+    assert_eq!(
+        interactions[0]["request"]["body"],
+        interactions[1]["request"]["body"]
+    );
+    let request = Request::new(Route::openai_responses().model("gpt-4.1-mini"));
+    let tokens = interactions
+        .iter()
+        .map(|interaction| {
+            assert_eq!(
+                interaction["request"]["url"],
+                "https://api.openai.com/v1/responses"
+            );
+            let frames = interaction["response"]["body"]
+                .as_str()
+                .unwrap()
+                .lines()
+                .filter_map(|line| line.strip_prefix("data: "))
+                .filter(|line| *line != "[DONE]")
+                .collect::<Vec<_>>();
+            let usage = response(&mut OpenAIResponses::parser(&request), &frames)
+                .unwrap()
+                .usage
+                .unwrap();
+            (usage.input_tokens, usage.cache_read_input_tokens)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        tokens,
+        [(Some(4765.0), Some(0.0)), (Some(4765.0), Some(4608.0))]
+    );
+}
+
+#[test]
 fn temperature_is_omitted_on_codex_routes() {
     for id in ["openai-codex-responses", "openai-codex-websocket-responses"] {
         let mut route = Route::openai_responses();

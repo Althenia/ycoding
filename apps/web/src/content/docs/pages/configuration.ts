@@ -687,19 +687,11 @@ Report concrete defects with file and symbol evidence.`,
     description: "Provider entries, credential variable names, request overlays, custom endpoints, and named profiles.",
     sections: [
       {
-        heading: "Muse (Meta)",
+        heading: "Provider choices",
         blocks: [
           {
             kind: "paragraph",
-            text: "The builtin `muse` provider supports a Meta Muse Code account through Meta's OAuth device flow. Run `ycoding`, open `/connect`, choose Muse (Meta), and name the profile. Follow the displayed verification link and code. Native and Node builds embed `YCODING_MUSE_CLIENT_ID` and optional `YCODING_MUSE_CLIENT_SECRET` at build time, ignoring runtime values. The release build receives the same-name GitHub Actions secrets. An empty or absent secret uses a public client sending only `client_id`; a nonempty secret also sends `client_secret`. Without an embedded client ID, device sign-in fails before HTTP. A Meta Model API key profile or `META_API_KEY` in the server environment uses the direct API and skips account key minting.",
-          },
-          {
-            kind: "paragraph",
-            text: "Account connections lazily mint an inference key and require an active Muse subscription/payment setup; failures include the setup link when supplied. Keys stay in memory per credential generation. OAuth catalog discovery uses bounded key remint on HTTP 401; unrecognized base URLs fall back to `https://api.meta.ai/v1`. Model discovery reads the Muse catalog's metadata[\"muse-code\"] for names, release dates, modalities and integer context/output limits. It skips hidden, non-tool, non-text and unbounded models. Effort choices follow catalog variants in catalog order, including minimal, low, medium, high, xhigh, max and ultra when advertised. The default effort comes from catalog options and is omitted when absent; temperature and top-p hints are not sent. Requests use streaming Responses, encrypted reasoning, automatic summaries, full-input replay, and YCoding's Session-scoped prompt cache key. `x-client-id` maps surfaces to `tbh:tui`, `tbh:exec`, `tbh:desktop`, or `tbh:serve`; Session-derived UUIDs attribute Muse sessions and threads, with a process UUID fallback outside Sessions and internal YCoding headers stripped. `x-tbh-contributor-mode` is `1` for `-contributor`, `0` for standard models, and omitted for `-internal`; `tool_choice` is normalized to `auto` only on live `/responses`.",
-          },
-          {
-            kind: "paragraph",
-            text: "Account token refresh is unsupported: expired or rejected tokens require re-login through `/connect` → Muse (Meta). Minted key lifetime is unknown; an inference HTTP 401 remints once and retries once, then reports a re-login error if rejected again. Direct keys do not remint. Model cost is unreported. Key minting supplies initial `subs_usage` windows and `subs_tier_name`, displayed in the safe label `Muse (Meta) · <tier>` rather than `subscription.tier`. Trailing response stream observations update the duration-labeled window and Weekly percentages and reset times, preserving overages above 100%. Missing metrics stay unreported and zero remains zero. Quota reads do not mint keys; explicit refresh for a stored OAuth account mints at most once every 60 seconds, while direct keys never mint. Observations stay in memory until the local service restarts.",
+            text: "Connect providers lists OpenAI, Claude, Antigravity, OpenRouter, and Custom OpenAI-compatible Endpoint in that order. Add a custom endpoint in the connected machine’s configuration or terminal /connect before connecting its profile here. Other providers remain in stored credentials and Session history but cannot be selected for new work.",
           },
         ],
       },
@@ -777,7 +769,7 @@ Report concrete defects with file and symbol evidence.`,
           },
           {
             kind: "paragraph",
-            text: "For `transport`, `\"http\"` or omission selects HTTP/SSE, and neither route falls back to the other. `/connect` → Custom OpenAI-compatible endpoint writes the first example into the global `ycoding.json` (or existing `ycoding.jsonc`) and stores the API key as a profile.",
+            text: "For `transport`, `\"http\"` or omission selects HTTP/SSE, and neither route falls back to the other. `/connect` → Custom OpenAI-compatible Endpoint writes the first example into the global `ycoding.json` (or existing `ycoding.jsonc`) and stores the API key as a profile.",
           },
         ],
       },

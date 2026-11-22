@@ -97,6 +97,32 @@ fn codex_constructor_forces_backend_routes_and_keeps_cache_key_only() {
     assert!(!prepared.headers.contains_key("session-id"));
 }
 
+#[test]
+fn codex_keeps_request_affinity_and_input_prefix_when_runtime_state_changes() {
+    for websocket in [false, true] {
+        let model = selected(Some("fixture-account"), websocket, Arc::default());
+        let mut request = request(&model, Some("user"), Some("affinity"));
+        request.system = vec!["Stable instructions".into()];
+        let baseline = model.route.prepare(&request).unwrap();
+        let baseline: serde_json::Value = serde_json::from_str(&baseline.encoded_body).unwrap();
+        let prefix = baseline["input"].as_array().unwrap();
+        for state in ["Runtime state: waiting", "Runtime state: ready"] {
+            request.messages.truncate(1);
+            let mut suffix = Message::system(state);
+            suffix.volatile = true;
+            request.messages.push(suffix);
+            let prepared = model.route.prepare(&request).unwrap();
+            let body: serde_json::Value = serde_json::from_str(&prepared.encoded_body).unwrap();
+            let input = body["input"].as_array().unwrap();
+            assert_eq!(input.len(), prefix.len() + 1);
+            assert_eq!(&input[..prefix.len()], prefix);
+            assert!(input.last().unwrap().to_string().contains(state));
+            assert_eq!(body["prompt_cache_key"], baseline["prompt_cache_key"]);
+            assert_eq!(prepared.headers["session-id"], "affinity");
+        }
+    }
+}
+
 #[tokio::test]
 async fn codex_http_affinity_remembers_first_state_per_user_cache_and_account() {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {

@@ -173,7 +173,8 @@ test("landing provider auth uses the chosen repository and exposes a local-only 
     expect(await page.evaluate(`document.querySelector('dialog[aria-label="Connect provider"]').textContent.includes('Sign in on the backend machine')`)).toBe(true)
     expect(await page.evaluate(`[...document.querySelectorAll('dialog button')].find(item=>item.textContent.trim()==='Connect profile').disabled`)).toBe(true)
     expect(await page.evaluate(`window.requestLog.filter(item=>item.operation==='provider.auth.begin').length`)).toBe(0)
-    await choose(page, "Provider", "Environment provider")
+    await choose(page, "Provider", "Custom OpenAI-compatible Endpoint")
+    await choose(page, "Configured endpoint", "Environment provider")
     expect(await page.evaluate(`document.querySelector('dialog[aria-label="Connect provider"] button[aria-label="Authentication method"]')===null`)).toBe(true)
     expect(await page.evaluate(`document.querySelector('dialog[aria-label="Connect provider"]').textContent.includes('requires machine-local configuration')`)).toBe(true)
   } finally { await page.close() }

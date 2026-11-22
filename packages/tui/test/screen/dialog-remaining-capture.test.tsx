@@ -7,7 +7,6 @@ import path from "node:path"
 import { createEffect, createMemo, createSignal, onMount, Show, type JSX } from "solid-js"
 import { DialogAgent } from "../../src/component/dialog-agent"
 import { DialogConfig } from "../../src/component/dialog-config"
-import { DialogCustomEndpoint } from "../../src/component/dialog-custom-endpoint"
 import { DialogDebug } from "../../src/component/dialog-debug"
 import { beginOAuth, DialogIntegration, DialogIntegrationMethods } from "../../src/component/dialog-integration"
 import { DialogMcp } from "../../src/component/dialog-mcp"
@@ -87,7 +86,7 @@ const states = [
   { name: "mcp-servers", settle: "agentmemory", evidence: "Connecting", view: () => <DialogMcp /> },
   { name: "select-agent", settle: "Default primary agent", evidence: "Background subagent", view: () => <DialogAgent /> },
   { name: "settings", settle: "Settings", view: () => <DialogConfig /> },
-  { name: "connect-service", settle: "GitHub Copilot", evidence: "Popular", view: () => <DialogIntegration /> },
+  { name: "connect-service", settle: "OpenRouter", evidence: "Custom OpenAI-compatible Endpoint", view: () => <DialogIntegration /> },
   { name: "connect-github-copilot", settle: "Login with GitHub Copilot", evidence: "API key", view: () => <DialogIntegrationMethods integration={integrations[2]!} /> },
   { name: "select-model", settle: "Claude Opus 5", evidence: "Gemini 3 Pro", view: () => <DialogModel order={[
     { providerID: "anthropic", modelID: "claude-opus-5" },
@@ -294,31 +293,17 @@ test("escape from manual code entry cancels its one owned attempt", async () => 
 })
 
 test("the Connect integration menu opens the custom endpoint dialog", async () => {
-  let opened = false
-  function Connect() {
-    const dialog = useDialog()
-    return (
-      <DialogIntegration
-        onCustomEndpoint={() => {
-          opened = true
-          dialog.replace(() => <DialogCustomEndpoint onComplete={() => dialog.clear()} />)
-        }}
-      />
-    )
-  }
-
-  const app = await testRender(() => <DialogProviders><Connect /></DialogProviders>, { width: 100, height: 35, kittyKeyboard: true, useMouse: true })
+  const app = await testRender(() => <DialogProviders><DialogIntegration /></DialogProviders>, { width: 100, height: 35, kittyKeyboard: true, useMouse: true })
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes("Connect a service"))
-  await app.mockInput.typeText("Custom OpenAI-compatible endpoint")
+  await app.mockInput.typeText("Custom OpenAI-compatible Endpoint")
   await app.waitForFrame((frame) => frame.includes("Configure an OpenAI-compatible provider"))
   await app.renderOnce()
   const rows = app.captureCharFrame().split("\n")
   const optionRow = rows.findIndex((row) => row.includes("Configure an OpenAI-compatible provider"))
-  await app.mockMouse.click(rows[optionRow].indexOf("Custom OpenAI-compatible endpoint") + 1, optionRow)
-  await app.waitForFrame((frame) => frame.includes("Custom OpenAI-Compatible Endpoint"))
-  expect(opened).toBe(true)
-  expect(app.captureCharFrame()).toContain("Endpoint URL")
+  await app.mockMouse.click(rows[optionRow].indexOf("Custom OpenAI-compatible Endpoint") + 1, optionRow)
+  await app.waitForFrame((frame) => frame.includes("Endpoint URL"))
+  expect(app.captureCharFrame()).toContain("Custom OpenAI-compatible Endpoint")
   app.renderer.destroy()
 })
 
@@ -658,6 +643,7 @@ async function route(url: URL, request: Request) {
   if (url.pathname === "/api/model") return json({ location, data: models })
   if (url.pathname === "/api/model/default") return json({ location, data: undefined })
   if (url.pathname === "/api/provider") return json({ location, data: providers })
+  if (url.pathname === "/api/provider/integrations") return json({ location, data: ["openai", "anthropic", "antigravity", "openrouter"].map((id) => ({ providerID: id, integrationID: id })) })
   if (url.pathname === "/api/agent") return json({ location, data: agents })
   if (url.pathname === "/api/integration") return json({ location, data: integrations })
   if (url.pathname === "/api/skill") return json({ location, data: skills })
@@ -727,6 +713,8 @@ const integrations = [
   { id: "google", name: "Google", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
   { id: "302ai", name: "302.AI", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
   { id: "amazon-bedrock", name: "Amazon Bedrock", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
+  { id: "antigravity", name: "Antigravity", methods: [{ id: "google", type: "oauth" as const, label: "Google account" }], connections: [] },
+  { id: "openrouter", name: "OpenRouter", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
 ]
 const skills = [
   { id: "go-developer", name: "go-developer", description: "Scoped Go implementation", location: `${worktree}/.ycoding/skills/go-developer/SKILL.md`, content: "" },

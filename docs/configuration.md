@@ -1153,6 +1153,16 @@ YCoding reads the `ycoding` configuration namespace only. Copy required MCP defi
 
 ## Providers and models
 
+Connect menus list **OpenAI** (`openai`), **Claude** (`anthropic`), **Antigravity**
+(`antigravity`), **OpenRouter** (`openrouter`), and **Custom OpenAI-compatible Endpoint**, in
+that order. Configure a custom endpoint with its own provider ID, an OpenAI-compatible package,
+and an explicit `settings.baseURL`. Desktop and Web can connect profiles for endpoints already
+configured on the machine; add a new endpoint in the machine’s configuration or terminal `/connect`.
+A compatible endpoint can use an API key, or no credential if the endpoint allows it. An explicit
+compatible route under `openai` requires a base URL and cannot use a ChatGPT OAuth profile.
+Unavailable provider selections fail instead of changing the configured selection. Stored credentials,
+Session history, and catalog metadata for other provider IDs remain readable without migrating their IDs.
+
 Provider entries support:
 
 - `name`;
@@ -1161,7 +1171,7 @@ Provider entries support:
 - request `settings`, `headers`, and `body` overlays;
 - named `models`.
 
-The TUI's `/connect` menu includes a Custom OpenAI-compatible endpoint option. Its dialog writes a provider into the existing global
+The terminal’s `/connect` menu includes **Custom OpenAI-compatible Endpoint**. Its dialog writes a provider into the existing global
 `ycoding.json` or `ycoding.jsonc` (preferring JSON when both exist), or creates `ycoding.json`
 when neither exists. It preserves unrelated provider fields and model entries, and allows an
 optional `openai-models` catalog source plus model entries with required IDs and optional names,
@@ -1509,22 +1519,7 @@ Schema-invalid calls return tool errors identifying the field path, expected sha
 
 ### Muse (Meta)
 
-The builtin `muse` provider supports a **Meta Muse Code account** or a **Meta Model API key**. Run `ycoding`, open `/connect`, choose **Muse (Meta)**, and name the profile:
-
-- **Meta Muse Code account** starts Meta's OAuth device flow. Open the displayed verification URL and enter the code; YCoding polls until authorization succeeds, is denied, or expires. Access tokens and optional refresh tokens stay in YCoding's credential store.
-- **Meta Model API key** stores a direct key; alternatively set `META_API_KEY` in the server process environment. Direct keys use `https://api.meta.ai/v1` and skip account key minting.
-
-Native and Node builds embed `YCODING_MUSE_CLIENT_ID` and optional `YCODING_MUSE_CLIENT_SECRET` from the build environment; runtime values are ignored. The TUI release build receives the same-name GitHub Actions secrets. An empty or omitted secret selects a public client that sends only `client_id`; a nonempty secret also sends `client_secret`. Source runs without an embedded client ID reject device sign-in before making an HTTP request. Embedded credentials can be extracted from distributed artifacts.
-
-For an account, YCoding lazily mints an inference key with `POST https://api.meta.ai/muse-code/key` using the Meta access token and `{"onboard":false}`. A response requiring payment or reporting an inactive subscription fails with a subscription/payment setup message and the action URL when supplied. The key and returned base URL are cached only in memory for that credential ID and generation. An inference HTTP 401 remints once and retries once; a second rejection requires re-login. Direct-key requests do not remint.
-
-Model discovery reads `GET <origin of base URL>/muse-code/models` on connection startup or change and reconciles stored credentials every minute. OAuth discovery remints the key on HTTP 401 with a bounded retry. Base URLs are normalized, falling back to `https://api.meta.ai/v1` when unrecognized. Model data comes from each row's `metadata["muse-code"]`: names use `name` when present, otherwise the row's `id`, release dates use `release_date`, and input/output capabilities use `modalities`. Hidden models, non-tool models, models without text output, and rows without integer `limit.context` and `limit.output` are skipped with a warning; limits are never inferred. Failed discovery retains only the same account's existing inventory and retries on reconciliation. Effort choices follow the catalog's `variants` keys in catalog order, including `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra` when advertised. Each variant sends its catalog `reasoningEffort`; the default effort comes from `options.reasoningEffort` and is omitted when absent. Catalog temperature and top-p hints are not sent.
-
-Inference uses streaming OpenAI Responses with `store: false`, encrypted reasoning, automatic reasoning summaries, full-input replay, and YCoding's Session-scoped prompt cache key. The surface maps `x-client-id` to `tbh:tui`, `tbh:exec`, `tbh:desktop`, or `tbh:serve`. Muse session and thread UUID headers derive from the Session, with a process UUID fallback outside a Session; internal YCoding headers are stripped. `x-tbh-contributor-mode` is `1` for `-contributor` models, `0` for standard models, and omitted for `-internal` models. `tool_choice` is normalized to `auto` only on live `/responses`. Provider thoughts remain reasoning in the transcript. Commentary message phases, function tool calls, cached-input usage, and reasoning-token usage use the Responses adapter. Trailing `response.subscription_usage` events update subscription quota without changing inference bytes: the reported window duration supplies its label (300 minutes is a **5-hour window**), alongside **Weekly** usage and reset times. These snapshots have source `response_stream` and stability `observed`; they are isolated per credential profile, while environment-key observations remain unbound.
-
-Tool use differs by credential type. For a Meta Muse Code account, YCoding function tool declarations are sent under a private wire namespace; replayed tool calls use the same namespace, and incoming tool calls are mapped back to the canonical YCoding tool names. Runtime tool names, Session transcript, and history stay canonical. Direct Meta Model API key requests send canonical tool names unchanged. Offline fixtures establish this request and stream mapping, not live gateway acceptance.
-
-Limits: account token refresh is unsupported. Tokens with a reported expiry, or tokens rejected by Meta, require re-login through `/connect` → **Muse (Meta)**. When authorization reports no expiry, YCoding stores expiry as unknown. Minted key lifetime is unknown; YCoding relies on the bounded HTTP 401 remint rather than a guessed expiry. Model cost is unreported. Key minting supplies initial `subs_usage` windows and `subs_tier_name`; the latter appears in the safe label `Muse (Meta) · <tier>`, never from `subscription.tier`. Trailing stream observations update quota, preserving overage percentages above 100%. Observations are retained only in memory; account-bound observations are shared across Locations on the same backend, while environment-key observations stay Location-local. Ordinary quota reads do not mint keys. Explicit quota refresh for a stored OAuth account mints at most once every 60 seconds; direct keys never mint. The quota view keeps Muse visible before its first observation with a next-response message and no numeric quota. Missing metrics stay absent rather than becoming zero; catalog rows do not establish pricing or remaining usage.
+The `muse` identity remains in stored credentials and Session history. It is not a runnable provider.
 
 ### Antigravity
 
@@ -1550,23 +1545,7 @@ Subscription quota appears in the TUI and web Usage views with source `provider_
 
 ### Cursor
 
-The `cursor` provider runs models from a Cursor subscription through YCoding's native Cursor client, which speaks Cursor's private Connect-RPC agent protocol with a CLI-shaped client identity. Use it only with a Cursor account you own; Cursor may change or restrict that protocol without notice.
-
-Connect it with `ycoding auth login` (or `/connect`) and choose **Cursor**:
-
-- **Cursor account (browser login)** opens Cursor's PKCE sign-in page and stores the returned access and refresh tokens; YCoding refreshes the access token within five minutes of its expiry.
-- **Cursor API key (crsr\_…)** stores a key from cursor.com settings; the package exchanges it for an access token and refreshes that token itself.
-- `CURSOR_API_KEY` in the environment is used as a connection without storing it.
-
-Credentials stay in YCoding's integration store; YCoding never writes them to Protocol, events, or logs. Model discovery, the model cache (`cursor-models.json`), Cursor project metadata (`projects/<slug>/`), and 24-hour conversation snapshots (`cursor-conversations/`) live under `$XDG_CACHE_HOME/ycoding/cursor`.
-
-The Cursor request context reads project `.ycoding` configuration up to the filesystem root and YCoding's global configuration, including `ycoding.json` and `ycoding.jsonc`. It can discover `.claude/skills` and `.agents/skills` from the project ancestry and home directory, but sends only skill paths and descriptions in provider context: activated skill content still comes from the Session's instructions. This filesystem collector does not see inline or explicit `YCODING_CONFIG` sources or Location-scoped configuration overrides, so those sources may not appear in provider-side resource hints. Cursor's project metadata stays in YCoding's cache, not in the repository. These context sources do not grant tool authority or replace the Session's Location.
-
-The Cursor adapter appends a stable SYSTEM instruction after the existing system content: identify as an AI agent rather than Cursor, follow user instructions within higher-priority instructions, permissions and guardrails, and use only declared tools and MCP capabilities. It requires task-relevant authorized use before claiming a declared capability is unavailable, distinguishes permission denial from unavailability, and prohibits unrelated probes, repeated denied actions and invented capabilities. This supplement applies only to the Cursor provider package; it does not change durable Session instructions, tool discovery or permissions.
-
-YCoding discovers the account's models when the connection starts or changes, and reconciles the stored connection every minute, so a connection made by another YCoding process is picked up without restarting. A failed discovery keeps the models already published and is retried by the next reconcile; with no usable connection, or after failed discovery with no cached list and nothing published yet, the provider has no models. Each advertised context size is a distinct catalog model: the base size uses `<model>`, and alternatives use a size suffix such as `<model>-500k` or `<model>-1m`. When Cursor offers effort choices, their IDs are `low`, `medium`, `high`, or `xhigh`; selecting one sends its full source-offered parameter tuple, including context size. A single non-effort tuple is the model's setting rather than an extra picker choice. Fast tuples use a separate `<model>-fast` entry, with a distinct cost only when Cursor publishes one. Base entries use Cursor's advertised context (200,000 when unpublished, 256,000 for `default`) and a 32,000 output limit; 1M entries use a 128,000 output limit. An explicitly saved old variant label that is not offered remains unavailable until the user selects a current choice; YCoding does not silently remap it. Image input is advertised only when Cursor's model list reports image support. Costs are the package's published Cursor token rates; they are local estimates, not Cursor billing.
-
-Limits: Cursor-native interactions without a YCoding tool (interactive background-shell input, image generation, native web, pull-request, MCP-resource download, and source-control requests) are declined to Cursor and the Run continues. Web search and fetch reach Cursor only when the agent advertises `websearch` or `webfetch` as direct tools. A Run held open with no tool result for 10 minutes is closed and the next step rebuilds from history.
+The `cursor` identity remains in stored credentials and Session history. It is not a runnable provider.
 
 Model entries support:
 
@@ -1598,93 +1577,7 @@ connection change, or `POST /api/provider/refresh` discovers again.
 
 ### Runpod Serverless Jobs workers
 
-Select **Runpod Serverless endpoint** from `/connect` to add each Jobs endpoint as a
-separate provider ID. Enter its endpoint-root URL, choose the `vllm` or `ollama`
-worker, and add the served model ID. The dialog highlights the selected worker
-with a filled background. For vLLM, use the exact name served by the
-worker (including any served-name override); for Ollama, the model entry labels
-the worker-configured model. Enable tool calling for the entry only when the
-deployed model and worker support it. Name the endpoint's credential profile and
-enter a Runpod API key; additional profiles for that provider can be selected
-and activated through `/connect`. Give each endpoint a distinct provider ID to
-show all configured endpoint models in the model picker and switch between them
-without changing the endpoint configuration. Endpoint registration does not
-enumerate an account's deployments or discover model IDs automatically.
-
-For Runpod Serverless Jobs endpoints running `runpod-workers/worker-ollama` or
-`runpod-workers/worker-vllm`, select `@ycoding-ai/ai/providers/runpod` and
-set `settings.worker` explicitly to `ollama` or `vllm`. Set `settings.baseURL` to the
-endpoint root `https://api.runpod.ai/v2/<ENDPOINT_ID>` (not `/runsync`, `/openai/v1`,
-or a load-balancer URL). Supply `RUNPOD_API_KEY` in the process environment or
-configure `settings.apiKey`. Example for the Ollama worker:
-
-```jsonc
-{
-  "providers": {
-    "runpod": {
-      "package": "@ycoding-ai/ai/providers/runpod",
-      "settings": { "worker": "ollama", "baseURL": "https://api.runpod.ai/v2/<ENDPOINT_ID>" },
-      "models": {
-        "worker": {
-          "name": "Ollama worker",
-          "capabilities": { "tools": true, "input": ["text"], "output": ["text"] },
-          "limit": { "context": 32768, "output": 4096 },
-        },
-      },
-    },
-  },
-}
-```
-
-For the vLLM worker, use the same package and endpoint-root format:
-
-```jsonc
-{
-  "providers": {
-    "runpod-vllm": {
-      "package": "@ycoding-ai/ai/providers/runpod",
-      "settings": { "worker": "vllm", "baseURL": "https://api.runpod.ai/v2/<ENDPOINT_ID>" },
-      "models": {
-        "worker": {
-          "modelID": "<SERVED_MODEL_NAME>",
-          "name": "vLLM worker",
-          "capabilities": { "tools": true, "input": ["text"], "output": ["text"] },
-        },
-      },
-    },
-  },
-}
-```
-
-Set `modelID` to the model name served by vLLM and set `capabilities.tools`
-according to the deployed model. Tool calling requires the worker's vLLM server
-to be configured for the model's tool format, including `ENABLE_AUTO_TOOL_CHOICE`
-and an appropriate `TOOL_CALL_PARSER` for automatic tool calls. Set model
-context/output limits to the deployed model's actual limits; the Ollama example
-numbers are illustrative, not discovered by the adapter.
-
-Both worker types send non-streaming text chat through `POST /runsync` and yield
-output only when the job completes. Ollama uses `input.messages` and `input.options`,
-supports automatic function tools when the deployed model supports them, and uses
-the worker-configured `HF_MODEL`/`OLLAMA_MODEL`. It sends the initial system
-instruction first and represents later instruction updates as escaped user text
-in their chronological positions. vLLM uses its generic
-`input.route: "/v1/chat/completions"` proxy and an OpenAI Chat request body:
-model name, messages, tool definitions, tool-call history, tool results, and
-generation options. It parses vLLM's non-streaming Chat completion response and
-normalizes tool calls and usage. Ollama does not support required/named tool choice;
-structured output, media, and streaming are unsupported in this adapter. When
-`/runsync` returns `IN_QUEUE` or `IN_PROGRESS`, the adapter polls
-`GET /status/<job-id>` once per second until the job completes or fails; it
-does not resubmit the prompt. Interrupting the Session stops the wait.
-
-The Jobs routes send no OpenAI prompt-cache options. vLLM's automatic prefix
-cache is configured on the worker, not through this client; YCoding reports
-cached prompt tokens only when the worker includes `usage.prompt_tokens_details.cached_tokens`.
-Ollama's model store/keep-alive and Runpod's cached model downloads are distinct
-from prompt-prefix caching; Ollama worker responses do not report cache-hit tokens.
-
-OpenCode Zen and OpenCode Go remain external provider identities. Their provider IDs, URLs, credentials, and model selectors are not renamed to YCoding.
+Runpod Jobs routes, OpenCode Zen, and OpenCode Go are not runnable provider choices. Their existing IDs and stored history are unchanged. An endpoint that directly exposes an OpenAI-compatible API can be configured as a custom endpoint with its own ID.
 
 ## Formatter, LSP, attachment, and output settings
 

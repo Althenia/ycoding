@@ -944,10 +944,16 @@ export class BackendController {
     const source = modelSource(input)
     return this.use("Integrations could not be read. Refresh to retry.", async (api, signal, revision) => {
       const location = await parityLocation(api, signal, source)
-      const result = await api.integration.list(location ? { location } : undefined, { signal })
-      const rows = catalogEnvelope(result, location, "integration")
-      const items = rows.map((row) => {
-        const item = decodeIntegration(row)
+      const input = location ? { location } : undefined
+      const [result, connections] = await Promise.all([
+        api.integration.list(input, { signal }),
+        api.provider.integrations(input, { signal }),
+      ])
+      const integrationIDs = new Set(catalogEnvelope(connections, location, "provider integrations").map((item) => {
+        if (!object(item) || typeof item.integrationID !== "string") throw new DesktopError("The backend returned an invalid provider integration. Refresh to retry.")
+        return item.integrationID
+      }))
+      const items = catalogEnvelope(result, location, "integration").map((item) => decodeIntegration(item)).filter((item) => integrationIDs.has(item.id)).map((item) => {
         const methods = item.methods.map((method) => {
           if (method.type === "command") return { type: method.type, id: method.id, label: method.label }
           if (method.type === "env") return { type: method.type, names: [...method.names] }

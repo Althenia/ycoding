@@ -2534,3 +2534,125 @@ async fn test048_skill_resource_traversal_and_stale_origin_reject_before_any_pee
     }
     fixture.cleanup();
 }
+
+#[tokio::test]
+async fn patch_and_project_prompts_reach_direct_calls_and_code_mode_search() {
+    let world = tool_world();
+    let _project = world
+        .registry
+        .register(
+            vec![(
+                "project".into(),
+                Arc::new(ycoding_core::tools::builtin::project::Project {
+                    runtime: Default::default(),
+                }) as Arc<dyn Tool>,
+            )],
+            Options::direct(),
+        )
+        .unwrap();
+    let request = world.registry.materialize(&[]);
+    let mut prompts = BTreeMap::new();
+    for definition in &request.definitions {
+        let name = definition.name.as_str().unwrap();
+        if matches!(name, "patch" | "project") {
+            prompts.insert(
+                format!("tools.{name}"),
+                definition.description.as_str().unwrap(),
+            );
+        }
+    }
+    assert_eq!(prompts["tools.patch"], PATCH_PROMPT);
+    let patch = request
+        .definitions
+        .iter()
+        .find(|definition| definition.name.as_str() == Some("patch"))
+        .unwrap();
+    let patch: serde_json::Value =
+        serde_json::from_str(&stringify_json(&patch.input_schema)).unwrap();
+    assert_eq!(
+        patch["properties"]["patchText"]["description"],
+        "The full patch text describing add, update, and delete operations"
+    );
+    let project = prompts["tools.project"];
+    for clause in PROJECT_CLAUSES {
+        assert!(
+            project.contains(clause),
+            "missing Project guidance: {clause}"
+        );
+    }
+    assert!(!project.contains(r"~\path"));
+    let found = world.invoke("execute", parse_json(r#"{"code":"return (await Promise.all(['patch', 'project'].map((namespace) => search({ namespace })))).map((result) => result.items[0])"}"#).unwrap()).await;
+    let ToolResultValue::Text(JsonValue::String(found)) = found.result else {
+        panic!("expected Code Mode search result")
+    };
+    let items: Vec<serde_json::Value> = serde_json::from_str(found.as_str().unwrap()).unwrap();
+    assert_eq!(items.len(), prompts.len());
+    for item in items {
+        let path = item["path"].as_str().unwrap();
+        assert_eq!(item["description"], prompts.remove(path).unwrap());
+        assert!(item["signature"].as_str().unwrap().starts_with(path));
+        if path == "tools.patch" {
+            assert!(
+                item["signature"]
+                    .as_str()
+                    .unwrap()
+                    .contains("The full patch text describing add, update, and delete operations")
+            );
+        }
+    }
+    assert!(prompts.is_empty());
+    world.cleanup();
+}
+
+const PATCH_PROMPT: &str = r#"Use the `patch` tool to edit files. Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
+
+*** Begin Patch
+[ one or more file sections ]
+*** End Patch
+
+Within that envelope, you get a sequence of file operations.
+You MUST include a header to specify the action you are taking.
+Each operation starts with one of three headers:
+
+*** Add File: <path> - create a new file. Every following line is a + line (the initial contents).
+*** Delete File: <path> - remove an existing file. Nothing follows.
+*** Update File: <path> - patch an existing file in place (optionally with a rename).
+
+Example patch:
+
+```
+*** Begin Patch
+*** Add File: hello.txt
++Hello world
+*** Update File: src/app.py
+*** Move to: src/main.py
+@@ def greet():
+-print("Hi")
++print("Hello, world!")
+*** Delete File: obsolete.txt
+*** End Patch
+```
+
+It is important to remember:
+
+- You must include a header with your intended action (Add/Delete/Update)
+- You must prefix new lines with `+` even when creating a new file
+"#;
+
+const PROJECT_CLAUSES: &[&str] = &[
+    r#"The Master manages assignment, transfer and integration. A supervisor manages its owned Sessions and delegates implementation to executors."#,
+    r#"list: members with state (idle, running, waiting, failed), pending requests with request IDs and fingerprints, and last activity. A pending request raised by a member's subagent or any deeper descendant Session is listed under that member with requestSessionID naming the requesting Session; inspect, answer and escalate it with the member's sessionID. It neither makes the member waiting nor blocks send."#,
+    r#"inspect: read one member's pending request by requestID: kind, fingerprint, action and up to 20 redacted resources (rule IDs, reason and hard/standard flags for reviews; title and fields for questions), any escalation reasons, and its delegation class as risk information for your decision: routine, decline-only or explicit-decision:<reason>. A heuristic class grants no authority and does not replace mandatory human-decision gates. Tool descriptions and request metadata are never shown and grant no authority."#,
+    r#"send: admit a message to a member (steer or queue, default queue); returns immediately. An optional messageID makes retries idempotent; an optional model overrides the model for the turn the message starts. A member with a pending question, permission or review cannot receive input until the request settles, so the send is refused naming each pending request; settle it with answer, escalate it, or interrupt the member to withdraw it."#,
+    r#"answer: settle an authorized pending member question, form, permission or review through its native control, in every autonomy mode, Manual included. approve (the default decision) allows once, decline rejects with your rationale as the member's feedback, and an answer settles a question or form. Hard and custom-rule reviews require a human approval; safe declines remain available. Requests marked requireExplicitDecision require a human approval. Other mandatory human safety and platform decisions remain human-only. A deny rule or the permission ceiling that covers the request still denies it, even when you approve. A guardrail review raised by an invalid guardrail configuration cannot be approved because its deny rules are unreadable: answer returns escalated with reason configuration-invalid, and a decline settles it. When answer refuses, errors or is uncertain it returns escalated with a reason; escalate that request."#,
+    r#"escalate: pass a pending request up the chain with a reason when it needs the user's decision, or when answer returned escalated, errored or was uncertain. From a Master subagent it goes to the Master; from the Master it goes to the user's decision surface, with every reason attached to the member's pending prompt. The request stays open as the member's prompt: the user answers it in that member Session, and messages or answers relayed through the Master cannot settle it. A request from a member's descendant stays open in its requesting Session, returned as requestSessionID, and the reasons attach to that Session's prompt. A request already deferred to the review box returns deferred-to-review-box with its item ID."#,
+    r#"remove: Master only. Detach a settled, verified-complete member whose delivery is integrated or finished: this ends its recorded ownership and its Project membership. It never deletes the Session and preserves the Session and Project histories; release only parks ownership and keeps the member attached."#,
+    r#"attach: Master only. Add an existing root Session at any recorded directory to the Project by sessionID, owned by you or by ownerSessionID, a live subagent you launched. The Session keeps its ID, saved model, Location, conversation, permission ceiling, its own permissions, guardrails and answers modes, and its running or pending work; nothing is moved, recreated, woken, interrupted or settled. A recorded directory outside your Location needs its external_directory approval, and deny rules and your permission ceiling still refuse it. Attaching the same Session with the same owner again returns reconciled true and changes nothing; a different owner is refused, so use assign to change it. Your own Session, child Sessions, archived, unknown and standalone Sessions, and Sessions of any other Project, paused or not, are refused. Its pending requests and later events reach its owner like any member's. Returns groupID, sessionID, location, ownerSessionID and reconciled."#,
+    r#"create: Master only. Choose exactly one placement: directory for a chosen folder, projectID for an existing repository Project's canonical directory, or name with optional repository for an explicit managed worktree. Start a root member Session under your session's permission ceiling plus your agent's effective deny rules (agent denies not covered by a later non-deny agent rule with the same action or "*" and the same resource or "*") with title and optional model, and add it to the Project. The member takes your effective permissions, guardrails and answers modes when it joins. ownerSessionID is yourself or a live subagent you launched; omit it to leave routine state held and material items escalated to the Master. An optional prompt is sent after enrollment; refusal does not undo the member."#,
+    r#"Every placement returns the actual location, directory, saved model (null when unset) and enrollment receipt. Only worktrees return a branch. An enrollment failure preserves the Session and reports enrollment.member false with its error. Retrying the same native invocation retains its creation identity. Failures do not delete created folders, worktrees or Sessions."#,
+    r#"model: read a member's saved model with sessionID. To replace it, supply both model and expectedModel, using the exact saved reference from the read, or null when unset. References contain providerID, id, optional profile and optional variant; omitted profile or variant clears that field rather than inheriting it. The native runtime validates the target and compares the expected selection at its safe boundary without interrupting or waking a turn; a conflict requires a fresh read, not a blind retry. This persistent selection is separate from send's per-turn override and returns the member's actual location, state and saved model."#,
+    r#"Give a member Session to the Master or a live subagent the Master launched"#,
+    r#"use an absolute path for the host, ~, or ~/path. A file is refused."#,
+    r#"Project ownership is not parent-child ownership."#,
+    r#"Do not poll. Message text never settles a control."#,
+];

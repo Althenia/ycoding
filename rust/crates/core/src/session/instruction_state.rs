@@ -316,18 +316,25 @@ pub(crate) fn updates(
 
 pub(crate) fn apply(tx: &mut Write<'_>, event: &Event) -> Result<(), Error> {
     let id = session::Id::new(event.aggregate_id.clone()).map_err(record_error)?;
+    let Some(state) = current(tx, &id)? else {
+        return Ok(());
+    };
+    InstructionStateTable::put(tx, &state)
+}
+
+pub(crate) fn current(
+    tx: &mut Write<'_>,
+    id: &session::Id,
+) -> Result<Option<InstructionState>, Error> {
     let rows = events(
         &mut Reader::Transaction(tx),
-        &id,
+        id,
         RELEVANT,
         None,
         Bound::Unbounded,
         None,
     )?;
-    let Some(state) = fold(&id, &rows)? else {
-        return Ok(());
-    };
-    InstructionStateTable::put(tx, &state)
+    fold(id, &rows)
 }
 
 impl Service {
@@ -338,15 +345,7 @@ impl Service {
         let id = id.clone();
         self.client
             .submit(move |tx| {
-                let rows = events(
-                    &mut Reader::Transaction(tx),
-                    &id,
-                    RELEVANT,
-                    None,
-                    Bound::Unbounded,
-                    None,
-                )?;
-                let state = fold(&id, &rows)?;
+                let state = current(tx, &id)?;
                 match &state {
                     Some(state) => InstructionStateTable::put(tx, state)?,
                     None => {

@@ -744,6 +744,61 @@ async fn registry_contracts_are_exact_ts_definitions_and_compaction_is_not_a_mod
             get(&contract, "outputSchema")
         );
     }
+    let goal = definitions
+        .iter()
+        .find(|definition| definition.name.as_str() == Some("goal"))
+        .unwrap();
+    let goal_schema: serde_json::Value =
+        serde_json::from_str(&ycoding_schema::stringify_json(&goal.input_schema)).unwrap();
+    for (field, description) in [
+        (
+            "action",
+            "Goal action: get, update status, report no progress, record rework, complete, or stop/clear the current goal",
+        ),
+        ("status", "Desired status for update action"),
+        (
+            "unit",
+            "Rework unit: the file, check, feature or child result being reopened or resolved",
+        ),
+        (
+            "reason",
+            "Rework reason: the failed check, regression or contradicting evidence",
+        ),
+        (
+            "state",
+            "Rework state: opened when evidence reopens the unit, resolved when its check passes",
+        ),
+        (
+            "evidence",
+            "Required for resolved rework: the check that now passes",
+        ),
+    ] {
+        assert_eq!(goal_schema["properties"][field]["description"], description);
+    }
+    let goal = goal.description.as_str().unwrap();
+    for clause in [
+        "The user alone creates, replaces, or resumes the goal through the /goal command or the UI; never change the objective text.",
+        "Pending family reviews pause no-progress accounting.",
+        "a shell run of that check after the latest such edit has passed",
+        "An unresolved failure in this Session's own iteration also blocks completion.",
+    ] {
+        assert!(goal.contains(clause), "missing goal guidance: {clause}");
+    }
+    let question = definitions
+        .iter()
+        .find(|definition| definition.name.as_str() == Some("question"))
+        .unwrap();
+    let question_schema: serde_json::Value =
+        serde_json::from_str(&ycoding_schema::stringify_json(&question.input_schema)).unwrap();
+    let prompt = &question_schema["$defs"]["Question.Prompt"]["properties"];
+    assert_eq!(
+        prompt["multiple"]["description"],
+        "Allow selecting multiple choices"
+    );
+    assert_eq!(
+        prompt["custom"]["description"],
+        "Allow typing a custom answer (default: true)"
+    );
     let advertised = definitions
         .iter()
         .find(|definition| definition.name.as_str() == Some("subagent"))

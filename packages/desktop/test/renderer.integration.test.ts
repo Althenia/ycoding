@@ -163,7 +163,12 @@ beforeAll(async () => {
     if (call.route === "/api/session/active") return { data: running ? { ses_test: { type: "running" } } : {} }
     if (call.route === "/api/model") return { location, data: [model] }
     if (call.route === "/api/model/default") return { location, data: { selection: selection() } }
-    if (providerScene && call.route === "/api/integration") return { location, data: [{ id: "synthetic", name: "Synthetic Provider", methods: [{ type: "key", label: "Synthetic API key" }, { type: "oauth", id: "browser", label: "Synthetic browser sign-in" }], connections: [{ type: "credential", id: "cred_synthetic", label: "Synthetic account", active: true, kind: "key" }] }] }
+    if (providerScene && call.route === "/api/integration") return { location, data: [
+      ...["openrouter", "anthropic", "antigravity"].map(id => ({ id, name: id, methods: [{ type: "key", label: "API key" }], connections: [] })),
+      { id: "openai", name: "OpenAI", methods: [{ type: "key", label: "Synthetic API key" }, { type: "oauth", id: "browser", label: "Synthetic browser sign-in" }], connections: [{ type: "credential", id: "cred_synthetic", label: "Synthetic account", active: true, kind: "key" }] },
+      { id: "excluded", name: "Excluded integration", methods: [{ type: "key", label: "API key" }], connections: [] },
+    ] }
+    if (call.route === "/api/provider/integrations") return { location, data: ["openai", "anthropic", "antigravity", "openrouter"].map(id => ({ providerID: id, integrationID: id })) }
     if (call.route === "/api/shell") return { location, data: referenceScene ? [{ id: "sh_synthetic", status: "running", command: "bun test test/session-page.test.ts", cwd: "/synthetic/repo", shell: "sh", file: "output", time: { started: 1 }, metadata: { sessionID: "ses_test" } }] : [] }
     if (call.route === "/api/vcs/branch") return { location, data: { current: "synthetic", default: "main" } }
     if (call.route === "/api/vcs/status") return { location, data: [] }
@@ -434,7 +439,8 @@ test("Stitch provider inspection keeps the list beside its connection details", 
   try {
     await command(page, "Connect providers")
     await wait(page, `document.querySelector('dialog[open] [aria-label="Providers"]')`)
-    await wait(page, `document.querySelector('dialog[open] .provider-picker button')?.textContent.includes('Synthetic Provider')`)
+    await wait(page, `document.querySelector('dialog[open] .provider-picker button')?.textContent.includes('OpenAI')`)
+    expect(await page.evaluate(`[...document.querySelectorAll('.provider-picker button strong')].map(node => node.textContent)`, decodeArray(decodeString))).toEqual(["OpenAI", "Claude", "Antigravity", "OpenRouter", "Custom OpenAI-compatible Endpoint"])
     await page.evaluate(`document.querySelector('dialog[open] .provider-picker button').click()`)
     await wait(page, `document.querySelector('dialog[open] [aria-label="Provider connection"]')?.textContent.includes('Synthetic browser sign-in')`)
     expect(await page.evaluate(`(() => { const list = document.querySelector('dialog[open] [aria-label="Providers"]'); const detail = document.querySelector('dialog[open] [aria-label="Provider connection"]'); return !!detail && list.getBoundingClientRect().right <= detail.getBoundingClientRect().left; })()`, decodeBoolean)).toBe(true)
@@ -645,14 +651,14 @@ test("Desktop provider cards switch the default credential through the existing 
   prepareImplementedSurface()
   let active = "cred_work"
   sceneRead = call => {
-    if (call.route === "/api/integration") return { location, data: [{ id: "synthetic", name: "Synthetic Provider", methods: [{ type: "key", label: "Synthetic API key" }, { type: "oauth", id: "browser", label: "Synthetic browser sign-in" }, { type: "oauth", id: "headless", label: "Synthetic headless sign-in" }], connections: ["work", "personal"].map(name => ({ type: "credential", id: `cred_${name}`, label: name, active: active === `cred_${name}`, kind: "oauth" })) }] }
+    if (call.route === "/api/integration") return { location, data: [{ id: "openai", name: "OpenAI", methods: [{ type: "key", label: "Synthetic API key" }, { type: "oauth", id: "browser", label: "Synthetic browser sign-in" }, { type: "oauth", id: "headless", label: "Synthetic headless sign-in" }], connections: ["work", "personal"].map(name => ({ type: "credential", id: `cred_${name}`, label: name, active: active === `cred_${name}`, kind: "oauth" })) }] }
     if (call.method === "POST" && call.route === "/api/credential/cred_personal/activate") { active = "cred_personal"; return new Response(null, { status: 204 }) }
     return undefined
   }
   const page = await openReference()
   try {
     await command(page, "/connect", "command-palette-connect.png")
-    await clickContaining(page, '.provider-picker button', "Synthetic Provider")
+    await clickContaining(page, '.provider-picker button', "OpenAI")
     const cards = `[...document.querySelectorAll('.desktop-credential-card')]`
     await wait(page, `${cards}.length === 2`)
     expect(await page.evaluate(`${cards}.map(card => card.querySelector('.desktop-state-badge').textContent.trim())`, decodeArray(decodeString))).toEqual(["Default", "Not default"])
@@ -1647,16 +1653,16 @@ test("Stitch scene 80928cfab4bc4b20b3042c2f089574ef pending authorization stays 
   captureScene = true
   referenceScene = true
   providerScene = true
-  sceneRead = call => call.method === "POST" && call.route.endsWith("/connect/oauth") ? { data: { attemptID: "con_scene", url: "https://example.test/synthetic-authorization", mode: "code", instructions: "Synthetic authorization is pending. No browser was opened.", manualCode: true, time: { created: 1, expires: 4102444800000 } } } : undefined
+  sceneRead = call => call.method === "POST" && call.route.endsWith("/connect/oauth") ? { location, data: { attemptID: "con_scene", url: "https://example.test/synthetic-authorization", mode: "code", instructions: "Synthetic authorization is pending. No browser was opened.", manualCode: true, time: { created: 1, expires: 4102444800000 } } } : undefined
   const page = await openReference()
   try {
     await command(page, "Connect providers")
-    await clickContaining(page, '.provider-picker button', "Synthetic Provider")
+    await clickContaining(page, '.provider-picker button', "OpenAI")
     await clickText(page, 'dialog[open] button', "Synthetic browser sign-in")
     await wait(page, `document.querySelector('dialog[open]')?.textContent.includes('Authorization · pending')`)
     await page.evaluate(`[...document.querySelectorAll('dialog[open] h3')].find(heading => heading.textContent.includes('Authorization · pending')).scrollIntoView({ block: 'start' })`)
     expect(await page.evaluate(`(() => { const body = document.querySelector('dialog[open] .desktop-dialog__body').getBoundingClientRect(); const provider = document.querySelector('dialog[open] [aria-label="Providers"] button').getBoundingClientRect(); return provider.width > 0 && provider.height > 0 && provider.top >= body.top && provider.bottom <= body.bottom && provider.left >= body.left && provider.right <= body.right; })()`, decodeBoolean)).toBe(true)
-    await captureReference(page, "80928cfab4bc4b20b3042c2f089574ef", `document.querySelector('dialog[open]')?.textContent.includes('Authorization · pending') && document.querySelector('dialog[open]')?.textContent.includes('No browser was opened.')`, ["POST /api/integration/synthetic/connect/oauth"])
+    await captureReference(page, "80928cfab4bc4b20b3042c2f089574ef", `document.querySelector('dialog[open]')?.textContent.includes('Authorization · pending') && document.querySelector('dialog[open]')?.textContent.includes('No browser was opened.')`, ["POST /api/integration/openai/connect/oauth"])
     expect(await page.evaluate(`window.__desktopFixture.completed.openExternalUrl`)).toBeUndefined()
     await page.setViewport(1000, 600)
     expect(await page.evaluate(`(() => { const list = document.querySelector('dialog[open] [aria-label="Provider list"]').getBoundingClientRect(); const detail = document.querySelector('dialog[open] [aria-label="Provider connection"]').getBoundingClientRect(); const provider = document.querySelector('dialog[open] [aria-label="Providers"] button').getBoundingClientRect(); return list.height >= provider.height && detail.height > 0 && list.right <= detail.left + 1 && provider.top >= list.top && provider.bottom <= list.bottom && document.documentElement.scrollWidth <= innerWidth; })()`, decodeBoolean)).toBe(true)
@@ -2918,7 +2924,7 @@ test("Desktop polish aligns Settings navigation and keeps the shortcut editor co
 test("Desktop polish fits provider columns and returns focus from management dialogs", async () => {
   prepareImplementedSurface()
   const longID = "synthetic-provider-" + "catalog".repeat(24)
-  sceneRead = call => call.route === "/api/integration" ? { location, data: [{ id: longID, name: "Synthetic Provider " + "Catalog".repeat(18), methods: [{ type: "key", label: "Synthetic API key", env: ["SYNTHETIC_" + "KEY".repeat(30)] }], connections: [] }] } : undefined
+  sceneRead = call => call.route === "/api/provider/integrations" ? { location, data: [{ providerID: longID, integrationID: longID }] } : call.route === "/api/integration" ? { location, data: [{ id: longID, name: "Synthetic Provider " + "Catalog".repeat(18), methods: [{ type: "key", label: "Synthetic API key" }, { type: "env", names: ["SYNTHETIC_" + "KEY".repeat(30)] }], connections: [] }] } : undefined
   const page = await openReference()
   try {
     await page.navigate(`${origin}/#/settings`)
@@ -2929,7 +2935,8 @@ test("Desktop polish fits provider columns and returns focus from management dia
       await wait(page, `document.querySelector('dialog[open]')`)
     }
     await open("Models & Providers")
-    await clickContaining(page, '.provider-picker button', "Synthetic Provider")
+    await clickContaining(page, '.provider-picker button', "Custom OpenAI-compatible Endpoint")
+    await clickContaining(page, '.desktop-provider-detail button', "Synthetic Provider")
     await wait(page, `document.querySelector('[aria-label="Provider connection"] input[type="password"]')`)
     const providerCells: unknown[] = []
     for (const width of [1440, 1000]) {
@@ -3173,27 +3180,29 @@ test("Desktop v0.11.12 Settings cards share framed insets and align shortcut con
 
 test("Desktop v0.11.12 providers keep search inline and contain long identity and form content", async () => {
   prepareImplementedSurface()
-  sceneRead = call => call.route === "/api/integration" ? { location, data: [{ id: "synthetic-" + "registry".repeat(24), name: "Synthetic Provider " + "Registry".repeat(14), methods: [{ type: "key", label: "Synthetic API key" }], connections: [{ type: "credential", id: "cred_scene", label: "Synthetic credential", active: true, kind: "key" }] }] } : undefined
+  const longID = "synthetic-" + "registry".repeat(24)
+  sceneRead = call => call.route === "/api/provider/integrations" ? { location, data: [{ providerID: longID, integrationID: longID }] } : call.route === "/api/integration" ? { location, data: [{ id: longID, name: "Synthetic Provider " + "Registry".repeat(14), methods: [{ type: "key", label: "Synthetic API key" }], connections: [{ type: "credential", id: "cred_scene", label: "Synthetic credential", active: true, kind: "key" }] }] } : undefined
   const failures: string[] = []
   for (const theme of ["dark", "light"] as const) {
     const page = await openReference()
     try {
       await polishTheme(page, theme)
       await command(page, "Connect providers")
-      await clickContaining(page, '.provider-picker button', "Synthetic Provider")
+      await clickContaining(page, '.provider-picker button', "Custom OpenAI-compatible Endpoint")
+      await clickContaining(page, '.desktop-provider-detail button', "Synthetic Provider")
       await wait(page, `document.querySelector('.desktop-credential-card')`)
       for (const width of [1440, 1000]) {
         await page.setViewport(width, width === 1000 ? 600 : 900)
         await page.evaluate(`document.querySelector('dialog[data-kind="providers"] input[type="search"]').focus({ preventScroll:true })`)
         await settleR7(page)
         const metrics = await page.evaluate(`(() => {
-          const dialog = document.querySelector('dialog[data-kind="providers"]'), list = dialog.querySelector('.desktop-provider-list'), detail = dialog.querySelector('.desktop-provider-detail'), search = dialog.querySelector('input[type="search"]'), refresh = dialog.querySelector('.desktop-provider-tools button'), add = detail.querySelector('input[type="url"]').closest('form'), ref = el => el.getBoundingClientRect(), rect = el => { const r = ref(el); return [r.left,r.top,r.right,r.bottom]; };
-          return { width: ref(dialog).width, columns: [rect(list), rect(detail)], stacks: ref(list).bottom <= ref(detail).top, inline: Math.abs(ref(search).bottom-ref(refresh).bottom)<=1 && ref(search).right < ref(refresh).left, overflow: [list, detail, list.firstElementChild, list.querySelector('button')].map(el=>[el.clientWidth,el.scrollWidth]), pads: [detail.querySelector('.st-section'), detail.querySelector('.desktop-credential-card'), add].map(el=>parseFloat(getComputedStyle(el).paddingInlineStart)), addGap: ref(add.querySelector('button')).top-ref(add.querySelector('input')).bottom, focused: search === document.activeElement };
+          const dialog = document.querySelector('dialog[data-kind="providers"]'), list = dialog.querySelector('.desktop-provider-list'), detail = dialog.querySelector('.desktop-provider-detail'), search = dialog.querySelector('input[type="search"]'), refresh = dialog.querySelector('.desktop-provider-tools button'), ref = el => el.getBoundingClientRect(), rect = el => { const r = ref(el); return [r.left,r.top,r.right,r.bottom]; };
+          return { width: ref(dialog).width, columns: [rect(list), rect(detail)], stacks: ref(list).bottom <= ref(detail).top, inline: Math.abs(ref(search).bottom-ref(refresh).bottom)<=1 && ref(search).right < ref(refresh).left, overflow: [list, detail, list.firstElementChild, list.querySelector('button')].map(el=>[el.clientWidth,el.scrollWidth]), pads: [detail.querySelector('.st-section'), detail.querySelector('.desktop-credential-card')].map(el=>parseFloat(getComputedStyle(el).paddingInlineStart)), focused: search === document.activeElement };
         })()`, decodeRecord)
         const name = `providers-${theme}-${width}`
         await polishGeometry(page, name, metrics)
         const overflows = decodeArray(decodeArray(decodeNumber))(metrics.overflow)
-        if (metrics.width !== 880 || metrics.stacks || !metrics.inline || !metrics.focused || overflows.some(([client, scroll]) => (scroll ?? 0) > (client ?? 0)) || decodeNumber(metrics.addGap) < 8 || decodeArray(decodeNumber)(metrics.pads).some(pad => pad < 16)) failures.push(`${name}: ${JSON.stringify(metrics)}`)
+        if (metrics.width !== 880 || metrics.stacks || !metrics.inline || !metrics.focused || overflows.some(([client, scroll]) => (scroll ?? 0) > (client ?? 0)) || decodeArray(decodeNumber)(metrics.pads).some(pad => pad < 16)) failures.push(`${name}: ${JSON.stringify(metrics)}`)
       }
     } finally { await page.close() }
   }

@@ -4,7 +4,7 @@ import { Modal } from "../../ui/modal"
 import { CustomSelect } from "../../ui/custom-select"
 import { useRemote } from "../context"
 import type { CatalogTarget } from "../catalog"
-import type { ProviderAuthInfo } from "@ycoding-ai/remote"
+import { customEndpointChoice, providerChoices, type ProviderAuthInfo } from "@ycoding-ai/remote"
 import { createProviderAuth, providerAuthPrompts, type ProviderAuthState } from "../provider-auth"
 import { providerProfileMethod, providerProfileRefreshVisible, providerProfileView } from "../view-model"
 import "./provider-connect.css"
@@ -13,6 +13,7 @@ export function ProviderConnect(props: { readonly target: CatalogTarget; readonl
   const remote = useRemote()
   const scope = remote.scope()
   const [state, setState] = createSignal<ProviderAuthState>({ phase: "loading", integrations: [] })
+  const [custom, setCustom] = createSignal(false)
   const [integrationID, setIntegrationID] = createSignal("")
   const [methodID, setMethodID] = createSignal("")
   const [label, setLabel] = createSignal("default")
@@ -22,6 +23,13 @@ export function ProviderConnect(props: { readonly target: CatalogTarget; readonl
   const current = () => scope !== undefined && remote.scope()?.deviceID === scope.deviceID && remote.scope()?.generation === scope.generation && remote.state().transport.kind === "open"
   const auth = scope === undefined ? undefined : createProviderAuth({ scope, target: props.target, current,
     request: (operation, input) => remote.store.link.request(scope, operation, { input }), changed: setState })
+  const choices = createMemo(() => providerChoices(state().integrations))
+  const selectIntegration = (id: string) => {
+    setIntegrationID(id); setMethodID(""); setInputs({}); setSecret("")
+    const taken = new Set(state().integrations.find((item) => item.id === id)?.profiles.map((profile) => profile.name))
+    const next = Array.from({ length: taken.size + 2 }, (_, index) => index === 0 ? "default" : `profile-${index + 1}`).find((name) => !taken.has(name))
+    setLabel(next ?? "default")
+  }
   const integration = createMemo(() => state().integrations.find((item) => item.id === integrationID()))
   const methods = () => integration()?.methods ?? []
   const method = createMemo(() => methods().find((item) => (item.id ?? "key") === methodID()))
@@ -70,13 +78,17 @@ export function ProviderConnect(props: { readonly target: CatalogTarget; readonl
       <p class="field__hint">Keys and authorization codes pass through the authenticated relay to this machine. Connecting adds or replaces the named profile and makes it the machine’s provider default. Session profile selection remains separate.</p>
       <Show when={!current()}><p role="alert" class="field__hint">This machine is no longer connected. Close this dialog and reconnect before signing in.</p></Show>
       <Show when={state().phase === "loading"}><p role="status">Loading provider integrations…</p></Show>
-      <Show when={state().integrations.length > 0}>
-        <CustomSelect label="Provider" value={integrationID()} placeholder="Choose a provider" disabled={!current() || busy() || attemptActive()} options={state().integrations.map((item) => ({ value: item.id, label: item.name }))} onChange={(id) => {
-          setIntegrationID(id); setMethodID(""); setInputs({}); setSecret("")
-          const taken = new Set(state().integrations.find((item) => item.id === id)?.profiles.map((profile) => profile.name))
-          const next = Array.from({ length: taken.size + 2 }, (_, index) => index === 0 ? "default" : `profile-${index + 1}`).find((name) => !taken.has(name))
-          setLabel(next ?? "default")
+      <Show when={state().phase !== "loading" && state().phase !== "unsupported"}>
+        <CustomSelect label="Provider" value={custom() ? customEndpointChoice.id : integrationID()} placeholder="Choose a provider" disabled={!current() || busy() || attemptActive()} options={[...choices().builtIn, customEndpointChoice].map(({ id, name }) => ({ value: id, label: name }))} onChange={(id) => {
+          setCustom(id === customEndpointChoice.id)
+          selectIntegration(id === customEndpointChoice.id ? "" : id)
         }} />
+        <Show when={custom()}>
+          <p class="field__hint">Add an endpoint with the terminal’s <code>/connect</code> command or in YCoding configuration on the connected machine. Refresh provider profiles to connect a key here.</p>
+          <Show when={choices().custom.length > 0}>
+            <CustomSelect label="Configured endpoint" value={integrationID()} placeholder="Choose an endpoint" disabled={!current() || busy() || attemptActive()} options={choices().custom.map(({ id, name }) => ({ value: id, label: name }))} onChange={selectIntegration} />
+          </Show>
+        </Show>
         <Show when={integration()}>{(item) => <>
           <Show when={item().profiles.length}><ul class="provider-profiles" aria-label="Existing profiles"><For each={item().profiles}>{(profile) => {
             const view = () => providerProfileView(profile)
@@ -119,7 +131,6 @@ export function ProviderConnect(props: { readonly target: CatalogTarget; readonl
       <Show when={state().phase === "complete"}><p role="status">Provider profile connected.</p><button type="button" class="button button--secondary" disabled={!current()} onClick={() => { notified = false; void auth?.load() }}>Connect another profile</button></Show>
       <Show when={state().message}><p role={state().phase === "failed" ? "alert" : "status"} class="field__hint">{state().message}</p></Show>
       <Show when={providerProfileRefreshVisible({ phase: state().phase, hasAttempt: state().attempt !== undefined })}><button type="button" class="button button--secondary" disabled={busy() || !current()} onClick={() => void auth?.load()}>Refresh provider profiles</button></Show>
-      <Show when={state().phase === "ready" && !state().integrations.length}><p role="status">No provider integrations are available at this Location.</p></Show>
     </div>
   </Modal></Portal>
 }

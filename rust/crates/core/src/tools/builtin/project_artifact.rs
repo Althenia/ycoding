@@ -26,7 +26,7 @@ impl Tool for ProjectArtifact {
     fn definition(&self, name: &str) -> ToolDefinition {
         ToolDefinition {
             name: name.into(),
-            description: "At a safe boundary after work is complete and validated, record at most one repeated durable repository-specific insight as a trial skill, instruction-only command, or least-privilege agent. Never record transient state, preferences, prompts, logs, secrets, credentials, private paths or URLs, customer data, or speculation. Do not create plugins.".into(),
+            description: "At a safe boundary after the primary task is complete and validated, record at most one repeated durable repository-specific insight for future work. Never record transient state, preferences, prompts, logs, secrets, credentials, private paths/URLs, customer data, or speculation. Search and update an owned artifact instead of duplicating it; prefer a skill, use an instruction-only command or least-privilege agent only when necessary, and never create a plugin.".into(),
             input_schema: parse_json(include_str!("project-artifact.input-schema.json")).unwrap(),
             output_schema: Some(parse_json(include_str!("project-artifact.output-schema.json")).unwrap()),
             cache: None,

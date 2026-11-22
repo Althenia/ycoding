@@ -198,15 +198,22 @@ async fn muse_retained_owner_seeds_rebuilt_catalog_and_reconciles_on_timer() {
         .unwrap();
         assert!(composition.diagnostics.is_empty());
         let saved = credentials.all().unwrap();
+        let selection = reference("muse", "muse-fixture", "Muse");
         assert!(
-            Resolver::new(composition.catalog)
-                .resolve(
-                    &reference("muse", "muse-fixture", "Muse"),
-                    &saved,
-                    saved.first()
+            composition
+                .catalog
+                .get(
+                    &selection.provider_id,
+                    &selection.id,
+                    selection.profile.as_ref(),
+                    &saved
                 )
-                .is_ok()
+                .is_some()
         );
+        assert!(matches!(
+            Resolver::new(composition.catalog).resolve(&selection, &saved, saved.first()),
+            Err(ycoding_core::resources::model::Error::UnsupportedPackage)
+        ));
     }
     assert_eq!(fixture.finish().await.len(), 2);
     credentials.shutdown().await.unwrap();
@@ -239,15 +246,23 @@ async fn account_removal_and_replacement_clear_dynamic_inventory_without_borrowi
     )
     .await
     .unwrap();
+    let selection = reference("github-copilot", "gpt-fixture", "Work");
+    let saved = credentials.all().unwrap();
     assert!(
-        Resolver::new(composition.catalog.clone())
-            .resolve(
-                &reference("github-copilot", "gpt-fixture", "Work"),
-                &credentials.all().unwrap(),
-                Some(&first)
+        composition
+            .catalog
+            .get(
+                &selection.provider_id,
+                &selection.id,
+                selection.profile.as_ref(),
+                &saved
             )
-            .is_ok()
+            .is_some()
     );
+    assert!(matches!(
+        Resolver::new(composition.catalog.clone()).resolve(&selection, &saved, Some(&first)),
+        Err(ycoding_core::resources::model::Error::UnsupportedPackage)
+    ));
     credentials.update(first.id().clone(), None, Some(secret(r#"{"type":"oauth","methodID":"device","access":"copilot-replaced","refresh":"github-replaced","expires":0}"#)), 101).await.unwrap();
     composition.diagnostics = accounts
         .reconcile(&mut composition.catalog, &credentials, 101, false)
@@ -255,13 +270,15 @@ async fn account_removal_and_replacement_clear_dynamic_inventory_without_borrowi
         .unwrap();
     assert_eq!(composition.diagnostics.len(), 1);
     assert!(
-        Resolver::new(composition.catalog.clone())
-            .resolve(
-                &reference("github-copilot", "gpt-fixture", "Work"),
-                &credentials.all().unwrap(),
-                credentials.all().unwrap().first()
+        composition
+            .catalog
+            .get(
+                &selection.provider_id,
+                &selection.id,
+                selection.profile.as_ref(),
+                &credentials.all().unwrap()
             )
-            .is_err()
+            .is_none()
     );
     accounts
         .reconcile(&mut composition.catalog, &credentials, 102, false)
@@ -323,6 +340,49 @@ async fn configured_models_discovery_is_retained_and_uses_prepared_selected_cred
         assert!(composition.diagnostics.is_empty());
         let selection = model::Ref::decode(
             &parse_json(r#"{"providerID":"local","id":"local-model"}"#).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            Resolver::new(composition.catalog)
+                .resolve(&selection, &[], None)
+                .is_ok()
+        );
+    }
+    assert_eq!(fixture.finish().await.len(), 2);
+    credentials.shutdown().await.unwrap();
+    store.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn configured_openai_discovery_uses_the_endpoint_without_a_snapshot() {
+    let fixture = Fixture::new(vec![
+        (
+            200,
+            r#"{"object":"list","data":[{"id":"local-model"}]}"#.into(),
+        ),
+        (
+            200,
+            r#"{"object":"list","data":[{"id":"local-model"}]}"#.into(),
+        ),
+    ])
+    .await;
+    let (store, credentials) = store();
+    let documents = vec![parse_json(&serde_json::json!({"providers":{"openai":{"package":"aisdk:@ai-sdk/openai-compatible","catalog":{"source":"openai-models"},"settings":{"baseURL":fixture.base,"apiKey":"local-key"}}}}).to_string()).unwrap()];
+    let mut accounts = AccountCatalog::new(Preparation::default(), BTreeMap::new()).unwrap();
+    for now in [100, 101, 60101] {
+        let composition = Catalog::compose_with_accounts(
+            Vec::new(),
+            &documents,
+            &credentials,
+            &mut accounts,
+            now,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(composition.diagnostics.is_empty());
+        let selection = model::Ref::decode(
+            &parse_json(r#"{"providerID":"openai","id":"local-model"}"#).unwrap(),
         )
         .unwrap();
         assert!(
@@ -470,57 +530,49 @@ async fn upstream_console_profiles_republish_retained_inventory_config_and_attri
         )
         .await
         .unwrap();
-        let resolver = Resolver::new(composition.catalog);
+        let catalog = composition.catalog;
+        let resolver = Resolver::new(catalog.clone());
         let saved = credentials.all().unwrap();
         for (profile, id) in [("Work", "work-model"), ("Personal", "personal-model")] {
+            let selection = reference("router", id, profile);
             let selected = saved
                 .iter()
                 .find(|credential| credential.label().as_str() == Some(profile))
                 .unwrap();
-            let resolved = resolver
-                .resolve(&reference("router", id, profile), &saved, Some(selected))
+            let info = catalog
+                .get(
+                    &selection.provider_id,
+                    &selection.id,
+                    selection.profile.as_ref(),
+                    &saved,
+                )
                 .unwrap();
+            let other = if profile == "Work" {
+                "personal-model"
+            } else {
+                "work-model"
+            };
             assert!(
-                resolver
-                    .resolve(
-                        &reference(
-                            "router",
-                            if profile == "Work" {
-                                "personal-model"
-                            } else {
-                                "work-model"
-                            },
-                            profile
-                        ),
-                        &saved,
-                        Some(selected)
+                catalog
+                    .get(
+                        &selection.provider_id,
+                        &other.into(),
+                        selection.profile.as_ref(),
+                        &saved
                     )
-                    .is_err()
+                    .is_none()
             );
             assert_eq!(
-                resolved.info.package.as_ref().unwrap().as_str(),
+                info.package.as_ref().unwrap().as_str(),
                 Some("@ycoding-ai/ai/providers/openrouter")
             );
-            let native =
-                ycoding_core::resources::model::ProviderContext::new(BTreeMap::new(), "fixture")
-                    .unwrap()
-                    .model(&resolved.info, Some(&selected.secret().domain().unwrap()))
-                    .await
-                    .unwrap();
-            let prepared = native
-                .route
-                .prepare(&ycoding_ai::llm::Request::new(native.clone()))
-                .unwrap();
-            assert_eq!(prepared.headers["x-title"], "configured-title");
-            assert_eq!(
-                prepared.headers["authorization"],
-                format!("Bearer selected-{}", selected.id().as_str().unwrap())
-            );
-            assert!(!prepared.encoded_body.contains("remote-secret"));
-            assert!(!prepared.encoded_body.contains("private"));
             if profile == "Work" {
-                assert_eq!(resolved.info.limit.output.get(), 777);
+                assert_eq!(info.limit.output.get(), 777);
             }
+            assert!(matches!(
+                resolver.resolve(&selection, &saved, Some(selected)),
+                Err(ycoding_core::resources::model::Error::UnsupportedPackage)
+            ));
         }
     }
     let requests = fixture.finish().await;

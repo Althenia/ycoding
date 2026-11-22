@@ -1,15 +1,15 @@
 {
   "name": "goal",
-  "description": "Inspect and maintain the user's autonomous goal. Only the user creates, replaces or resumes its objective. Use report only for an unresolved blocker after reasonable self-resolution; every accepted report spends one no-progress attempt. Pending family reviews pause accounting. Background work is unfinished work, not a blocker. Record reopened work with rework, unit, reason and state opened; resolve it with state resolved and evidence naming the passing check. Rework never spends the no-progress budget. Complete only after verifying the objective. Named script paths and backticked commands must pass through shell after the latest completed edit, write or patch in the Session family. An identical completion rejection without intervening work spends one no-progress attempt. Stop or clear only at the user's direction. Set cannot create a goal.",
+  "description": "Manage the current autonomous goal for this session. The user alone creates, replaces, or resumes the goal through the /goal command or the UI; never change the objective text. After the user enables a goal, maintain its status: use get to inspect, report after a blocker, complete after verified achievement, and stop/clear only when the user asks. Do not report ordinary progress. Pending family reviews pause no-progress accounting. Use report only after encountering a blocker, attempting reasonable self-resolution, and remaining unable to progress; every report consumes one no-progress retry attempt. Active background subagents or shells are unfinished work, not automatic no progress. Use complete only after the goal is achieved and verified; completion is agent-owned. When the user's goal request names a check (a ./ or ../ script path ending in .sh, .bash, .zsh, .ps1, .cmd or .bat, or a backticked command of two or more words), complete and update to completed are rejected after a completed edit, write or patch in this Session or its descendants until a shell run of that check after the latest such edit has passed; the rejection names the check to rerun. A completion rejection identical to the previous one, with no other tool call, check run, edit or descendant work in between, consumes one no-progress retry attempt. Use rework with unit, reason and state opened when a failed check, regression or rejected result reopens finished work, and with state resolved plus evidence once its check passes; rework is neither a no-progress report nor progress narration and never stops the goal. An unresolved failure in this Session's own iteration also blocks completion. Do not use set to create a goal; it will be rejected.",
   "inputSchema": {
     "type": "object",
     "properties": {
-      "action": {"type": "string", "enum": ["get", "set", "update", "report", "rework", "complete", "stop", "clear"]},
-      "status": {"type": "string", "enum": ["active", "completed", "stopped"]},
-      "unit": {"type": "string", "pattern": "\\S", "maxLength": 120},
-      "reason": {"type": "string", "pattern": "\\S", "maxLength": 300},
-      "state": {"type": "string", "enum": ["opened", "resolved"]},
-      "evidence": {"type": "string", "pattern": "\\S", "maxLength": 300}
+      "action": {"type": "string", "enum": ["get", "set", "update", "report", "rework", "complete", "stop", "clear"], "description": "Goal action: get, update status, report no progress, record rework, complete, or stop/clear the current goal"},
+      "status": {"type": "string", "enum": ["active", "completed", "stopped"], "description": "Desired status for update action"},
+      "unit": {"type": "string", "pattern": "\\S", "maxLength": 120, "description": "Rework unit: the file, check, feature or child result being reopened or resolved"},
+      "reason": {"type": "string", "pattern": "\\S", "maxLength": 300, "description": "Rework reason: the failed check, regression or contradicting evidence"},
+      "state": {"type": "string", "enum": ["opened", "resolved"], "description": "Rework state: opened when evidence reopens the unit, resolved when its check passes"},
+      "evidence": {"type": "string", "pattern": "\\S", "maxLength": 300, "description": "Required for resolved rework: the check that now passes"}
     },
     "required": ["action"],
     "additionalProperties": false

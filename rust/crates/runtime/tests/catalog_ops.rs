@@ -39,7 +39,10 @@ use ycoding_runtime::{CatalogServices, CatalogTask, LocalAuth, standard};
 fn base_catalog() -> Catalog {
     let info = ycoding_core::ycoding_schema::model::Info::decode(&parse_json(r#"{"id":"code","modelID":"api-code","providerID":"fixture","name":"Code","package":"@ycoding-ai/ai/providers/openai-compatible","settings":{},"headers":{"X-Fixture":"safe"},"body":{"custom":{"enabled":true}},"capabilities":{"tools":true,"input":["text","image"],"output":["text"]},"variants":[{"id":"high","body":{"service_tier":"priority"}}],"time":{"released":12},"cost":[{"tier":{"type":"context","size":100},"input":1.5,"output":2.5,"cache":{"read":0.1,"write":0.2}}],"status":"active","enabled":true,"daybreak":["daybreak_blue"],"api":"chat","limit":{"context":4096,"input":4000,"output":96}}"#).unwrap()).unwrap();
     let mut catalog = Catalog::default();
-    catalog.providers = vec![ProviderRecord { provider: provider::Info::decode(&parse_json(r#"{"id":"fixture","integrationID":"fixture-auth","name":"Fixture","package":"@ycoding-ai/ai/providers/openai-compatible","settings":{"apiKey":"synthetic-secret","nested":{"authToken":"synthetic-secret","claudeCodeSource":"managed-source-identity","retained":true}},"headers":{"Authorization":"Bearer synthetic-secret","X-API-Key":"synthetic-secret","X-Fixture":"safe"},"body":{"credentialID":"internal-identity","format":"compact"}}"#).unwrap()).unwrap(), models: vec![info], environment: vec![] }];
+    catalog.providers = vec![ProviderRecord { provider: provider::Info::decode(&parse_json(r#"{"id":"fixture","integrationID":"fixture-auth","name":"Fixture","package":"@ycoding-ai/ai/providers/openai-compatible","settings":{"apiKey":"synthetic-secret","baseURL":"http://localhost:1234/v1","nested":{"authToken":"synthetic-secret","claudeCodeSource":"managed-source-identity","retained":true}},"headers":{"Authorization":"Bearer synthetic-secret","X-API-Key":"synthetic-secret","X-Fixture":"safe"},"body":{"credentialID":"internal-identity","format":"compact"}}"#).unwrap()).unwrap(), models: vec![info], environment: vec![] }];
+    catalog
+        .configure(&[parse_json(r#"{"providers":{"fixture":{}}}"#).unwrap()])
+        .unwrap();
     catalog
 }
 
@@ -199,7 +202,7 @@ async fn location_catalogs_preserve_provider_model_fields_and_private_values_sta
             units(provider.integration_id.as_ref().unwrap()),
             "fixture-auth"
         );
-        assert_eq!(provider.settings.as_ref().unwrap().entries.len(), 1);
+        assert_eq!(provider.settings.as_ref().unwrap().entries.len(), 2);
         assert_eq!(provider.headers.as_ref().unwrap().entries.len(), 1);
         assert_eq!(provider.body.as_ref().unwrap().entries.len(), 1);
         let bytes = providers.encode_to_vec();
@@ -317,14 +320,18 @@ async fn integrations_include_unconnected_but_exclude_disabled_and_denied_and_re
         let counter = refreshed.clone();
         let refresh: CatalogTask = Arc::new(move || { counter.fetch_add(1, Ordering::SeqCst); Box::pin(async { Ok(()) }) });
         let mut catalog = base_catalog();
-        for (id, disabled, denied) in [("unconnected", false, false), ("disabled", true, false), ("denied", false, true)] {
-            catalog.providers.push(ProviderRecord { provider: provider::Info::decode(&parse_json(&format!(r#"{{"id":"{id}","integrationID":"{id}-auth","name":"{id}","package":"fixture","disabled":{disabled}}}"#)).unwrap()).unwrap(), models: vec![], environment: vec![] });
-            catalog.set_denied(provider::Id(id.into()), denied);
-        }
+        catalog.configure(&[parse_json(r#"{"providers":{
+            "unconnected":{"package":"aisdk:@ai-sdk/openai-compatible","settings":{"baseURL":"http://localhost:1234/v1"}},
+            "disabled":{"package":"aisdk:@ai-sdk/openai-compatible","settings":{"baseURL":"http://localhost:1234/v1"}},
+            "denied":{"package":"aisdk:@ai-sdk/openai-compatible","settings":{"baseURL":"http://localhost:1234/v1"}}
+        }}"#).unwrap()]).unwrap();
+        catalog.set_denied(provider::Id("denied".into()), true);
+        let disabled = catalog.providers.iter_mut().find(|record| record.provider.id.0.as_str() == Some("disabled")).unwrap();
+        disabled.provider.disabled = Some(true);
         let server = start(settings(fixture(catalog, refresh), None), standard().unwrap()).await;
         let mut client = Client::open(server.address(), &[]).await.unwrap();
         let mappings: v5::ProviderIntegrationsResult = ask(&mut client, "provider.integrations", location_scope("/project"), v5::ProviderIntegrationsRequest { query: query("/project", None) }).await;
-        assert_eq!(mappings.data.items.iter().map(|mapping| units(&mapping.provider_id)).collect::<Vec<_>>(), ["fixture", "unconnected"]);
+        assert_eq!(mappings.data.items.iter().map(|mapping| units(&mapping.provider_id)).collect::<Vec<_>>(), ["openai", "anthropic", "antigravity", "openrouter", "fixture", "unconnected"]);
         let _: v5::ProviderRefreshResult = ask(&mut client, "provider.refresh", location_scope("/project"), v5::ProviderRefreshRequest { query: query("/project", None) }).await;
         assert_eq!(refreshed.load(Ordering::SeqCst), 1);
         drop(client); server.shutdown().await.unwrap();

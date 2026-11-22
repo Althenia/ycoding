@@ -1302,6 +1302,7 @@ details[open] > summary > .rl-disclosure-chev { transform: rotate(90deg); }
 .desktop-provider-detail { display: grid; align-content: start; grid-template-columns: minmax(0, 1fr); gap: var(--yc-space-3); min-inline-size: 0; }
 .desktop-provider-detail :is(.st-section, form, label, code, .rl-btn) { min-inline-size: 0; max-inline-size: 100%; overflow-wrap: anywhere; }
 .desktop-provider-detail .rl-btn { white-space: normal; justify-self: start; }
+.desktop-provider-detail > .rl-option { min-inline-size: 0; white-space: normal; overflow-wrap: anywhere; text-align: start; }
 .desktop-provider-detail input { inline-size: 100%; min-inline-size: 0; }
 :is(.desktop-dialog, .rl-companion[data-full="true"]) .desktop-diff { grid-template-columns: minmax(9rem, 22%) minmax(0, 1fr); align-items: start; }
 :is(.desktop-dialog, .rl-companion[data-full="true"]) .desktop-diff > nav { grid-column: 1; min-inline-size: 0; overflow: auto; }

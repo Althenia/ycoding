@@ -1,4 +1,4 @@
-use super::{Catalog, ProviderRecord, empty_model, field, field_lossless, models_dev, object, set};
+use super::{Catalog, empty_model, field, field_lossless, models_dev, object, set};
 use crate::resources::credential;
 use std::time::Duration;
 use ycoding_schema::{
@@ -140,7 +140,7 @@ impl Catalog {
                 continue;
             }
             let provider_id = provider::Id(id.clone());
-            if !catalog.provider_permitted(&provider_id) {
+            if !catalog.provider_runnable(&provider_id) {
                 continue;
             }
             let integration = catalog
@@ -154,19 +154,19 @@ impl Catalog {
             let selections = if saved.is_empty() {
                 vec![None]
             } else {
-                saved.iter().map(Some).collect()
+                let compatible = catalog.compatible_endpoints.contains(&provider_id);
+                saved
+                    .iter()
+                    .filter(|info| {
+                        !compatible
+                            || matches!(
+                                info.secret().domain(),
+                                Ok(ycoding_schema::credential::Value::Key(_))
+                            )
+                    })
+                    .map(Some)
+                    .collect()
             };
-            if catalog.provider(&provider_id).is_none() {
-                catalog.providers.push(ProviderRecord {
-                    provider: provider::Info::decode(&object(&[
-                        ("id", id.encode()),
-                        ("name", id.encode()),
-                        ("package", "".encode()),
-                    ]))?,
-                    models: vec![],
-                    environment: vec![],
-                });
-            }
             let configured_ids = documents
                 .iter()
                 .filter_map(|d| {

@@ -310,3 +310,58 @@ async fn memory_write_permission_denial_preserves_storage() {
     assert!(!fixture.root.join("data").exists());
     fixture.cleanup();
 }
+
+#[test]
+fn memory_and_project_artifact_advertise_release_guidance() {
+    use ycoding_core::{
+        resources::project_artifact::{source_registry, store},
+        tools::builtin::project_artifact::ProjectArtifact,
+    };
+    let fixture = ToolFixture::new();
+    let (registry, _memory) = register_memory(&fixture);
+    let artifacts = Arc::new(store::Service::new(
+        fixture.authority.store.client(),
+        store::Paths {
+            data: fixture.root.join("data"),
+            home: fixture.root.join("home"),
+            config: fixture.root.join("config"),
+        },
+        Arc::new(std::sync::Mutex::new(source_registry::Registry::default())),
+    ));
+    let _artifact = registry
+        .register(
+            vec![(
+                "project_artifact".into(),
+                Arc::new(ProjectArtifact {
+                    store: artifacts,
+                    project_id: ycoding_schema::project::Id::new("prj_parity").unwrap(),
+                    policy: fixture.policy.clone(),
+                }) as Arc<dyn Tool>,
+            )],
+            Options::direct(),
+        )
+        .unwrap();
+    let request = registry.materialize(&[]);
+    for (name, expected) in [
+        (
+            "memory",
+            r#"Use on-demand knowledge for the active workspace: status, list, lexical search, read, write linked Markdown, export an offline HTML graph, or maintain entries.
+scope defaults to the active Git repository and may be 'knowledge' for shared cross-repository concepts; outside Git only the knowledge scope is available.
+Never automatically save transcripts or inject memory. Read before replacing or deleting a concept and supply its digest.
+delete moves an entry to recoverable trash, trash lists it, restore returns it without overwriting, purge permanently removes one exact trash entry, and vacuum previews derived cleanup (dryRun defaults true).
+IDs are lowercase paths without extensions; index/log are reserved. Markdown requires YAML frontmatter type. The graph is a local file; it makes no network requests."#,
+        ),
+        (
+            "project_artifact",
+            r#"At a safe boundary after the primary task is complete and validated, record at most one repeated durable repository-specific insight for future work. Never record transient state, preferences, prompts, logs, secrets, credentials, private paths/URLs, customer data, or speculation. Search and update an owned artifact instead of duplicating it; prefer a skill, use an instruction-only command or least-privilege agent only when necessary, and never create a plugin."#,
+        ),
+    ] {
+        let definition = request
+            .definitions
+            .iter()
+            .find(|definition| definition.name.as_str() == Some(name))
+            .unwrap();
+        assert_eq!(definition.description.as_str(), Some(expected), "{name}");
+    }
+    fixture.cleanup();
+}

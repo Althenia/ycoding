@@ -459,6 +459,128 @@ fn public_openai_responses_endpoint_marks_every_candidate_without_prefix_reserve
 }
 
 #[test]
+fn volatile_system_text_stays_after_the_encoded_cache_prefix_on_kept_routes() {
+    use ycoding_ai::{antigravity, providers};
+
+    let config = providers::Config::new(Auth::bearer(Credential::value("fixture")));
+    let routes = [
+        (Route::openai_responses().model("gpt-5.5"), "input"),
+        (Route::openai_responses().model("gpt-6-luna"), "input"),
+        (Route::anthropic().model("claude-sonnet-4-5"), "messages"),
+        (
+            providers::openrouter(
+                "openai/gpt-6-luna",
+                providers::OpenRouterConfig {
+                    common: config.clone(),
+                    reasoning: None,
+                },
+            ),
+            "input",
+        ),
+        (
+            providers::compatible(
+                "fixture-model",
+                ycoding_schema::provider::Id("custom-fixture".into()),
+                providers::Config {
+                    base_url: Some("https://fixture.invalid/v1".into()),
+                    ..config
+                },
+                providers::Api::Chat,
+            )
+            .unwrap(),
+            "messages",
+        ),
+        (
+            antigravity::route(antigravity::Config {
+                access: Some(Credential::value("fixture")),
+                project: Some("fixture-project".into()),
+                session_id: Some("fixture-affinity".into()),
+                ..Default::default()
+            })
+            .model("gemini-4-hydrogen"),
+            "contents",
+        ),
+    ];
+    for (model, field) in routes {
+        let mut request = Request::new(model);
+        request.system = vec!["Required startup instructions".into()];
+        request.messages = vec![Message::user("Reusable task context")];
+        let route = request.model.route.clone();
+        let prepare = |request: &Request| {
+            let prepared = route.prepare(request).unwrap();
+            let body = serde_json::from_str::<serde_json::Value>(&prepared.encoded_body).unwrap();
+            let inner = if field == "contents" {
+                assert_eq!(body["project"], "fixture-project");
+                assert_eq!(
+                    body["request"]["sessionId"],
+                    antigravity::session_id("fixture-affinity", "gemini-4-hydrogen")
+                );
+                &body["request"]
+            } else {
+                &body
+            };
+            inner[field].as_array().unwrap().clone()
+        };
+        let prefix = prepare(&request);
+        for suffix in ["Current state: first", "Current state: changed"] {
+            let mut observation = Message::system(suffix);
+            observation.volatile = true;
+            request.messages.truncate(1);
+            request.messages.push(observation);
+            let wire = prepare(&request);
+            assert_eq!(wire.len(), prefix.len() + 1, "{}: {wire:?}", route.id);
+            assert_eq!(&wire[..prefix.len()], &prefix, "{}", route.id);
+            assert!(wire.last().unwrap().to_string().contains(suffix));
+        }
+    }
+}
+
+#[test]
+fn direct_responses_stored_chain_contains_one_system_item_and_keeps_its_key() {
+    use ycoding_ai::providers;
+
+    for transport in [providers::Transport::Http, providers::Transport::WebSocket] {
+        let mut request = Request::new(providers::openai(
+            "gpt-6-luna",
+            providers::OpenAIConfig {
+                common: providers::Config::new(Auth::bearer(Credential::value("fixture"))),
+                organization: None,
+                project: None,
+                transport,
+            },
+        ));
+        request.system = vec!["Required startup instructions".into()];
+        request.messages = vec![Message::user("First turn")];
+        request.tools = vec![tool("lookup")];
+        request.provider_options = Some(parse_json(r#"{"openai":{"store":true,"promptCacheKey":"session-fixture","promptCacheOptions":{"mode":"implicit","ttl":"30m"},"instructions":"Keep answers brief"}}"#).unwrap());
+        let shape = |request: &Request| {
+            let wire = request.model.route.prepare(request).unwrap();
+            assert_eq!(wire.url.host_str(), Some("api.openai.com"));
+            assert_eq!(wire.headers["authorization"], "Bearer fixture");
+            serde_json::from_str::<serde_json::Value>(&wire.encoded_body).unwrap()
+        };
+        let first = shape(&request);
+        request
+            .messages
+            .push(Message::assistant(vec![Part::Text("Reply".into())]));
+        request.messages.push(Message::user("Second turn"));
+        request.provider_options = Some(parse_json(r#"{"openai":{"store":true,"previousResponseId":"resp_fixture","continuationInputStart":2,"promptCacheKey":"session-fixture","promptCacheOptions":{"mode":"implicit","ttl":"30m"},"instructions":"Keep answers brief"}}"#).unwrap());
+        let second = shape(&request);
+        assert_eq!(second["previous_response_id"], "resp_fixture");
+        assert_eq!(first["input"][0]["role"], "system");
+        assert_eq!(second["input"].as_array().unwrap().len(), 1);
+        assert_eq!(second["input"][0]["content"][0]["text"], "Second turn");
+        assert_eq!(second["prompt_cache_key"], first["prompt_cache_key"]);
+        assert_eq!(
+            second["prompt_cache_options"],
+            first["prompt_cache_options"]
+        );
+        assert_eq!(second["tools"], first["tools"]);
+        assert_eq!(second["instructions"], "Keep answers brief");
+    }
+}
+
+#[test]
 fn newer_gemini_cache_profiles_and_variants() {
     for id in [
         "gemini-3.1-pro",

@@ -22,7 +22,7 @@ impl Tool for Memory {
     fn definition(&self, name: &str) -> ToolDefinition {
         ToolDefinition {
             name: name.into(),
-            description: "Use on-demand workspace knowledge: inspect status, list, search, read, write linked Markdown, export a local graph, or maintain entries. Read before replacing or deleting a concept and supply its digest. Delete moves an entry to recoverable trash; vacuum previews cleanup unless dryRun is false.".into(),
+            description: "Use on-demand knowledge for the active workspace: status, list, lexical search, read, write linked Markdown, export an offline HTML graph, or maintain entries.\nscope defaults to the active Git repository and may be 'knowledge' for shared cross-repository concepts; outside Git only the knowledge scope is available.\nNever automatically save transcripts or inject memory. Read before replacing or deleting a concept and supply its digest.\ndelete moves an entry to recoverable trash, trash lists it, restore returns it without overwriting, purge permanently removes one exact trash entry, and vacuum previews derived cleanup (dryRun defaults true).\nIDs are lowercase paths without extensions; index/log are reserved. Markdown requires YAML frontmatter type. The graph is a local file; it makes no network requests.".into(),
             input_schema: parse_json(include_str!("memory.input-schema.json")).unwrap(),
             output_schema: Some(parse_json(include_str!("memory.output-schema.json")).unwrap()),
             cache: None,

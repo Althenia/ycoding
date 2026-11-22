@@ -455,7 +455,7 @@ async fn all_16_successes_cross_real_connector_and_reject_expired_owner_authorit
                 payload: v5::ProviderAuthKeyRequestPayload {
                     target: target(&fixture.root),
                     integration_id: text(&fixture.integration),
-                    label: text("Work"),
+                    label: text("Key profile"),
                     key: text("synthetic-key-secret"),
                 },
             },
@@ -540,7 +540,17 @@ async fn all_16_successes_cross_real_connector_and_reject_expired_owner_authorit
         )
         .await;
     assert_eq!(catalog.data.models.items.len(), 1);
-    assert_eq!(units(&catalog.data.models.items[0].id), "code");
+    let model = &catalog.data.models.items[0];
+    assert_eq!(units(&model.id), "code");
+    assert_eq!(model.enabled, Some(false));
+    let profiles = &model.profiles.as_ref().unwrap().items;
+    assert_eq!(
+        profiles
+            .iter()
+            .map(|profile| units(&profile.name))
+            .collect::<Vec<_>>(),
+        ["Key profile"]
+    );
     no_private(&catalog.encode_to_vec());
     let by_workspace: v5::CatalogGetResult = harness
         .ask(

@@ -173,6 +173,7 @@ impl Preparation {
             draft.oauth(claude.implementation(vec!["claude".into()], environment.clone()));
         }
         for (id, name) in [
+            ("openrouter", "OPENROUTER_API_KEY"),
             ("anthropic", "ANTHROPIC_API_KEY"),
             ("openai", "OPENAI_API_KEY"),
             ("xai", "XAI_API_KEY"),

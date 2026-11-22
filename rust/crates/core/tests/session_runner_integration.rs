@@ -370,6 +370,78 @@ fn fixture_services(
 }
 
 #[tokio::test]
+async fn unchanged_instruction_files_keep_fresh_sessions_quiet_and_one_edit_notifies_once() {
+    let root = std::env::temp_dir().join(format!(
+        "ycoding-instruction-notices-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("AGENTS.md");
+    std::fs::write(&file, "Original fixture guidance").unwrap();
+    let source = ycoding_core::session::instruction_sources::ambient(
+        ycoding_core::resources::instruction_discovery::Options {
+            directory: root.clone(),
+            project_root: root.clone(),
+            global_config: root.join("global"),
+            project: true,
+            max_bytes: None,
+        },
+    );
+    let (endpoint, mut requests, server) = server(vec![TEXT; 8]).await;
+    let id = session::Id::new("ses_one").unwrap();
+    for index in 0..3 {
+        let store = support::store();
+        let service = Service::new(store.client());
+        let notices = || {
+            service
+                .transcript(&id)
+                .unwrap()
+                .into_iter()
+                .filter_map(|message| match message {
+                    session_message::Info::System(message) => message
+                        .text
+                        .to_utf8()
+                        .ok()
+                        .filter(|text| text.starts_with("Instructions updated: ")),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let coordinator = Coordinator::new(Arc::new(local_sources(
+            &store,
+            &endpoint,
+            registry(),
+            Arc::new(WallClock),
+            vec![source.clone()],
+        )));
+        for (name, prompt) in [("initial", "First prompt"), ("followup", "Second prompt")] {
+            admit_input(&service, name, prompt, "steer").await;
+            coordinator.run(&id).await.unwrap();
+            let request = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+            assert!(request.contains("Original fixture guidance"));
+            assert!(notices().is_empty());
+        }
+        if index == 2 {
+            std::fs::write(&file, "Revised fixture guidance").unwrap();
+            for (name, prompt) in [("edit", "Read the edit"), ("unchanged", "Continue")] {
+                admit_input(&service, name, prompt, "steer").await;
+                coordinator.run(&id).await.unwrap();
+                let request = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+                assert_eq!(request.matches("Revised fixture guidance").count(), 1);
+                assert_eq!(notices(), ["Instructions updated: core/instructions"]);
+            }
+        }
+        coordinator.shutdown().await.unwrap();
+    }
+    server.await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
 async fn composed_builtin_file_and_entry_sources_render_updates_and_removal_from_admitted_values() {
     let root = std::env::temp_dir().join(format!(
         "ycoding-instructions-{}-{}",

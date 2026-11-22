@@ -57,8 +57,8 @@ fn snapshot(id: &str, package: &str) -> models_dev::Snapshot {
 }
 
 #[test]
-fn kept_models_dev_providers_resolve_and_prepare_their_wire_family() {
-    for (id, package) in KEPT {
+fn builtin_models_resolve_and_prepare_their_wire_family() {
+    for (id, package) in &KEPT[..3] {
         let mut catalog = Catalog::new(vec![snapshot(id, package)]);
         catalog
             .configure(&[parse_json(
@@ -149,28 +149,20 @@ fn npm_provider_documents_preserve_selection_pricing_and_unrelated_settings() {
             let selected = catalog.default_selection(&[]).unwrap();
             assert_eq!(selected.provider_id, provider::Id(id.into()));
             assert_eq!(selected.id, "code".into());
-            let resolved = model::Resolver::new(catalog.clone())
-                .resolve(&selected, &[], None)
+            assert!(matches!(
+                model::Resolver::new(catalog.clone()).resolve(&selected, &[], None),
+                Err(model::Error::UnsupportedPackage)
+            ));
+            let info = catalog
+                .get(&selected.provider_id, &selected.id, None, &[])
                 .unwrap();
-            assert_eq!(resolved.info.cost, cost);
+            assert_eq!(info.cost, cost);
             assert_eq!(
-                resolved
-                    .info
-                    .settings
-                    .as_ref()
-                    .unwrap()
-                    .0
-                    .get(&"custom".into()),
+                info.settings.as_ref().unwrap().0.get(&"custom".into()),
                 Some(&parse_json(r#"{"keep":true}"#).unwrap())
             );
             assert_eq!(
-                resolved
-                    .info
-                    .settings
-                    .as_ref()
-                    .unwrap()
-                    .0
-                    .get(&"temperature".into()),
+                info.settings.as_ref().unwrap().0.get(&"temperature".into()),
                 Some(&0.25.encode())
             );
             assert!(
@@ -427,18 +419,23 @@ async fn catalog_metadata_reads_do_not_execute_or_install_explicit_packages() {
     assert!(composed.diagnostics.is_empty());
     assert!(composed.degraded.is_empty());
     assert_eq!(composed.catalog.all(&[]).len(), 1);
-    assert_eq!(composed.catalog.available(&[]).len(), 1);
+    assert!(composed.catalog.available(&[]).is_empty());
     let selected = composed.catalog.default_selection(&[]).unwrap();
-    let resolved = model::Resolver::new(composed.catalog)
-        .resolve(&selected, &[], None)
+    assert!(matches!(
+        model::Resolver::new(composed.catalog.clone()).resolve(&selected, &[], None),
+        Err(model::Error::UnsupportedPackage)
+    ));
+    let info = composed
+        .catalog
+        .get(&selected.provider_id, &selected.id, None, &[])
         .unwrap();
     assert_eq!(selected.provider_id, provider::Id("fixture".into()));
     assert_eq!(
-        resolved.info.package.as_ref().unwrap().as_str(),
+        info.package.as_ref().unwrap().as_str(),
         Some(format!("file:{}", package.display()).as_str())
     );
-    assert_eq!(resolved.info.cost[0].input.get(), 2.0);
-    assert_eq!(resolved.info.cost[0].output.get(), 5.0);
+    assert_eq!(info.cost[0].input.get(), 2.0);
+    assert_eq!(info.cost[0].output.get(), 5.0);
     assert!(!marker.exists());
     for path in [
         root.join("node_modules"),
@@ -458,29 +455,21 @@ async fn catalog_metadata_reads_do_not_execute_or_install_explicit_packages() {
 }
 
 #[tokio::test]
-async fn npm_provider_catalog_discovery_only_reads_the_configured_metadata_endpoint() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+async fn excluded_package_discovery_does_not_contact_the_endpoint_or_hide_metadata() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
     let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
-    let task = tokio::spawn(async move {
-        for _ in NPM_PROVIDERS {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut bytes = vec![0; 4096];
-            let length = socket.read(&mut bytes).await.unwrap();
-            let request = String::from_utf8(bytes[..length].to_vec()).unwrap();
-            assert!(request.starts_with("GET /v1/models HTTP/1.1"));
-            assert!(!request.to_lowercase().contains("authorization:"));
-            let body =
-                r#"{"object":"list","data":[{"id":"code","name":"Discovered"},{"id":"extra"}]}"#;
-            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
-        }
-    });
-    let providers = NPM_PROVIDERS.iter().map(|(id, package)| ((*id).to_owned(), serde_json::json!({"package":package,"catalog":{"source":"openai-models"},"settings":{"baseURL":endpoint,"custom":"kept"},"models":{"code":{"limit":{"output":777}}}}))).collect::<serde_json::Map<_, _>>();
-    let decoded = config::decode_document(
-        &serde_json::json!({"providers":providers}).to_string(),
-        "fixture",
-    );
-    assert!(decoded.diagnostics.is_empty(), "{:?}", decoded.diagnostics);
+    let id = "aihubmix";
+    let package = "@aihubmix/ai-sdk-provider";
+    let document = parse_json(
+        &serde_json::json!({"providers": {id: {
+            "package": package, "catalog": {"source": "openai-models"},
+            "settings": {"baseURL": endpoint, "custom": "kept"},
+            "models": {"code": {"limit": {"output": 777}}}
+        }}})
+        .to_string(),
+    )
+    .unwrap();
     let store = ycoding_store::Store::disposable(
         ycoding_store::Options::core(),
         ycoding_store::Catalog::new(1, ycoding_store::resources::TABLES),
@@ -488,38 +477,25 @@ async fn npm_provider_catalog_discovery_only_reads_the_configured_metadata_endpo
     )
     .unwrap();
     let credentials = ycoding_core::resources::credential::Service::new(store.client());
-    let composed = Catalog::compose(
-        NPM_PROVIDERS
-            .iter()
-            .map(|(id, package)| snapshot(id, package))
-            .collect(),
-        &[decoded.info.unwrap()],
-        &credentials,
-    )
-    .await
-    .unwrap();
+    let composed = Catalog::compose(vec![snapshot(id, package)], &[document], &credentials)
+        .await
+        .unwrap();
     assert!(composed.diagnostics.is_empty());
     assert!(composed.degraded.is_empty());
-    for (id, _) in NPM_PROVIDERS {
-        let code = composed
-            .catalog
-            .get(&provider::Id((*id).into()), &"code".into(), None, &[])
-            .unwrap();
-        assert_eq!(code.name, "Discovered".into());
-        assert_eq!(code.limit.output.get(), 777);
-        assert_eq!(code.cost[0].input.get(), 3.0);
-        assert_eq!(
-            code.settings.unwrap().0.get(&"custom".into()),
-            Some(&"kept".encode())
-        );
-        assert!(
-            composed
-                .catalog
-                .get(&provider::Id((*id).into()), &"extra".into(), None, &[])
-                .is_some()
-        );
-    }
-    task.await.unwrap();
+    let code = composed
+        .catalog
+        .get(&provider::Id(id.into()), &"code".into(), None, &[])
+        .unwrap();
+    assert_eq!(code.limit.output.get(), 777);
+    assert_eq!(code.cost[0].input.get(), 3.0);
+    assert_eq!(
+        code.settings.unwrap().0.get(&"custom".into()),
+        Some(&"kept".encode())
+    );
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
     credentials.shutdown().await.unwrap();
     store.shutdown().unwrap();
 }
@@ -529,4 +505,119 @@ fn field<'a>(value: &'a JsonValue, key: &str) -> Option<&'a JsonValue> {
         return None;
     };
     fields.get(&key.into())
+}
+
+#[test]
+fn excluded_upstream_provider_remains_readable_but_cannot_be_selected() {
+    let id = provider::Id("deepseek".into());
+    let mut catalog = Catalog::new(vec![
+        snapshot("openai", "@ai-sdk/openai"),
+        snapshot("deepseek", "@ai-sdk/openai-compatible"),
+    ]);
+    catalog
+        .configure(&[parse_json(
+            r#"{"model":{"providerID":"deepseek","model":"code"},"providers":{"openai":{"settings":{"apiKey":"fixture-key"}},"deepseek":{"settings":{"apiKey":"fixture-key"}}}}"#,
+        )
+        .unwrap()])
+        .unwrap();
+    let selection = catalog.configured_default().unwrap().clone();
+    let historical = catalog.get(&id, &"code".into(), None, &[]).unwrap();
+    assert_eq!(historical.cost[0].input.get(), 3.0);
+    assert_eq!(catalog.default_selection(&[]), Some(selection.clone()));
+    assert!(catalog.default_model(&[]).is_none());
+    assert!(
+        catalog
+            .available(&[])
+            .iter()
+            .all(|model| model.provider_id != id)
+    );
+    assert!(matches!(
+        model::Resolver::new(catalog).resolve(&selection, &[], None),
+        Err(model::Error::UnsupportedPackage)
+    ));
+}
+
+#[test]
+fn provider_integration_choices_keep_canonical_ids_order_and_custom_profiles() {
+    use ycoding_core::resources::auth::{Preparation, integration::Draft};
+    use ycoding_core::ycoding_schema::integration::Method;
+
+    let mut catalog = Catalog::new(vec![snapshot("deepseek", "@ai-sdk/openai-compatible")]);
+    catalog.configure(&[parse_json(r#"{"providers":{"local":{"package":"aisdk:@ai-sdk/openai-compatible","settings":{"baseURL":"http://localhost:1234/v1"},"models":{"code":{}}}}}"#).unwrap()]).unwrap();
+    assert_eq!(
+        catalog
+            .integrations()
+            .iter()
+            .map(|entry| entry.provider_id.0.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["openai", "anthropic", "antigravity", "openrouter", "local"]
+    );
+    assert_eq!(
+        catalog
+            .available(&[])
+            .iter()
+            .map(|model| model.provider_id.0.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["local"]
+    );
+    let mut draft = Draft::default();
+    Preparation::default()
+        .register(&mut draft, &Default::default(), None)
+        .unwrap();
+    draft.register_endpoints(&catalog);
+    assert!(
+        draft
+            .methods(&"openai".into())
+            .iter()
+            .any(|method| matches!(method, Method::OAuth(_)))
+    );
+    for id in ["openai", "anthropic", "openrouter", "local"] {
+        assert!(
+            draft
+                .methods(&id.into())
+                .iter()
+                .any(|method| matches!(method, Method::Key(_))),
+            "{id}"
+        );
+    }
+    assert!(draft.get(&"deepseek".into()).is_some());
+}
+
+#[test]
+fn configured_openai_compatible_route_retains_its_id_and_rejects_oauth() {
+    use ycoding_core::ycoding_schema::{DomainDecode, credential};
+    let mut catalog = Catalog::new(vec![snapshot("openai", "@ai-sdk/openai")]);
+    catalog.configure(&[parse_json(r#"{"providers":{"openai":{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{"baseURL":"http://localhost:1234/v1","api":"chat"}}}}"#).unwrap()]).unwrap();
+    let selected = catalog.default_selection(&[]).unwrap();
+    assert_eq!(selected.provider_id, provider::Id("openai".into()));
+    assert_eq!(
+        catalog
+            .integrations()
+            .iter()
+            .filter(|integration| integration.provider_id == selected.provider_id)
+            .count(),
+        1
+    );
+    let resolved = model::Resolver::new(catalog)
+        .resolve(&selected, &[], None)
+        .unwrap();
+    let oauth = credential::Value::decode(&parse_json(r#"{"type":"oauth","methodID":"chatgpt-headless","access":"test-token","refresh":"test-refresh","expires":0}"#).unwrap()).unwrap();
+    assert!(matches!(
+        model::from_catalog_model(&resolved.info, Some(&oauth)),
+        Err(model::Error::ProfileUnavailable)
+    ));
+    let key = credential::Value::Key(credential::Key {
+        key: "fixture-key".into(),
+        metadata: None,
+    });
+    let native = model::from_catalog_model(&resolved.info, Some(&key)).unwrap();
+    let prepared = native
+        .route
+        .prepare(&ycoding_ai::llm::Request::new(native.clone()))
+        .unwrap();
+    assert_eq!(
+        prepared.url.as_str(),
+        "http://localhost:1234/v1/chat/completions"
+    );
+    assert_eq!(prepared.headers["authorization"], "Bearer fixture-key");
 }

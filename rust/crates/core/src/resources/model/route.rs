@@ -275,6 +275,11 @@ pub(super) fn from_catalog_model_environment(
         } else {
             family
         };
+    if family == ProviderFamily::Compatible
+        && matches!(credential, Some(credential::Value::OAuth(_)))
+    {
+        return Err(Error::ProfileUnavailable);
+    }
     let native = package.as_str().is_some_and(|p| !p.starts_with("aisdk:"));
     let settings = info
         .settings

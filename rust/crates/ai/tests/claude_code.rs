@@ -478,6 +478,38 @@ impl Account for FixtureAccount {
 }
 
 #[test]
+fn claude_code_keeps_billing_and_marked_prefix_when_runtime_state_changes() {
+    let route = claude_code::route(Arc::new(FixtureAccount::default()), settings());
+    let mut request = Request::new(route.model("claude-sonnet-4-5"));
+    request.system = vec!["Stable instructions".into()];
+    request.messages = vec![Message::user("Reusable task context")];
+    request
+        .http
+        .headers
+        .insert("x-ycoding-session".into(), "ses_durable".into());
+    let prepare = |request: &Request| {
+        let prepared = route.prepare(request).unwrap();
+        serde_json::from_str::<serde_json::Value>(&prepared.encoded_body).unwrap()
+    };
+    let baseline = prepare(&request);
+    let prefix = baseline["messages"].as_array().unwrap();
+    assert!(!markers(&baseline).is_empty());
+    for state in ["Runtime state: waiting", "Runtime state: ready"] {
+        request.messages.truncate(1);
+        let mut suffix = Message::system(state);
+        suffix.volatile = true;
+        request.messages.push(suffix);
+        let body = prepare(&request);
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(body["system"], baseline["system"]);
+        assert_eq!(messages.len(), prefix.len() + 1);
+        assert_eq!(&messages[..prefix.len()], prefix);
+        assert!(messages.last().unwrap().to_string().contains(state));
+        assert!(markers(messages.last().unwrap()).is_empty());
+    }
+}
+
+#[test]
 fn claude_code_server_tool_errors_are_provider_executed_results() {
     let route = claude_code::route(Arc::new(FixtureAccount::default()), settings());
     let request = Request::new(route.model("claude-fixture"));

@@ -82,7 +82,8 @@ fn lower(request: &Request) -> Result<JsonValue, Error> {
             }
             wrapped.extend("\n</system-update>".encode_utf16());
             let wrapped = LosslessString::from_utf16(wrapped);
-            if let Some(previous) = contents.last_mut()
+            if !message.volatile
+                && let Some(previous) = contents.last_mut()
                 && get(previous, "role").and_then(json::text) == Some("user")
             {
                 let mut parts = get(previous, "parts")

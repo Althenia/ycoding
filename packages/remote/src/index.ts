@@ -1,5 +1,6 @@
 import { parseProviderAuthInput, providerAuthOperations } from "./provider-auth.ts"
 import { isSessionDirectoryPath } from "./session-directory.ts"
+export { customEndpointChoice, isBuiltInProvider, providerChoices } from "@ycoding-ai/protocol/provider-choices"
 export { parseProviderAuthInput, providerAuthOperations, isProviderAuthorizationURL, type ProviderAuthOperation, type ProviderAuthInput, type ProviderAuthTarget, type ProviderAuthInfo, type ProviderAuthAttempt, type ProviderAuthStatus, type ProviderAuthRefresh, type ProviderAuthPrompt } from "./provider-auth.ts"
 export { RemoteProtocolVersion, RemoteWebSocketPath, RelayLimits, remoteDescriptors, relayDescriptors, remoteEventTypes, createRelayConnection, receiveBinary, frameReservation, handoffBinary, Connection, ReservationBudget, FailureCategory, PeerRole, WireLimit } from "./binary"
 export { takeAsset } from "./asset"

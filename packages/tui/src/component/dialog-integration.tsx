@@ -1,4 +1,5 @@
 import { TextAttributes } from "@opentui/core"
+import { customEndpointChoice, providerChoices } from "@ycoding-ai/client"
 import type {
   ConnectionInfo,
   IntegrationCommandConnectOutput,
@@ -18,29 +19,14 @@ import { DialogSelect } from "../ui/dialog-select"
 import { Link } from "../ui/link"
 import { useToast } from "../ui/toast"
 import { errorMessage } from "../util/error"
-
-const INTEGRATION_PRIORITY: Record<string, number> = {
-  ycoding: 0,
-  "opencode-go": 1,
-  openai: 2,
-  "github-copilot": 3,
-  anthropic: 4,
-  google: 5,
-}
+import { FrontendPaths } from "../frontend-paths"
+import { saveCustomEndpoint } from "../custom-endpoint-save"
+import { DialogCustomEndpoint, type CustomEndpointResult } from "./dialog-custom-endpoint"
 
 type ConnectMethod = Exclude<IntegrationInfo["methods"][number], { type: "env" }>
 type IntegrationAttempt = IntegrationOauthConnectOutput["data"]
 type CommandAttempt = IntegrationCommandConnectOutput["data"]
 export type OnIntegrationConnected = (providerID?: string) => void
-
-export function integrationOptions(list: IntegrationInfo[]) {
-  return list.toSorted(
-    (a, b) =>
-      (INTEGRATION_PRIORITY[a.id] ?? 99) - (INTEGRATION_PRIORITY[b.id] ?? 99) ||
-      a.name.localeCompare(b.name) ||
-      a.id.localeCompare(b.id),
-  )
-}
 
 export function connectMethods(integration: IntegrationInfo): ConnectMethod[] {
   return integration.methods
@@ -73,57 +59,98 @@ export function connectionSummary(integration: IntegrationInfo) {
     .join(", ")
 }
 
-export function DialogIntegration(props: { onConnected?: OnIntegrationConnected; onCustomEndpoint?: () => void; onRunpodEndpoint?: () => void } = {}) {
+export function DialogIntegration(props: { onConnected?: OnIntegrationConnected } = {}) {
   const data = useData()
   const dialog = useDialog()
+  const client = useClient()
+  const toast = useToast()
   const { theme } = useTheme().contextual("elevated")
-  const options = createMemo(() => {
-    const integrations = integrationOptions(data.location.integration.list() ?? []).map((integration) => {
-      const methods = connectMethods(integration)
-      const connected = integration.connections.length > 0
-      const category = integration.id in INTEGRATION_PRIORITY ? "Popular" : "Services"
-      return {
-        title: integration.name,
-        value: integration.id,
-        description: methods.length ? undefined : "Environment only",
-        footer: connected ? `Linked · ${connectionSummary(integration)}` : "Not linked",
-        category,
-        categoryView:
-          category === "Services" ? (
-            <box position="relative" top={-1}>
-              <text fg={theme.text.feedback.info.default} attributes={TextAttributes.BOLD}>
-                Services
-              </text>
-            </box>
-          ) : undefined,
-        disabled: methods.length === 0,
-        state: connected ? ("connected" as const) : ("disabled" as const),
-        onSelect: () =>
-          credentialConnections(integration).length
-            ? manageConnections(integration, methods, dialog, props.onConnected)
-            : selectMethod(integration, methods, dialog, props.onConnected),
-      }
-    })
-    if (!props.onCustomEndpoint) return integrations
-    return [...integrations, ...(props.onRunpodEndpoint ? [{
-      title: "Runpod Serverless endpoint",
-      value: "runpod-endpoint",
-      description: "Connect a vLLM or Ollama Jobs endpoint",
-      category: "Services",
-      onSelect: props.onRunpodEndpoint,
-    }] : []), {
-      title: "Custom OpenAI-compatible endpoint",
-      value: "custom-openai-endpoint",
-      description: "Configure an OpenAI-compatible provider",
-      category: "Services",
-      onSelect: props.onCustomEndpoint,
-    }]
+  const [integrationIDs, setIntegrationIDs] = createSignal<ReadonlySet<string>>()
+  const location = data.location.default()
+  const locationRef = { directory: location.directory, workspace: location.workspaceID }
+  const catalog = createMemo(() => providerChoices(integrationIDs() ? data.location.integration.list() ?? [] : [], integrationIDs()))
+  const readIntegrationIDs = async (signal?: AbortSignal) => {
+    const { data } = await client.api.provider.integrations({ location: locationRef }, { signal })
+    return new Set(data.map((item) => item.integrationID))
+  }
+  onMount(() => {
+    const controller = new AbortController()
+    onCleanup(() => controller.abort())
+    void readIntegrationIDs(controller.signal).then(setIntegrationIDs)
+      .catch((error) => { if (!controller.signal.aborted) toast.error(error) })
   })
+  const save = (result: CustomEndpointResult) => {
+    const id = result.provider?.trim() || "custom-openai"
+    const known = data.location.integration.list() ?? []
+    if (known.some((item) => item.id === id) && !catalog().custom.some((item) => item.id === id)) {
+      toast.show({ variant: "error", message: "Choose a provider ID that is not already in use." })
+      return
+    }
+    dialog.clear()
+    let allowed: ReadonlySet<string>
+    void saveCustomEndpoint(FrontendPaths.Path.config, result, {
+      syncRegistration: async () => {
+        const [, ids] = await Promise.all([data.location.integration.sync(), readIntegrationIDs()])
+        allowed = ids
+      },
+      registered: (providerID) => allowed.has(providerID) && (data.location.integration.list() ?? []).some(
+        (integration) => integration.id === providerID && integration.methods.some((method) => method.type === "key"),
+      ),
+      connectKey: ({ integrationID, key, label }) => client.api.integration.connect.key({ integrationID, location: locationRef, key, label }),
+      activate: (credentialID) => client.api.credential.activate({ credentialID, location: locationRef }),
+      refresh: () => Promise.all([data.location.integration.sync(), data.location.model.sync(), data.location.provider.sync()]),
+    }).then(({ credentialConnected, providerID }) => {
+      toast.show({ variant: "success", message: credentialConnected
+        ? "Endpoint saved and credential profile connected" : "Endpoint saved to YCoding config",
+      })
+      props.onConnected?.(providerID)
+    }).catch(toast.error)
+  }
+  const option = (integration: IntegrationInfo) => {
+    const methods = connectMethods(integration)
+    const connected = integration.connections.length > 0
+    return {
+      title: integration.name,
+      value: integration.id,
+      description: methods.length ? undefined : "Environment only",
+      footer: connected ? `Linked · ${connectionSummary(integration)}` : "Not linked",
+      disabled: methods.length === 0,
+      state: connected ? ("connected" as const) : ("disabled" as const),
+      onSelect: () => credentialConnections(integration).length
+        ? manageConnections(integration, methods, dialog, props.onConnected)
+        : selectMethod(integration, methods, dialog, props.onConnected),
+    }
+  }
+  const openCustomEditor = (configured: IntegrationInfo[]) => dialog.replace(() => (
+    <DialogCustomEndpoint
+      providerOptions={configured.map((integration) => ({
+        id: integration.id,
+        name: integration.name,
+        profiles: credentialConnections(integration).map(({ id, label, active }) => ({ id, label, active })),
+      }))}
+      onComplete={save}
+      onCancel={() => dialog.clear()}
+    />
+  ))
+  const options = createMemo(() => [...catalog().builtIn.map(option), {
+    title: customEndpointChoice.name,
+    value: customEndpointChoice.id,
+    description: "Configure an OpenAI-compatible provider",
+    onSelect: () => {
+      const configured = catalog().custom
+      if (!configured.length) { openCustomEditor(configured); return }
+      dialog.replace(() => <DialogSelect title={customEndpointChoice.name} flat={true} options={[
+        { title: "Configure endpoint", value: null, onSelect: () => openCustomEditor(configured) },
+        ...configured.map(option),
+      ]} />)
+    },
+  }])
 
   return (
     <DialogSelect
       title="Connect a service"
       options={options()}
+      flat={true}
       emptyView={
         <box paddingLeft={4} paddingRight={4} paddingTop={1}>
           <text fg={theme.text.subdued}>No integrations available</text>

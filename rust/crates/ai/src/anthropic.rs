@@ -346,7 +346,7 @@ pub fn lower(request: &Request) -> Result<JsonValue, Error> {
                         text_block(text),
                         parts.last().and_then(|part| part.cache.as_ref()),
                     )],
-                    false,
+                    message.volatile,
                 );
             }
             continue;

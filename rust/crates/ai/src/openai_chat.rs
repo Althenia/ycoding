@@ -256,14 +256,22 @@ pub fn lower(request: &Request) -> Result<JsonValue, Error> {
             }
             let text = openai_shared::wrapped_system(message, "OpenAI Chat")?;
             if !images.is_empty() {
-                images.push(json::object([("type", s("text")), ("text", s(text))]));
+                if !message.volatile {
+                    images.push(json::object([
+                        ("type", s("text")),
+                        ("text", s(text.clone())),
+                    ]));
+                }
                 messages.push(json::object([
                     ("role", s("user")),
                     ("content", JsonValue::Array(std::mem::take(&mut images))),
                 ]));
-                continue;
+                if !message.volatile {
+                    continue;
+                }
             }
-            if let Some(previous) = messages.last_mut()
+            if !message.volatile
+                && let Some(previous) = messages.last_mut()
                 && get(previous, "role").and_then(json::text) == Some("user")
             {
                 match get(previous, "content") {

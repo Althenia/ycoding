@@ -464,7 +464,8 @@ pub fn lower(request: &Request) -> Result<JsonValue, Error> {
                 openai_shared::wrapped_system(message, "OpenAI Responses")?,
                 false,
             );
-            if let Some(previous) = input.last_mut()
+            if !message.volatile
+                && let Some(previous) = input.last_mut()
                 && get(previous, "role").and_then(json::text) == Some("user")
                 && let Some(content) = get(previous, "content").and_then(json::array)
             {
