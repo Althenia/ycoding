@@ -41,6 +41,24 @@ describe("update selection", () => {
     expect(urls).toEqual([latestURL])
   })
 
+  test.each(["0.13.0", "0.13.0-beta.1", "1.0.0"])("a bare update from Bun 0.12.1 requires opt-in to %s and downloads nothing", async (latest) => {
+    const urls: string[] = []
+    expect(await planUpdate({ installed: "0.12.1", fetch: latestFetch(`v${latest}`, urls) })).toEqual({ action: "requires-opt-in", latest })
+    expect(urls).toEqual([latestURL])
+  })
+
+  test("a bare update from Bun 0.12.1 can install a later 0.12 patch", async () => {
+    const urls: string[] = []
+    expect(await planUpdate({ installed: "0.12.1", fetch: latestFetch("v0.12.2", urls) })).toEqual({ action: "install", version: "0.12.2" })
+    expect(urls).toEqual([latestURL])
+  })
+
+  test("an explicit Rust version bypasses automatic release selection", async () => {
+    const urls: string[] = []
+    expect(await planUpdate({ installed: "0.12.1", requested: "0.13.0", fetch: latestFetch("v0.13.0", urls) })).toEqual({ action: "install", version: "0.13.0" })
+    expect(urls).toEqual([])
+  })
+
   test("an explicit version installs that exact release, including an older one, without resolving latest", async () => {
     const urls: string[] = []
     expect(await planUpdate({ installed: "0.12.4", requested: "0.12.0", fetch: latestFetch("v0.12.0", urls) })).toEqual({ action: "install", version: "0.12.0" })

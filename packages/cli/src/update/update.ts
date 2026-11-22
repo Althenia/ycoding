@@ -81,11 +81,18 @@ export type UpdatePlan =
   | { readonly action: "install"; readonly version: string }
   | { readonly action: "current" }
   | { readonly action: "newer-installed"; readonly latest: string }
+  | { readonly action: "requires-opt-in"; readonly latest: string }
+
+export function requiresEditionOptIn(installed: string, latest: string) {
+  const current = semver.parse(installed)
+  return current?.major === 0 && current.minor === 12 && semver.gte(latest, "0.13.0-0")
+}
 
 export async function planUpdate(input: { readonly installed: string; readonly requested?: string; readonly fetch?: Fetch }): Promise<UpdatePlan> {
   if (input.requested !== undefined)
     return input.requested === input.installed ? { action: "current" } : { action: "install", version: input.requested }
   const latest = await latestRelease(input.fetch)
+  if (requiresEditionOptIn(input.installed, latest)) return { action: "requires-opt-in", latest }
   if (latest === input.installed) return { action: "current" }
   if (semver.valid(input.installed) && semver.lt(latest, input.installed)) return { action: "newer-installed", latest }
   return { action: "install", version: latest }

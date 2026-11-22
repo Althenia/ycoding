@@ -8,7 +8,7 @@ import { Context, Effect, FileSystem, Layer } from "effect"
 import { parse, type ParseError } from "jsonc-parser"
 import path from "node:path"
 import semver from "semver"
-import { latestRelease, type Fetch } from "../update/update"
+import { latestRelease, requiresEditionOptIn, type Fetch } from "../update/update"
 
 export type Policy = boolean | "notify"
 export type Action = "none" | "notify"
@@ -98,7 +98,9 @@ export const layerWith = (options: Options = {}) =>
           })
           const next = action(version, latestVersion, policy)
           if (next === "none") return yield* Effect.logInfo("update check done", { action: "up-to-date" })
-          const message = `YCoding ${latestVersion} available. Run \`ycoding update\`.`
+          const message = requiresEditionOptIn(version, latestVersion)
+            ? `YCoding ${latestVersion} is a separate edition. To switch, run \`ycoding update --version ${latestVersion}\`.`
+            : `YCoding ${latestVersion} available. Run \`ycoding update\`.`
           yield* notify(message)
           return yield* Effect.logInfo("update available", { current: version, latest: latestVersion })
         })

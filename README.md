@@ -57,7 +57,7 @@ Run a single prompt without opening the interface:
 ycoding --model <[profile#]provider/model[#variant]> "Explain this repository"
 ```
 
-Use the installer above to move to v0.12.0 from v0.11.12 or earlier, v0.12.1 through v0.12.3, or v0.12.4. From v0.12.0, use `ycoding update` for newer releases on macOS and Linux; it never installs an older release unless you name one with `--version`. See [installation](https://ycoding.althenia.app/docs/installation) for macOS permissions and archive verification.
+Use the installer above if your existing updater cannot install the Interaction archive. From Bun v0.12.0, run `ycoding update --version 0.12.1` on macOS or Linux to install the Bun edition. Bun v0.12.1 does not switch to Rust when you run `ycoding update` without a version. See [installation](https://ycoding.althenia.app/docs/installation) for macOS permissions and archive verification.
 
 ## Three surfaces, one runtime
 

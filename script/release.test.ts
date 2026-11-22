@@ -319,7 +319,8 @@ test("release source checks cover Interaction and stored OpenAI Responses withou
 test.each([
   ["0.12.0-rc.1+build.2", "preview", "branch", "0.12.0-rc.1+build.2"],
   ["", "v0.12.0", "tag", "0.12.0"],
-  ["", "v0.11.0-preview", "branch", "0.12.0"],
+  ["", "v0.12.1", "tag", "0.12.1"],
+  ["", "v0.11.0-preview", "branch", "0.12.1"],
   ["0.12.04", "preview", "branch", null],
   ["0.12.0\nANOTHER=value", "preview", "branch", null],
   ["0.12.0$(printf unexpected)", "preview", "branch", null],
@@ -760,7 +761,9 @@ test("packaging overlaps source verification without bypassing publication or de
   expect(verify).not.toContain("permissions:")
   expect(verify).toContain("fetch-depth: 0")
   expect(verify).toContain("persist-credentials: false")
-  expect(verify).toContain("git merge-base --is-ancestor \"$GITHUB_SHA\" origin/main")
+  expect(verify).toContain("git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main +refs/heads/release/0.12:refs/remotes/origin/release/0.12")
+  expect(verify).toContain("git merge-base --is-ancestor 19325907da64a4b86437cfce948d6591c0bd8317 origin/main")
+  expect(verify).toContain("git merge-base --is-ancestor \"$GITHUB_SHA\" origin/release/0.12")
   expect(verify).toContain("      - name: Verify tag is reachable from main\n        if: github.event_name == 'push'\n")
 })
 
@@ -845,10 +848,12 @@ test.each([
 })
 
 test.each([
-  ["ancestor", 0],
-  ["nonancestor", 1],
-  ["missing main", 128],
-] as const)("release ancestry guard uses checkout refs without a remote: %s", (scenario, status) => {
+  ["both ancestors", true],
+  ["Bun base not on main", false],
+  ["tag not on release branch", false],
+  ["missing main", false],
+  ["missing release branch", false],
+] as const)("release ancestry guard checks both remote branches: %s", (scenario, accepted) => {
   const guard = workflowJob(workflow, "verify-source")
     .split("      - name: Verify tag is reachable from main\n")[1]
     ?.split("\n      - name:")[0] ?? ""
@@ -863,19 +868,23 @@ test.each([
     }
     git(["init", "--quiet"])
     const tree = git(["mktree"])
-    const commit = (parent?: string) => git(["hash-object", "-t", "commit", "-w", "--stdin"],
-      `tree ${tree}\n${parent ? `parent ${parent}\n` : ""}author Release Fixture <release@example.test> 0 +0000\ncommitter Release Fixture <release@example.test> 0 +0000\n\nfixture\n`)
-    const ancestor = commit()
-    const descendant = commit(ancestor)
+    const commit = (parent?: string, subject = "fixture") => git(["hash-object", "-t", "commit", "-w", "--stdin"],
+      `tree ${tree}\n${parent ? `parent ${parent}\n` : ""}author Release Fixture <release@example.test> 0 +0000\ncommitter Release Fixture <release@example.test> 0 +0000\n\n${subject}\n`)
+    const base = commit()
+    const tag = commit(base)
+    const releaseHead = commit(tag)
+    git(["remote", "add", "origin", "."])
     if (scenario !== "missing main")
-      git(["update-ref", "refs/remotes/origin/main", scenario === "nonancestor" ? ancestor : descendant])
-    const result = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", command!], {
+      git(["update-ref", "refs/heads/main", scenario === "Bun base not on main" ? commit(undefined, "unrelated") : base])
+    if (scenario !== "missing release branch")
+      git(["update-ref", "refs/heads/release/0.12", scenario === "tag not on release branch" ? base : releaseHead])
+    const result = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", command!.replace("19325907da64a4b86437cfce948d6591c0bd8317", base)], {
       cwd: directory,
-      env: { ...process.env, GITHUB_SHA: scenario === "nonancestor" ? descendant : ancestor, GIT_TERMINAL_PROMPT: "0" },
+      env: { ...process.env, GITHUB_SHA: tag, GIT_TERMINAL_PROMPT: "0" },
       stdout: "pipe",
       stderr: "pipe",
     })
-    expect(result.exitCode, result.stderr.toString()).toBe(status)
+    expect(result.exitCode === 0, result.stderr.toString()).toBe(accepted)
   } finally {
     fs.rmSync(directory, { recursive: true, force: true })
   }

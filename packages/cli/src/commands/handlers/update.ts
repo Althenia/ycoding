@@ -16,6 +16,12 @@ export default Runtime.handler(UpdateCommand, (input) =>
       const requested = Option.getOrUndefined(input.version)
       if (requested && !validVersion(requested)) throw new Error(`Invalid YCoding version: ${requested}`)
       const plan = await planUpdate({ installed: InstallationVersion, requested })
+      if (plan.action === "requires-opt-in") {
+        process.stdout.write(
+          `ycoding ${InstallationVersion} stays on the Bun 0.12.x release line. To switch editions, run ycoding update --version ${plan.latest}.\n`,
+        )
+        return undefined
+      }
       if (plan.action === "current") {
         process.stdout.write(`ycoding ${InstallationVersion} is already up to date\n`)
         return undefined

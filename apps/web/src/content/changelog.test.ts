@@ -7,8 +7,22 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.12.0 first with its notes", async () => {
+  test("lists the v0.12.1 Bun edition first with its notes", async () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.12.1", title: "Bun edition with Field Notes and message actions", tags: ["Changed", "Fixed"] })
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.12.1.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.12.1\n")
+    const changes = notes.split(/^## /m).flatMap((section) => {
+      const tag = TAGS.find((tag) => section.startsWith(`${tag}\n`))
+      if (!tag) return []
+      return [...section.matchAll(/^[+*-] (.+)$/gm)].map((match) => ({ tag, text: match[1]! }))
+    })
+    expect(entry?.changes).toEqual(changes)
+    expect(after("0.12.1")?.version).toBe("0.12.0")
+  })
+
+  test("retains the v0.12.0 release with its notes", async () => {
+    const entry = byVersion("0.12.0")
     expect(entry).toMatchObject({ version: "0.12.0", date: "2026-11-21", title: "YCoding Interaction, queued messages and Markdown code cards", tags: ["Added", "Changed", "Fixed"] })
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.12.0.md", import.meta.url)).text()
     expect(notes).toStartWith("# YCoding v0.12.0\n")
@@ -29,7 +43,7 @@ describe("release entries", () => {
     ]))
     expect(entry?.changes).toEqual(changes)
     expect(after("0.12.0")?.version).toBe("0.11.12")
-    expect(RELEASES.filter((release) => /^0\.12\.[1-4]$/.test(release.version))).toEqual([])
+    expect(RELEASES.filter((release) => /^0\.12\.[2-4]$/.test(release.version))).toEqual([])
   })
 
   test("retains the v0.11.12 release with its notes", async () => {
@@ -1821,7 +1835,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 60)).toEqual([
+    expect(versions.slice(0, 61)).toEqual([
+      "0.12.1",
       "0.12.0",
       "0.11.12",
       "0.11.11",

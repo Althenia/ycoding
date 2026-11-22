@@ -229,7 +229,7 @@ export const configurationPages: readonly DocPage[] = [
               ["`shell`", "string", "unset", "Shell for terminal and shell-tool execution."],
               ["`shell_sandbox`", "`disabled` | `optional` | `required`", "unset", "`disabled` runs on the host; `optional` uses an enforceable sandbox when available and warns otherwise; `required` rejects the command before approval or spawn when none is available."],
               ["`shell_memory_limit_mb`", "integer 0–1048576", "unset (unlimited)", "Default shell process-tree memory ceiling in MiB; `0` means unlimited."],
-              ["`autoupdate`", "boolean | `notify`", "unset (checks enabled)", "Omitted, `true`, and `notify` announce new releases; `false` disables the check. Installation is explicit; use the current installer to move to v0.12.0 from v0.11.12 or earlier, v0.12.1 through v0.12.3, or v0.12.4."],
+              ["`autoupdate`", "boolean | `notify`", "unset (checks enabled)", "Omitted, `true`, and `notify` announce new releases; `false` disables the check. A notice never installs a release. Bun v0.12.1 requires `ycoding update --version <version>` to switch to Rust."],
               ["`share`", "`manual` | `auto` | `disabled`", "unset", "Session sharing policy."],
               ["`enterprise.url`", "string", "unset", "Enterprise sharing endpoint."],
               ["`permissions`", "array of `{ action, resource, effect }`", "unset", "Global ordered tool permission rules."],
