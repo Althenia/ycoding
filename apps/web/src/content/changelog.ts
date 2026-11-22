@@ -31,6 +31,7 @@ export const RELEASES: readonly ReleaseEntry[] = [
       { tag: "Fixed", text: "Rust keeps the reusable prompt prefix stable on Codex, Claude Code, and Antigravity when Session state changes. Each provider still decides whether to reuse cached content." },
       { tag: "Fixed", text: "Rust announces a change to active Session instructions once, rather than repeating it on the next turn." },
       { tag: "Changed", text: "Stable Rust releases take the GitHub Latest badge. Existing Bun archives remain available, and switching an existing Bun installation to Rust still requires an explicit choice." },
+      { tag: "Changed", text: "New CLI and Desktop downloads are for Apple Silicon. Earlier releases retain their original platform archives." },
       { tag: "Changed", text: "Terminal, Desktop, and Web show OpenAI, Claude, Antigravity, OpenRouter, and Custom OpenAI-compatible Endpoint in the connect menu. Rust preserves credentials and Session history for retired providers but does not start new requests through them." },
     ],
   },

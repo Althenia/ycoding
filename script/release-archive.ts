@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { BrowserExtension } from "../packages/core/src/browser/extension"
-import { interactionApplication, interactionExtensionDirectory, interactionExtensionFiles, usesInteractionLayout, usesNativeReleaseLayout } from "../packages/cli/src/update/interaction-layout"
+import { interactionApplication, interactionExtensionDirectory, interactionExtensionFiles, usesAppleSiliconRelease, usesInteractionLayout, usesNativeReleaseLayout } from "../packages/cli/src/update/interaction-layout"
 
 const targets = ["darwin-arm64", "darwin-x64", "linux-x64", "windows-x64"] as const
 type Target = typeof targets[number]
@@ -55,8 +55,12 @@ function desktopFilename(version: string) {
   return `YCoding-Desktop-v${version}-darwin-arm64.zip`
 }
 
+function releaseTargets(version: string): readonly Target[] {
+  return usesAppleSiliconRelease(version) ? ["darwin-arm64"] : targets
+}
+
 export function releaseArchives(version: string) {
-  return [...targets.map((target) => filename(target, version)), desktopFilename(version)]
+  return [...releaseTargets(version).map((target) => filename(target, version)), desktopFilename(version)]
 }
 
 function desktopPayload(hash: string) {
@@ -200,16 +204,16 @@ async function create(target: Target, version: string, directory: string, output
 
 async function finalize(version: string, directory: string, output: string) {
   const expected = releaseArchives(version)
-  if (JSON.stringify((await fs.readdir(directory)).sort()) !== JSON.stringify([...expected].sort())) throw new Error("Expected exactly five release archives")
+  if (JSON.stringify((await fs.readdir(directory)).sort()) !== JSON.stringify([...expected].sort())) throw new Error(`Expected exactly ${expected.length} release archives for ${version}`)
   await fs.mkdir(output, { recursive: true })
   if ((await fs.readdir(output)).length !== 0) throw new Error("Release output must be empty")
-  for (const target of targets) await validateArchive(path.join(directory, filename(target, version)), target, version)
+  for (const target of releaseTargets(version)) await validateArchive(path.join(directory, filename(target, version)), target, version)
   await validateDesktopArchive(path.join(directory, desktopFilename(version)))
   for (const name of expected) await fs.copyFile(path.join(directory, name), path.join(output, name))
   for (const name of ["LICENSE", "NOTICE"]) await fs.copyFile(path.join(import.meta.dir, "..", name), path.join(output, name))
   const checksums = await Promise.all([...expected, "LICENSE", "NOTICE"].map(async (name) => `${createHash("sha256").update(new Uint8Array(await Bun.file(path.join(output, name)).arrayBuffer())).digest("hex")}  ${name}\n`))
   await Bun.write(path.join(output, `ycoding-${version}-checksums.txt`), checksums.join(""))
-  console.log("Validated five release archives and all seven asset checksums")
+  console.log(`Validated ${expected.length} release archives and all ${checksums.length} asset checksums`)
 }
 
 if (import.meta.main) await main()
@@ -221,6 +225,7 @@ async function main() {
   if ((args[0] === "create" && args.length === 5) || (args[0] === "executable" && args.length === 3)) {
     const target = targets.find((target) => target === args[1])
     if (!target) throw new Error("Invalid release target")
+    if (!releaseTargets(version).includes(target)) throw new Error(`YCoding ${version} release archives are Apple Silicon only`)
     if (args[0] === "executable") console.log(archiveExecutable(target, version))
     else await create(target, version, path.resolve(args[3]!), path.resolve(args[4]!))
     return

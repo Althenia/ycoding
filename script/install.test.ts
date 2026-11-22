@@ -19,6 +19,17 @@ afterEach(async () => {
 })
 
 describe("native release installer", () => {
+  test("rejects a current release on Linux or Intel macOS before requesting release assets", async () => {
+    for (const system of ["Linux", "Darwin"]) {
+      const fixture = await setup({ system, machine: "x86_64", version: "0.13.2" })
+      const result = await runInstaller(fixture, { YCODING_VERSION: "" })
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stderr).toContain("Apple Silicon")
+      expect(await releaseRequests(fixture)).toEqual([releaseListURL])
+      expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding")).exists()).toBe(false)
+    }
+  })
+
   test("installs the native archive member as ycoding and records its verified digest on a fresh home", async () => {
     const fixture = await nativeInstallFixture()
     const result = await runInstaller(fixture, { YCODING_VERSION: "" })
@@ -35,7 +46,7 @@ describe("native release installer", () => {
   })
 
   test("selects the newest stable Rust release despite GitHub Latest pointing to the Bun bridge", async () => {
-    const fixture = await nativeInstallFixture(undefined, "0.13.10")
+    const fixture = await setup({ system: "Linux", machine: "x86_64", version: "0.13.10" })
     await writeFile(path.join(fixture.fixture, "releases"), JSON.stringify([
       { tag_name: "v0.99.0", draft: true, prerelease: false },
       { tag_name: "v0.14.0", draft: false, prerelease: true },
@@ -48,13 +59,9 @@ describe("native release installer", () => {
       { tag_name: "v0.14.0-rc.1", draft: false, prerelease: false },
     ], null, 2))
     const result = await runInstaller(fixture, { YCODING_VERSION: "" })
-    expect(result.exitCode, result.stderr).toBe(0)
-    expect(result.stdout).toContain("Installed ycoding 0.13.10")
-    expect(await releaseRequests(fixture)).toEqual([
-      releaseListURL,
-      "https://github.com/Althenia/ycoding/releases/download/v0.13.10/ycoding-0.13.10-checksums.txt",
-      "https://github.com/Althenia/ycoding/releases/download/v0.13.10/ycoding-0.13.10-linux-x64.tar.gz",
-    ])
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain("YCoding 0.13.10 is available only for Apple Silicon")
+    expect(await releaseRequests(fixture)).toEqual([releaseListURL])
   })
 
   test("installs Rust 0.13.0 when there is no newer stable Rust release", async () => {

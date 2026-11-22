@@ -35,7 +35,7 @@ Latency and client-timing telemetry stays in local SQLite and is disabled until 
 
 ## Quick start
 
-**macOS (Apple Silicon or Intel) and Linux (x64)** — requires `curl`, `tar`, and `shasum` or `sha256sum`:
+**Apple Silicon** — requires `curl`, `tar`, and `shasum` or `sha256sum`:
 
 ```sh
 curl -fsSL https://ycoding.althenia.app/install.sh | sh
@@ -49,7 +49,7 @@ ycoding
 
 Type `/connect` in the composer to add a provider profile, then describe your task.
 
-**Windows:** Windows release builds are paused until the native runtime supports Windows.
+YCoding v0.13.2 and later ship for Apple Silicon. For Intel macOS or Linux x64, set `YCODING_VERSION` to a historical release that includes your platform's archive. Earlier Windows downloads remain in GitHub Releases.
 
 Run a single prompt without opening the interface:
 

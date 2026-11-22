@@ -57,7 +57,7 @@ test("source verification runs the native decision follow regression files in th
 
 test("native builders upload each archive once and the finalizer checks the complete set", () => {
   const build = workflowJob(workflow, "build")
-  expect(build).toContain("timeout-minutes: ${{ matrix.platform == 'linux' && 30 || 60 }}")
+  expect(build).toContain("timeout-minutes: 60")
   const release = workflowJob(workflow, "finalize-release")
   expect(workflow).not.toContain("\n  package:")
   expect(build).toContain('bun script/release-archive.ts create "${{ matrix.target }}" "$RELEASE_VERSION"')
@@ -93,9 +93,9 @@ test("release workflow ships no Godot desktop client", () => {
   expect(workflow).not.toMatch(/\boffice\b/i)
 })
 
-test("release workflow packages and checksums every CLI archive", () => {
+test("release workflow packages and checksums only the Apple Silicon CLI archive", () => {
   const build = workflowJob(workflow, "build")
-  expect([...build.matchAll(/- target: (\S+)/g)].map((match) => match[1])).toEqual(["darwin-arm64", "darwin-x64", "linux-x64", "windows-x64"])
+  expect([...build.matchAll(/- target: (\S+)/g)].map((match) => match[1])).toEqual(["darwin-arm64"])
   expect(build).toContain("fail-fast: false")
   expect(build.indexOf("Verify build metadata")).toBeLessThan(build.indexOf("Create and validate native archive"))
   expect(build.indexOf("Stage native executables")).toBeLessThan(build.indexOf("Create and validate native archive"))
@@ -103,19 +103,7 @@ test("release workflow packages and checksums every CLI archive", () => {
   expect(workflowJob(workflow, "finalize-release")).toContain('bun script/release-archive.ts finalize "$RELEASE_VERSION" downloaded release')
 })
 
-test("the Windows release and independent PR gate compile and verify an embedded native x64 executable", () => {
-  const release = workflowJob(workflow, "build")
-  expect(release).toContain("- target: windows-x64\n            runner: windows-2025\n            platform: win32\n            arch: x64")
-  expect(release.indexOf("uses: ./.github/actions/setup-rust")).toBeLessThan(release.indexOf("name: Build TUI artifact"))
-  expect(release).toContain("--runtime-receipt=")
-  expect(release).toContain("'.exe'")
-  const verify = release.split("- name: Verify packaged Windows runtime")[1]?.split("- name: Upload native archive")[0] ?? ""
-  expect(verify).toContain("if: runner.os == 'Windows'")
-  expect(verify).toContain("7z x")
-  expect(verify).toContain("verify-embedded")
-  expect(verify).toContain("/ycoding.exe")
-  expect(release.indexOf("Create and validate native archive")).toBeLessThan(release.indexOf("Verify packaged Windows runtime"))
-  expect(release.indexOf("Verify packaged Windows runtime")).toBeLessThan(release.indexOf("Upload native archive"))
+test("the independent Windows PR gate still verifies a native x64 executable", () => {
   const pr = workflowJob(testWorkflow, "native-windows")
   expect(pr).toContain("name: native runtime build (windows)")
   expect(pr).toContain("runs-on: windows-2025")
@@ -137,7 +125,6 @@ test("macOS release builds sign the app with the pinned release certificate and 
   const stage = build.split("      - name: Verify packaged macOS signatures")[1]?.split("      - name: Upload native archive")[0] ?? ""
   expect(build).toContain("      YCODING_MACOS_SIGNING_IDENTITY: YCoding Code Signing")
   expect(build).toContain("      YCODING_MACOS_SIGNING_SHA1: 9dd524184b0db949ffac7f0ada0ae860ac7f5f85\n")
-  expect(importStep).toContain("if: runner.os == 'macOS'")
   expect(importStep).toContain("YCODING_MACOS_SIGNING_P12: ${{ secrets.YCODING_MACOS_SIGNING_P12 }}")
   expect(importStep).toContain("YCODING_MACOS_SIGNING_PASSWORD: ${{ secrets.YCODING_MACOS_SIGNING_PASSWORD }}")
   expect(importStep).toContain('test -n "$YCODING_MACOS_SIGNING_P12" || { echo "Missing YCODING_MACOS_SIGNING_P12 Actions secret" >&2; exit 1; }')
@@ -157,7 +144,7 @@ test("macOS release builds sign the app with the pinned release certificate and 
   expect(build.indexOf("- name: Import macOS signing identity")).toBeLessThan(build.indexOf("- name: Build TUI artifact"))
   expect(stage).toContain("codesign --verify --strict -R")
   expect(stage).toContain("codesign --verify --deep --strict -R")
-  expect(build).toContain("if: ${{ always() && runner.os == 'macOS' }}")
+  expect(build).toContain("- name: Remove macOS signing keychain\n        if: always()")
   expect(build).toContain('security list-keychains -d user -s "${original[@]}"')
   expect(build).toContain('security delete-keychain "$keychain"')
   expect(workflow).not.toContain("codesign --force --sign -")
@@ -1096,38 +1083,26 @@ test("install retries the pinned Bun action once, then installs the same pinned 
   expect(installBun).not.toContain("bun install")
 })
 
-test("setup caches the Bun package store by OS, arch and lockfile before installing dependencies without a cache-warming workflow", async () => {
-  const steps = (Bun.YAML.parse(setupBun) as { runs: { steps: { name: string; if?: string; uses?: string; with?: Record<string, string> }[] } }).runs.steps
-  const names = steps.map((step) => step.name)
-  const install = names.indexOf("Install dependencies")
-  const pin = "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
-  const key = "${{ runner.os }}-${{ runner.arch }}-bun-${{ hashFiles('bun.lock') }}"
-  const restore = "${{ runner.os }}-${{ runner.arch }}-bun-"
-  const caches = steps.filter((step) => step.uses === pin)
-  expect(caches).toHaveLength(2)
-  for (const step of caches) expect(names.indexOf(step.name)).toBeLessThan(install)
-  const unix = caches.find((step) => step.if === "runner.os != 'Windows'")
-  const windows = caches.find((step) => step.if === "runner.os == 'Windows'")
-  expect(unix?.with?.path).toBe("~/.bun/install/cache")
-  expect(windows?.with?.path).toBe("${{ runner.temp }}/bun-install-cache")
-  for (const step of [unix, windows]) {
-    expect(step?.with?.key).toBe(key)
-    expect(step?.with?.["restore-keys"]?.trim()).toBe(restore)
-  }
-  expect(setupBun.split(`${pin} # v6.1.0`)).toHaveLength(3)
+test("Bun setup installs dependencies without transferring the remote package store", async () => {
+  expect(setupBun).not.toContain("actions/cache")
+  expect(setupBun).not.toContain("BUN_INSTALL_CACHE_DIR")
   expect(setupBun).toContain("bun install ${{ inputs.install-flags }}")
+  expect(setupBun).toContain("bun install --linker hoisted ${{ inputs.install-flags }}")
   expect(await Bun.file(path.join(import.meta.dir, "../.github/workflows/bun-cache.yml")).exists()).toBe(false)
 })
 
-test("Windows keeps the Bun cache on the runner's workspace disk before installing dependencies", () => {
-  const beforeInstall = setupBun.split("- name: Install dependencies")[0] ?? ""
-  expect(beforeInstall).toContain("if: runner.os == 'Windows'")
-  expect(beforeInstall).toContain("BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-install-cache")
+test("Turbo restore keys are shared across CI without hashing installed packages", async () => {
+  const types = await Bun.file(path.join(import.meta.dir, "../.github/workflows/typecheck.yml")).text()
+  const key = "turbo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('turbo.json', 'tsconfig.json', 'bun.lock') }}-"
+  for (const content of [workflow, testWorkflow, types]) {
+    const cache = content.split("- name: Cache Turbo\n")[1]?.split("\n      - name: ")[0] ?? ""
+    expect(cache).toContain(`key: ${key}\${{ github.sha }}`)
+    expect(cache).toContain(`\n            ${key}\n`)
+    expect(cache).not.toContain("**/")
+  }
 })
 
-test("PR verification uses the same standard hosted runners as release", async () => {
-  expect(workflow).toContain("runner: ubuntu-24.04")
-  expect(workflow).toContain("runner: windows-2025")
+test("PR verification retains the standard Linux and Windows runners", async () => {
   for (const runner of ["ubuntu-24.04", "windows-2025"]) expect(testWorkflow).toContain(`host: ${runner}`)
   const types = await Bun.file(path.join(import.meta.dir, "../.github/workflows/typecheck.yml")).text()
   expect(types).toContain("runs-on: ubuntu-24.04")

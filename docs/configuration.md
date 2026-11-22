@@ -236,6 +236,8 @@ The run holds every `session.step.failed` event of error type `provider.invalid-
 
 ## Terminal installation and commands
 
+YCoding v0.13.2 and later ship for Apple Silicon. On Intel macOS or Linux x64, use an explicit historical version whose release includes your platform's archive. The shell installer takes `YCODING_VERSION`; `ycoding update` takes `--version`.
+
 On a new installation, `curl -fsSL https://ycoding.althenia.app/install.sh | sh` selects the newest stable Rust release and installs a checksum-verified executable in `~/.local/bin`. It stops if no stable Rust release is available. The installer refuses to replace a Bun executable or start over when it finds Bun data without a Rust store. Use `YCODING_VERSION=0.12.2 sh install.sh` to keep Bun, or `sh install.sh --replace-bun` for a clean Rust install that leaves Bun data on disk. Run these commands with the downloaded installer. Installation does not require a separate Bun runtime. The installer adds the binary directory to PATH only when needed; unsupported shells receive manual PATH guidance.
 
 `ycoding` opens the interactive terminal interface. `ycoding --model <[profile#]provider/model[#variant]> "prompt"` executes a direct non-interactive run instead. `ycoding run --help` lists the explicit run command's options; `--config <file>` and `--isolated` give one run its own configuration document and data directory (see [per-run configuration and isolated runs](#per-run-configuration-and-isolated-runs)). These paths share the existing durable Session execution and permission handling.

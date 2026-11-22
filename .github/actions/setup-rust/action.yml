@@ -5,6 +5,17 @@ inputs:
     description: "Cargo build profile key (release or dev)"
     required: false
     default: "release"
+  release-cache:
+    description: "Restore the shared cache written by the Apple Silicon Desktop release job"
+    required: false
+    default: ""
+outputs:
+  release-cache-hit:
+    description: "Whether the Apple Silicon cache was restored"
+    value: ${{ steps.release-cache.outputs.cache-hit }}
+  release-cache-key:
+    description: "Primary key for the Apple Silicon cache"
+    value: ${{ steps.release-cache.outputs.cache-primary-key }}
 runs:
   using: "composite"
   steps:
@@ -93,6 +104,7 @@ runs:
         echo "PROTOC=$executable" >> "$GITHUB_ENV"
 
     - name: Cache Rust dependencies and build artifacts
+      if: inputs.release-cache == ''
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
@@ -105,6 +117,18 @@ runs:
           ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml', 'rust/vendor/**') }}-${{ hashFiles('rust/crates/**/Cargo.toml', 'rust/crates/**/build.rs') }}-
           ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml', 'rust/vendor/**') }}-
           ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-
+
+    - name: Restore Apple Silicon release dependencies
+      if: inputs.release-cache != ''
+      id: release-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          rust/target/release
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-desktop-release-${{ hashFiles('.github/actions/setup-rust/action.yml', 'rust/Cargo.lock', 'rust/Cargo.toml', 'rust/vendor/**', 'rust/crates/**/Cargo.toml', 'rust/crates/**/build.rs') }}
 
     - name: Verify Windows native build tools
       if: runner.os == 'Windows'

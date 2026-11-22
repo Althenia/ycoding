@@ -350,6 +350,13 @@ case "$target" in
   *) fail "Unsupported platform: $target" ;;
 esac
 
+if [ "$target" != darwin-arm64 ] && printf '%s\n' "${version%%[-+]*}" | LC_ALL=C awk -F . '
+  $1 > 0 || $2 > 13 || ($2 == 13 && $3 >= 2) { apple_silicon = 1 }
+  END { exit !apple_silicon }
+'; then
+  fail "YCoding $version is available only for Apple Silicon. Set YCODING_VERSION to a historical release for $target."
+fi
+
 asset="ycoding-$version-$target.tar.gz"
 checksums="ycoding-$version-checksums.txt"
 release_url="https://github.com/$repository/releases/download/v$version"

@@ -119,6 +119,16 @@ test("archive executable command prints the canonical member for its target and 
   }
 })
 
+test("v0.13.2 archives reject retired targets while historical releases retain them", () => {
+  for (const target of ["darwin-x64", "linux-x64", "windows-x64"]) {
+    const current = execute(import.meta.dir, ["executable", target, "0.13.2"])
+    expect(current.exitCode).not.toBe(0)
+    expect(current.stderr.toString()).toContain("Apple Silicon")
+    expect(execute(import.meta.dir, ["executable", target, "0.13.1"]).exitCode).toBe(0)
+  }
+  expect(execute(import.meta.dir, ["executable", "darwin-arm64", "0.13.2"]).stdout.toString()).toBe("ycoding-native\n")
+})
+
 async function fixture(root: string, target: string, release = "0.11.12") {
   const current = release === version
   const application = current ? "YCoding Interaction.app" : app
@@ -363,6 +373,31 @@ test("native archive finalize needs no installed dependencies and publishes only
   }
 })
 
+test("native archive finalize accepts only the two Apple Silicon archives for v0.13.2", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-apple-silicon-release-"))
+  try {
+    const release = "0.13.2"
+    const source = await fixture(root, "darwin-arm64", version)
+    const cli = execute(root, ["create", "darwin-arm64", release, source, "prepared"])
+    expect(cli.exitCode, cli.stderr.toString()).toBe(0)
+    const desktop = execute(root, ["create-desktop", release, await desktopFixture(root), "prepared"])
+    expect(desktop.exitCode, desktop.stderr.toString()).toBe(0)
+    const result = execute(root, ["finalize", release, "prepared", "release"])
+    expect(result.exitCode, result.stderr.toString()).toBe(0)
+    const lines = (await Bun.file(path.join(root, "release", `ycoding-${release}-checksums.txt`)).text()).trim().split("\n")
+    expect(lines.map((line) => line.slice(66)).sort()).toEqual([
+      "LICENSE", "NOTICE", `YCoding-Desktop-v${release}-darwin-arm64.zip`, `ycoding-${release}-darwin-arm64.tar.gz`,
+    ])
+    const extra = `ycoding-${release}-linux-x64.tar.gz`
+    await Bun.write(path.join(root, "prepared", extra), "unexpected archive")
+    const rejected = execute(root, ["finalize", release, "prepared", "extra"])
+    expect(rejected.exitCode).not.toBe(0)
+    expect(rejected.stderr.toString()).toContain("Expected exactly 2 release archives")
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
 for (const target of [...targets, "windows-x64", "desktop"])
   test(`native archive finalize rejects the missing ${target} target`, async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-native-missing-"))
@@ -371,7 +406,7 @@ for (const target of [...targets, "windows-x64", "desktop"])
       await fs.unlink(path.join(input, target === "desktop" ? desktopArchive : target === "windows-x64" ? windowsArchive : `ycoding-${version}-${target}.tar.gz`))
       const result = execute(root, ["finalize", version, input, "release"])
       expect(result.exitCode).not.toBe(0)
-      expect(result.stderr.toString()).toContain("Expected exactly five release archives")
+      expect(result.stderr.toString()).toContain("Expected exactly 5 release archives")
       expect(await Bun.file(path.join(root, "release", `ycoding-${version}-checksums.txt`)).exists()).toBe(false)
     } finally {
       await fs.rm(root, { recursive: true, force: true })

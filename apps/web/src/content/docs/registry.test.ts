@@ -60,11 +60,12 @@ describe("public docs allowlist", () => {
     expect(text).not.toMatch(/usage_anchor|usageAnchor|session_provider_request|credential IDs|CREATE TABLE/)
   })
 
-  test("documents Muse account and key setup with current authentication limits", () => {
-    const section = findDocPage("configuration/providers")?.sections.find((section) => section.heading === "Muse (Meta)")
+  test("documents selectable providers without advertising retired providers for new work", () => {
+    const section = findDocPage("configuration/providers")?.sections.find((section) => section.heading === "Provider choices")
     const text = section?.blocks.flatMap((block) => block.kind === "paragraph" ? [block.text] : []).join(" ") ?? ""
-    for (const required of ["muse", "Meta Muse Code account", "Meta Model API key", "META_API_KEY", "YCODING_MUSE_CLIENT_ID", "YCODING_MUSE_CLIENT_SECRET", "public client", "minimal", "max", "ultra", "metadata", "catalog", "hidden", "non-tool", "re-login", "unknown", "x-client-id", "x-tbh-contributor-mode", "tool_choice", "subs_usage", "subs_tier_name", "response stream observations", "Weekly", "above 100%", "Quota reads do not mint keys", "60 seconds"])
-      expect(text).toContain(required)
+    expect(text).toContain("OpenAI, Claude, Antigravity, OpenRouter, and Custom OpenAI-compatible Endpoint in that order")
+    expect(text).toContain("remain in stored credentials and Session history but cannot be selected for new work")
+    expect(findDocPage("configuration/providers")?.sections.some((section) => section.heading === "Muse (Meta)")).toBe(false)
   })
 
   test("publishes exactly the approved routes", () => {
@@ -317,7 +318,10 @@ describe("remote recovery documentation", () => {
 describe("page structure", () => {
   test("the installation guide selects Rust on a new install and preserves existing Bun data", () => {
     const page = findDocPage("installation")
-    const install = page?.sections.find((section) => section.heading === "Install on macOS or Linux")
+    const install = page?.sections.find((section) => section.heading === "Install on Apple Silicon")
+    const requirements = page?.sections.find((section) => section.heading === "Requirements")
+    expect(requirements?.blocks.find((block) => block.kind === "table")?.rows.map((row) => row[1])).toEqual(["darwin-arm64"])
+    expect(JSON.stringify(requirements?.blocks)).toContain("historical release that has a matching archive")
     expect(install?.blocks).toContainEqual(expect.objectContaining({
       kind: "paragraph", text: expect.stringMatching(/newest stable Rust release and stops if none is available/),
     }))

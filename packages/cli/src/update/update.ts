@@ -5,7 +5,7 @@ import { createGunzip } from "node:zlib"
 import semver from "semver"
 import type { UpdateProgress } from "./progress"
 import { BrowserExtension } from "../assets"
-import { interactionApplication, interactionCLIIdentifier, interactionExtensionFiles, interactionSigningRequirement, usesInteractionLayout, usesNativeReleaseLayout } from "./interaction-layout"
+import { interactionApplication, interactionCLIIdentifier, interactionExtensionFiles, interactionSigningRequirement, usesAppleSiliconRelease, usesInteractionLayout, usesNativeReleaseLayout } from "./interaction-layout"
 
 const repository = "Althenia/ycoding"
 const maxArchiveBytes = 512 * 1024 * 1024
@@ -113,11 +113,13 @@ export async function planUpdate(input: { readonly installed: string; readonly r
 
 export async function installRelease(input: InstallReleaseInput) {
   if (!validVersion(input.version)) throw new Error(`Invalid YCoding version: ${input.version}`)
+  const target = releaseTarget(input.platform, input.arch)
+  if (target !== "darwin-arm64" && usesAppleSiliconRelease(input.version))
+    throw new Error(`YCoding ${input.version} is available only for Apple Silicon. Use --version to select a historical release for ${target}.`)
   const existing = await lstat(input.executable)
   const uid = input.currentUser ? input.currentUser() : process.getuid?.()
   if (!existing.isFile() || existing.isSymbolicLink() || existing.uid !== uid)
     throw new Error("Installed ycoding executable must be an owned regular file")
-  const target = releaseTarget(input.platform, input.arch)
   const asset = `ycoding-${input.version}-${target}.tar.gz`
   const checksums = `ycoding-${input.version}-checksums.txt`
   const release = `https://github.com/${repository}/releases/download/v${input.version}`

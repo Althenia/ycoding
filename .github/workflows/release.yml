@@ -72,9 +72,9 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules/.cache/turbo
-          key: turbo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('turbo.json', 'tsconfig.json', 'bun.lock', '**/package.json', '**/tsconfig.json') }}-${{ github.sha }}
+          key: turbo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('turbo.json', 'tsconfig.json', 'bun.lock') }}-${{ github.sha }}
           restore-keys: |
-            turbo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('turbo.json', 'tsconfig.json', 'bun.lock', '**/package.json', '**/tsconfig.json') }}-
+            turbo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('turbo.json', 'tsconfig.json', 'bun.lock') }}-
             turbo-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Check workspace and types
@@ -318,20 +318,8 @@ jobs:
             runner: macos-26
             platform: darwin
             arch: arm64
-          - target: darwin-x64
-            runner: macos-15-intel
-            platform: darwin
-            arch: x64
-          - target: linux-x64
-            runner: ubuntu-24.04
-            platform: linux
-            arch: x64
-          - target: windows-x64
-            runner: windows-2025
-            platform: win32
-            arch: x64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ matrix.platform == 'linux' && 30 || 60 }}
+    timeout-minutes: 60
     env:
       YCODING_MACOS_SIGNING_IDENTITY: YCoding Code Signing
       YCODING_MACOS_SIGNING_SHA1: 9dd524184b0db949ffac7f0ada0ae860ac7f5f85
@@ -355,6 +343,8 @@ jobs:
 
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
+        with:
+          release-cache: reader
 
       - name: Verify native build host
         env:
@@ -369,7 +359,6 @@ jobs:
           '
 
       - name: Import macOS signing identity
-        if: runner.os == 'macOS'
         env:
           YCODING_MACOS_SIGNING_P12: ${{ secrets.YCODING_MACOS_SIGNING_P12 }}
           YCODING_MACOS_SIGNING_PASSWORD: ${{ secrets.YCODING_MACOS_SIGNING_PASSWORD }}
@@ -400,12 +389,7 @@ jobs:
           YCODING_ANTIGRAVITY_CLIENT_SECRET: ${{ secrets.YCODING_ANTIGRAVITY_CLIENT_SECRET }}
           YCODING_MUSE_CLIENT_ID: ${{ secrets.YCODING_MUSE_CLIENT_ID }}
           YCODING_MUSE_CLIENT_SECRET: ${{ secrets.YCODING_MUSE_CLIENT_SECRET }}
-        run: |
-          if [ "$RUNNER_OS" = Windows ]; then
-            bun run build:tui --target=win32-x64 --runtime-receipt="$RUNNER_TEMP/windows-runtime"
-          else
-            bun run build:tui
-          fi
+        run: bun run build:tui
 
       - name: Verify build metadata
         run: |
@@ -413,7 +397,6 @@ jobs:
           node -e 'const metadata = require("./dist/tui/tui-${{ matrix.target }}/package.json"); if (metadata.version !== process.env.YCODING_VERSION) process.exit(1)'
 
       - name: Verify standalone TUI build boundary
-        if: matrix.target == 'linux-x64'
         run: bun test --cwd packages/cli ./test/import-boundaries.test.ts
 
       - name: Stage native executables
@@ -421,17 +404,14 @@ jobs:
           set -euo pipefail
           staging="dist/release-bin/${{ matrix.target }}"
           mkdir -p "$staging"
-          cp "dist/tui/tui-${{ matrix.target }}/bin/ycoding${{ runner.os == 'Windows' && '.exe' || '' }}" "$staging/"
+          cp "dist/tui/tui-${{ matrix.target }}/bin/ycoding" "$staging/"
           cp -R "dist/tui/tui-${{ matrix.target }}/bin/ycoding-chrome-extension" "$staging/"
-          if [ "${{ runner.os }}" = "macOS" ]; then
-            cp -R "dist/tui/tui-${{ matrix.target }}/bin/YCoding Interaction.app" "$staging/"
-          fi
+          cp -R "dist/tui/tui-${{ matrix.target }}/bin/YCoding Interaction.app" "$staging/"
 
       - name: Create and validate native archive
         run: bun script/release-archive.ts create "${{ matrix.target }}" "$RELEASE_VERSION" "dist/release-bin/${{ matrix.target }}" "dist/release-archive/${{ matrix.target }}"
 
       - name: Verify packaged macOS signatures
-        if: runner.os == 'macOS'
         run: |
           set -euo pipefail
           payload=$(mktemp -d "$RUNNER_TEMP/ycoding-payload.XXXXXX")
@@ -440,15 +420,6 @@ jobs:
           executable="$(bun script/release-archive.ts executable "${{ matrix.target }}" "$RELEASE_VERSION")"
           codesign --verify --strict -R "=identifier \"app.ycoding.cli\" and certificate leaf = H\"$YCODING_MACOS_SIGNING_SHA1\"" "$payload/$executable"
           codesign --verify --deep --strict -R "=identifier \"app.ycoding.interaction\" and certificate leaf = H\"$YCODING_MACOS_SIGNING_SHA1\"" "$payload/YCoding Interaction.app"
-
-      - name: Verify packaged Windows runtime
-        if: runner.os == 'Windows'
-        run: |
-          set -euo pipefail
-          payload=$(mktemp -d "$RUNNER_TEMP/ycoding-payload.XXXXXX")
-          trap 'rm -rf "$payload"' EXIT
-          7z x "dist/release-archive/windows-x64/ycoding-$RELEASE_VERSION-windows-x64.zip" "-o$(cygpath -w "$payload")"
-          bun packages/cli/script/runtime.ts verify-embedded "$payload/ycoding.exe" "$RUNNER_TEMP/windows-runtime/receipt.json"
 
       - name: Upload native archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -459,17 +430,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Upload Windows runtime build receipt
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: runtime-receipt-windows-x64
-          path: ${{ runner.temp }}/windows-runtime/receipt.json
-          if-no-files-found: error
-          retention-days: 7
-
       - name: Remove macOS signing keychain
-        if: ${{ always() && runner.os == 'macOS' }}
+        if: always()
         run: |
           set -euo pipefail
           keychain="$RUNNER_TEMP/ycoding-signing.keychain-db"
@@ -507,7 +469,10 @@ jobs:
           install-flags: --frozen-lockfile
 
       - name: Setup Rust
+        id: desktop-rust
         uses: ./.github/actions/setup-rust
+        with:
+          release-cache: writer
 
       - name: Cache Electrobun native assets
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -592,6 +557,17 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
+
+      - name: Save Apple Silicon release dependencies
+        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && steps.desktop-rust.outputs.release-cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust/target/release
+          key: ${{ steps.desktop-rust.outputs.release-cache-key }}
 
       - name: Remove macOS signing keychain
         if: always()

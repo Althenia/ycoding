@@ -37,7 +37,7 @@ export const gettingStartedPages: readonly DocPage[] = [
           {
             kind: "list",
             items: [
-              "Use a supported release platform: macOS arm64 or x64, or Linux x64. Windows release builds are paused until the native runtime supports Windows.",
+              "Use an Apple Silicon Mac for v0.13.2 or later. Earlier releases retain their original downloads.",
               "Have credentials for a model provider you can use. YCoding's `/connect` flow stores a provider profile; provider access and model availability come from that provider.",
               "Start YCoding in the repository or project folder you want to work in. The current directory supplies the local project context.",
             ],
@@ -108,7 +108,7 @@ export const gettingStartedPages: readonly DocPage[] = [
     slug: "installation",
     title: "Installation",
     group: "Get started",
-    description: "Install a verified YCoding release on macOS or Linux and learn how updates work.",
+    description: "Install a verified YCoding release on Apple Silicon and learn how updates work.",
     sections: [
       {
         heading: "Requirements",
@@ -117,29 +117,27 @@ export const gettingStartedPages: readonly DocPage[] = [
             kind: "table",
             head: ["Platform", "Release target", "Install method"],
             rows: [
-              ["macOS Apple silicon", "arm64", "Shell installer or release archive."],
-              ["macOS Intel", "x64", "Shell installer or release archive."],
-              ["Linux", "x64", "Shell installer or release archive."],
+              ["Apple Silicon", "darwin-arm64", "Shell installer or release archive."],
             ],
           },
           {
             kind: "paragraph",
-            text: "The macOS and Linux shell installer needs `curl`, `tar`, and either `shasum` or `sha256sum`. Release installation does not require Bun.",
+            text: "The shell installer needs `curl`, `tar`, and either `shasum` or `sha256sum`. Release installation does not require Bun. On Intel macOS or Linux x64, set `YCODING_VERSION` to a historical release that has a matching archive.",
           },
         ],
       },
       {
-        heading: "Install on macOS or Linux",
+        heading: "Install on Apple Silicon",
         blocks: [
           {
             kind: "paragraph",
             text: "On a new installation, the installer selects the newest stable Rust release and stops if none is available. It verifies the archive checksum and installs `ycoding` in `~/.local/bin`. It adds that directory to a recognized shell profile only when needed; if your shell is not recognized, add it to PATH yourself.",
           },
-          { kind: "code", language: "sh", label: "macOS or Linux x64", code: "curl -fsSL https://ycoding.althenia.app/install.sh | sh" },
+          { kind: "code", language: "sh", label: "Apple Silicon", code: "curl -fsSL https://ycoding.althenia.app/install.sh | sh" },
           {
             kind: "steps",
             items: [
-              { title: "Run the installer", text: "Paste the command above into a terminal. It supports macOS arm64/x64 and Linux x64; it prints the installed version and destination when it succeeds." },
+              { title: "Run the installer", text: "Run the command in a terminal. The installer prints the installed version and destination when it succeeds." },
               { title: "Apply PATH changes", text: "If the installer updated a shell profile, open a new terminal so it reads the updated PATH." },
               { title: "Verify the executable", text: "Run `ycoding --version`. The command prints the version of the installed release." },
             ],
@@ -185,7 +183,7 @@ export const gettingStartedPages: readonly DocPage[] = [
           { kind: "code", language: "sh", label: "Replace Bun with a clean Rust install", code: "sh install.sh --replace-bun" },
           {
             kind: "paragraph",
-            text: "On macOS or Linux, use `ycoding update` to update an existing Rust installation. Without `--version` it does not install a release older than the one running. It verifies the archive checksum and contents before replacement. On macOS it also verifies the signatures on the CLI and the Interaction helper. On Windows, close YCoding and replace it with the contents of the release ZIP.",
+            text: "On Apple Silicon, use `ycoding update` to update an existing Rust installation. Without `--version` it does not install a release older than the one running. It verifies the archive checksum, contents, and signatures before replacement. On Intel macOS or Linux x64, use `--version` to select a historical release with a matching archive.",
           },
           { kind: "code", language: "sh", label: "Install the newest release", code: "ycoding update" },
           {

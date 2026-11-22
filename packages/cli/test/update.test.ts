@@ -140,6 +140,23 @@ describe("update selection", () => {
 })
 
 describe("release updater", () => {
+  test("rejects Apple Silicon-only releases on Linux or Intel without fetching archives", async () => {
+    const fixture = await setup()
+    for (const platform of ["linux", "darwin"]) {
+      const urls: string[] = []
+      const error = await installRelease({
+        version: "0.13.2",
+        executable: fixture.executable,
+        platform,
+        arch: "x64",
+        fetch: fixtureFetch(fixture, urls),
+      }).then(() => "", (cause) => String(cause))
+      expect(error).toContain("Apple Silicon")
+      expect(urls).toEqual([])
+      expect(await readFile(fixture.executable, "utf8")).toBe("old executable\n")
+    }
+  })
+
   test("validates release versions and supported platforms", () => {
     expect(validVersion(fixtureVersion)).toBe(true)
     expect(validVersion("1.2.3-beta.1")).toBe(true)

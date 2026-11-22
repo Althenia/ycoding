@@ -22,13 +22,13 @@ test("native generator metadata and pinned dependencies", () => {
   expect(cli.dependencies["npm-package-arg"]).toBe("13.0.2")
 })
 
-test("Rust setup pins tools and verifies protoc without a dependency cache", () => {
+test("Rust setup pins tools and verifies protoc before extracting cached archives", () => {
   const action = readFileSync(path.join(root, ".github/actions/setup-rust/action.yml"), "utf8")
   expect(action).toContain('RUST_VERSION: "1.98.1"')
   expect(action).toContain('PROTOC_VERSION: "36.2"')
   expect(action).toContain('test "$actual" = "$sha256"')
   expect(action).toContain('echo "PROTOC=$executable" >> "$GITHUB_ENV"')
-  expect(action).not.toContain("actions/cache/")
+  expect(action).not.toMatch(/actions\/cache(?:\/[a-z]+)?@(?![a-f0-9]{40}\b)/)
   const before = action.split("- name: Install Rust toolchain")[0]
   expect(before).toContain("uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0")
   for (const entry of ["~/.rustup/toolchains", "~/.rustup/update-hashes", "~/.rustup/settings.toml"])
@@ -51,10 +51,27 @@ test("release targets install checksum-verified native Rust and protoc", () => {
   const workflow = Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8")) as {
     jobs: { build: { strategy: { matrix: { include: { target: string }[] } }; steps: { uses?: string }[] } }
   }
-  expect(workflow.jobs.build.strategy.matrix.include.map((entry) => entry.target).sort()).toEqual([
-    "darwin-arm64", "darwin-x64", "linux-x64", "windows-x64",
-  ])
+  expect(workflow.jobs.build.strategy.matrix.include.map((entry) => entry.target)).toEqual(["darwin-arm64"])
   expect(workflow.jobs.build.steps.some((step) => step.uses === "./.github/actions/setup-rust")).toBe(true)
+})
+
+test("Apple Silicon release jobs share a dependency cache written only by default-branch Desktop builds", () => {
+  const action = readFileSync(path.join(root, ".github/actions/setup-rust/action.yml"), "utf8")
+  const workflow = readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8")
+  const restore = action.split("- name: Restore Apple Silicon release dependencies\n")[1]?.split("\n    - name: ")[0] ?? ""
+  const save = workflow.split("- name: Save Apple Silicon release dependencies\n")[1]?.split("\n      - name: ")[0] ?? ""
+  const native = workflow.split("\n  build:\n")[1]?.split("\n  build-desktop:\n")[0] ?? ""
+  expect(restore).toContain("uses: actions/cache/restore@")
+  expect(restore).toContain("rust/Cargo.lock")
+  expect(restore).not.toContain("**/*.rs")
+  expect(save).toContain("uses: actions/cache/save@")
+  expect(save).toContain("github.event.repository.default_branch")
+  expect(save).toContain("key: ${{ steps.desktop-rust.outputs.release-cache-key }}")
+  expect(restore.match(/path: \|\n([\s\S]+?)\s+key:/)?.[1]?.trim().split(/\n\s*/)).toEqual(
+    save.match(/path: \|\n([\s\S]+?)\s+key:/)?.[1]?.trim().split(/\n\s*/),
+  )
+  expect(native).not.toContain("actions/cache/save@")
+  expect(native).toContain("release-cache: reader")
 })
 
 
