@@ -315,8 +315,12 @@ describe("remote recovery documentation", () => {
 })
 
 describe("page structure", () => {
-  test("the installation guide preserves Bun by default and requires opting in to Rust", () => {
+  test("the installation guide selects Rust on a new install and preserves existing Bun data", () => {
     const page = findDocPage("installation")
+    const install = page?.sections.find((section) => section.heading === "Install on macOS or Linux")
+    expect(install?.blocks).toContainEqual(expect.objectContaining({
+      kind: "paragraph", text: expect.stringMatching(/newest stable Rust release and stops if none is available/),
+    }))
     const update = page?.sections.find((section) => section.heading === "Update an installation")
     const warning = update?.blocks.find((block) => block.kind === "callout" && block.title === "Keep an existing Bun installation")
     expect(warning).toMatchObject({ kind: "callout", text: expect.stringMatching(/refuses to replace an existing Bun executable.*GitHub Latest stays on Bun 0\.12\.2/) })

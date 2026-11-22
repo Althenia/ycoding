@@ -221,8 +221,8 @@ installed_native() {
   [ "$(wc -c < "$receipt")" -eq "$((${#installed_version} + 66))" ]
 }
 
-stable_version() {
-  LC_ALL=C awk '
+stable_rust_version() {
+  LC_ALL=C awk -v minimum=0.13.0 '
     function token(   result) {
       while (1) {
         sub(/^[ \t\r]+/, "", line)
@@ -285,6 +285,7 @@ stable_version() {
       if (tag == "" || draft == "" || prerelease == "") exit 1
       if (draft == "true" || prerelease == "true" || tag !~ /^"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?"$/) return
       version = substr(tag, 3, length(tag) - 3)
+      if (compare(version, minimum) < 0) return
       order = best == "" ? 1 : compare(version, best)
       if (order > 0) { best = version; ambiguous = 0 }
       else if (order == 0) ambiguous = 1
@@ -312,7 +313,7 @@ if [ -z "$version" ]; then
   status_code=$(curl --proto '=https' --proto-redir '=https' --max-filesize 2097152 -fsS -o "$temporary/releases" -w '%{http_code}' "https://api.github.com/repos/$repository/releases?per_page=20") ||
     fail "Failed to fetch the GitHub release list"
   [ "$status_code" = 200 ] && [ "$(wc -c < "$temporary/releases")" -le 2097152 ] || fail "Invalid GitHub release list response"
-  version=$(stable_version "$temporary/releases") || fail "Invalid GitHub release list or no stable version found"
+  version=$(stable_rust_version "$temporary/releases") || fail "Invalid GitHub release list or no stable Rust release found"
 fi
 
 printf '%s\n' "$version" | valid_version ||

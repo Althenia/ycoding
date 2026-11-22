@@ -80,7 +80,7 @@ test("native archive finalization deploys the verified web artifact without rebu
   expect(verify).toContain("name: verified-web")
   expect(verify).toContain("path: apps/web/dist/")
   expect(verify.indexOf("run: bun run build:web")).toBeLessThan(verify.indexOf("name: verified-web"))
-  expect(deploy).toContain("needs: release-tui")
+  expect(deploy).toContain("needs: [verify-staged-release, release-tui]")
   expect(deploy).toContain("name: verified-web")
   expect(deploy).toContain("path: apps/web/dist")
   expect(deploy).not.toContain("bun run build:web")
@@ -242,7 +242,7 @@ test("the first unified release has nonempty shared notes", async () => {
 
 test("same v tag deploys web after the GitHub release is published, without GitHub write access", () => {
   const deploy = workflow.split("\n  deploy-web:")[1]
-  expect(deploy).toContain("needs: release-tui")
+  expect(deploy).toContain("needs: [verify-staged-release, release-tui]")
   expect(deploy).toContain("github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
   expect(deploy).toContain("name: verified-web")
   expect(deploy).toContain("bun run deploy:cloudflare")
@@ -266,9 +266,9 @@ test("app preview Worker deploys only after the relay and only when the reposito
 test("GitHub Release publication waits for every check and web deployment waits for publication", () => {
   const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0]
   expect(workflowJob(workflow, "finalize-release")).toContain("needs: [verify-source, build, build-desktop]")
-  expect(tui).toContain("needs: finalize-release")
+  expect(tui).toContain("needs: verify-staged-release")
   expect(tui).toContain("github.event_name == 'push'")
-  expect(workflow.split("\n  deploy-web:")[1]).toContain("needs: release-tui")
+  expect(workflow.split("\n  deploy-web:")[1]).toContain("needs: [verify-staged-release, release-tui]")
 })
 
 test("an existing release is replaced through staged, verified publication with a retained recovery manifest", () => {
@@ -285,7 +285,7 @@ test("an existing release is replaced through staged, verified publication with 
   expect(workflow).not.toContain('"$GITHUB_WORKSPACE/script/release-publish.test.ts"')
 })
 
-test("Rust publication keeps Bun v0.12.2 as GitHub Latest", () => {
+test("Rust publication keeps Bun 0.12.2 as GitHub Latest on both publication paths", () => {
   const publish = workflow.split("- name: Publish GitHub release")[1]?.split("\n      - name:")[0] ?? ""
   const latestGuard = '"$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)" != "v0.12.2"'
   expect(publish).toContain('latest="$(bun script/release-publish.ts latest "$RELEASE_TAG")"')
@@ -305,6 +305,64 @@ test("Cloudflare deployment requires a scoped Actions token before Wrangler runs
   )
 })
 
+test("tag publication consumes only the verified staging run's signed archives and Web build", () => {
+  const parsed: unknown = Bun.YAML.parse(workflow)
+  const dispatch = "${{ github.event_name == 'workflow_dispatch' }}"
+  for (const job of ["verify-source", "build", "build-desktop", "finalize-release"]) {
+    expect(parsed).toHaveProperty("jobs." + job + ".if", dispatch)
+  }
+  const release = workflowJob(workflow, "release-tui")
+  expect(release).toContain("needs: verify-staged-release")
+  expect(release.match(/run-id: /g)).toHaveLength(2)
+  expect(workflowJob(workflow, "deploy-web")).toContain("run-id: ")
+  expect(workflowJob(workflow, "verify-staged-release")).toContain("actions: read")
+})
+
+test("promotion rejects lightweight tags and staging runs from the wrong source or attempt", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ycoding-release-staging-"))
+  try {
+    const git = (args: string[], stdin = "") => {
+      const result = Bun.spawnSync(["git", ...args], { cwd: directory, stdin: Buffer.from(stdin) })
+      if (result.exitCode !== 0) throw new Error(result.stderr.toString())
+      return result.stdout.toString().trim()
+    }
+    git(["init", "--quiet"])
+    const tree = git(["mktree"])
+    const author = "Release Fixture <release@example.test> 0 +0000"
+    const sha = git(["hash-object", "-t", "commit", "-w", "--stdin"], `tree ${tree}\nauthor ${author}\ncommitter ${author}\n\nfixture\n`)
+    const checksums = "1".repeat(64)
+    const tag = "refs/tags/v0.13.1"
+    const annotated = git(["mktag"], `object ${sha}\ntype commit\ntag v0.13.1\ntagger ${author}\n\nVerified release run 42 checksums ${checksums}\n`)
+    fs.writeFileSync(path.join(directory, "gh"), '#!/bin/sh\n[ "$1 $2" = "api repos/example/ycoding/actions/runs/42" ] || exit 2\nprintf "%s\\n" "$RUN_RESPONSE"\n', { mode: 0o755 })
+    const output = path.join(directory, "output")
+    const run = {
+      event: "workflow_dispatch", path: ".github/workflows/release.yml", head_repository: { full_name: "example/ycoding" },
+      head_sha: sha, run_attempt: 1, status: "completed", conclusion: "success",
+    }
+    const resolve = (head: string, response: typeof run) => {
+      git(["update-ref", tag, head])
+      fs.writeFileSync(output, "")
+      return Bun.spawnSync(["bash", path.join(import.meta.dir, "release-staged-run.sh")], {
+        cwd: directory,
+        env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, GITHUB_REF: tag, GITHUB_SHA: sha,
+          GITHUB_REPOSITORY: "example/ycoding", GITHUB_OUTPUT: output, RUN_RESPONSE: JSON.stringify(response) },
+      })
+    }
+    const accepted = resolve(annotated, run)
+    expect(accepted.exitCode, accepted.stderr.toString()).toBe(0)
+    expect(fs.readFileSync(output, "utf8")).toBe(`run-id=42\nchecksums=${checksums}\n`)
+    for (const [head, response] of [
+      [sha, run], [annotated, { ...run, head_sha: "a".repeat(40) }], [annotated, { ...run, run_attempt: 2 }],
+      [annotated, { ...run, event: "push" }], [annotated, { ...run, conclusion: "failure" }],
+    ] as const) {
+      expect(resolve(head, response).exitCode).not.toBe(0)
+      expect(fs.readFileSync(output, "utf8")).toBe("")
+    }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
 test("manual release runs prepare assets without publishing or deploying", () => {
   const prepare = workflow.split("\n  build:")[1]?.split("\n  release-tui:")[0]
   expect(prepare).toContain("github.event_name == 'workflow_dispatch'")
@@ -318,7 +376,7 @@ test("release dispatch finalizes with read-only contents access and never schedu
   const tagPush = "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}"
   expect(parsed).toHaveProperty("jobs.finalize-release.permissions.contents", "read")
   expect(parsed).toHaveProperty("jobs.release-tui.if", tagPush)
-  expect(parsed).toHaveProperty("jobs.release-tui.needs", "finalize-release")
+  expect(parsed).toHaveProperty("jobs.release-tui.needs", "verify-staged-release")
   expect(parsed).toHaveProperty("jobs.release-tui.permissions.contents", "write")
   expect(workflowJob(workflow, "finalize-release")).not.toMatch(/gh release|release-publish-manifest/)
   expect(workflowJob(workflow, "release-tui")).toContain("sha256sum --check")
@@ -355,7 +413,7 @@ test.each([
   ["0.12.0-rc.1+build.2", "preview", "branch", "0.12.0-rc.1+build.2"],
   ["", "v0.12.0", "tag", "0.12.0"],
   ["", "v0.13.0", "tag", "0.13.0"],
-  ["", "v0.11.0-preview", "branch", "0.13.0"],
+  ["", "v0.11.0-preview", "branch", "0.13.1"],
   ["0.12.04", "preview", "branch", null],
   ["0.12.0\nANOTHER=value", "preview", "branch", null],
   ["0.12.0$(printf unexpected)", "preview", "branch", null],
@@ -701,9 +759,9 @@ test("release and test workflows keep both relay versions in source verification
   }
   expect(releaseSource).toContain("ac_wire_002_handshake_invalid_input_matrix_dispatches_nothing")
   const deploy = workflowJob(workflow, "deploy-web")
-  expect(deploy).toContain("needs: release-tui")
+  expect(deploy).toContain("needs: [verify-staged-release, release-tui]")
   expect(workflow).toContain("\npermissions:\n  contents: read\n")
-  expect(deploy).not.toContain("permissions:")
+  expect(deploy).toContain("    permissions:\n      actions: read\n      contents: read\n    steps:")
   expect(deploy).toContain("name: verified-web\n          path: apps/web/dist")
   expect(deploy).toContain("bun run deploy:cloudflare")
 })
@@ -818,17 +876,20 @@ test("packaging overlaps source verification without bypassing publication or de
     ["build", undefined],
     ["build-desktop", undefined],
     ["finalize-release", "[verify-source, build, build-desktop]"],
-    ["release-tui", "finalize-release"],
-    ["deploy-web", "release-tui"],
+    ["verify-staged-release", undefined],
+    ["release-tui", "verify-staged-release"],
+    ["deploy-web", "[verify-staged-release, release-tui]"],
   ] as const
   expect(jobs.filter((_, index) => index % 2 === 0).sort()).toEqual(dependencies.map(([name]) => name).sort())
   for (const [name, needs] of dependencies) {
     const job = jobs[jobs.indexOf(name) + 1] ?? ""
     expect(/^    needs: (.+)$/m.exec(job)?.[1]).toBe(needs)
     expect(/^    if: (.+)$/m.exec(job)?.[1]).toBe(
-      name === "deploy-web" || name === "release-tui"
+      name === "deploy-web"
         ? "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}"
-        : "${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}",
+        : name === "release-tui" || name === "verify-staged-release"
+          ? "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}"
+          : "${{ github.event_name == 'workflow_dispatch' }}",
     )
   }
   expect(workflow).not.toContain("continue-on-error:")
@@ -839,8 +900,9 @@ test("packaging overlaps source verification without bypassing publication or de
   expect(verify).not.toContain("permissions:")
   expect(verify).toMatch(/- name: Checkout release source\n[^\n]+\n        with:\n          fetch-depth: 0\n/)
   expect(verify).toContain("persist-credentials: false")
-  expect(verify).toContain("git merge-base --is-ancestor \"$GITHUB_SHA\" origin/main")
-  expect(verify).toContain("      - name: Verify tag is reachable from main\n        if: github.event_name == 'push'\n")
+  const staged = workflowJob(workflow, "verify-staged-release")
+  expect(staged).toContain("git merge-base --is-ancestor \"$GITHUB_SHA\" origin/main")
+  expect(staged).toContain("      - name: Verify tag is reachable from main\n")
 })
 
 test("release workflow builds and archives the macOS desktop app from the locked Electrobun package", () => {
@@ -929,10 +991,10 @@ test.each([
   ["nonancestor", 1],
   ["missing main", 128],
 ] as const)("release ancestry guard uses checkout refs without a remote: %s", (scenario, status) => {
-  const guard = workflowJob(workflow, "verify-source")
+  const guard = workflowJob(workflow, "verify-staged-release")
     .split("      - name: Verify tag is reachable from main\n")[1]
     ?.split("\n      - name:")[0] ?? ""
-  const command = /\n {8}run: \|\n([\s\S]*)/.exec(guard)?.[1]
+  const command = /^ {8}run: \|\n([\s\S]*)/m.exec(guard)?.[1]
   expect(command).toBeDefined()
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ycoding-release-ancestry-"))
   try {

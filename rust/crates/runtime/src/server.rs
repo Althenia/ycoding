@@ -375,7 +375,11 @@ fn health_response(
     if !auth.authorized(headers) {
         return (
             StatusCode::UNAUTHORIZED,
-            [(WWW_AUTHENTICATE, "Basic realm=\"Secure Area\"")],
+            [
+                (WWW_AUTHENTICATE, "Basic realm=\"Secure Area\""),
+                (axum::http::header::CONTENT_TYPE, "application/json"),
+            ],
+            r#"{"_tag":"UnauthorizedError","message":"Authentication required"}"#,
         )
             .into_response();
     }

@@ -22,6 +22,16 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.13.1",
+    date: "2026-11-22",
+    title: "Fresh Rust installs and clearer connection errors",
+    tags: ["Fixed", "Changed"],
+    changes: [
+      { tag: "Fixed", text: "Rust returns a structured authentication error when a client checks a password-protected server without valid credentials. The CLI can now explain how to connect instead of reporting an incompatible health response." },
+      { tag: "Changed", text: "The shell installer selects the newest stable Rust release on a fresh installation and stops if none is available. Rust keeps its own store and does not import Bun Sessions or data." },
+    ],
+  },
+  {
     version: "0.13.0",
     date: "2026-11-22",
     title: "Rust for new installations",

@@ -27,7 +27,7 @@ env:
 jobs:
   verify-source:
     name: verify release source (${{ matrix.suite }})
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     strategy:
       fail-fast: false
       matrix:
@@ -51,12 +51,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Verify tag is reachable from main
-        if: github.event_name == 'push'
-        run: |
-          set -euo pipefail
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
       - name: Resolve release version
         run: bash script/release-version.sh
@@ -315,7 +309,7 @@ jobs:
 
   build:
     name: build ${{ matrix.target }}
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     strategy:
       fail-fast: false
       matrix:
@@ -491,7 +485,7 @@ jobs:
 
   build-desktop:
     name: build desktop darwin-arm64
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: macos-26
     timeout-minutes: 60
     defaults:
@@ -617,7 +611,7 @@ jobs:
   finalize-release:
     name: finalize release archives and checksums
     needs: [verify-source, build, build-desktop]
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -653,13 +647,44 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  verify-staged-release:
+    name: verify staged release provenance
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      run-id: ${{ steps.stage.outputs.run-id }}
+      checksums: ${{ steps.stage.outputs.checksums }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag is reachable from main
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - name: Verify tag and staging run
+        id: stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash script/release-staged-run.sh
+
   release-tui:
     name: publish TUI release
-    needs: finalize-release
+    needs: verify-staged-release
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
+      actions: read
       contents: write
     steps:
       - name: Checkout repository
@@ -673,6 +698,8 @@ jobs:
       - name: Download prepared target archives
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.verify-staged-release.outputs.run-id }}
           path: release
           pattern: release-archive-*
           merge-multiple: true
@@ -680,13 +707,18 @@ jobs:
       - name: Download validated checksums
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.verify-staged-release.outputs.run-id }}
           name: release-checksums-${{ env.RELEASE_VERSION }}
           path: release
 
       - name: Verify publication inputs
+        env:
+          EXPECTED_CHECKSUMS: ${{ needs.verify-staged-release.outputs.checksums }}
         run: |
           set -euo pipefail
           cp LICENSE NOTICE release/
+          printf '%s  %s\n' "$EXPECTED_CHECKSUMS" "release/ycoding-$RELEASE_VERSION-checksums.txt" | sha256sum --check
           (cd release && sha256sum --check "ycoding-$RELEASE_VERSION-checksums.txt")
 
       - name: Install Bun
@@ -734,10 +766,13 @@ jobs:
 
   deploy-web:
     name: deploy web (cloudflare)
-    needs: release-tui
+    needs: [verify-staged-release, release-tui]
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -753,6 +788,8 @@ jobs:
       - name: Download verified web build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.verify-staged-release.outputs.run-id }}
           name: verified-web
           path: apps/web/dist
 

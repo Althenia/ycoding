@@ -29,30 +29,59 @@ describe("native release installer", () => {
     expect(await Bun.file(path.join(install, ".ycoding-native-release")).text()).toBe(nativeReceipt)
     expect(await releaseRequests(fixture)).toEqual([
       releaseListURL,
-      "https://github.com/Althenia/ycoding/releases/download/v0.13.0/ycoding-0.13.0-checksums.txt",
-      "https://github.com/Althenia/ycoding/releases/download/v0.13.0/ycoding-0.13.0-linux-x64.tar.gz",
+      "https://github.com/Althenia/ycoding/releases/download/v0.13.1/ycoding-0.13.1-checksums.txt",
+      "https://github.com/Althenia/ycoding/releases/download/v0.13.1/ycoding-0.13.1-linux-x64.tar.gz",
     ])
   })
 
-  test("selects the numerically highest stable release independent of GitHub Latest and list order", async () => {
-    const fixture = await nativeInstallFixture()
+  test("selects the newest stable Rust release despite GitHub Latest pointing to the Bun bridge", async () => {
+    const fixture = await nativeInstallFixture(undefined, "0.13.10")
     await writeFile(path.join(fixture.fixture, "releases"), JSON.stringify([
       { tag_name: "v0.99.0", draft: true, prerelease: false },
       { tag_name: "v0.14.0", draft: false, prerelease: true },
       { tag_name: "not-a-release", draft: false, prerelease: false },
-      { tag_name: "v0.13.0", draft: false, prerelease: false, body: 'Text: {"tag_name":"v9.0.0"} \n \\' },
+      { tag_name: "v0.12.6", draft: false, prerelease: false },
+      { tag_name: "v0.13.10", draft: false, prerelease: false, body: 'Text: {"tag_name":"v9.0.0"} \n \\' },
+      { tag_name: "v0.13.9", draft: false, prerelease: false },
       { tag_name: "v0.9.99", draft: false, prerelease: false },
       { tag_name: "v0.12.101", draft: false, prerelease: false },
       { tag_name: "v0.14.0-rc.1", draft: false, prerelease: false },
     ], null, 2))
     const result = await runInstaller(fixture, { YCODING_VERSION: "" })
     expect(result.exitCode, result.stderr).toBe(0)
-    expect(result.stdout).toContain("Installed ycoding 0.13.0")
+    expect(result.stdout).toContain("Installed ycoding 0.13.10")
     expect(await releaseRequests(fixture)).toEqual([
       releaseListURL,
-      "https://github.com/Althenia/ycoding/releases/download/v0.13.0/ycoding-0.13.0-checksums.txt",
-      "https://github.com/Althenia/ycoding/releases/download/v0.13.0/ycoding-0.13.0-linux-x64.tar.gz",
+      "https://github.com/Althenia/ycoding/releases/download/v0.13.10/ycoding-0.13.10-checksums.txt",
+      "https://github.com/Althenia/ycoding/releases/download/v0.13.10/ycoding-0.13.10-linux-x64.tar.gz",
     ])
+  })
+
+  test("installs Rust 0.13.0 when there is no newer stable Rust release", async () => {
+    const fixture = await nativeInstallFixture(undefined, "0.13.0")
+    await writeFile(path.join(fixture.fixture, "releases"), JSON.stringify([
+      { tag_name: "v0.12.6", draft: false, prerelease: false },
+      { tag_name: "v0.13.0", draft: false, prerelease: false },
+      { tag_name: "v0.13.1", draft: true, prerelease: false },
+      { tag_name: "v0.14.0", draft: false, prerelease: true },
+    ]))
+    const result = await runInstaller(fixture, { YCODING_VERSION: "" })
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect(result.stdout).toContain("Installed ycoding 0.13.0")
+  })
+
+  test("never falls back to Bun when there is no stable Rust release", async () => {
+    const fixture = await nativeInstallFixture()
+    await writeFile(path.join(fixture.fixture, "releases"), JSON.stringify([
+      { tag_name: "v0.12.99", draft: false, prerelease: false },
+      { tag_name: "v0.13.1", draft: true, prerelease: false },
+      { tag_name: "v0.14.0", draft: false, prerelease: true },
+    ]))
+    const result = await runInstaller(fixture, { YCODING_VERSION: "" })
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain("no stable Rust release found")
+    expect(await releaseRequests(fixture)).toEqual([releaseListURL])
+    expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding")).exists()).toBe(false)
   })
 
   test("rejects invalid, ambiguous, oversized or empty release lists before asset downloads", async () => {
@@ -62,7 +91,8 @@ describe("native release installer", () => {
       '[{"tag_name":"v0.13.0","draft":false,"draft":true,"prerelease":false}]',
       '[{"tag_name":"v0.13.0","draft":"false","prerelease":false}]',
       '[{"tag_name":"v0.13.0","draft":false,"prerelease":false}] trailing',
-      '[{"tag_name":"v0.13.0","draft":false,"prerelease":false,"nested":[1,]}]',
+      '[{"tag_name":"v0.13.1","draft":false,"prerelease":false,"nested":[1,]}]',
+      '[{"tag_name":"v0.13.1","draft":false,"prerelease":false},{"tag_name":"v0.13.1+duplicate","draft":false,"prerelease":false}]',
       " ".repeat(2 * 1024 * 1024 + 1),
       "[]",
     ]) {
@@ -277,14 +307,6 @@ describe("curl installer", () => {
     expect(zdotdirResult.exitCode).toBe(0)
     expect(await readFile(path.join(profiles, ".zshrc"), "utf8")).toBe('export PATH="$HOME/.local/bin:$PATH"\n')
     expect(await readFile(path.join(zdotdir.home, ".zshrc"), "utf8")).toBe("# existing profile\n")
-  })
-
-  test("resolves a stable version from the fixed GitHub release list", async () => {
-    const fixture = await setup()
-    const result = await runInstaller(fixture, { YCODING_VERSION: "" })
-
-    expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain(`Installed ycoding ${fixtureVersion}`)
   })
 
   test("prints a manual fallback for unsupported shells without creating a profile", async () => {
@@ -842,10 +864,10 @@ async function writeExecutable(file: string, content: string) {
 }
 
 const nativeExecutable = "#!/bin/sh\nexit 13\n"
-const nativeReceipt = `0.13.0 ${new Bun.CryptoHasher("sha256").update(nativeExecutable).digest("hex")}\n`
+const nativeReceipt = `0.13.1 ${new Bun.CryptoHasher("sha256").update(nativeExecutable).digest("hex")}\n`
 
-async function nativeInstallFixture(entries = ["ycoding-native"]) {
-  const fixture = await setup({ system: "Linux", machine: "x86_64", version: "0.13.0" })
+async function nativeInstallFixture(entries = ["ycoding-native"], version = "0.13.1") {
+  const fixture = await setup({ system: "Linux", machine: "x86_64", version })
   await writeExecutable(path.join(fixture.fixture, "ycoding-native"), nativeExecutable)
   await writeInteractionLinuxArchive(fixture, entries)
   return fixture

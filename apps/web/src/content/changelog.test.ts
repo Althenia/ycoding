@@ -7,8 +7,20 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.13.0 first with separate Rust installation and Bun retention instructions", async () => {
+  test("lists the fresh Rust installation and connection error release first", async () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.13.1", title: "Fresh Rust installs and clearer connection errors", tags: ["Fixed", "Changed"] })
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.13.1.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.13.1\n")
+    expect(entry?.changes).toEqual([...notes.matchAll(/^## (Fixed|Changed)\n\n- (.+)$/gm)].map((match) => ({
+      tag: match[1] === "Fixed" ? "Fixed" : "Changed",
+      text: match[2]!,
+    })))
+    expect(after("0.13.1")?.version).toBe("0.13.0")
+  })
+
+  test("retains the v0.13.0 Rust installation and Bun retention instructions", async () => {
+    const entry = byVersion("0.13.0")
     expect(entry).toMatchObject({ version: "0.13.0", title: "Rust for new installations", tags: ["Changed"] })
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.13.0.md", import.meta.url)).text()
     expect(notes).toStartWith("# YCoding v0.13.0\n")
@@ -1869,7 +1881,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 63)).toEqual([
+    expect(versions.slice(0, 64)).toEqual([
+      "0.13.1",
       "0.13.0",
       "0.12.2",
       "0.12.1",

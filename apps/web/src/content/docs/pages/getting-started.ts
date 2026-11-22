@@ -133,7 +133,7 @@ export const gettingStartedPages: readonly DocPage[] = [
         blocks: [
           {
             kind: "paragraph",
-            text: "On a new installation, the installer selects the highest stable release version. It verifies the Rust archive checksum and installs `ycoding` in `~/.local/bin`. It adds that directory to a recognized shell profile only when needed; if your shell is not recognized, add it to PATH yourself.",
+            text: "On a new installation, the installer selects the newest stable Rust release and stops if none is available. It verifies the archive checksum and installs `ycoding` in `~/.local/bin`. It adds that directory to a recognized shell profile only when needed; if your shell is not recognized, add it to PATH yourself.",
           },
           { kind: "code", language: "sh", label: "macOS or Linux x64", code: "curl -fsSL https://ycoding.althenia.app/install.sh | sh" },
           {

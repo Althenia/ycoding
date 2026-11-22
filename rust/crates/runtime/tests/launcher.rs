@@ -374,8 +374,13 @@ fn stdio_readiness_authenticated_health_and_eof_shutdown() {
         "url",
     );
     for path in ["/health", "/api/health"] {
-        assert_eq!(request(&url, path, None, None).0, 401);
-        assert_eq!(request(&url, path, Some("wrong"), None).0, 401);
+        for password in [None, Some("wrong")] {
+            let (status, body) = request(&url, path, password, None);
+            assert_eq!(status, 401);
+            let error = ycoding_core::ycoding_schema::parse_json(&body).unwrap();
+            assert_eq!(string(&error, "_tag"), "UnauthorizedError");
+            assert!(!string(&error, "message").is_empty());
+        }
         let (status, body) = request(&url, path, Some("secret"), None);
         assert_eq!(status, 200);
         assert!(body.contains("\"healthy\":true"));
