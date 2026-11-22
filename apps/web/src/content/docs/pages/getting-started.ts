@@ -175,7 +175,7 @@ export const gettingStartedPages: readonly DocPage[] = [
             kind: "callout",
             tone: "warning",
             title: "Keep an existing Bun installation",
-            text: "The default installer refuses to replace an existing Bun executable or start over when it finds Bun data and no Rust store. GitHub Latest stays on Bun 0.12.2, so the existing Bun updater stays on Bun. You can also choose Bun explicitly with the downloaded shell installer.",
+            text: "The default installer refuses to replace an existing Bun executable or start over when it finds Bun data and no Rust store. To stay on Bun, install Bun 0.12.2 explicitly with the downloaded shell installer.",
           },
           { kind: "code", language: "sh", label: "Stay on Bun", code: "YCODING_VERSION=0.12.2 sh install.sh" },
           {

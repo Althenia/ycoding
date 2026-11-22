@@ -740,17 +740,18 @@ jobs:
             echo ""
             echo "**Full Changelog**: https://github.com/Althenia/ycoding/compare/$range"
           } > release-notes.md
-          latest="$(bun script/release-publish.ts latest "$RELEASE_TAG")"
-          if [[ "$latest" == "false" && "$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)" != "v0.12.2" ]]; then
-            echo "Publish v0.12.2 as GitHub Latest before publishing Rust" >&2
-            exit 1
-          fi
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             bun script/release-publish.ts --repository "$GH_REPO" --tag "$RELEASE_TAG" --title "YCoding $version" --notes-file release-notes.md --run "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --manifest release-publish-manifest.json release/* "docs/releases/v$version.md"
           else
-            gh release create "v$version" release/* "docs/releases/v$version.md" --verify-tag --latest="$latest" --title "YCoding $version" --notes-file release-notes.md
-            if [[ "$latest" == "false" && "$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)" != "v0.12.2" ]]; then
-              echo "GitHub Latest changed during Rust publication" >&2
+            previous_latest="$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)"
+            latest="$(bun script/release-publish.ts latest "$RELEASE_TAG" "$previous_latest")"
+            expected_latest="$previous_latest"
+            if [[ "$latest" == "true" ]]; then expected_latest="$RELEASE_TAG"; fi
+            prerelease=()
+            if [[ "${version%%+*}" == *-* ]]; then prerelease+=(--prerelease); fi
+            gh release create "v$version" release/* "docs/releases/v$version.md" --verify-tag --latest="$latest" "${prerelease[@]}" --title "YCoding $version" --notes-file release-notes.md
+            if [[ "$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)" != "$expected_latest" ]]; then
+              echo "GitHub Latest does not point to $expected_latest" >&2
               exit 1
             fi
           fi

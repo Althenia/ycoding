@@ -30,6 +30,7 @@ function github(
     readonly assets: ReadonlyArray<{ name: string; content: string; state?: Asset["state"] }>
     readonly fault?: (call: Call) => Fault | undefined
     readonly digests?: "present" | "null"
+    readonly latestTag?: string
     readonly latest?: () => number
     readonly tag?: string
   } = { assets: [] },
@@ -50,7 +51,7 @@ function github(
       { id: index + 1, name: asset.name, state: asset.state ?? "uploaded", content: bytes(asset.content) },
     ]),
   )
-  let latest = options.tag === "v0.13.0" ? otherID : releaseID
+  let latest = options.latestTag ? otherID : releaseID
   const view = (asset: Asset) => ({
     id: asset.id,
     name: asset.name,
@@ -82,7 +83,7 @@ function github(
       if (request.method === "GET" && route === `/releases/tags/${release.tag_name}`) return Response.json(releaseView())
       if (request.method === "GET" && route === "/releases/latest") {
         const id = options.latest?.() ?? latest
-        return Response.json({ ...releaseView(), id, tag_name: id === otherID ? "v0.12.2" : release.tag_name })
+        return Response.json({ ...releaseView(), id, tag_name: id === otherID ? options.latestTag ?? "v0.12.2" : release.tag_name })
       }
       if (request.method === "GET" && route === `/releases/${releaseID}/assets`)
         return Response.json(
@@ -149,6 +150,7 @@ function github(
     assets,
     names: () => Object.fromEntries([...assets.values()].map((asset) => [asset.name, asset.id])),
     mutations: () => calls.filter((call) => call.method !== "GET"),
+    latest: async () => (await fetch(`${base}/repos/${repository}/releases/latest`)).json(),
     base,
   }
 }
@@ -263,21 +265,59 @@ test("a verified swap points every public name at a new asset, renames the check
   expect(manifest.original.map((asset) => asset.id).toSorted((left, right) => left - right)).toEqual([1, 2, 3])
 })
 
-test("Rust publication sends make_latest false and keeps Bun Latest", async () => {
-  const server = github({ assets: original, tag: "v0.13.0" })
-  const { result } = await run(server)
-  expect(result.status).toBe("published")
-  expect(server.release).toMatchObject({ draft: false, prerelease: false, tag_name: "v0.13.0" })
-  expect(server.mutations().filter((call) => call.path === `/releases/${releaseID}`).map((call) => call.makeLatest)).toEqual(["false"])
-  const latest = await fetch(`${server.base}/repos/${repository}/releases/latest`)
-  expect(await latest.json()).toMatchObject({ id: otherID, tag_name: "v0.12.2" })
+test("the publication command selects Latest only for stable Rust at least as new as the current Rust release", () => {
+  const cases = [
+    ["v0.13.1", "v0.12.2", "true"],
+    ["v0.13.1", "v0.13.1", "true"],
+    ["v0.13.10", "v0.13.2", "true"],
+    ["v0.13.2", "v0.13.10", "false"],
+    ["v0.12.2", "v0.13.1", "false"],
+    ["v0.14.0-beta.1", "v0.13.1", "false"],
+  ] as const
+  for (const [tag, latest, expected] of cases) {
+    const result = Bun.spawnSync([process.execPath, path.join(import.meta.dir, "release-publish.ts"), "latest", tag, latest])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout.toString().trim()).toBe(expected)
+  }
 })
 
-test("Rust publication refuses before uploading when Bun v0.12.2 is not Latest", async () => {
-  const server = github({ assets: original, tag: "v0.13.0", latest: () => releaseID })
+test("a verified Rust release replaces the Bun release as GitHub Latest", async () => {
+  const server = github({ assets: original, tag: "v0.13.1", latestTag: "v0.12.2" })
   const { result } = await run(server)
-  expect(result.status).toBe("refused")
-  expect(server.mutations()).toEqual([])
+  expect(result.status).toBe("published")
+  expect(server.release).toMatchObject({ draft: false, prerelease: false, tag_name: "v0.13.1" })
+  expect(await server.latest()).toMatchObject({ id: releaseID, tag_name: "v0.13.1" })
+})
+
+test("repairing a historical Bun or older Rust release keeps the newer Rust release as Latest", async () => {
+  for (const tag of ["v0.12.2", "v0.13.0"]) {
+    const server = github({ assets: original, tag, latestTag: "v0.13.1" })
+    const { result } = await run(server)
+    expect(result.status).toBe("published")
+    expect(await server.latest()).toMatchObject({ id: otherID, tag_name: "v0.13.1" })
+    expect(server.mutations().some((call) => call.makeLatest === "true")).toBe(false)
+  }
+})
+
+test("a Rust prerelease stays out of Latest when its assets are repaired", async () => {
+  const server = github({ assets: original, tag: "v0.14.0-beta.1", latestTag: "v0.13.1" })
+  const { result } = await run(server)
+  expect(result.status).toBe("published")
+  expect(server.release.prerelease).toBe(true)
+  expect(await server.latest()).toMatchObject({ id: otherID, tag_name: "v0.13.1" })
+})
+
+test("a lost promotion response is reconciled without promoting the release twice", async () => {
+  const server = github({
+    assets: original,
+    tag: "v0.13.1",
+    latestTag: "v0.12.2",
+    fault: (call) => call.makeLatest === "true" ? "applied-reject" : undefined,
+  })
+  const { result } = await run(server)
+  expect(result.status).toBe("published")
+  expect(await server.latest()).toMatchObject({ id: releaseID, tag_name: "v0.13.1" })
+  expect(server.mutations().filter((call) => call.makeLatest === "true")).toHaveLength(1)
 })
 
 test("a rename failure restores every public name to its original asset", async () => {
@@ -361,17 +401,20 @@ test("a failed metadata update restores the original public names", async () => 
 })
 
 test("a final verification failure restores the original assets and metadata", async () => {
-  const server = github({ assets: original, latest: () => otherID })
+  const server = github({ assets: original, tag: "v0.13.1", latestTag: "v0.12.2", latest: () => otherID })
   const { result, manifest } = await run(server)
   expect(result.status).toBe("restored")
   expectOriginalPublicNames(server)
   expect(server.release).toMatchObject({ name: "YCoding 0.11.0", body: "old notes" })
-  expect(manifest.error).toContain("latest")
+  expect(manifest.error).toMatch(/latest/i)
+  expect(await server.latest()).toMatchObject({ id: otherID, tag_name: "v0.12.2" })
 })
 
 test("a public asset that no longer matches its verified digest after the swap restores the original assets", async () => {
   const server = github({
     assets: original,
+    tag: "v0.13.1",
+    latestTag: "v0.12.2",
     fault: (call) =>
       call.method === "PATCH" && call.name === "LICENSE" && Number(call.path.split("/").at(-1)) >= 1000
         ? "corrupt"
@@ -382,6 +425,8 @@ test("a public asset that no longer matches its verified digest after the swap r
   expectOriginalPublicNames(server)
   expect(server.release).toMatchObject({ name: "YCoding 0.11.0", body: "old notes" })
   expect(manifest.error).toContain("LICENSE")
+  expect(server.mutations().some((call) => call.makeLatest === "true")).toBe(false)
+  expect(await server.latest()).toMatchObject({ id: otherID, tag_name: "v0.12.2" })
 })
 
 test("another replacement retains both generations of prior assets", async () => {

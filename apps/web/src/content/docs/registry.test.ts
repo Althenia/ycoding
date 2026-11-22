@@ -323,7 +323,7 @@ describe("page structure", () => {
     }))
     const update = page?.sections.find((section) => section.heading === "Update an installation")
     const warning = update?.blocks.find((block) => block.kind === "callout" && block.title === "Keep an existing Bun installation")
-    expect(warning).toMatchObject({ kind: "callout", text: expect.stringMatching(/refuses to replace an existing Bun executable.*GitHub Latest stays on Bun 0\.12\.2/) })
+    expect(warning).toMatchObject({ kind: "callout", text: expect.stringMatching(/refuses to replace an existing Bun executable.*install Bun 0\.12\.2 explicitly/) })
     expect(update?.blocks).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "code", code: "YCODING_VERSION=0.12.2 sh install.sh" }),
       expect.objectContaining({ kind: "code", code: "sh install.sh --replace-bun" }),

@@ -285,15 +285,18 @@ test("an existing release is replaced through staged, verified publication with 
   expect(workflow).not.toContain('"$GITHUB_WORKSPACE/script/release-publish.test.ts"')
 })
 
-test("Rust publication keeps Bun 0.12.2 as GitHub Latest on both publication paths", () => {
+test("new publication selects Latest against the current release and verifies the resulting tag", () => {
   const publish = workflow.split("- name: Publish GitHub release")[1]?.split("\n      - name:")[0] ?? ""
-  const latestGuard = '"$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)" != "v0.12.2"'
-  expect(publish).toContain('latest="$(bun script/release-publish.ts latest "$RELEASE_TAG")"')
-  expect(publish).toContain(latestGuard)
-  expect(publish.indexOf(latestGuard)).toBeLessThan(publish.indexOf('if gh release view "$RELEASE_TAG"'))
+  const create = publish.indexOf('gh release create "v$version"')
+  expect(publish).toContain('previous_latest="$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)"')
+  expect(publish.slice(0, create)).toContain('latest="$(bun script/release-publish.ts latest "$RELEASE_TAG" "$previous_latest")"')
   expect(publish).toContain('gh release create "v$version" release/* "docs/releases/v$version.md" --verify-tag --latest="$latest"')
-  expect(publish.lastIndexOf(latestGuard)).toBeGreaterThan(publish.indexOf('gh release create "v$version"'))
-  expect(publish).not.toMatch(/--draft|--prerelease/)
+  expect(publish).toContain('if [[ "${version%%+*}" == *-* ]]; then prerelease+=(--prerelease); fi')
+  expect(publish).toContain('"${prerelease[@]}" --title')
+  expect(publish).toContain('expected_latest="$previous_latest"')
+  expect(publish).toContain('expected_latest="$RELEASE_TAG"')
+  expect(publish.indexOf('"$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)" != "$expected_latest"')).toBeGreaterThan(create)
+  expect(publish).not.toContain("v0.12.2")
 })
 
 test("Cloudflare deployment requires a scoped Actions token before Wrangler runs", () => {
