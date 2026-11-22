@@ -191,18 +191,18 @@ export const gettingStartedPages: readonly DocPage[] = [
             kind: "callout",
             tone: "warning",
             title: "Install the Bun edition",
-            text: "On macOS or Linux, use the shell installer above with `--version 0.12.1` if your current updater cannot install the Interaction archive or you need to replace an earlier build that used the same version number. On Windows, close YCoding and replace it with the contents of the release ZIP.",
+            text: "On macOS or Linux, use the shell installer above with `--version 0.12.2` if your current updater cannot install the Interaction archive or you need to replace an earlier build that used the same version number. On Windows, close YCoding and replace it with the contents of the release ZIP.",
           },
           {
             kind: "paragraph",
-            text: "From Bun v0.12.0 on macOS or Linux, use `ycoding update --version 0.12.1` to install the Bun edition. In Bun v0.12.1, a bare `ycoding update` stays on the 0.12.x line, even if GitHub reports a newer Rust release. To switch editions or install an older version, name the version explicitly. The updater verifies the archive checksum and contents before replacement. On macOS, it also verifies the YCoding signing certificate for both the CLI and the Interaction helper.",
+            text: "From Bun v0.12.0 on macOS or Linux, use `ycoding update --version 0.12.2` to install this Bun release. On Bun v0.12.1 and v0.12.2, `ycoding update` without a version stays on the 0.12.x line, even if GitHub reports a newer Rust release. To switch editions or install an older version, name the version explicitly. The updater verifies the archive checksum and contents before replacement. On macOS, it also verifies the YCoding signing certificate for both the CLI and the Interaction helper.",
           },
           { kind: "code", language: "sh", label: "Check for an update on the Bun release line", code: "ycoding update" },
           {
             kind: "code",
             language: "sh",
             label: "Install one published version",
-            code: "ycoding update --version 0.12.1",
+            code: "ycoding update --version 0.12.2",
           },
           {
             kind: "paragraph",

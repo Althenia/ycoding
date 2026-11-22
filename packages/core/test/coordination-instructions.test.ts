@@ -120,8 +120,7 @@ test("the Master delegates all project work through supervisors (including a sin
   for (const instruction of [
     "As Master, decompose the user's work into independent scopes without waiting to be asked and delegate each scope (including single-member work) to the appropriate supervisor/owner, using `assign` to establish or transfer supervisor ownership.",
     "The Project hierarchy is Master → recorded owner → executor",
-    "When member placement is specified, use `directory` for a chosen folder or `projectID` for an existing repository Project's canonical directory.",
-    "For supervisor-owned Sessions, route everything through their recorded supervisor rather than directly creating, steering, updating, or managing member sessions or relaying routine events, and handle only their escalations and integration",
+    "For supervisor-owned Sessions, route work through their recorded supervisor; the Master does not dispatch, steer, update or manage their work or relay routine events",
     "keep advancing independent work",
   ]) expect(CoordinationInstructions.content).toContain(instruction)
   once(CoordinationInstructions.content, delegationRule)
@@ -285,14 +284,44 @@ test("controller and executor guidance share one consolidated-verification pract
   }
 })
 
-test("the Master can place a member at a chosen path and creates a worktree only when explicitly requested", () => {
-  for (const instruction of [
-    "Use an absolute or home-relative path with `directory`, including for non-Git folders and repository subdirectories.",
-    "Use `name` with optional `repository` only for an explicitly requested managed worktree.",
-    "Never create a project work Session under the Master Session as a child or descendant; member Sessions are independently bound root Sessions, and only lightweight supervisor subagents live under the Master.",
-  ]) once(CoordinationInstructions.content, instruction)
-  expect(CoordinationInstructions.content).not.toContain("start a member Session in its own managed worktree")
-  expect(CoordinationInstructions.content).not.toContain("member Sessions are standalone root Sessions")
+test("the owner resolves one explicit placement and the Master enrolls without dispatching", async () => {
+  for (const role of ["master", "supervisor"] as const) {
+    const value = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make(role))))[0]?.value)
+    for (const instruction of [
+      "The supervising owner resolves the target Project folder or designated worktree before enrollment",
+      "Pass exactly one placement",
+      "`directory` with an absolute or home-relative path for an explicit folder, including a non-Git folder or repository subdirectory",
+      "`projectID` for a repository Project's canonical checkout",
+      "`name` with an explicit `repository` for a new managed worktree",
+      "Never infer placement from the coordinator's directory",
+      "The Master performs the required native `project create` with the resolved placement and `ownerSessionID`, without a `prompt`",
+      "The recorded owner verifies the enrolled Location and sends the assignment",
+      "Attach, assign, send, model, release and remove never change the Session's ID, parent or Location or move or recreate it",
+      "Never create a project work Session under the Master Session as a child or descendant; member Sessions are independently bound root Sessions, and only lightweight supervisor subagents live under the Master.",
+    ]) once(value, instruction)
+    expect(value).not.toContain("optional `repository`")
+    expect(value).not.toContain("member Sessions are standalone root Sessions")
+  }
+})
+
+test("the Master coordinates native archival after delivery and ownership settle", async () => {
+  for (const role of ["master", "supervisor", "executor"] as const) {
+    const value = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make(role))))[0]?.value)
+    const rules = [
+      "After verifying delivery and its evidence, have the recorded owners verify that finished members are idle, have no outstanding work or requests, and are not needed for reuse",
+      "Archive through an authorized native Session control",
+      "Archiving a member releases its ownership and keeps its membership",
+      "use the Master-only detach or release control if the lifecycle calls for a separate membership or ownership change",
+      "Only after ownership clears and the supervisor's task settles, archive the finished supervisor if it is no longer needed",
+      "Keep active, waiting and reusable Sessions open. Preserve Session history, evidence and dependency links",
+      "If a native control refuses, keep the records intact and report the exact gate",
+    ] as const
+    for (const rule of rules) {
+      if (role === "master") once(value, rule)
+      else expect(value).not.toContain(rule)
+    }
+    if (role === "master") expect(value.indexOf(rules[2])).toBeLessThan(value.indexOf(rules[4]))
+  }
 })
 
 test("controller recovery reconciles uncertain work once without polling or replay loops", () => {
@@ -308,7 +337,7 @@ test("coordination instructions enforce owner-routed boundaries, preserve histor
   const content = CoordinationInstructions.content
   for (const text of [
     "A supervisor cannot call the `project` tool's Master-only create, attach, assign (including transfers), release, or remove operations; within authorized routes, a supervisor reuses a suitable owned member when available and steers, updates, or acts on owned member Sessions via `send`, `model`, `answer`, `inspect`, `escalate`, `interrupt`, and `list`.",
-    "Coordinate all Project work through the established authorized owner route rather than directly creating, steering, updating, attaching, releasing, or removing member Sessions at the Master; use `assign` only to establish or transfer supervisor ownership to a live supervisor subagent the Master launched, and keep read-only oversight, escalations, and integration review at the Master.",
+    "Use `assign` only to establish or transfer ownership to a live supervisor subagent the Master launched; keep read-only oversight, escalations and integration review at the Master.",
     "preserve Session and Project histories intact without deleting history as cleanup",
     "a completed child or `task_complete` is not whole delivery completion",
     "unfinished member work or pending family requests stay open with their recorded owner until settled",
@@ -318,7 +347,7 @@ test("coordination instructions enforce owner-routed boundaries, preserve histor
   expect(supervisor).toContain("within authorized routes, a supervisor reuses a suitable owned member when available")
   expect(supervisor).not.toContain("Supervisors cannot create, attach, assign, transfer, release, or remove Project members.")
   const executor = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make("executor"))))[0]?.value)
-  expect(executor).not.toContain("Coordinate all Project work through the established authorized owner route")
+  expect(executor).not.toContain("The Master performs the required native `project create`")
 })
 
 test("the Master role line directs owner-routed supervision, escalation and history preservation without direct member mutations", async () => {
@@ -327,8 +356,8 @@ test("the Master role line directs owner-routed supervision, escalation and hist
   const prefix = (value: string) => value.slice(0, value.indexOf("Coordinate and supervise only"))
   const master = prefix(await read("master"))
   expect(master).toContain("Project role: Master.")
-  expect(master).toContain("Coordinate through the established authorized owner route without directly creating, steering, updating, attaching, releasing, or removing member Sessions")
-  expect(master).toContain("assign and transfer supervisor ownership")
+  expect(master).toContain("Route Project work through recorded owners; use Master-only controls for enrollment and ownership, never to dispatch or steer member work")
+  expect(master).toContain("Assign and transfer supervisor ownership")
   expect(master).toContain("keep read-only oversight")
   expect(master).toContain("handle escalations and integration for delegated work")
   expect(master).toContain("preserving Session and Project histories without deleting history or cancelling active work")

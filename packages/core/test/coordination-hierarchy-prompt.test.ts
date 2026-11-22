@@ -390,9 +390,12 @@ const sharedExecution = [
   "Never introduce ceremony, handoffs, slots, or resource-limitation throttling; run independent builds, typechecks, and selected checks directly in parallel",
 ]
 const placement = [
-  "When member placement is specified, use `directory` for a chosen folder or `projectID` for an existing repository Project's canonical directory.",
-  "Use an absolute or home-relative path with `directory`, including for non-Git folders and repository subdirectories.",
-  "Use `name` with optional `repository` only for an explicitly requested managed worktree.",
+  "The supervising owner resolves the target Project folder or designated worktree before enrollment.",
+  "Pass exactly one placement: `directory` with an absolute or home-relative path for an explicit folder, including a non-Git folder or repository subdirectory; `projectID` for a repository Project's canonical checkout; or `name` with an explicit `repository` for a new managed worktree.",
+  "Never infer placement from the coordinator's directory.",
+  "The Master performs the required native `project create` with the resolved placement and `ownerSessionID`, without a `prompt`.",
+  "The recorded owner verifies the enrolled Location and sends the assignment.",
+  "Apply placement only to creation. Attach, assign, send, model, release and remove never change the Session's ID, parent or Location or move or recreate it.",
 ]
 const conflictingDirectMaster = [
   "Default to direct Master",
@@ -430,7 +433,8 @@ const operating = [
   "Report progress by delivery milestones, not by mixed administrative counts",
   ...placement,
   "A supervisor cannot call the `project` tool's Master-only create, attach, assign (including transfers), release, or remove operations; within authorized routes, a supervisor reuses a suitable owned member when available and steers, updates, or acts on owned member Sessions via `send`, `model`, `answer`, `inspect`, `escalate`, `interrupt`, and `list`.",
-  "Coordinate all Project work through the established authorized owner route rather than directly creating, steering, updating, attaching, releasing, or removing member Sessions at the Master; use `assign` only to establish or transfer supervisor ownership to a live supervisor subagent the Master launched, and keep read-only oversight, escalations, and integration review at the Master.",
+  "Use `assign` only to establish or transfer ownership to a live supervisor subagent the Master launched",
+  "keep read-only oversight, escalations and integration review at the Master",
   "Supervisors cannot release themselves",
   "your task remains `supervising` until ownership ends",
   "act on each in the turn it arrives",
@@ -554,7 +558,10 @@ describe("Master hierarchy prompt assembly", () => {
       expect(system).toContain("including single-member work")
       expect(system).not.toContain("launch an owner subagent for each")
       expect(system).not.toContain("require five subagents")
-      expect(system).toContain("For supervisor-owned Sessions, route everything through their recorded supervisor rather than directly creating, steering, updating, or managing member sessions or relaying routine events, and handle only their escalations and integration")
+      expect(system).toContain("For supervisor-owned Sessions, route work through their recorded supervisor; the Master does not dispatch, steer, update or manage their work or relay routine events.")
+      expect(system).toContain("use Master-only controls for enrollment and ownership, never to dispatch or steer member work")
+      expect(system).toContain("Archive through an authorized native Session control and verify the archive time; do not issue a shell mutation as coordinator.")
+      expect(system).toContain("Keep active, waiting and reusable Sessions open.")
       for (const text of conflictingDirectMaster) expect(system).not.toContain(text)
       expect(system).not.toContain("Main")
       expect(system).toContain("Do not execute a member's task, take over its tools, or control its subagents.")

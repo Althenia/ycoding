@@ -319,7 +319,7 @@ describe("page structure", () => {
     const page = findDocPage("installation")
     const update = page?.sections.find((section) => section.heading === "Update an installation")
     const warning = update?.blocks.find((block) => block.kind === "callout" && block.title === "Install the Bun edition")
-    expect(warning).toMatchObject({ kind: "callout", text: expect.stringContaining("use the shell installer above with `--version 0.12.1`") })
+    expect(warning).toMatchObject({ kind: "callout", text: expect.stringContaining("use the shell installer above with `--version 0.12.2`") })
     expect(JSON.stringify(update?.blocks)).toContain("stays on the 0.12.x line")
     expect(JSON.stringify(page?.sections)).toContain("YCoding Interaction.app")
     expect(JSON.stringify(page?.sections)).not.toContain("YCoding Computer Use.app")

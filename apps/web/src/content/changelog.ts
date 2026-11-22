@@ -22,6 +22,17 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.12.2",
+    date: "2026-11-22",
+    title: "Project placement and cleanup guidance",
+    tags: ["Changed"],
+    changes: [
+      { tag: "Changed", text: "Project supervisors resolve the folder or worktree for each new member. The Master enrolls the Session at that location, and the supervisor verifies the placement before sending the assignment." },
+      { tag: "Changed", text: "After delivery is verified, Project owners arrange archival for idle Sessions that are no longer needed. They leave active, waiting, or reusable Sessions open. Archiving keeps Session history." },
+      { tag: "Changed", text: "Built-in agents clean up only their own unused task files and clean, merged worktrees and branches. They keep shared files, tool caches, and the evidence needed to verify or roll back a release." },
+    ],
+  },
+  {
     version: "0.12.1",
     date: "2026-11-22",
     title: "Bun edition with Field Notes and message actions",

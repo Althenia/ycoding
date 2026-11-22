@@ -282,14 +282,23 @@ describe("Agent", () => {
         Effect.provideService(Location.Service, Location.Service.of(testLocation)),
       )
 
-      const rule =
-        "- Done includes cleanup: remove the completed task's unused outputs, files, caches and temporary files. After verifying its merge with git merge-base --is-ancestor <branch> <target> and a clean git status, remove that task's worktree with git worktree remove <path> (never --force) and its branch with git branch -d (never force-delete). Preserve active, shared and unmerged work and a recovery path for everything removed."
       for (const id of ["zeus", "GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein"]) {
         const item = yield* agent.get(Agent.ID.make(id))
         if (!item?.system) throw new Error(`expected ${id} with a system prompt`)
-        expect(item.system.split(rule)).toHaveLength(2)
-        expect(item.system.indexOf(rule)).toBeGreaterThan(item.system.indexOf("Evidence and delivery:"))
-        expect(item.system.indexOf(rule)).toBeLessThan(item.system.indexOf("Tools and recovery:"))
+        const marker = "- Done includes cleanup:"
+        const rule = item.system.split("\n").find((line) => line.startsWith(marker)) ?? ""
+        expect(item.system.split(marker)).toHaveLength(2)
+        expect(item.system.indexOf(marker)).toBeGreaterThan(item.system.indexOf("Evidence and delivery:"))
+        expect(item.system.indexOf(marker)).toBeLessThan(item.system.indexOf("Tools and recovery:"))
+        expect(rule).toContain("Remove only unused task-owned outputs, caches and temporary files")
+        expect(rule).toContain("Then remove only a clean, merged task worktree and its local branch")
+        expect(rule).toContain("git merge-base --is-ancestor <branch> <target>")
+        expect(rule).toContain("git status reports a clean worktree")
+        expect(rule).toContain("git worktree remove <path> and git branch -d <branch>, without force")
+        expect(rule).toContain("dirty, unmerged, active, shared or protected work")
+        expect(rule).toContain("repository and tool-managed caches")
+        expect(rule).toContain("required release and rollback evidence")
+        expect(rule).toContain("a recovery path for everything removed")
         expect(item.system).not.toContain("leave nothing behind")
         expect(item.system).not.toContain("git worktree prune")
         expect(item.system.split("git worktree remove")).toHaveLength(2)
@@ -533,7 +542,7 @@ describe("Agent", () => {
         "/autonomous", "Only the user creates, replaces or resumes a goal",
         "get, report, complete, stop or clear", "Never change objective text",
         "notifications", "do not poll", "serialize only for a real dependency, shared file, or approval, never for ceremony, handoffs, slots, or resource limitations",
-        "git worktree remove <path>", "never --force",
+        "git worktree remove <path> and git branch -d <branch>, without force",
         "bounded judgments", "not approval, a user answer or completion evidence",
       ]
       for (const id of ["GSD", "architech", "god", "yangi"]) {
