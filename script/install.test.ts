@@ -103,7 +103,7 @@ describe("native release installer", () => {
     expect(result.stderr).toContain("YCODING_VERSION=0.12.2")
     expect(await releaseRequests(fixture)).toEqual([releaseListURL])
     expect(await Bun.file(path.join(data, "ycoding.db")).text()).toBe("Bun store")
-    expect(await readdir(fixture.home)).toEqual([".zshrc", "custom-data"])
+    expect((await readdir(fixture.home)).sort()).toEqual([".zshrc", "custom-data"])
   })
 
   test("allows retained Bun data only when a native store is also present", async () => {
