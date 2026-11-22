@@ -7,8 +7,54 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.12.0 first with its notes", async () => {
+  test("lists v0.13.0 first with separate Rust installation and Bun retention instructions", async () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.13.0", title: "Rust for new installations", tags: ["Changed"] })
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.13.0.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.13.0\n")
+    const changes = notes.split(/^## /m).flatMap((section) => {
+      const tag = TAGS.find((tag) => section.startsWith(`${tag}\n`))
+      if (!tag) return []
+      return [...section.matchAll(/^- (.+)$/gm)].map((match) => ({ tag, text: match[1]! }))
+    })
+    expect(changes).toHaveLength(5)
+    expect(changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ tag: "Changed", text: expect.stringMatching(/core\.redb.*does not import/) }),
+      expect.objectContaining({ tag: "Changed", text: expect.stringMatching(/YCODING_VERSION=0\.12\.2.*--replace-bun.*Bun database intact/) }),
+      expect.objectContaining({ tag: "Changed", text: expect.stringMatching(/GitHub Latest stays on Bun 0\.12\.2.*checks for stable Rust releases/) }),
+      expect.objectContaining({ tag: "Changed", text: expect.stringMatching(/`\/remote` for Bun 0\.12\.x devices.*`\/remote\/rust` for Rust devices/) }),
+      expect.objectContaining({ tag: "Changed", text: expect.stringMatching(/v5 WebSocket.*`ycoding api session\.list`.*not available.*`ycoding api --help`/) }),
+    ]))
+    expect(entry?.changes).toEqual(changes)
+    expect(after("0.13.0")?.version).toBe("0.12.2")
+  })
+
+  test("retains the v0.12.2 Bun edition with its published notes", async () => {
+    const entry = byVersion("0.12.2")
+    expect(entry).toMatchObject({ version: "0.12.2", date: "2026-11-22", title: "Project placement and cleanup guidance", tags: ["Changed"] })
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.12.2.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.12.2\n")
+    expect(entry?.changes).toEqual([...notes.matchAll(/^- (.+)$/gm)].map((match) => ({ tag: "Changed", text: match[1]! })))
+    expect(after("0.12.2")?.version).toBe("0.12.1")
+  })
+
+  test("retains the v0.12.1 Bun edition with its published notes", async () => {
+    const entry = byVersion("0.12.1")
+    expect(entry).toMatchObject({ version: "0.12.1", date: "2026-11-22", title: "Bun edition with Field Notes and message actions", tags: ["Changed", "Fixed"] })
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.12.1.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.12.1\n")
+    const changes = notes.split(/^## /m).flatMap((section) => {
+      const tag = TAGS.find((tag) => section.startsWith(`${tag}\n`))
+      if (!tag) return []
+      return [...section.matchAll(/^- (.+)$/gm)].map((match) => ({ tag, text: match[1]! }))
+    })
+    expect(changes).toHaveLength(5)
+    expect(entry?.changes).toEqual(changes)
+    expect(after("0.12.1")?.version).toBe("0.12.0")
+  })
+
+  test("retains v0.12.0 with its notes", async () => {
+    const entry = byVersion("0.12.0")
     expect(entry).toMatchObject({ version: "0.12.0", date: "2026-11-21", title: "YCoding Interaction, queued messages and Markdown code cards", tags: ["Added", "Changed", "Fixed"] })
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.12.0.md", import.meta.url)).text()
     expect(notes).toStartWith("# YCoding v0.12.0\n")
@@ -31,7 +77,7 @@ describe("release entries", () => {
     ]))
     expect(entry?.changes).toEqual(changes)
     expect(after("0.12.0")?.version).toBe("0.11.12")
-    expect(RELEASES.filter((release) => /^0\.12\.[1-4]$/.test(release.version))).toEqual([])
+    expect(RELEASES.filter((release) => /^0\.12\.[34]$/.test(release.version))).toEqual([])
   })
 
   test("retains the v0.11.12 release with its notes", async () => {
@@ -1823,7 +1869,10 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 60)).toEqual([
+    expect(versions.slice(0, 63)).toEqual([
+      "0.13.0",
+      "0.12.2",
+      "0.12.1",
       "0.12.0",
       "0.11.12",
       "0.11.11",

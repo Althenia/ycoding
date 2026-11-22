@@ -68,6 +68,34 @@ test("Web Push sends a decryptable minimal payload with VAPID and bounded header
   expect(failures).toEqual([["https://fcm.googleapis.com/fcm/send/a", true]])
 })
 
+test("trusted Rust delivery marks every alert payload without marking or coalescing the equivalent Bun alert", async () => {
+  const receiver = await receiverFor("https://fcm.googleapis.com/fcm/send/edition")
+  const keys = await vapidKeys()
+  const requests: Request[] = []
+  const send = (event: Parameters<typeof sendPushToOwner>[0]["event"], relayProtocol?: 5) => {
+    const delivery = { ...keys, relayProtocol }
+    return sendPushToOwner({ ...delivery, store: memoryStore([receiver.subscription]), accountID: "usr_1", event,
+      fetch: async (input, init) => { requests.push(new Request(input, init)); return new Response(null, { status: 201 }) } })
+  }
+  const events = [
+    { category: "approval-requested", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_4" },
+    { category: "machine-offline", deviceID: "dev_1", offlineAt: 1_790_000_000_000 },
+    { category: "agent-completed", deviceID: "dev_1", overflow: 5 },
+    { category: "quota-pace", deviceID: "dev_1", providerID: "prov_a", windowID: "weekly", milestone: "almost-out", resetAt: 1_790_000_000_000 },
+  ] as const
+  for (const event of events) {
+    const eventWithUntrustedMarker = { ...event, relayProtocol: 5 }
+    await send(eventWithUntrustedMarker)
+    await send(event, 5)
+    const [bun, rust] = requests.splice(0)
+    if (!bun || !rust) throw new Error("Expected one delivery for each edition")
+    expect(await receiver.decrypt(bun)).toEqual(event)
+    expect(await receiver.decrypt(rust)).toEqual({ ...event, relayProtocol: 5 })
+    expect(rust.headers.get("topic")).not.toBe(bun.headers.get("topic"))
+    expect(rust.headers.get("topic")?.length).toBeLessThanOrEqual(32)
+  }
+})
+
 test("each subscription receives only the categories its device turned on as System alerts", async () => {
   const windows = await receiverFor("https://fcm.googleapis.com/fcm/send/windows", { ...allOn, "machine-offline": false })
   const iphone = await receiverFor("https://web.push.apple.com/iphone", { "agent-completed": false, "approval-requested": true, "machine-offline": true, "quota-pace": true })

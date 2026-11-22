@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { ownsListener, parseListeners, parseProcess, type ProcessRecord } from "./isolation"
 
 const BACKEND = "/synthetic/backend/ycoding"
+const RUNTIME = "/synthetic/private/cache/ycoding/bin/runtime/0.13.0/digest/ycoding-runtime"
 const HARNESS = 100
 
 const process_ = (pid: number, ppid: number, exe: string | undefined): ProcessRecord => ({ pid, ppid, exe })
@@ -26,29 +27,34 @@ test("parses a process record with its first txt path and refuses missing, dupli
     expect(parseProcess(bad), bad).toBeUndefined()
 })
 
-test("allows only a backend-executable listener that is a direct harness child or whose parent is a backend direct harness child", () => {
-  const listener = (pid: number, ppid: number) => [{ pid, ppid }]
-  expect(ownsListener(listener(10, HARNESS), process_(10, HARNESS, BACKEND), undefined, BACKEND, HARNESS)).toBe(true)
-  expect(ownsListener(listener(11, 10), process_(11, 10, BACKEND), process_(10, HARNESS, BACKEND), BACKEND, HARNESS)).toBe(true)
+test("accepts only the reviewed runtime listener under the packaged CLI and bound launcher when supplied", () => {
+  const port = [{ pid: 11, ppid: 10 }]
+  const frontend = process_(10, HARNESS, BACKEND)
+  expect(ownsListener(port, process_(11, 10, RUNTIME), frontend, RUNTIME, BACKEND, HARNESS)).toBe(true)
+  expect(ownsListener(port, process_(11, 10, RUNTIME), frontend, RUNTIME, BACKEND, HARNESS, 10)).toBe(true)
+  expect(ownsListener(port, process_(11, 10, RUNTIME), frontend, RUNTIME, BACKEND, HARNESS, 9)).toBe(false)
 })
 
 test("denies GUI chains, orphans, two listeners, wrong executables and missing or inconsistent records", () => {
   const one = (pid: number, ppid: number) => [{ pid, ppid }]
-  const gui = process_(50, 1, "/synthetic/Fixture.app/Contents/MacOS/fixture")
-  expect(ownsListener(one(10, 50), process_(10, 50, BACKEND), gui, BACKEND, HARNESS)).toBe(false)
-  expect(ownsListener(one(10, 1), process_(10, 1, BACKEND), process_(1, 0, "/sbin/launchd"), BACKEND, HARNESS)).toBe(false)
-  expect(ownsListener([{ pid: 10, ppid: HARNESS }, { pid: 11, ppid: HARNESS }], process_(10, HARNESS, BACKEND), undefined, BACKEND, HARNESS)).toBe(false)
-  expect(ownsListener(one(10, HARNESS), process_(10, HARNESS, "/synthetic/other"), undefined, BACKEND, HARNESS)).toBe(false)
-  expect(ownsListener(one(10, HARNESS), process_(10, HARNESS, undefined), undefined, BACKEND, HARNESS)).toBe(false)
-  expect(ownsListener(one(11, 10), process_(11, 10, "/synthetic/other"), undefined, BACKEND, HARNESS)).toBe(false)
-  expect(ownsListener(one(11, 10), process_(11, 10, BACKEND), process_(10, HARNESS, "/synthetic/other"), BACKEND, HARNESS)).toBe(false)
-  expect(ownsListener(one(11, 10), process_(11, 10, BACKEND), process_(10, 77, BACKEND), BACKEND, HARNESS)).toBe(false)
-  expect(ownsListener(one(11, 10), process_(11, 10, BACKEND), process_(12, HARNESS, BACKEND), BACKEND, HARNESS)).toBe(false)
-  expect(ownsListener(one(10, HARNESS), process_(99, HARNESS, BACKEND), undefined, BACKEND, HARNESS)).toBe(false)
-  expect(ownsListener(one(11, 10), process_(11, 10, "/synthetic/other"), process_(10, HARNESS, BACKEND), BACKEND, HARNESS)).toBe(false)
-  expect(ownsListener(one(11, 10), process_(11, 10, undefined), process_(10, HARNESS, BACKEND), BACKEND, HARNESS)).toBe(false)
-  expect(ownsListener(one(11, 10), process_(11, 10, BACKEND), process_(10, HARNESS, undefined), BACKEND, HARNESS)).toBe(false)
-  expect(ownsListener(one(10, HARNESS), undefined, undefined, BACKEND, HARNESS)).toBe(false)
-  expect(ownsListener(undefined, process_(10, HARNESS, BACKEND), undefined, BACKEND, HARNESS)).toBe(false)
-  expect(ownsListener([], undefined, undefined, BACKEND, HARNESS)).toBe(false)
+  const deny = (listeners: Parameters<typeof ownsListener>[0], native: ProcessRecord | undefined, parent: ProcessRecord | undefined) =>
+    expect(ownsListener(listeners, native, parent, RUNTIME, BACKEND, HARNESS)).toBe(false)
+  const native = process_(11, 10, RUNTIME)
+  const frontend = process_(10, HARNESS, BACKEND)
+  deny(one(11, 50), process_(11, 50, RUNTIME), process_(50, HARNESS, "/synthetic/Fixture.app/Contents/MacOS/fixture"))
+  deny(one(11, 1), process_(11, 1, RUNTIME), process_(1, 0, "/sbin/launchd"))
+  deny(one(11, HARNESS), process_(11, HARNESS, RUNTIME), undefined)
+  deny([...one(11, 10), ...one(12, 10)], native, frontend)
+  deny(one(11, 10), process_(11, 10, BACKEND), frontend)
+  deny(one(11, 10), process_(11, 10, `${RUNTIME}-other`), frontend)
+  deny(one(11, 10), process_(11, 10, undefined), frontend)
+  deny(one(11, 10), native, process_(10, HARNESS, undefined))
+  deny(one(11, 10), native, process_(10, 77, BACKEND))
+  deny(one(11, 10), native, process_(12, HARNESS, BACKEND))
+  deny(one(11, 77), native, frontend)
+  deny(one(99, 10), native, frontend)
+  deny(one(11, 10), undefined, frontend)
+  deny(one(11, 10), native, undefined)
+  deny(undefined, native, frontend)
+  deny([], undefined, undefined)
 })

@@ -7,6 +7,11 @@
  * an account and an enrolled device.
  */
 
+import { RUST_REMOTE_SHELL } from "../pwa/offline"
+import { REMOTE_ROOT } from "../routes"
+
+const releasesURL = "https://github.com/Althenia/ycoding/releases"
+
 export const SITE = {
   productName: "YCoding",
   descriptor: "terminal coding agent",
@@ -15,12 +20,12 @@ export const SITE = {
   description:
     "YCoding runs a coding agent on your own machine with durable sessions, explicit autonomy, and repository-native customization.",
   repositoryURL: "https://github.com/Althenia/ycoding",
-  releasesURL: "https://github.com/Althenia/ycoding/releases/latest",
+  releasesURL,
   licenseURL: "https://github.com/Althenia/ycoding/blob/main/LICENSE",
   securityURL: "https://github.com/Althenia/ycoding/blob/main/SECURITY.md",
   docsURL: "/docs",
   changelogURL: "/changelog",
-  remoteURL: "/remote",
+  remoteURL: REMOTE_ROOT,
   metadata: {
     changelogDescription:
       "Every YCoding release with its user-visible changes, filterable by year and change type.",
@@ -36,7 +41,10 @@ export const SITE = {
     headline: "Your coding agent. Your machine.",
     support: "Work in the terminal. Continue from your browser.",
     primaryAction: { label: "Get started", href: "/docs/getting-started" },
-    secondaryAction: { label: "Open workspace", href: "/remote" },
+    workspaceActions: [
+      { label: "Bun workspace", href: REMOTE_ROOT },
+      { label: "Rust workspace", href: RUST_REMOTE_SHELL },
+    ],
   },
   features: [
     {
@@ -66,7 +74,7 @@ export const SITE = {
       links: [
         { label: "Documentation", href: "/docs" },
         { label: "Changelog", href: "/changelog" },
-        { label: "Remote workspace", href: "/remote" },
+        { label: "Remote workspace", href: REMOTE_ROOT },
         { label: "Install", href: "/docs/installation" },
       ],
     },
@@ -83,7 +91,7 @@ export const SITE = {
       title: "Project",
       links: [
         { label: "GitHub", href: "https://github.com/Althenia/ycoding" },
-        { label: "Releases", href: "https://github.com/Althenia/ycoding/releases/latest" },
+        { label: "Releases", href: releasesURL },
         { label: "License", href: "https://github.com/Althenia/ycoding/blob/main/LICENSE" },
         { label: "Security", href: "https://github.com/Althenia/ycoding/blob/main/SECURITY.md" },
       ],

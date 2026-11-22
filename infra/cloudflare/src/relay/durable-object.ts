@@ -52,9 +52,9 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
   constructor(ctx: DurableObjectState, env: WorkerEnv) {
     super(ctx, env)
     const service = createAuthService(createD1AuthStore(env.DB))
-    const delivery = relayDelivery(ctx, env)
     const name = ctx.id.name
     const binary = name === undefined ? ctx.getWebSockets(binaryRelaySocketTag).length > 0 : name.startsWith("v5:")
+    const delivery = relayDelivery(ctx, env, binary ? 5 : undefined)
     this.#adapter = binary
       ? new BinaryRelayAdapter(ctx, env.DEVICE_RELAY, service, delivery)
       : new JsonRelayAdapter(ctx, env, service, delivery)
@@ -83,7 +83,7 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
 
 type RelayDelivery = Pick<RelayDeps, "notices" | "loadOfflineCheck" | "saveOfflineCheck" | "notifyPush" | "quota">
 
-function relayDelivery(ctx: DurableObjectState, env: WorkerEnv): RelayDelivery {
+function relayDelivery(ctx: DurableObjectState, env: WorkerEnv, relayProtocol?: 5): RelayDelivery {
   return {
     notices: createNoticeStore({
       sql: ctx.storage.sql,
@@ -103,7 +103,7 @@ function relayDelivery(ctx: DurableObjectState, env: WorkerEnv): RelayDelivery {
         console.info(JSON.stringify({ component: "web-push", category: event.category, host: "none", targetCount: 0, errorClass: "configuration_missing" }))
         return Promise.resolve([])
       }
-      return sendPushToOwner({ store: createD1PushStore(env.DB), accountID, event,
+      return sendPushToOwner({ store: createD1PushStore(env.DB), accountID, event, relayProtocol,
         publicKey, privateKey, subject, now: Date.now, fetch: (input, init) => globalThis.fetch(input, init) }).catch((cause: unknown) => {
         console.error(JSON.stringify({ component: "web-push", category: event.category, host: "unknown", targetCount: null, errorClass: "dispatch_error" }))
         throw cause
@@ -120,7 +120,7 @@ function relayDelivery(ctx: DurableObjectState, env: WorkerEnv): RelayDelivery {
       push: async (_ownerID, event, subscriptions) => {
         const keys = vapidKeys(env)
         if (keys === undefined) return []
-        return sendPush({ store: createD1PushStore(env.DB), event, subscriptions, ...keys, now: Date.now, fetch: (input, init) => globalThis.fetch(input, init) })
+        return sendPush({ store: createD1PushStore(env.DB), event, subscriptions, relayProtocol, ...keys, now: Date.now, fetch: (input, init) => globalThis.fetch(input, init) })
       },
     },
   }

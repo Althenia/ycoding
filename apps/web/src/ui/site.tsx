@@ -2,6 +2,8 @@ import { For, Show, createEffect, createSignal, onCleanup, type JSX } from "soli
 import { useLocation, useNavigate } from "@tanstack/solid-router"
 import { Link } from "./link"
 import { SITE } from "../content/site"
+import type { RemoteShellPath } from "../pwa/offline"
+import { REMOTE_ROOT } from "../routes"
 import { useTheme } from "../theme/theme-store"
 import { themePreferenceLabel } from "../theme/theme"
 import { shouldShowOfflineNotice, useOnlineStatus } from "./online"
@@ -115,10 +117,10 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
               <ThemeToggle />
             </span>
             <span class="app-header__cta">
-              <Link to="/remote" class="button button--primary">
+              <a href={REMOTE_ROOT} class="button button--primary">
                 Open workspace
                 <Icon name="chevron-right" size={16} />
-              </Link>
+              </a>
             </span>
             <button
               ref={menuTrigger}
@@ -160,18 +162,18 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
               </Link>
             </nav>
             <nav class="primary-nav__aux" aria-label="Additional navigation">
-              <Link to="/remote" class="docs-nav__link" onClick={() => setOpen(false)}>
+              <a href={REMOTE_ROOT} class="docs-nav__link">
                 Remote workspace
-              </Link>
+              </a>
               <a class="docs-nav__link" href={SITE.repositoryURL} rel="noreferrer noopener" target="_blank">
                 GitHub
               </a>
             </nav>
             <div class="primary-nav__actions">
-              <Link to="/remote" class="button button--primary" onClick={() => setOpen(false)}>
+              <a href={REMOTE_ROOT} class="button button--primary">
                 Open workspace
                 <Icon name="chevron-right" size={16} />
-              </Link>
+              </a>
               <DocsSearch onNavigate={() => setOpen(false)} />
             </div>
           </div>
@@ -202,6 +204,8 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
                           <a href={link.href} rel="noreferrer noopener" target="_blank">
                             {link.label}
                           </a>
+                        ) : link.href === REMOTE_ROOT ? (
+                          <a href={link.href}>{link.label}</a>
                         ) : (
                           <Link to={link.href}>{link.label}</Link>
                         )
@@ -236,13 +240,9 @@ export function LandingPage(): JSX.Element {
               >
                 {SITE.hero.primaryAction.label}
               </button>
-              <button
-                type="button"
-                class="button button--secondary button--large"
-                onClick={() => navigate({ to: SITE.hero.secondaryAction.href })}
-              >
-                {SITE.hero.secondaryAction.label}
-              </button>
+              <For each={SITE.hero.workspaceActions}>
+                {(action) => <a href={action.href} class="button button--secondary button--large">{action.label}</a>}
+              </For>
             </div>
           </div>
           <div class="hero__install">
@@ -272,7 +272,7 @@ export function LandingPage(): JSX.Element {
   )
 }
 
-export function NotFoundPage(): JSX.Element {
+export function NotFoundPage(props: { readonly workspaceRoot?: RemoteShellPath }): JSX.Element {
   return (
     <div class="not-found">
       <div class="not-found__card">
@@ -289,10 +289,10 @@ export function NotFoundPage(): JSX.Element {
             Go home
           </Link>
         </div>
-        <Link to="/remote" class="text-link not-found__workspace">
+        <a href={props.workspaceRoot ?? REMOTE_ROOT} class="text-link not-found__workspace">
           <Icon name="terminal" size={16} />
           Open workspace
-        </Link>
+        </a>
       </div>
     </div>
   )

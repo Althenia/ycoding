@@ -29,7 +29,7 @@ export default Runtime.handler(DesktopHostCommand, (input) => Effect.scoped(Effe
     const connection = yield* ServerConnection.resolve({
       server,
       standalone: input.mode === "own",
-      privateServer: { command: [input.backend, "serve"], detached: false },
+      privateServer: { detached: false },
       managedCommand: [input.backend, "serve", "--service"],
       mismatch: "ignore",
       allowLoopbackFallback: true,

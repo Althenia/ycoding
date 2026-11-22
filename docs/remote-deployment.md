@@ -67,7 +67,7 @@ Commands below run from the repository root and target the committed configurati
 
 The relay accepts JSON at `/ws/v4/client` and `/ws/v4/agent` and binary protobuf at `/ws/v5/client` and `/ws/v5/agent`. A client and agent must use the same version; the Worker never translates between them. Missing and unsupported WebSocket versions return `404`. Both versions use the same account, browser session and device credentials. No migration is needed to enable v5.
 
-Deploy the Worker and Web assets from the same release. The current Web build connects to the native Rust connector over v5. Bun v0.12.0 still connects over v4 with a v4 browser client; a v5-only tab cannot control a device running the rolled-back Bun connector. Wait for active Sessions to finish before restarting the local service on either runtime. The relay deployment does not change local stores or require reenrollment.
+Deploy the Worker and both Web editions from the same release. Open `/remote` for a Bun device using v4 and `/remote/rust` for a Rust device using v5. If you roll a device back to Bun, reopen that device in the Bun edition. Wait for active Sessions to finish before restarting the local service on either runtime. The relay deployment does not change local stores or require reenrollment.
 
 ### Notification protocol cutover
 
@@ -108,7 +108,7 @@ Real-time logs of `ycoding-preview` contain bootstrap URLs with their one-use ti
 
 D1 stores authentication and device metadata and Web Push subscriptions. Historical MCP authorization tables remain stored but provide no active ingress or authorization route. D1 never stores transcripts, message projections, streaming deltas, tool output, Session contents, or file contents; Session data stays on the user's machine and crosses the relay as live WebSocket frames.
 
-Authenticated `GET /api/devices` and `GET /api/me` return each retained device with `online: boolean`. The Worker reports v4 presence by default and v5 presence for `?relay=5`, which the current Web build sends. The chosen relay must have an authenticated agent for that owner and device; a revoked device and any failed presence read report `false`. `status`, `lastSeenAt`, and enrollment alone never mark a device online. Offline devices remain in these lists, and revoked devices remain until the owner removes them from Settings. The device picker connects only to active devices that are online for its relay version.
+Authenticated `GET /api/devices` and `GET /api/me` return each retained device with `online: boolean`. The Worker reports v4 presence by default and v5 presence for `?relay=5`, which the Rust Web edition sends. The chosen relay must have an authenticated agent for that owner and device; a revoked device and any failed presence read report `false`. `status`, `lastSeenAt`, and enrollment alone never mark a device online. Offline devices remain in these lists, and revoked devices remain until the owner removes them from Settings. The device picker connects only to active devices that are online for its relay version.
 
 | Table                            | Contents                                                                                                       |
 | -------------------------------- | -------------------------------------------------------------------------------------------------------------- |
@@ -254,8 +254,9 @@ For local compatibility acceptance, set `YCODING_RELAY_ACCEPTANCE_SCRATCH` to an
 | Phase | What it checks | Additional input |
 | --- | --- | --- |
 | `boundary` | The Worker rejects unauthorized clients and mismatched frame types on the v4 and v5 routes. | None |
+| `editions` | Workerd serves the Bun and Rust shells and their assets at the correct URLs, preserves both OAuth return paths, and refuses to serve the Rust shell if the Bun shell is missing. | `YCODING_RELAY_ACCEPTANCE_ASSETS` points to the composed Web build, including `/_bun/index.html` inside that directory. |
 | `native` | The Web transport reads Sessions, live events, and HTTP message and attachment bytes through the local Worker and Rust runtime. | `YCODING_RELAY_RUST_CLI` for an extracted release candidate, or `YCODING_RUNTIME_EXECUTABLE` for a locally built runtime. |
 | `usage` | The Web transport reads native Usage summaries, reports, dashboards, and provider Usage without starting a provider. | The same Rust executable as `native`, plus `YCODING_RELAY_USAGE_SEED` for the built `usage_performance_seed` example. |
-| `rollback` | The signed Bun build can enroll and read a Session over v4; an authenticated v5 client cannot read that v4 Session. | `YCODING_RELAY_BUN_CLI` for the extracted signed Bun executable. |
+| `rollback` | A signed Bun 0.12.0 or 0.12.1 build can enroll and read a Session over v4; an authenticated v5 client cannot read that v4 Session. | `YCODING_RELAY_BUN_CLI` for the extracted signed Bun executable. |
 
 The `native` phase uses a loopback provider to create turns. The `usage` phase writes fixture records to a fresh native store and checks the runtime's published totals over the relay. The smoke command checks the supplied origin's unauthenticated boundaries. These checks do not prove authenticated production traffic, a production migration, or a restore.

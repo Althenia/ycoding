@@ -115,17 +115,28 @@ jobs:
         run: |
           bun test --cwd apps/web ./src/content/changelog.test.ts ./src/content/docs/registry.test.ts ./src/remote/autonomy-source.test.ts ./src/remote/autonomy.test.ts ./src/remote/coordination.test.ts ./src/remote/prediction.test.ts ./src/remote/project-escalation.test.ts ./src/remote/projection.test.ts ./src/remote/prompt-generate.test.ts ./src/remote/queries.test.ts ./src/remote/ui/autonomous-panel.test.tsx ./src/remote/ui/command-palette-model.test.ts ./src/remote/ui/composer-action.test.ts ./src/remote/ui/composer-layout.test.ts ./src/remote/ui/composer-logic.test.ts ./src/remote/ui/provider-logo.test.ts ./src/remote/ui/remote-redesign.test.ts ./src/remote/ui/settings-layout.test.ts ./src/remote/ui/status-bar.test.ts ./src/remote/ui/todo-panel.test.ts ./src/remote/ui/transcript-rows.test.ts ./src/remote/ui/usage-accounting.test.ts ./src/remote/ui/usage-filters.test.ts ./src/remote/ui/usage-layout.test.ts ./src/remote/view-model.test.ts ./src/styles/design-md.test.ts ./src/styles/composition.test.ts ./src/remote/form-contract.test.ts ./src/remote/question-history.test.ts
           bun test --cwd packages/remote ./test/contract.test.ts ./test/coordination.test.ts ./test/completions.test.ts ./test/provider-auth.test.ts
-          bun test --cwd apps/web ./src/content/boundary.test.ts
+          bun test --cwd apps/web ./src/content/boundary.test.ts ./src/content/site.test.ts
 
       - name: Build web application
         if: matrix.suite == 'web'
         run: bun run build:web
 
+      - name: Add Bun Web to the production build
+        if: matrix.suite == 'web'
+        env:
+          BUN_WEB_SOURCE: 14936fbcd50a5afacaf168f2db23e12732312802
+        run: |
+          set -euo pipefail
+          source_dir="$(mktemp -d "$RUNNER_TEMP/bun-web.XXXXXX")"
+          git archive "$BUN_WEB_SOURCE" | tar -xf - -C "$source_dir"
+          (cd "$source_dir" && bun install --frozen-lockfile && bun run --cwd apps/web build)
+          bun script/build-web-assets.ts --bun-dist "$source_dir/apps/web/dist"
+
       - name: Verify injected web transport boundaries
         if: matrix.suite == 'web'
         run: |
           bun test --cwd apps/web ./test/remote-store-container.test.ts
-          bun test --cwd apps/web ./src/remote/endpoint.test.ts ./src/pwa/offline.test.ts ./src/service-worker.push.test.ts
+          bun test --cwd apps/web ./src/remote/endpoint.test.ts ./src/pwa/offline.test.ts ./src/service-worker.push.test.ts ./src/remote/notifications.test.ts ./src/remote/alert.test.ts ./src/remote/invite.test.ts
           bun test --cwd apps/web ./test/remote-http.test.ts ./test/remote-http-bulk.test.ts
           bun test --cwd apps/web ./test/remote-sync.test.ts -t 'oversized live invalidations'
           bun test --cwd packages/protocol ./test/http-bulk.test.ts
@@ -137,7 +148,8 @@ jobs:
         if: matrix.suite == 'web'
         run: |
           bun test --cwd infra/cloudflare ./test/mcp-boundary.test.ts ./test/relay-core.test.ts ./test/auth-service.test.ts ./test/push-coordination-filter.test.ts ./test/device-alias.test.ts
-          bun test --cwd infra/cloudflare ./test/router.test.ts -t 'websocket upgrades|message stream forwards|v5 message and attachment bulk selectors|relay presence|closes every device|after rotation|revokes an owned device'
+          bun test --cwd infra/cloudflare ./test/router.test.ts -t 'websocket upgrades|message stream forwards|v5 message and attachment bulk selectors|relay presence|closes every device|after rotation|revokes an owned device|static asset delegation'
+          bun test --cwd infra/cloudflare ./test/config.test.ts ./test/push-send.test.ts ./test/push-router.test.ts
           bun test --cwd infra/cloudflare ./test/relay-authority.test.ts ./test/relay-handoff.test.ts ./test/relay-http.test.ts ./test/relay-mcp.test.ts ./test/relay-resync.test.ts
           bun run typecheck:cloudflare
           bun run build:cloudflare
@@ -431,7 +443,8 @@ jobs:
           payload=$(mktemp -d "$RUNNER_TEMP/ycoding-payload.XXXXXX")
           trap 'rm -rf "$payload"' EXIT
           tar -xzf "dist/release-archive/${{ matrix.target }}/"*.tar.gz -C "$payload"
-          codesign --verify --strict -R "=identifier \"app.ycoding.cli\" and certificate leaf = H\"$YCODING_MACOS_SIGNING_SHA1\"" "$payload/ycoding"
+          executable="$(bun script/release-archive.ts executable "${{ matrix.target }}" "$RELEASE_VERSION")"
+          codesign --verify --strict -R "=identifier \"app.ycoding.cli\" and certificate leaf = H\"$YCODING_MACOS_SIGNING_SHA1\"" "$payload/$executable"
           codesign --verify --deep --strict -R "=identifier \"app.ycoding.interaction\" and certificate leaf = H\"$YCODING_MACOS_SIGNING_SHA1\"" "$payload/YCoding Interaction.app"
 
       - name: Verify packaged Windows runtime
@@ -695,10 +708,19 @@ jobs:
             echo ""
             echo "**Full Changelog**: https://github.com/Althenia/ycoding/compare/$range"
           } > release-notes.md
+          latest="$(bun script/release-publish.ts latest "$RELEASE_TAG")"
+          if [[ "$latest" == "false" && "$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)" != "v0.12.2" ]]; then
+            echo "Publish v0.12.2 as GitHub Latest before publishing Rust" >&2
+            exit 1
+          fi
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             bun script/release-publish.ts --repository "$GH_REPO" --tag "$RELEASE_TAG" --title "YCoding $version" --notes-file release-notes.md --run "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --manifest release-publish-manifest.json release/* "docs/releases/v$version.md"
           else
-            gh release create "v$version" release/* "docs/releases/v$version.md" --verify-tag --title "YCoding $version" --notes-file release-notes.md
+            gh release create "v$version" release/* "docs/releases/v$version.md" --verify-tag --latest="$latest" --title "YCoding $version" --notes-file release-notes.md
+            if [[ "$latest" == "false" && "$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)" != "v0.12.2" ]]; then
+              echo "GitHub Latest changed during Rust publication" >&2
+              exit 1
+            fi
           fi
 
       - name: Upload release publication manifest
@@ -740,6 +762,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN Actions secret" >&2; exit 1; }
+          test -f apps/web/dist/_bun/index.html
           bun run deploy:cloudflare
 
       - name: Deploy app preview Worker

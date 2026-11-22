@@ -100,6 +100,25 @@ function execute(root: string, args: string[]) {
   return Bun.spawnSync([process.execPath, script, ...args], { cwd: root, stdout: "pipe", stderr: "pipe" })
 }
 
+test("archive executable command prints the canonical member for its target and version", () => {
+  for (const [target, release, expected] of [
+    ["darwin-arm64", "0.12.1", "ycoding"],
+    ["darwin-x64", "0.13.0", "ycoding-native"],
+    ["linux-x64", "0.13.0-rc.1", "ycoding-native"],
+    ["windows-x64", "0.13.0", "ycoding.exe"],
+  ] as const) {
+    const result = execute(import.meta.dir, ["executable", target, release])
+    expect(result.exitCode, result.stderr.toString()).toBe(0)
+    expect(result.stdout.toString()).toBe(`${expected}\n`)
+  }
+  for (const [target, release, error] of [["darwin", "0.13.0", "target"], ["darwin-arm64", "v0.13.0", "version"]] as const) {
+    const result = execute(import.meta.dir, ["executable", target, release])
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr.toString()).toContain(`Invalid release ${error}`)
+    expect(result.stdout.toString()).toBe("")
+  }
+})
+
 async function fixture(root: string, target: string, release = "0.11.12") {
   const current = release === version
   const application = current ? "YCoding Interaction.app" : app
@@ -134,21 +153,75 @@ async function desktopFixture(root: string) {
   return source
 }
 
-async function archives(root: string) {
+async function archives(root: string, release = version) {
   const input = path.join(root, "downloaded")
   await fs.mkdir(input)
   for (const target of targets) {
     const source = await fixture(root, target, version)
-    const filename = path.join(input, `ycoding-${version}-${target}.tar.gz`)
+    const filename = path.join(input, `ycoding-${release}-${target}.tar.gz`)
     const result = Bun.spawnSync(["tar", "-czf", filename, "ycoding", "ycoding-chrome-extension", ...(target.startsWith("darwin") ? ["YCoding Interaction.app"] : [])], { cwd: source, env: { ...process.env, COPYFILE_DISABLE: "1" } })
     expect(result.exitCode).toBe(0)
   }
   const windows = await windowsFixture(root)
-  expect(Bun.spawnSync(["zip", "-qr", path.join(input, windowsArchive), "ycoding.exe", "ycoding-chrome-extension"], { cwd: windows }).exitCode).toBe(0)
+  expect(Bun.spawnSync(["zip", "-qr", path.join(input, `ycoding-${release}-windows-x64.zip`), "ycoding.exe", "ycoding-chrome-extension"], { cwd: windows }).exitCode).toBe(0)
   await desktopFixture(root)
-  expect(Bun.spawnSync(["zip", "-qr", path.join(input, desktopArchive), desktop], { cwd: path.join(root, "desktop") }).exitCode).toBe(0)
+  expect(Bun.spawnSync(["zip", "-qr", path.join(input, `YCoding-Desktop-v${release}-darwin-arm64.zip`), desktop], { cwd: path.join(root, "desktop") }).exitCode).toBe(0)
   return input
 }
+
+test("0.13 Unix archive create renames only the archived executable, preserving Windows layout and public filenames", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-native-release-layout-"))
+  try {
+    const release = "0.13.0-rc.1"
+    for (const target of targets) {
+      const source = await fixture(root, target, version)
+      const result = execute(root, ["create", target, release, source, "prepared"])
+      expect(result.exitCode, result.stderr.toString()).toBe(0)
+      const archive = path.join(root, "prepared", `ycoding-${release}-${target}.tar.gz`)
+      const listing = Bun.spawnSync(["tar", "-tzf", archive])
+      expect(listing.exitCode).toBe(0)
+      const entries = listing.stdout.toString().trim().split("\n")
+      expect(entries).toContain("ycoding-native")
+      expect(entries).not.toContain("ycoding")
+      expect(await Bun.file(path.join(source, "ycoding")).text()).toBe("synthetic executable\n")
+      expect(await Bun.file(path.join(source, "ycoding-native")).exists()).toBe(false)
+      const extract = path.join(root, `${target}-extract`)
+      await fs.mkdir(extract)
+      expect(Bun.spawnSync(["tar", "-xzf", archive, "-C", extract]).exitCode).toBe(0)
+      expect(await Bun.file(path.join(extract, "ycoding-native")).text()).toBe("synthetic executable\n")
+      expect((await fs.stat(path.join(extract, "ycoding-native"))).mode & 0o111).not.toBe(0)
+    }
+    const windows = await windowsFixture(root)
+    const result = execute(root, ["create", "windows-x64", release, windows, "prepared"])
+    expect(result.exitCode, result.stderr.toString()).toBe(0)
+    const listing = Bun.spawnSync(["unzip", "-Z1", path.join(root, "prepared", `ycoding-${release}-windows-x64.zip`)])
+    expect(listing.exitCode).toBe(0)
+    expect(listing.stdout.toString().trim().split("\n")).toContain("ycoding.exe")
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+test("0.13 Unix archive finalize rejects the legacy executable but finalizes native archives", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-native-finalize-layout-"))
+  try {
+    const release = "0.13.0"
+    const input = await archives(root, release)
+    const wrong = execute(root, ["finalize", release, input, "rejected"])
+    expect(wrong.exitCode).not.toBe(0)
+    expect(wrong.stderr.toString()).toContain("Invalid release archive entries")
+    for (const target of targets) {
+      await fs.rm(path.join(input, `ycoding-${release}-${target}.tar.gz`))
+      const result = execute(root, ["create", target, release, path.join(root, target), input])
+      expect(result.exitCode, result.stderr.toString()).toBe(0)
+    }
+    const result = execute(root, ["finalize", release, input, "release"])
+    expect(result.exitCode, result.stderr.toString()).toBe(0)
+    expect(await Bun.file(path.join(root, "release", `ycoding-${release}-checksums.txt`)).text()).toContain(`  ycoding-${release}-linux-x64.tar.gz\n`)
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
 
 for (const target of targets)
   test(`native archive create preserves the complete ${target} payload and executable modes`, async () => {

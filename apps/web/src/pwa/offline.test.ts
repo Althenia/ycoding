@@ -12,8 +12,8 @@ import {
 const origin = "https://ycoding.althenia.app"
 
 describe("precache list", () => {
-  test("refreshes cached manifest and app icons for installation", () => {
-    expect(CACHE_NAME).toBe("ycoding-web-shell-v3")
+  test("replaces the old shared navigation cache on update", () => {
+    expect(CACHE_NAME).toBe("ycoding-web-shell-v4")
   })
   test("contains only same-origin static shell paths", () => {
     expect(PRECACHE_URLS.length).toBeGreaterThan(0)
@@ -103,21 +103,66 @@ describe("shouldCacheStaticAsset", () => {
 
 describe("shouldHandleNavigation", () => {
   test("handles same-origin document navigations for public routes", () => {
-    expect(shouldHandleNavigation({ url: `${origin}/docs/usage`, method: "GET", mode: "navigate" })).toBe(true)
-    expect(shouldHandleNavigation({ url: `${origin}/remote/settings`, method: "GET", mode: "navigate" })).toBe(true)
+    expect(shouldHandleNavigation({ url: `${origin}/docs/usage`, method: "GET", mode: "navigate" }, origin)).toBe(true)
+    expect(shouldHandleNavigation({ url: `${origin}/remote/settings`, method: "GET", mode: "navigate" }, origin)).toBe(true)
   })
 
   test("leaves API, auth, and socket requests to the network", () => {
-    expect(shouldHandleNavigation({ url: `${origin}/api/me`, method: "GET", mode: "navigate" })).toBe(false)
-    expect(shouldHandleNavigation({ url: `${origin}/auth/google`, method: "GET", mode: "navigate" })).toBe(false)
+    expect(shouldHandleNavigation({ url: `${origin}/api/me`, method: "GET", mode: "navigate" }, origin)).toBe(false)
+    expect(shouldHandleNavigation({ url: `${origin}/auth/google`, method: "GET", mode: "navigate" }, origin)).toBe(false)
     for (const path of ["/ws/v4/client", "/ws/v5/client", "/ws/v4/agent", "/ws/v5/agent"])
-      expect(shouldHandleNavigation({ url: `${origin}${path}`, method: "GET", mode: "navigate" })).toBe(false)
-    expect(shouldHandleNavigation({ url: `${origin}/docs/usage`, method: "POST", mode: "navigate" })).toBe(false)
+      expect(shouldHandleNavigation({ url: `${origin}${path}`, method: "GET", mode: "navigate" }, origin)).toBe(false)
+    expect(shouldHandleNavigation({ url: `${origin}/docs/usage`, method: "POST", mode: "navigate" }, origin)).toBe(false)
   })
 
   test("leaves navigations to published text files to the network so they never replace the cached shell", () => {
     for (const path of ["/llms.txt", "/llms-full.txt", "/docs/quickstart.md", "/docs/index.md", "/sitemap.xml"]) {
-      expect({ path, handled: shouldHandleNavigation({ url: `${origin}${path}`, method: "GET", mode: "navigate" }) }).toEqual({ path, handled: false })
+      expect({ path, handled: shouldHandleNavigation({ url: `${origin}${path}`, method: "GET", mode: "navigate" }, origin) }).toEqual({ path, handled: false })
     }
   })
+})
+
+test("service worker caches each remote shell separately and never substitutes a different shell offline", async () => {
+  const listeners = new Map<string, (event: unknown) => void>()
+  const previous = Object.fromEntries(["addEventListener", "location", "caches", "fetch"].map((key) => [key, Reflect.get(globalThis, key)]))
+  const html = (body: string) => new Response(body, { headers: { "content-type": "text/html; charset=utf-8" } })
+  const cached = new Map([["/", html("Public shell")], [OFFLINE_FALLBACK_URL, html("Offline screen")]])
+  let network: (() => Response) | undefined
+  Reflect.set(globalThis, "addEventListener", (name: string, listener: (event: unknown) => void) => listeners.set(name, listener))
+  Reflect.set(globalThis, "location", { origin })
+  Reflect.set(globalThis, "caches", { open: async () => ({
+    match: async (key: string) => cached.get(key)?.clone(),
+    put: async (key: string, response: Response) => { cached.set(key, response) },
+  }) })
+  Reflect.set(globalThis, "fetch", async () => {
+    if (!network) throw new TypeError("Offline")
+    return network()
+  })
+  try {
+    const workerModule = "../service-worker.ts?offline-navigation"
+    await import(workerModule)
+    const navigate = async (path: string) => {
+      const request = { url: new URL(path, origin).href, method: "GET", mode: "navigate", destination: "document" }
+      let response: Promise<Response> | undefined
+      listeners.get("fetch")?.({ request, respondWith: (pending: Promise<Response>) => { response = pending } })
+      return response === undefined ? undefined : (await response).text()
+    }
+
+    expect(await navigate("/remote/rust/settings")).toBe("Offline screen")
+    network = () => html("Bun shell")
+    expect(await navigate("/remote/usage?device_id=dev_bun")).toBe("Bun shell")
+    network = undefined
+    expect(await navigate("/remote/rust/settings")).toBe("Offline screen")
+    network = () => html("Rust shell")
+    expect(await navigate("/remote/rust/session?session_id=ses_rust")).toBe("Rust shell")
+    network = () => Object.defineProperty(html("Redirected outside Rust"), "redirected", { value: true })
+    expect(await navigate("/remote/rust/settings")).toBe("Redirected outside Rust")
+    network = undefined
+    expect(await navigate("/remote/rust/usage")).toBe("Rust shell")
+    expect(await navigate("/remote/rusted")).toBe("Bun shell")
+    expect(await navigate("/")).toBe("Public shell")
+    expect(await navigate("https://example.test/remote/rust")).toBeUndefined()
+  } finally {
+    for (const [key, value] of Object.entries(previous)) Reflect.set(globalThis, key, value)
+  }
 })

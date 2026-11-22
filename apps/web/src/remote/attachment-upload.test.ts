@@ -8,27 +8,27 @@ test("rejects a prompt whose text and uploaded references exceed the complete re
 })
 
 test("uploads a large image in ordered bounded chunks before replacing its prompt file URI", async () => {
-  const data = Buffer.alloc(120_000, 42).toString("base64")
-  const requests: { index: number; last: boolean; data: string; uploadID: string }[] = []
+  const data = Buffer.alloc(120_001, 255)
+  const requests: { index: number; offset: number; last: boolean; data: Uint8Array; uploadID: string }[] = []
   let inFlight = 0
   let maximum = 0
   const progress: number[] = []
-  const files = await uploadAttachments({ sessionID: "ses_1", files: [{ uri: `data:image/png;base64,${data}`, name: "capture.png" }], request: async (operation, request) => {
+  const files = await uploadAttachments({ sessionID: "ses_1", files: [{ uri: `data:image/png;base64,${data.toString("base64")}`, name: "capture.png" }], request: async (operation, request) => {
     expect(operation).toBe("session.attachment.upload")
     expect(request?.sessionID).toBe("ses_1")
     const fields = request?.input
-    if (typeof fields?.index !== "number" || typeof fields.last !== "boolean" || typeof fields.data !== "string" || typeof fields.uploadID !== "string") throw new Error("Invalid upload request")
-    const input = { index: fields.index, last: fields.last, data: fields.data, uploadID: fields.uploadID }
+    if (typeof fields?.index !== "number" || typeof fields.offset !== "number" || typeof fields.last !== "boolean" || !(fields.data instanceof Uint8Array) || typeof fields.uploadID !== "string") throw new Error("Invalid upload request")
+    const input = { index: fields.index, offset: fields.offset, last: fields.last, data: fields.data, uploadID: fields.uploadID }
     requests.push(input)
     maximum = Math.max(maximum, ++inFlight)
     await Bun.sleep(1)
     inFlight--
-    return { status: "ok" as const, value: input.last ? { uri: `ycoding-upload://${input.uploadID}` } : { received: input.data.length } }
+    return { status: "ok" as const, value: input.last ? { uri: `ycoding-upload://${input.uploadID}` } : { received: input.offset + input.data.byteLength } }
   }, onProgress: (_, percent) => progress.push(percent) })
   expect(maximum).toBe(1)
   expect(requests.length).toBeGreaterThan(1)
-  expect(requests.every((chunk, index) => chunk.index === index && chunk.data.length <= RemoteLimits.maxAttachmentChunkChars && chunk.last === (index === requests.length - 1))).toBe(true)
-  expect(requests.map((chunk) => chunk.data).join("")).toBe(data)
+  expect(requests.every((chunk, index) => chunk.index === index && chunk.offset === index * 21_000 && chunk.data.byteLength <= 21_000 && chunk.last === (index === requests.length - 1))).toBe(true)
+  expect(Buffer.concat(requests.map((chunk) => chunk.data))).toEqual(data)
   expect(files).toEqual([{ uri: `ycoding-upload://${requests[0]!.uploadID}`, name: "capture.png" }])
   expect(progress.at(-1)).toBe(100)
 })

@@ -19,3 +19,8 @@ export function usesInteractionLayout(version: string) {
   if (!match) return false
   return Number(match[1]) > 0 || Number(match[2]) >= 12
 }
+
+export function usesNativeReleaseLayout(version: string) {
+  const match = /^([0-9]+)[.]([0-9]+)[.]([0-9]+)(?=$|[+-])/.exec(version)
+  return match !== null && (Number(match[1]) > 0 || Number(match[2]) >= 13)
+}

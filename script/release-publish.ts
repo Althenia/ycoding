@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto"
 import path from "node:path"
 import { releaseArchives } from "./release-archive"
+import { usesNativeReleaseLayout } from "../packages/cli/src/update/interaction-layout"
+
+const bunLatestTag = "v0.12.2"
+
+function makeLatest(tag: string) {
+  return usesNativeReleaseLayout(tag.slice(1)) ? "false" : "true"
+}
 
 export type PublishInput = {
   readonly apiURL: string
@@ -16,7 +23,7 @@ export type PublishInput = {
 }
 
 type RemoteAsset = { id: number; name: string; state: string; size: number; digest: string | null }
-type RemoteRelease = { id: number; name: string | null; body: string | null; draft: boolean; prerelease: boolean }
+type RemoteRelease = { id: number; tag: string | undefined; name: string | null; body: string | null; draft: boolean; prerelease: boolean }
 type Rename = { id: number; from: string; to: string }
 type LocalAsset = { name: string; content: Uint8Array; sha256: string; size: number }
 type OriginalAsset = RemoteAsset & { sha256: string }
@@ -61,19 +68,22 @@ export async function publish(input: PublishInput) {
     }),
   )
   const release = await github.release()
-  const latest = await github.latestID()
+  const latest = await github.latest()
   manifest.release = {
     id: release.id,
     name: release.name,
     body: release.body,
     draft: release.draft,
     prerelease: release.prerelease,
-    latestID: latest,
+    latestID: latest?.id,
   }
   const before = await github.assets(release.id)
   manifest.original = before.map(describe)
   let originals: OriginalAsset[]
   try {
+    if (makeLatest(input.tag) === "false" && (latest?.tag !== bunLatestTag || latest.id === release.id)) {
+      throw new Error(`Publish ${bunLatestTag} as GitHub Latest before publishing Rust`)
+    }
     originals = await preflight(github, input, release, before, local)
   } catch (error) {
     manifest.status = "refused"
@@ -256,7 +266,7 @@ async function swap(
 
 async function metadata(github: ReturnType<typeof client>, releaseID: number, input: PublishInput) {
   await github
-    .edit(releaseID, { name: input.title, body: input.notes, draft: false, prerelease: false, make_latest: "true" })
+    .edit(releaseID, { name: input.title, body: input.notes, draft: false, prerelease: false, make_latest: makeLatest(input.tag) })
     .catch(async (error: unknown) => {
       const current = await github.release()
       if (current.name === input.title && current.body === input.notes && !current.draft && !current.prerelease) return
@@ -281,7 +291,12 @@ async function verify(
   }
   await verifyOriginals(github, assets, before, (asset) => manifest.renames.find((rename) => rename.id === asset.id)?.to ?? asset.name)
   if (assets.length !== before.length + manifest.staged.length) throw new Error("Release has unexpected assets after publication")
-  if ((await github.latestID()) !== releaseID) throw new Error("Release is not the latest release after publication")
+  const latest = await github.latest()
+  if (makeLatest(input.tag) === "true") {
+    if (latest?.id !== releaseID) throw new Error("Release is not the latest release after publication")
+  } else if (latest?.id !== manifest.release?.latestID || latest?.tag !== bunLatestTag) {
+    throw new Error(`GitHub Latest is no longer ${bunLatestTag} after publication`)
+  }
 }
 
 async function restore(
@@ -306,14 +321,14 @@ async function restore(
       prerelease: release.prerelease,
     })
   const latest = manifest.release?.latestID
-  if (latest !== undefined && (await github.latestID()) !== latest) await github.edit(latest, { make_latest: "true" })
+  if (latest !== undefined && (await github.latest())?.id !== latest) await github.edit(latest, { make_latest: "true" })
   for (const entry of manifest.staged.filter((staged) => staged.id !== undefined)) await github.remove(entry.id!)
   const assets = await github.assets(release.id)
   await verifyOriginals(github, assets, before, (asset) => asset.name)
   if (assets.length !== before.length) throw new Error("Release has unexpected assets after restoration")
   const after = await github.release()
   if (after.name !== release.name || after.body !== release.body || after.draft !== release.draft || after.prerelease !== release.prerelease ||
-    latest !== undefined && (await github.latestID()) !== latest) throw new Error("Release metadata was not restored")
+    latest !== undefined && (await github.latest())?.id !== latest) throw new Error("Release metadata was not restored")
 }
 
 function client(input: PublishInput) {
@@ -342,9 +357,9 @@ function client(input: PublishInput) {
   }
   return {
     release: async () => readRelease(await read(api(`/releases/tags/${encodeURIComponent(input.tag)}`))),
-    latestID: () =>
+    latest: () =>
       read(api("/releases/latest")).then(
-        (release) => readRelease(release).id,
+        readRelease,
         () => undefined,
       ),
     assets: async (releaseID: number) => {
@@ -422,6 +437,7 @@ function readRelease(value: unknown): RemoteRelease {
     throw new Error("GitHub returned a release without an id")
   return {
     id: value.id,
+    tag: "tag_name" in value && typeof value.tag_name === "string" ? value.tag_name : undefined,
     name: "name" in value && typeof value.name === "string" ? value.name : null,
     body: "body" in value && typeof value.body === "string" ? value.body : null,
     draft: "draft" in value && value.draft === true,
@@ -439,6 +455,10 @@ function sha256(content: Uint8Array) {
 
 if (import.meta.main) {
   const args = process.argv.slice(2)
+  if (args[0] === "latest" && args.length === 2) {
+    console.log(makeLatest(args[1]!))
+    process.exit(0)
+  }
   const option = (name: string) => {
     const index = args.indexOf(`--${name}`)
     if (index === -1 || index + 1 >= args.length) throw new Error(`Missing --${name}`)

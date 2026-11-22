@@ -5,11 +5,12 @@ import { createGunzip } from "node:zlib"
 import semver from "semver"
 import type { UpdateProgress } from "./progress"
 import { BrowserExtension } from "../assets"
-import { interactionApplication, interactionCLIIdentifier, interactionExtensionFiles, interactionSigningRequirement, usesInteractionLayout } from "./interaction-layout"
+import { interactionApplication, interactionCLIIdentifier, interactionExtensionFiles, interactionSigningRequirement, usesInteractionLayout, usesNativeReleaseLayout } from "./interaction-layout"
 
 const repository = "Althenia/ycoding"
 const maxArchiveBytes = 512 * 1024 * 1024
 const maxChecksumsBytes = 1024 * 1024
+const maxReleaseMetadataBytes = 2 * 1024 * 1024
 const maxArchiveEntries = 1024
 const pairedMacOSRelease = "0.2.0"
 const appMacOSRelease = "0.7.1"
@@ -30,7 +31,7 @@ type InstallTransaction = {
   helperInstalled: boolean
   bundlesInstalled: string[]
 }
-type Bundle = { readonly label: string; readonly target: string; readonly candidate: string; readonly exists: boolean }
+type Bundle = { readonly label: string; readonly target: string; readonly candidate?: string; readonly exists: boolean }
 
 export type InstallReleaseInput = {
   readonly version: string
@@ -59,16 +60,32 @@ export function releaseTarget(platform: string, arch: string) {
   )
 }
 
-export async function latestRelease(fetcher: Fetch = fetch) {
-  const response = await fetcher(`https://api.github.com/repos/${repository}/releases/latest`, {
+export async function latestRelease(installed: string, fetcher: Fetch = fetch) {
+  const native = usesNativeReleaseLayout(installed)
+  const endpoint = native ? "releases?per_page=20" : "releases/latest"
+  const response = await fetcher(`https://api.github.com/repos/${repository}/${endpoint}`, {
     headers: { Accept: "application/vnd.github+json", "User-Agent": "ycoding" },
     signal: AbortSignal.timeout(10_000),
   })
   requireHttps(response)
   if (!response.ok) throw new Error(`Failed to resolve the latest release: HTTP ${response.status}`)
   const data: unknown = JSON.parse(
-    new TextDecoder().decode(await readLimited(response, maxChecksumsBytes, "latest release response")),
+    new TextDecoder().decode(await readLimited(response, maxReleaseMetadataBytes, "latest release response")),
   )
+  if (native) {
+    if (!Array.isArray(data) || data.length > 20) throw new Error("Rust releases response did not contain a valid release list")
+    let latest: string | undefined
+    for (const value of data as readonly unknown[]) {
+      if (typeof value !== "object" || value === null || !("draft" in value) || value.draft !== false ||
+        !("prerelease" in value) || value.prerelease !== false || !("tag_name" in value) ||
+        typeof value.tag_name !== "string" || !value.tag_name.startsWith("v")) continue
+      const version = value.tag_name.slice(1)
+      if (!validVersion(version) || semver.prerelease(version) || !usesNativeReleaseLayout(version)) continue
+      if (latest === undefined || semver.gt(version, latest)) latest = version
+    }
+    if (latest === undefined) throw new Error("No stable Rust release found")
+    return latest
+  }
   if (typeof data !== "object" || data === null || !("tag_name" in data) || typeof data.tag_name !== "string") {
     throw new Error("Latest release response did not contain a tag")
   }
@@ -83,12 +100,15 @@ export type UpdatePlan =
   | { readonly action: "newer-installed"; readonly latest: string }
 
 export async function planUpdate(input: { readonly installed: string; readonly requested?: string; readonly fetch?: Fetch }): Promise<UpdatePlan> {
-  if (input.requested !== undefined)
-    return input.requested === input.installed ? { action: "current" } : { action: "install", version: input.requested }
-  const latest = await latestRelease(input.fetch)
-  if (latest === input.installed) return { action: "current" }
-  if (semver.valid(input.installed) && semver.lt(latest, input.installed)) return { action: "newer-installed", latest }
-  return { action: "install", version: latest }
+  const version = input.requested ?? await latestRelease(input.installed, input.fetch)
+  if (version === input.installed) return { action: "current" }
+  if (input.requested === undefined && semver.valid(input.installed) && semver.lt(version, input.installed)) {
+    return { action: "newer-installed", latest: version }
+  }
+  if (usesNativeReleaseLayout(version) && !usesNativeReleaseLayout(input.installed)) {
+    throw new Error("Bun was left in place. Use ycoding update --version 0.12.2 to stay on Bun, or install.sh --replace-bun for a clean Rust install. Bun data is not migrated.")
+  }
+  return { action: "install", version }
 }
 
 export async function installRelease(input: InstallReleaseInput) {
@@ -117,10 +137,12 @@ export async function installRelease(input: InstallReleaseInput) {
   try {
     const currentLayout = semver.gte(input.version, currentLayoutRelease)
     const interactionLayout = usesInteractionLayout(input.version)
+    const nativeLayout = usesNativeReleaseLayout(input.version)
+    const archiveExecutable = nativeLayout ? "ycoding-native" : "ycoding"
     const appExecutable = interactionLayout ? interactionApplication.executable : currentLayout ? "ycoding-computer-use" : legacyComputerHelper
     const computerApp = interactionLayout ? interactionApplication.name : currentLayout ? "YCoding Computer Use.app" : legacyComputerApp
     const bareHelper = input.platform === "darwin" && semver.gte(input.version, pairedMacOSRelease) && !currentLayout
-    const installedNames = bareHelper ? ["ycoding", legacyComputerHelper] : ["ycoding"]
+    const installedNames = bareHelper ? [archiveExecutable, legacyComputerHelper] : [archiveExecutable]
     const appRequired = input.platform === "darwin" && semver.gte(input.version, appMacOSRelease)
     const appFiles = [
       `${computerApp}/Contents/Info.plist`,
@@ -137,10 +159,10 @@ export async function installRelease(input: InstallReleaseInput) {
     const files = readArchive(await expandArchive(archive), required, interactionLayout)
     await Promise.all(
       required.map(async (name) => {
-        const candidate = path.join(temporary, name)
+        const candidate = path.join(temporary, name === archiveExecutable ? "ycoding" : name)
         await mkdir(path.dirname(candidate), { recursive: true })
         await Bun.write(candidate, files.get(name)!)
-        if (name === "ycoding" || name === legacyComputerHelper || name === appFiles[1]) await chmod(candidate, 0o755)
+        if (name === archiveExecutable || name === legacyComputerHelper || name === appFiles[1]) await chmod(candidate, 0o755)
       }),
     )
     if (appRequired && interactionLayout) {
@@ -165,17 +187,27 @@ export async function installRelease(input: InstallReleaseInput) {
       ])
     }
     const move = input.filesystem?.rename ?? rename
-    if (!bareHelper && !appRequired && !currentLayout) {
+    const installDirectory = path.dirname(input.executable)
+    const receiptName = ".ycoding-native-release"
+    const receipt = path.join(installDirectory, receiptName)
+    const installedReceipt = await statIfExists(receipt)
+    if (installedReceipt && (!installedReceipt.isFile() || installedReceipt.uid !== uid)) {
+      throw new Error("Installed native release receipt must be an owned regular file")
+    }
+    if (nativeLayout) {
+      const digest = new Bun.CryptoHasher("sha256").update(files.get(archiveExecutable)!).digest("hex")
+      await Bun.write(path.join(temporary, receiptName), `${input.version} ${digest}\n`)
+    }
+    if (!bareHelper && !appRequired && !currentLayout && !installedReceipt) {
       await move(path.join(temporary, "ycoding"), input.executable)
       return { version: input.version, asset }
     }
-    const installDirectory = path.dirname(input.executable)
     const helper = bareHelper ? path.join(installDirectory, legacyComputerHelper) : undefined
     const installedHelper = helper ? await statIfExists(helper) : undefined
     if (installedHelper && (!installedHelper.isFile() || installedHelper.isSymbolicLink() || installedHelper.uid !== uid)) {
       throw new Error("Installed computer helper must be a regular file owned by the current user")
     }
-    const bundles: ReadonlyArray<Bundle> = await Promise.all(
+    const bundles: Bundle[] = await Promise.all(
       [
         ...(appRequired ? [{ label: "Computer helper app", name: computerApp }] : []),
         ...(currentLayout ? [{ label: "Chrome extension", name: extension }] : []),
@@ -188,6 +220,9 @@ export async function installRelease(input: InstallReleaseInput) {
         return { label: bundle.label, target, candidate: path.join(temporary, bundle.name), exists: installed !== undefined }
       }),
     )
+    if (nativeLayout || installedReceipt) {
+      bundles.push({ label: "Native release receipt", target: receipt, candidate: nativeLayout ? path.join(temporary, receiptName) : undefined, exists: installedReceipt !== undefined })
+    }
     const superseded = currentLayout && input.platform === "darwin" ? await installedSuperseded(installDirectory, uid, interactionLayout) : []
     rollback = await mkdtemp(path.join(installDirectory, ".ycoding-update-backup-"))
     const transaction: InstallTransaction = {
@@ -263,6 +298,7 @@ async function replaceRelease(input: {
     input.transaction.helperInstalled = true
   }
   for (const bundle of input.bundles) {
+    if (bundle.candidate === undefined) continue
     await input.rename(bundle.candidate, bundle.target)
     input.transaction.bundlesInstalled.push(bundle.target)
   }

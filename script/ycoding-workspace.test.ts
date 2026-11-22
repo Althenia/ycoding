@@ -59,18 +59,20 @@ test("SQLite is allowed only for the declared Zed reader and its import edge", (
   expect(checkBundleGraph(graph([reader, owner], [{ file: "/fixture/packages/tui/src/other.ts", specifier: "bun:sqlite" }]))[0]?.owner).toBe("sqlite")
 })
 
-test("only the native CLI may bundle the Desktop Zed reader's Bun SQLite import", () => {
+test("only the bundled Desktop Zed reader may import Bun SQLite in the CLI", () => {
   const reader = "/fixture/packages/desktop/src/editor-zed.ts"
-  const sqlite = "bun:sqlite"
-  const graph = (frontend: string, modules: string[], importers: string[], specifier = sqlite) => ({
+  const unrelated = "/fixture/packages/desktop/src/worker.ts"
+  const graph = (frontend: string, modules: string[], specifier: string, importers: string[]) => ({
     frontend,
-    outputs: [{ file: "bundle.js", modules, imports: [specifier], edges: importers.map((file) => ({ file, specifier })) }],
+    outputs: [{ file: "app.js", modules, imports: [specifier], edges: importers.map((file) => ({ file, specifier })) }],
   })
-  expect(checkBundleGraph(graph("cli", [reader], [reader]))).toEqual([])
-  expect(checkBundleGraph(graph("cli", ["/fixture/index.ts"], [reader]))[0]?.owner).toBe("sqlite")
-  expect(checkBundleGraph(graph("cli", [reader], [reader, "/fixture/other.ts"]))[0]?.owner).toBe("sqlite")
-  expect(checkBundleGraph(graph("cli", [reader], [reader], "node:sqlite"))[0]?.owner).toBe("sqlite")
-  for (const frontend of ["tui", "node", "plugin-sdk"]) {
-    expect(checkBundleGraph(graph(frontend, [reader], [reader]))[0]?.owner).toBe("sqlite")
+  expect(checkBundleGraph(graph("cli", [reader], "bun:sqlite", [reader]))).toEqual([])
+  for (const rejected of [
+    graph("tui", [reader], "bun:sqlite", [reader]),
+    graph("cli", [reader], "node:sqlite", [reader]),
+    graph("cli", [unrelated], "bun:sqlite", [reader]),
+    graph("cli", [reader, unrelated], "bun:sqlite", [reader, unrelated]),
+  ]) {
+    expect(checkBundleGraph(rejected)).toMatchObject([{ owner: "sqlite", kind: "bundle" }])
   }
 })

@@ -23,12 +23,13 @@ export async function uploadAttachments(input: {
     if (!file.uri.startsWith("data:")) { uploaded.push(file); continue }
     const payload = file.uri.slice(file.uri.indexOf(",") + 1)
     const uploadID = crypto.randomUUID()
-    for (let offset = 0, index = 0; offset < payload.length; offset += RemoteLimits.maxAttachmentChunkChars, index++) {
+    let offset = 0
+    for (let start = 0, index = 0; start < payload.length; start += RemoteLimits.maxAttachmentChunkChars, index++) {
       if (input.signal?.aborted) throw new Error("Attachment upload cancelled.")
-      const last = offset + RemoteLimits.maxAttachmentChunkChars >= payload.length
-      const chunk = { uploadID, index, last, data: payload.slice(offset, offset + RemoteLimits.maxAttachmentChunkChars) }
-      if (serializeRequest({ type: "request", id: "x".repeat(RemoteLimits.maxRequestIDChars), operation: "session.attachment.upload", sessionID: input.sessionID, input: chunk }).length > RemoteLimits.maxClientMessageChars)
-        throw new Error("Attachment chunk exceeds the remote frame limit.")
+      const end = Math.min(start + RemoteLimits.maxAttachmentChunkChars, payload.length)
+      const last = end === payload.length
+      const data = Uint8Array.from(atob(payload.slice(start, end)), (byte) => byte.charCodeAt(0))
+      const chunk = { uploadID, index, offset, last, data }
       const outcome = await input.request("session.attachment.upload", { sessionID: input.sessionID, input: chunk, ...(index === 0 ? { timeoutMs: 10_000 } : {}) })
       if (input.signal?.aborted) throw new Error("Attachment upload cancelled.")
       if ((outcome.status === "unknown" && index === 0) || (outcome.status === "failed" && outcome.error.code === "unknown_operation"))
@@ -36,7 +37,8 @@ export async function uploadAttachments(input: {
       if (outcome.status !== "ok") throw new Error(outcome.status === "unavailable" ? "Attachment upload lost its machine connection." : outcome.error.message)
       if (last && (typeof outcome.value !== "object" || outcome.value === null || Reflect.get(outcome.value, "uri") !== `ycoding-upload://${uploadID}`))
         throw new Error("The machine did not confirm the attachment upload.")
-      input.onProgress?.(file.name ?? "Attachment", Math.round(Math.min(1, (offset + chunk.data.length) / payload.length) * 100))
+      offset += data.byteLength
+      input.onProgress?.(file.name ?? "Attachment", Math.round(end / payload.length * 100))
     }
     uploaded.push({ ...file, uri: `ycoding-upload://${uploadID}` })
   }

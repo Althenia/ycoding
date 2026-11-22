@@ -315,15 +315,25 @@ describe("remote recovery documentation", () => {
 })
 
 describe("page structure", () => {
-  test("the installation guide routes installations that cannot update to v0.12.0 through the installer", () => {
+  test("the installation guide preserves Bun by default and requires opting in to Rust", () => {
     const page = findDocPage("installation")
     const update = page?.sections.find((section) => section.heading === "Update an installation")
-    const warning = update?.blocks.find((block) => block.kind === "callout" && block.title === "Move to v0.12.0 with the installer")
-    expect(warning).toMatchObject({ kind: "callout", text: expect.stringContaining("use the shell installer above") })
-    expect(JSON.stringify(update?.blocks)).toContain("does not replace a binary at the same version")
-    expect(JSON.stringify(update?.blocks)).toContain("leaves the Bun database intact")
+    const warning = update?.blocks.find((block) => block.kind === "callout" && block.title === "Keep an existing Bun installation")
+    expect(warning).toMatchObject({ kind: "callout", text: expect.stringMatching(/refuses to replace an existing Bun executable.*GitHub Latest stays on Bun 0\.12\.2/) })
+    expect(update?.blocks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "code", code: "YCODING_VERSION=0.12.2 sh install.sh" }),
+      expect.objectContaining({ kind: "code", code: "sh install.sh --replace-bun" }),
+      expect.objectContaining({ kind: "paragraph", text: expect.stringMatching(/core\.redb.*leaves Bun's SQLite database on disk.*does not import/) }),
+    ]))
     expect(JSON.stringify(page?.sections)).toContain("YCoding Interaction.app")
     expect(JSON.stringify(page?.sections)).not.toContain("YCoding Computer Use.app")
+  })
+
+  test("getting started distinguishes Bun and Rust Web addresses", () => {
+    const blocks = findDocPage("getting-started")?.sections.flatMap(({ blocks }) => blocks) ?? []
+    expect(blocks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "paragraph", text: expect.stringMatching(/`\/remote`.*Bun 0\.12\.x.*`\/remote\/rust`.*Rust.*same Web sign-in/) }),
+    ]))
   })
 
   test("the remote guide describes family-finished and attention categories", () => {

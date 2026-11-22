@@ -7,9 +7,11 @@ import {
   decodeNumber,
   decodeRecord,
   decodeString,
+  type Page,
 } from "./cdp"
 
 const port = 4497
+const origin = `http://127.0.0.1:${port}`
 const chrome = process.env.YCODING_WEB_CHROME
 if (!chrome) throw new Error("Set YCODING_WEB_CHROME")
 let server: ReturnType<typeof Bun.spawn>
@@ -86,6 +88,14 @@ const rendered = (url: string) =>
   })
 const leaf = (result: Probe) => result.routes.at(-1)
 const splat = (result: Probe) => result.params.find(([name]) => name === "_splat")?.[1]
+
+async function waitFor(tab: Page, predicate: string) {
+  for (let attempt = 0; attempt < 80; attempt++) {
+    if (await tab.evaluate(predicate).catch(() => false)) return
+    await Bun.sleep(50)
+  }
+  throw new Error(`Page did not reach ${predicate}`)
+}
 
 test("every public URL matches its own route", async () => {
   const leaves = await Promise.all(
@@ -276,3 +286,124 @@ test("navigation pushes Session and landing query state, replaces on request, an
     view: "/remote",
   })
 })
+
+test("Rust workspace deep links keep query state and use the existing remote views", async () => {
+  const cases = [
+    ["/remote/rust", "/remote/"],
+    ["/remote/rust/sessions", "/remote/sessions"],
+    ["/remote/rust/session", "/remote/session"],
+    ["/remote/rust/projects", "/remote/projects"],
+    ["/remote/rust/workspaces", "/remote/workspaces"],
+    ["/remote/rust/usage", "/remote/usage"],
+    ["/remote/rust/settings", "/remote/settings"],
+    ["/remote/rust/invite", "/remote/invite"],
+    ["/remote/rusty", "/remote/$"],
+    ["/remote/rust/rust", "/remote/$"],
+  ] as const
+  for (const [url, route] of cases) expect(leaf(await probe(url))).toBe(route)
+  expect(await probe("/remote/rust/session/?session_id=ses_1&device_id=dev_1#panel")).toMatchObject({
+    pathname: "/remote/session",
+    search: { session_id: "ses_1", device_id: "dev_1" },
+    hash: "panel",
+  })
+  const href = await page.evaluate(`window.routerProbe.buildSession('ses_1', 'dev_1', '/remote/rust/usage')`, decodeString)
+  const url = new URL(href, "https://ycoding.test")
+  expect(url.pathname).toBe("/remote/rust/session")
+  expect(Object.fromEntries(url.searchParams)).toEqual({ session_id: "ses_1", device_id: "dev_1" })
+})
+
+test("Rust workspace navigation, replacement, and back keep the Rust URL", async () => {
+  const tab = await browser.openPage()
+  try {
+    await tab.navigate(`${origin}/verify/router-fixture.html`)
+    await waitFor(tab, `window.routerProbe !== undefined`)
+    const result = await tab.evaluate(`window.routerProbe.browserHistory('/remote/rust/usage?device_id=dev_1')`)
+    expect(result).toMatchObject({
+      pushed: { added: 1, pathname: "/docs", view: "/docs" },
+      landing: { added: 2, pathname: "/remote/rust", view: "/remote" },
+      selected: { added: 3, pathname: "/remote/rust/session", view: "/remote/session", search: { session_id: "ses_1", device_id: "dev_studio" } },
+      replaced: { added: 3, pathname: "/remote/rust/sessions", view: "/remote/sessions" },
+      back: { added: 3, pathname: "/remote/rust", view: "/remote" },
+    })
+  } finally {
+    await tab.close()
+  }
+})
+
+test("landing workspace choices load documents and Rust sign-in keeps the deep link", async () => {
+  const tab = await browser.openPage()
+  try {
+    await tab.injectOnNewDocument(`window.fetch = new Proxy(window.fetch, { apply(fetch, receiver, args) {
+      if (args[0] === '/api/me?relay=5') return Promise.resolve(Response.json({ error: { code: 'unauthorized' } }, { status: 401 }));
+      return Reflect.apply(fetch, receiver, args);
+    } });`)
+    for (const path of ["/remote", "/remote/rust"]) {
+      await tab.navigate(`${origin}/`)
+      const link = `.hero__actions a[href="${path}"]`
+      expect(await tab.evaluate(`Boolean(document.querySelector(${JSON.stringify(link)}))`)).toBe(true)
+      await tab.evaluate(`window.beforeEditionNavigation = true; setTimeout(() => document.querySelector(${JSON.stringify(link)}).click(), 0)`)
+      await waitFor(tab, `location.pathname === ${JSON.stringify(path)} && !!document.querySelector('#remote-access-key')`)
+      expect(await tab.evaluate(`({ path: location.pathname, newDocument: window.beforeEditionNavigation === undefined, signIn: !!document.querySelector('#remote-access-key') })`)).toEqual({ path, newDocument: true, signIn: true })
+    }
+    const deepLink = "/remote/rust/session?session_id=ses_1&device_id=dev_1"
+    await tab.navigate(`${origin}${deepLink}`)
+    await waitFor(tab, `!!document.querySelector('#remote-access-key')`)
+    await tab.evaluate(`setTimeout(() => [...document.querySelectorAll('button')].find(button => button.textContent.includes('Continue with Google')).click(), 0)`)
+    await waitFor(tab, `location.pathname === '/api/auth/google/start'`)
+    expect(await tab.evaluate(`({ path: location.pathname, target: new URLSearchParams(location.search).get('redirect_after') })`)).toEqual({ path: "/api/auth/google/start", target: deepLink })
+  } finally {
+    await tab.close()
+  }
+}, 30_000)
+
+test("Rust invite redemption strips the token and continues into Rust", async () => {
+  const tab = await browser.openPage()
+  const token = "A".repeat(43)
+  try {
+    await tab.injectOnNewDocument(`window.inviteCalls = []; window.fetch = new Proxy(window.fetch, { apply(fetch, receiver, args) {
+      if (args[0] === '/api/auth/invite') {
+        window.inviteCalls.push(JSON.parse(args[1].body));
+        return Promise.resolve(Response.json({ accessKey: '0123-4567-89AB-CDEF-GHJK-MNPQ-RSTV-WXYZ' }, { status: 201 }));
+      }
+      if (args[0] === '/api/me?relay=5') return Promise.resolve(Response.json({ error: { code: 'unauthorized' } }, { status: 401 }));
+      return Reflect.apply(fetch, receiver, args);
+    } });`)
+    await tab.navigate(`${origin}/remote/rust/invite#${token}`)
+    await waitFor(tab, `!!document.querySelector('.sign-in__title')`)
+    expect(await tab.evaluate(`({ path: location.pathname, hash: location.hash, title: document.querySelector('h1')?.textContent, calls: window.inviteCalls })`)).toEqual({ path: "/remote/rust/invite", hash: "", title: "You're invited to YCoding Remote", calls: [] })
+    await tab.evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Accept invite').click()`)
+    await waitFor(tab, `!!document.querySelector('#new-access-key')`)
+    expect(await tab.evaluate(`({ revealed: !!document.querySelector('#new-access-key'), calls: window.inviteCalls })`)).toEqual({ revealed: true, calls: [{ token }] })
+    await tab.evaluate(`setTimeout(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Continue').click(), 0)`)
+    await waitFor(tab, `location.pathname === '/remote/rust' && !!document.querySelector('#remote-access-key')`)
+    expect(await tab.evaluate(`({ path: location.pathname, signIn: !!document.querySelector('#remote-access-key') })`)).toEqual({ path: "/remote/rust", signIn: true })
+    await tab.navigate(`${origin}/remote/rust/invite`)
+    expect(await tab.evaluate(`document.querySelector('a.text-link')?.getAttribute('href')`)).toBe("/remote/rust")
+  } finally {
+    await tab.close()
+  }
+}, 30_000)
+
+test("Rust workspace links keep their edition when followed or opened directly", async () => {
+  const tab = await browser.openPage()
+  try {
+    await tab.injectOnNewDocument(`window.fetch = new Proxy(window.fetch, { apply(fetch, receiver, args) {
+      if (args[0] === '/api/me?relay=5') return Promise.resolve(Response.json({ user: { id: 'fixture' }, session: { expiresAt: Date.now() + 60000 }, devices: [] }));
+      if (args[0] === '/api/devices?relay=5') return Promise.resolve(Response.json({ devices: [] }));
+      return Reflect.apply(fetch, receiver, args);
+    } });`)
+    const usage = 'a[data-destination="usage"]'
+    const sessions = 'a[data-destination="sessions"]'
+    await tab.navigate(`${origin}/remote/rust`)
+    await waitFor(tab, `!!document.querySelector(${JSON.stringify(usage)})`)
+    expect(await tab.evaluate(`document.querySelector(${JSON.stringify(usage)}).getAttribute('href')`)).toBe("/remote/rust/usage")
+    await tab.evaluate(`window.inWorkspace = true; document.querySelector(${JSON.stringify(usage)}).click()`)
+    await waitFor(tab, `location.pathname === '/remote/rust/usage' && document.querySelector(${JSON.stringify(usage)}).getAttribute('aria-current') === 'page'`)
+    expect(await tab.evaluate(`window.inWorkspace`)).toBe(true)
+    await tab.navigate(`${origin}/remote/rust/usage?device_id=dev_fixture`)
+    await waitFor(tab, `document.querySelector(${JSON.stringify(usage)})?.getAttribute('aria-current') === 'page'`)
+    expect(await tab.evaluate(`({ device: new URLSearchParams(location.search).get('device_id'), sessions: document.querySelector(${JSON.stringify(sessions)}).getAttribute('href') })`)).toEqual({ device: "dev_fixture", sessions: "/remote/rust/sessions" })
+  } finally {
+    await tab.close()
+  }
+}, 30_000)

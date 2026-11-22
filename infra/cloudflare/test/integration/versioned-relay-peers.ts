@@ -248,7 +248,7 @@ async function rejectsFrame(
 }
 
 export async function startRollback(executable: string, root: string, origin: string, cookie: string) {
-  assert.ok(isAbsolute(executable), "Bind YCODING_RELAY_BUN_CLI to the extracted signed Bun 0.12.0 executable")
+  assert.ok(isAbsolute(executable), "Bind YCODING_RELAY_BUN_CLI to the extracted signed Bun 0.12.0 or 0.12.1 executable")
   const workspace = join(root, "workspace")
   const config = join(root, "fixture-config")
   await mkdir(workspace, { recursive: true })
@@ -293,7 +293,7 @@ export async function startRollback(executable: string, root: string, origin: st
       clearTimeout(timer)
     }
   }
-  assert.match(await run(["--version"]), /\bv0\.12\.0\b/)
+  assert.match(await run(["--version"]), /\bv0\.12\.[01]\b/)
   const made = await registration(origin, cookie)
   await run(["remote", "enroll", made.enrollmentID, "--name", "Bun rollback", "--relay", origin], made.code)
   const server = Bun.spawn([executable, "serve", "--stdio", "--hostname", "127.0.0.1", "--port", "0"], {

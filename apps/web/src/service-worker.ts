@@ -1,6 +1,6 @@
 import { isAlertTitle, quotaKey } from "@ycoding-ai/remote"
-import { CACHE_NAME, CACHE_PREFIX, OFFLINE_FALLBACK_URL, PRECACHE_URLS, shouldCacheStaticAsset, shouldHandleNavigation } from "./pwa/offline"
-import { alertCopy, isAlertDeviceID, overflowCopy, quotaCopy, readQuota, sessionURL, usageURL } from "./remote/alert"
+import { CACHE_NAME, CACHE_PREFIX, OFFLINE_FALLBACK_URL, PRECACHE_URLS, remoteShellPath, RUST_REMOTE_SHELL, shouldCacheStaticAsset, shouldHandleNavigation } from "./pwa/offline"
+import { alertCopy, alertTag, isAlertDeviceID, overflowCopy, quotaCopy, readQuota, sessionURL, usageURL } from "./remote/alert"
 
 /**
  * Static shell service worker.
@@ -47,7 +47,7 @@ scope.addEventListener("activate", (event: { waitUntil: (promise: Promise<unknow
 
 scope.addEventListener("fetch", (event: FetchEvent) => {
   const request = event.request
-  if (shouldHandleNavigation({ url: request.url, method: request.method, mode: request.mode })) {
+  if (shouldHandleNavigation({ url: request.url, method: request.method, mode: request.mode }, scope.location.origin)) {
     event.respondWith(navigationResponse(request))
     return
   }
@@ -59,31 +59,39 @@ scope.addEventListener("fetch", (event: FetchEvent) => {
 scope.addEventListener("push", (event: { data?: { json: () => unknown }; waitUntil: (promise: Promise<unknown>) => void }) => {
   event.waitUntil((async () => {
     const payload = await Promise.resolve().then(() => event.data?.json()).catch(() => undefined)
-    const alert = pushAlert(payload)
-    await scope.registration.showNotification(alert.title, { ...alert.options, icon: "/icons/icon-256.png", badge: "/icons/icon-256.png" })
+    const { fields, relayProtocol } = readNotificationData(payload)
+    const alert = pushAlert(fields)
+    const { tag, data } = alert.options
+    await scope.registration.showNotification(alert.title, {
+      ...alert.options,
+      ...(typeof tag === "string" ? { tag: alertTag(tag, relayProtocol) } : {}),
+      ...(relayProtocol === 5 ? { data: { ...(isRecord(data) ? data : {}), relayProtocol } } : {}),
+      icon: "/icons/icon-256.png", badge: "/icons/icon-256.png",
+    })
   })())
 })
 
 scope.addEventListener("notificationclick", (event: { notification: { data?: unknown; close: () => void }; waitUntil: (promise: Promise<unknown>) => void }) => {
   event.notification.close()
   event.waitUntil((async () => {
-    const data = event.notification.data
+    const { fields: data, relayProtocol } = readNotificationData(event.notification.data)
+    const shell = relayProtocol === 5 ? RUST_REMOTE_SHELL : "/remote"
     const clients = await scope.clients.matchAll({ type: "window", includeUncontrolled: true })
     const current = clients.find((client) => {
       const url = new URL(client.url)
-      return url.origin === scope.location.origin && (url.pathname === "/remote" || url.pathname.startsWith("/remote/"))
+      return url.origin === scope.location.origin && remoteShellPath(url.pathname) === shell
     })
-    if (isRecord(data) && data.quota === true && isAlertDeviceID(data.deviceID) && Object.keys(data).length === 2) {
+    if (data.quota === true && isAlertDeviceID(data.deviceID) && Object.keys(data).length === 2) {
       const delivered = current !== undefined && await current.focus().then(() => {
         current.postMessage({ type: "ycoding:open-usage", deviceID: data.deviceID })
         return true
       }).catch(() => false)
-      if (!delivered) await scope.clients.openWindow(usageURL(data.deviceID))
+      if (!delivered) await scope.clients.openWindow(usageURL(data.deviceID, shell))
       return
     }
-    if (!isRecord(data) || !isSessionID(data.sessionID)) {
+    if (!isSessionID(data.sessionID)) {
       if (current && await current.focus().then(() => true, () => false)) return
-      await scope.clients.openWindow("/remote")
+      await scope.clients.openWindow(shell)
       return
     }
     const deviceID = isAlertDeviceID(data.deviceID) ? data.deviceID : undefined
@@ -96,7 +104,7 @@ scope.addEventListener("notificationclick", (event: { notification: { data?: unk
       }).catch(() => false)
       if (delivered) return
     }
-    await scope.clients.openWindow(sessionURL(data.sessionID, deviceID, noticeID))
+    await scope.clients.openWindow(sessionURL(data.sessionID, deviceID, noticeID, shell))
   })())
 })
 
@@ -127,6 +135,13 @@ scope.addEventListener("pushsubscriptionchange", (event: { newSubscription?: { e
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function readNotificationData(value: unknown): { fields: Record<string, unknown>; relayProtocol?: 5 } {
+  if (!isRecord(value)) return { fields: {} }
+  const { relayProtocol, ...fields } = value
+  if (relayProtocol === 5) return { fields, relayProtocol }
+  return { fields: relayProtocol === undefined || relayProtocol === 4 ? fields : {} }
 }
 
 function isSessionID(value: unknown): value is string {
@@ -192,18 +207,18 @@ async function precacheShell(): Promise<void> {
 }
 
 async function navigationResponse(request: Request): Promise<Response> {
-  try {
-    const response = await fetch(request)
-    if (response.ok) {
-      const cache = await caches.open(CACHE_NAME)
-      await cache.put("/", response.clone())
-    }
+  const pathname = new URL(request.url).pathname
+  const shell = remoteShellPath(pathname)
+  const cacheKey = shell ?? "/"
+  const response = await fetch(request).catch(() => undefined)
+  if (response !== undefined) {
+    if ((shell !== undefined || pathname === "/") && response.ok && !response.redirected && /^text\/html(?:;|$)/i.test(response.headers.get("content-type") ?? ""))
+      await caches.open(CACHE_NAME).then((cache) => cache.put(cacheKey, response.clone())).catch(() => undefined)
     return response
-  } catch {
-    const cache = await caches.open(CACHE_NAME)
-    const cached = (await cache.match("/", { ignoreSearch: true })) ?? (await cache.match(OFFLINE_FALLBACK_URL))
-    return cached ?? new Response("Offline", { status: 503, headers: { "content-type": "text/plain" } })
   }
+  const cache = await caches.open(CACHE_NAME)
+  const cached = (await cache.match(cacheKey, { ignoreSearch: true })) ?? (await cache.match(OFFLINE_FALLBACK_URL))
+  return cached ?? new Response("Offline", { status: 503, headers: { "content-type": "text/plain" } })
 }
 
 async function cacheFirst(request: Request): Promise<Response> {

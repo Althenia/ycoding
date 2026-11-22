@@ -23,14 +23,15 @@ export function isolatedEnvironment(root: string) {
   }
 }
 
-export async function startWorker(root: string) {
+export async function startWorker(root: string, assetsDirectory?: string) {
   await mkdir(root, { recursive: true })
-  await access(join(repository, "apps/web/dist/index.html"))
   const persist = join(root, "state")
   const config = join(root, "wrangler.json")
   const source: unknown = Bun.JSONC.parse(await readFile(join(cloudflare, "wrangler.jsonc"), "utf8"))
   assert.ok(record(source) && typeof source.main === "string" && typeof source.compatibility_date === "string")
   assert.ok(record(source.assets) && typeof source.assets.directory === "string")
+  const directory = assetsDirectory ?? resolve(cloudflare, source.assets.directory)
+  await access(join(directory, "index.html"))
   const generated = await crypto.subtle.generateKey(
     { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
     true,
@@ -99,7 +100,7 @@ export async function startWorker(root: string) {
         name: "ycoding-relay-acceptance",
         main: resolve(cloudflare, source.main),
         compatibility_date: source.compatibility_date,
-        assets: { ...source.assets, directory: resolve(cloudflare, source.assets.directory) },
+        assets: { ...source.assets, directory },
         durable_objects: source.durable_objects,
         exports: source.exports,
         d1_databases: [{ binding: "DB", database_name: database, database_id: crypto.randomUUID() }],
@@ -151,14 +152,17 @@ export async function startWorker(root: string) {
     })
     return {
       origin,
+      assetsDirectory: directory,
       close,
       async initializeDatabase() {
         const ddl = join(cloudflare, "migrations")
         for (const file of (await readdir(ddl)).filter((name) => name.endsWith(".sql")).sort())
           await d1("--file", join(ddl, file))
       },
-      async signIn(account: (typeof accounts)[number]) {
-        const start = await fetch(`${origin}/api/auth/google/start?redirect_after=/remote/`, { redirect: "manual" })
+      async signIn(account: (typeof accounts)[number], returnPath = "/remote/") {
+        const startURL = new URL("/api/auth/google/start", origin)
+        startURL.searchParams.set("redirect_after", returnPath)
+        const start = await fetch(startURL, { redirect: "manual" })
         assert.equal(start.status, 302, "OAuth start")
         const oauth = cookie(start, "yc_oauth")
         const state = new URL(start.headers.get("location") ?? "").searchParams.get("state")
@@ -193,7 +197,11 @@ export async function startWorker(root: string) {
             redirect: "manual",
           })
           assert.equal(callback.status, 302, "OAuth callback")
-          assert.equal(callback.headers.get("location"), "/remote/", "OAuth callback must accept the synthetic account")
+          assert.equal(
+            callback.headers.get("location"),
+            returnPath,
+            "OAuth callback must preserve the edition return path",
+          )
           return cookie(callback, "yc_session")
         } finally {
           idToken = undefined

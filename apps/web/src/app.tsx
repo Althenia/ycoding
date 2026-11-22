@@ -9,12 +9,13 @@ import { preloadCoordination, preloadKeepAwake, preloadUsage, preloadWorkspaces 
 import type { RemoteStore } from "./remote/store"
 import { RemoteShell } from "./remote/ui/shell"
 import { InvitePage } from "./remote/ui/invite"
-import { REMOTE_INVITE_PATH, REMOTE_VIEWS } from "./routes"
+import { REMOTE_INVITE_PATH, REMOTE_ROOT, REMOTE_VIEWS, remoteRouteRewrite, remoteWorkspaceRoot } from "./routes"
 import { Tooltips } from "./ui/tooltip"
 
 const remoteUnknownPath = "/remote/$"
 
 export function createAppRouter(options: { readonly createRemoteStore?: () => RemoteStore; readonly history?: RouterHistory } = {}) {
+  const workspaceRoot = remoteWorkspaceRoot(options.history?.location.pathname ?? globalThis.location?.pathname ?? "/")
   const rootRoute = createRootRoute({
     component: RootShell,
     notFoundComponent: () => (
@@ -37,7 +38,7 @@ export function createAppRouter(options: { readonly createRemoteStore?: () => Re
   let session: RemoteSession | undefined
   const remoteRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: "/remote",
+    path: REMOTE_ROOT,
     validateSearch: (search: Record<string, unknown>) => ({
       ...(typeof search.session_id === "string" ? { session_id: search.session_id } : {}),
       ...(typeof search.device_id === "string" ? { device_id: search.device_id } : {}),
@@ -59,7 +60,7 @@ export function createAppRouter(options: { readonly createRemoteStore?: () => Re
       })
       return (
         <RemoteProvider session={owned}>
-          <Show when={!unknown()} fallback={<NotFoundPage />}>
+          <Show when={!unknown()} fallback={<NotFoundPage workspaceRoot={workspaceRoot} />}>
             <RemoteShell path={pathname} />
           </Show>
         </RemoteProvider>
@@ -72,12 +73,7 @@ export function createAppRouter(options: { readonly createRemoteStore?: () => Re
     caseSensitive: true,
     defaultPreload: "intent",
     defaultPreloadStaleTime: 0,
-    rewrite: {
-      input: ({ url }) => {
-        url.pathname = url.pathname.replace(/\/{2,}/g, "/").replace(/(.)\/$/, "$1")
-        return url
-      },
-    },
+    rewrite: remoteRouteRewrite(workspaceRoot),
     routeTree: rootRoute.addChildren([
       marketingRoute.addChildren([
         createRoute({ getParentRoute: () => marketingRoute, path: "/", component: LandingPage }),
@@ -99,7 +95,7 @@ export function createAppRouter(options: { readonly createRemoteStore?: () => Re
         ...REMOTE_VIEWS.map((path) => createRoute({ getParentRoute: () => remoteRoute, path, loader: ({ context }) => preloads[path]?.(context.remote) })),
         createRoute({ getParentRoute: () => remoteRoute, path: "$" }),
       ]),
-      createRoute({ getParentRoute: () => rootRoute, path: REMOTE_INVITE_PATH, component: InvitePage }),
+      createRoute({ getParentRoute: () => rootRoute, path: REMOTE_INVITE_PATH, component: () => <InvitePage workspaceRoot={workspaceRoot} /> }),
     ]),
   })
 }

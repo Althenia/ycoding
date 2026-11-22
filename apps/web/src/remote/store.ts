@@ -116,7 +116,6 @@ function eventTodos(event: unknown, sessionID: string): readonly TodoView[] | un
 
 export type SessionInfoView = {
   readonly scope?: "bound" | "standalone"
-  readonly scopeExplicit?: true
   readonly id: string
   readonly parentID?: string
   readonly title: string
@@ -326,7 +325,6 @@ export type RemoteStore = {
   readonly killTeamShell: (shellID: string) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
   readonly teamShellOutput: (ownerID: string, shellID: string, cursor?: number) => Promise<{ readonly command?: string; readonly status?: string; readonly text: string; readonly cursor: number; readonly size: number; readonly truncated: boolean }>
   readonly createSideChat: () => Promise<{ readonly status: "ok"; readonly sessionID: string } | { readonly status: "failed" | "unknown"; readonly message: string }>
-  readonly forkSession: (messageID?: string) => Promise<{ readonly status: "ok"; readonly sessionID: string } | { readonly status: "failed" | "unknown"; readonly message: string }>
   readonly selectWorkspace: (workspaceID: string) => void
   readonly refreshSessions: () => void
   readonly searchSessions: (query: string, filter?: "all" | "waiting" | "running" | "idle") => void
@@ -508,7 +506,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
   let activeUpload: AbortController | undefined
   let selectionToken = 0
-  const pendingForks = new Set<string>()
   const goalsInFlight = new Set<string>()
   let selectionReadyToken: number | undefined
   let selectionFailedToken: number | undefined
@@ -3614,45 +3611,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       setState({ team: { ...container.state.team, sideChats: [{ id, title: info.title, updatedAt: info.updatedAt }, ...container.state.team.sideChats] } })
       return { status: "ok", sessionID: id }
     },
-    forkSession: async (messageID) => {
-      const owner = transport
-      const sessionID = container.state.activeSessionID
-      const token = selectionToken
-      const source = container.state.selectedSessionInfo
-      if (!owner || !sessionID || container.state.transport.kind !== "open") return { status: "failed", message: "Session is unavailable." }
-      if (!source || source.id !== sessionID || !source.scopeExplicit || source.projectID === undefined || source.directory === undefined)
-        return { status: "failed", message: "Session placement is unavailable." }
-      if (pendingForks.has(sessionID)) return { status: "failed", message: "A fork is already in progress." }
-      pendingForks.add(sessionID)
-      try {
-      const outcome = await owner.request("session.fork", { sessionID, ...(messageID === undefined ? {} : { input: { messageID } }), timeoutMs: 10_000 })
-      const currentSource = container.state.selectedSessionInfo
-      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID)
-        return { status: "unknown", message: "The connection or Session changed; check Sessions before retrying." }
-      if (!currentSource || currentSource.id !== sessionID || !currentSource.scopeExplicit || currentSource.scope !== source.scope ||
-        currentSource.projectID !== source.projectID || currentSource.directory !== source.directory || currentSource.workspaceID !== source.workspaceID)
-        return { status: "unknown", message: "The Session placement changed; check Sessions before retrying." }
-      if (outcome.status !== "ok") {
-        if (outcome.status === "failed" && outcome.error.code === "unknown_operation") return { status: "failed", message: "Update YCoding on this machine to fork Sessions." }
-        const failure = teamActionFailure(outcome, "Fork Session")
-        return outcome.status === "failed" && outcome.error.code === "outcome_unknown" ? { ...failure, status: "unknown" } : failure
-      }
-      const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
-      const info = readSessionInfo(data)
-      const fork = typeof data === "object" && data !== null ? Reflect.get(data, "fork") : undefined
-      if (!info || !/^ses_[A-Za-z0-9_-]+$/.test(info.id) || info.id === sessionID || info.parentID !== undefined ||
-        !info.scopeExplicit || info.scope !== currentSource.scope || info.projectID !== currentSource.projectID || info.directory !== currentSource.directory || info.workspaceID !== currentSource.workspaceID ||
-        typeof fork !== "object" || fork === null || Reflect.get(fork, "sessionID") !== sessionID ||
-        Reflect.get(fork, "messageID") !== messageID)
-        return { status: "unknown", message: "The fork could not be verified; check Sessions before retrying." }
-      await selectSession(info.id, info)
-      if (!isCurrentConnection(owner) || selectionToken !== token + 1 || selectionReadyToken !== selectionToken || container.state.activeSessionID !== info.id)
-        return { status: "unknown", message: "The connection or Session changed; check Sessions before retrying." }
-      return { status: "ok", sessionID: info.id }
-      } finally {
-        pendingForks.delete(sessionID)
-      }
-    },
     selectWorkspace: (workspaceID) => {
       if (container.state.transport.kind !== "open" || container.state.connection.kind === "offline") return
       if (!container.state.sessionGroups.some((group) => group.id === workspaceID) || container.state.selectedWorkspaceID === workspaceID) return
@@ -3876,12 +3834,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (input.skills !== undefined && (input.skills.length > RemoteLimits.maxPromptSkills || input.skills.some((id) => !id.trim() || id.length > 128))) return false
       const queuedDraft = container.state.queuedPromptDrafts?.[sessionID]
       const delivery = queuedDraft !== undefined && queuedDraft.trim() === text ? "queue" : input.delivery
-      if (!requestFits("session.prompt", sessionID, { text, delivery, agents: input.agents, skills: input.skills }, input.files)) return false
+      const payload = { text, delivery,
+        ...(input.agents === undefined ? {} : { agents: input.agents }),
+        ...(input.skills?.length ? { metadata: { skills: input.skills.map((id) => ({ id })) } } : {}) }
+      if (!requestFits("session.prompt", sessionID, payload, input.files)) return false
       const messageID = createMessageID()
       const accepted = acceptSend({ id: messageID, kind: "prompt", label: delivery === "queue" ? "Queued prompt" : "Prompt", state: "sending", phase: "preparing",
-        created: now(), sessionID, operation: "session.prompt", input: { id: messageID, text, delivery,
-          ...(input.files === undefined ? {} : { files: input.files }), ...(input.agents === undefined ? {} : { agents: input.agents }),
-          ...(input.skills?.length ? { skills: input.skills } : {}) } }, input)
+        created: now(), sessionID, operation: "session.prompt", input: { id: messageID, ...payload,
+          ...(input.files === undefined ? {} : { files: input.files }) } }, input)
       if (accepted && queuedDraft !== undefined && queuedDraft.trim() === text) {
         const queued = container.state.queuedPromptDrafts
         setState({ queuedPromptDrafts: Object.fromEntries(Object.entries(queued ?? {}).filter(([id]) => id !== sessionID)) })
@@ -4461,7 +4421,6 @@ export function readSessionInfo(value: unknown, options: { readonly running?: bo
   return {
     id,
     ...(record.scope === undefined ? { scope: "bound" as const } : record.scope === "bound" || record.scope === "standalone" ? { scope: record.scope } : {}),
-    ...(record.scope === "bound" || record.scope === "standalone" ? { scopeExplicit: true as const } : {}),
     ...(typeof record.parentID === "string" && record.parentID.length > 0 ? { parentID: record.parentID } : {}),
     title: typeof record.title === "string" && record.title.length > 0 ? record.title : id,
     ...(typeof record.projectID === "string" && record.projectID.length > 0 ? { projectID: record.projectID } : {}),

@@ -23,6 +23,12 @@ type PushSender = {
   readonly fetch: typeof fetch
 }
 
+type RelayPushSender = PushSender & {
+  readonly store: PushStore
+  readonly event: PushEvent
+  readonly relayProtocol?: 5
+}
+
 type PushMessage = {
   readonly category: PushEvent["category"] | "test"
   readonly payload: Uint8Array
@@ -32,11 +38,11 @@ type PushMessage = {
   readonly targetCount: number
 }
 
-export async function sendPushToOwner(input: PushSender & { readonly store: PushStore; readonly accountID: string; readonly event: PushEvent }): Promise<readonly PushOutcome[]> {
+export async function sendPushToOwner(input: RelayPushSender & { readonly accountID: string }): Promise<readonly PushOutcome[]> {
   return sendPush({ ...input, subscriptions: await input.store.list(input.accountID) })
 }
 
-export async function sendPush(input: PushSender & { readonly store: PushStore; readonly event: PushEvent; readonly subscriptions: readonly PushSubscription[] }): Promise<readonly PushOutcome[]> {
+export async function sendPush(input: RelayPushSender & { readonly subscriptions: readonly PushSubscription[] }): Promise<readonly PushOutcome[]> {
   const subscriptions = input.subscriptions
   const allows = (subscription: PushSubscription) => subscription.categories[input.event.category] &&
     coordinationPushAllows(subscription.coordinationFilter, {
@@ -57,13 +63,16 @@ export async function sendPush(input: PushSender & { readonly store: PushStore; 
   const scope = input.event.category === "quota-pace" ? `quota:${quotaKey(input.event)}`
     : "offlineAt" in input.event ? `${input.event.deviceID}:${input.event.offlineAt}`
     : "overflow" in input.event ? `${input.event.deviceID}:overflow` : `${input.event.deviceID}:${input.event.noticeID ?? input.event.sessionID}`
+  const relayProtocol = input.relayProtocol === 5 ? 5 : undefined
+  const payload = quota === undefined ? input.event : { category: quota.category, deviceID: quota.deviceID,
+    providerID: quota.providerID, windowID: quota.windowID, milestone: quota.milestone, resetAt: quota.resetAt }
+  const topic = `${scope}:${input.event.category}${relayProtocol === 5 ? ":v5" : ""}`
   const message: PushMessage = {
     category: input.event.category,
-    payload: new TextEncoder().encode(JSON.stringify(quota === undefined ? input.event : { category: quota.category, deviceID: quota.deviceID,
-      providerID: quota.providerID, windowID: quota.windowID, milestone: quota.milestone, resetAt: quota.resetAt })),
+    payload: new TextEncoder().encode(JSON.stringify({ ...payload, relayProtocol })),
     ttl: quota === undefined ? "3600" : String(Math.max(1, Math.min(3600, Math.floor((quota.resetAt - input.now()) / 1000)))),
     urgency: input.event.category === "approval-requested" ? "high" : "normal",
-    topic: base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${scope}:${input.event.category}`)))).slice(0, 32),
+    topic: base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(topic)))).slice(0, 32),
     targetCount: targets.length,
   }
   const sent = await Promise.all(targets.map(async (subscription): Promise<PushOutcome> => {

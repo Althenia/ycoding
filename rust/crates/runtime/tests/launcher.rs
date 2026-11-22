@@ -1,5 +1,5 @@
-#[path = "launcher/bun_store_migration.rs"]
-mod bun_store_migration;
+#[path = "launcher/clean_store.rs"]
+mod clean_store;
 #[path = "support/launcher.rs"]
 mod launcher;
 #[path = "launcher/stable_sources.rs"]
@@ -172,16 +172,29 @@ fn startup_upgrades_recognized_native_catalogs_and_preserves_the_first_copy() {
         ][..],
     ] {
         let directory = Directory::new();
-        let file = directory.0.join("predecessor.redb");
+        let file = directory.0.join("data/ycoding/core.redb");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         let current = native::catalog(native::DatabaseKind::Core);
         let previous = Catalog::new(
-            current.version,
+            1,
             Box::leak(
                 current
                     .tables()
                     .iter()
                     .copied()
-                    .filter(|table| !removed.contains(&table.name))
+                    .filter(|table| {
+                        !removed.contains(&table.name)
+                            && ![
+                                "usage_cell",
+                                "usage_cell_leaf",
+                                "usage_cell_sample",
+                                "usage_cell_unpriced",
+                                "usage_cell_backfill",
+                                "coordination_group",
+                                "coordination_member",
+                            ]
+                            .contains(&table.name)
+                    })
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
             ),
@@ -192,8 +205,7 @@ fn startup_upgrades_recognized_native_catalogs_and_preserves_the_first_copy() {
             .unwrap();
         let mut original_copy = None;
         for _ in 0..2 {
-            let mut command = directory.isolated("test-v1", "beta");
-            command.env("YCODING_DB", &file);
+            let command = directory.isolated("test-v1", "latest");
             let mut runtime = Runtime::spawn(command, &["--stdio", "--port", "0"]);
             runtime.ready();
             drop(runtime.child.stdin.take());
@@ -813,7 +825,7 @@ fn unreadable_store_is_refused_with_a_sanitized_diagnostic_and_left_unchanged() 
     let directory = Directory::new();
     let data = directory.0.join("data/ycoding");
     std::fs::create_dir_all(&data).unwrap();
-    let store = data.join("ycoding.redb");
+    let store = data.join("core.redb");
     std::fs::write(&store, b"not a ycoding store").unwrap();
     let errors = directory.0.join("startup-error");
     let output = directory
@@ -841,11 +853,11 @@ fn unreadable_store_is_refused_with_a_sanitized_diagnostic_and_left_unchanged() 
     let stores = std::fs::read_dir(&data)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-        .filter(|name| name.starts_with("ycoding"))
+        .filter(|name| name.ends_with(".redb"))
         .collect::<Vec<_>>();
     assert_eq!(
         stores,
-        ["ycoding.redb"],
+        ["core.redb"],
         "no fresh or migrated store may appear"
     );
     assert!(!directory.registration("local").exists());
@@ -892,7 +904,7 @@ async fn managed_service_shutdown_suspends_sessions_still_running() {
     std::fs::create_dir_all(&workspace).unwrap();
     let data = directory.0.join("data/ycoding");
     std::fs::create_dir_all(&data).unwrap();
-    let file = data.join("ycoding.redb");
+    let file = data.join("core.redb");
     let seeded = Store::initialize(
         &file,
         Options::core(),
@@ -1420,10 +1432,16 @@ mod store_path {
                 Vec::<String>::new(),
                 "{channel}: no store, lease, analytics, marker, journal or backup file"
             );
-            assert_eq!(store_files(&directory.0.join(state)), Vec::<String>::new());
+            assert_eq!(
+                store_files(&directory.0.join(state)),
+                vec![format!("{}.lock", service_filename(channel))]
+            );
             stop(runtime);
             assert_eq!(store_files(&directory.0.join(data)), Vec::<String>::new());
-            assert_eq!(store_files(&directory.0.join(state)), Vec::<String>::new());
+            assert_eq!(
+                store_files(&directory.0.join(state)),
+                vec![format!("{}.lock", service_filename(channel))]
+            );
             assert!(
                 tree(&directory.0.join("tmp"))
                     .keys()
@@ -1483,7 +1501,11 @@ mod store_path {
             );
             assert_eq!(
                 store_files(&directory.0.join("state")),
-                Vec::<String>::new()
+                vec![format!(
+                    "{}/{}.lock",
+                    ycoding_runtime::launch::namespace(channel),
+                    service_filename(channel)
+                )]
             );
             assert_eq!(projects(&slot), ["prj_slot"], "{channel}");
             assert_eq!(digest(&stable), stable_hash, "{channel}");
@@ -1569,6 +1591,7 @@ mod store_path {
                 let label = format!("{channel} absolute={absolute}");
                 assert!(target.is_file(), "{label}");
                 assert!(root.join("custom.redb.runtime.lock").is_file(), "{label}");
+                assert!(!root.join("core.redb").exists(), "{label}");
                 assert!(!root.join("ycoding.redb").exists(), "{label}");
                 assert!(!root.join("ycoding-local.redb").exists(), "{label}");
                 assert!(!root.join("runtime.lock").exists(), "{label}");
@@ -1577,7 +1600,11 @@ mod store_path {
                 assert_eq!(projects(&target), Vec::<String>::new(), "{label}");
                 assert_eq!(
                     store_files(&directory.0.join("state")),
-                    Vec::<String>::new(),
+                    vec![format!(
+                        "{}/{}.lock",
+                        ycoding_runtime::launch::namespace(channel),
+                        service_filename(channel)
+                    )],
                     "{label}"
                 );
             }
@@ -1656,37 +1683,49 @@ mod store_path {
     #[test]
     fn slot_path_identity_holds_for_stable_channels() {
         for channel in ["latest", "prod"] {
-            let directory = Directory::new();
-            closed(
-                &directory.0.join("data/ycoding/ycoding.db"),
-                "plain",
-                "prj_stable",
-                "",
-            );
-            let target = directory.0.join("data/ycoding/ycoding.redb");
-            let (runtime, ..) = serve(&directory, channel, &[("YCODING_DB", utf8(&target))]);
-            stop(runtime);
-            let root = directory.0.join("data/ycoding");
-            assert!(target.is_file(), "{channel}");
-            assert!(root.join("runtime.lock").is_file(), "{channel}");
-            assert!(
-                !root.join("ycoding.redb.runtime.lock").exists(),
-                "{channel}"
-            );
-            assert!(!root.join(format!("ycoding-{channel}.redb")).exists());
-            assert_eq!(projects(&target), Vec::<String>::new(), "{channel}");
-            assert!(
-                !directory
-                    .0
-                    .join("state/ycoding/stable-import-v1.json")
-                    .exists(),
-                "{channel}: the stable slot never imports without an explicit source"
-            );
+            for aliased in [false, true] {
+                let directory = Directory::new();
+                let real = directory.0.join(if aliased { "realdata" } else { "data" });
+                if aliased {
+                    mkdir(&real, 0o755);
+                    symlink(&real, directory.0.join("data")).unwrap();
+                }
+                closed(
+                    &directory.0.join("data/ycoding/ycoding.db"),
+                    "plain",
+                    "prj_stable",
+                    "",
+                );
+                let target = real.join("ycoding/core.redb");
+                let (runtime, ..) = serve(&directory, channel, &[("YCODING_DB", utf8(&target))]);
+                stop(runtime);
+                let root = directory.0.join("data/ycoding");
+                assert!(target.is_file(), "{channel} {aliased}");
+                assert!(root.join("runtime.lock").is_file(), "{channel} {aliased}");
+                assert!(
+                    !root.join("core.redb.runtime.lock").exists(),
+                    "{channel} {aliased}"
+                );
+                assert!(!root.join("ycoding.redb").exists(), "{channel} {aliased}");
+                assert!(!root.join(format!("ycoding-{channel}.redb")).exists());
+                assert_eq!(
+                    projects(&target),
+                    Vec::<String>::new(),
+                    "{channel} {aliased}"
+                );
+                assert!(
+                    !directory
+                        .0
+                        .join("state/ycoding/stable-import-v1.json")
+                        .exists(),
+                    "{channel}: the stable slot has no import marker"
+                );
+            }
         }
     }
 
     #[test]
-    fn only_latest_default_slot_imports_and_preserves_an_existing_store() {
+    fn stable_default_slot_is_native_and_preserves_an_existing_store() {
         for channel in ["latest", "prod"] {
             let directory = Directory::new();
             let stable = directory.0.join("data/ycoding/ycoding.db");
@@ -1696,30 +1735,31 @@ mod store_path {
             stop(runtime);
             let root = directory.0.join("data/ycoding");
             assert_eq!(
-                projects(&root.join("ycoding.redb")),
-                if channel == "latest" {
-                    vec!["prj_stable"]
-                } else {
-                    vec![]
-                },
+                projects(&root.join("core.redb")),
+                Vec::<String>::new(),
                 "{channel}"
             );
             assert!(root.join("runtime.lock").is_file(), "{channel}");
-            assert!(
-                !root.join("ycoding.redb.bun-import-v1").exists(),
-                "{channel}"
-            );
+            assert!(!root.join("core.redb.bun-import-v1").exists(), "{channel}");
             assert_eq!(source_set(&stable), hash, "{channel}");
         }
         let directory = Directory::new();
         let stable = directory.0.join("data/ycoding/ycoding.db");
         closed(&stable, "plain", "prj_stable", "");
-        let store = directory.0.join("data/ycoding/ycoding.redb");
+        let store = directory.0.join("data/ycoding/core.redb");
         native(&store, "prj_stage");
+        let previous = directory.0.join("data/ycoding/ycoding.redb");
+        native(&previous, "prj_unpublished");
+        let previous_hash = digest(&previous);
         let (runtime, ..) = serve(&directory, "latest", &[]);
         stop(runtime);
         assert_eq!(projects(&store), ["prj_stage"]);
-        assert!(!store.with_file_name("ycoding.redb.bun-import-v1").exists());
+        assert!(!store.with_file_name("core.redb.bun-import-v1").exists());
+        assert_eq!(digest(&previous), previous_hash);
+        let (runtime, ..) = serve(&directory, "latest", &[("YCODING_DB", utf8(&previous))]);
+        stop(runtime);
+        assert_eq!(projects(&previous), ["prj_unpublished"]);
+        assert_eq!(projects(&store), ["prj_stage"]);
     }
 
     #[test]
@@ -1744,7 +1784,7 @@ mod store_path {
                 "{value}: the stable slot never imports automatically"
             );
             assert_eq!(
-                projects(&root.join("ycoding.redb")),
+                projects(&root.join("core.redb")),
                 Vec::<String>::new(),
                 "{value}"
             );
@@ -1779,7 +1819,7 @@ mod store_path {
                 Vec::<String>::new(),
                 "{value:?}"
             );
-            assert!(!root.join("ycoding.redb").exists(), "{value:?}");
+            assert!(!root.join("core.redb").exists(), "{value:?}");
             assert!(
                 !directory
                     .0
@@ -1810,7 +1850,7 @@ mod store_path {
             let (runtime, ..) = serve(&directory, channel, &[("YCODING_DISABLE_CHANNEL_DB", "1")]);
             stop(runtime);
             let root = directory.0.join("data/ycoding");
-            assert!(root.join("ycoding.redb").is_file(), "{channel}");
+            assert!(root.join("core.redb").is_file(), "{channel}");
             assert!(!root.join(format!("ycoding-{channel}.redb")).exists());
         }
     }
@@ -1831,7 +1871,7 @@ mod store_path {
         stop(runtime);
         let root = directory.0.join("data/ycoding");
         assert!(target.is_file());
-        assert!(!root.join("ycoding.redb").exists());
+        assert!(!root.join("core.redb").exists());
         assert!(!root.join("ycoding-dev.redb").exists());
 
         let directory = Directory::new();
@@ -1839,7 +1879,7 @@ mod store_path {
         stop(runtime);
         let root = directory.0.join("data/ycoding");
         assert!(root.join("ycoding-dev.redb").is_file());
-        assert!(!root.join("ycoding.redb").exists());
+        assert!(!root.join("core.redb").exists());
 
         let directory = Directory::new();
         let (runtime, ..) = serve(
@@ -1849,7 +1889,7 @@ mod store_path {
         );
         stop(runtime);
         let root = directory.0.join("data/ycoding");
-        assert!(root.join("ycoding.redb").is_file());
+        assert!(root.join("core.redb").is_file());
         assert!(!root.join("ycoding-dev.redb").exists());
     }
 
@@ -1876,7 +1916,7 @@ mod store_path {
                 "{wal}"
             );
             assert!(!provenance(&root.join("ycoding-dev.redb")));
-            assert!(!root.join("ycoding.redb").exists(), "{wal}");
+            assert!(!root.join("core.redb").exists(), "{wal}");
             assert!(
                 !directory
                     .0
@@ -1962,7 +2002,7 @@ mod store_path {
         assert!(directory.0.join("data/ycoding-beta/runtime.lock").is_file());
         assert!(root.join("ycoding-dev.redb").is_file());
         assert!(root.join("ycoding-local.redb").is_file());
-        assert!(root.join("ycoding.redb").is_file());
+        assert!(root.join("core.redb").is_file());
         assert!(directory.0.join("data/ycoding-beta/ycoding.redb").is_file());
         let registration = std::fs::read_to_string(directory.registration("dev")).unwrap();
         let mut contender = Runtime::spawn(configured(&directory, "dev", &[]), &SERVE);
@@ -2078,7 +2118,7 @@ mod store_path {
                 .join("state/ycoding/stable-import-local-v1.json");
             if variant == "blank-with-selector" {
                 assert_eq!(
-                    projects(&root.join("ycoding.redb")),
+                    projects(&root.join("core.redb")),
                     Vec::<String>::new(),
                     "{variant}"
                 );
@@ -2094,7 +2134,7 @@ mod store_path {
                 );
                 assert!(root.join("runtime-local.lock").is_file(), "{variant}");
                 assert!(!marker.exists(), "{variant}");
-                assert!(!root.join("ycoding.redb").exists(), "{variant}");
+                assert!(!root.join("core.redb").exists(), "{variant}");
                 assert!(!root.join("runtime.lock").exists(), "{variant}");
             }
             assert_eq!(

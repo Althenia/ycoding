@@ -17,6 +17,7 @@ afterEach(async () => {
 
 describe("update selection", () => {
   const latestURL = "https://api.github.com/repos/Althenia/ycoding/releases/latest"
+  const releasesURL = "https://api.github.com/repos/Althenia/ycoding/releases?per_page=20"
   const latestFetch = (tag: string, urls: string[]) => async (url: string) => {
     urls.push(url)
     if (url === latestURL) return Response.json({ tag_name: tag })
@@ -41,6 +42,39 @@ describe("update selection", () => {
     expect(urls).toEqual([latestURL])
   })
 
+  test("a Bun update refuses to select Rust and explains explicit clean replacement", async () => {
+    const urls: string[] = []
+    expect(await planUpdate({ installed: "0.12.1", fetch: latestFetch("v0.13.0", urls) }).then(() => "", String)).toContain("--replace-bun")
+    expect(urls).toEqual([latestURL])
+    expect(await planUpdate({ installed: "0.12.1", requested: "0.13.0", fetch: latestFetch("v0.13.0", urls) }).then(() => "", String)).toContain("--replace-bun")
+    expect(urls).toEqual([latestURL])
+  })
+
+  test("Rust uses its newest stable release while GitHub Latest stays on Bun", async () => {
+    const urls: string[] = []
+    const release = (tag_name: string, draft = false, prerelease = false) => ({ tag_name, draft, prerelease })
+    const releases = [release("v9.0.0", true), release("v8.0.0", false, true), release("v7.0.0-rc.1"), release("v0.12.1"), release("v0.13.0")]
+    const fetch = async (url: string) => {
+      urls.push(url)
+      if (url === releasesURL) return Response.json(releases)
+      if (url === latestURL) return Response.json({ tag_name: "v0.12.1" })
+      return new Response("unexpected", { status: 500 })
+    }
+    expect(await planUpdate({ installed: "0.13.0", fetch })).toEqual({ action: "current" })
+    releases.push(release("v0.13.10"), release("v0.13.9"), release("not-a-version"))
+    expect(await planUpdate({ installed: "0.13.0", fetch })).toEqual({ action: "install", version: "0.13.10" })
+    expect(urls).toEqual([releasesURL, releasesURL])
+  })
+
+  test("Rust refuses an empty stable release line without falling back to Bun", async () => {
+    const urls: string[] = []
+    expect(await planUpdate({ installed: "0.13.0", fetch: async (url) => {
+      urls.push(url)
+      return Response.json([{ tag_name: "v0.12.1", draft: false, prerelease: false }])
+    } }).then(() => "", String)).toContain("No stable Rust release")
+    expect(urls).toEqual([releasesURL])
+  })
+
   test("an explicit version installs that exact release, including an older one, without resolving latest", async () => {
     const urls: string[] = []
     expect(await planUpdate({ installed: "0.12.4", requested: "0.12.0", fetch: latestFetch("v0.12.0", urls) })).toEqual({ action: "install", version: "0.12.0" })
@@ -48,7 +82,7 @@ describe("update selection", () => {
     expect(urls).toEqual([])
   })
 
-  test("installs the 0.12.0 Interaction layout and retires the Computer Use app after verifying both signatures", async () => {
+  test.each([["0.12.0", "ycoding"], ["0.13.0", "ycoding-native"]] as const)("installs the %s Interaction layout after verifying both signatures", async (version, archiveExecutable) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-update-interaction-"))
     temporary.push(root)
     const source = path.join(root, "source")
@@ -56,15 +90,15 @@ describe("update selection", () => {
     await mkdir(path.join(contents, "MacOS"), { recursive: true })
     await mkdir(path.join(contents, "Resources"))
     await mkdir(path.join(contents, "_CodeSignature"))
-    await writeFile(path.join(source, "ycoding"), "new executable\n")
+    await writeFile(path.join(source, archiveExecutable), "new executable\n")
     await writeFile(path.join(contents, "Info.plist"), "<key>CFBundleIdentifier</key><string>app.ycoding.interaction</string><key>CFBundleDisplayName</key><string>YCoding Interaction</string><key>CFBundleIconFile</key><string>YCoding.icns</string>\n")
     await writeFile(path.join(contents, "MacOS/ycoding-interaction"), "interaction helper\n")
     await writeFile(path.join(contents, "Resources/YCoding.icns"), "icon\n")
     await writeFile(path.join(contents, "_CodeSignature/CodeResources"), "signature\n")
     await mkdir(path.join(source, "ycoding-chrome-extension/icons"), { recursive: true })
     for (const file of interactionExtensionFiles) await writeFile(path.join(source, "ycoding-chrome-extension", file), `new ${file}\n`)
-    const asset = "ycoding-0.12.0-darwin-arm64.tar.gz"
-    expect(Bun.spawnSync(["tar", "-C", "source", "-czf", asset, "ycoding", "YCoding Interaction.app", "ycoding-chrome-extension"], { cwd: root, env: { ...process.env, COPYFILE_DISABLE: "1" } }).exitCode).toBe(0)
+    const asset = `ycoding-${version}-darwin-arm64.tar.gz`
+    expect(Bun.spawnSync(["tar", "-C", "source", "-czf", asset, archiveExecutable, "YCoding Interaction.app", "ycoding-chrome-extension"], { cwd: root, env: { ...process.env, COPYFILE_DISABLE: "1" } }).exitCode).toBe(0)
     const archive = new Uint8Array(await Bun.file(path.join(root, asset)).arrayBuffer())
     const checksums = `${new Bun.CryptoHasher("sha256").update(archive).digest("hex")}  ${asset}\n`
     const install = path.join(root, "bin")
@@ -75,7 +109,7 @@ describe("update selection", () => {
     await writeFile(path.join(install, "ycoding"), "old executable\n")
     const verified: string[] = []
     const result = await installRelease({
-      version: "0.12.0",
+      version,
       executable: path.join(install, "ycoding"),
       platform: "darwin",
       arch: "arm64",
@@ -89,10 +123,17 @@ describe("update selection", () => {
         },
       },
     })
-    expect(result).toEqual({ version: "0.12.0", asset })
+    expect(result).toEqual({ version, asset })
     expect(verified).toEqual(["executable:ycoding", "application:YCoding Interaction.app"])
     expect(await readFile(path.join(install, "ycoding"), "utf8")).toBe("new executable\n")
-    expect((await readdir(install)).sort()).toEqual(["YCoding Interaction.app", "ycoding", "ycoding-chrome-extension"])
+    const receiptName = ".ycoding-native-release"
+    expect((await readdir(install)).sort()).toEqual([
+      ...(version === "0.13.0" ? [receiptName] : []), "YCoding Interaction.app", "ycoding", "ycoding-chrome-extension",
+    ])
+    if (version === "0.13.0") {
+      const digest = new Bun.CryptoHasher("sha256").update(await readFile(path.join(install, "ycoding"))).digest("hex")
+      expect(await readFile(path.join(install, receiptName), "utf8")).toBe(`${version} ${digest}\n`)
+    }
     expect((await readdir(path.join(install, "ycoding-chrome-extension"), { recursive: true })).filter((file) => file !== "icons").sort()).toEqual([...interactionExtensionFiles].sort())
     expect(await Bun.file(path.join(install, "ycoding-chrome-extension/protocol.js")).exists()).toBe(false)
   })
@@ -168,7 +209,7 @@ describe("release updater", () => {
 
   test("validates the latest version returned by the fixed GitHub API", async () => {
     const urls: string[] = []
-    const version = await latestRelease(async (url) => {
+    const version = await latestRelease("0.12.1", async (url) => {
       urls.push(url)
       return Response.json({ tag_name: "v1.2.3-beta.1" })
     })
@@ -176,7 +217,7 @@ describe("release updater", () => {
     expect(version).toBe("1.2.3-beta.1")
     expect(urls).toEqual(["https://api.github.com/repos/Althenia/ycoding/releases/latest"])
     expect(
-      await latestRelease(async () => Response.json({ tag_name: "../../bad" })).then(
+      await latestRelease("0.12.1", async () => Response.json({ tag_name: "../../bad" })).then(
         () => "",
         (error) => (error instanceof Error ? error.message : String(error)),
       ),

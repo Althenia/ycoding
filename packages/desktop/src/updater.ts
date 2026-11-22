@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { constants } from "node:fs"
 import { access as fsAccess, lstat, mkdtemp, open, readdir, rename, rm } from "node:fs/promises"
 import path from "node:path"
+import { usesNativeReleaseLayout } from "../../cli/src/update/interaction-layout"
 import { DesktopError, type UpdateCheckResult, type UpdateInstallResult } from "./contract"
 
 export const DESKTOP_GITHUB_LATEST_RELEASE_URL = "https://api.github.com/repos/Althenia/ycoding/releases/latest"
@@ -10,6 +11,7 @@ export const DESKTOP_SIGNING_CERT_SHA1 = "9dd524184b0db949ffac7f0ada0ae860ac7f5f
 
 const releaseDownloadBase = "https://github.com/Althenia/ycoding/releases/download"
 const releaseTagBase = "https://github.com/Althenia/ycoding/releases/tag"
+const nativeReleasesUrl = "https://api.github.com/repos/Althenia/ycoding/releases?per_page=20"
 const userAgent = "ycoding-desktop"
 const maxMetadataBytes = 1024 * 1024
 const maxChecksumsBytes = 1024 * 1024
@@ -70,7 +72,7 @@ export function resolveAppBundlePath(targetPath: string): string | null {
 
 export async function checkForUpdates(options: CheckForUpdatesOptions): Promise<UpdateCheckResult> {
   const current = requireVersion(options.currentVersion, "current version")
-  const release = await fetchLatestRelease(options.fetch ?? fetch)
+  const release = await fetchLatestRelease(options.currentVersion, options.fetch ?? fetch)
   const updateAvailable = compareVersions(requireVersion(release.version, "latest version"), current) > 0
   const cannotInstallReason = updateAvailable ? await installBlocker(options, release) : undefined
   return {
@@ -96,7 +98,7 @@ export async function installUpdate(options: InstallUpdateOptions): Promise<Upda
   await assertWritable(appBundlePath, options.access ?? fsAccess)
 
   const fetcher = options.fetch ?? fetch
-  const version = options.targetVersion ?? (await fetchLatestRelease(fetcher)).version
+  const version = options.targetVersion ?? (await fetchLatestRelease(options.currentVersion, fetcher)).version
   requireNewer(version, current)
   const zipName = archiveName(version)
   const releaseBase = `${releaseDownloadBase}/v${version}`
@@ -170,16 +172,35 @@ async function assertWritable(appBundlePath: string, access: UpdateAccess) {
   await access(appBundlePath, constants.W_OK)
 }
 
-async function fetchLatestRelease(fetcher: UpdateFetch): Promise<Release> {
-  const response = await fetcher(DESKTOP_GITHUB_LATEST_RELEASE_URL, {
+async function fetchLatestRelease(currentVersion: string, fetcher: UpdateFetch): Promise<Release> {
+  const native = usesNativeReleaseLayout(currentVersion)
+  const response = await fetcher(native ? nativeReleasesUrl : DESKTOP_GITHUB_LATEST_RELEASE_URL, {
     headers: { Accept: "application/vnd.github+json", "User-Agent": userAgent },
     signal: AbortSignal.timeout(metadataTimeoutMs),
   })
   const bytes = await readLimited(response, maxMetadataBytes, "latest release metadata")
   const data = parseJson(new TextDecoder().decode(bytes))
+  if (native) {
+    if (!Array.isArray(data) || data.length > 20) throw new DesktopError("Rust release metadata did not contain a valid release list")
+    let latest: { readonly data: Record<string, unknown>; readonly tag: string; readonly version: Version } | undefined
+    for (const entry of data as readonly unknown[]) {
+      if (!isRecord(entry) || entry.draft !== false || entry.prerelease !== false ||
+        typeof entry.tag_name !== "string" || !entry.tag_name.startsWith("v")) continue
+      const value = entry.tag_name.slice(1)
+      const version = parseVersion(value)
+      if (!version || version.prerelease.length !== 0 || !usesNativeReleaseLayout(value)) continue
+      if (!latest || compareVersions(version, latest.version) > 0) latest = { data: entry, tag: entry.tag_name, version }
+    }
+    if (!latest) throw new DesktopError("No stable Rust release found")
+    return releaseMetadata(latest.data, latest.tag)
+  }
   if (!isRecord(data) || typeof data.tag_name !== "string") throw new DesktopError("Latest release metadata did not contain a tag")
   const version = data.tag_name.startsWith("v") ? data.tag_name.slice(1) : ""
   requireVersion(version, `latest release tag ${JSON.stringify(data.tag_name)}`)
+  return releaseMetadata(data, data.tag_name)
+}
+
+function releaseMetadata(data: Record<string, unknown>, tag: string): Release {
   const assets = Array.isArray(data.assets)
     ? data.assets.flatMap((asset) =>
         isRecord(asset) && typeof asset.name === "string" && typeof asset.browser_download_url === "string"
@@ -188,9 +209,9 @@ async function fetchLatestRelease(fetcher: UpdateFetch): Promise<Release> {
       )
     : []
   return {
-    version,
+    version: tag.slice(1),
     releaseUrl:
-      typeof data.html_url === "string" && isHttpsUrl(data.html_url) ? data.html_url : `${releaseTagBase}/${data.tag_name}`,
+      typeof data.html_url === "string" && isHttpsUrl(data.html_url) ? data.html_url : `${releaseTagBase}/${tag}`,
     publishedAt: typeof data.published_at === "string" ? data.published_at : "",
     releaseNotes: typeof data.body === "string" ? data.body : "",
     assets,

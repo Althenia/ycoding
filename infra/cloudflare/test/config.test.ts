@@ -17,7 +17,7 @@ test("adopts the existing production Worker, only the requested Cloudflare resou
   expect(config.assets).toEqual({
     directory: "../../apps/web/dist",
     binding: "ASSETS",
-    not_found_handling: "single-page-application",
+    not_found_handling: "none",
     run_worker_first: [
       "/api",
       "/api/*",
@@ -28,6 +28,8 @@ test("adopts the existing production Worker, only the requested Cloudflare resou
       "/health",
       "/remote",
       "/remote/*",
+      "/_bun",
+      "/_bun/*",
       "/docs",
       "/docs/*",
       "/changelog",

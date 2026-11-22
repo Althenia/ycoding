@@ -649,11 +649,18 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
     const operation = requestedOperation === "session.message.delete" ? "session.deleteMessage" : requestedOperation
     const value = owner
     const unavailable = (reason: Extract<RemoteRequestOutcome, { status: "unavailable" }>["reason"]) => {
-      reportTiming({ operation, outcome: "unavailable", reason, queueMs: 0, totalMs: 0 })
+      reportTiming({ operation: requestedOperation, outcome: "unavailable", reason, queueMs: 0, totalMs: 0 })
       return Promise.resolve<RemoteRequestOutcome>({ status: "unavailable", reason })
     }
     if (input.signal?.aborted) return unavailable("cancelled")
     if (!value || current.kind !== "open" || !currentOwner(value)) return unavailable("not-connected")
+    if (!remotePayloadCodecs.has(operation)) {
+      reportTiming({ operation: requestedOperation, outcome: "failed", queueMs: 0, totalMs: 0 })
+      return Promise.resolve({
+        status: "failed",
+        error: { code: "unknown_operation", message: "This operation is not available over the remote connection." },
+      })
+    }
     if (value.pending.size >= (options.maxInFlight ?? 32)) return unavailable("in-flight-limit")
     const prepared = prepareRemoteRequest(operation, input)
     const http = input.httpBulk === undefined ? undefined : {
@@ -751,7 +758,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
           const totalMs = Math.max(0, Math.round(now() - started))
           const queueMs = Math.min(totalMs, Math.max(0, Math.round((transmitted ?? now()) - started)))
           reportTiming({
-            operation,
+            operation: requestedOperation,
             outcome: outcome.status,
             ...(outcome.status === "unavailable" ? { reason: outcome.reason } : {}),
             queueMs,

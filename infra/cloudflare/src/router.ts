@@ -236,10 +236,26 @@ export function createRouter(deps: RouterDeps) {
     // this worker for every path, matched or not.
     if (isRelayPath(url.pathname)) return apiError(404, "invalid_message", "Not found")
 
-    // Landing, docs, changelog, and the remote SPA are served from the asset
-    // binding. Unmatched paths reach this branch for every `run_worker_first`
-    // route, and the asset layer rewrites them to `/index.html` for the SPA.
-    if (deps.assets) return withSecurityHeaders(await deps.assets.fetch(request))
+    if (url.pathname === "/_bun" || url.pathname.startsWith("/_bun/"))
+      return withSecurityHeaders(new Response("Not found", { status: 404 }))
+
+    const remote = url.pathname === "/remote" || url.pathname.startsWith("/remote/")
+    const rust = url.pathname === "/remote/rust" || url.pathname.startsWith("/remote/rust/")
+    const read = request.method === "GET" || request.method === "HEAD"
+    if (remote && read) {
+      const response = await deps.assets?.fetch(new Request(new URL(rust ? "/" : "/_bun/", url), request))
+      if (response && (rust || response.status === 200 || response.status === 304)) return withSecurityHeaders(response)
+      return withSecurityHeaders(new Response(request.method === "HEAD" ? null : "Web shell unavailable", {
+        status: 503,
+        headers: { "cache-control": "no-store" },
+      }))
+    }
+
+    if (deps.assets) {
+      const response = await deps.assets.fetch(request)
+      if (response.status !== 404 || !read || url.pathname === "/") return withSecurityHeaders(response)
+      return withSecurityHeaders(await deps.assets.fetch(new Request(new URL("/", url), request)))
+    }
     return withSecurityHeaders(new Response("Not found", { status: 404 }))
   }
 

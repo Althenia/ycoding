@@ -7,7 +7,7 @@ import { publish, type Manifest } from "./release-publish"
 
 type Asset = { id: number; name: string; state: "uploaded" | "starter"; content: Uint8Array; digest?: string | null }
 type Fault = "reject" | "applied-reject" | "starter" | "corrupt"
-type Call = { method: string; path: string; name?: string }
+type Call = { method: string; path: string; name?: string; makeLatest?: unknown }
 
 const repository = "example/ycoding"
 const tag = "v0.12.0"
@@ -31,13 +31,14 @@ function github(
     readonly fault?: (call: Call) => Fault | undefined
     readonly digests?: "present" | "null"
     readonly latest?: () => number
+    readonly tag?: string
   } = { assets: [] },
 ) {
   let nextID = 1000
   const calls: Call[] = []
   const release = {
     id: releaseID,
-    tag_name: tag,
+    tag_name: options.tag ?? tag,
     name: "YCoding 0.11.0",
     body: "old notes",
     draft: false,
@@ -49,7 +50,7 @@ function github(
       { id: index + 1, name: asset.name, state: asset.state ?? "uploaded", content: bytes(asset.content) },
     ]),
   )
-  let latest = releaseID
+  let latest = options.tag === "v0.13.0" ? otherID : releaseID
   const view = (asset: Asset) => ({
     id: asset.id,
     name: asset.name,
@@ -70,6 +71,7 @@ function github(
       const call: Call = {
         method: request.method,
         path: route,
+        makeLatest: body.get("make_latest"),
         name:
           url.searchParams.get("name") ??
           ((value) => (typeof value === "string" ? value : undefined))(body.get("name")),
@@ -77,9 +79,11 @@ function github(
       calls.push(call)
       const fault = options.fault?.(call)
       if (fault === "reject") return new Response("injected failure", { status: 500 })
-      if (request.method === "GET" && route === `/releases/tags/${tag}`) return Response.json(releaseView())
-      if (request.method === "GET" && route === "/releases/latest")
-        return Response.json({ ...releaseView(), id: options.latest?.() ?? latest })
+      if (request.method === "GET" && route === `/releases/tags/${release.tag_name}`) return Response.json(releaseView())
+      if (request.method === "GET" && route === "/releases/latest") {
+        const id = options.latest?.() ?? latest
+        return Response.json({ ...releaseView(), id, tag_name: id === otherID ? "v0.12.2" : release.tag_name })
+      }
       if (request.method === "GET" && route === `/releases/${releaseID}/assets`)
         return Response.json(
           url.searchParams.get("page") === "1" || !url.searchParams.get("page") ? [...assets.values()].map(view) : [],
@@ -176,7 +180,7 @@ async function run(server: ReturnType<typeof github>, entries = replacement, run
     uploadURL: server.base,
     token: "test-token",
     repository,
-    tag,
+    tag: server.release.tag_name,
     title: "YCoding 0.11.0",
     notes: "new notes",
     run: runID,
@@ -257,6 +261,23 @@ test("a verified swap points every public name at a new asset, renames the check
     ),
   )
   expect(manifest.original.map((asset) => asset.id).toSorted((left, right) => left - right)).toEqual([1, 2, 3])
+})
+
+test("Rust publication sends make_latest false and keeps Bun Latest", async () => {
+  const server = github({ assets: original, tag: "v0.13.0" })
+  const { result } = await run(server)
+  expect(result.status).toBe("published")
+  expect(server.release).toMatchObject({ draft: false, prerelease: false, tag_name: "v0.13.0" })
+  expect(server.mutations().filter((call) => call.path === `/releases/${releaseID}`).map((call) => call.makeLatest)).toEqual(["false"])
+  const latest = await fetch(`${server.base}/repos/${repository}/releases/latest`)
+  expect(await latest.json()).toMatchObject({ id: otherID, tag_name: "v0.12.2" })
+})
+
+test("Rust publication refuses before uploading when Bun v0.12.2 is not Latest", async () => {
+  const server = github({ assets: original, tag: "v0.13.0", latest: () => releaseID })
+  const { result } = await run(server)
+  expect(result.status).toBe("refused")
+  expect(server.mutations()).toEqual([])
 })
 
 test("a rename failure restores every public name to its original asset", async () => {

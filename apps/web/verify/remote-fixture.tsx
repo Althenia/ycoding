@@ -1176,7 +1176,7 @@ function createFixtureStore(): Fixture {
     ].includes(operation)) {
       mutationRequests.push({ operation, input })
     }
-    if (operation === "session.catalog" || operation === "workspace.catalog") return { status: "ok", value: catalog }
+    if (operation === "catalog.get") return { status: "ok", value: catalog }
     if (operation === "session.file.find" || operation === "workspace.file.find") {
       const query = typeof input?.query === "string" ? input.query.toLowerCase() : ""
       const limit = typeof input?.limit === "number" ? input.limit : 20
@@ -1277,7 +1277,7 @@ function createFixtureStore(): Fixture {
             return [{ id, title: `Inventory Session ${number}`, projectID: number % 2 === 1 ? "prj_other" : "prj_remote",
               location: { directory: number % 2 === 1 ? "/workspace/other" : "/workspace/ycoding" }, time: { created: number, updated: inventoryCount - number } }]
           }).filter((session) => input.workspace === undefined || groupOf(session).id === input.workspace)
-          return { status: "ok", value: { data: data.slice(0, Number(input.limit ?? 50)), cursor: {} } }
+          return { status: "ok", value: { data: { data: data.slice(0, Number(input.limit ?? 50)), cursor: {} } } }
         }
         const limit = inventoryPageRows > 0 ? inventoryPageRows : Math.min(50, Number(input?.limit ?? 50))
         const odd = input?.workspace === "workspace_other"
@@ -1295,14 +1295,14 @@ function createFixtureStore(): Fixture {
           return { id: `ses_inventory_${number}`, title: `Inventory Session ${number}`, projectID: other ? "prj_other" : "prj_remote",
             location: { directory: other ? "/workspace/other" : "/workspace/ycoding" }, time: { created: number, updated: inventoryCount - number } }
         })
-        const result = { status: "ok" as const, value: { data, cursor: { ...(offset > 0 ? { previous: String(Math.max(0, offset - limit)) } : {}),
-          ...(offset + data.length < count ? { next: String(offset + data.length) } : {}) } } }
+        const result = { status: "ok" as const, value: { data: { data, cursor: { ...(offset > 0 ? { previous: String(Math.max(0, offset - limit)) } : {}),
+          ...(offset + data.length < count ? { next: String(offset + data.length) } : {}) } } } }
         if (input?.workspace !== undefined && accountParams.get("sessionListGate") === "1" && sessionListsHeld)
           return new Promise<RemoteRequestOutcome>((resolve) => heldSessionLists.push(() => resolve(result)))
         return input?.workspace !== undefined && sessionListDelayMs > 0
           ? new Promise<RemoteRequestOutcome>((resolve) => setTimeout(() => resolve(result), sessionListDelayMs)) : result
       }
-      return { status: "ok", value: { data: [...createdSessions.values(), ...(emptyBackend ? [] : sessions)]
+      const data = [...createdSessions.values(), ...(emptyBackend ? [] : sessions)]
         .filter((session) => input?.workspace === undefined || groupOf(session).id === input.workspace)
         .filter((session) => !paletteAcceptance || typeof input?.search !== "string" || `${session.title} ${session.id}`.toLowerCase().includes(input.search.toLowerCase()))
         .filter((session) => input?.parentID !== null || Reflect.get(session, "parentID") === undefined)
@@ -1317,7 +1317,8 @@ function createFixtureStore(): Fixture {
           const group = (id: string) => (statusAttention?.has(id) ?? (id === sessionID && unreplied(permissions).length + unreplied(guardrails).length > 0)) && !statusFailed.has(id) && !statusLost.has(id) ? 0 : statusRunning.has(id) ? 1 : 2
           return group(left.id) - group(right.id) || (Reflect.get(right.time, "active") ?? right.time.updated) - (Reflect.get(left.time, "active") ?? left.time.updated) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
         })
-        .slice(0, typeof input?.limit === "number" ? input.limit : undefined) } }
+        .slice(0, typeof input?.limit === "number" ? input.limit : undefined)
+      return { status: "ok", value: { data: { data, cursor: {} } } }
     }
     if (operation === "session.active") return { status: "ok", value: { data: { [sessionID]: { type: "running" } } } }
     if (operation === "session.subagent.list") {
@@ -1603,7 +1604,7 @@ function createFixtureStore(): Fixture {
     if (targetSessionID !== undefined && targetSessionID !== laptopSession.id) return { status: "failed", error: { code: "session_not_allowed", message: "Session not found" } }
     if (operation === "workspace.list") return { status: "ok", value: { data: [laptopGroup] } }
     if (operation === "session.status") return { status: "ok", value: { running: [], attention: [], failed: [], lost: [] } }
-    if (operation === "session.list") return { status: "ok", value: { data: input?.status === undefined || input.status === "idle" ? [laptopSession] : [], cursor: {} } }
+    if (operation === "session.list") return { status: "ok", value: { data: { data: input?.status === undefined || input.status === "idle" ? [laptopSession] : [], cursor: {} } } }
     if (operation === "session.get") return { status: "ok", value: { data: laptopSession } }
     if (operation === "session.snapshot") return { status: "ok", value: { data: { sourceEpoch: "epoch_laptop", session: laptopSession, messages: [
       { id: "msg_laptop_user", type: "user", text: "Check the laptop release build.", time: { created: ago(19), consumed: ago(19) } },

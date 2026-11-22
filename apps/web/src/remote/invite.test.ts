@@ -17,8 +17,11 @@ test("invite landing view does not redeem on load and distinguishes invalid and 
 })
 
 test("takes an invite fragment into memory and strips the URL before any action", () => {
-  const replaced: string[] = []
-  expect(takeInviteToken("#" + "A".repeat(43), (target) => replaced.push(target))).toBe("A".repeat(43))
-  expect(replaced).toEqual(["/remote/invite"])
-  expect(takeInviteToken("", (target) => replaced.push(target))).toBeUndefined()
+  let cleared = 0
+  const clearFragment = () => { cleared++ }
+  expect(takeInviteToken("#" + "A".repeat(43), clearFragment)).toBe("A".repeat(43))
+  expect(cleared).toBe(1)
+  expect(takeInviteToken("#invalid", clearFragment)).toBeUndefined()
+  expect(takeInviteToken("", clearFragment)).toBeUndefined()
+  expect(cleared).toBe(2)
 })

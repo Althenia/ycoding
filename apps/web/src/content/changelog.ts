@@ -22,6 +22,43 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.13.0",
+    date: "2026-11-22",
+    title: "Rust for new installations",
+    tags: ["Changed"],
+    changes: [
+      { tag: "Changed", text: "A new installation uses the Rust runtime. On macOS or Linux, run the shell installer from the installation page. Rust starts with its own `core.redb` store and does not import Bun Session history, Usage, or saved data." },
+      { tag: "Changed", text: "The default installer leaves an existing Bun installation or database alone. To stay on Bun, run `YCODING_VERSION=0.12.2 sh install.sh` using the downloaded installer. To replace the executable with Rust, let active Sessions finish and run `sh install.sh --replace-bun`. That command leaves your Bun database intact on disk." },
+      { tag: "Changed", text: "GitHub Latest stays on Bun 0.12.2, so an existing Bun installation stays on Bun when it runs `ycoding update`. On Rust, the same command checks for stable Rust releases." },
+      { tag: "Changed", text: "Open `/remote` for Bun 0.12.x devices or `/remote/rust` for Rust devices. Both use the same Web sign-in, and existing Bun links still work." },
+      { tag: "Changed", text: "The Rust runtime uses the v5 WebSocket API for Session, Project, and configuration operations. Call a named operation with `ycoding api session.list`, or use a v5 client. The Bun REST routes for these operations are not available on Rust. Run `ycoding api --help` for operation syntax and `ycoding --help` for the Rust command list." },
+    ],
+  },
+  {
+    version: "0.12.2",
+    date: "2026-11-22",
+    title: "Project placement and cleanup guidance",
+    tags: ["Changed"],
+    changes: [
+      { tag: "Changed", text: "Project supervisors resolve the folder or worktree for each new member. The Master enrolls the Session at that location, and the supervisor verifies the placement before sending the assignment." },
+      { tag: "Changed", text: "After delivery is verified, Project owners arrange archival for idle Sessions that are no longer needed. They leave active, waiting, or reusable Sessions open. Archiving keeps Session history." },
+      { tag: "Changed", text: "Built-in agents clean up only their own unused task files and clean, merged worktrees and branches. They keep shared files, tool caches, and the evidence needed to verify or roll back a release." },
+    ],
+  },
+  {
+    version: "0.12.1",
+    date: "2026-11-22",
+    title: "Bun edition with Field Notes and message actions",
+    tags: ["Changed", "Fixed"],
+    changes: [
+      { tag: "Changed", text: "The full-featured Bun edition includes the Field Notes redesign on Web and in the signed macOS Desktop app. The conversation header can hide the Session list, and Desktop groups Sessions by what needs your attention." },
+      { tag: "Changed", text: "The composer keeps Send visible on one row. Narrow layouts move secondary actions into Controls without clearing the draft." },
+      { tag: "Changed", text: "The pending-message tray shows a one-line preview ending in `..` when truncated. Open it to steer or delete individual messages. You can also delete an unread sent message; if YCoding reads it before the delete completes, the message stays in the conversation." },
+      { tag: "Changed", text: "This edition includes signed YCoding Interaction for macOS, the Chrome extension, Markdown code cards, image previews, and Goal Mode with rework tracking and named-check verification." },
+      { tag: "Fixed", text: "On Bun 0.12.x, `ycoding update` can install a newer 0.12.x release but will not switch to Rust when 0.13.0 or later is the latest release. To switch editions, specify the target explicitly with `ycoding update --version <version>`." },
+    ],
+  },
+  {
     version: "0.12.0",
     date: "2026-11-21",
     title: "YCoding Interaction, queued messages and Markdown code cards",

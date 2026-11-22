@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { rejects } from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
@@ -17,6 +18,8 @@ type CommandResult = {
   stdout: string
   stderr: string
 }
+
+const nativeReleasesUrl = "https://api.github.com/repos/Althenia/ycoding/releases?per_page=20"
 
 function withUrl(response: Response, url: string): Response {
   Object.defineProperty(response, "url", { value: url, configurable: true })
@@ -263,14 +266,14 @@ describe("desktop updater constants and bundle path resolution", () => {
 })
 
 describe("checkForUpdates", () => {
-  test("requests the latest GitHub release with Accept header and AbortSignal timeout and reports an installable update", async () => {
+  test("Bun Desktop requests GitHub Latest with its Accept header and timeout and reports an installable update", async () => {
     await withTempDir(async (root) => {
       const appBundlePath = path.join(root, "YCoding Desktop.app")
       await mkdir(appBundlePath, { recursive: true })
       const requests: Array<{ url: string; accept: string | null; hasAbortSignal: boolean }> = []
 
       const result = await checkForUpdates({
-        currentVersion: "1.18.4",
+        currentVersion: "0.12.4",
         appBundlePath,
         platform: "darwin",
         arch: "arm64",
@@ -283,7 +286,7 @@ describe("checkForUpdates", () => {
           })
           return jsonResponse(
             releasePayload({
-              version: "1.19.0",
+              version: "0.12.5",
               body: "Signed desktop self-update support",
             }),
           )
@@ -298,10 +301,10 @@ describe("checkForUpdates", () => {
         },
       ])
       expect(result).toMatchObject({
-        currentVersion: "1.18.4",
-        latestVersion: "1.19.0",
+        currentVersion: "0.12.4",
+        latestVersion: "0.12.5",
         updateAvailable: true,
-        releaseUrl: "https://github.com/Althenia/ycoding/releases/tag/v1.19.0",
+        releaseUrl: "https://github.com/Althenia/ycoding/releases/tag/v0.12.5",
         publishedAt: "2026-11-14T10:00:00Z",
         releaseNotes: "Signed desktop self-update support",
         canInstall: true,
@@ -309,15 +312,70 @@ describe("checkForUpdates", () => {
     })
   })
 
+  test("native Desktop selects the highest stable Rust release and keeps that entry's metadata", async () => {
+    const stable = (version: string) => ({ ...releasePayload({ version }), draft: false, prerelease: false })
+    const requests: string[] = []
+    const result = await checkForUpdates({
+      currentVersion: "0.13.0",
+      appBundlePath: "/synthetic/YCoding Desktop.app",
+      platform: "darwin",
+      arch: "arm64",
+      access: async () => {},
+      fetch: async (input, init) => {
+        const url = input instanceof Request ? input.url : input.toString()
+        requests.push(url)
+        expect(new Headers(init?.headers).get("accept")).toBe("application/vnd.github+json")
+        expect(init?.signal?.aborted).toBe(false)
+        return url === nativeReleasesUrl ? jsonResponse([
+          stable("0.13.10"), stable("0.12.9"), { ...stable("0.14.0"), draft: true },
+          { ...stable("0.15.0"), prerelease: true }, stable("0.16.0-rc.1"),
+          { ...stable("0.17.0"), tag_name: "latest" }, releasePayload({ version: "0.18.0" }), stable("0.13.9"),
+        ], nativeReleasesUrl) : jsonResponse(releasePayload({ version: "0.12.9" }))
+      },
+    })
+    expect(requests).toEqual([nativeReleasesUrl])
+    expect(result).toEqual({
+      currentVersion: "0.13.0",
+      latestVersion: "0.13.10",
+      updateAvailable: true,
+      releaseUrl: "https://github.com/Althenia/ycoding/releases/tag/v0.13.10",
+      publishedAt: "2026-11-14T10:00:00Z",
+      releaseNotes: "Release notes for 0.13.10",
+      canInstall: true,
+    })
+  })
+
+  test("native Desktop rejects invalid lists and never falls back to Bun Latest without a Rust release", async () => {
+    const bun = { ...releasePayload({ version: "0.12.9" }), draft: false, prerelease: false }
+    const requests: string[] = []
+    for (const [payload, reason] of [
+      [bun, "valid release list"],
+      [Array.from({ length: 21 }, () => bun), "valid release list"],
+      [[bun], "No stable Rust release found"],
+    ] as const) {
+      await rejects(checkForUpdates({
+        currentVersion: "0.13.0",
+        appBundlePath: null,
+        fetch: async (input) => {
+          requests.push(input instanceof Request ? input.url : input.toString())
+          return jsonResponse(payload, nativeReleasesUrl)
+        },
+      }), { message: new RegExp(reason) })
+    }
+    expect(requests).toEqual([nativeReleasesUrl, nativeReleasesUrl, nativeReleasesUrl])
+  })
+
   test("reports updateAvailable false and canInstall false when latestVersion is equal to or older than currentVersion", async () => {
     await withTempDir(async (root) => {
       const appBundlePath = path.join(root, "YCoding Desktop.app")
       await mkdir(appBundlePath, { recursive: true })
 
-      for (const [currentVersion, latestVersion] of [
-        ["1.19.0", "1.19.0"],
-        ["1.20.0", "1.19.0"],
-        ["1.19.0", "1.19.0-rc.1"],
+      for (const [currentVersion, latestVersion, metadataUrl] of [
+        ["0.12.5", "0.12.5", DESKTOP_GITHUB_LATEST_RELEASE_URL],
+        ["0.12.6", "0.12.5", DESKTOP_GITHUB_LATEST_RELEASE_URL],
+        ["0.12.5", "0.12.5-rc.1", DESKTOP_GITHUB_LATEST_RELEASE_URL],
+        ["0.13.0", "0.13.0", nativeReleasesUrl],
+        ["0.13.1", "0.13.0", nativeReleasesUrl],
       ] as const) {
         const result = await checkForUpdates({
           currentVersion,
@@ -325,7 +383,11 @@ describe("checkForUpdates", () => {
           platform: "darwin",
           arch: "arm64",
           access: async () => {},
-          fetch: async () => jsonResponse(releasePayload({ version: latestVersion })),
+          fetch: async (input) => {
+            expect(input).toBe(metadataUrl)
+            const release = releasePayload({ version: latestVersion })
+            return jsonResponse(metadataUrl === nativeReleasesUrl ? [{ ...release, draft: false, prerelease: false }] : release, metadataUrl)
+          },
         })
 
         expect(result.currentVersion).toBe(currentVersion)
@@ -343,7 +405,7 @@ describe("checkForUpdates", () => {
 
       await expect(
         checkForUpdates({
-          currentVersion: "1.18.4",
+          currentVersion: "0.12.4",
           appBundlePath,
           platform: "darwin",
           arch: "arm64",
@@ -356,7 +418,7 @@ describe("checkForUpdates", () => {
       for (const status of [403, 404, 500]) {
         await expect(
           checkForUpdates({
-            currentVersion: "1.18.4",
+            currentVersion: "0.12.4",
             appBundlePath,
             platform: "darwin",
             arch: "arm64",
@@ -368,7 +430,7 @@ describe("checkForUpdates", () => {
 
       await expect(
         checkForUpdates({
-          currentVersion: "1.18.4",
+          currentVersion: "0.12.4",
           appBundlePath,
           platform: "darwin",
           arch: "arm64",
@@ -383,7 +445,7 @@ describe("checkForUpdates", () => {
       const chunk = new TextEncoder().encode("x".repeat(64 * 1024))
       await expect(
         checkForUpdates({
-          currentVersion: "1.18.4",
+          currentVersion: "0.12.4",
           appBundlePath,
           platform: "darwin",
           arch: "arm64",
@@ -395,7 +457,7 @@ describe("checkForUpdates", () => {
       for (const badTag of ["", "latest", "v01.2.3", "../../1.2.3", "vnot-semver"]) {
         await expect(
           checkForUpdates({
-            currentVersion: "1.18.4",
+            currentVersion: "0.12.4",
             appBundlePath,
             platform: "darwin",
             arch: "arm64",
@@ -413,12 +475,12 @@ describe("checkForUpdates", () => {
       await mkdir(appBundlePath, { recursive: true })
 
       const unbundled = await checkForUpdates({
-        currentVersion: "1.18.4",
+        currentVersion: "0.12.4",
         appBundlePath: null,
         platform: "darwin",
         arch: "arm64",
         access: async () => {},
-        fetch: async () => jsonResponse(releasePayload({ version: "1.19.0" })),
+        fetch: async () => jsonResponse(releasePayload({ version: "0.12.5" })),
       })
       expect(unbundled.updateAvailable).toBe(true)
       expect(unbundled.canInstall).toBe(false)
@@ -430,12 +492,12 @@ describe("checkForUpdates", () => {
         ["darwin", "x64"],
       ] as const) {
         const unsupported = await checkForUpdates({
-          currentVersion: "1.18.4",
+          currentVersion: "0.12.4",
           appBundlePath,
           platform,
           arch,
           access: async () => {},
-          fetch: async () => jsonResponse(releasePayload({ version: "1.19.0" })),
+          fetch: async () => jsonResponse(releasePayload({ version: "0.12.5" })),
         })
         expect(unsupported.updateAvailable).toBe(true)
         expect(unsupported.canInstall).toBe(false)
@@ -449,12 +511,12 @@ describe("checkForUpdates", () => {
         { checksumsProtocol: "http" as const },
       ]) {
         const missingAsset = await checkForUpdates({
-          currentVersion: "1.18.4",
+          currentVersion: "0.12.4",
           appBundlePath,
           platform: "darwin",
           arch: "arm64",
           access: async () => {},
-          fetch: async () => jsonResponse(releasePayload({ version: "1.19.0", ...assetOverride })),
+          fetch: async () => jsonResponse(releasePayload({ version: "0.12.5", ...assetOverride })),
         })
         expect(missingAsset.updateAvailable).toBe(true)
         expect(missingAsset.canInstall).toBe(false)
@@ -463,14 +525,14 @@ describe("checkForUpdates", () => {
 
       for (const code of ["EROFS", "EACCES"] as const) {
         const readOnly = await checkForUpdates({
-          currentVersion: "1.18.4",
+          currentVersion: "0.12.4",
           appBundlePath,
           platform: "darwin",
           arch: "arm64",
           access: async () => {
             throw Object.assign(new Error(`${code}: bundle location is not writable`), { code })
           },
-          fetch: async () => jsonResponse(releasePayload({ version: "1.19.0" })),
+          fetch: async () => jsonResponse(releasePayload({ version: "0.12.5" })),
         })
         expect(readOnly.updateAvailable).toBe(true)
         expect(readOnly.canInstall).toBe(false)
@@ -829,21 +891,31 @@ describe("installUpdate", () => {
     }
   })
 
-  test("unpacks into a sibling temp directory with ditto, verifies Info.plist and case-insensitive pinned codesign SHA-1, swaps atomically, and relaunches", async () => {
+  test.each([
+    ["Bun Desktop", "0.12.4", "0.12.5", DESKTOP_GITHUB_LATEST_RELEASE_URL],
+    ["native Desktop", "0.13.0", "0.13.10", nativeReleasesUrl],
+    ["native Desktop with an explicit target", "0.13.0", "0.14.0-rc.1", undefined],
+  ] as const)("%s installs the selected release with verified identity, an atomic swap, and one relaunch", async (_, currentVersion, targetVersion, metadataUrl) => {
     await withTempDir(async (root) => {
-      const fixture = await createInstallFixture(root)
+      const fixture = await createInstallFixture(root, { currentVersion, targetVersion })
+      const urls: string[] = []
       const commands: string[][] = []
       const launcherDuringRelaunch: string[] = []
       const entriesDuringRelaunch: string[][] = []
 
       const result = await installUpdate({
         currentVersion: fixture.currentVersion,
+        ...(metadataUrl === undefined ? { targetVersion } : {}),
         appBundlePath: fixture.appBundlePath,
         platform: "darwin",
         arch: "arm64",
         fetch: async (input) => {
-          const url = String(input)
-          if (url === DESKTOP_GITHUB_LATEST_RELEASE_URL) return jsonResponse(releasePayload({ version: fixture.targetVersion }))
+          const url = input instanceof Request ? input.url : input.toString()
+          urls.push(url)
+          if (url === metadataUrl) {
+            const release = releasePayload({ version: fixture.targetVersion })
+            return jsonResponse(metadataUrl === nativeReleasesUrl ? [{ ...release, draft: false, prerelease: false }] : release, url)
+          }
           if (url.endsWith(fixture.checksumsName)) return withUrl(new Response(fixture.checksumsText), url)
           if (url.endsWith(fixture.zipName)) return withUrl(new Response(fixture.zipBytes), url)
           return withUrl(new Response("not found", { status: 404 }), url)
@@ -866,6 +938,8 @@ describe("installUpdate", () => {
         installedVersion: fixture.targetVersion,
         relaunching: true,
       })
+      const releaseBase = `https://github.com/Althenia/ycoding/releases/download/v${targetVersion}`
+      expect(urls).toEqual([...(metadataUrl === undefined ? [] : [metadataUrl]), `${releaseBase}/${fixture.checksumsName}`, `${releaseBase}/${fixture.zipName}`])
 
       const dittoCommand = commands.find((cmd) => cmd[0] === "/usr/bin/ditto")
       expect(dittoCommand?.slice(0, 3)).toEqual(["/usr/bin/ditto", "-x", "-k"])
@@ -908,7 +982,6 @@ describe("installUpdate", () => {
           arch: "arm64",
           fetch: async (input) => {
             const url = String(input)
-            if (url === DESKTOP_GITHUB_LATEST_RELEASE_URL) return jsonResponse(releasePayload({ version: fixture.targetVersion }))
             if (url.endsWith(fixture.checksumsName)) return withUrl(new Response(fixture.checksumsText), url)
             if (url.endsWith(fixture.zipName)) return withUrl(new Response(fixture.zipBytes), url)
             return withUrl(new Response("not found", { status: 404 }), url)
@@ -924,6 +997,7 @@ describe("installUpdate", () => {
         }),
       ).rejects.toThrow()
 
+      expect(commands.some((command) => command[0] === "/usr/bin/codesign" && command.includes("-r-"))).toBe(true)
       expect(relaunched).toEqual([])
       expect(await readFile(path.join(fixture.appBundlePath, "Contents/MacOS/launcher"), "utf8")).toBe(
         `launcher-${fixture.currentVersion}\n`,

@@ -176,6 +176,48 @@ test("service worker shows one notification per push including malformed and foc
     focusFails = false
     opened = ""
     shown.splice(quotaStart)
+    const bunPosts: unknown[] = [], rustPosts: unknown[] = []
+    const bunClient = { ...windowClient, url: "https://relay.test/remote/rusted", postMessage: (message: unknown) => bunPosts.push(message) }
+    const rustClient = { ...windowClient, url: "https://relay.test/remote/rust/settings", postMessage: (message: unknown) => rustPosts.push(message) }
+    const rustNotice = { ...payload, noticeID: "ntc_12", relayProtocol: 5 }
+    const clickLatest = () => emit("notificationclick", { notification: { data: shown.at(-1)?.options.data, close: () => undefined } })
+    windowClients.splice(0, windowClients.length, bunClient)
+    await emit("push", { data: { json: () => rustNotice } })
+    await clickLatest()
+    expect(bunPosts).toEqual([])
+    expect(opened).toBe("/remote/rust/session?session_id=ses_1&device_id=dev_1&notice_id=ntc_12")
+    opened = ""
+    windowClients.push(rustClient)
+    await clickLatest()
+    expect(rustPosts).toEqual([{ type: "ycoding:open-session", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_12" }])
+    expect(opened).toBe("")
+    const rustTag = shown.at(-1)?.options.tag
+    windowClients.reverse()
+    await emit("push", { data: { json: () => ({ ...rustNotice, relayProtocol: 4 }) } })
+    expect(shown.at(-1)?.options.tag).not.toBe(rustTag)
+    await clickLatest()
+    expect(bunPosts).toEqual(rustPosts)
+    expect(rustPosts).toHaveLength(1)
+    windowClients.splice(0, windowClients.length, bunClient, { ...rustClient, url: "https://elsewhere.test/remote/rust" })
+    for (const [value, title, destination] of [
+      [{ ...quota, relayProtocol: 5 }, "YCoding — quota will run out", "/remote/rust/usage?device_id=dev_1"],
+      [{ category: "machine-offline", deviceID: "dev_1", offlineAt: 1_790_000_000_000, relayProtocol: 5 }, "YCoding — machine offline", "/remote/rust"],
+      [{ category: "approval-requested", deviceID: "dev_1", overflow: 5, relayProtocol: 5 }, "YCoding — more sessions need attention", "/remote/rust"],
+    ] as const) {
+      opened = ""
+      await emit("push", { data: { json: () => value } })
+      expect(shown.at(-1)?.title).toBe(title)
+      await clickLatest()
+      expect(opened).toBe(destination)
+    }
+    expect(bunPosts).toHaveLength(1)
+    expect(rustPosts).toHaveLength(1)
+    opened = ""
+    windowClients.push(rustClient)
+    await emit("push", { data: { json: () => ({ ...quota, relayProtocol: 5 }) } })
+    await clickLatest()
+    expect(rustPosts.at(-1)).toEqual({ type: "ycoding:open-usage", deviceID: "dev_1" })
+    expect(opened).toBe("")
     const paused = { title: "YCoding — alerts paused", options: { body: "Push alerts to this device stopped. Open YCoding to turn them back on.",
       tag: "ycoding-push-renewal", icon: "/icons/icon-256.png", badge: "/icons/icon-256.png" } }
     const beforeChange = shown.length

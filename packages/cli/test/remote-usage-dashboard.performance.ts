@@ -148,7 +148,20 @@ test("the native connector supplies the dashboard within the first-ready, warm, 
 
       const coldStart = performance.now()
       const coldOptions = { signal: AbortSignal.timeout(budget.first) }
-      const readColdQuota = () => direct(runtime.client.usage.dashboard(inputs, coldOptions), "cold machine usage.dashboard")
+      const coldTimings: { elapsedMs: number; dashboard: RemoteUsageDashboard["status"]; quota?: string }[] = []
+      const readColdQuota = async () => {
+        const started = performance.now()
+        try {
+          const value = await runtime.client.usage.dashboard(inputs, coldOptions)
+          coldTimings.push({ elapsedMs: round(performance.now() - coldStart), dashboard: value.status,
+            ...(value.status === "ready" ? { quota: value.quota.status } : {}) })
+          return value
+        } catch (cause) {
+          const evidence = { seedMs: fixture.seedMs, serverStartMs, producerMs, locationBootMs, coldTimings,
+            requestStartedMs: round(started - coldStart), elapsedMs: round(performance.now() - coldStart), aborted: coldOptions.signal.aborted }
+          throw new Error(`cold machine usage.dashboard: ${failureCode(cause)} ${JSON.stringify(evidence)}`, { cause })
+        }
+      }
       let settled = await readColdQuota()
       const localMs = performance.now() - coldStart
       expect({ status: settled.status, quota: settled.status === "ready" ? settled.quota.status : undefined, over: localMs > budget.cold }).toEqual({ status: "ready", quota: "preparing", over: false })

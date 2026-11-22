@@ -7,7 +7,10 @@ describe("public landing copy", () => {
       headline: "Your coding agent. Your machine.",
       support: "Work in the terminal. Continue from your browser.",
       primaryAction: { label: "Get started", href: "/docs/getting-started" },
-      secondaryAction: { label: "Open workspace", href: "/remote" },
+      workspaceActions: [
+        { label: "Bun workspace", href: "/remote" },
+        { label: "Rust workspace", href: "/remote/rust" },
+      ],
     })
     expect(SITE.installing.command).toBe("curl -fsSL https://ycoding.althenia.app/install.sh | sh")
     expect(SITE.features.map((feature) => feature.title)).toEqual([
@@ -18,11 +21,13 @@ describe("public landing copy", () => {
     ])
   })
 
-  test("retains public install, security, and license destinations in the compact footer", () => {
+  test("links to both release editions and retains install, security, and license destinations", () => {
+    expect(SITE.releasesURL).toBe("https://github.com/Althenia/ycoding/releases")
     const links = SITE.footerColumns.flatMap((column) => column.links.map((link) => ({ label: String(link.label), href: String(link.href) })))
     expect(links).toEqual(
       expect.arrayContaining([
         { label: "Install", href: "/docs/installation" },
+        { label: "Releases", href: SITE.releasesURL },
         { label: "License", href: SITE.licenseURL },
         { label: "Security", href: SITE.securityURL },
       ]),

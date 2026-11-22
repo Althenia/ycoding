@@ -1,6 +1,14 @@
 export const CACHE_PREFIX = "ycoding-web-shell-"
-export const CACHE_NAME = "ycoding-web-shell-v3"
+export const CACHE_NAME = "ycoding-web-shell-v4"
 export const OFFLINE_FALLBACK_URL = "/offline.html"
+export const RUST_REMOTE_SHELL = "/remote/rust"
+export type RemoteShellPath = "/remote" | typeof RUST_REMOTE_SHELL
+
+export function remoteShellPath(pathname: string): RemoteShellPath | undefined {
+  if (pathname === RUST_REMOTE_SHELL || pathname.startsWith(`${RUST_REMOTE_SHELL}/`)) return RUST_REMOTE_SHELL
+  if (pathname === "/remote" || pathname.startsWith("/remote/")) return "/remote"
+  return undefined
+}
 
 /**
  * Explicit static public shell assets. Nothing here is user-, session-, or
@@ -58,11 +66,11 @@ export function shouldCacheStaticAsset(request: CacheableRequest, origin: string
  * cached shell. Navigations to files such as `/llms.txt` or `/docs/usage.md` stay
  * on the network, because a handled navigation response replaces the cached shell.
  */
-export function shouldHandleNavigation(request: CacheableRequest): boolean {
+export function shouldHandleNavigation(request: CacheableRequest, origin: string): boolean {
   if (!isCacheableGet(request)) return false
   if (request.mode !== "navigate") return false
   const url = parseUrl(request.url)
-  return url !== undefined && !isBlockedPath(url.pathname) && !/\.[^/]+$/.test(url.pathname)
+  return url !== undefined && url.origin === origin && !isBlockedPath(url.pathname) && !/\.[^/]+$/.test(url.pathname)
 }
 
 function isCacheableGet(request: CacheableRequest): boolean {

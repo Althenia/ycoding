@@ -529,6 +529,37 @@ describe("createNotificationDelivery", () => {
 })
 
 describe("createDesktopNotifier", () => {
+  test("Rust page notifications carry their edition for Session, Usage and generic clicks without replacing Bun alerts", async () => {
+    await withFakeNotificationAsync("granted", async () => {
+      const original = Reflect.get(globalThis, "location")
+      const worker = fakeWorkerRegistration()
+      try {
+        Reflect.set(globalThis, "location", { pathname: "/remote/session" })
+        const bun = createDesktopNotifier(async () => worker.registration)
+        const notice = { title: "Session", body: "body", tag: "ycoding-dev_1-ntc_2", sessionID: "ses_a", notice: { deviceID: "dev_1", noticeID: "ntc_2" } }
+        bun.show(notice)
+        Reflect.set(globalThis, "location", { pathname: "/remote/rust/session" })
+        const rust = createDesktopNotifier(async () => worker.registration)
+        rust.show(notice)
+        rust.show({ title: "Usage", body: "body", tag: "ycoding-dev_1-quota", usageDeviceID: "dev_1" })
+        rust.show({ title: "Offline", body: "body", tag: "ycoding-dev_1-offline-1000" })
+        await Bun.sleep(0)
+        expect(worker.shown.map((entry) => entry.options.data)).toEqual([
+          { sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_2" },
+          { sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_2", relayProtocol: 5 },
+          { quota: true, deviceID: "dev_1", relayProtocol: 5 },
+          { relayProtocol: 5 },
+        ])
+        expect(worker.open.size).toBe(4)
+        rust.dispose()
+        await Bun.sleep(0)
+        expect([...worker.open.keys()]).toEqual([notice.tag])
+      } finally {
+        Reflect.set(globalThis, "location", original)
+      }
+    })
+  })
+
   test("shows each presented alert through the service worker, keyed like the push alert for the same notice", async () => {
     await withFakeNotificationAsync("granted", async () => {
       const worker = fakeWorkerRegistration()

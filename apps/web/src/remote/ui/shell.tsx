@@ -561,7 +561,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     sessionID: state().activeSessionID,
     requests: state().view?.requests.length ?? 0,
     waiting: waitingSessionCount(state().sessionStatus),
-  }).map((item) => ({ ...item, href: router.buildLocation(item.route === "/remote/session" && state().activeSessionID !== undefined ? { to: item.route, search: sessionSearch(state().activeSessionID!, state().activeDeviceID) } : { to: item.route }).href }))
+  }).map((item) => ({ ...item, href: router.buildLocation(item.route === "/remote/session" && state().activeSessionID !== undefined ? { to: item.route, search: sessionSearch(state().activeSessionID!, state().activeDeviceID) } : { to: item.route }).publicHref }))
   const sessionStatusShown = () => view() === "/remote/session" && selected() && ownsSessionDevice()
   const childRunning = () => (state().team === undefined ? 0 : teamActiveCount(state().team!) ?? 0) > 0
   const trace = () => ({ running: sessionStatusShown() && state().view?.status === "running", branch: sessionStatusShown() && state().view?.status === "running" && childRunning() })

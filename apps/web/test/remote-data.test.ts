@@ -125,28 +125,37 @@ describe("remote data", () => {
     } finally { await test.stop() }
   })
   test("uploads a large attachment in bounded acknowledged chunks before prompt admission", async () => {
-    const uploads: { index: number; last: boolean; data: string; uploadID: string }[] = []
-    const test = await setup((request) => {
+    const uploads: { index: number; offset: number; last: boolean; data: Uint8Array; uploadID: string }[] = []
+    const completed = Promise.withResolvers<void>()
+    const test = await setup(async (request) => {
       if (request.operation !== "session.attachment.upload") return "default"
       const fields = request.input
-      if (typeof fields?.index !== "number" || typeof fields.last !== "boolean" || typeof fields.data !== "string" || typeof fields.uploadID !== "string") throw new Error("Invalid upload request")
-      const chunk = { index: fields.index, last: fields.last, data: fields.data, uploadID: fields.uploadID }
+      if (typeof fields?.index !== "number" || typeof fields.offset !== "number" || typeof fields.last !== "boolean" || !(fields.data instanceof Uint8Array) || typeof fields.uploadID !== "string") throw new Error("Invalid upload request")
+      const chunk = { index: fields.index, offset: fields.offset, last: fields.last, data: fields.data, uploadID: fields.uploadID }
       uploads.push(chunk)
-      return { ok: true, value: chunk.last ? { uri: `ycoding-upload://${chunk.uploadID}` } : { received: chunk.data.length } }
+      if (chunk.last) await completed.promise
+      return { ok: true, value: chunk.last ? { uri: `ycoding-upload://${chunk.uploadID}` } : { received: chunk.offset + chunk.data.byteLength } }
     })
     try {
       await test.store.load()
       await waitFor(() => test.store.state().sessions.length === 2)
       await test.store.selectSession("ses_a")
-      const data = Buffer.alloc(120_000, 42).toString("base64")
-      await test.store.sendPrompt({ text: "Review", delivery: "steer", files: [{ uri: `data:image/png;base64,${data}`, name: "capture.png" }] })
-      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.prompt"))
-      expect(uploads.length).toBeGreaterThan(1)
-      expect(uploads.map((chunk) => chunk.data).join("")).toBe(data)
-      expect(uploads.every((chunk, index) => chunk.index === index)).toBe(true)
-      expect(test.relay.requests.find((request) => request.operation === "session.prompt")?.input?.files).toEqual([{ uri: `ycoding-upload://${uploads[0]!.uploadID}`, name: "capture.png" }])
+      const data = Buffer.from(Uint8Array.from({ length: 42_001 }, (_, index) => index % 256))
+      expect(await test.store.sendPrompt({ text: "Review", delivery: "steer", files: [{ uri: `data:image/png;base64,${data.toString("base64")}`, name: "capture.png" }] })).toBe(true)
+      await waitFor(() => uploads.at(-1)?.last === true)
+      const uploadID = uploads[0]!.uploadID
+      expect(uploads.map(({ index, offset, last, data, uploadID }) => [index, offset, last, data.byteLength, uploadID])).toEqual([
+        [0, 0, false, 21_000, uploadID], [1, 21_000, false, 21_000, uploadID], [2, 42_000, true, 1, uploadID],
+      ])
+      expect(Buffer.concat(uploads.map((chunk) => chunk.data))).toEqual(data)
+      expect(test.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
+      completed.resolve()
+      await waitFor(() => test.store.state().mutations.length === 0)
+      expect(test.relay.requests.filter((request) => request.operation === "session.prompt")).toMatchObject([
+        { sessionID: "ses_a", input: { text: "Review", delivery: "steer", files: [{ uri: `ycoding-upload://${uploadID}`, name: "capture.png" }] } },
+      ])
       expect(test.store.state().upload).toBeUndefined()
-    } finally { await test.stop() }
+    } finally { completed.resolve(); await test.stop() }
   })
   test("uploads a command attachment and forwards only the completed reference", async () => {
     const test = await setup((request) => request.operation === "session.attachment.upload"
@@ -402,12 +411,13 @@ describe("remote data", () => {
         prompt: { text: "Start", files: [{ uri: "file:///work/a.ts" }], skills: ["audit"] } })
       expect(id).toBe("ses_created")
       expect(test.store.state().activeSessionID).toBe(id)
-      expect(test.relay.requests.find((request) => request.operation === "session.create")?.input).toMatchObject({
-        id, workspace: "wsp_project", agent: "reviewer", model: { providerID: "openai", id: "gpt-6" },
+      expect(test.relay.requests.find((request) => request.operation === "session.create")).toMatchObject({
+        workspaceID: "wsp_project", input: { id, agent: "reviewer", model: { providerID: "openai", id: "gpt-6" } },
       })
       await waitFor(() => test.store.state().mutations.length === 0)
-      expect(test.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(1)
-      expect(test.relay.requests.find((request) => request.operation === "session.prompt")?.input?.skills).toEqual(["audit"])
+      expect(test.relay.requests.filter((request) => request.operation === "session.prompt")).toMatchObject([
+        { sessionID: id, input: { text: "Start", files: [{ uri: "file:///work/a.ts" }], metadata: { skills: [{ id: "audit" }] } } },
+      ])
       expect(test.relay.requests.filter((request) => request.operation === "session.skill")).toHaveLength(0)
     } finally { await test.stop() }
   })
@@ -426,7 +436,7 @@ describe("remote data", () => {
       expect(test.relay.requests.filter((request) => ["session.switchAgent", "session.switchModel", "session.skill", "session.prompt"].includes(request.operation))
         .map((request) => [request.operation, request.input])).toMatchObject([
         ["session.switchAgent", { agent: "reviewer" }], ["session.switchModel", { model: { providerID: "openai", id: "gpt-6" } }],
-        ["session.prompt", { text: "Review", skills: ["audit", "test"], files: [{ uri: "file:///work/a.ts", name: "a.ts" }], agents: [{ name: "helper" }] }],
+        ["session.prompt", { text: "Review", delivery: "steer", metadata: { skills: [{ id: "audit" }, { id: "test" }] }, files: [{ uri: "file:///work/a.ts", name: "a.ts" }], agents: [{ name: "helper" }] }],
       ])
       const prompts = test.relay.requests.filter((request) => request.operation === "session.prompt")
       expect(prompts).toHaveLength(1)

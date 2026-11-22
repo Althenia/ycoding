@@ -59,8 +59,9 @@ test("an accepted attachment displays submitted upload before the first chunk ac
     expect(await page.evaluate(`document.querySelectorAll('.composer__attachment-error').length`)).toBe(0)
     expect(relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(0)
     uploadHandler = (request) => {
-      if (typeof request.input?.uploadID !== "string") throw new Error("Missing upload ID")
-      return { ok: true, value: request.input.last ? { uri: `ycoding-upload://${request.input.uploadID}` } : {} }
+      const input = request.input
+      if (typeof input?.uploadID !== "string" || typeof input.offset !== "number" || !(input.data instanceof Uint8Array)) throw new Error("Invalid upload request")
+      return { ok: true, value: input.last ? { uri: `ycoding-upload://${input.uploadID}` } : { received: input.offset + input.data.byteLength } }
     }
     await page.evaluate(`document.querySelector('.transcript-message__send-error button').click()`)
     await wait(`window.uploadFlowState().mutations.length===0`)
@@ -89,7 +90,8 @@ test("a locally rejected oversized attachment prompt explains the failure withou
 
 test("chunk progress remains cancellable after submission and never leaks into a different Session", async () => {
   const second = Promise.withResolvers<RelayHandlerOutcome>()
-  uploadHandler = (request) => request.input?.index === 0 ? { ok: true, value: {} } : second.promise
+  uploadHandler = (request) => request.input?.index === 0 && request.input.data instanceof Uint8Array
+    ? { ok: true, value: { received: request.input.data.byteLength } } : second.promise
   const page = await browser.openPage()
   const wait = async (expression: string) => {
     for (let count = 0; count < 180; count++) {

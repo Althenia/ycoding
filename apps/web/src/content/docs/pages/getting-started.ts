@@ -63,6 +63,10 @@ export const gettingStartedPages: readonly DocPage[] = [
             title: "Run in the project folder",
             text: "For example, change to the repository directory before running `ycoding`. The remote workspace also works with Sessions created on that machine; it does not let a browser choose an arbitrary folder.",
           },
+          {
+            kind: "paragraph",
+            text: "Open `/remote` for a device running Bun 0.12.x or `/remote/rust` for a device running Rust. Both remote workspaces use the same Web sign-in.",
+          },
         ],
       },
       {
@@ -129,7 +133,7 @@ export const gettingStartedPages: readonly DocPage[] = [
         blocks: [
           {
             kind: "paragraph",
-            text: "The installer resolves the newest GitHub release, checks the downloaded archive against its SHA-256 checksum, and installs `ycoding` under `~/.local/bin`. It adds that directory to a recognized shell profile only when needed; if your shell is not recognized, add it to PATH yourself.",
+            text: "On a new installation, the installer selects the highest stable release version. It verifies the Rust archive checksum and installs `ycoding` in `~/.local/bin`. It adds that directory to a recognized shell profile only when needed; if your shell is not recognized, add it to PATH yourself.",
           },
           { kind: "code", language: "sh", label: "macOS or Linux x64", code: "curl -fsSL https://ycoding.althenia.app/install.sh | sh" },
           {
@@ -170,23 +174,25 @@ export const gettingStartedPages: readonly DocPage[] = [
           {
             kind: "callout",
             tone: "warning",
-            title: "Move to v0.12.0 with the installer",
-            text: "On macOS or Linux, use the shell installer above to move to v0.12.0 from v0.11.12 or earlier, v0.12.1 through v0.12.3, or v0.12.4. The `ycoding update` command in those versions cannot install the v0.12.0 archive, and v0.12.4 is numbered above v0.12.0. On Windows, close YCoding and replace it with the contents of the release ZIP.",
+            title: "Keep an existing Bun installation",
+            text: "The default installer refuses to replace an existing Bun executable or start over when it finds Bun data and no Rust store. GitHub Latest stays on Bun 0.12.2, so the existing Bun updater stays on Bun. You can also choose Bun explicitly with the downloaded shell installer.",
           },
+          { kind: "code", language: "sh", label: "Stay on Bun", code: "YCODING_VERSION=0.12.2 sh install.sh" },
           {
             kind: "paragraph",
-            text: "If you already have the Bun-based v0.12.0, let active Sessions finish, then use the same installer to switch to Rust. `ycoding update` does not replace a binary at the same version. The first Rust start imports Bun Session history if the default Rust store is empty and leaves the Bun database intact.",
+            text: "To switch to Rust, let active Sessions finish and pass `--replace-bun` to the downloaded installer. Rust uses its own `core.redb` store. It leaves Bun's SQLite database on disk and does not import its Sessions or Usage.",
           },
+          { kind: "code", language: "sh", label: "Replace Bun with a clean Rust install", code: "sh install.sh --replace-bun" },
           {
             kind: "paragraph",
-            text: "From v0.12.0 on macOS or Linux, use `ycoding update` to install a newer release. Without `--version` it never installs a release older than the one running; it reports that the installation is up to date or newer and downloads nothing. With `--version` it installs that published version, older or newer. It verifies the archive checksum and contents before replacement. The updater verifies the YCoding signing certificate for both the CLI and the Interaction helper on macOS.",
+            text: "On macOS or Linux, use `ycoding update` to update an existing Rust installation. Without `--version` it does not install a release older than the one running. It verifies the archive checksum and contents before replacement. On macOS it also verifies the signatures on the CLI and the Interaction helper. On Windows, close YCoding and replace it with the contents of the release ZIP.",
           },
           { kind: "code", language: "sh", label: "Install the newest release", code: "ycoding update" },
           {
             kind: "code",
             language: "sh",
             label: "Install one published version",
-            code: "ycoding update --version 0.12.0",
+            code: "ycoding update --version 0.13.0",
           },
           {
             kind: "paragraph",
@@ -210,8 +216,8 @@ export const gettingStartedPages: readonly DocPage[] = [
           {
             kind: "callout",
             tone: "warning",
-            title: "Back up before a major upgrade",
-            text: "The first startup after an upgrade can reclaim SQLite space and may need temporary free disk space up to twice the database size. Back up session data before a large upgrade and close other writers for its first start.",
+            title: "Back up before changing editions",
+            text: "Keep the Bun database and the Bun release package if you may need to switch back. Rust Sessions stay in the Rust store and do not appear in Bun.",
           },
           { kind: "related", slugs: ["getting-started", "quickstart", "configuration", "troubleshooting"] },
         ],

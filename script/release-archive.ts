@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { BrowserExtension } from "../packages/core/src/browser/extension"
-import { interactionApplication, interactionExtensionDirectory, interactionExtensionFiles, usesInteractionLayout } from "../packages/cli/src/update/interaction-layout"
+import { interactionApplication, interactionExtensionDirectory, interactionExtensionFiles, usesInteractionLayout, usesNativeReleaseLayout } from "../packages/cli/src/update/interaction-layout"
 
 const targets = ["darwin-arm64", "darwin-x64", "linux-x64", "windows-x64"] as const
 type Target = typeof targets[number]
@@ -14,12 +14,12 @@ const computerUseApplication = {
 }
 const desktopApplication = "YCoding Desktop.app"
 
-function payload(target: Target, withApplication: boolean, version: string) {
+function payload(binary: string, withApplication: boolean, version: string) {
   const interaction = usesInteractionLayout(version)
   const app = interaction ? interactionApplication : computerUseApplication
   const extension = interaction ? interactionExtensionFiles : BrowserExtension.files
   return [
-    executable(target),
+    binary,
     `${interactionExtensionDirectory}/`,
     ...extension.map((file) => `${interactionExtensionDirectory}/${file}`),
     ...new Set(extension.filter((file) => file.includes("/")).map((file) => `${interactionExtensionDirectory}/${file.slice(0, file.lastIndexOf("/"))}/`)),
@@ -45,6 +45,10 @@ function filename(target: Target, version: string) {
 
 function executable(target: Target) {
   return target === "windows-x64" ? "ycoding.exe" : "ycoding"
+}
+
+function archiveExecutable(target: Target, version: string) {
+  return target !== "windows-x64" && usesNativeReleaseLayout(version) ? "ycoding-native" : executable(target)
 }
 
 function desktopFilename(version: string) {
@@ -91,7 +95,7 @@ async function tree(directory: string, prefix = ""): Promise<string[]> {
 async function validatePayload(directory: string, target: Target, version: string) {
   const withApplication = target.startsWith("darwin")
   const app = usesInteractionLayout(version) ? interactionApplication : computerUseApplication
-  if (JSON.stringify(await tree(directory)) !== JSON.stringify(payload(target, withApplication, version)))
+  if (JSON.stringify(await tree(directory)) !== JSON.stringify(payload(executable(target), withApplication, version)))
     throw new Error("Invalid release payload: unexpected or missing entries")
   for (const file of [target === "windows-x64" ? undefined : "ycoding", withApplication ? `${app.name}/Contents/MacOS/${app.executable}` : undefined].filter((file) => file !== undefined))
     if (((await fs.stat(path.join(directory, file))).mode & 0o111) === 0) throw new Error(`Invalid release payload: ${file} is not executable`)
@@ -104,7 +108,8 @@ async function validatePayload(directory: string, target: Target, version: strin
 async function validateArchive(file: string, target: Target, version: string) {
   const info = await fs.lstat(file)
   if (!info.isFile() || info.isSymbolicLink() || info.size === 0) throw new Error("Invalid release archive file")
-  const expected = payload(target, includesApplication(target, version), version)
+  const binary = archiveExecutable(target, version)
+  const expected = payload(binary, includesApplication(target, version), version)
   const zip = target === "windows-x64"
   if (zip && process.platform === "win32") {
     const [header, listing] = run(["7z", "l", "-slt", file]).split(/\n-{10,}\n/)
@@ -127,7 +132,7 @@ async function validateArchive(file: string, target: Target, version: string) {
   for (const [index, name] of names.entries()) {
     const mode = modes[index]!.split(/\s/)[0]!
     if (mode[0] !== (name.endsWith("/") ? "d" : "-")) throw new Error("Invalid release archive entry type")
-    if (!zip && (name === "ycoding" || name.includes("/Contents/MacOS/") && !name.endsWith("/")) && !mode.includes("x")) throw new Error("Invalid release archive executable mode")
+    if (!zip && (name === binary || name.includes("/Contents/MacOS/") && !name.endsWith("/")) && !mode.includes("x")) throw new Error("Invalid release archive executable mode")
     if (zip && !name.endsWith("/") && !(Number(modes[index]!.trim().split(/\s+/)[3]) > 0)) throw new Error("Invalid release archive empty entry")
   }
   if (zip) run(["unzip", "-t", file])
@@ -174,10 +179,21 @@ async function create(target: Target, version: string, directory: string, output
   const file = path.join(output, filename(target, version))
   if (await Bun.file(file).exists()) throw new Error("Release archive already exists")
   const app = usesInteractionLayout(version) ? interactionApplication : computerUseApplication
-  const entries = [executable(target), interactionExtensionDirectory, ...(includesApplication(target, version) ? [app.name] : [])]
-  run(target !== "windows-x64" ? ["tar", "-czf", file, ...entries]
-    : process.platform === "win32" ? ["7z", "a", "-tzip", "-mm=Deflate", file, ...entries]
-    : ["zip", "-qr", file, ...entries], directory)
+  const binary = archiveExecutable(target, version)
+  const entries = [interactionExtensionDirectory, ...(includesApplication(target, version) ? [app.name] : [])]
+  if (binary !== executable(target)) {
+    const staging = await fs.mkdtemp(path.join(output, ".native-release-"))
+    try {
+      await fs.copyFile(path.join(directory, executable(target)), path.join(staging, binary))
+      run(["tar", "-czf", file, "-C", staging, binary, "-C", directory, ...entries])
+    } finally {
+      await fs.rm(staging, { recursive: true, force: true })
+    }
+  } else {
+    run(target !== "windows-x64" ? ["tar", "-czf", file, binary, ...entries]
+      : process.platform === "win32" ? ["7z", "a", "-tzip", "-mm=Deflate", file, binary, ...entries]
+      : ["zip", "-qr", file, binary, ...entries], directory)
+  }
   await validateArchive(file, target, version)
   console.log(`Prepared ${filename(target, version)}`)
 }
@@ -200,12 +216,13 @@ if (import.meta.main) await main()
 
 async function main() {
   const args = process.argv.slice(2)
-  const version = args[args[0] === "create" ? 2 : 1]
+  const version = args[args[0] === "create" || args[0] === "executable" ? 2 : 1]
   if (!version || !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/.test(version)) throw new Error("Invalid release version")
-  if (args[0] === "create" && args.length === 5) {
+  if ((args[0] === "create" && args.length === 5) || (args[0] === "executable" && args.length === 3)) {
     const target = targets.find((target) => target === args[1])
     if (!target) throw new Error("Invalid release target")
-    await create(target, version, path.resolve(args[3]!), path.resolve(args[4]!))
+    if (args[0] === "executable") console.log(archiveExecutable(target, version))
+    else await create(target, version, path.resolve(args[3]!), path.resolve(args[4]!))
     return
   }
   if (args[0] === "create-desktop" && args.length === 4) {
@@ -216,5 +233,5 @@ async function main() {
     await finalize(version, path.resolve(args[2]!), path.resolve(args[3]!))
     return
   }
-  throw new Error("Use create <target> <version> <source> <output>, create-desktop <version> <application> <output> or finalize <version> <source> <output>")
+  throw new Error("Use executable <target> <version>, create <target> <version> <source> <output>, create-desktop <version> <application> <output> or finalize <version> <source> <output>")
 }

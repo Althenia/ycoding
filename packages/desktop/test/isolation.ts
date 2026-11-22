@@ -7,22 +7,25 @@ import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { bundledBackend } from "../src/resources"
-import { profile, syntheticEnvironment } from "../src/backend-confinement"
+import { syntheticEnvironment } from "../src/backend-confinement"
+import { readRuntime, runtimeProfile, stageRuntime } from "./runtime-grant"
 
 export type FakeRequest = { readonly method: string; readonly path: string; readonly model?: string }
 export type Command = readonly [string, ...string[]]
 type OwnedRoot = { readonly path: string }
 type Endpoint = { readonly port: number }
 type Backend = Awaited<ReturnType<typeof bundledGrant>>
+type Runtime = Awaited<ReturnType<typeof readRuntime>>
+type StagedRuntime = Awaited<ReturnType<typeof stageRuntime>>
 
 const sandbox = "/usr/bin/sandbox-exec"
 const systemReads = ["/usr/lib", "/System/Library", "/System/Cryptexes/OS", "/System/Volumes/Preboot/Cryptexes/OS"]
 const devices = ["/dev/null", "/dev/random", "/dev/urandom"]
-const probeTools = ["/bin/bash", "/bin/cat", "/bin/ls", "/usr/bin/nc"]
+const probeTools = ["/bin/bash", "/bin/cat", "/bin/chmod", "/bin/ln", "/bin/ls", "/bin/mv", "/bin/rm", "/usr/bin/nc"]
 const credentialName = /KEY|TOKEN|SECRET|PASSWORD|AUTH|CREDENTIAL|COOKIE|SOCK/
 const denied = "Operation not permitted"
 
-export async function syntheticEnv(root: string, provider: string) {
+async function syntheticEnv(root: string, provider: string): Promise<Record<string, string>> {
   return syntheticEnvironment(root, provider, process.env)
 }
 
@@ -48,6 +51,11 @@ async function bundledGrant(resources: string, home: string) {
   if (await fs.realpath(directory) !== directory || binary.executable !== path.join(directory, "ycoding") || !info.isFile() || inside(home, root))
     throw new Error("The bundled backend must be a canonical, digest-verified directory that does not contain HOME.")
   return { resources: root, directory, manifest, executable: binary.executable, version: binary.version }
+}
+
+export function confinedWorkerCommand(rules: string, backend: Pick<Backend, "resources" | "executable">, owned: string): Command {
+  return [sandbox, "-p", `${rules}\n(allow file-read-data (literal ${JSON.stringify(backend.resources)}))`, backend.executable,
+    "desktop-client", "--resources", backend.resources, "--preferences", path.join(owned, "preferences.json")]
 }
 
 async function execute(command: Command, env: Record<string, string>) {
@@ -101,7 +109,7 @@ async function homeProbeTarget(home: string, granted: readonly string[]) {
   return target
 }
 
-async function probe(run: string, home: string, cwd: string, backend: Backend) {
+async function probe(run: string, home: string, cwd: string, backend: Backend, native: Runtime) {
   const root = await ownedDirectory(run, home)
   const elsewhere = await ownedDirectory(run, home)
   const readable = path.join(root, "inside")
@@ -135,12 +143,13 @@ async function probe(run: string, home: string, cwd: string, backend: Backend) {
     const udp = await open(datagrams())
     const socket = await open(listener({ path: path.join(root, "s") }))
     const env = await syntheticEnv(root, "http://127.0.0.1:9/v1")
+    const runtime = await stageRuntime(root, env, backend.version, native)
     const observer = path.join(run, "unix-connect")
     const built = await execute(["/usr/bin/cc", "-O2", "-Wall", "-Werror", "-o", observer, fileURLToPath(new URL("./unix-connect.c", import.meta.url))], env)
     if (built.code !== 0) throw new Error(`The Unix-socket observer did not compile: exit ${built.code}; ${built.stderr.trim().slice(0, 300)}`)
-    const confined = (command: Command): Command => [sandbox, "-p", profile({ owned: root, cwd, backend, connect: [allowed.port] }), ...command]
-    const tools = (command: Command): Command => [sandbox, "-p", profile({ owned: root, cwd, backend, connect: [allowed.port], tools: probeTools }), ...command]
-    const observed = (command: Command): Command => [sandbox, "-p", profile({ owned: root, cwd, backend, connect: [allowed.port], tools: [observer] }), ...command]
+    const confined = (command: Command): Command => [sandbox, "-p", runtimeProfile({ owned: root, cwd, backend, connect: [allowed.port] }, runtime), ...command]
+    const tools = (command: Command): Command => [sandbox, "-p", runtimeProfile({ owned: root, cwd, backend, connect: [allowed.port], tools: probeTools }, runtime), ...command]
+    const observed = (command: Command): Command => [sandbox, "-p", runtimeProfile({ owned: root, cwd, backend, connect: [allowed.port], tools: [observer] }, runtime), ...command]
     const own = await execute(tools(["/bin/cat", readable]), env)
     verify("an owned file is readable", own.code === 0 && own.stdout === "inside\n", own)
     const sibling = await execute(tools(["/bin/cat", outside]), env)
@@ -153,6 +162,23 @@ async function probe(run: string, home: string, cwd: string, backend: Backend) {
       const result = await execute(confined(command), env)
       verify(`the backend boundary refuses to execute ${command[0]}`, refusedBy(result), result)
     }
+    const different = path.join(path.dirname(runtime.executable), "not-the-reviewed-runtime")
+    await fs.copyFile("/usr/bin/true", different, constants.COPYFILE_EXCL)
+    const otherRuntime = await execute(confined([different]), env)
+    verify("a different executable inside the owned root is refused", refusedBy(otherRuntime), otherRuntime)
+    const newRuntime = path.join(path.dirname(runtime.executable), "alternate")
+    const createdRuntime = await execute(tools(["/bin/bash", "-c", 'set -C; printf x > "$1"', "probe", newRuntime]), env)
+    verify("the native cache refuses a new executable", refusedBy(createdRuntime) && !(await exists(newRuntime)), createdRuntime)
+    const removedRuntime = await execute(tools(["/bin/rm", "-f", runtime.executable]), env)
+    verify("the native executable cannot be unlinked", refusedBy(removedRuntime) && await exists(runtime.executable), removedRuntime)
+    const chmodRuntime = await execute(tools(["/bin/chmod", "u+w", runtime.executable]), env)
+    verify("the native executable cannot be made writable", refusedBy(chmodRuntime) && ((await fs.stat(runtime.executable)).mode & 0o222) === 0, chmodRuntime)
+    for (const directory of [runtime.cache, ...runtime.ancestors.slice(1)]) {
+      const moved = await execute(tools(["/bin/mv", directory, `${directory}-moved`]), env)
+      verify("native cache path components cannot be replaced", refusedBy(moved) && !(await exists(`${directory}-moved`)), moved)
+    }
+    const linked = await execute(tools(["/bin/ln", runtime.executable, path.join(root, "alias")]), env)
+    verify("the native executable cannot be linked at a writable path", refusedBy(linked) && !(await exists(path.join(root, "alias"))), linked)
     for (const target of ["/private/etc/hosts", license, manifest]) {
       const result = await execute(tools(["/bin/cat", target]), env)
       verify(`reading ${target} is refused`, refusedBy(result), result)
@@ -240,48 +266,73 @@ export function parseProcess(output: string): ProcessRecord | undefined {
   return state === "parent" ? { pid, ppid, exe } : undefined
 }
 
-export function ownsListener(listeners: readonly Listener[] | undefined, listener: ProcessRecord | undefined, parent: ProcessRecord | undefined, executable: string, harness: number) {
+export function ownsListener(listeners: readonly Listener[] | undefined, listener: ProcessRecord | undefined, parent: ProcessRecord | undefined, runtime: string, frontend: string, harness: number, launcher?: number) {
   const [only] = listeners ?? []
-  if (listeners?.length !== 1 || !only || !listener || listener.pid !== only.pid || listener.ppid !== only.ppid || listener.exe !== executable) return false
-  if (listener.ppid === harness) return true
-  return parent !== undefined && parent.pid === only.ppid && parent.exe === executable && parent.ppid === harness
+  if (listeners?.length !== 1 || !only || !listener || listener.pid !== only.pid || listener.ppid !== only.ppid || listener.exe !== runtime)
+    return false
+  return parent !== undefined && parent.pid === listener.ppid && parent.pid !== listener.pid && parent.pid !== harness &&
+    parent.exe === frontend && parent.ppid === harness && (launcher === undefined || parent.pid === launcher)
 }
 
-async function ownedListener(port: number, executable: string) {
+async function ownedListener(port: number, runtimes: ReadonlySet<string>, frontend: string, launcher?: number) {
   const env = { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" }
   const listing = await execute(["/usr/sbin/lsof", "-nP", "-R", "-a", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpR"], env)
   const listeners = listing.code === 0 ? parseListeners(listing.stdout) : undefined
   const [only] = listeners ?? []
-  if (listeners?.length !== 1 || !only) return false
+  if (listeners?.length !== 1 || !only) return undefined
   const inspect = async (pid: number) => {
     const result = await execute(["/usr/sbin/lsof", "-nP", "-R", "-a", "-p", String(pid), "-d", "txt", "-FpRn"], env)
     return result.code === 0 ? parseProcess(result.stdout) : undefined
   }
-  return ownsListener(listeners, await inspect(only.pid), await inspect(only.ppid), executable, process.pid)
+  const listener = await inspect(only.pid)
+  if (!listener?.exe || !runtimes.has(listener.exe)) return undefined
+  const parent = listener.ppid === process.pid ? undefined : await inspect(listener.ppid)
+  return ownsListener(listeners, listener, parent, listener.exe, frontend, process.pid, launcher) ? listener : undefined
+}
+
+export async function syntheticDirectories(declared: string | undefined, temporary: string) {
+  if (!declared || !path.isAbsolute(declared)) throw new Error("HOME must be an absolute path.")
+  const account = await execute(["/bin/sh", "-c", "printf %s ~"], { PATH: "/usr/bin:/bin" })
+  if (account.code !== 0 || !path.isAbsolute(account.stdout)) throw new Error("Could not resolve the account HOME.")
+  const realHome = await fs.realpath(account.stdout)
+  const home = await fs.realpath(declared)
+  if (home === realHome) throw new Error("The native test HOME must not be the account HOME.")
+  const temp = await fs.realpath(temporary)
+  const task = path.dirname(home)
+  const taskInfo = await fs.lstat(task)
+  if (home !== declared || home === temp || path.dirname(temp) !== task || taskInfo.uid !== process.getuid?.() || (taskInfo.mode & 0o077) !== 0)
+    throw new Error("Use separate synthetic HOME and temporary directories under a private task root.")
+  return { home, temp }
 }
 
 export async function isolation(resources: string) {
   const inherited = Object.keys(process.env).filter((key) => credentialName.test(key))
   if (inherited.length) throw new Error(`Run native desktop tests with the credential-free command in README.md; the harness inherited ${inherited.join(", ")}.`)
   await fs.access(sandbox, constants.X_OK)
-  const declared = process.env.HOME
-  if (!declared || !path.isAbsolute(declared)) throw new Error("HOME must be an absolute path.")
-  const home = await fs.realpath(declared)
-  const run = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "ycd-")))
+  const { home, temp } = await syntheticDirectories(process.env.HOME, os.tmpdir())
+  const run = await fs.realpath(await fs.mkdtemp(path.join(temp, "ycd-")))
+  const previousCwd = process.cwd()
   const cwd = path.join(run, "cwd")
   let backend: Backend
+  let native: Runtime
   try {
     if (inside(run, home) || inside(home, run)) throw new Error("The native test temporary root must be outside HOME.")
     backend = await bundledGrant(resources, home)
+    const source = process.env.YCODING_DESKTOP_TEST_RUNTIME
+    const sha256 = process.env.YCODING_DESKTOP_TEST_RUNTIME_SHA256
+    if (!source || !sha256) throw new Error("Set YCODING_DESKTOP_TEST_RUNTIME and YCODING_DESKTOP_TEST_RUNTIME_SHA256 to the independently reviewed native producer and digest.")
+    native = await readRuntime(source, sha256, backend.executable)
     await fs.mkdir(cwd)
     process.chdir(cwd)
-    await probe(run, home, cwd, backend)
+    await probe(run, home, cwd, backend, native)
   } catch (error) {
+    process.chdir(previousCwd)
     await fs.rm(run, { recursive: true, force: true })
     throw error
   }
 
-  const roots = new Set<OwnedRoot>()
+  const roots = new Map<OwnedRoot, StagedRuntime>()
+  const runtimes = new Set<string>()
   const live = new Map<number, Endpoint>()
   const issue = (port: number) => {
     if (live.has(port)) throw new Error(`Loopback port ${port} already has a live endpoint grant.`)
@@ -293,18 +344,20 @@ export async function isolation(resources: string) {
   const guarded = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : input)
     const port = Number(url.port)
-    if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !url.port || !(live.has(port) || await ownedListener(port, backend.executable)))
+    if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !url.port || !(live.has(port) || await ownedListener(port, runtimes, backend.executable)))
       throw new TypeError("The trusted harness may contact only harness-issued endpoints and loopback listeners of the bundled backend.")
     return original(input, { ...init, redirect: "error" })
   }, original)
   globalThis.fetch = guarded
-  const confine = (owned: OwnedRoot, endpoints: readonly Endpoint[], command: Command): Command => {
-    if (!roots.has(owned)) throw new Error("Confined backends may use only a registered owned fixture root.")
+  const rulesFor = (owned: OwnedRoot, endpoints: readonly Endpoint[]) => {
+    const runtime = roots.get(owned)
+    if (!runtime) throw new Error("Confined backends may use only a registered owned fixture root.")
     const info = lstatSync(owned.path)
     if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("The owned fixture root changed.")
     if (endpoints.some((endpoint) => live.get(endpoint.port) !== endpoint)) throw new Error("Confined backends may reach only harness-issued live endpoints.")
-    return [sandbox, "-p", profile({ owned: owned.path, cwd, backend, connect: endpoints.map((endpoint) => endpoint.port) }), ...command]
+    return runtimeProfile({ owned: owned.path, cwd, backend, connect: endpoints.map((endpoint) => endpoint.port) }, runtime)
   }
+  const confine = (owned: OwnedRoot, endpoints: readonly Endpoint[], command: Command): Command => [sandbox, "-p", rulesFor(owned, endpoints), ...command]
   const serverEndpoint = (command: Command) => {
     const index = command.indexOf("--server")
     if (index < 0) return undefined
@@ -384,15 +437,22 @@ export async function isolation(resources: string) {
       const origin = new URL(url)
       if (origin.protocol !== "http:" || origin.hostname !== "127.0.0.1" || Number(origin.port) !== port)
         throw new Error("The shared synthetic backend did not bind the harness-chosen loopback port.")
+      const runtime = roots.get(owned)
+      const listener = runtime === undefined ? undefined : await ownedListener(port, new Set([runtime.executable]), backend.executable, server.pid)
+      if (!listener) throw new Error("The shared synthetic listener is not the reviewed native child of its packaged CLI.")
       const response = await guarded(new URL("/api/health", origin), { headers: headers({ url, auth: { type: "basic", username: "ycoding", password } }), redirect: "error", signal: AbortSignal.timeout(5_000) })
       if (!response.ok) throw new Error(`The shared synthetic health check returned ${response.status}.`)
       const health: unknown = await response.json()
-      if (typeof health !== "object" || health === null || !("pid" in health) || health.pid !== server.pid)
+      if (typeof health !== "object" || health === null || !("pid" in health) || health.pid !== listener.pid || !("version" in health) || health.version !== backend.version)
         throw new Error("The shared synthetic endpoint is not served by the confined backend the harness started.")
       const issued = issue(port)
       revoke = issued.revoke
       if (server.exitCode !== null || server.signalCode !== null) throw new Error("The shared synthetic backend exited before its endpoint was granted.")
-      return { url, pid: server.pid, endpoint: issued.endpoint, stop }
+      return { url, pid: listener.pid, endpoint: issued.endpoint, stop: async () => {
+        await stop()
+        if (server.exitCode !== 0 || processIsAlive(listener.pid))
+          throw new Error("The shared synthetic backend did not retire cleanly.")
+      } }
     } catch (error) {
       await stop()
       throw error
@@ -405,14 +465,26 @@ export async function isolation(resources: string) {
     fetch: guarded,
     root: async () => {
       const owned: OwnedRoot = Object.freeze({ path: await ownedDirectory(run, home) })
-      roots.add(owned)
-      return owned
+      try {
+        const env = await syntheticEnv(owned.path, provider.url)
+        const runtime = await stageRuntime(owned.path, env, backend.version, native)
+        roots.set(owned, runtime)
+        runtimes.add(runtime.executable)
+        return { owned, env }
+      } catch (error) {
+        await fs.rm(owned.path, { recursive: true, force: true })
+        throw error
+      }
     },
     release: async (owned: OwnedRoot) => {
-      if (!roots.delete(owned)) throw new Error("Only a registered owned fixture root can be released.")
+      const runtime = roots.get(owned)
+      if (!runtime) throw new Error("Only a registered owned fixture root can be released.")
+      roots.delete(owned)
+      runtimes.delete(runtime.executable)
       await fs.rm(owned.path, { recursive: true, force: true })
     },
     confine,
+    worker: (owned: OwnedRoot, endpoint: Endpoint) => confinedWorkerCommand(rulesFor(owned, [provider.endpoint, endpoint]), backend, owned.path),
     launch: (owned: OwnedRoot, endpoints: readonly Endpoint[]) => (command: Command) => {
       const server = serverEndpoint(command)
       return confine(owned, server ? [...endpoints, server] : endpoints, command)
@@ -422,7 +494,13 @@ export async function isolation(resources: string) {
     close: async () => {
       await fake.stop()
       globalThis.fetch = original
+      process.chdir(previousCwd)
       await fs.rm(run, { recursive: true, force: true })
     },
   }
+}
+
+function processIsAlive(pid: number) {
+  try { process.kill(pid, 0); return true }
+  catch (error) { if (error instanceof Error && "code" in error && error.code === "ESRCH") return false; throw error }
 }

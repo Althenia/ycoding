@@ -10,8 +10,8 @@ export function formatAccessKey(value: string): string {
   return value.replaceAll("-", "").match(/.{4}/g)?.join("-") ?? value
 }
 
-export function takeInviteToken(fragment: string, replace: (path: string) => void): string | undefined {
-  if (fragment) replace("/remote/invite")
+export function takeInviteToken(fragment: string, clearFragment: () => void): string | undefined {
+  if (fragment) clearFragment()
   const token = fragment.startsWith("#") ? fragment.slice(1) : ""
   return /^[A-Za-z0-9_-]{43}$/.test(token) ? token : undefined
 }

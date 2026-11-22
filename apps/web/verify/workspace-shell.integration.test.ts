@@ -289,9 +289,9 @@ describe("quiet workspace", () => {
       await until(page, `document.querySelector('.mini-composer__input-wrap') !== null`)
       await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
       await until(page, `document.querySelector('#session-companion-panel') !== null`)
-      const result = await page.evaluate(`(() => { const box = document.querySelector('.composer').getBoundingClientRect(), controls = [...document.querySelectorAll('.composer .composer__attach, .composer .mini-composer__send')]; return { inside: controls.length === 2 && controls.every(e => { const r = e.getBoundingClientRect(); return r.left >= box.left && r.right <= box.right && r.top >= box.top && r.bottom <= box.bottom }), title: document.querySelector('.conversation-breadcrumb h1').getBoundingClientRect().width } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, inside: (decodeBoolean)(record["inside"]), title: (decodeNumber)(record["title"]) } })
+      const result = await page.evaluate(`(() => { const box = document.querySelector('.composer').getBoundingClientRect(), controls = [...document.querySelectorAll('.composer .composer__attach, .composer .mini-composer__send')]; return { inside: controls.length === 2 && controls.every(e => { const r = e.getBoundingClientRect(); return r.left >= box.left && r.right <= box.right && r.top >= box.top && r.bottom <= box.bottom }), identityWidth: document.querySelector('.conversation-breadcrumb__identity').getBoundingClientRect().width } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, inside: (decodeBoolean)(record["inside"]), identityWidth: (decodeNumber)(record["identityWidth"]) } })
       expect(result.inside).toBe(true)
-      expect(result.title).toBeGreaterThanOrEqual(140)
+      expect(result.identityWidth).toBeGreaterThanOrEqual(140)
     } finally { await page.close() }
   }, 30_000)
 

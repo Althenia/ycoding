@@ -8,6 +8,7 @@ import { interactionExtensionFiles } from "../packages/cli/src/update/interactio
 const temporary: string[] = []
 const installer = path.join(import.meta.dir, "install.sh")
 const fixtureVersion = "0.7.0"
+const releaseListURL = "https://api.github.com/repos/Althenia/ycoding/releases?per_page=20"
 const macTest = process.platform === "darwin" ? test : test.skip
 const pinnedSigner = "9dd524184b0db949ffac7f0ada0ae860ac7f5f85"
 const pinnedTest = process.platform === "darwin" && Bun.spawnSync(["/usr/bin/security", "find-identity", "-v", "-p", "codesigning"]).stdout.toString().toLowerCase().includes(pinnedSigner) ? test : test.skip
@@ -15,6 +16,193 @@ setDefaultTimeout(30_000)
 
 afterEach(async () => {
   await Promise.all(temporary.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
+})
+
+describe("native release installer", () => {
+  test("installs the native archive member as ycoding and records its verified digest on a fresh home", async () => {
+    const fixture = await nativeInstallFixture()
+    const result = await runInstaller(fixture, { YCODING_VERSION: "" })
+    expect(result.exitCode, result.stderr).toBe(0)
+    const install = path.join(fixture.home, ".local/bin")
+    expect(await Bun.file(path.join(install, "ycoding")).text()).toBe(nativeExecutable)
+    expect(await Bun.file(path.join(install, "ycoding-native")).exists()).toBe(false)
+    expect(await Bun.file(path.join(install, ".ycoding-native-release")).text()).toBe(nativeReceipt)
+    expect(await releaseRequests(fixture)).toEqual([
+      releaseListURL,
+      "https://github.com/Althenia/ycoding/releases/download/v0.13.0/ycoding-0.13.0-checksums.txt",
+      "https://github.com/Althenia/ycoding/releases/download/v0.13.0/ycoding-0.13.0-linux-x64.tar.gz",
+    ])
+  })
+
+  test("selects the numerically highest stable release independent of GitHub Latest and list order", async () => {
+    const fixture = await nativeInstallFixture()
+    await writeFile(path.join(fixture.fixture, "releases"), JSON.stringify([
+      { tag_name: "v0.99.0", draft: true, prerelease: false },
+      { tag_name: "v0.14.0", draft: false, prerelease: true },
+      { tag_name: "not-a-release", draft: false, prerelease: false },
+      { tag_name: "v0.13.0", draft: false, prerelease: false, body: 'Text: {"tag_name":"v9.0.0"} \n \\' },
+      { tag_name: "v0.9.99", draft: false, prerelease: false },
+      { tag_name: "v0.12.101", draft: false, prerelease: false },
+      { tag_name: "v0.14.0-rc.1", draft: false, prerelease: false },
+    ], null, 2))
+    const result = await runInstaller(fixture, { YCODING_VERSION: "" })
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect(result.stdout).toContain("Installed ycoding 0.13.0")
+    expect(await releaseRequests(fixture)).toEqual([
+      releaseListURL,
+      "https://github.com/Althenia/ycoding/releases/download/v0.13.0/ycoding-0.13.0-checksums.txt",
+      "https://github.com/Althenia/ycoding/releases/download/v0.13.0/ycoding-0.13.0-linux-x64.tar.gz",
+    ])
+  })
+
+  test("rejects invalid, ambiguous, oversized or empty release lists before asset downloads", async () => {
+    for (const body of [
+      '{"tag_name":"v0.13.0","draft":false,"prerelease":false}',
+      '[{"tag_name":"v0.13.0","draft":false,"prerelease":false},]',
+      '[{"tag_name":"v0.13.0","draft":false,"draft":true,"prerelease":false}]',
+      '[{"tag_name":"v0.13.0","draft":"false","prerelease":false}]',
+      '[{"tag_name":"v0.13.0","draft":false,"prerelease":false}] trailing',
+      '[{"tag_name":"v0.13.0","draft":false,"prerelease":false,"nested":[1,]}]',
+      " ".repeat(2 * 1024 * 1024 + 1),
+      "[]",
+    ]) {
+      const fixture = await nativeInstallFixture()
+      await writeFile(path.join(fixture.fixture, "releases"), body)
+      const result = await runInstaller(fixture, { YCODING_VERSION: "" })
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stderr).toMatch(/release list/i)
+      expect(await releaseRequests(fixture)).toEqual([releaseListURL])
+      expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding")).exists()).toBe(false)
+    }
+  })
+
+  test("refuses an unrecognized binary without executing it or requesting release assets", async () => {
+    const fixture = await nativeInstallFixture()
+    const install = path.join(fixture.home, ".local/bin")
+    const existing = '#!/bin/sh\ntouch "$FIXTURE/probed"\nprintf "ycoding v0.13.0\\n"\n'
+    await mkdir(install, { recursive: true })
+    await writeExecutable(path.join(install, "ycoding"), existing)
+    const result = await runInstaller(fixture)
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain("YCODING_VERSION=0.12.2")
+    expect(result.stderr).toContain("--replace-bun")
+    expect(await Bun.file(path.join(fixture.fixture, "probed")).exists()).toBe(false)
+    expect(await releaseRequests(fixture)).toEqual([])
+    expect(await Bun.file(path.join(install, "ycoding")).text()).toBe(existing)
+    expect(await readdir(install)).toEqual(["ycoding"])
+  })
+
+  test("refuses a legacy SQLite store before archive requests even without an installed binary", async () => {
+    const fixture = await nativeInstallFixture()
+    const xdgData = path.join(fixture.home, "custom-data")
+    const data = path.join(xdgData, "ycoding")
+    await mkdir(data, { recursive: true })
+    await writeFile(path.join(data, "ycoding.db"), "Bun store")
+    const result = await runInstaller(fixture, { XDG_DATA_HOME: xdgData, YCODING_VERSION: "" })
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain("YCODING_VERSION=0.12.2")
+    expect(await releaseRequests(fixture)).toEqual([releaseListURL])
+    expect(await Bun.file(path.join(data, "ycoding.db")).text()).toBe("Bun store")
+    expect(await readdir(fixture.home)).toEqual([".zshrc", "custom-data"])
+  })
+
+  test("allows retained Bun data only when a native store is also present", async () => {
+    const fixture = await nativeInstallFixture()
+    const data = path.join(fixture.home, ".local/share/ycoding")
+    await mkdir(data, { recursive: true })
+    const entries = ["ycoding.db", "ycoding.db-wal", "ycoding.db-shm", "core.redb"]
+    for (const name of entries) await writeFile(path.join(data, name), `${name} bytes`)
+    const result = await runInstaller(fixture)
+    expect(result.exitCode, result.stderr).toBe(0)
+    for (const name of entries) expect(await Bun.file(path.join(data, name)).text()).toBe(`${name} bytes`)
+  })
+
+  test("recognizes a matching native receipt without running the existing executable", async () => {
+    const fixture = await nativeInstallFixture()
+    const install = path.join(fixture.home, ".local/bin")
+    const executable = '#!/bin/sh\ntouch "$FIXTURE/probed"\nexit 99\n'
+    await mkdir(install, { recursive: true })
+    await writeExecutable(path.join(install, "ycoding"), executable)
+    const receipt = path.join(install, ".ycoding-native-release")
+    await writeFile(receipt, nativeReceipt)
+    const stale = await runInstaller(fixture)
+    expect(stale.exitCode).not.toBe(0)
+    expect(await releaseRequests(fixture)).toEqual([])
+    const matching = `0.13.0 ${new Bun.CryptoHasher("sha256").update(executable).digest("hex")}\n`
+    await writeFile(path.join(fixture.home, "linked-receipt"), matching)
+    await rm(receipt)
+    await symlink(path.join(fixture.home, "linked-receipt"), receipt)
+    const linked = await runInstaller(fixture)
+    expect(linked.exitCode).not.toBe(0)
+    expect(await releaseRequests(fixture)).toEqual([])
+    await rm(receipt)
+    await writeFile(receipt, matching)
+    const result = await runInstaller(fixture)
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect(await Bun.file(path.join(fixture.fixture, "probed")).exists()).toBe(false)
+    expect(await Bun.file(receipt).text()).toBe(nativeReceipt)
+  })
+
+  for (const source of ["flag", "environment"] as const) {
+    test(`replaces a Bun executable only with the explicit ${source} and preserves all database files`, async () => {
+      const fixture = await nativeInstallFixture()
+      const install = path.join(fixture.home, ".local/bin")
+      const data = path.join(fixture.home, ".local/share/ycoding")
+      const entries = ["ycoding.db", "ycoding.db-wal", "ycoding.db-shm", "ycoding.db-journal", "core.redb"]
+      await mkdir(install, { recursive: true })
+      await mkdir(data, { recursive: true })
+      await writeExecutable(path.join(install, "ycoding"), "#!/bin/sh\nexit 99\n")
+      for (const name of entries) await writeFile(path.join(data, name), `${name} bytes`)
+      if (source === "flag") await rm(path.join(data, "core.redb"))
+      const result = source === "flag" ? await runInstaller(fixture, {}, ["--replace-bun"]) : await runInstaller(fixture, { YCODING_REPLACE_BUN: "1" })
+      expect(result.exitCode, result.stderr).toBe(0)
+      expect(await Bun.file(path.join(install, "ycoding")).text()).toBe(nativeExecutable)
+      expect(await Bun.file(path.join(install, ".ycoding-native-release")).text()).toBe(nativeReceipt)
+      for (const name of entries.filter((name) => source !== "flag" || name !== "core.redb"))
+        expect(await Bun.file(path.join(data, name)).text()).toBe(`${name} bytes`)
+      if (source === "flag") expect(await Bun.file(path.join(data, "core.redb")).exists()).toBe(false)
+    })
+  }
+
+  test("rejects an archive with the old Unix member or both names under the native version", async () => {
+    for (const entries of [["ycoding"], ["ycoding-native", "ycoding"]]) {
+      const fixture = await nativeInstallFixture(entries)
+      const result = await runInstaller(fixture)
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stderr).toContain("unexpected entries")
+      expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding")).exists()).toBe(false)
+    }
+  })
+
+  test("rolls back executable and receipt together when a native install or a Bun pin fails", async () => {
+    const fixture = await nativeInstallFixture()
+    const install = path.join(fixture.home, ".local/bin")
+    const oldNative = "#!/bin/sh\nexit 20\n"
+    const previousReceipt = `0.13.1 ${new Bun.CryptoHasher("sha256").update(oldNative).digest("hex")}\n`
+    await mkdir(install, { recursive: true })
+    await writeExecutable(path.join(install, "ycoding"), oldNative)
+    const receipt = path.join(install, ".ycoding-native-release")
+    await writeFile(receipt, previousReceipt)
+    await failFirstMove(fixture, ".ycoding-native-release")
+    const nativeFailure = await runInstaller(fixture)
+    expect(nativeFailure.exitCode).not.toBe(0)
+    expect(nativeFailure.stderr).toContain("Failed to install the native release receipt")
+    expect(await Bun.file(path.join(install, "ycoding")).text()).toBe(oldNative)
+    expect(await Bun.file(receipt).text()).toBe(previousReceipt)
+
+    const old = { ...await setup({ system: "Linux", machine: "x86_64", version: "0.12.1" }), home: fixture.home }
+    await writeInteractionLinuxArchive(old, ["ycoding"])
+    await failFirstMove(old, "ycoding")
+    const bunFailure = await runInstaller(old)
+    expect(bunFailure.exitCode).not.toBe(0)
+    expect(await Bun.file(path.join(install, "ycoding")).text()).toBe(oldNative)
+    expect(await Bun.file(receipt).text()).toBe(previousReceipt)
+
+    const bun = await runInstaller(old)
+    expect(bun.exitCode, bun.stderr).toBe(0)
+    expect(await Bun.file(path.join(install, "ycoding")).text()).toBe(`#!/bin/sh\necho ycoding ${fixtureVersion}\n`)
+    expect(await Bun.file(receipt).exists()).toBe(false)
+  })
 })
 
 describe("curl installer", () => {
@@ -91,7 +279,7 @@ describe("curl installer", () => {
     expect(await readFile(path.join(zdotdir.home, ".zshrc"), "utf8")).toBe("# existing profile\n")
   })
 
-  test("resolves the latest version from the fixed GitHub repository", async () => {
+  test("resolves a stable version from the fixed GitHub release list", async () => {
     const fixture = await setup()
     const result = await runInstaller(fixture, { YCODING_VERSION: "" })
 
@@ -576,6 +764,7 @@ async function setup(platform: { system?: string; machine?: string; version?: st
   const tar = Bun.spawnSync(["tar", "-C", fixture, "-czf", archive, ...entries])
   expect(tar.exitCode).toBe(0)
   await writeChecksum(fixture, asset)
+  await writeFile(path.join(fixture, "releases"), JSON.stringify([{ tag_name: `v${version}`, draft: false, prerelease: false }]))
   await writeExecutable(
     path.join(bin, "uname"),
     `#!/bin/sh\ncase "$1" in\n  -s) printf '%s\\n' '${system}' ;;\n  -m) printf '%s\\n' '${machine}' ;;\n  *) exit 1 ;;\nesac\n`,
@@ -601,9 +790,13 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ "$proto" = true ] && [ "$proto_redir" = true ] || exit 45
+printf '%s\n' "$url" >> "$FIXTURE/requests"
 case "$url" in
+  'https://api.github.com/repos/Althenia/ycoding/releases?per_page=20')
+    cp "$FIXTURE/releases" "$output"
+    printf 200 ;;
   https://github.com/Althenia/ycoding/releases/latest)
-    printf '%s' 'https://github.com/Althenia/ycoding/releases/tag/v${version}' ;;
+    printf '%s' 'https://github.com/Althenia/ycoding/releases/tag/v0.12.1' ;;
   https://github.com/Althenia/ycoding/releases/download/v${version}/ycoding-${version}-checksums.txt)
     cp "$FIXTURE/checksums" "$output" ;;
   https://github.com/Althenia/ycoding/releases/download/v${version}/${asset})
@@ -646,6 +839,41 @@ async function runInstaller(
 async function writeExecutable(file: string, content: string) {
   await writeFile(file, content)
   await chmod(file, 0o755)
+}
+
+const nativeExecutable = "#!/bin/sh\nexit 13\n"
+const nativeReceipt = `0.13.0 ${new Bun.CryptoHasher("sha256").update(nativeExecutable).digest("hex")}\n`
+
+async function nativeInstallFixture(entries = ["ycoding-native"]) {
+  const fixture = await setup({ system: "Linux", machine: "x86_64", version: "0.13.0" })
+  await writeExecutable(path.join(fixture.fixture, "ycoding-native"), nativeExecutable)
+  await writeInteractionLinuxArchive(fixture, entries)
+  return fixture
+}
+
+async function writeInteractionLinuxArchive(fixture: Awaited<ReturnType<typeof setup>>, entries: string[]) {
+  const extension = "ycoding-chrome-extension"
+  await mkdir(path.join(fixture.fixture, extension, "icons"), { recursive: true })
+  for (const file of interactionExtensionFiles) await writeFile(path.join(fixture.fixture, extension, file), "fixture\n")
+  const tar = Bun.spawnSync(["tar", "-C", fixture.fixture, "-czf", path.join(fixture.fixture, fixture.asset), ...entries, extension], { env: { ...process.env, COPYFILE_DISABLE: "1" } })
+  expect(tar.exitCode).toBe(0)
+  await writeChecksum(fixture.fixture, fixture.asset)
+}
+
+async function releaseRequests(fixture: Awaited<ReturnType<typeof setup>>) {
+  const file = Bun.file(path.join(fixture.fixture, "requests"))
+  return (await file.exists()) ? (await file.text()).trimEnd().split("\n") : []
+}
+
+async function failFirstMove(fixture: Awaited<ReturnType<typeof setup>>, name: string) {
+  await writeExecutable(path.join(fixture.path.split(":")[0]!, "mv"), `#!/bin/sh
+destination=
+for argument do destination=$argument; done
+if [ "$destination" = "$HOME/.local/bin/${name}" ] && [ ! -e "$FIXTURE/mv-failed" ]; then
+  touch "$FIXTURE/mv-failed"; exit 70
+fi
+exec /bin/mv "$@"
+`)
 }
 
 async function writeChecksum(fixture: string, asset: string) {

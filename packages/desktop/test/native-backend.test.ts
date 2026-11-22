@@ -6,7 +6,7 @@ import path from "node:path"
 import { BackendController } from "../src/backend-controller"
 import type { ConnectionState } from "../src/contract"
 import * as NativeClient from "../src/native-client"
-import { isolation, syntheticEnv } from "./isolation"
+import { isolation } from "./isolation"
 
 const resources = process.env.YCODING_DESKTOP_TEST_RESOURCES
 if (!resources) throw new Error("Set YCODING_DESKTOP_TEST_RESOURCES to the built task-owned app Resources.")
@@ -19,15 +19,19 @@ function startShared(owned: Awaited<ReturnType<typeof fixture>>, port = 0) {
 }
 
 async function fixture(password?: string, onState?: (state: ConnectionState) => void) {
-  const rootGrant = await confinement.root()
-  const root = rootGrant.path
-  const env: Record<string, string> = await syntheticEnv(root, provider.url)
-  if (password) env.YCODING_PASSWORD = password
-  const events: string[] = []
-  const controller = new BackendController(confinement.backend.resources, { env, onState, launch: confinement.launch(rootGrant, [provider.endpoint]), onEvent: (event) => { events.push(event.type) } })
-  let closing: Promise<void> | undefined
-  const close = () => closing ??= (async () => { await controller.disconnect(); await confinement.release(rootGrant) })()
-  return { rootGrant, root, env, events, controller, close }
+  const { owned: rootGrant, env } = await confinement.root()
+  try {
+    const root = rootGrant.path
+    if (password) env.YCODING_PASSWORD = password
+    const events: string[] = []
+    const controller = new BackendController(confinement.backend.resources, { env, onState, launch: confinement.launch(rootGrant, [provider.endpoint]), onEvent: (event) => { events.push(event.type) } })
+    let closing: Promise<void> | undefined
+    const close = () => closing ??= (async () => { await controller.disconnect(); await confinement.release(rootGrant) })()
+    return { rootGrant, root, env, events, controller, close }
+  } catch (error) {
+    await confinement.release(rootGrant)
+    throw error
+  }
 }
 
 test("packaged private backend uses real native health/events and exits when its lease closes", async () => {
@@ -37,6 +41,7 @@ test("packaged private backend uses real native health/events and exits when its
     const state = await owned.controller.connect({ mode: "own" })
     expect(state.status).toBe("connected")
     expect(state.mode).toBe("own")
+    expect(state.version).toBe(confinement.backend.version)
     expect(state.backendPID).toBeGreaterThan(0)
     expect(owned.events[0]).toBe("server.connected")
     expect((await owned.controller.sessions({})).items).toEqual([])
@@ -68,8 +73,7 @@ test("packaged shared native endpoint survives disconnect and retry without repl
     expect((await api.health.get()).pid).toBe(before.pid)
     expect(running(shared.pid)).toBe(true)
   } finally {
-    await owned.close()
-    await shared.stop()
+    try { await shared.stop() } finally { await owned.close() }
   }
 }, 60_000)
 
@@ -118,8 +122,7 @@ test("native chat workspace places a bound chat in an opened repository and read
     expect(requested.length).toBeGreaterThan(0)
     expect(requested.every((request) => request.method === "POST" && request.path === "/v1/chat/completions" && request.model === "echo")).toBe(true)
   } finally {
-    await owned.close()
-    await shared.stop()
+    try { await shared.stop() } finally { await owned.close() }
   }
 }, 60_000)
 
@@ -144,9 +147,7 @@ test("shared reconnect publishes the restarted backend's current identity", asyn
     expect(owned.controller.state()).toEqual(current)
     expect(Array.isArray((await owned.controller.sessions({})).items)).toBe(true)
   } finally {
-    await owned.close()
-    await first.stop()
-    await second?.stop()
+    try { await Promise.all([first.stop(), second?.stop()]) } finally { await owned.close() }
   }
 }, 60_000)
 
@@ -201,48 +202,72 @@ test("a Session read held across a same-attempt reconnect is rejected and the ne
 test("confined desktop-client worker serves the restricted line protocol without credentials and exits on stdin EOF", async () => {
   const password = crypto.randomUUID()
   const owned = await fixture(password)
-  const shared = await startShared(owned)
-  const { readPreferences } = await import("../src/preferences")
-  const preferences = path.join(owned.root, "preferences.json")
-  const server = new URL(shared.url).href
-  const sent = provider.requests.length
-  const command = confinement.confine(owned.rootGrant, [provider.endpoint, shared.endpoint], [confinement.backend.executable, "desktop-client", "--resources", confinement.backend.resources, "--preferences", preferences])
-  const worker = Bun.spawn([...command], { env: owned.env, stdin: "pipe", stdout: "pipe", stderr: "ignore" })
-  const lines: Record<string, unknown>[] = []
-  const waiters = new Set<() => void>()
-  let ended = false
-  const wake = () => { for (const resolve of [...waiters]) { waiters.delete(resolve); resolve() } }
-  const reading = (async () => {
-    const decoder = new TextDecoder()
-    let buffer = ""
-    for await (const chunk of worker.stdout) {
-      buffer += decoder.decode(chunk, { stream: true })
-      for (let newline = buffer.indexOf("\n"); newline >= 0; newline = buffer.indexOf("\n")) {
-        lines.push(JSON.parse(buffer.slice(0, newline)))
-        buffer = buffer.slice(newline + 1)
-      }
-      wake()
-    }
-    ended = true
-    wake()
-  })()
-  const request = async (id: number, operation: string, input?: unknown) => {
-    await worker.stdin.write(JSON.stringify({ id, operation, ...(input === undefined ? {} : { input }) }) + "\n")
-    await worker.stdin.flush()
-    for (;;) {
-      const found = lines.find((line) => line.type === "reply" && line.id === id)
-      if (found) return found
-      if (ended) throw new Error(`Worker closed before reply ${id}`)
-      await new Promise<void>((resolve) => waiters.add(resolve))
-    }
-  }
+  let stopShared: (() => Promise<void>) | undefined
+  let stopWorker: (() => Promise<void>) | undefined
   try {
+    const shared = await startShared(owned)
+    stopShared = shared.stop
+    const { readPreferences } = await import("../src/preferences")
+    const preferences = path.join(owned.root, "preferences.json")
+    const server = new URL(shared.url).href
+    const sent = provider.requests.length
+    const command = confinement.worker(owned.rootGrant, shared.endpoint)
+    const worker = Bun.spawn([...command], { env: owned.env, stdin: "pipe", stdout: "pipe", stderr: "ignore" })
+    let reading: Promise<void> | undefined
+    stopWorker = async () => {
+      try { if (worker.exitCode === null) { worker.kill("SIGKILL"); await worker.exited } }
+      finally { await reading }
+    }
+    const lines: Record<string, unknown>[] = []
+    const waiters = new Set<() => void>()
+    let ended = false
+    const wake = () => { for (const resolve of [...waiters]) { waiters.delete(resolve); resolve() } }
+    reading = (async () => {
+      const decoder = new TextDecoder()
+      let buffer = ""
+      for await (const chunk of worker.stdout) {
+        buffer += decoder.decode(chunk, { stream: true })
+        for (let newline = buffer.indexOf("\n"); newline >= 0; newline = buffer.indexOf("\n")) {
+          lines.push(JSON.parse(buffer.slice(0, newline)))
+          buffer = buffer.slice(newline + 1)
+        }
+        wake()
+      }
+    })().catch(() => { throw new Error("Could not read the worker's line replies.") }).finally(() => { ended = true; wake() })
+    void reading.catch(() => {})
+    const request = async (id: number, operation: string, input?: unknown) => {
+      await worker.stdin.write(JSON.stringify({ id, operation, ...(input === undefined ? {} : { input }) }) + "\n")
+      await worker.stdin.flush()
+      for (;;) {
+        const found = lines.find((line) => line.type === "reply" && line.id === id)
+        if (found) return found
+        if (ended) throw new Error(`Worker closed before reply ${id}`)
+        await new Promise<void>((resolve) => waiters.add(resolve))
+      }
+    }
     expect((await request(1, "preferences")).data).toEqual({})
     expect((await request(11, "workspaces")).error).toBe("Connect to a backend before using Sessions.")
     expect((await request(12, "messages", "not-a-session")).error).toBe("Choose a Session.")
     expect((await request(13, "prompt", { sessionID: "ses_synthetic", promptID: "msg_synthetic", text: "x", extra: true })).error).toBe("Invalid message.")
     expect((await request(14, "create-session", { directory: "relative", sessionID: "ses_synthetic" })).error).toBe("Choose a previously opened repository.")
-    const connected = (await request(2, "connect", { mode: "shared", server })).data as { status: string; backendPID: number }
+    const connection = await request(2, "connect", { mode: "shared", server })
+    if (connection.data === undefined) {
+      const error = connection.error
+      const detail = [
+        "The bundled backend is missing, non-executable or does not match its bundle manifest. Rebuild the desktop app.",
+        "The bundled backend could not report its version. Rebuild the desktop app.",
+        "The bundled backend version does not match its bundle manifest. Rebuild the desktop app.",
+        "The shared backend is unavailable or incompatible. Start it manually or check the endpoint and retry.",
+        "Could not establish native backend health and events. Check the endpoint and retry.",
+        "The native event stream did not start with server.connected.",
+        "Native backend connection was cancelled.",
+        "Backend connection was cancelled.",
+        "Backend connection failed. Retry.",
+        "Native desktop request failed.",
+      ].find((message) => typeof error === "string" && (error === message || error.startsWith(`${message} `)))
+      throw new Error(`Worker shared connect returned no data: ${detail ?? (typeof error === "string" ? "unrecognized error (not printed)" : "missing error")}`)
+    }
+    const connected = connection.data as { status: string; backendPID: number }
     expect(connected.status).toBe("connected")
     expect(connected.backendPID).toBe(shared.pid)
     expect(lines.some((line) => line.type === "state" && (line.data as { status: string }).status === "connecting")).toBe(true)
@@ -258,10 +283,8 @@ test("confined desktop-client worker serves the restricted line protocol without
     await worker.stdin.end()
     expect(await worker.exited).toBe(0)
   } finally {
-    if (worker.exitCode === null) { worker.kill("SIGKILL"); await worker.exited }
-    await reading
-    await owned.close()
-    await shared.stop()
+    try { await stopWorker?.() }
+    finally { try { await stopShared?.() } finally { await owned.close() } }
   }
 }, 60_000)
 
@@ -274,7 +297,8 @@ test("confined backend children receive only owned synthetic state and harness-o
   try {
     expect(Object.keys(owned.env).filter((key) => /KEY|TOKEN|SECRET|PASSWORD|AUTH|CREDENTIAL|COOKIE|SOCK/.test(key))).toEqual([])
     expect(Object.keys(owned.env).filter((key) => !key.startsWith("XDG_") && !key.startsWith("YCODING_") && !key.startsWith("GIT_CONFIG_"))
-      .every((key) => ["PATH", "HOME", "TMPDIR", "LANG", "USER", "LOGNAME"].includes(key))).toBe(true)
+      .every((key) => ["PATH", "HOME", "TMPDIR", "LANG", "USER", "LOGNAME", "BUN_ENABLE_CRASH_REPORTING"].includes(key))).toBe(true)
+    expect(owned.env.BUN_ENABLE_CRASH_REPORTING).toBe("0")
     expect(owned.env.HOME).toBe(process.env.HOME)
     expect(owned.env.PATH).toBe("/usr/bin:/bin:/usr/sbin:/sbin")
     for (const key of ["TMPDIR", "YCODING_TEST_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "YCODING_DB"])
@@ -309,8 +333,7 @@ test("an owned backend that exits unexpectedly becomes an actionable error, rest
     expect((await api.health.get()).pid).toBe(shared.pid)
     expect(provider.requests.length).toBe(sent)
   } finally {
-    await owned.close()
-    await shared.stop()
+    try { await shared.stop() } finally { await owned.close() }
   }
 }, 60_000)
 

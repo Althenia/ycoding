@@ -1,8 +1,8 @@
 # YCoding
 
-[![Latest release](https://img.shields.io/github/v/release/Althenia/ycoding?style=flat&color=67D7A4)](https://github.com/Althenia/ycoding/releases/latest)
+[![Releases](https://img.shields.io/github/v/release/Althenia/ycoding?style=flat&color=67D7A4)](https://github.com/Althenia/ycoding/releases)
 [![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](./LICENSE)
-[![Platforms](https://img.shields.io/badge/macOS%20%7C%20Linux-supported-lightgrey)](https://github.com/Althenia/ycoding/releases/latest)
+[![Platforms](https://img.shields.io/badge/macOS%20%7C%20Linux-supported-lightgrey)](https://github.com/Althenia/ycoding/releases)
 [![Docs](https://img.shields.io/badge/docs-ycoding.althenia.app-67D7A4)](https://ycoding.althenia.app/docs)
 
 **A terminal-first coding agent that runs on your own machine.** YCoding keeps every Session durable, lets you decide how much it may do on its own, and puts the same local runtime in your browser and on your phone when you step away from the terminal.
@@ -41,7 +41,7 @@ Latency and client-timing telemetry stays in local SQLite and is disabled until 
 curl -fsSL https://ycoding.althenia.app/install.sh | sh
 ```
 
-The installer downloads the latest release, verifies its SHA-256 checksum, and installs `ycoding` in `~/.local/bin`. Follow the PATH instructions it prints, then open a new terminal in your project:
+On a new installation, the installer downloads the highest stable Rust release, verifies its SHA-256 checksum, and installs `ycoding` in `~/.local/bin`. Follow the PATH instructions it prints, then open a new terminal in your project:
 
 ```sh
 ycoding
@@ -57,7 +57,7 @@ Run a single prompt without opening the interface:
 ycoding --model <[profile#]provider/model[#variant]> "Explain this repository"
 ```
 
-Use the installer above to move to v0.12.0 from v0.11.12 or earlier, v0.12.1 through v0.12.3, or v0.12.4. From v0.12.0, use `ycoding update` for newer releases on macOS and Linux; it never installs an older release unless you name one with `--version`. See [installation](https://ycoding.althenia.app/docs/installation) for macOS permissions and archive verification.
+Run `ycoding update` to stay on your existing edition: Bun updates to Bun 0.12.2, and Rust checks for stable Rust releases. The shell installer leaves Bun in place unless you pass `--replace-bun`. A clean Rust installation uses a separate store and does not import Bun data. See [installation](https://ycoding.althenia.app/docs/installation) for version selection, signature checks, and switching editions.
 
 ## Three surfaces, one runtime
 
@@ -80,7 +80,7 @@ See [remote workspace](https://ycoding.althenia.app/docs/usage/remote) for sign-
 
 ### macOS desktop app
 
-Download the separate signed Apple silicon Desktop ZIP from [GitHub Releases](https://github.com/Althenia/ycoding/releases/latest), or build it from source with `bun run build:desktop -- --outdir=<fresh-directory>`. At startup, choose **Start my own backend** (a private bundled backend that stops when the window closes) or **Connect to a shared backend** (an explicit local URL or the running managed service, left running on close). It uses the same native client and events as the terminal, not the relay. See [packages/desktop](./packages/desktop/README.md).
+Download the separate signed Apple silicon Desktop ZIP from [GitHub Releases](https://github.com/Althenia/ycoding/releases), or build it from source with `bun run build:desktop -- --outdir=<fresh-directory>`. At startup, choose **Start my own backend** (a private bundled backend that stops when the window closes) or **Connect to a shared backend** (an explicit local URL or the running managed service, left running on close). It uses the same native client and events as the terminal, not the relay. See [packages/desktop](./packages/desktop/README.md).
 
 ### Native Dots access
 

@@ -194,10 +194,11 @@ test("macOS release archives stage the signed app and preserve its bundle tree",
 })
 
 test.each([
-  ["cli", "ycoding", ""],
+  ["cli", "$executable", ""],
   ["interaction", "YCoding Interaction.app", " --deep"],
 ])("the release verifies the archived %s against the pinned certificate before upload", (identifier, entry, deep) => {
   const stage = workflow.split("      - name: Verify packaged macOS signatures")[1]?.split("      - name: Upload native archive")[0] ?? ""
+  expect(stage).toContain('executable="$(bun script/release-archive.ts executable "${{ matrix.target }}" "$RELEASE_VERSION")"')
   expect(stage).toContain(
     String.raw`codesign --verify${deep} --strict -R "=identifier \"app.ycoding.${identifier}\" and certificate leaf = H\"$YCODING_MACOS_SIGNING_SHA1\"" "$payload/${entry}"`,
   )
@@ -274,14 +275,25 @@ test("an existing release is replaced through staged, verified publication with 
   const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0] ?? ""
   const publish = tui.split("- name: Publish GitHub release")[1]?.split("\n      - name:")[0] ?? ""
   expect(publish).not.toContain("already exists")
-  expect(publish.indexOf('if gh release view "$RELEASE_TAG"')).toBeLessThan(publish.indexOf("bun script/release-publish.ts"))
+  expect(publish.indexOf('if gh release view "$RELEASE_TAG"')).toBeLessThan(publish.indexOf("bun script/release-publish.ts --repository"))
   expect(publish).toContain('--run "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --manifest release-publish-manifest.json release/* "docs/releases/v$version.md"')
-  expect(publish.indexOf("bun script/release-publish.ts")).toBeLessThan(publish.indexOf('gh release create "v$version"'))
+  expect(publish.indexOf("bun script/release-publish.ts --repository")).toBeLessThan(publish.indexOf('gh release create "v$version"'))
   expect(tui.indexOf("- name: Install Bun")).toBeLessThan(tui.indexOf("- name: Publish GitHub release"))
   const manifest = tui.split("- name: Upload release publication manifest")[1] ?? ""
   expect(manifest).toContain("if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}")
   expect(manifest).toContain("path: release-publish-manifest.json")
   expect(workflow).not.toContain('"$GITHUB_WORKSPACE/script/release-publish.test.ts"')
+})
+
+test("Rust publication keeps Bun v0.12.2 as GitHub Latest", () => {
+  const publish = workflow.split("- name: Publish GitHub release")[1]?.split("\n      - name:")[0] ?? ""
+  const latestGuard = '"$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)" != "v0.12.2"'
+  expect(publish).toContain('latest="$(bun script/release-publish.ts latest "$RELEASE_TAG")"')
+  expect(publish).toContain(latestGuard)
+  expect(publish.indexOf(latestGuard)).toBeLessThan(publish.indexOf('if gh release view "$RELEASE_TAG"'))
+  expect(publish).toContain('gh release create "v$version" release/* "docs/releases/v$version.md" --verify-tag --latest="$latest"')
+  expect(publish.lastIndexOf(latestGuard)).toBeGreaterThan(publish.indexOf('gh release create "v$version"'))
+  expect(publish).not.toMatch(/--draft|--prerelease/)
 })
 
 test("Cloudflare deployment requires a scoped Actions token before Wrangler runs", () => {
@@ -342,7 +354,8 @@ test("release source checks cover Interaction and stored OpenAI Responses withou
 test.each([
   ["0.12.0-rc.1+build.2", "preview", "branch", "0.12.0-rc.1+build.2"],
   ["", "v0.12.0", "tag", "0.12.0"],
-  ["", "v0.11.0-preview", "branch", "0.12.0"],
+  ["", "v0.13.0", "tag", "0.13.0"],
+  ["", "v0.11.0-preview", "branch", "0.13.0"],
   ["0.12.04", "preview", "branch", null],
   ["0.12.0\nANOTHER=value", "preview", "branch", null],
   ["0.12.0$(printf unexpected)", "preview", "branch", null],
@@ -379,6 +392,16 @@ test("release workflow verifies the web application and relay before the Cloudfl
   expect(workflow).toContain("bun test --cwd packages/cli ./test/import-boundaries.test.ts")
   expect(workflow).not.toContain("bun run test:integration:browser")
   expect(workflow).not.toContain("isolated-browser-smoke.ts")
+})
+
+test("the verified Web artifact includes the published Bun v0.12.2 site", () => {
+  const source = workflowJob(workflow, "verify-source")
+  const compose = source.split("- name: Add Bun Web to the production build")[1]?.split("\n      - name:")[0] ?? ""
+  expect(compose).toContain("if: matrix.suite == 'web'")
+  expect(compose).toContain("BUN_WEB_SOURCE: 14936fbcd50a5afacaf168f2db23e12732312802")
+  expect(compose).toContain('git archive "$BUN_WEB_SOURCE"')
+  expect(compose).toContain('bun script/build-web-assets.ts --bun-dist "$source_dir/apps/web/dist"')
+  expect(source.indexOf("- name: Add Bun Web to the production build")).toBeLessThan(source.indexOf("name: verified-web"))
 })
 
 test("active source checks select named files without package-wide test commands", () => {

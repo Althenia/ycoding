@@ -1,5 +1,6 @@
 import { noticeSequence, quotaKey, type RemoteNoticePresentation, type RemoteQuota } from "@ycoding-ai/remote"
-import { alertCopy, quotaCopy, type AlertNotice } from "./alert"
+import { remoteShellPath, RUST_REMOTE_SHELL } from "../pwa/offline"
+import { alertCopy, alertTag, quotaCopy, type AlertNotice } from "./alert"
 import { externalKind, type ExternalKind } from "./coordination"
 import { readNotificationPreferences, type NotificationCategory, type NotificationPreferences } from "./preferences"
 
@@ -79,11 +80,17 @@ export function createDesktopNotifier(registration: () => Promise<DesktopRegistr
   return {
     show: (alert) => {
       if (typeof Notification === "undefined" || Notification.permission !== "granted") return
-      raised.add(alert.tag)
+      const relayProtocol = remoteShellPath(globalThis.location?.pathname ?? "") === RUST_REMOTE_SHELL ? 5 : undefined
+      const tag = alertTag(alert.tag, relayProtocol)
+      const data = {
+        ...(alert.sessionID !== undefined ? { sessionID: alert.sessionID, ...alert.notice }
+          : alert.usageDeviceID !== undefined ? { quota: true, deviceID: alert.usageDeviceID } : {}),
+        ...(relayProtocol === undefined ? {} : { relayProtocol }),
+      }
+      raised.add(tag)
       void registration().then((worker) => worker?.showNotification(alert.title, {
-        body: alert.body, tag: alert.tag, ...(alert.renotify ? { renotify: true } : {}), icon: "/icons/icon-256.png", badge: "/icons/icon-256.png",
-        ...(alert.sessionID !== undefined ? { data: { sessionID: alert.sessionID, ...alert.notice } }
-          : alert.usageDeviceID !== undefined ? { data: { quota: true, deviceID: alert.usageDeviceID } } : {}),
+        body: alert.body, tag, ...(alert.renotify ? { renotify: true } : {}), icon: "/icons/icon-256.png", badge: "/icons/icon-256.png",
+        ...(Object.keys(data).length === 0 ? {} : { data }),
       })).catch(() => undefined)
     },
     dispose: (retainMachineOffline = false) => {

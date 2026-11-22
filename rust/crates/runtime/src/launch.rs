@@ -137,7 +137,6 @@ pub struct FileStorage {
     pub lease: PathBuf,
     pub analytics: PathBuf,
     pub slot: bool,
-    import_bun: bool,
 }
 
 impl Storage {
@@ -1643,24 +1642,12 @@ fn prepare_store(config: &LaunchConfig) -> Result<(), BootFailure> {
         return Ok(());
     };
     if storage.file.try_exists()? {
-        if storage.import_bun {
-            ycoding_core::ycoding_store::bun_import::recover_interrupted(&storage.file)
-                .map_err(|error| BootFailure::Retained(message(error)))?;
-        }
         ycoding_core::ycoding_store::upgrade::core(
             &storage.file,
             Options::core(),
             ycoding_core::session::history_pruning::free_bytes,
         )
         .map_err(|_| BootFailure::Refused(unsupported_store()))?;
-    }
-    if storage.import_bun {
-        ycoding_core::ycoding_store::bun_import::first_run(
-            &storage.file.with_extension("db"),
-            &storage.file,
-            metadata()?,
-        )
-        .map_err(|error| BootFailure::Retained(message(error)))?;
     }
     Ok(())
 }
@@ -1721,7 +1708,6 @@ fn select_storage(
 ) -> Result<Storage, LaunchError> {
     let mut slot = slot_storage(channel, roots, selector);
     let Some(database) = database else {
-        slot.import_bun = channel == "latest";
         return Ok(Storage::File(slot));
     };
     if database == ":memory:" {
@@ -1741,25 +1727,20 @@ fn select_storage(
 }
 
 fn slot_storage(channel: &str, roots: &config::Roots, selector: bool) -> FileStorage {
-    let named = |name: &str| {
-        (
-            roots.data.join(format!("ycoding{name}.redb")),
-            roots.data.join(format!("runtime{name}.lock")),
-            roots.data.join(format!("analytics{name}")),
-        )
+    let suffix = if channel == "beta" || matches!(channel, "latest" | "prod") || selector {
+        String::new()
+    } else {
+        format!("-{}", sanitize(channel))
     };
-    let (file, lease, analytics) =
-        if channel == "beta" || matches!(channel, "latest" | "prod") || selector {
-            named("")
-        } else {
-            named(&format!("-{}", sanitize(channel)))
-        };
     FileStorage {
-        file,
-        lease,
-        analytics,
+        file: roots.data.join(if suffix.is_empty() && channel != "beta" {
+            "core.redb".to_owned()
+        } else {
+            format!("ycoding{suffix}.redb")
+        }),
+        lease: roots.data.join(format!("runtime{suffix}.lock")),
+        analytics: roots.data.join(format!("analytics{suffix}")),
         slot: true,
-        import_bun: false,
     }
 }
 

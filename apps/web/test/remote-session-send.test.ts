@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test"
-import { RemoteLimits } from "@ycoding-ai/remote"
+import { create, decodeRemoteResult, RemoteLimits, remotePayloadCodecs, TypedPayloadSchema } from "@ycoding-ai/remote"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
@@ -12,9 +12,10 @@ function gate() {
 async function harness(handler: RelayRequestHandler, now?: () => number, deterministicIDs = true) {
   const relay = await startRelayDouble({ handler, advertisedSessions: ["ses_a", "ses_b"] })
   let ids = 0
+  let transport: ReturnType<typeof createRemoteTransport> | undefined
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20 }),
+    createTransport: (deviceID, handlers) => (transport = createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20 })),
     ...(deterministicIDs ? { createMessageID: () => `msg_send_${++ids}` } : {}),
     now,
     batchMs: 0,
@@ -22,159 +23,70 @@ async function harness(handler: RelayRequestHandler, now?: () => number, determi
   await store.load()
   await waitFor(() => store.state().sessions.length > 0)
   await store.selectSession("ses_a")
-  return { store, relay, stop: async () => { store.dispose(); await relay.stop() } }
+  return { store, relay, get transport() { return transport }, stop: async () => { store.dispose(); await relay.stop() } }
 }
 
-const source = { id: "ses_a", scope: "bound", projectID: "prj_test", location: { directory: "/work" }, title: "Source" }
-const forked = { ...source, id: "ses_child", title: "Fork", fork: { sessionID: "ses_a" } }
-const boundaryFork = { ...forked, fork: { ...forked.fork, messageID: "msg_boundary" } }
-const forkHarness = (handler: RelayRequestHandler) => harness((request) => request.operation === "session.list"
-  ? { ok: true, value: { data: [source, { ...source, id: "ses_b" }] } }
-  : handler(request))
+const source = { id: "ses_a", projectID: "prj_test", location: { directory: "/work" }, title: "Source" }
 
 describe("remote Session nonblocking sends", () => {
-  test("opens a verified fork on the same device", async () => {
-    const child = forked
-    const context = await forkHarness((request) => request.operation === "session.fork" ? { ok: true, value: { data: child } }
-      : request.operation === "session.get" && request.sessionID === child.id ? { ok: true, value: { data: child } } : "default")
+  test("remote v5 omits local Session fork and refuses to dispatch it", async () => {
+    const context = await harness(() => "default")
     try {
-      expect(await context.store.forkSession()).toMatchObject({ status: "ok", sessionID: child.id })
-      expect(context.store.state().selectedSessionInfo?.id).toBe(child.id)
-      expect(context.relay.requests.filter((request) => request.operation === "session.fork")).toHaveLength(1)
+      const transport = context.transport
+      if (!transport) throw new Error("Expected an open transport")
+      expect(remotePayloadCodecs.has("session.fork")).toBe(false)
+      expect("forkSession" in context.store).toBe(false)
+      expect(await transport.request("session.fork", { sessionID: "ses_a" })).toMatchObject({
+        status: "failed",
+        error: { code: "unknown_operation" },
+      })
+      expect(context.relay.requests.some((request) => request.operation === "session.fork")).toBe(false)
+      expect(context.relay.rejectedFrames).toEqual([])
     } finally { await context.stop() }
   })
 
-  test("fork reports an unsupported operation without Team copy", async () => {
-    const context = await forkHarness((request) => request.operation === "session.fork" ? { ok: false, code: "unknown_operation", message: "unknown" } : "default")
+  test("standalone scope from the Session list prevents prompt dispatch", async () => {
+    const context = await harness((request) => {
+      if (request.operation === "session.list") return { ok: true, value: { data: [{ ...source, scope: "standalone" }] } }
+      if (request.sessionID === source.id && (request.operation === "session.get" || request.operation === "session.snapshot"))
+        return { ok: false, code: "not_found", message: "Session not found" }
+      return "default"
+    })
     try {
-      const result = await context.store.forkSession()
-      expect(result.status).toBe("failed")
-      if (result.status === "ok") throw new Error("Expected fork failure")
-      expect(result.message).toContain("fork")
-      expect(result.message).not.toContain("Team")
+      expect(context.store.state().selectedSessionInfo).toMatchObject({ id: source.id, scope: "standalone" })
+      expect(await context.store.sendPrompt({ text: "Must not send", delivery: "queue" })).toBe(false)
+      expect(context.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
     } finally { await context.stop() }
   })
-
-  for (const [name, child] of [
-    ["scope", { ...boundaryFork, scope: "standalone" }],
-    ["directory", { ...boundaryFork, location: { directory: "/other" } }],
-    ["source", { ...boundaryFork, fork: { ...boundaryFork.fork, sessionID: "ses_other" } }],
-    ["message", { ...boundaryFork, fork: { ...boundaryFork.fork, messageID: "msg_other" } }],
-    ["missing scope", { ...boundaryFork, scope: undefined }],
-  ] as const) test(`fork rejects mismatched ${name}`, async () => {
-    const context = await forkHarness((request) => request.operation === "session.fork" ? { ok: true, value: { data: child } } : "default")
-    try {
-      expect((await context.store.forkSession("msg_boundary")).status).toBe("unknown")
-      expect(context.store.state().activeSessionID).toBe("ses_a")
-    } finally { await context.stop() }
+  const snapshotInfo = { id: "ses_deep", scope: "bound", projectID: "prj_test", title: "Deep", location: { directory: "/work" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 1 } }
+  const snapshot = (session: typeof snapshotInfo, aggregateID: string, seq = 0) => ({
+    sourceEpoch: "epoch_1",
+    session,
+    messages: [],
+    watermark: { type: "log.synced", aggregateID, seq },
   })
 
-  test("fork without a boundary rejects an unexpected boundary", async () => {
-    const context = await forkHarness((request) => request.operation === "session.fork" ? { ok: true, value: { data: boundaryFork } } : "default")
-    try {
-      expect((await context.store.forkSession()).status).toBe("unknown")
-      expect(context.store.state().activeSessionID).toBe("ses_a")
-    } finally { await context.stop() }
+  for (const [name, sessionBytes, expectedError] of [
+    ["empty Session", [], "required presence"],
+    ["invalid scope", [0x88, 0x01, 0x03], "enum"],
+  ] as const) test(`deep-linked placement rejects ${name} at the v5 snapshot decoder`, () => {
+    const wireBytes = Uint8Array.of(0x0a, sessionBytes.length + 2, 0x12, sessionBytes.length, ...sessionBytes)
+    const payload = create(TypedPayloadSchema, { typeName: "ycoding.v5.session_snapshot_Result", payload: wireBytes })
+    expect(() => decodeRemoteResult("session.snapshot", payload)).toThrow(expectedError)
   })
 
-  test("fork rejects a source placement changed by a list refresh", async () => {
-    const response = gate()
-    let changed = false
-    const context = await harness((request) => request.operation === "session.fork" ? response.promise
-      : request.operation === "session.list" ? { ok: true, value: { data: [{ ...source, location: { directory: changed ? "/other" : "/work" } }] } } : "default")
-    try {
-      const result = context.store.forkSession()
-      await waitFor(() => context.relay.requests.some((request) => request.operation === "session.fork"))
-      changed = true
-      context.store.searchSessions("source")
-      await waitFor(() => context.store.state().selectedSessionInfo?.directory === "/other")
-      response.resolve({ ok: true, value: { data: forked } })
-      expect((await result).status).toBe("unknown")
-      expect(context.store.state().activeSessionID).toBe("ses_a")
-    } finally { response.resolve("default"); await context.stop() }
-  })
-
-  test("fork prevents concurrent duplicate submissions", async () => {
-    const response = gate()
-    const context = await forkHarness((request) => request.operation === "session.fork" ? response.promise : "default")
-    try {
-      const first = context.store.forkSession()
-      await waitFor(() => context.relay.requests.some((request) => request.operation === "session.fork"))
-      const duplicate = context.store.forkSession()
-      response.resolve({ ok: false, code: "outcome_unknown", message: "unknown" })
-      expect((await first).status).toBe("unknown")
-      expect((await duplicate).status).toBe("failed")
-      expect(context.relay.requests.filter((request) => request.operation === "session.fork")).toHaveLength(1)
-      expect(context.store.state().mutations).toEqual([])
-    } finally { response.resolve("default"); await context.stop() }
-  })
-
-  test("fork does not report success after selection is superseded", async () => {
-    const subscription = gate()
-    const context = await forkHarness((request) => request.operation === "session.fork" ? { ok: true, value: { data: forked } }
-      : request.operation === "session.subscribe" && request.sessionID === forked.id ? subscription.promise : "default")
-    try {
-      const result = context.store.forkSession()
-      await waitFor(() => context.relay.requests.some((request) => request.operation === "session.subscribe" && request.sessionID === forked.id))
-      await context.store.selectSession("ses_b")
-      subscription.resolve({ ok: true, value: {} })
-      expect((await result).status).toBe("unknown")
-      expect(context.store.state().activeSessionID).toBe("ses_b")
-    } finally { subscription.resolve("default"); await context.stop() }
-  })
-
-  test("fork does not report success after the device changes during selection", async () => {
-    const subscription = gate()
-    const context = await forkHarness((request) => request.operation === "session.fork" ? { ok: true, value: { data: forked } }
-      : request.operation === "session.subscribe" && request.sessionID === forked.id ? subscription.promise : "default")
-    try {
-      const result = context.store.forkSession()
-      await waitFor(() => context.relay.requests.some((request) => request.operation === "session.subscribe" && request.sessionID === forked.id))
-      context.store.connect("device_other")
-      subscription.resolve({ ok: true, value: {} })
-      expect((await result).status).toBe("unknown")
-    } finally { subscription.resolve("default"); await context.stop() }
-  })
-
-  test("fork requires explicit source scope", async () => {
-    const context = await harness((request) => request.operation === "session.list"
-      ? { ok: true, value: { data: [{ ...source, scope: undefined }] } } : "default")
-    try {
-      expect((await context.store.forkSession()).status).toBe("failed")
-      expect(context.relay.requests.filter((request) => request.operation === "session.fork")).toHaveLength(0)
-    } finally { await context.stop() }
-  })
-
-  test("fork retains unknown outcomes and does not replay the mutation", async () => {
-    const context = await forkHarness((request) => request.operation === "session.fork"
-      ? { ok: false, code: "outcome_unknown", message: "Fork outcome unknown" } : "default")
-    try {
-      expect(await context.store.forkSession("msg_boundary")).toMatchObject({ status: "unknown" })
-      expect(context.relay.requests.filter((request) => request.operation === "session.fork")).toHaveLength(1)
-      expect(context.store.state().selectedSessionInfo?.id).toBe("ses_a")
-    } finally { await context.stop() }
-  })
-
-  test("a late fork response cannot change a newer Session selection", async () => {
-    const response = gate()
-    const context = await forkHarness((request) => request.operation === "session.fork" ? response.promise : "default")
-    try {
-      const fork = context.store.forkSession()
-      await waitFor(() => context.relay.requests.some((request) => request.operation === "session.fork"))
-      await context.store.selectSession("ses_b")
-      response.resolve({ ok: true, value: { data: { id: "ses_child", scope: "bound", location: { directory: "/work" } } } })
-      await fork
-      expect(context.store.state().selectedSessionInfo?.id).toBe("ses_b")
-    } finally { response.resolve("default"); await context.stop() }
-  })
-  const snapshotInfo = { projectID: "prj_test", title: "Deep", location: { directory: "/work" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 1 } }
-  for (const [name, session, aggregateID] of [["empty", {}, undefined], ["mismatched", { ...snapshotInfo, id: "ses_other" }, undefined], ["invalid scope", { ...snapshotInfo, id: "ses_deep", scope: "unknown" }, undefined], ["foreign watermark", { ...snapshotInfo, id: "ses_deep" }, "ses_other"]] as const)
+  for (const [name, sessionID, aggregateID] of [
+    ["mismatched Session", "ses_other", "ses_deep"],
+    ["foreign watermark", "ses_deep", "ses_other"],
+  ] as const)
     test(`deep-linked placement rejects ${name} snapshot authority`, async () => {
       const context = await harness((request) => request.sessionID !== "ses_deep" ? "default"
         : request.operation === "session.get" ? { ok: false, code: "not_found", message: "Not found" }
-        : request.operation === "session.snapshot" ? { ok: true, value: { session, messages: [], watermark: { seq: 0, aggregateID } } } : "default")
+        : request.operation === "session.snapshot" ? { ok: true, value: snapshot({ ...snapshotInfo, id: sessionID }, aggregateID) } : "default")
       try {
         await context.store.selectSession("ses_deep")
+        expect(context.store.state().transport.kind).toBe("open")
+        expect(context.store.state().notice).toBe("The session snapshot was not readable, so the current history is kept.")
         expect(await context.store.sendPrompt({ text: "Must not send", delivery: "queue" })).toBe(false)
         expect(context.relay.requests.filter((request) => request.operation === "session.prompt" && request.sessionID === "ses_deep")).toHaveLength(0)
       } finally { await context.stop() }
@@ -184,11 +96,16 @@ describe("remote Session nonblocking sends", () => {
     let reads = 0
     const context = await harness((request) => request.sessionID !== "ses_deep" ? "default"
       : request.operation === "session.get" ? { ok: false, code: "not_found", message: "Not found" }
-      : request.operation === "session.snapshot" ? { ok: true, value: { session: ++reads === 1 ? {} : { ...snapshotInfo, id: "ses_deep" }, messages: [], watermark: { seq: reads === 1 ? 5 : 4, aggregateID: "ses_deep" } } } : "default")
+      : request.operation === "session.snapshot" ? { ok: true, value: ++reads === 1
+        ? snapshot({ ...snapshotInfo, scope: "standalone" }, "ses_deep", 5)
+        : snapshot(snapshotInfo, "ses_deep", 4) } : "default")
     try {
       await context.store.selectSession("ses_deep")
-      expect(context.store.state().view?.watermark).toBe(5)
+      expect(context.store.state().view).toMatchObject({ scope: "standalone", watermark: 5 })
       await context.store.reloadMessages()
+      expect(reads).toBe(2)
+      expect(context.store.state().transport.kind).toBe("open")
+      expect(context.store.state().view).toMatchObject({ scope: "standalone", watermark: 5 })
       expect(await context.store.sendPrompt({ text: "Must not send", delivery: "queue" })).toBe(false)
       expect(context.relay.requests.filter((request) => request.operation === "session.prompt" && request.sessionID === "ses_deep")).toHaveLength(0)
     } finally { await context.stop() }
@@ -201,10 +118,17 @@ describe("remote Session nonblocking sends", () => {
       expect(await context.store.sendPrompt({ text: "First", delivery: "steer", model: { id: "next", providerID: "synthetic" } })).toBe(true)
       await waitFor(() => context.relay.requests.some((request) => request.operation === "session.switchModel"))
       expect(await context.store.sendPrompt({ text: "Queued", delivery: "queue" })).toBe(true)
-      context.relay.pushEvent("ses_a", { type: "session.created", data: { sessionID: "ses_a", scope: "standalone" }, durable: { aggregateID: "ses_a", seq: 1, version: 2 } })
+      context.relay.pushEvent("ses_a", {
+        type: "session.created",
+        data: { sessionID: source.id, scope: "standalone", projectID: source.projectID, location: source.location, title: source.title, created: 1 },
+        durable: { aggregateID: source.id, seq: 1, version: 2 },
+      })
       await waitFor(() => context.store.state().view?.scope === "standalone")
       modelGate.resolve({ ok: true, value: { data: {} } })
-      await waitFor(() => context.store.state().mutations.every((mutation) => mutation.state === "failed"))
+      await waitFor(() => {
+        const mutations = context.store.state().mutations
+        return mutations.length === 2 && mutations.every((mutation) => mutation.state === "failed")
+      })
       for (const mutation of context.store.state().mutations) await context.store.retryMutation(mutation.id)
       expect(context.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(0)
     } finally { modelGate.resolve("default"); await context.stop() }
@@ -435,7 +359,7 @@ describe("remote Session nonblocking sends", () => {
       expect(await context.store.sendPrompt({ text: "Review later", delivery: "queue", skills: ["audit", "test"] })).toBe(true)
       await waitFor(() => context.relay.requests.some((request) => request.operation === "session.prompt"))
       expect(context.relay.requests.filter((request) => request.operation === "session.skill")).toEqual([])
-      expect(context.relay.requests.find((request) => request.operation === "session.prompt")?.input).toMatchObject({ text: "Review later", delivery: "queue", skills: ["audit", "test"] })
+      expect(context.relay.requests.find((request) => request.operation === "session.prompt")?.input).toMatchObject({ text: "Review later", delivery: "queue", metadata: { skills: [{ id: "audit" }, { id: "test" }] } })
       response.resolve("default")
       await waitFor(() => context.store.state().mutations.length === 0)
       expect(context.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(1)
@@ -459,7 +383,7 @@ describe("remote Session nonblocking sends", () => {
       expect(context.store.state().view?.messages.some((message) => message.id === id)).toBe(false)
       await context.store.retryMutation(id)
       expect(context.relay.requests.filter((request) => request.operation === "session.prompt")).toEqual([])
-      context.relay.pushEvent("ses_a", { type: "session.input.admitted", aggregateID: "ses_a", seq: 1, data: {
+      context.relay.pushEvent("ses_a", { type: "session.input.admitted", durable: { aggregateID: "ses_a", seq: 1, version: 1 }, data: {
         inputID: id, input: { type: "user", delivery: "steer", data: { text: "Other device's independent history" } },
       } })
       await waitFor(() => context.store.state().view?.messages.some((message) => message.kind === "user" && message.text === "Other device's independent history") === true)
@@ -518,7 +442,7 @@ describe("remote Session nonblocking sends", () => {
       expect(context.relay.requests.some((request) => request.operation === "session.skill")).toBe(false)
       model.resolve("default")
       await waitFor(() => context.relay.requests.some((request) => request.operation === "session.prompt"))
-      expect(context.relay.requests.find((request) => request.operation === "session.prompt")?.input?.skills).toEqual(["review"])
+      expect(context.relay.requests.find((request) => request.operation === "session.prompt")?.input?.metadata).toEqual({ skills: [{ id: "review" }] })
       expect(context.relay.requests.some((request) => request.operation === "session.skill")).toBe(false)
       admission.resolve("default")
       await waitFor(() => context.store.state().mutations.length === 0)
@@ -530,7 +454,7 @@ describe("remote Session nonblocking sends", () => {
   test("retries a failed admission with stable IDs and selected skills while preserving a newer draft", async () => {
     let fail = true
     const context = await harness((request) => request.operation === "session.prompt" && fail
-      ? { ok: false, code: "internal_error", message: "Admission failed" } : "default")
+      ? { ok: false, code: "invalid_message", message: "Admission failed" } : "default")
     try {
       expect(await context.store.sendPrompt({ text: "Try skills", delivery: "steer", skills: ["first", "second"] })).toBe(true)
       await waitFor(() => context.store.state().mutations.some((mutation) => mutation.state === "failed"))
@@ -541,7 +465,9 @@ describe("remote Session nonblocking sends", () => {
       await context.store.retryMutation(root!.id)
       await waitFor(() => context.store.state().mutations.length === 0)
       expect(context.relay.requests.filter((request) => request.operation === "session.skill")).toEqual([])
-      expect(context.relay.requests.filter((request) => request.operation === "session.prompt").map((request) => request.input?.skills)).toEqual([["first", "second"], ["first", "second"]])
+      expect(context.relay.requests.filter((request) => request.operation === "session.prompt").map((request) => request.input?.metadata)).toEqual([
+        { skills: [{ id: "first" }, { id: "second" }] }, { skills: [{ id: "first" }, { id: "second" }] },
+      ])
       expect(context.relay.requests.filter((request) => request.operation === "session.prompt").every((request) => request.input?.id === root?.id)).toBe(true)
       expect(context.store.state().drafts.ses_a).toBe("Newer draft")
     } finally { await context.stop() }
@@ -842,7 +768,7 @@ describe("remote Session nonblocking sends", () => {
     let fail = true
     const context = await harness((request) => {
       if (request.operation === "session.attachment.upload") return { ok: true, value: { uri: `ycoding-upload://${String(request.input?.uploadID)}` } }
-      if (request.operation === "session.prompt" && fail) return { ok: false, code: "internal_error", message: "Admission failed" }
+      if (request.operation === "session.prompt" && fail) return { ok: false, code: "invalid_message", message: "Admission failed" }
       return "default"
     }, () => time)
     try {

@@ -44,7 +44,8 @@ async function rendered(url: string) {
   return result
 }
 
-async function browserHistory() {
+async function browserHistory(entry?: string) {
+  if (entry) window.history.replaceState(null, "", entry)
   const router = createAppRouter()
   const host = document.createElement("div")
   document.body.append(host)
@@ -74,9 +75,9 @@ async function build(to: string, hash?: string) {
   return router.buildLocation({ to, hash }).href
 }
 
-async function buildSession(sessionID: string, deviceID: string) {
-  const router = await open("/")
-  return router.buildLocation({ to: "/remote/session", search: { session_id: sessionID, device_id: deviceID } }).href
+async function buildSession(sessionID: string, deviceID: string, entry = "/") {
+  const router = await open(entry)
+  return router.buildLocation({ to: "/remote/session", search: { session_id: sessionID, device_id: deviceID } }).publicHref
 }
 
 Object.assign(window, { routerProbe: { probe, rendered, browserHistory, build, buildSession } })
