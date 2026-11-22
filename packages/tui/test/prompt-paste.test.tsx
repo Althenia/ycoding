@@ -1,8 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import { mkdtemp } from "node:fs/promises"
+import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { json, sessionSnapshot } from "./fixture/tui-client"
 import { materializeClipboardImage } from "../src/clipboard"
 import { renderScreen } from "./screen/harness"
@@ -186,5 +187,28 @@ test("attaches an image from a pasted file path", async () => {
     expect(screen.frame()).not.toContain("pasted-image.png")
   } finally {
     await screen.dispose()
+  }
+}, 30_000)
+
+test("attaches copied file URLs with spaces without inserting their paths", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ycoding-paste-urls-"))
+  const png = path.join(root, "copied image.png")
+  const pdf = path.join(root, "copied report.pdf")
+  await Bun.write(png, Bun.file(new URL("../../../assets/brand/ycoding-mark-256.png", import.meta.url)))
+  await Bun.write(pdf, "%PDF")
+  const screen = await renderScreen({
+    width: 100,
+    height: 40,
+    args: { sessionID },
+    route,
+    clipboard: { read: async () => ({ type: "text", mime: "text/plain", text: [png, pdf].map((file) => pathToFileURL(file).href).join("\n") }) },
+    settle: "Message YCoding…",
+  })
+  try {
+    await pasteInto(screen, () => screen.input.pressKey("v", { ctrl: true }), "[Image 1] [PDF 1]")
+    expect(screen.frame()).not.toContain("file://")
+  } finally {
+    await screen.dispose()
+    await rm(root, { recursive: true, force: true })
   }
 }, 30_000)

@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test"
-import { mkdtemp, readdir, stat } from "node:fs/promises"
+import { mkdtemp, readdir, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
-import { copyCommand, materializeClipboardImage } from "../src/clipboard"
+import { fileURLToPath, pathToFileURL } from "node:url"
+import { copyCommand, materializeClipboardImage, readMacOSClipboard } from "../src/clipboard"
 
 test("prefers Wayland clipboard when available", () => {
   expect(copyCommand("linux", true, (name) => name === "wl-copy")).toEqual(["wl-copy"])
@@ -20,6 +20,53 @@ test("falls back through X11 clipboard commands", () => {
 
 test("returns undefined when native clipboard is unavailable", () => {
   expect(copyCommand("linux", false, () => false)).toBeUndefined()
+})
+
+test.skipIf(process.platform !== "darwin")("reads macOS copied files and TIFF images from an isolated pasteboard", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ycoding-pasteboard-test-"))
+  const image = fileURLToPath(new URL("../../../assets/brand/ycoding-mark-256.png", import.meta.url))
+  const pdf = path.join(root, "copied file.pdf")
+  await Bun.write(pdf, "%PDF")
+  const run = (script: string, ...args: string[]) => {
+    const result = Bun.spawnSync(["osascript", "-l", "JavaScript", "-e", `ObjC.import('AppKit'); ${script}`, "--", ...args])
+    expect(result.exitCode, result.stderr.toString()).toBe(0)
+    return result.stdout.toString().trimEnd()
+  }
+  const name = run("ObjC.unwrap($.NSPasteboard.pasteboardWithUniqueName.name)")
+  try {
+    run(`function run(args) {
+      const board = $.NSPasteboard.pasteboardWithName(args[0]);
+      board.clearContents;
+      const files = $.NSMutableArray.array;
+      for (const path of args.slice(1)) files.addObject($.NSURL.fileURLWithPath(path));
+      if (!board.writeObjects(files)) throw Error('No files copied');
+    }`, name, image, pdf)
+    expect(await readMacOSClipboard(root, undefined, name)).toEqual({
+      type: "text", mime: "text/plain", text: [image, pdf].map((path) => pathToFileURL(path).href).join("\n"),
+    })
+    run(`function run(args) {
+      const board = $.NSPasteboard.pasteboardWithName(args[0]);
+      board.clearContents;
+      const image = $.NSImage.alloc.initWithContentsOfFile(args[1]);
+      if (!board.setDataForType(image.TIFFRepresentation, $.NSPasteboardTypeTIFF)) throw Error('No TIFF copied');
+    }`, name, image)
+    const content = await readMacOSClipboard(root, undefined, name)
+    expect(content?.type).toBe("file")
+    if (content?.type !== "file") throw Error("Clipboard did not return an image")
+    expect((await Bun.file(content.temporary.path).bytes()).subarray(0, 8)).toEqual(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]))
+    expect((await stat(content.temporary.path)).mode & 0o777).toBe(0o600)
+    await content.temporary.cleanup()
+    run(`function run(args) {
+      const board = $.NSPasteboard.pasteboardWithName(args[0]);
+      board.clearContents;
+      if (!board.setStringForType(args[1], $.NSPasteboardTypeString)) throw Error('No text copied');
+    }`, name, "line 1\nline 2")
+    expect(await readMacOSClipboard(root, undefined, name)).toEqual({ type: "text", mime: "text/plain", text: "line 1\nline 2" })
+    expect(await readdir(root)).toEqual(["copied file.pdf"])
+  } finally {
+    run("function run(args) { $.NSPasteboard.pasteboardWithName(args[0]).releaseGlobally }", name)
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 test("CLP-001 materializes concurrent clipboard images in distinct mode-0600 files", async () => {

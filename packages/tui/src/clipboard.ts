@@ -42,38 +42,7 @@ export async function read(options?: ClipboardReadOptions) {
     ? AbortSignal.any([options.signal, AbortSignal.timeout(options.timeoutMs ?? 60_000)])
     : AbortSignal.timeout(options?.timeoutMs ?? 60_000)
   requireActive(signal)
-  if (platform() === "darwin") {
-    // Use OS tmpdir (typically /var/folders/.../T) instead of hardcoded /private/tmp
-    // to respect sandbox/TMPDIR and avoid intermittent ENOENT on restricted /private/tmp.
-    try {
-      return await materializeClipboardImage(
-        tmpdir(),
-        async (file) => {
-          await command(
-            "osascript",
-            [
-              "-e",
-              'set imageData to the clipboard as "PNGf"',
-              "-e",
-              `set fileRef to open for access POSIX file "${file}" with write permission`,
-              "-e",
-              "set eof fileRef to 0",
-              "-e",
-              "write imageData to fileRef",
-              "-e",
-              "close access fileRef",
-            ],
-            undefined,
-            signal,
-          )
-        },
-        { signal },
-      )
-    } catch (error) {
-      requireActive(signal, error)
-      // Fall through to text clipboard.
-    }
-  }
+  if (platform() === "darwin") return readMacOSClipboard(tmpdir(), signal)
 
   if (platform() === "win32" || release().includes("WSL")) {
     try {
@@ -115,6 +84,45 @@ export async function read(options?: ClipboardReadOptions) {
   const text = await clipboardy.read().catch(() => undefined)
   requireActive(signal)
   if (text) return { type: "text" as const, text, mime: "text/plain" as const }
+  return undefined
+}
+
+export async function readMacOSClipboard(root: string, signal?: AbortSignal, pasteboardName?: string) {
+  let result: unknown
+  const image = await materializeClipboardImage(root, async (file) => {
+    const output = await command("/usr/bin/osascript", ["-l", "JavaScript", "-e", String.raw`
+ObjC.import('AppKit');
+function run(args) {
+  const board = args[1] ? $.NSPasteboard.pasteboardWithName(args[1]) : $.NSPasteboard.generalPasteboard;
+  const fileOnly = $.NSDictionary.dictionaryWithObjectForKey($.NSNumber.numberWithBool(true), $.NSPasteboardURLReadingFileURLsOnlyKey);
+  const files = board.readObjectsForClassesOptions($.NSArray.arrayWithObject($.NSURL), fileOnly);
+  if (!files.isNil() && files.count > 0) {
+    const urls = [];
+    for (let i = 0; i < files.count; i++) urls.push(ObjC.unwrap(files.objectAtIndex(i).absoluteString));
+    return JSON.stringify(urls.join('\n'));
+  }
+  let png = board.dataForType($.NSPasteboardTypePNG);
+  if (png.isNil()) {
+    const images = board.readObjectsForClassesOptions($.NSArray.arrayWithObject($.NSImage), $.NSDictionary.dictionary);
+    if (!images.isNil() && images.count > 0) {
+      const bitmap = $.NSBitmapImageRep.imageRepWithData(images.objectAtIndex(0).TIFFRepresentation);
+      if (!bitmap.isNil()) png = bitmap.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $.NSDictionary.dictionary);
+    }
+  }
+  if (!png.isNil() && png.length > 0) {
+    if (!png.writeToFileAtomically(args[0], false)) throw Error('Could not write clipboard image');
+    return 'true';
+  }
+  const text = board.stringForType($.NSPasteboardTypeString);
+  return JSON.stringify(text.isNil() ? null : ObjC.unwrap(text));
+}
+`, "--", file, ...(pasteboardName ? [pasteboardName] : [])], undefined, signal)
+    result = JSON.parse(output.toString())
+  }, { signal })
+  if (result === true) return image
+  await image.temporary.cleanup()
+  requireActive(signal)
+  if (typeof result === "string" && result) return { type: "text" as const, text: result, mime: "text/plain" as const }
   return undefined
 }
 

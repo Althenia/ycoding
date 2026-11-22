@@ -414,8 +414,10 @@ test.each([
     const envFile = path.join(directory, "github-env")
     const initial = "EXISTING=value\n"
     fs.writeFileSync(envFile, initial)
-    const result = Bun.spawnSync(["bash", "script/release-version.sh"], {
-      cwd: path.join(import.meta.dir, ".."),
+    fs.mkdirSync(path.join(directory, "docs/releases"), { recursive: true })
+    for (const version of ["0.12.2", "0.13.1", "0.13.0"]) fs.writeFileSync(path.join(directory, `docs/releases/v${version}.md`), "Release notes\n")
+    const result = Bun.spawnSync(["bash", path.join(import.meta.dir, "release-version.sh")], {
+      cwd: directory,
       env: { ...process.env, REQUESTED_RELEASE_VERSION: requested, RELEASE_REF_NAME: ref, RELEASE_REF_TYPE: type, GITHUB_ENV: envFile },
       stdout: "pipe", stderr: "pipe",
     })

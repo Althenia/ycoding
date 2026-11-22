@@ -112,7 +112,7 @@ export const usePages: readonly DocPage[] = [
             kind: "steps",
             items: [
               { title: "Draft", text: "Use Shift+Return for a new line and Return to submit." },
-              { title: "Attach", text: "Paste a clipboard image or a supported local file path. Attachment preparation happens before prompt admission, with a 20 MiB byte limit." },
+              { title: "Attach", text: "Press Ctrl+V in the composer to paste a clipboard image or supported files copied in Finder. You can also paste a local path. Attachment preparation happens before prompt admission, with a 20 MiB byte limit." },
               { title: "Check delivery", text: "A pending prompt shows a clock receipt, a promoted prompt one check, and a prompt consumed by a physical model request two checks." },
             ],
           },
