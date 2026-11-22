@@ -320,7 +320,8 @@ test.each([
   ["0.12.0-rc.1+build.2", "preview", "branch", "0.12.0-rc.1+build.2"],
   ["", "v0.12.0", "tag", "0.12.0"],
   ["", "v0.12.1", "tag", "0.12.1"],
-  ["", "v0.11.0-preview", "branch", "0.12.1"],
+  ["", "v0.12.2", "tag", "0.12.2"],
+  ["", "v0.11.0-preview", "branch", "0.12.10"],
   ["0.12.04", "preview", "branch", null],
   ["0.12.0\nANOTHER=value", "preview", "branch", null],
   ["0.12.0$(printf unexpected)", "preview", "branch", null],
@@ -328,11 +329,14 @@ test.each([
 ])("release version validates the selected input before environment export (%j, %j, %s)", (requested, ref, type, expected) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ycoding-release-version-"))
   try {
+    const releases = path.join(directory, "docs/releases")
+    fs.mkdirSync(releases, { recursive: true })
+    for (const version of ["0.12.9", "0.12.10"]) fs.writeFileSync(path.join(releases, `v${version}.md`), "")
     const envFile = path.join(directory, "github-env")
     const initial = "EXISTING=value\n"
     fs.writeFileSync(envFile, initial)
-    const result = Bun.spawnSync(["bash", "script/release-version.sh"], {
-      cwd: path.join(import.meta.dir, ".."),
+    const result = Bun.spawnSync(["bash", path.join(import.meta.dir, "release-version.sh")], {
+      cwd: directory,
       env: { ...process.env, REQUESTED_RELEASE_VERSION: requested, RELEASE_REF_NAME: ref, RELEASE_REF_TYPE: type, GITHUB_ENV: envFile },
       stdout: "pipe", stderr: "pipe",
     })
