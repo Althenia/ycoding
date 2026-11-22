@@ -213,6 +213,7 @@ async fn authenticated_global_consent_append_page_opt_out_and_keep_awake_wire() 
         let awake: v5::KeepAwakeGetResult =
             success(client.call("keepAwake.get", machine(), Vec::new()).await);
         assert_eq!(awake.data.state, 3);
+        assert_eq!(awake.data.display, Some(3));
         let changed: v5::KeepAwakeSetResult = success(
             client
                 .call(

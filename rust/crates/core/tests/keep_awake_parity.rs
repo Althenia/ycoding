@@ -43,10 +43,10 @@ async fn eventually(mut done: impl FnMut() -> bool) {
 }
 
 #[test]
-fn macos_owner_pid_command_and_unsupported_never_spawn() {
+fn macos_inhibitor_holds_display_and_idle_sleep_for_the_owner_pid() {
     let command = macos_inhibitor(4242);
     assert_eq!(command.program, "/usr/bin/caffeinate");
-    assert_eq!(command.args, ["-i", "-w", "4242"]);
+    assert_eq!(command.args, ["-d", "-i", "-w", "4242"]);
     assert!(matches!(command.stdin, Input::Ignore));
     assert!(matches!(command.stdout, Output::Ignore));
     assert!(matches!(command.stderr, Output::Ignore));
@@ -56,6 +56,7 @@ fn macos_owner_pid_command_and_unsupported_never_spawn() {
 async fn unsupported_does_not_create_worker_or_spawn() {
     let service = Service::with_command(false, Arc::new(|| panic!("unsupported platform spawned")));
     assert_eq!(service.get().state, State::Unsupported);
+    assert_eq!(service.get().display, Some(State::Unsupported));
     assert_eq!(service.set(true).await, service.get());
     assert_eq!(service.set(false).await, service.get());
     assert_eq!(
@@ -69,14 +70,21 @@ async fn unsupported_does_not_create_worker_or_spawn() {
 async fn idempotent_concurrent_enables_serialized_switches_and_owner_close() {
     let (service, count) = counted();
     assert_eq!(service.get().state, State::Off);
+    assert_eq!(service.get().display, Some(State::Off));
     let (a, b, c) = tokio::join!(service.set(true), service.set(true), service.set(true));
     assert_eq!([a.state, b.state, c.state], [State::On; 3]);
+    assert_eq!([a.display, b.display, c.display], [Some(State::On); 3]);
     assert_eq!(count.load(Ordering::SeqCst), 1);
     let (off, on) = tokio::join!(service.set(false), service.set(true));
     assert_eq!([off.state, on.state], [State::Off, State::On]);
+    assert_eq!(
+        [off.display, on.display],
+        [Some(State::Off), Some(State::On)]
+    );
     assert_eq!(count.load(Ordering::SeqCst), 2);
     service.close().await;
     assert_eq!(service.get().state, State::Off);
+    assert_eq!(service.get().display, Some(State::Off));
     assert_eq!(service.set(true).await.state, State::Off);
 }
 
@@ -96,6 +104,7 @@ async fn spawn_failure_redacts_command_and_recovers() {
     );
     let failed = service.set(true).await;
     assert_eq!(failed.state, State::Error);
+    assert_eq!(failed.display, Some(State::Error));
     assert_eq!(
         failed.message.unwrap().as_str(),
         Some("The sleep inhibitor could not be started.")
@@ -112,6 +121,7 @@ async fn early_exit_reports_code_and_disable_resets() {
         Service::with_command(true, Arc::new(|| Command::new("/bin/sh", ["-c", "exit 3"])));
     let failed = service.set(true).await;
     assert_eq!(failed.state, State::Error);
+    assert_eq!(failed.display, Some(State::Error));
     assert_eq!(
         failed.message.unwrap().as_str(),
         Some("The sleep inhibitor stopped unexpectedly (exit code 3).")
@@ -182,6 +192,7 @@ async fn unexpected_signal_exit_has_no_rearm_and_recovers_on_request() {
     .unwrap();
     kill.wait().await.unwrap();
     eventually(|| service.get().state == State::Error).await;
+    assert_eq!(service.get().display, Some(State::Error));
     assert_eq!(
         service.get().message.unwrap().as_str(),
         Some("The sleep inhibitor stopped unexpectedly (terminated by a signal).")
@@ -302,11 +313,14 @@ async fn independent_root_holds_preserve_manual_preference_until_the_last_releas
     assert_eq!(service.hold("ses_first").await.state, State::On);
     assert_eq!(service.hold("ses_first").await.manual, Some(false));
     assert_eq!(service.hold("ses_second").await.defer_hold, Some(true));
-    assert_eq!(service.set(false).await.state, State::On);
+    assert_eq!(service.set(false).await.display, Some(State::On));
     assert_eq!(service.release("ses_first").await.state, State::On);
     assert_eq!(service.release("ses_missing").await.state, State::On);
     assert_eq!(count.load(Ordering::SeqCst), 1);
-    assert_eq!(service.release("ses_second").await.state, State::Off);
+    assert_eq!(
+        service.release("ses_second").await.display,
+        Some(State::Off)
+    );
     assert_eq!(service.get().defer_hold, Some(false));
     service.set(true).await;
     service.hold("ses_third").await;

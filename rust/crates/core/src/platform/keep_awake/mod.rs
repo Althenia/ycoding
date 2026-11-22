@@ -14,7 +14,12 @@ use ycoding_schema::keep_awake::{LidState, State, Status};
 pub fn macos_inhibitor(pid: u32) -> Command {
     let mut command = Command::new(
         "/usr/bin/caffeinate",
-        ["-i".to_string(), "-w".to_string(), pid.to_string()],
+        [
+            "-d".to_string(),
+            "-i".to_string(),
+            "-w".to_string(),
+            pid.to_string(),
+        ],
     );
     command.stdin = Input::Ignore;
     command.stdout = Output::Ignore;
@@ -187,12 +192,16 @@ impl Service {
 }
 
 fn initial(supported: bool) -> Status {
+    inhibitor_status(if supported {
+        State::Off
+    } else {
+        State::Unsupported
+    })
+}
+fn inhibitor_status(state: State) -> Status {
+    let supported = state != State::Unsupported;
     Status {
-        state: if supported {
-            State::Off
-        } else {
-            State::Unsupported
-        },
+        state,
         message: (!supported).then(|| "Keep machine awake is available on macOS only.".into()),
         manual: None,
         lid: Some(if supported {
@@ -202,15 +211,14 @@ fn initial(supported: bool) -> Status {
         }),
         defer_hold: Some(false),
         system: None,
-        display: None,
+        display: Some(state),
         activity: None,
     }
 }
 fn error(message: impl Into<ycoding_schema::LosslessString>) -> Status {
     Status {
-        state: State::Error,
         message: Some(message.into()),
-        ..initial(true)
+        ..inhibitor_status(State::Error)
     }
 }
 fn exited(exit: std::io::Result<process::Exit>) -> Status {
@@ -338,7 +346,7 @@ async fn run(
         let next = tokio::select! {
             _ = reply.closed(), if cancelable => { let _ = child.kill(process::KillOptions::default()).await; continue; }
             exit = child.wait() => exited(exit),
-            _ = tokio::time::sleep(Duration::from_millis(300)) => Status { state: State::On, message: None, ..initial(true) },
+            _ = tokio::time::sleep(Duration::from_millis(300)) => inhibitor_status(State::On),
         };
         if next.state == State::On {
             active = Some(child);
