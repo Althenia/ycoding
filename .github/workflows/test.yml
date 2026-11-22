@@ -1,18 +1,11 @@
 name: test
 
 on:
-  push:
-    branches:
-      - main
-      - dev
-      - v2
   pull_request:
   workflow_dispatch:
 
 concurrency:
-  # Keep every run on dev so cancelled checks do not pollute the default branch
-  # commit history. PRs and other branches still share a group and cancel stale runs.
-  group: ${{ case(github.ref == 'refs/heads/dev', format('{0}-{1}', github.workflow, github.run_id), format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref)) }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -48,7 +41,6 @@ jobs:
         env:
           CI_PR_BASE: ${{ github.event.pull_request.base.sha }}
           CI_PR_HEAD: ${{ github.event.pull_request.head.sha }}
-          CI_PUSH_BEFORE: ${{ github.event.before }}
         run: bun script/ci-build-inputs.ts | tee -a "$GITHUB_OUTPUT"
 
   unit:

@@ -3,10 +3,14 @@ use crate::{
     catalog::definition,
     metadata::{bootstrap, inspect},
 };
-use redb::{Database, ReadOnlyDatabase, ReadTransaction, ReadableDatabase, ReadableTable};
+use redb::{
+    Database, DatabaseError, ReadOnlyDatabase, ReadTransaction, ReadableDatabase, ReadableTable,
+    StorageBackend, backends::FileBackend,
+};
 use std::{
     fs::{File, OpenOptions},
-    io::Write,
+    io::{self, Write},
+    ops::Bound,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -37,6 +41,38 @@ pub fn marker(database: &Path) -> PathBuf {
 
 pub fn upgrade_path(database: &Path) -> PathBuf {
     suffix(database, ".pre-upgrade-backup")
+}
+
+pub(crate) fn recover<T>(
+    database: &Path,
+    prepare: impl FnOnce(&Path) -> Result<T, Error>,
+) -> Result<T, Error> {
+    if !std::fs::symlink_metadata(database)?.is_file() {
+        return Err(Error::Rejected("recovery source is not a regular file"));
+    }
+    let mut source = OpenOptions::new().read(true).write(true).open(database)?;
+    let locked = FileBackend::new(source.try_clone()?)?;
+    if !locked
+        .try_lock_range(Bound::Unbounded, Bound::Unbounded)
+        .map_err(DatabaseError::from)?
+    {
+        return Err(DatabaseError::DatabaseAlreadyOpen.into());
+    }
+    let staged = temporary(database);
+    let mut file = private_file(&staged)?;
+    let result = (|| {
+        io::copy(&mut source, &mut file)?;
+        drop(file);
+        let outcome = prepare(&staged)?;
+        File::open(&staged)?.sync_all()?;
+        std::fs::rename(&staged, database)?;
+        sync_parent(database)?;
+        Ok(outcome)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&staged);
+    }
+    result
 }
 
 pub(crate) fn preserve(

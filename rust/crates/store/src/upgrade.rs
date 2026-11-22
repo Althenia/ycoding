@@ -13,10 +13,10 @@ use crate::{
     session::{Document, Job, JobTable, Session, SessionTable, Task, TaskTable, codec::Field},
 };
 use redb::{
-    Database, Durability, ReadOnlyDatabase, ReadTransaction, ReadableDatabase, ReadableTable,
-    ReadableTableMetadata, WriteTransaction,
+    Database, DatabaseError, Durability, ReadOnlyDatabase, ReadTransaction, ReadableDatabase,
+    ReadableTable, ReadableTableMetadata, WriteTransaction,
 };
-use std::{collections::BTreeSet, ops::Bound, path::Path, sync::OnceLock};
+use std::{collections::BTreeSet, io::ErrorKind, ops::Bound, path::Path, sync::OnceLock};
 use ycoding_schema::{
     JsonValue, LosslessString, domain, model, permission, provider_request, session_event,
     session_origin, session_revert, session_scope, token_usage,
@@ -79,8 +79,34 @@ pub fn core(
 }
 
 fn upgrade(path: &Path, options: Options, free_bytes: FreeBytes<'_>) -> Result<Outcome, Error> {
+    match ReadOnlyDatabase::open(path) {
+        Ok(database) => upgrade_open(path, path, database, options, free_bytes),
+        Err(DatabaseError::RepairAborted) => backup::recover(path, |staged| {
+            drop(
+                Database::builder()
+                    .set_cache_size(options.cache_bytes)
+                    .open(staged)?,
+            );
+            upgrade_open(
+                path,
+                staged,
+                ReadOnlyDatabase::open(staged)?,
+                options,
+                free_bytes,
+            )
+        }),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn upgrade_open(
+    path: &Path,
+    source: &Path,
+    database: ReadOnlyDatabase,
+    options: Options,
+    free_bytes: FreeBytes<'_>,
+) -> Result<Outcome, Error> {
     let target = native::catalog(DatabaseKind::Core);
-    let database = ReadOnlyDatabase::open(path)?;
     let read = database.begin_read()?;
     let manifest = stored_manifest(&read)?;
     let predecessor = Predecessor::identify(&manifest)?;
@@ -102,7 +128,7 @@ fn upgrade(path: &Path, options: Options, free_bytes: FreeBytes<'_>) -> Result<O
         migrate(
             &Database::builder()
                 .set_cache_size(options.cache_bytes)
-                .open(path)?,
+                .open(source)?,
             predecessor,
             decimals,
         )?;
@@ -146,12 +172,17 @@ impl Pruned {
             if inspect(&read, target)? != *metadata {
                 return Err(Error::Rejected("pre-prune backup identity mismatch"));
             }
-            if !copy.try_exists()? {
-                return Err(Error::Rejected(
-                    "upgraded pre-prune backup has no pre-upgrade copy",
-                ));
-            }
-            let original = backup::open_copy(&copy)?;
+            let original = match backup::open_copy(&copy) {
+                Err(Error::Io(error)) if error.kind() == ErrorKind::NotFound => {
+                    if sealed == Some(true) {
+                        return Ok(Self::Upgraded { sealed: true });
+                    }
+                    return Err(Error::Rejected(
+                        "upgraded pre-prune backup has no pre-upgrade copy",
+                    ));
+                }
+                result => result?,
+            };
             let original = original.begin_read()?;
             let predecessor = Predecessor::identify(&stored_manifest(&original)?)?;
             if inspect(&original, predecessor.catalog()?)? != *metadata {

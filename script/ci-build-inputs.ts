@@ -14,13 +14,11 @@ function changedPaths() {
   const env = process.env
   const head = env.GITHUB_SHA ?? ""
   if (!sha.test(head) || git("rev-parse", "HEAD").toString().trim() !== head) throw new Error("The event revision is not checked out")
-  const base = env.GITHUB_EVENT_NAME === "pull_request" ? env.CI_PR_BASE : env.CI_PUSH_BEFORE
+  const base = env.CI_PR_BASE
   if (!base || !sha.test(base)) throw new Error("The event has no usable comparison base")
-  if (env.GITHUB_EVENT_NAME === "pull_request") {
-    const parents = git("rev-list", "--parents", "-n", "1", head).toString().trim().split(" ")
-    if (parents.length !== 3 || parents[1] !== base || parents[2] !== env.CI_PR_HEAD) {
-      throw new Error("The checked-out PR merge does not match the event parents")
-    }
+  const parents = git("rev-list", "--parents", "-n", "1", head).toString().trim().split(" ")
+  if (parents.length !== 3 || parents[1] !== base || parents[2] !== env.CI_PR_HEAD) {
+    throw new Error("The checked-out PR merge does not match the event parents")
   }
   const output = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
     git("diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", base, head, "--"),
@@ -90,8 +88,7 @@ async function desktopWebSources() {
 }
 
 async function selectBuilds() {
-  const event = process.env.GITHUB_EVENT_NAME
-  if (event !== "pull_request" && event !== "push") return full
+  if (process.env.GITHUB_EVENT_NAME !== "pull_request") return full
   try {
     const changed = changedPaths()
     const manifest: { workspaces: { packages: string[] } } = await Bun.file(path.join(root, "package.json")).json()

@@ -735,6 +735,63 @@ fn a_current_store_is_reported_current_without_any_write_or_copy() {
 }
 
 #[test]
+fn a_sealed_current_pruning_backup_allows_startup_without_any_write_or_copy() {
+    let directory = Directory::new();
+    let path = directory.database();
+    create(&path, target());
+    let store = open(&path);
+    assert_eq!(
+        store.prepare_pruning(NOW, plenty).unwrap(),
+        backup::Status::Ready
+    );
+    store.shutdown().unwrap();
+    let before = bytes(&path);
+
+    assert_eq!(run(&path).unwrap(), Outcome::Current);
+    assert_eq!(bytes(&path), before);
+}
+
+#[test]
+fn an_unclean_store_recovers_committed_rows_at_startup() {
+    let directory = Directory::new();
+    let path = directory.database();
+    Store::initialize(&path, Options::core(), target(), identity())
+        .unwrap()
+        .shutdown()
+        .unwrap();
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "seed_unclean_store", "--ignored"])
+        .env("YCODING_UNCLEAN_STORE", &path)
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(17));
+
+    assert_eq!(run(&path).unwrap(), Outcome::Current);
+    drop(redb::ReadOnlyDatabase::open(&path).unwrap());
+    let store = open(&path);
+    assert!(
+        store
+            .snapshot()
+            .unwrap()
+            .get::<session::SessionTable>(&tuple_key(&[KeyPart::String(&s("ses_root"))]))
+            .unwrap()
+            .is_some()
+    );
+    store.shutdown().unwrap();
+    assert!(!backup::upgrade_path(&path).exists());
+    assert_eq!(run(&path).unwrap(), Outcome::Current);
+}
+
+#[test]
+#[ignore = "subprocess-only abrupt-exit fixture"]
+fn seed_unclean_store() {
+    let path = PathBuf::from(std::env::var_os("YCODING_UNCLEAN_STORE").unwrap());
+    let store = open(&path);
+    seed(&store);
+    std::process::exit(17);
+}
+
+#[test]
 fn the_analytics_predecessor_gains_only_the_incident_and_events_tables() {
     let directory = Directory::new();
     let path = directory.database();

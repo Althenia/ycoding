@@ -9,7 +9,7 @@ const neither = "desktop=false\nweb=false\n"
 const desktopOnly = "desktop=true\nweb=false\n"
 const webOnly = "desktop=false\nweb=true\n"
 
-function withHistory(entries: string, verify: (run: (event: string, options?: Record<string, string>) => string, ref: (name: string) => string) => void) {
+function withHistory(entries: string, verify: (run: (event: string, options?: Record<string, string>) => string) => void) {
   const cwd = mkdtempSync(path.join(tmpdir(), "ycoding-ci-inputs-"))
   const git = (args: string[], stdin?: string) => {
     const result = Bun.spawnSync(["git", ...args], { cwd, stdin: stdin === undefined ? "ignore" : Buffer.from(stdin) })
@@ -25,7 +25,6 @@ function withHistory(entries: string, verify: (run: (event: string, options?: Re
       commit("main", 2, "from :1\n", 'M 100644 inline "docs/product-direction.md"\ndata 1\nx\n'),
       commit("topic", 3, "from :1\n", entries),
       commit("main", 4, "from :2\nmerge :3\n", entries),
-      commit("previous-push", 5, "from :1\n", added("packages/desktop/src/removed-by-force-push.ts")),
       "done\n",
     ].join(""))
     verify((event, options = {}) => {
@@ -37,13 +36,12 @@ function withHistory(entries: string, verify: (run: (event: string, options?: Re
           GITHUB_SHA: git(["rev-parse", "HEAD"]),
           CI_PR_BASE: git(["rev-parse", "HEAD^1"]),
           CI_PR_HEAD: git(["rev-parse", "HEAD^2"]),
-          CI_PUSH_BEFORE: git(["rev-parse", "HEAD^1"]),
           ...options,
         },
       })
       expect(result.exitCode, result.stderr.toString()).toBe(0)
       return result.stdout.toString()
-    }, (name) => git(["rev-parse", name]))
+    })
   } finally {
     rmSync(cwd, { recursive: true, force: true })
   }
@@ -74,27 +72,20 @@ test.each([
   withHistory(added(file), (run) => expect(run("pull_request")).toBe(expected))
 })
 
-test("compares a push to its exact previous tree, even when the commits diverge", () => {
-  withHistory(added("apps/web/public/robots.txt"), (run, ref) => {
-    expect(run("push")).toBe(webOnly)
-    expect(run("push", { CI_PUSH_BEFORE: ref("previous-push") })).toBe(both)
-  })
-})
-
 test("selects both sides of a rename and does not drop deleted inputs", () => {
   withHistory('R "packages/desktop/src/old.ts" "apps/web/public/new name.txt"\n', (run) => {
     expect(run("pull_request")).toBe(both)
   })
   withHistory('D "packages/desktop/src/old.ts"\n', (run) => {
-    expect(run("push")).toBe(desktopOnly)
+    expect(run("pull_request")).toBe(desktopOnly)
   })
 })
 
 test("builds both when a native comparison is missing or uncertain", () => {
   withHistory(added("docs/architecture.md"), (run) => {
     expect(run("workflow_dispatch")).toBe(both)
-    expect(run("push", { CI_PUSH_BEFORE: "0".repeat(40) })).toBe(both)
-    expect(run("push", { CI_PUSH_BEFORE: "a".repeat(40) })).toBe(both)
+    expect(run("pull_request", { CI_PR_BASE: "0".repeat(40) })).toBe(both)
+    expect(run("pull_request", { CI_PR_BASE: "a".repeat(40) })).toBe(both)
     expect(run("pull_request", { CI_PR_HEAD: "a".repeat(40) })).toBe(both)
     expect(run("pull_request", { GITHUB_SHA: "a".repeat(40) })).toBe(both)
   })
@@ -105,16 +96,26 @@ function yamlFields(value: unknown): Record<string, unknown> {
   return Object.fromEntries(Object.entries(value))
 }
 
-test("reports selection on main pushes and retains the existing normal CI events", () => {
-  const workflow = yamlFields(Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows/test.yml"), "utf8")))
-  const events = yamlFields(workflow.on)
-  expect(yamlFields(events.push).branches).toEqual(["main", "dev", "v2"])
-  expect(events).toHaveProperty("pull_request")
-  expect(events).toHaveProperty("workflow_dispatch")
+test("keeps branch pushes out of CI while retaining pull requests and manual runs", () => {
+  for (const name of ["test", "typecheck", "nix-eval"]) {
+    const events = workflowEvents(name)
+    expect(events).not.toHaveProperty("push")
+    expect(events).toHaveProperty("pull_request")
+    expect(events).toHaveProperty("workflow_dispatch")
+  }
+  expect(yamlFields(workflowEvents("nix-hashes").push).branches).toEqual(["beta"])
+  expect(workflowEvents("nix-hashes")).toHaveProperty("workflow_dispatch")
+  expect(workflowEvents("release").push).toEqual({ tags: ["v*"] })
+  expect(workflowEvents("release")).toHaveProperty("workflow_dispatch")
   const selector = workflowJobs("test")["build-inputs"]?.steps.find((step) => step.id === "select")
   expect(selector?.shell).toBe("bash")
   expect(selector?.run).toBe('bun script/ci-build-inputs.ts | tee -a "$GITHUB_OUTPUT"')
 })
+
+function workflowEvents(name: string) {
+  const workflow = yamlFields(Bun.YAML.parse(readFileSync(path.join(root, `.github/workflows/${name}.yml`), "utf8")))
+  return yamlFields(workflow.on)
+}
 
 function workflowJobs(name: string) {
   const workflow = yamlFields(Bun.YAML.parse(readFileSync(path.join(root, `.github/workflows/${name}.yml`), "utf8")))
