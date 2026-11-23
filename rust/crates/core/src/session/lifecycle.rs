@@ -21,10 +21,12 @@ pub enum Change {
 
 impl Service {
     pub async fn change(&self, id: &session::Id, change: Change) -> Result<bool, Error> {
+        const DUPLICATE_PIN: &str = "Session already pinned";
         let event_id = random_event_id()?.as_lossless().clone();
         let created = chrono::Utc::now().timestamp_millis();
         let id = id.clone();
-        self.client
+        let result = self
+            .client
             .submit(move |tx| {
                 let Some(row) = tx.get::<SessionTable>(&key(id.as_lossless()))? else {
                     return Ok(false);
@@ -34,7 +36,10 @@ impl Service {
                     Change::Unarchive if row.time_archived.is_some() => {
                         ("session.unarchived.2", None)
                     }
-                    Change::Pin if row.time_pinned.is_none() => ("session.pinned.1", None),
+                    Change::Pin if row.time_pinned.is_some() => {
+                        return Err(Error::Rejected(DUPLICATE_PIN));
+                    }
+                    Change::Pin => ("session.pinned.1", None),
                     Change::Unpin if row.time_pinned.is_some() => ("session.unpinned.1", None),
                     Change::Rename(title) => ("session.renamed.1", Some(title)),
                     Change::Daybreak(_) => ("session.daybreak.set.1", None),
@@ -61,6 +66,10 @@ impl Service {
                 )?;
                 Ok(true)
             })?
-            .await
+            .await;
+        match result {
+            Err(Error::Rejected(DUPLICATE_PIN)) => Ok(true),
+            result => result,
+        }
     }
 }

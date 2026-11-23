@@ -1931,6 +1931,65 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
+    #[test]
+    fn ordinary_empty_submissions_and_both_reclaim_passes_sync() {
+        let path = std::env::temp_dir().join(format!(
+            "ycoding-store-reclaim-sync-{}.redb",
+            std::process::id()
+        ));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let armed = Arc::new(AtomicBool::new(false));
+        let barrier = Arc::new(std::sync::Mutex::new(None));
+        let options = Options {
+            cache_bytes: 1024 * 1024,
+            queue_capacity: 2,
+            max_snapshots: 2,
+        };
+        let db = Database::builder()
+            .set_cache_size(options.cache_bytes)
+            .create_with_backend(SyncFault {
+                file: redb::backends::FileBackend::new(file).unwrap(),
+                armed: Arc::clone(&armed),
+                barrier: Arc::clone(&barrier),
+            })
+            .unwrap();
+        let store = Store::start(
+            db,
+            options,
+            Catalog::EMPTY,
+            Some(Metadata::new([9; 16], 1)),
+            None,
+        )
+        .unwrap();
+        for pass in 0..3 {
+            let (reached, entered) = mpsc::channel();
+            let (release, held) = mpsc::channel();
+            *barrier.lock().unwrap() = Some((reached, held));
+            let receipt = if pass == 0 {
+                store.submit(|_| Ok(()))
+            } else {
+                store.reclaim()
+            }
+            .unwrap();
+            entered.recv_timeout(Duration::from_secs(10)).unwrap();
+            release.send(()).unwrap();
+            receipt.wait().unwrap();
+        }
+        armed.store(true, Ordering::Release);
+        assert!(matches!(
+            store.reclaim().unwrap().wait(),
+            Err(Error::CommitUncertain(_))
+        ));
+        assert!(store.is_fenced());
+        store.shutdown().unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
+
     struct Stamp;
     impl TableSpec for Stamp {
         type Record = u64;

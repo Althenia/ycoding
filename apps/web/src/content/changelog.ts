@@ -24,11 +24,12 @@ export const RELEASES: readonly ReleaseEntry[] = [
   {
     version: "0.13.4",
     date: "2026-11-23",
-    title: "Service startup and deferred Form fixes",
+    title: "Clearer startup errors and deferred Form fixes",
     tags: ["Fixed"],
     changes: [
-      { tag: "Fixed", text: "When the Rust service cannot load global configuration at startup, the CLI explains what to check without exposing configuration values or private paths." },
+      { tag: "Fixed", text: "If startup fails because a global configuration file or a file it references is missing, is a directory, or cannot be read, the CLI explains what to check without exposing configuration values or private paths." },
       { tag: "Fixed", text: "Clients can submit deferred Form answers by field name, including checkbox and number values." },
+      { tag: "Fixed", text: "Pinning a Session that is already pinned no longer writes to the database." },
     ],
   },
   {

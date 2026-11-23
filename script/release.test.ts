@@ -75,6 +75,23 @@ test("release source verification selects the native startup diagnostic regressi
   expect(steps.indexOf(selected[0]!)).toBeGreaterThan(steps.findIndex((step) => step.startsWith("Build and verify native runtime receipt\n")))
 })
 
+test("release source verification selects duplicate-pin and reclaim durability cases", () => {
+  const verify = workflowJob(workflow, "verify-source")
+  const steps = verify.split("\n      - name: ").slice(1)
+  const selected = steps.filter((step) => step.startsWith("Verify Session pin durability\n"))
+  expect(selected).toHaveLength(1)
+  const cargo = "cargo test --locked --manifest-path rust/Cargo.toml -p"
+  expect(Bun.YAML.parse(`name: ${selected[0]!.replace(/^ {8}/gm, "")}`)).toEqual({
+    name: "Verify Session pin durability",
+    if: "matrix.suite == 'tui-runtime'",
+    run: [
+      `${cargo} ycoding-core --test session_lifecycle duplicate_pin_leaves_the_file_unchanged_and_pin_follows_a_queued_unpin -- --exact`,
+      `${cargo} ycoding-core --test session_lifecycle pin_and_unpin_toggle_the_pinned_time_and_ignore_repeats -- --exact`,
+      `${cargo} ycoding-store --lib engine::tests::ordinary_empty_submissions_and_both_reclaim_passes_sync -- --exact`,
+    ].join("\n") + "\n",
+  })
+})
+
 test("source verification runs the native decision follow regression files in the CLI suite", async () => {
   const verify = workflowJob(workflow, "verify-source")
   const steps = verify.split("\n      - name: ").slice(1).filter((step) => step.startsWith("Verify native decision follow\n"))

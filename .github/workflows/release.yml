@@ -239,6 +239,13 @@ jobs:
           cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --test service_failed_boot failed_store_boot_retains_native_owner_until_authenticated_exact_instance_stop -- --exact
           cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --lib production::tests::retention_settings_fail_startup_when_the_first_load_fails -- --exact
 
+      - name: Verify Session pin durability
+        if: matrix.suite == 'tui-runtime'
+        run: |
+          cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-core --test session_lifecycle duplicate_pin_leaves_the_file_unchanged_and_pin_follows_a_queued_unpin -- --exact
+          cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-core --test session_lifecycle pin_and_unpin_toggle_the_pinned_time_and_ignore_repeats -- --exact
+          cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-store --lib engine::tests::ordinary_empty_submissions_and_both_reclaim_passes_sync -- --exact
+
       - name: Verify typed decision suites
         if: matrix.suite == 'tui-runtime'
         working-directory: packages/core

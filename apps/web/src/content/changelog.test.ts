@@ -8,7 +8,7 @@ const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.ve
 
 describe("release entries", () => {
   test.each([
-    { index: 0, version: "0.13.4", title: "Service startup and deferred Form fixes", tags: ["Fixed"], previous: "0.13.3" },
+    { index: 0, version: "0.13.4", title: "Clearer startup errors and deferred Form fixes", tags: ["Fixed"], previous: "0.13.3" },
     { index: 1, version: "0.13.3", title: "Rust connection and recovery fixes", tags: ["Fixed", "Changed"], previous: "0.13.2" },
   ])("lists v$version in release order with its notes", async ({ index, version, title, tags, previous }) => {
     const entry = RELEASES[index]
