@@ -49,8 +49,7 @@ struct Artifacts {
 
 async fn fixture(endpoint: &str) -> (Fixture, Artifacts) {
     let mut fixture = Fixture::new().await;
-    let mut provider = ycoding_core::ycoding_schema::provider::Info::decode(&parse_json(&format!(r#"{{"id":"fixture","name":"Fixture","package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}"#)).unwrap()).unwrap();
-    provider.integration_id = None;
+    let provider = ycoding_core::ycoding_schema::provider::Info::decode(&parse_json(r#"{"id":"fixture","name":"Fixture","package":"@ycoding-ai/ai/providers/openai-compatible"}"#).unwrap()).unwrap();
     let info = |name: &str, context| {
         ycoding_core::ycoding_schema::model::Info::decode(&parse_json(&format!(r#"{{"id":"{name}","modelID":"{name}","providerID":"fixture","name":"Fixture","package":"@ycoding-ai/ai/providers/openai-compatible","capabilities":{{"tools":true,"input":["text"],"output":["text"]}},"variants":[],"time":{{"released":1}},"cost":[],"status":"active","enabled":true,"limit":{{"context":{context},"output":96}}}}"#)).unwrap()).unwrap()
     };
@@ -68,6 +67,12 @@ async fn fixture(endpoint: &str) -> (Fixture, Artifacts) {
         ],
         environment: vec![],
     }];
+    catalog
+        .configure(&[parse_json(&format!(
+            r#"{{"providers":{{"fixture":{{"settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#
+        ))
+        .unwrap()])
+        .unwrap();
     let models = Arc::new(model::Resolver::new(catalog));
     let mut reviewer = agent::empty("reviewer".into());
     reviewer.mode = "subagent".into();
@@ -1817,6 +1822,191 @@ async fn subagent_switch_model_commits_at_the_boundary_and_maps_every_failure() 
     );
     drop(client);
     server.shutdown().await.unwrap();
+    fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subagent_switch_model_waits_for_its_active_step_before_replying() {
+    use std::{sync::Mutex, time::Duration};
+    use tokio::{
+        net::TcpListener,
+        sync::{mpsc, oneshot},
+        time::timeout,
+    };
+    use ycoding_core::session::run_coordinator::Coordinator;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (fixture, _) = fixture(&format!("http://{}", listener.local_addr().unwrap())).await;
+    let (requests, mut received) = mpsc::unbounded_channel();
+    let router = axum::Router::new().route(
+        "/chat/completions",
+        axum::routing::post(move |body: axum::body::Bytes| {
+            let requests = requests.clone();
+            async move {
+                let (release, held) = oneshot::channel();
+                requests.send((body, release)).unwrap();
+                held.await.unwrap();
+                (
+                    [("content-type", "text/event-stream")],
+                    "data: {\"id\":\"step\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Step complete\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"step\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                )
+            }
+        }),
+    );
+    let (stop_provider, stopped) = oneshot::channel();
+    let provider = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async { stopped.await.unwrap() })
+            .await
+            .unwrap();
+    });
+
+    let entered = Arc::new(Mutex::new(None::<oneshot::Sender<()>>));
+    let mut settings = fixture.environment(true).services.clone();
+    let core = settings.core.as_mut().unwrap();
+    let catalogs = core.catalogs.take().unwrap();
+    core.catalogs = Some(Arc::new({
+        let entered = entered.clone();
+        move |location| {
+            let result = catalogs(location);
+            if let Some(signal) = entered.lock().unwrap().take() {
+                signal.send(()).unwrap();
+            }
+            result
+        }
+    }));
+    let server = support::start(settings, ycoding_runtime::standard().unwrap()).await;
+    let mut client = Client::open(server.address(), &[]).await.unwrap();
+    let runner = &fixture.catalogs.session.as_ref().unwrap().runner;
+    let coordinator = Coordinator::new(Arc::new(runner.clone()));
+    let parent = &fixture.root;
+    let model = |name| v5::ModelRef {
+        provider_id: text("fixture"),
+        id: text(name),
+        variant: None,
+        profile: None,
+    };
+    let mut children = Vec::new();
+    for (call_id, prompt) in [
+        ("held-selected-step", "Run the selected child's Step"),
+        ("held-unrelated-step", "Run the unrelated child's Step"),
+    ] {
+        let launched: v5::SessionSubagentLaunchResult = ask(
+            &mut client,
+            "session.subagent.launch",
+            scope(parent),
+            v5::SessionSubagentLaunchRequest {
+                params: v5::SessionSubagentLaunchRequestParams {
+                    parent_id: text(parent),
+                },
+                payload: v5::SessionSubagentLaunch {
+                    parent_assistant_message_id: text("msg_step_parent"),
+                    tool_call_id: text(call_id),
+                    agent: text("reviewer"),
+                    description: text(prompt),
+                    prompt: text(prompt),
+                    model: Some(model("code")),
+                    background: Some(false),
+                },
+            },
+        )
+        .await;
+        let child = units(&launched.data.session_id);
+        let child_id = sid(&child);
+        world().core.execution.interrupt(&child_id).await.unwrap();
+        let runs = coordinator.clone();
+        let run = tokio::spawn(async move { runs.run(&child_id).await });
+        let (body, release) = timeout(support::WAIT, received.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let body = std::str::from_utf8(&body).unwrap();
+        assert!(body.contains(prompt), "unexpected provider request: {body}");
+        assert!(
+            body.contains(r#""model":"code""#),
+            "unexpected provider request: {body}"
+        );
+        children.push((child, run, release));
+    }
+    let [
+        (child, run_child, release_child),
+        (other, run_other, release_other),
+    ]: [_; 2] = children.try_into().ok().unwrap();
+    let tasks = async |client: &mut Client| {
+        let result: v5::SessionSubagentListResult = ask(
+            client,
+            "session.subagent.list",
+            scope(parent),
+            v5::SessionSubagentListRequest {
+                params: v5::SessionSubagentListRequestParams {
+                    parent_id: text(parent),
+                },
+                query: v5::SessionSubagentListQuery::default(),
+            },
+        )
+        .await;
+        result.data.data.items
+    };
+    let before = tasks(&mut client).await;
+    let (signal, handler_entered) = oneshot::channel();
+    *entered.lock().unwrap() = Some(signal);
+    let request = client
+        .send(
+            "session.subagent.switchModel",
+            scope(parent),
+            v5::SessionSubagentSwitchModelRequest {
+                params: v5::SessionSubagentSwitchModelRequestParams {
+                    parent_id: text(parent),
+                    child_id: text(&child),
+                },
+                payload: v5::SessionSubagentModel {
+                    expected_model: model("code"),
+                    model: model("large"),
+                },
+            }
+            .encode_to_vec(),
+        )
+        .await;
+    timeout(support::WAIT, handler_entered)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(tasks(&mut client).await, before);
+    client.run_for(Duration::from_millis(100)).await;
+    assert!(client.close.is_none());
+    assert!(
+        !client
+            .events
+            .iter()
+            .any(|event| matches!(event, support::Event::Settled(id, _, _) if id == &request)),
+        "switch replied while the selected child's provider was still holding the Step"
+    );
+
+    release_child.send(()).unwrap();
+    let switched: v5::SessionSubagentSwitchModelResult =
+        support::success(client.settle(&request).await);
+    let after = tasks(&mut client).await;
+    let authoritative = after
+        .iter()
+        .find(|task| units(&task.session_id) == child)
+        .unwrap();
+    assert_eq!(&switched.data, authoritative);
+    assert_eq!(switched.data.model, model("large"));
+    assert_eq!(
+        after.iter().find(|task| units(&task.session_id) == other),
+        before.iter().find(|task| units(&task.session_id) == other)
+    );
+    assert!(!release_other.is_closed());
+    assert!(!run_other.is_finished());
+    release_other.send(()).unwrap();
+    for run in [run_child, run_other] {
+        timeout(support::WAIT, run).await.unwrap().unwrap().unwrap();
+    }
+    coordinator.shutdown().await.unwrap();
+    drop(client);
+    server.shutdown().await.unwrap();
+    stop_provider.send(()).unwrap();
+    provider.await.unwrap();
     fixture.close().await;
 }
 

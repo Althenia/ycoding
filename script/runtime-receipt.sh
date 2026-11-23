@@ -108,6 +108,7 @@ catalog() {
 }
 
 require_run() {
+  local number
   printf '%s\n' "${GITHUB_SHA:-}" | grep -Eqx '[0-9a-f]{40}' || fail "GITHUB_SHA must be a full commit SHA"
   test -n "${RELEASE_VERSION:-}" || fail "RELEASE_VERSION is required"
   case "${YCODING_CHANNEL:-}" in beta | latest) ;; *) fail "YCODING_CHANNEL must be beta or latest" ;; esac
@@ -117,16 +118,35 @@ require_run() {
     *) fail "RECEIPT_TARGET must be darwin-arm64, linux-x64 or windows-x64" ;;
   esac
   test "$RECEIPT_TARGET" = "$(host_target)" || fail "RECEIPT_TARGET $RECEIPT_TARGET does not match host $(host_target)"
+  if [ "$profile:$RECEIPT_TARGET" = release:darwin-arm64 ]; then
+    test "${GITHUB_ACTIONS:-}:${GITHUB_EVENT_NAME:-}" = true:workflow_dispatch || fail "Apple Silicon release reuse requires a manual GitHub Actions run"
+    printf '%s\n' "${GITHUB_REPOSITORY:-}" | grep -Eqx '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' || fail "GITHUB_REPOSITORY is required"
+    case "${GITHUB_WORKFLOW_REF:-}" in
+      "$GITHUB_REPOSITORY"/.github/workflows/release.yml@refs/*) ;;
+      *) fail "the release workflow is required" ;;
+    esac
+    for number in "${GITHUB_RUN_ID:-}" "${GITHUB_RUN_ATTEMPT:-}"; do
+      printf '%s\n' "$number" | grep -Eqx '[1-9][0-9]*' || fail "a run ID and attempt are required"
+    done
+    test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || fail "the checkout does not match the release commit"
+  fi
 }
 
 expected() {
   set -e
-  local binary=$1 toolchain catalog lock sha256 bytes
-  toolchain="$(identity)"
+  local binary=$1 toolchain=${2:-} catalog lock sha256 bytes handoff='{}' recipe
+  if [ -z "$toolchain" ]; then toolchain="$(identity)"; fi
+  if [ "$profile:$RECEIPT_TARGET" = release:darwin-arm64 ]; then
+    recipe="$(bun packages/cli/script/regex-worker-metadata.ts)"
+    [[ $recipe =~ ^[0-9a-f]{64}$'\n'[1-9][0-9]*$ ]] || fail "invalid native regex recipe metadata"
+    handoff="$(jq -S -c -n --arg recipe "$recipe" \
+      '{run: {workflow: $ENV.GITHUB_WORKFLOW_REF, id: $ENV.GITHUB_RUN_ID, attempt: $ENV.GITHUB_RUN_ATTEMPT}, regex_recipe: $recipe}')"
+  fi
   catalog="$(catalog)"
   lock="$(digest rust/Cargo.lock)"
   sha256="$(digest "$binary")"
   bytes="$(wc -c <"$binary" | tr -d ' ')"
+  test "$bytes" -gt 0 || fail "empty runtime executable"
   jq -S -c -n \
     --arg schema "$schema" \
     --arg commit "$GITHUB_SHA" \
@@ -141,7 +161,8 @@ expected() {
     --arg lock "$lock" \
     --arg sha256 "$sha256" \
     --argjson bytes "$bytes" \
-    '{schema: $schema, source: {commit: $commit}, version: $version, channel: $channel, target: $target, profile: $profile, command: $command, toolchain: $toolchain, catalog: $catalog, lock_sha256: $lock, binary: {name: $binary_name, sha256: $sha256, bytes: $bytes}}'
+    --argjson handoff "$handoff" \
+    '{schema: $schema, source: {commit: $commit}, version: $version, channel: $channel, target: $target, profile: $profile, command: $command, toolchain: $toolchain, catalog: $catalog, lock_sha256: $lock, binary: {name: $binary_name, sha256: $sha256, bytes: $bytes}} + $handoff'
 }
 
 write() {
@@ -167,12 +188,17 @@ verify() {
   for name in receipt.json "$binary_name"; do
     test -f "$artifact/$name" && test ! -L "$artifact/$name" || fail "$name is not a regular file"
   done
-  local receipt want mismatch directory staged
+  local receipt want mismatch directory staged toolchain=''
+  if [ "$profile:$RECEIPT_TARGET" = release:darwin-arm64 ]; then
+    printf '%s\n' "${RECEIPT_SHA256:-}" | grep -Eqx '[0-9a-f]{64}' || fail "the producer receipt digest is required"
+    test "$(digest "$artifact/receipt.json")" = "$RECEIPT_SHA256" || fail "the receipt digest does not match the producer"
+    toolchain="$(jq -c -e '.toolchain | select(type == "object" and .target == "darwin-arm64")' "$artifact/receipt.json")" || fail "invalid producer toolchain identity"
+  fi
   receipt="$(jq -S -c 'if type == "object" then . else error("not an object") end' "$artifact/receipt.json" 2>/dev/null)" || fail "receipt.json is not a JSON object"
-  want="$(expected "$artifact/$binary_name")"
+  want="$(expected "$artifact/$binary_name" "$toolchain")"
   mismatch="$(jq -r -n --argjson receipt "$receipt" --argjson want "$want" '
     if ([$receipt | paths] | sort) != ([$want | paths] | sort) then "fields"
-    else (first(("schema source version channel target profile command toolchain catalog lock_sha256 binary" | split(" "))[] | select($receipt[.] != $want[.])) // "")
+    else (first(("schema source version channel target profile command toolchain catalog lock_sha256 run regex_recipe binary" | split(" "))[] | select($receipt[.] != $want[.])) // "")
     end')"
   test "$mismatch" != fields || fail "receipt fields differ from schema $schema"
   test -z "$mismatch" || fail "receipt $mismatch does not match this run"

@@ -2,6 +2,7 @@ mod durable;
 mod projection;
 mod rest;
 pub use durable::{Connect, ConnectError, Socket, SocketError, SocketFuture};
+pub use rest::RestDriver;
 
 use super::{
     access::{
@@ -130,11 +131,12 @@ impl Service {
         host: Host,
         attachment: &super::access::Attachment,
         connect: Connect,
+        driver: RestDriver,
     ) -> Result<Self, ConversationError> {
         let stopped = Arc::new(AtomicBool::new(false));
         let owner = attachment.guard();
-        let rest =
-            rest::Rest::new(host.clone(), stopped.clone(), owner.clone()).map_err(Error::public)?;
+        let rest = rest::Rest::new(host.clone(), stopped.clone(), owner.clone(), driver)
+            .map_err(Error::public)?;
         let work = Work {
             rest,
             durable: Arc::new(durable::Durable::start(host, owner, connect)),

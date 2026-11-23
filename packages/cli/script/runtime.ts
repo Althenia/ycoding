@@ -9,12 +9,14 @@ import { platformBinary } from "../src/binary"
 import { modelsSource } from "./generate"
 import { metadata } from "./regex-worker-metadata"
 
-export async function buildRuntime(target: { os: string; arch: string; abi?: string }, receiptDirectory?: string) {
-  if (target.os !== process.platform || target.arch !== process.arch || target.abi === "musl")
-    throw new Error("Rust payload builds require a matching native host")
-  const root = path.resolve(import.meta.dirname, "../../..")
+const root = path.resolve(import.meta.dirname, "../../..")
+
+function runtimeEnvironment() {
+  return { ...process.env, YCODING_BUNDLED_MODELS_PATH: path.resolve(modelsSource) }
+}
+
+async function compileRuntime(env: NodeJS.ProcessEnv) {
   const args = ["--manifest-path", path.join(root, "rust/Cargo.toml"), "--no-deps", "--format-version", "1"]
-  const env = { ...process.env, YCODING_BUNDLED_MODELS_PATH: path.resolve(modelsSource) }
   const cargoMetadata = spawnSync("cargo", ["metadata", "--locked", ...args], { cwd: root, encoding: "utf8", env })
   if (cargoMetadata.error) throw cargoMetadata.error
   if (cargoMetadata.status !== 0) throw new Error(`Rust payload metadata failed (${cargoMetadata.status ?? cargoMetadata.signal})`)
@@ -51,24 +53,60 @@ export async function buildRuntime(target: { os: string; arch: string; abi?: str
   const recipe = metadata()
   if (await readFile(path.join(receipts[0].out_dir, "regex_worker.metadata"), "utf8") !== `${recipe.sha256}\n${recipe.byteLength}\n`)
     throw new Error("Native regex worker metadata does not match the configured producer")
-  const executable = path.join(
+  return path.join(
     targetDirectory,
     "release",
     platformBinary("ycoding-runtime", process.platform),
   )
+}
+
+function runtimeReceipt(operation: "write" | "verify", args: string[], target: "darwin-arm64" | "windows-x64", env: NodeJS.ProcessEnv) {
+  const receipt = spawnSync("bash", ["script/runtime-receipt.sh", operation, ...args], {
+    cwd: root, stdio: "inherit",
+    env: { ...env, RECEIPT_PROFILE: "release", RECEIPT_TARGET: target },
+  })
+  if (receipt.error) throw receipt.error
+  if (receipt.status !== 0) throw new Error(
+    `${operation === "verify" ? "Verifying the Apple Silicon release runtime" : "Writing the native runtime receipt"} failed (${receipt.status ?? receipt.signal})`,
+  )
+}
+
+export async function buildRuntime(target: { os: string; arch: string; abi?: string }, receiptDirectory?: string) {
+  if (target.os !== process.platform || target.arch !== process.arch || target.abi === "musl")
+    throw new Error("Rust payload builds require a matching native host")
+  const env = runtimeEnvironment()
+  const staged = process.env.YCODING_RELEASE_RUNTIME_DIR
+  const name = platformBinary("ycoding-runtime", process.platform)
+  const appleSilicon = target.os === "darwin" && target.arch === "arm64"
+  if (appleSilicon && staged === undefined && process.env.GITHUB_ACTIONS === "true" &&
+    process.env.GITHUB_EVENT_NAME === "workflow_dispatch" &&
+    process.env.GITHUB_WORKFLOW_REF?.startsWith(`${process.env.GITHUB_REPOSITORY}/.github/workflows/release.yml@`))
+    throw new Error("Apple Silicon release packaging requires the staged runtime")
+  if (staged !== undefined) {
+    if (!path.isAbsolute(staged) || !appleSilicon || receiptDirectory !== undefined)
+      throw new Error("A staged release runtime requires an absolute artifact path and a native Apple Silicon target")
+    const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-verified-runtime-"))
+    try {
+      const verified = path.join(directory, name)
+      runtimeReceipt("verify", [staged, verified], "darwin-arm64", env)
+      return await packRuntime(await Bun.file(verified).bytes(), name)
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  }
+  const executable = await compileRuntime(env)
   const bytes = await Bun.file(executable).bytes()
   const sha256 = createHash("sha256").update(bytes).digest("hex")
   if (receiptDirectory !== undefined) {
-    const receipt = spawnSync("bash", ["script/runtime-receipt.sh", "write", executable, receiptDirectory], {
-      cwd: root, stdio: "inherit",
-      env: { ...env, RECEIPT_PROFILE: "release", RECEIPT_TARGET: "windows-x64" },
-    })
-    if (receipt.error) throw receipt.error
-    if (receipt.status !== 0) throw new Error(`Writing the native runtime receipt failed (${receipt.status ?? receipt.signal})`)
+    runtimeReceipt("write", [executable, receiptDirectory], "windows-x64", env)
     const written = await Bun.file(path.join(receiptDirectory, "receipt.json")).json()
     if (written.binary?.sha256 !== sha256 || written.binary?.bytes !== bytes.length)
       throw new Error("The runtime used for embedding does not match the release receipt")
   }
+  return packRuntime(bytes, name, sha256)
+}
+
+async function packRuntime(bytes: Uint8Array, name: string, sha256 = createHash("sha256").update(bytes).digest("hex")) {
   const payload = brotliCompressSync(bytes, {
     params: {
       [constants.BROTLI_PARAM_QUALITY]: 6,
@@ -77,7 +115,7 @@ export async function buildRuntime(target: { os: string; arch: string; abi?: str
     },
   })
   const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-runtime-asset-"))
-  const asset = path.join(directory, path.basename(executable))
+  const asset = path.join(directory, name)
   await writeFile(asset, payload, { mode: 0o600 })
   return {
     path: asset,
@@ -123,7 +161,14 @@ async function verifyEmbedded(frontend: string, receiptFile: string) {
 
 if (import.meta.main) {
   const [command, frontend, receipt, ...extra] = process.argv.slice(2)
-  if (command !== "verify-embedded" || !frontend || !receipt || extra.length)
-    throw new Error("Use verify-embedded <ycoding.exe> <receipt.json>")
-  await verifyEmbedded(frontend, receipt)
+  if (command === "stage-release" && frontend && receipt === undefined) {
+    if (process.platform !== "darwin" || process.arch !== "arm64" || !path.isAbsolute(frontend))
+      throw new Error("Staging a release runtime requires an absolute output path and a native Apple Silicon host")
+    const env = runtimeEnvironment()
+    runtimeReceipt("write", [await compileRuntime(env), frontend], "darwin-arm64", env)
+  } else if (command === "verify-embedded" && frontend && receipt && !extra.length) {
+    await verifyEmbedded(frontend, receipt)
+  } else {
+    throw new Error("Use stage-release <directory> or verify-embedded <ycoding.exe> <receipt.json>")
+  }
 }

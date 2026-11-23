@@ -64,10 +64,12 @@ pub async fn usage(
     let id = invocation.session(&request.params.session_id)?;
     let sessions = core.sessions.clone();
     let read_id = id.clone();
-    let summary = tokio::task::spawn_blocking(move || sessions.usage(&read_id))
-        .await
-        .map_err(|_| Failure::Unavailable("Usage read worker unavailable".into()))?
-        .map_err(|error| failure(error, &id))?;
+    let summary = tokio::task::spawn_blocking(move || {
+        ycoding_core::session::usage_read::await_prepared(&sessions, || sessions.usage(&read_id))
+    })
+    .await
+    .map_err(|_| Failure::Unavailable("Usage read worker unavailable".into()))?
+    .map_err(|error| failure(error, &id))?;
     Ok(v5::SessionUsageResult {
         data: convert::provider_summary(&summary).map_err(|_| unrepresentable())?,
     })
@@ -82,10 +84,14 @@ pub async fn usage_report(
     let input = report_input(&request.query)?;
     let sessions = core.sessions.clone();
     let read_id = id.clone();
-    let report = tokio::task::spawn_blocking(move || sessions.usage_report(&read_id, &input))
-        .await
-        .map_err(|_| Failure::Unavailable("Usage read worker unavailable".into()))?
-        .map_err(|error| failure(error, &id))?;
+    let report = tokio::task::spawn_blocking(move || {
+        ycoding_core::session::usage_read::await_prepared(&sessions, || {
+            sessions.usage_report(&read_id, &input)
+        })
+    })
+    .await
+    .map_err(|_| Failure::Unavailable("Usage read worker unavailable".into()))?
+    .map_err(|error| failure(error, &id))?;
     Ok(v5::SessionUsageReportResult {
         data: wire_report(&report)?,
     })

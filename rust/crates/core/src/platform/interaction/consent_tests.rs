@@ -269,3 +269,52 @@ async fn stopping_an_empty_inventory_cancels_retry_without_a_warning() {
     assert!(output.text().is_empty());
     authority.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn stopping_a_consent_prompt_rejects_its_late_approval_without_stopping_the_replacement() {
+    for key in ["macos", "chrome-isolated"] {
+        let (authority, native, _, request) = fixture(key, 0, false);
+        let generation = authority.status("ses_consent")["generation"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let cancel = native.cancellation(text(&request, "candidateID")).unwrap();
+        native
+            .consent(&request, cancel, |targets, mut signal| {
+                let (authority, native, request, generation) =
+                    (&authority, &native, &request, &generation);
+                async move {
+                    assert!(!authority.stop("ses_consent", TARGET));
+                    assert!(!*signal.borrow());
+                    assert!(authority.stop("ses_consent", generation));
+                    tokio::time::timeout(Duration::from_secs(2), signal.wait_for(|cancel| *cancel))
+                        .await
+                        .unwrap()
+                        .unwrap();
+
+                    let replacement = authority
+                        .request("ses_consent", request["selection"].clone())
+                        .unwrap();
+                    assert_eq!(replacement["state"], "pending");
+                    assert_ne!(replacement["generation"], *generation);
+                    assert!(approve(native, request, &targets).await.is_err());
+                    assert_eq!(authority.status("ses_consent"), replacement);
+                    Ok(())
+                }
+            })
+            .await;
+
+        let replacement = native.pending()[0].clone();
+        let cancel = native
+            .cancellation(text(&replacement, "candidateID"))
+            .unwrap();
+        native
+            .consent(&replacement, cancel, |targets, _| {
+                let (native, replacement) = (&native, &replacement);
+                async move { approve(native, replacement, &targets).await }
+            })
+            .await;
+        assert_eq!(authority.status("ses_consent")["state"], "active");
+        authority.shutdown().await.unwrap();
+    }
+}

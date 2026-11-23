@@ -2,7 +2,7 @@ import { expect, mock, test } from "bun:test"
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { availablePort } from "../test/remote-harness"
+import { availablePort } from "../test/fixture/loopback-port"
 
 const diagnostic = "stdio readiness synthetic diagnostic"
 const entry = path.resolve(import.meta.dir, "../src/index.ts")

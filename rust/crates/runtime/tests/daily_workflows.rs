@@ -100,6 +100,116 @@ fn an_approved_effect_settles_once_and_a_crash_with_a_pending_approval_replays_n
     assert!(child(name, "restart", &root.0).status().unwrap().success());
 }
 
+#[test]
+fn restarting_with_a_running_root_tool_exposes_its_unknown_effect_without_resuming() {
+    let name = "restarting_with_a_running_root_tool_exposes_its_unknown_effect_without_resuming";
+    const TOOL_STARTED: &str = "DAILY_WORKFLOW_TOOL_STARTED";
+    const CALL: &str = "call_root_tool_in_flight";
+    if let Some((root, phase)) = assigned() {
+        return run(move |host| {
+            Box::pin(async move {
+                let marker = root.join("project/in-flight.marker");
+                let starting = phase == "start";
+                let provider = Provider::start(if starting {
+                    vec![tool_call(
+                        CALL,
+                        "shell",
+                        r#"{"command":"sh -c 'printf started >> in-flight.marker; exec sleep 30'"}"#,
+                    )]
+                } else {
+                    vec![]
+                })
+                .await;
+                let (_store, core) = boot(
+                    host,
+                    &root,
+                    &provider.endpoint,
+                    SHELL_ASKS,
+                    if starting { &[(SESSION, None)] } else { &[] },
+                    !starting,
+                )
+                .await;
+                let session = id(SESSION);
+                if starting {
+                    let (_, services) = core.locations.session(&session).unwrap();
+                    admit(&core, SESSION, "msg_daily_in_flight", "Run the marker tool").await;
+                    let _running = resume(&core, SESSION);
+                    let asked = until(|| {
+                        services
+                            .permissions
+                            .for_session(&session)
+                            .into_iter()
+                            .next()
+                    })
+                    .await;
+                    services
+                        .permissions
+                        .reply(&asked.id, permission::Reply("once".into()), None)
+                        .unwrap();
+                    until(|| marker.exists().then_some(())).await;
+                    println!("\n{TOOL_STARTED}");
+                    std::future::pending::<()>().await;
+                }
+
+                assert!(
+                    provider.bodies().is_empty(),
+                    "the root must not resume on restart"
+                );
+                assert!(core.execution.active().is_empty());
+                assert_eq!(std::fs::read_to_string(marker).unwrap(), "started");
+                let Some(session_message::Info::Assistant(reply)) =
+                    core.sessions.latest(&session, "assistant").unwrap()
+                else {
+                    panic!("the interrupted assistant reply is missing");
+                };
+                assert_eq!(
+                    reply.error.as_ref().unwrap().r#type.as_str(),
+                    Some("interrupted")
+                );
+                let tool = reply
+                    .content
+                    .iter()
+                    .find_map(|part| match part {
+                        session_message::AssistantContent::Tool(tool)
+                            if tool.id.as_str() == Some(CALL) =>
+                        {
+                            Some(tool)
+                        }
+                        _ => None,
+                    })
+                    .expect("the admitted tool call is missing");
+                let session_message::ToolState::Error(error) = &tool.state else {
+                    panic!("the restarted tool still appears unsettled");
+                };
+                assert!(
+                    error
+                        .error
+                        .message
+                        .as_str()
+                        .unwrap()
+                        .contains("effect is unknown")
+                );
+                assert!(tool.time.completed.is_some());
+                core.shutdown().await.unwrap();
+                provider.stop().await;
+            })
+        });
+    }
+    let root = Disposable::new();
+    let mut crashed = child(name, "start", &root.0)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(crashed.stdout.take().unwrap()).lines();
+    assert!(
+        lines.any(|line| line.unwrap() == TOOL_STARTED),
+        "the runtime exited before the tool wrote its marker"
+    );
+    crashed.kill().unwrap();
+    crashed.wait().unwrap();
+    assert!(child(name, "restart", &root.0).status().unwrap().success());
+}
+
 async fn question_flow(host: &production_owner::Host, root: PathBuf) {
     let provider = Provider::start(vec![
         tool_call("call_question", "question", QUESTION),

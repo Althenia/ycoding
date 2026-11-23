@@ -164,6 +164,7 @@ struct Platforms {
     #[cfg(unix)]
     isolated: Arc<isolated::Isolated>,
     profiles: std::path::PathBuf,
+    confirm_chrome: Option<chrome::Confirm>,
     chrome: Option<Arc<chrome::Transport>>,
 }
 struct Cleanup {
@@ -200,9 +201,23 @@ impl Authority {
         {
             return Err(Error("busy"));
         }
-        if let Some(macos) = &macos {
+        let confirm_chrome = if let Some(macos) = &macos {
+            let (cancel, cancelled) = watch::channel(false);
+            let ready = macos.available(cancelled);
+            tokio::pin!(ready);
+            let ready = tokio::select! {
+                ready = &mut ready => ready,
+                _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                    cancel.send_replace(true);
+                    ready.await;
+                    false
+                }
+            };
             macos.mount(self)?;
-        }
+            ready.then(|| macos.profile_confirmation())
+        } else {
+            None
+        };
         #[cfg(unix)]
         let isolated = {
             let isolated = isolated::Isolated::installed(macos.clone());
@@ -219,6 +234,7 @@ impl Authority {
             #[cfg(unix)]
             isolated,
             profiles,
+            confirm_chrome,
             chrome: None,
         });
         Ok(())
@@ -238,14 +254,9 @@ impl Authority {
                 Err(Error("origin_changed"))
             };
         }
-        let confirm = platforms.macos.as_ref().map_or_else(
-            || {
-                Arc::new(|_, _| {
-                    Box::pin(async { false }) as crate::platform::computer::Future<'static, bool>
-                }) as chrome::Confirm
-            },
-            |macos| macos.profile_confirmation(),
-        );
+        let Some(confirm) = platforms.confirm_chrome.clone() else {
+            return Ok(None);
+        };
         let chrome = chrome::Transport::new(self, origin, platforms.profiles.clone(), confirm)?;
         platforms.chrome = Some(chrome.clone());
         Ok(Some(chrome))

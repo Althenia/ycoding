@@ -7,7 +7,9 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { deltaChunk, finishChunk, toolCallChunk } from "../../ai/test/lib/openai-chunks"
-import { auth, availablePort, createSession, password, providerConfig, startProviderStandIn, startServer } from "./remote-harness"
+import { availablePort } from "./fixture/loopback-port"
+import { providerConfig, startProviderStandIn } from "./fixture/provider-stand-in"
+import { auth, createSession, password, startServer } from "./remote-harness"
 
 const cleanups: Array<() => Promise<unknown>> = []
 afterEach(async () => {

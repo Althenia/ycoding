@@ -181,6 +181,8 @@ impl Protocol for Antigravity {
             inner: Gemini::parser(request),
             linker: Linker::default(),
             blocks: Blocks::default(),
+            has_finish_reason: false,
+            provider_failed: false,
         })
     }
 }
@@ -485,10 +487,10 @@ impl Linker {
                 }
                 let text = get(&part, "text");
                 let text_string = text.and_then(json::string);
-                let thought = get(&part, "thought") == Some(&JsonValue::Bool(true));
+                let thought = get(&part, "thought");
                 if let Some(text) = text_string
                     && !text.is_empty()
-                    && thought
+                    && thought == Some(&JsonValue::Bool(true))
                 {
                     self.open = None;
                     open_in_current = Some(kept.len());
@@ -512,6 +514,7 @@ impl Linker {
                 if empty_text
                     && let Some(signature) = signature
                     && only_signature_keys
+                    && thought.is_none_or(|thought| matches!(thought, JsonValue::Bool(_)))
                     && (open_in_current.is_some() || self.open.is_some())
                 {
                     if let Some(index) = open_in_current {
@@ -750,6 +753,8 @@ struct Parser {
     inner: Box<dyn StreamParser>,
     linker: Linker,
     blocks: Blocks,
+    has_finish_reason: bool,
+    provider_failed: bool,
 }
 impl Parser {
     fn feed(&mut self, frames: Vec<JsonValue>) -> Result<Vec<Event>, Error> {
@@ -760,6 +765,7 @@ impl Parser {
                     .and_then(|error| get(error, "message"))
                     .and_then(json::string)
                 {
+                    self.provider_failed = true;
                     events.push(Event::ProviderError {
                         message: message.clone(),
                         context_overflow: false,
@@ -768,6 +774,14 @@ impl Parser {
                     continue;
                 }
                 events.extend(self.inner.push(&frame)?);
+                if let Some(reason) = get(&frame, "candidates")
+                    .and_then(json::array)
+                    .and_then(|candidates| candidates.first())
+                    .and_then(|candidate| get(candidate, "finishReason"))
+                    .and_then(json::string)
+                {
+                    self.has_finish_reason = !reason.is_empty();
+                }
             }
         }
         Ok(self.blocks.normalize(events))
@@ -784,6 +798,12 @@ impl StreamParser for Parser {
     fn finish(&mut self) -> Result<Vec<Event>, Error> {
         let released = self.linker.flush();
         let mut events = self.feed(released)?;
+        if self.provider_failed {
+            return Ok(events);
+        }
+        if !self.has_finish_reason {
+            return Err(Error::missing_terminal());
+        }
         events.extend(self.blocks.normalize(self.inner.finish()?));
         Ok(events)
     }

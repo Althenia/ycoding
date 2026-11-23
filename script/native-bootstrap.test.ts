@@ -43,24 +43,25 @@ test("Rust notices commands remain available", () => {
 })
 
 
-test("release targets install checksum-verified native Rust and protoc", () => {
+test("the Apple Silicon runtime producer installs checksum-verified native Rust and protoc", () => {
   const action = readFileSync(path.join(root, ".github/actions/setup-rust/action.yml"), "utf8")
   for (const platform of ["Linux-X64", "macOS-ARM64", "macOS-X64", "Windows-X64"])
     expect(action).toContain(`${platform})`)
   expect(action).toContain("228cc7add4616cc14ca5e80dee83209d44449a7aee95a914ae748fa374efb078")
   const workflow = Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8")) as {
-    jobs: { build: { strategy: { matrix: { include: { target: string }[] } }; steps: { uses?: string }[] } }
+    jobs: { build: { strategy: { matrix: { include: { target: string }[] } } }; "build-desktop-runtime": { steps: { uses?: string }[] } }
   }
   expect(workflow.jobs.build.strategy.matrix.include.map((entry) => entry.target)).toEqual(["darwin-arm64"])
-  expect(workflow.jobs.build.steps.some((step) => step.uses === "./.github/actions/setup-rust")).toBe(true)
+  expect(workflow.jobs["build-desktop-runtime"].steps.some((step) => step.uses === "./.github/actions/setup-rust")).toBe(true)
 })
 
-test("Apple Silicon release jobs share a dependency cache written only by default-branch Desktop builds", () => {
+test("only the default-branch Apple Silicon runtime producer writes the release dependency cache", () => {
   const action = readFileSync(path.join(root, ".github/actions/setup-rust/action.yml"), "utf8")
   const workflow = readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8")
   const restore = action.split("- name: Restore Apple Silicon release dependencies\n")[1]?.split("\n    - name: ")[0] ?? ""
   const save = workflow.split("- name: Save Apple Silicon release dependencies\n")[1]?.split("\n      - name: ")[0] ?? ""
-  const native = workflow.split("\n  build:\n")[1]?.split("\n  build-desktop:\n")[0] ?? ""
+  const producer = workflow.split("\n  build-desktop-runtime:\n")[1]?.split("\n  finalize-release:\n")[0] ?? ""
+  const packagers = workflow.split("\n  build:\n")[1]?.split("\n  build-desktop-runtime:\n")[0] ?? ""
   expect(restore).toContain("uses: actions/cache/restore@")
   expect(restore).toContain("rust/Cargo.lock")
   expect(restore).not.toContain("**/*.rs")
@@ -70,8 +71,11 @@ test("Apple Silicon release jobs share a dependency cache written only by defaul
   expect(restore.match(/path: \|\n([\s\S]+?)\s+key:/)?.[1]?.trim().split(/\n\s*/)).toEqual(
     save.match(/path: \|\n([\s\S]+?)\s+key:/)?.[1]?.trim().split(/\n\s*/),
   )
-  expect(native).not.toContain("actions/cache/save@")
-  expect(native).toContain("release-cache: reader")
+  expect(producer).toContain("- name: Save Apple Silicon release dependencies")
+  expect(producer).toContain("release-cache: writer")
+  expect(producer).not.toContain("secrets.")
+  expect(packagers).not.toContain("release-cache:")
+  expect(packagers).not.toContain("actions/cache/save@")
 })
 
 

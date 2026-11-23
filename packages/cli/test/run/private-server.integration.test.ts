@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { providerConfig, startProviderStandIn } from "../remote-harness"
+import { providerConfig, startProviderStandIn } from "../fixture/provider-stand-in"
 
 const cli = path.resolve(import.meta.dir, "../../src/tui.ts")
 const marker = "PROJECT-RULE-MARKER"

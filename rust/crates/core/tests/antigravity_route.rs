@@ -1,4 +1,7 @@
-use ycoding_ai::llm::{Message, Request};
+use ycoding_ai::{
+    llm::{Event, FinishReason, Message, Request, Response},
+    provider_error::Reason,
+};
 use ycoding_core::resources::{
     catalog::models_dev,
     model::{Error, ProviderContext, from_catalog_model, with_variant},
@@ -206,4 +209,93 @@ fn antigravity_requires_an_oauth_credential_and_the_google_package() {
         from_catalog_model(&wrong, Some(&oauth(None))),
         Err(Error::UnsupportedPackage)
     ));
+}
+
+#[test]
+fn antigravity_stream_requires_a_finish_reason_before_and_after_output() {
+    let model = from_catalog_model(&info("{}", &[]), Some(&oauth(None))).unwrap();
+    let request = Request::new(model);
+    let usage = parse_json(r#"{"response":{"usageMetadata":{"promptTokenCount":5}}}"#).unwrap();
+    let text = parse_json(r#"{"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"partial"}]}}]}}"#).unwrap();
+    let empty_finish = parse_json(r#"{"response":{"candidates":[{"finishReason":""}]}}"#).unwrap();
+    for has_output in [false, true] {
+        for finish in [None, Some(&empty_finish)] {
+            let mut parser = request.model.route.protocol.parser(&request);
+            if has_output {
+                let events = parser.push(&text).unwrap();
+                assert!(events.iter().any(|event| matches!(event, Event::TextDelta(delta) if delta.text.as_str() == Some("partial"))));
+            }
+            if let Some(finish) = finish {
+                assert!(parser.push(finish).unwrap().is_empty());
+            }
+            assert!(parser.push(&usage).unwrap().is_empty());
+            assert_eq!(
+                parser.finish().unwrap_err(),
+                ycoding_ai::Error::missing_terminal(),
+                "has_output={has_output}, finish={finish:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn antigravity_stream_rejects_malformed_signature_parts_before_and_after_output() {
+    let model = from_catalog_model(&info("{}", &[]), Some(&oauth(None))).unwrap();
+    let request = Request::new(model);
+    let malformed = parse_json(r#"{"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"Plan","thought":true},{"text":"","thought":"true","thoughtSignature":"bad-signature"}]},"finishReason":"STOP"}]}}"#).unwrap();
+    let outcomes = [false, true].map(|has_output| {
+        let mut parser = request.model.route.protocol.parser(&request);
+        if has_output {
+            let text = parse_json(r#"{"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"partial"}]}}]}}"#).unwrap();
+            let events = parser.push(&text).unwrap();
+            assert!(events.iter().any(|event| matches!(event, Event::TextDelta(delta) if delta.text.as_str() == Some("partial"))));
+        }
+        parser
+            .push(&malformed)
+            .and_then(|mut events| {
+                events.extend(parser.finish()?);
+                Ok(events)
+            })
+            .map_err(|error| (error.reason, error.message))
+    });
+    for outcome in outcomes {
+        assert!(
+            matches!(&outcome, Err((Reason::InvalidProviderOutput, message)) if message.contains("stream event")),
+            "expected a typed failure for the malformed signature part, got {outcome:?}"
+        );
+    }
+}
+
+#[test]
+fn antigravity_stream_finishes_with_trailing_usage_and_reasoning() {
+    let model = from_catalog_model(&info("{}", &[]), Some(&oauth(None))).unwrap();
+    let request = Request::new(model);
+    let reasoning = parse_json(r#"{"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"Plan","thought":true}]}}]}}"#).unwrap();
+    let usage = parse_json(r#"{"response":{"usageMetadata":{"promptTokenCount":5,"cachedContentTokenCount":1,"candidatesTokenCount":2,"thoughtsTokenCount":1,"totalTokenCount":8}}}"#).unwrap();
+    for (reason, expected) in [
+        ("STOP", FinishReason::Stop),
+        ("OTHER", FinishReason::Unknown),
+    ] {
+        let mut parser = request.model.route.protocol.parser(&request);
+        let output = parse_json(&format!(r#"{{"response":{{"candidates":[{{"content":{{"role":"model","parts":[{{"text":"Answer"}}]}},"finishReason":"{reason}"}}]}}}}"#)).unwrap();
+        let mut events = parser.push(&output).unwrap();
+        events.extend(parser.push(&reasoning).unwrap());
+        events.extend(parser.push(&usage).unwrap());
+        assert!(!events.iter().any(Event::terminal));
+        let finish = parser.finish().unwrap();
+        assert!(matches!(finish.last(), Some(Event::Finish(_))));
+        events.extend(finish);
+        let response = Response::from_events(events).unwrap();
+        assert_eq!(response.finish_reason, expected);
+        assert_eq!(response.text().as_str(), Some("Answer"));
+        assert_eq!(response.reasoning().as_str(), Some("Plan"));
+        let usage = response.usage.unwrap();
+        assert_eq!(usage.input_tokens, Some(5.0));
+        assert_eq!(usage.non_cached_input_tokens, Some(4.0));
+        assert_eq!(usage.cache_read_input_tokens, Some(1.0));
+        assert_eq!(usage.output_tokens, Some(3.0));
+        assert_eq!(usage.reasoning_tokens, Some(1.0));
+        assert_eq!(usage.visible_output_tokens(), 2.0);
+        assert_eq!(usage.total_tokens, Some(8.0));
+    }
 }

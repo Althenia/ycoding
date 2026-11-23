@@ -1,10 +1,10 @@
-use super::{Error, cursor, field, list, malformed, projection, string};
+use super::{Error, SocketFuture, cursor, field, list, malformed, projection, string};
 use crate::dots::{
     access::{ConversationProblem as Problem, UpstreamRejection},
     enrollment::cca_headers,
     native::{Configuration, Host, ResolvedCredential},
 };
-use reqwest::{Client, Method};
+use reqwest::{Client, Method, Response};
 use std::{
     collections::BTreeSet,
     sync::{
@@ -19,10 +19,17 @@ use ycoding_schema::{JsonValue, parse_json, stringify_json};
 const BASE: &str = "https://chatgpt.com/backend-api";
 const HISTORY: &str = "https://codex-cloud-backend.chatgpt.com";
 
+pub type RestDriver = Arc<
+    dyn Fn(Client, reqwest::Request) -> SocketFuture<'static, Result<Response, reqwest::Error>>
+        + Send
+        + Sync,
+>;
+
 #[derive(Clone)]
 pub(super) struct Rest {
     pub host: Host,
     client: Client,
+    driver: RestDriver,
     stopped: Arc<AtomicBool>,
     owner: Arc<dyn Fn() -> bool + Send + Sync>,
 }
@@ -56,6 +63,7 @@ impl Rest {
         host: Host,
         stopped: Arc<AtomicBool>,
         owner: Arc<dyn Fn() -> bool + Send + Sync>,
+        driver: RestDriver,
     ) -> Result<Self, Error> {
         let client = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -65,6 +73,7 @@ impl Rest {
         Ok(Self {
             host,
             client,
+            driver,
             stopped,
             owner,
         })
@@ -127,8 +136,10 @@ impl Rest {
                 .body(stringify_json(body))
                 .header("content-type", "application/json");
         }
-        let mut response = request
-            .send()
+        let request = request
+            .build()
+            .map_err(|_| Error::new(Problem::Connection))?;
+        let mut response = (self.driver)(self.client.clone(), request)
             .await
             .map_err(|_| Error::new(Problem::Connection))?;
         self.fence(&owner.configuration)?;

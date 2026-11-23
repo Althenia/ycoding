@@ -253,6 +253,12 @@ impl Runtime {
                         "Message identity is already used with different content",
                     ));
                 }
+                if self
+                    .admitted_ready(&scope, caller, &input.session_id, Some(&message_id))
+                    .await?
+                {
+                    self.0.execution.wake(&input.session_id)?;
+                }
                 return Ok(SendResult {
                     session_id: input.session_id.clone(),
                     message_id,
@@ -2798,6 +2804,205 @@ impl Runtime {
                         .and_then(serde_json::Value::as_str)
                         .is_some_and(|id| family.contains(&id.into()))
             }))
+    }
+    pub async fn resume_admitted(&self) -> Result<(), Error> {
+        for group in self.0.coordination.list()? {
+            for member in &group.member_session_ids {
+                self.0
+                    .coordination
+                    .with_ownership(&group.id, async {
+                        let Some(scope) = self
+                            .0
+                            .coordination
+                            .member_of(member)?
+                            .filter(|scope| scope.group_id == group.id)
+                        else {
+                            return Ok::<(), Error>(());
+                        };
+                        if self
+                            .admitted_ready(&scope, &scope.master_session_id, member, None)
+                            .await?
+                        {
+                            self.0.execution.wake(member)?;
+                        }
+                        Ok(())
+                    })
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+    async fn admitted_ready(
+        &self,
+        scope: &Scope,
+        caller: &session::Id,
+        member: &session::Id,
+        input: Option<&session_message::Id>,
+    ) -> Result<bool, Error> {
+        if !scope.active {
+            return Ok(false);
+        }
+        let snapshot = self.0.coordination.client().snapshot()?;
+        let Some(row) = snapshot.get::<SessionTable>(&key(member.as_lossless()))? else {
+            return Ok(false);
+        };
+        if row.time_archived.is_some() || row.time_suspended.is_some() || row.revert.is_some() {
+            return Ok(false);
+        }
+        let group = scope.group_id.encode();
+        let mut admitted: Option<i64> = None;
+        let mut inputs = BTreeSet::new();
+        let prefix = key(member.as_lossless());
+        let mut after = None;
+        loop {
+            let page = snapshot.index_range::<PendingTable>(
+                "session_pending_session_admitted_seq_idx",
+                IndexQuery {
+                    lower: Bound::Unbounded,
+                    upper: Bound::Unbounded,
+                    prefix: Some(&prefix),
+                    order: IndexOrder::Ascending,
+                    after: after.as_ref(),
+                    limit: 128,
+                },
+            )?;
+            for entry in &page {
+                let pending = &entry.record;
+                if pending.type_.as_str() != Some("user")
+                    || !matches!(
+                        pending.delivery.as_ref().and_then(LosslessString::as_str),
+                        Some("steer" | "queue")
+                    )
+                {
+                    return Ok(false);
+                }
+                let data = session_pending::UserData::decode(&pending.data)?;
+                let metadata = data.metadata.as_ref();
+                let provenance = metadata
+                    .and_then(|metadata| metadata.get(&"coordination".into()))
+                    .and_then(|value| match value {
+                        JsonValue::Object(fields) => fields.get(&"groupID".into()),
+                        _ => None,
+                    });
+                if pending::input_origin(metadata) != Some("coordination")
+                    || provenance != Some(&group)
+                    || snapshot.get::<MessageTable>(&key(&pending.id))?.is_some()
+                {
+                    return Ok(false);
+                }
+                admitted = Some(
+                    admitted.map_or(pending.admitted_seq, |seq| seq.min(pending.admitted_seq)),
+                );
+                inputs.insert(pending.id.clone());
+            }
+            let Some(last) = page.last() else {
+                break;
+            };
+            after = Some(last.cursor.clone());
+        }
+        let Some(admitted) = admitted else {
+            return Ok(false);
+        };
+        if input.is_some_and(|input| !inputs.contains(input.as_lossless())) {
+            return Ok(false);
+        }
+        let named =
+            |value: &JsonValue| matches!(value, JsonValue::String(id) if inputs.contains(id));
+        let lower = ycoding_store::tuple_key(&[
+            ycoding_store::KeyPart::String(member.as_lossless()),
+            ycoding_store::KeyPart::I64(admitted),
+        ]);
+        let mut run: Option<bool> = None;
+        let mut after = None;
+        loop {
+            let page = snapshot.index_range::<EventTable>(
+                "event_aggregate_seq_idx",
+                IndexQuery {
+                    lower: Bound::Excluded(lower.as_slice()),
+                    upper: Bound::Unbounded,
+                    prefix: Some(&prefix),
+                    order: IndexOrder::Ascending,
+                    after: after.as_ref(),
+                    limit: 128,
+                },
+            )?;
+            for entry in &page {
+                let event = &entry.record;
+                let JsonValue::Object(data) = &event.data else {
+                    return Ok(false);
+                };
+                match event.type_.as_str() {
+                    Some("session.input.promoted.1")
+                        if data.get(&"inputID".into()).is_some_and(named) =>
+                    {
+                        return Ok(false);
+                    }
+                    Some("session.input.consumed.1") if matches!(data.get(&"inputIDs".into()), Some(JsonValue::Array(ids)) if ids.iter().any(named)) =>
+                    {
+                        return Ok(false);
+                    }
+                    Some("session.execution.started.1") => {
+                        if run.is_some() {
+                            return Ok(false);
+                        }
+                        run = Some(false);
+                    }
+                    Some(
+                        "session.step.started.1"
+                        | "session.input.promoted.1"
+                        | "session.input.consumed.1",
+                    ) => {
+                        if let Some(work) = run.as_mut() {
+                            *work = true;
+                        }
+                    }
+                    Some("session.execution.succeeded.1") => run = None,
+                    Some("session.execution.failed.1") => {
+                        let restarted = matches!(
+                            data.get(&"error".into()),
+                            Some(JsonValue::Object(error))
+                                if error.get(&"type".into()) == Some(&JsonValue::String("interrupted".into()))
+                        );
+                        if run != Some(false) || !restarted {
+                            return Ok(false);
+                        }
+                        run = None;
+                    }
+                    Some("session.execution.interrupted.1") => return Ok(false),
+                    _ => {}
+                }
+            }
+            let Some(last) = page.last() else {
+                break;
+            };
+            after = Some(last.cursor.clone());
+        }
+        if run.is_some()
+            || review_fold::fold(&snapshot, &[member.as_lossless().clone()])?
+                .iter()
+                .any(|item| item.is_open())
+        {
+            return Ok(false);
+        }
+        let aborted = |error: &ycoding_schema::session_error::Error| {
+            matches!(error.r#type.as_str(), Some("interrupted" | "aborted"))
+        };
+        if let Some(session_message::Info::Assistant(assistant)) =
+            self.0.sessions.latest(member, "assistant")?
+            && (assistant.time.completed.is_none()
+                || assistant.error.as_ref().is_some_and(aborted)
+                || assistant.content.iter().any(|part| {
+                    matches!(part, session_message::AssistantContent::Tool(tool) if match &tool.state {
+                        session_message::ToolState::Streaming(_)
+                        | session_message::ToolState::Running(_) => true,
+                        session_message::ToolState::Error(failed) => aborted(&failed.error),
+                        session_message::ToolState::Completed(_) => false,
+                    })
+                }))
+        {
+            return Ok(false);
+        }
+        Ok(self.pending(scope, caller, member).await?.is_empty())
     }
     pub async fn recover(&self) -> Result<(), Error> {
         self.complete_unowned_supervisors().await?;

@@ -64,7 +64,7 @@ async function runChild() {
   const { Logging } = await import("@ycoding-ai/core/observability/logging")
   const { ServiceConfig } = await import("../src/services/service-config")
   const { Effect, Fiber } = await import("effect")
-  const { availablePort } = await import("./remote-harness")
+  const { availablePort } = await import("./fixture/loopback-port")
   const { DeviceAuthorizationError } = await import("../src/remote-credentials")
   const { LocalFailure } = await import("../src/remote-local")
   await mkdir(Global.Path.state, { recursive: true })

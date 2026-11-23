@@ -409,6 +409,56 @@ fn analytics_queue_deadline_and_cancellation_bounds_leave_canonical_work_availab
 }
 
 #[test]
+fn presentation_wait_stops_at_deadline_and_wakes_on_shutdown() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let (root, store, worker) = setup();
+    drop(worker);
+    let engine =
+        crate::analytics::Engine::start(store.client(), root.0.join("derived"), SOURCES).unwrap();
+    assert!(
+        engine
+            .await_presentation(Instant::now() + REPORT_DEADLINE, || Ok(None::<()>))
+            .unwrap()
+            .is_none()
+    );
+    engine.observe_presentations(|_| {});
+    assert!(
+        engine
+            .await_presentation(Instant::now(), || Ok(None::<()>))
+            .unwrap()
+            .is_none()
+    );
+    let handle = engine.handle();
+    let (entered, reached) = std::sync::mpsc::sync_channel(1);
+    let (finished, outcome) = std::sync::mpsc::sync_channel(1);
+    let waiting = std::thread::spawn(move || {
+        let mut entered = Some(entered);
+        let result = handle.await_presentation(Instant::now() + REPORT_DEADLINE, || {
+            let result = handle
+                .usage_data()
+                .map_err(|error| crate::Error::Record(Box::new(error)));
+            if let Some(entered) = entered.take() {
+                entered.send(()).unwrap();
+            }
+            result
+        });
+        finished.send(result).unwrap();
+    });
+    reached.recv_timeout(REPORT_DEADLINE).unwrap();
+    engine.shutdown().unwrap();
+    let Err(error) = outcome
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("closing the engine wakes presentation readers")
+    else {
+        panic!("closed presentation wait returned a value");
+    };
+    waiting.join().unwrap();
+    assert!(
+        matches!(error, crate::Error::Record(error) if matches!(error.downcast_ref::<Error>(), Some(Error::Closed)))
+    );
+}
+
+#[test]
 fn advisory_wakes_coalesce_without_starving_maintenance_or_losing_committed_rows() {
     let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
     let (root, store, worker) = setup();

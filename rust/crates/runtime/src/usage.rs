@@ -103,10 +103,12 @@ pub async fn get(
 ) -> Result<v5::UsageGetResult, Failure> {
     let core = invocation.core()?;
     let sessions = core.sessions.clone();
-    let summary = tokio::task::spawn_blocking(move || sessions.usage_all())
-        .await
-        .map_err(|_| Failure::Unavailable("Usage read worker unavailable".into()))?
-        .map_err(failure)?;
+    let summary = tokio::task::spawn_blocking(move || {
+        ycoding_core::session::usage_read::await_prepared(&sessions, || sessions.usage_all())
+    })
+    .await
+    .map_err(|_| Failure::Unavailable("Usage read worker unavailable".into()))?
+    .map_err(failure)?;
     Ok(v5::UsageGetResult {
         data: convert::provider_summary(&summary).map_err(|_| {
             Failure::Unavailable("stored Session state is not representable on the wire".into())
@@ -121,10 +123,14 @@ pub async fn report(
     let core = invocation.core()?;
     let input = session_read_models::report_input(&request.query)?;
     let sessions = core.sessions.clone();
-    let report = tokio::task::spawn_blocking(move || sessions.usage_report_all(&input))
-        .await
-        .map_err(|_| Failure::Unavailable("Usage read worker unavailable".into()))?
-        .map_err(failure)?;
+    let report = tokio::task::spawn_blocking(move || {
+        ycoding_core::session::usage_read::await_prepared(&sessions, || {
+            sessions.usage_report_all(&input)
+        })
+    })
+    .await
+    .map_err(|_| Failure::Unavailable("Usage read worker unavailable".into()))?
+    .map_err(failure)?;
     Ok(v5::UsageReportResult {
         data: session_read_models::wire_report(&report)?,
     })

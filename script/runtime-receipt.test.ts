@@ -174,6 +174,71 @@ test("a Windows release receipt binds the MSVC host and exact exe bytes", async 
   }
 })
 
+test("the Apple Silicon release handoff verifies the producer receipt and current inputs without Cargo", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-darwin-release-receipt-"))
+  try {
+    await fixture(root)
+    for (const [name, source] of Object.entries({
+      git: `#!/bin/sh\nprintf '%s\\n' '${commit}'\n`,
+      bun: `#!/bin/sh\nprintf '%s\\n80\\n' "\${SHIM_RECIPE}"\n`,
+    })) {
+      const file = path.join(root, "shims", name)
+      await Bun.write(file, source)
+      await fs.chmod(file, 0o755)
+    }
+    const artifact = path.join(root, "artifact")
+    const destination = path.join(root, "verified/ycoding-runtime")
+    const binary = path.join(root, "built/ycoding-runtime")
+    const env = environment(root, "darwin", {
+      RECEIPT_PROFILE: "release",
+      GITHUB_ACTIONS: "true",
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      GITHUB_REPOSITORY: "example/ycoding",
+      GITHUB_WORKFLOW_REF: "example/ycoding/.github/workflows/release.yml@refs/heads/main",
+      GITHUB_RUN_ID: "90212",
+      GITHUB_RUN_ATTEMPT: "1",
+      SHIM_RECIPE: "1".repeat(64),
+      YCODING_BUNDLED_MODELS_PATH: path.join(root, "packages/cli/script/models-dev.snapshot.json"),
+    })
+    const written = run(root, ["write", binary, artifact], env)
+    expect(written.code, written.stderr).toBe(0)
+    const receiptFile = path.join(artifact, "receipt.json")
+    const receiptBytes = await Bun.file(receiptFile).bytes()
+    const pin = new Bun.CryptoHasher("sha256").update(receiptBytes).digest("hex")
+    expect(JSON.parse(new TextDecoder().decode(receiptBytes))).toMatchObject({
+      schema: "ycoding.release-runtime.receipt/1", target: "darwin-arm64", source: { commit },
+      run: { workflow: "example/ycoding/.github/workflows/release.yml@refs/heads/main", id: "90212", attempt: "1" },
+    })
+    for (const tool of ["cargo", "rustc"]) {
+      await Bun.write(path.join(root, "shims", tool), '#!/bin/sh\necho "Unexpected compiler invocation" >&2\nexit 99\n')
+    }
+    const consumer = { ...env, RECEIPT_SHA256: pin }
+    const verified = run(root, ["verify", artifact, destination], consumer)
+    expect(verified.code, verified.stderr).toBe(0)
+    expect(await Bun.file(destination).bytes()).toEqual(await Bun.file(binary).bytes())
+    expect(verified.stderr).not.toContain("Unexpected compiler invocation")
+
+    for (const change of [
+      { RECEIPT_SHA256: "" }, { RECEIPT_SHA256: "f".repeat(64) }, { GITHUB_RUN_ATTEMPT: "2" },
+      { GITHUB_REPOSITORY: "another/ycoding" }, { GITHUB_SHA: "f".repeat(40) },
+      { GITHUB_WORKFLOW_REF: "example/ycoding/.github/workflows/release.yml@refs/heads/another" },
+      { YCODING_CHANNEL: "latest" }, { RELEASE_VERSION: "0.11.0" }, { SHIM_RECIPE: "2".repeat(64) },
+    ]) {
+      const result = run(root, ["verify", artifact, destination], { ...consumer, ...change })
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).not.toContain("Unexpected compiler invocation")
+      expect(await Bun.file(destination).bytes()).toEqual(await Bun.file(binary).bytes())
+    }
+    await Bun.write(path.join(artifact, "ycoding-runtime"), "tampered executable")
+    const corrupted = run(root, ["verify", artifact, destination], consumer)
+    expect(corrupted.code).not.toBe(0)
+    expect(corrupted.stderr).toContain("binary does not match")
+    expect(await Bun.file(destination).bytes()).toEqual(await Bun.file(binary).bytes())
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
 test.each([
   ["a non-executable binary", async (root: string) => fs.chmod(path.join(root, "built/ycoding-runtime"), 0o644), {}, "not an executable regular file"],
   ["an abbreviated commit", async () => {}, { GITHUB_SHA: "0123456" }, "full commit SHA"],

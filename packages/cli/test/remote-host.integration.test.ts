@@ -14,7 +14,8 @@ import { RemoteAgent, type BridgeCredentials } from "../src/remote-bridge"
 import { DeviceAuthorizationError } from "../src/remote-credentials"
 import { createLocalServer } from "../src/remote-local"
 import { CloudflareRemoteTransport, type RemoteSocket } from "../src/remote-transport"
-import { auth, availablePort, password, startServer } from "./remote-harness"
+import { availablePort } from "./fixture/loopback-port"
+import { auth, password, startServer } from "./remote-harness"
 
 test.each(["ready", "disable", "shutdown", "failed"] as const)("server readiness gates connector startup through %s", async (boundary) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-remote-readiness-"))

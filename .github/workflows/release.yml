@@ -204,7 +204,7 @@ jobs:
 
       - name: Verify native release bootstrap
         if: matrix.suite == 'tui-runtime'
-        run: bun test --cwd script ./native-bootstrap.test.ts ./native-setup-release.test.ts ./runtime-receipt.test.ts
+        run: bun test --cwd script ./native-bootstrap.test.ts ./native-setup-release.test.ts ./runtime-receipt.test.ts "$GITHUB_WORKSPACE/packages/cli/test/runtime-build.test.ts"
 
       - name: Setup Rust for native contracts
         if: matrix.suite == 'tui-runtime'
@@ -228,6 +228,9 @@ jobs:
           cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-schema --test autonomy_review
           cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-protocol --test wire_session
           cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-protocol --test connection ac_wire_002_handshake_invalid_input_matrix_dispatches_nothing
+          cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-core --test coordination_admission admitted_project_input_reaches_execution_through_pause_gate_restart_and_settlement -- --exact
+          cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --test daily_workflows restarting_with_a_running_root_tool_exposes_its_unknown_effect_without_resuming -- --exact
+          cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --test events reconnect_reconciles_an_unacknowledged_prompt_by_its_durable_identity -- --exact
 
       - name: Verify typed decision suites
         if: matrix.suite == 'tui-runtime'
@@ -309,6 +312,7 @@ jobs:
 
   build:
     name: build ${{ matrix.target }}
+    needs: build-desktop-runtime
     if: ${{ github.event_name == 'workflow_dispatch' }}
     strategy:
       fail-fast: false
@@ -341,10 +345,12 @@ jobs:
         with:
           install-flags: --frozen-lockfile
 
-      - name: Setup Rust
-        uses: ./.github/actions/setup-rust
+      - name: Download verified runtime
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          release-cache: reader
+          name: release-runtime-darwin-arm64-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-runtime
+          digest-mismatch: error
 
       - name: Verify native build host
         env:
@@ -385,6 +391,8 @@ jobs:
 
       - name: Build TUI artifact
         env:
+          YCODING_RELEASE_RUNTIME_DIR: ${{ runner.temp }}/release-runtime
+          RECEIPT_SHA256: ${{ needs.build-desktop-runtime.outputs.receipt-sha256 }}
           YCODING_ANTIGRAVITY_CLIENT_ID: ${{ secrets.YCODING_ANTIGRAVITY_CLIENT_ID }}
           YCODING_ANTIGRAVITY_CLIENT_SECRET: ${{ secrets.YCODING_ANTIGRAVITY_CLIENT_SECRET }}
           YCODING_MUSE_CLIENT_ID: ${{ secrets.YCODING_MUSE_CLIENT_ID }}
@@ -447,6 +455,7 @@ jobs:
 
   build-desktop:
     name: build desktop darwin-arm64
+    needs: build-desktop-runtime
     if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: macos-26
     timeout-minutes: 60
@@ -468,11 +477,12 @@ jobs:
         with:
           install-flags: --frozen-lockfile
 
-      - name: Setup Rust
-        id: desktop-rust
-        uses: ./.github/actions/setup-rust
+      - name: Download verified runtime
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          release-cache: writer
+          name: release-runtime-darwin-arm64-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-runtime
+          digest-mismatch: error
 
       - name: Cache Electrobun native assets
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -533,6 +543,9 @@ jobs:
             || { echo "The signing bundle does not contain the pinned $YCODING_MACOS_SIGNING_IDENTITY certificate" >&2; exit 1; }
 
       - name: Build desktop app
+        env:
+          YCODING_RELEASE_RUNTIME_DIR: ${{ runner.temp }}/release-runtime
+          RECEIPT_SHA256: ${{ needs.build-desktop-runtime.outputs.receipt-sha256 }}
         run: /bin/sh packages/desktop/script/build.sh --outdir="$RUNNER_TEMP/desktop" --sign-identity=9dd524184b0db949ffac7f0ada0ae860ac7f5f85
 
       - name: Verify desktop backend version
@@ -558,17 +571,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Save Apple Silicon release dependencies
-        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && steps.desktop-rust.outputs.release-cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            rust/target/release
-          key: ${{ steps.desktop-rust.outputs.release-cache-key }}
-
       - name: Remove macOS signing keychain
         if: always()
         run: |
@@ -583,6 +585,61 @@ jobs:
             rm -f "$saved"
           fi
           if [ -e "$keychain" ]; then security delete-keychain "$keychain"; fi
+
+  build-desktop-runtime:
+    name: build shared Apple Silicon release runtime
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: macos-26
+    timeout-minutes: 60
+    outputs:
+      receipt-sha256: ${{ steps.runtime.outputs.receipt-sha256 }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Resolve release version
+        run: bash script/release-version.sh
+
+      - name: Install Bun
+        uses: ./.github/actions/install-bun
+
+      - name: Setup Rust
+        id: desktop-rust
+        uses: ./.github/actions/setup-rust
+        with:
+          release-cache: writer
+
+      - name: Stage Apple Silicon release runtime
+        id: runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun packages/cli/script/runtime.ts stage-release "$RUNNER_TEMP/release-runtime"
+          digest=$(shasum -a 256 < "$RUNNER_TEMP/release-runtime/receipt.json" | cut -d' ' -f1)
+          printf 'receipt-sha256=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Apple Silicon release runtime
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-runtime-darwin-arm64-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-runtime/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Save Apple Silicon release dependencies
+        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && steps.desktop-rust.outputs.release-cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust/target/release
+          key: ${{ steps.desktop-rust.outputs.release-cache-key }}
 
   finalize-release:
     name: finalize release archives and checksums

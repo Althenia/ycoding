@@ -37,6 +37,26 @@ test("native archive finalization preserves both TUI shards and every accepted c
   }
 })
 
+test("the Linux runtime shard runs the three exact native recovery cases after the existing contracts", () => {
+  const verify = workflowJob(workflow, "verify-source")
+  expect(verify).toContain("- suite: tui-runtime\n            runner: ubuntu-24.04")
+  const steps = verify.split("\n      - name: ").slice(1).filter((step) => step.startsWith("Verify native contract boundaries\n"))
+  expect(steps).toHaveLength(1)
+  const cargo = "cargo test --locked --manifest-path rust/Cargo.toml -p"
+  expect(Bun.YAML.parse(`name: ${steps[0]!.replace(/^ {8}/gm, "")}`)).toEqual({
+    name: "Verify native contract boundaries",
+    if: "matrix.suite == 'tui-runtime'",
+    run: [
+      `${cargo} ycoding-schema --test autonomy_review`,
+      `${cargo} ycoding-protocol --test wire_session`,
+      `${cargo} ycoding-protocol --test connection ac_wire_002_handshake_invalid_input_matrix_dispatches_nothing`,
+      `${cargo} ycoding-core --test coordination_admission admitted_project_input_reaches_execution_through_pause_gate_restart_and_settlement -- --exact`,
+      `${cargo} ycoding-runtime --test daily_workflows restarting_with_a_running_root_tool_exposes_its_unknown_effect_without_resuming -- --exact`,
+      `${cargo} ycoding-runtime --test events reconnect_reconciles_an_unacknowledged_prompt_by_its_durable_identity -- --exact`,
+    ].join("\n") + "\n",
+  })
+})
+
 test("source verification runs the native decision follow regression files in the CLI suite", async () => {
   const verify = workflowJob(workflow, "verify-source")
   const steps = verify.split("\n      - name: ").slice(1).filter((step) => step.startsWith("Verify native decision follow\n"))
@@ -478,7 +498,7 @@ test("active test manifests resolve every selected file in its owning directory"
   for (const step of source.split("\n      - name:")) {
     for (const command of step.split("\n").filter((line) => /\bbun test\b/.test(line))) {
       const cwd = /--cwd\s+(\S+)/.exec(command)?.[1] ?? /\n        working-directory: (\S+)/.exec(step)?.[1] ?? "."
-      const files = command.match(/(?:\.\/|test\/|\$GITHUB_WORKSPACE\/script\/)[\w/.-]+\.test\.[jt]sx?/g) ?? []
+      const files = command.match(/(?:\.\/|test\/|\$GITHUB_WORKSPACE\/)[\w/.-]+\.test\.[jt]sx?/g) ?? []
       expect(files.length).toBeGreaterThan(0)
       for (const file of files) {
         const selected = file.startsWith("$GITHUB_WORKSPACE/")
@@ -825,8 +845,8 @@ test("Chrome pin selector names an existing source case", async () => {
 test("source verification legs start in parallel with the native builds", () => {
   const verify = workflow.split("\n  verify-source:")[1]?.split("\n  build:")[0] ?? ""
   const build = workflowJob(workflow, "build")
-  expect(verify).not.toContain("needs:")
-  expect(build).not.toContain("needs:")
+  expect(workflowJob(workflow, "verify-source")).not.toContain("needs:")
+  expect(workflowJob(workflow, "build-desktop-runtime")).not.toContain("needs:")
   expect(verify).toContain("fail-fast: false")
   expect(verify).toContain("runs-on: ${{ matrix.runner }}")
   expect([...verify.matchAll(/- suite: (\S+)/g)].map((match) => match[1])).toEqual([
@@ -865,8 +885,9 @@ test("packaging overlaps source verification without bypassing publication or de
   const jobs = workflow.split("\njobs:\n")[1]!.split(/(?:^|\n)  ([\w-]+):\n/).slice(1)
   const dependencies = [
     ["verify-source", undefined],
-    ["build", undefined],
-    ["build-desktop", undefined],
+    ["build-desktop-runtime", undefined],
+    ["build", "build-desktop-runtime"],
+    ["build-desktop", "build-desktop-runtime"],
     ["finalize-release", "[verify-source, build, build-desktop]"],
     ["verify-staged-release", undefined],
     ["release-tui", "verify-staged-release"],
@@ -895,6 +916,29 @@ test("packaging overlaps source verification without bypassing publication or de
   const staged = workflowJob(workflow, "verify-staged-release")
   expect(staged).toContain("git merge-base --is-ancestor \"$GITHUB_SHA\" origin/main")
   expect(staged).toContain("      - name: Verify tag is reachable from main\n")
+})
+
+test("Desktop and TUI only embed the exact Apple Silicon runtime from the current prep attempt", () => {
+  const producer = workflowJob(workflow, "build-desktop-runtime")
+  expect(producer).toContain("runs-on: macos-26")
+  expect(producer).toContain("receipt-sha256: ${{ steps.runtime.outputs.receipt-sha256 }}")
+  expect(producer).toContain('bun packages/cli/script/runtime.ts stage-release "$RUNNER_TEMP/release-runtime"')
+  expect(producer).toContain('shasum -a 256 < "$RUNNER_TEMP/release-runtime/receipt.json"')
+  expect(producer).toContain("name: release-runtime-darwin-arm64-${{ github.run_attempt }}")
+  expect(producer).toContain("if-no-files-found: error")
+  expect(producer).not.toContain("secrets.")
+  for (const [job, build] of [["build", "Build TUI artifact"], ["build-desktop", "Build desktop app"]]) {
+    const packager = workflowJob(workflow, job)
+    const download = packager.split("      - name: Download verified runtime\n")[1]?.split("\n      - name: ")[0] ?? ""
+    const packaging = packager.split(`      - name: ${build}\n`)[1]?.split("\n      - name: ")[0] ?? ""
+    expect(download).toContain("name: release-runtime-darwin-arm64-${{ github.run_attempt }}")
+    expect(download).toContain("digest-mismatch: error")
+    expect(download).not.toMatch(/run-id:|repository:|github-token:/)
+    expect(packager.indexOf("Download verified runtime")).toBeLessThan(packager.indexOf(build))
+    expect(packaging).toContain("YCODING_RELEASE_RUNTIME_DIR: ${{ runner.temp }}/release-runtime")
+    expect(packaging).toContain("RECEIPT_SHA256: ${{ needs.build-desktop-runtime.outputs.receipt-sha256 }}")
+    expect(packager).not.toContain("uses: ./.github/actions/setup-rust")
+  }
 })
 
 test("release workflow builds and archives the macOS desktop app from the locked Electrobun package", () => {
@@ -951,7 +995,9 @@ test("release workflow signs the desktop app with the pinned self-signed identit
   expect(outside).not.toContain("YCODING_MACOS_SIGNING_P12")
   expect(outside).not.toContain("YCODING_MACOS_SIGNING_PASSWORD")
   expect(build).toContain('/bin/sh packages/desktop/script/build.sh --outdir="$RUNNER_TEMP/desktop" --sign-identity=9dd524184b0db949ffac7f0ada0ae860ac7f5f85')
-  expect(build).not.toContain("env:")
+  expect([...build.matchAll(/^          ([A-Z0-9_]+):/gm)].map((match) => match[1]).sort()).toEqual([
+    "RECEIPT_SHA256", "YCODING_RELEASE_RUNTIME_DIR",
+  ])
   expect(verify).toContain('codesign --verify --deep --strict "$RUNNER_TEMP/desktop/YCoding Desktop.app"')
   expect(verify).toContain('codesign -d -r- "$RUNNER_TEMP/desktop/YCoding Desktop.app" 2>&1 | grep -Ex "designated => identifier \\"app\\.ycoding\\.desktop\\" and certificate (leaf|root) = H\\"9dd524184b0db949ffac7f0ada0ae860ac7f5f85\\""')
   expect(cleanup).toContain("        if: always()\n")

@@ -18,7 +18,7 @@ The `executor_public_key` is `{ suite, x25519_public_key, mlkem768_public_key }`
 
 ## Service lifecycle
 
-The YCoding service hosts the executor. `startNativeRemoteControl` starts `createCcaExecutorHost` beside the remote-control host and stops both on service shutdown. The host runs while `NativeDots.Host.configuration()` reports Dots access enabled with a ready pinned credential. It re-reads configuration on every configuration notification, restarts when the pinned profile, credential, account, account generation, or access revision changes, and stops when access turns Off or readiness is lost.
+The Rust runtime starts the executor supervisor when a Dots profile is configured and shuts it down with the Dots services. The supervisor starts connection attempts when Dots access is enabled and the pinned credential is ready, and stops them when access is disabled or the credential loses readiness.
 
 Enrollment state lives in `cca-executor.json` in the YCoding state directory, in the same format the register proof writes, at mode `0600`:
 

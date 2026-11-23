@@ -1658,10 +1658,21 @@ async fn native_forms_list_reply_once_and_stay_owned_by_their_session() {
     )
     .await;
     assert!(failed(&cancelled));
+    let pending = form_state(&cx, &fixture.root, &form).await;
     assert!(matches!(
-        form_state(&cx, &fixture.root, &form).await.kind,
+        pending.kind,
         Some(v5::form_state::Kind::Value1(_))
     ));
+
+    let (_, invalid) = call(&cx, "session_form_reply", &reply(&root, "")).await;
+    assert!(failed(&invalid));
+    assert_eq!(
+        string(&invalid, &["structuredContent", "error", "type"]).as_deref(),
+        Some("ycoding.v5.FormInvalidAnswerError"),
+        "{}",
+        stringify_json(&invalid)
+    );
+    assert_eq!(form_state(&cx, &fixture.root, &form).await, pending);
 
     let (_, answered) = call(&cx, "session_form_reply", &reply(&root, "Ada")).await;
     assert!(!failed(&answered), "{}", stringify_json(&answered));

@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU16, Ordering},
     },
     time::Duration,
@@ -30,11 +30,18 @@ async fn enrolled_extension_is_confined_to_the_consented_lease_and_pauses_on_foc
     ));
     let profiles = directory.join("profiles.json");
     let authority = Authority::new(Options::default());
+    let confirmations = Arc::new(Mutex::new(Vec::new()));
     let transport = Transport::new(
         &authority,
         "http://127.0.0.1:32123",
         profiles.clone(),
-        Arc::new(|_, _| Box::pin(async { true })),
+        Arc::new({
+            let confirmations = confirmations.clone();
+            move |profile, _| {
+                confirmations.lock().unwrap().push(profile);
+                Box::pin(async { true })
+            }
+        }),
     )
     .unwrap();
     assert!(!transport.admit(
@@ -59,8 +66,18 @@ async fn enrolled_extension_is_confined_to_the_consented_lease_and_pauses_on_foc
             })
             .unwrap(),
     );
-    channel.receive(&json!({"type":"enroll","version":1,"profileID":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","profileLabel":"Fixture Chrome"}).to_string()).await;
+    channel
+        .receive(
+            &json!({"type":"enroll","version":1,"profileID":"P".repeat(43),"profileLabel":"Chrome 152"})
+                .to_string(),
+        )
+        .await;
     let authenticated = next(&mut receive, "authenticated").await;
+    assert_eq!(
+        *confirmations.lock().unwrap(),
+        [json!({"profileLabel":"Chrome 152","matchCode":"MPTP-QR4T"})]
+    );
+    assert_eq!(authenticated["version"], 1);
     let stored = tokio::fs::read_to_string(&profiles).await.unwrap();
     assert!(!stored.contains(authenticated["credential"].as_str().unwrap()));
     let status = authority

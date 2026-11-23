@@ -76,6 +76,7 @@ struct Presentations {
     pending: std::collections::BTreeMap<String, Option<PresentationJob>>,
     observers: Vec<PresentationObserver>,
     sequence: u64,
+    revision: u64,
     closed: bool,
     failed: bool,
 }
@@ -421,6 +422,7 @@ impl Engine {
             writer: writer.thread().id(),
             sender: Mutex::new(Some(sender)),
             presentations: Mutex::default(),
+            presentation_changed: Condvar::new(),
             usage: Mutex::default(),
             root: publication_root,
             wake_pending,
@@ -448,6 +450,7 @@ impl Engine {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .close();
+        self.handle.0.presentation_changed.notify_all();
         *self
             .handle
             .0
@@ -492,6 +495,7 @@ struct Shared {
     writer: std::thread::ThreadId,
     sender: Mutex<Option<mpsc::SyncSender<Command>>>,
     presentations: Mutex<Presentations>,
+    presentation_changed: Condvar,
     usage: Mutex<usage::Stage>,
     root: std::path::PathBuf,
     wake_pending: Arc<AtomicBool>,
@@ -681,6 +685,46 @@ impl Handle {
         })
     }
 
+    pub fn await_presentation<T>(
+        &self,
+        deadline: Instant,
+        mut read: impl FnMut() -> Result<Option<T>, crate::Error>,
+    ) -> Result<Option<T>, crate::Error> {
+        let presentations = &self.0.presentations;
+        let unavailable = || crate::Error::Record(Box::new(Error::Unavailable));
+        loop {
+            let revision = presentations.lock().map_err(|_| unavailable())?.revision;
+            if let Some(value) = read()? {
+                return Ok(Some(value));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(None);
+            }
+            let state = presentations.lock().map_err(|_| unavailable())?;
+            if !state.closed && state.observers.is_empty() {
+                return Ok(None);
+            }
+            let (state, elapsed) = self
+                .0
+                .presentation_changed
+                .wait_timeout_while(state, remaining, |state| {
+                    !state.closed && state.revision == revision
+                })
+                .map_err(|_| unavailable())?;
+            let done = state.closed || elapsed.timed_out();
+            drop(state);
+            if done {
+                return read();
+            }
+        }
+    }
+
+    fn presentation_changed(&self, state: &mut Presentations) {
+        state.revision = state.revision.wrapping_add(1);
+        self.0.presentation_changed.notify_all();
+    }
+
     fn drain_presentations(&self, work: &AtomicUsize) -> Result<(), Error> {
         let mut failure = None;
         while work.fetch_add(1, Ordering::Relaxed) < PRESENTATION_LIMIT {
@@ -784,6 +828,7 @@ impl Handle {
                     retry_at,
                 },
             );
+            self.presentation_changed(&mut state);
             if summary_ready {
                 let observers = state.observers.clone();
                 drop(state);
@@ -856,6 +901,7 @@ impl Handle {
         }
         state.failed = matches!(&publication, Err(Error::Preparation));
         state.replace(publication.ok().cloned());
+        self.presentation_changed(&mut state);
         Ok(())
     }
 

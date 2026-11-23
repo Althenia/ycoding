@@ -13,7 +13,7 @@ import { CcaPolicy } from "@ycoding-ai/core/cca/policy"
 import type { NativeDots } from "@ycoding-ai/core/dots/native"
 import { upstreamOs } from "@ycoding-ai/core/util/platform"
 import { createCcaExecutorHost } from "../src/remote-control/cca-executor-host"
-import { ccaExecutorCapabilityRoots } from "../src/remote-control/cca-executor-registration"
+import { ccaExecutorCapabilityRoots, ccaExecutorRegistrationURL } from "../src/remote-control/cca-executor-registration"
 import { idleDurableConnector, unrecordedTranscript } from "./fixture/cca-scope"
 import {
   ccaCompatibleExecServerVersion,
@@ -202,6 +202,7 @@ async function fixture(options: { readonly deny?: boolean; readonly ttlMs?: numb
   }), { mode: 0o600 })
 
   const registrations: any[] = []
+  const reconciliations: unknown[] = []
   const registryHeaders: http.IncomingHttpHeaders[] = []
   const registry = http.createServer((request, response) => {
     registryHeaders.push(request.headers)
@@ -324,6 +325,10 @@ async function fixture(options: { readonly deny?: boolean; readonly ttlMs?: numb
     dataDirectory: home,
     registryBaseURL: `http://127.0.0.1:${(registry.address() as AddressInfo).port}`,
     fetch: (url, init) => {
+      if (url === ccaExecutorRegistrationURL && init?.method === "POST" && typeof init.body === "string") {
+        reconciliations.push(JSON.parse(init.body))
+        return Promise.resolve(Response.json({ executor_id: executorID }))
+      }
       if (!url.startsWith("http://127.0.0.1:")) throw new Error("Unexpected non-loopback request")
       return fetch(url, init)
     },
@@ -338,7 +343,7 @@ async function fixture(options: { readonly deny?: boolean; readonly ttlMs?: numb
   })
   cleanups.push(() => host.stop())
   return {
-    home, host, harnesses, closed, registrations, registryHeaders, scopes, workspaceCalls, diagnostics,
+    home, host, harnesses, closed, registrations, reconciliations, registryHeaders, scopes, workspaceCalls, diagnostics,
     connection: (index: number) => connected[index]!.promise,
     set: (next: NativeDots.Configuration) => {
       configuration = next
@@ -781,6 +786,7 @@ describe("CCA executor host over a loopback registry and WebSocket relay", () =>
     expect(alive(pid)).toBe(true)
     expect(harness.scopes).toHaveLength(1)
     expect(harness.registrations).toHaveLength(1)
+    expect(harness.reconciliations).toEqual([expect.objectContaining({ installation_id: "synthetic-installation" })])
     expect(harness.registryHeaders[0]).toMatchObject({ originator: "codex_cli_rs", "user-agent": ccaExecServerUserAgent() })
     expect(harness.diagnostics.filter((message) => !message.startsWith("CCA executor channel-summary"))).toEqual([
       "CCA executor connected",

@@ -328,7 +328,11 @@ impl Parser {
         self.reasoning = false;
         events.push(Event::ReasoningEnd(BlockEvent {
             id: "reasoning-0".into(),
-            provider_metadata: self.reasoning_signature.as_ref().and_then(google_metadata),
+            provider_metadata: self
+                .reasoning_signature
+                .take()
+                .as_ref()
+                .and_then(google_metadata),
         }));
     }
 }

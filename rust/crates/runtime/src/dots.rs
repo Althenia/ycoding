@@ -1,5 +1,7 @@
 pub(crate) mod carrier;
 mod conversation_socket;
+#[cfg(test)]
+mod conversation_tests;
 mod native_library;
 
 use crate::{
@@ -329,7 +331,20 @@ async fn start_native_executor(
 }
 
 impl Services {
-    pub(crate) async fn start(mut settings: Settings) -> Result<Self, Failure> {
+    pub(crate) async fn start(settings: Settings) -> Result<Self, Failure> {
+        Self::start_with(
+            settings,
+            conversation_socket::connect(),
+            Arc::new(|client, request| Box::pin(async move { client.execute(request).await })),
+        )
+        .await
+    }
+
+    async fn start_with(
+        mut settings: Settings,
+        connect: conversation::Connect,
+        rest: conversation::RestDriver,
+    ) -> Result<Self, Failure> {
         let preparation = executor_configured(&settings.global)?.then(|| {
             NativePreparation::capture(
                 settings.home.clone(),
@@ -485,7 +500,8 @@ impl Services {
                             Ok(attachment) => match conversation::Service::start(
                                 host.clone(),
                                 &attachment,
-                                conversation_socket::connect(),
+                                connect,
+                                rest,
                             ) {
                                 Ok(conversation) => Ok((executor, attachment, conversation)),
                                 Err(error) => {
@@ -1158,6 +1174,11 @@ pub async fn thread_respond(
     invocation: Invocation,
     request: v5::DotsThreadRespondRequest,
 ) -> Result<v5::DotsThreadRespondResult, Failure> {
+    if request.payload.decision.is_some() == request.payload.answers.is_some() {
+        return Err(Failure::Invalid(
+            "Provide exactly one of decision or answers.".into(),
+        ));
+    }
     converse(invocation, request, conversation::Operation::Respond).await
 }
 pub async fn resume(

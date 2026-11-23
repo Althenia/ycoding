@@ -2762,9 +2762,15 @@ describe("remote store integration", () => {
   })
 
   test("an admitted pending read resolves an uncertain prompt without replaying it", async () => {
+    let admitted: string | undefined
     const test = await harness({ handler: (request) => {
-      if (request.operation === "session.prompt") return "close"
-      if (request.operation === "session.pending.list") return { ok: true, value: { data: [{ id: "msg_local_1", sessionID: "ses_a", admittedSeq: 2, timeCreated: 2,
+      if (request.operation === "session.prompt") {
+        expect(request.sessionID).toBe("ses_a")
+        expect(request.input?.id).toBe("msg_local_1")
+        admitted = "msg_local_1"
+        return "close"
+      }
+      if (request.operation === "session.pending.list") return { ok: true, value: { data: admitted === undefined ? [] : [{ id: admitted, sessionID: "ses_a", admittedSeq: 2, timeCreated: 2,
         type: "user", data: { text: "Continue safely" }, delivery: "steer" }] } }
       return "default"
     } })
@@ -2772,9 +2778,11 @@ describe("remote store integration", () => {
       await test.store.load()
       await waitFor(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
+      expect(test.store.state().view?.messages.some((message) => message.id === "msg_local_1")).toBe(false)
       await test.store.sendPrompt({ text: "Continue safely", delivery: "steer" })
       await test.runUntil(() => test.store.state().transport.kind === "open")
       await test.runUntil(() => test.store.state().mutations.every((mutation) => mutation.id !== "msg_local_1"))
+      expect(test.store.state().view?.id).toBe("ses_a")
       expect(test.store.state().view?.messages.filter((message) => message.id === "msg_local_1")).toHaveLength(1)
       expect(test.store.state().mutationToasts?.find((toast) => toast.id === "msg_local_1")).toBeUndefined()
       expect(test.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(1)
@@ -3776,15 +3784,17 @@ describe("remote store integration", () => {
       await test.store.load()
       await waitFor(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
-      const draft = "work in progress"
+      test.store.setDraft("ses_a", "work in progress")
       test.relay.dropConnections(1006, "")
       await test.runUntil(
         () => test.store.state().transport.kind === "open" && test.store.state().notice?.includes("read-only") === true,
       )
       expect(test.store.state().notice).toContain("read-only")
+      expect(test.store.state().view?.id).toBe("ses_a")
       expect(test.store.state().view?.messages.map((message) => message.id)).toEqual(["msg_1"])
-      expect(draft).toBe("work in progress")
-      expect(test.relay.requests.filter((request) => request.operation === "session.subscribe").length).toBeGreaterThanOrEqual(2)
+      expect(test.store.state().drafts.ses_a).toBe("work in progress")
+      expect(test.relay.requests.filter((request) => request.operation === "event.subscribe").map((request) => request.sessionID)).toEqual(["ses_a", "ses_a"])
+      expect(test.relay.requests.filter((request) => request.operation === "session.prompt")).toEqual([])
     } finally {
       await test.stop()
     }

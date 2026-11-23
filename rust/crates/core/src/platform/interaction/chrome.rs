@@ -2,6 +2,7 @@ use super::{
     Authority, Driver, Error, Native, Operation, now, refused, text, uuid, valid, validation,
 };
 use crate::platform::computer::Future;
+use icu_properties::{CodePointMapData, props::GeneralCategory};
 use ring::digest::{SHA256, digest};
 use serde_json::{Value, json};
 use std::{
@@ -354,14 +355,7 @@ impl Connection {
         let credential = match text(&frame, "type") {
             "enroll" => {
                 let label = text(&frame, "profileLabel");
-                if label.is_empty()
-                    || label.chars().count() > 64
-                    || label.trim() != label
-                    || label.chars().any(|c| {
-                        c.is_control()
-                            || matches!(c, '\u{200b}' | '\u{202e}' | '\u{2066}'..='\u{2069}')
-                    })
-                {
+                if !valid_profile_label(label) {
                     return Err(Error("invalid"));
                 }
                 if transport.enrolling.swap(true, Ordering::AcqRel) {
@@ -876,6 +870,18 @@ fn error_code(code: &str) -> &'static str {
         _ => "invalid",
     }
 }
+fn valid_profile_label(label: &str) -> bool {
+    if label.is_empty() || label.encode_utf16().count() > 64 || label.trim() != label {
+        return false;
+    }
+    let categories = CodePointMapData::<GeneralCategory>::new();
+    !label.chars().any(|character| {
+        matches!(
+            categories.get(character),
+            GeneralCategory::Control | GeneralCategory::Format
+        )
+    })
+}
 fn secret(value: &str) -> bool {
     value.len() == 43
         && value
@@ -916,4 +922,27 @@ pub fn match_code(profile_id: &str) -> String {
         .map(|i| alphabet[((bits >> (35 - i * 5)) & 31) as usize] as char)
         .collect::<String>();
     format!("{}-{}", &code[..4], &code[4..])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_profile_label;
+
+    #[test]
+    fn chrome_enrollment_validates_profile_labels_before_consent() {
+        for label in ["A".repeat(64), "😀".repeat(32), "Chrome · Équipe".into()] {
+            assert!(valid_profile_label(&label), "{label:?}");
+        }
+        for label in [
+            "A".repeat(65),
+            "😀".repeat(33),
+            "Work\u{00ad}Profile".into(),
+            "Work\u{200d}Profile".into(),
+            "Work\u{0085}Profile".into(),
+            " Work".into(),
+            "".into(),
+        ] {
+            assert!(!valid_profile_label(&label), "{label:?}");
+        }
+    }
 }

@@ -354,6 +354,122 @@ async fn disconnect_releases_the_feed_subscriber_and_a_reconnect_resumes_from_th
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reconnect_reconciles_an_unacknowledged_prompt_by_its_durable_identity() {
+    let _serial = SERIAL.lock().await;
+    bounded(async {
+        const SESSION: &str = "ses_prompt_reconnect";
+        const OTHER: &str = "ses_prompt_reconnect_other";
+        const BEFORE: &str = "msg_ack_before";
+        const AFTER: &str = "msg_ack_after";
+        insert_session(SESSION, "/project", None).await;
+        insert_session(OTHER, "/project", None).await;
+        let server = start(services(LocalAuth::disabled(), true), standard().unwrap()).await;
+        let address = server.address();
+        let scope = session_scope(SESSION);
+        let draft_client = Client::open(address, &[]).await.unwrap();
+        let unsent = prompt_request(SESSION, BEFORE);
+        drop(draft_client);
+
+        let mut observer = Client::open(address, &[]).await.unwrap();
+        let pending_request = v5::SessionPendingListRequest {
+            params: v5::SessionPendingListRequestParams {
+                session_id: text(SESSION),
+            },
+        }
+        .encode_to_vec();
+        let pending: v5::SessionPendingListResult = success(
+            observer
+                .call(
+                    "session.pending.list",
+                    scope.clone(),
+                    pending_request.clone(),
+                )
+                .await,
+        );
+        assert!(pending.data.items.is_empty());
+        let subscription = observer
+            .send(
+                "event.subscribe",
+                global(),
+                subscribe_request(scope.clone()),
+            )
+            .await;
+        observer
+            .subscribe_events(&subscription, scope.clone())
+            .await;
+
+        let mut sender = Client::open(address, &[]).await.unwrap();
+        let confirmed: v5::SessionPromptResult =
+            success(sender.call("session.prompt", scope.clone(), unsent).await);
+        assert_eq!(units(&confirmed.data.id), BEFORE);
+        sender
+            .send(
+                "session.prompt",
+                scope.clone(),
+                prompt_request(SESSION, AFTER),
+            )
+            .await;
+        until(&mut observer, |client| seen(client, "msg_ack_").len() == 2).await;
+        drop(sender);
+
+        let mut replacement = Client::open(address, &[]).await.unwrap();
+        let pending: v5::SessionPendingListResult = success(
+            replacement
+                .call("session.pending.list", scope.clone(), pending_request)
+                .await,
+        );
+        let admissions = seen(&observer, "msg_ack_");
+        let received = pending
+            .data
+            .items
+            .iter()
+            .map(|item| {
+                let Some(v5::session_pending_info::Kind::Value1(user)) = &item.kind else {
+                    panic!("expected a pending user prompt");
+                };
+                (units(&user.id), user.admitted_seq as u64)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            received,
+            [
+                (BEFORE.into(), admissions[0].sequence),
+                (AFTER.into(), admissions[1].sequence)
+            ]
+        );
+        assert!(admissions[0].sequence < admissions[1].sequence);
+        let conflict = rejected(
+            replacement
+                .call(
+                    "session.prompt",
+                    session_scope(OTHER),
+                    prompt_request(OTHER, AFTER),
+                )
+                .await,
+        );
+        assert_eq!(conflict.type_name, v5::ConflictError::full_name());
+        let log = replacement
+            .send(
+                "session.log",
+                scope.clone(),
+                log_request(SESSION, None, Some(false)),
+            )
+            .await;
+        let log = replacement.subscribe_log(&log, scope).await;
+        until(&mut replacement, |client| client.ended.contains(&log)).await;
+        assert_eq!(
+            seen(&replacement, "msg_ack_")
+                .into_iter()
+                .map(|entry| (entry.input, entry.sequence))
+                .collect::<Vec<_>>(),
+            received
+        );
+        server.shutdown().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn log_follow_is_driven_by_the_feed_and_releases_it_on_disconnect() {
     let _serial = SERIAL.lock().await;
     bounded(async {

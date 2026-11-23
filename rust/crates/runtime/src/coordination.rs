@@ -502,6 +502,10 @@ impl Worker {
             .recover()
             .await
             .map_err(|_| failed("Project notification recovery"))?;
+        runtime
+            .resume_admitted()
+            .await
+            .map_err(|_| failed("Project admitted input resumption"))?;
         let (stop, stopped) = watch::channel(false);
         let task = tokio::spawn(drive(runtime, feed, subscriber, notify, stopped));
         Ok(Self {

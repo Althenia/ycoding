@@ -6,9 +6,12 @@ mod structured;
 use replay::{Replay, Reply};
 use std::sync::{Arc, Mutex};
 use ycoding_ai::{
+    antigravity,
     auth::{Auth, Credential, ProviderAuth},
     cache::{Hint, MessageStrategy, Policy},
-    llm::{Event, Media, MediaData, Message, Model, Part, Request, Role, ToolDefinition},
+    llm::{
+        Event, FinishReason, Media, MediaData, Message, Model, Part, Request, Role, ToolDefinition,
+    },
     providers::{self, Api, Config, OpenAIConfig, OpenRouterConfig, Transport},
     route::{Attempt, AttemptPhase, Executor, Route},
 };
@@ -29,6 +32,75 @@ const ROUTES: &[(&str, &str, &str)] = &[
         "/v1/messages?beta=true",
     ),
 ];
+
+#[tokio::test]
+async fn antigravity_http_finishes_with_trailing_usage_and_keeps_reasoning_signatures_local() {
+    let body = [
+        r#"{"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"First thought","thought":true,"thoughtSignature":"sig-first"}]}}]}}"#,
+        r#"{"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"Answer"}]}}]}}"#,
+        r#"{"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"Unsigned thought","thought":true}]}}]}}"#,
+        r#"{"response":{"candidates":[{"finishReason":"STOP"}]}}"#,
+        r#"{"response":{"usageMetadata":{"promptTokenCount":5,"cachedContentTokenCount":0,"candidatesTokenCount":2,"thoughtsTokenCount":1,"totalTokenCount":8}}}"#,
+    ]
+    .iter()
+    .map(|frame| format!("data: {frame}\n\n"))
+    .collect::<String>();
+    let gateway = Replay::start(vec![Reply::stream(
+        "/v1internal:streamGenerateContent?alt=sse",
+        body,
+    )])
+    .await;
+    let route = antigravity::route(antigravity::Config {
+        access: Some(Credential::value("synthetic-key")),
+        base_url: Some(gateway.base.clone()),
+        ..Default::default()
+    });
+    let mut request = Request::new(route.model("claude-sonnet-5-5"));
+    request.messages.push(Message::user("Hi"));
+    let response = Executor::new(gateway.client()).generate(&request).await;
+    let requests = gateway.finish().await;
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0]
+            .headers
+            .contains("authorization: Bearer synthetic-key\r\n")
+    );
+    assert!(requests[0].body.contains(r#""model":"claude-sonnet-5-5""#));
+
+    let response = response.unwrap();
+    assert_eq!(response.finish_reason, FinishReason::Stop);
+    assert_eq!(response.text().as_str(), Some("Answer"));
+    let usage = response.usage.as_ref().unwrap();
+    assert_eq!(usage.cache_read_input_tokens, Some(0.0));
+    assert_eq!(usage.reasoning_tokens, Some(1.0));
+    assert_eq!(usage.visible_output_tokens(), 2.0);
+    assert_eq!(usage.total_tokens, Some(8.0));
+    let thinking: Vec<_> = response
+        .message
+        .content
+        .iter()
+        .filter_map(|part| match part {
+            Part::Reasoning(part) => Some((part.text.as_str(), part.provider_metadata.as_ref())),
+            _ => None,
+        })
+        .collect();
+    let signature = parse_json(r#"{"google":{"thoughtSignature":"sig-first"}}"#).unwrap();
+    assert_eq!(
+        thinking,
+        [
+            (Some("First thought"), Some(&signature)),
+            (Some("Unsigned thought"), None)
+        ]
+    );
+
+    request.messages.push(response.message);
+    request.messages.push(Message::user("Continue"));
+    let replay = request.model.route.prepare(&request).unwrap().encoded_body;
+    assert!(
+        replay.contains(r#""text":"First thought","thought":true,"thoughtSignature":"sig-first""#)
+    );
+    assert!(!replay.contains("Unsigned thought"));
+}
 
 struct SyntheticClaudeAccount;
 impl ycoding_ai::claude_code::Account for SyntheticClaudeAccount {

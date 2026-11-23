@@ -219,14 +219,18 @@ fn shared(
     shutdown: watch::Sender<bool>,
     drain: mpsc::Sender<()>,
 ) -> io::Result<Arc<Shared>> {
-    let interaction = services
-        .core
-        .as_ref()
-        .and_then(|core| core.interaction.as_ref())
-        .map(|authority| authority.bind_chrome(&format!("http://{address}")))
-        .transpose()
-        .map_err(|error| io::Error::other(format!("Interaction transport: {}", error.0)))?
-        .flatten();
+    let interaction = if address.ip() == std::net::Ipv4Addr::LOCALHOST {
+        services
+            .core
+            .as_ref()
+            .and_then(|core| core.interaction.as_ref())
+            .map(|authority| authority.bind_chrome(&format!("http://{address}")))
+            .transpose()
+            .map_err(|error| io::Error::other(format!("Interaction transport: {}", error.0)))?
+            .flatten()
+    } else {
+        None
+    };
     Ok(Arc::new(Shared {
         interaction,
         dispatcher,

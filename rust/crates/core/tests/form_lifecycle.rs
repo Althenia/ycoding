@@ -16,6 +16,47 @@ fn form(id: &str, session: &str, fields: &str) -> form::Info {
     form::Info::decode(&parse_json(&format!("{{\"id\":\"{id}\",\"sessionID\":\"{session}\",\"title\":\"Choose\",\"fields\":{fields}}}")).unwrap()).unwrap()
 }
 
+#[test]
+fn a_session_form_stays_pending_for_a_day_and_validates_the_late_reply() {
+    let fixture = Fixture::default();
+    let session = fixture.session("ses_late_form", None, 0, false, None);
+    let now = Arc::new(AtomicU64::new(0));
+    let clock = now.clone();
+    let service = Forms::with_clock(
+        fixture.authority(),
+        fixture.publisher(),
+        Arc::new(move || clock.load(Ordering::Relaxed)),
+    );
+    let input = form(
+        "frm_late_reply",
+        "ses_late_form",
+        r#"[{"key":"name","type":"string","required":true}]"#,
+    );
+    assert_eq!(service.create(input.clone()).unwrap(), input);
+
+    now.store(86_400_000, Ordering::Relaxed);
+    assert_eq!(service.state(&input.id), Ok(form::State::Pending));
+    assert_eq!(
+        service.list(Some(session.as_lossless())),
+        vec![input.clone()]
+    );
+
+    let empty = form::Answer::decode(&parse_json("{}").unwrap()).unwrap();
+    assert!(matches!(
+        service.reply(&input.id, empty),
+        Err(Error::InvalidAnswer(_))
+    ));
+    assert_eq!(service.state(&input.id), Ok(form::State::Pending));
+
+    let late = form::Answer::decode(&parse_json(r#"{"name":"Late"}"#).unwrap()).unwrap();
+    assert_eq!(service.reply(&input.id, late.clone()), Ok(()));
+    assert_eq!(
+        service.state(&input.id),
+        Ok(form::State::Answered(late.clone()))
+    );
+    assert_eq!(service.reply(&input.id, late), Err(Error::AlreadySettled));
+}
+
 #[tokio::test]
 async fn global_forms_need_no_session_and_remain_location_owned() {
     let fixture = Fixture::default();

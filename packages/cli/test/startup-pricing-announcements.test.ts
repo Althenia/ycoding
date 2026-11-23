@@ -6,7 +6,8 @@ import { Effect, Exit, Logger, Scope } from "effect"
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { auth, availablePort, password } from "./remote-harness"
+import { availablePort } from "./fixture/loopback-port"
+import { auth, password } from "./remote-harness"
 
 const folders = 6
 const directories: string[] = []

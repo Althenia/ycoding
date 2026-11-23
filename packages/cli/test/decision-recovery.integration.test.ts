@@ -4,7 +4,8 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { DecisionJudgment } from "@ycoding-ai/core/decision-judgment"
 import { deltaChunk, finishChunk, toolCallChunk } from "../../ai/test/lib/openai-chunks"
-import { createSession, providerConfig, startProviderStandIn, startServer, auth, type IsolatedServer } from "./remote-harness"
+import { providerConfig, startProviderStandIn } from "./fixture/provider-stand-in"
+import { auth, createSession, startServer, type IsolatedServer } from "./remote-harness"
 
 type Scores = Readonly<Record<string, number>>
 

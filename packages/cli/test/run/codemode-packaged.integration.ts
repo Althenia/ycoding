@@ -3,7 +3,7 @@ import { spawn } from "node:child_process"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { deltaChunk, finishChunk, toolCallChunk } from "../../../ai/test/lib/openai-chunks"
-import { providerConfig, startProviderStandIn } from "../remote-harness"
+import { providerConfig, startProviderStandIn } from "../fixture/provider-stand-in"
 
 const artifactEnv = "YCODING_CODEMODE_PACKAGED_ARTIFACTS"
 const rawArtifacts = process.env[artifactEnv]

@@ -499,6 +499,37 @@ pub(crate) fn prepared(
 ) -> Result<crate::usage_view::Prepared, Error> {
     presentation(client, id, inputs, false)
 }
+
+pub fn await_prepared<T>(
+    sessions: &Service,
+    mut read: impl FnMut() -> Result<T, Error>,
+) -> Result<T, Error> {
+    let pending = |error: &Error| {
+        matches!(
+            error,
+            Error::Domain {
+                kind: "Usage.PreparedUnavailable",
+                ..
+            }
+        )
+    };
+    match read() {
+        Err(error) if pending(&error) => {}
+        result => return result,
+    }
+    let handle = sessions.client.analytics().map_err(analytics_error)?;
+    handle
+        .await_presentation(
+            std::time::Instant::now() + analytics::REPORT_DEADLINE,
+            || match read() {
+                Ok(value) => Ok(Some(value)),
+                Err(error) if pending(&error) => Ok(None),
+                Err(error) => Err(error),
+            },
+        )?
+        .ok_or_else(unavailable)
+}
+
 pub(crate) fn presentation(
     client: &ycoding_store::Client,
     id: Option<&session::Id>,

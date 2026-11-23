@@ -36,6 +36,9 @@ function fakeSocket(resumeReply: (count: number) => Record<string, unknown>) {
   }
   return {
     socket,
+    sent,
+    receive: (message: unknown) => emit("message", JSON.stringify(message)),
+    drop: () => emit("close"),
     notify: (method: string, params: unknown) => emit("message", JSON.stringify({ method, params })),
     open: () => emit("open"),
     resumeCount: () => sent.filter((message) => message.method === "thread/resume").length,
@@ -111,5 +114,63 @@ describe("durable client thread/resume subscription cache", () => {
     const retried = await client.watch("thread-1")
     expect(retried.kind).toBe("result")
     expect(fake.resumeCount()).toBe(2)
+  })
+
+  test("reconnect watches the same thread once and never replays an unacknowledged input", async () => {
+    const first = fakeSocket(resumed)
+    const replacement = fakeSocket(resumed)
+    const firstReady = Promise.withResolvers<void>()
+    const replacementReady = Promise.withResolvers<void>()
+    const paused = Promise.withResolvers<number>()
+    const retry = Promise.withResolvers<void>()
+    let opens = 0
+    client = startCcaDurableClient({
+      credential: async () => ({ access: "synthetic-access", accountID: "synthetic-account" }),
+      connect: () => {
+        const peer = opens === 0 ? first : replacement
+        opens += 1
+        queueMicrotask(peer.open)
+        return peer.socket
+      },
+      random: () => 0,
+      wait: (ms, signal) => {
+        paused.resolve(ms)
+        return Promise.race([retry.promise, new Promise<void>((resolve) =>
+          signal.addEventListener("abort", () => resolve(), { once: true }),
+        )])
+      },
+      onState: (connected) => {
+        if (connected) (opens === 1 ? firstReady : replacementReady).resolve()
+      },
+    })
+
+    await firstReady.promise
+    expect(await client.watch("thread-1")).toEqual({ kind: "result", ...resumed() })
+    const pending = { id: "request-1", method: "item/tool/requestUserInput", params: { threadId: "thread-1" } }
+    first.receive(pending)
+    first.receive(pending)
+    expect(client.pending("thread-1").map((request) => request.requestID)).toEqual(["request-1"])
+
+    const sending = client.request("turn/addUserMessage", { threadId: "thread-1", clientMessageId: "msg-1" })
+    const admission = first.sent.filter((frame) => frame.method === "turn/addUserMessage")
+    expect(admission).toHaveLength(1)
+    first.drop()
+    expect(await sending).toEqual({ kind: "unknown" })
+    expect(await paused.promise).toBe(1_000)
+    expect(client.pending("thread-1")).toEqual([])
+
+    retry.resolve()
+    await replacementReady.promise
+    expect(await client.watch("thread-1")).toEqual({ kind: "result", ...resumed() })
+    expect(replacement.sent.filter((frame) => frame.method === "thread/resume").map((frame) => frame.params))
+      .toEqual([{ threadId: "thread-1", excludeTurns: true }])
+    expect(replacement.sent.filter((frame) => frame.method === "turn/addUserMessage")).toEqual([])
+    first.receive({ id: admission[0]?.id, result: { admissionOutcome: "started" } })
+    first.receive(pending)
+    expect(client.pending("thread-1")).toEqual([])
+    replacement.receive(pending)
+    replacement.receive(pending)
+    expect(client.pending("thread-1").map((request) => request.requestID)).toEqual(["request-1"])
+    expect(opens).toBe(2)
   })
 })

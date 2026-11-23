@@ -241,12 +241,18 @@ impl Adapter {
             link.join().await?;
             return Err(Error("unavailable"));
         }
-        link.request(
-            "hello",
-            json!({"version":1,"ownerPID":std::process::id()}),
-            cancel,
-        )
-        .await?;
+        if let Err(error) = link
+            .request(
+                "hello",
+                json!({"version":1,"ownerPID":std::process::id()}),
+                cancel,
+            )
+            .await
+        {
+            link.close();
+            link.join().await?;
+            return Err(error.into());
+        }
         Ok(link)
     }
     fn event(&self, event: Value) {
