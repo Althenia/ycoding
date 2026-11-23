@@ -88,6 +88,8 @@ test("REQ-WIRE-006 remote scopes are backend-resolved and cannot carry arbitrary
 test("REQ-WIRE-012 attachments are raw bytes and full messages use the canonical typed bulk result", () => {
   const upload = operations.find((item) => item.diagnosticName === "session.attachment.upload")!
   expect(upload.operationId).toBe(5023)
+  expect(upload.roles).toContain(PeerRole.LOCAL_CLIENT)
+  expect(upload.roles).toContain(PeerRole.REMOTE_CLIENT)
   const piece = messages["ycoding.v5.session_attachment_upload_Request_payload"].fields
   expect(piece.find((field) => field.name === "data")).toMatchObject({ tag: 4, type: 12, required: true })
   expect(piece.find((field) => field.name === "offset")).toMatchObject({ tag: 5, required: true })

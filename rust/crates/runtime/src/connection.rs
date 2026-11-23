@@ -105,6 +105,7 @@ struct Driver {
     connection: Connection,
     shared: Arc<Shared>,
     epoch: String,
+    closed: Arc<AtomicBool>,
     started: Instant,
     inflight: HashMap<String, Inflight>,
     lanes: Lanes,
@@ -156,6 +157,7 @@ pub(crate) async fn run(
         connection,
         shared,
         epoch,
+        closed: Arc::new(AtomicBool::new(false)),
         started: Instant::now(),
         inflight: HashMap::new(),
         lanes: Lanes {
@@ -366,6 +368,7 @@ impl Driver {
             let completions = self.completions.clone();
             let cancelled = cancelled.clone();
             let connection_id = self.epoch.clone();
+            let closed = self.closed.clone();
             async move {
                 if cancelled.load(Ordering::Acquire) {
                     return;
@@ -374,8 +377,11 @@ impl Driver {
                 let request_id = request.request_id.clone();
                 let result = shared
                     .dispatcher
-                    .invoke(environment, connection_id, request)
+                    .invoke(environment, connection_id.clone(), request)
                     .await;
+                if closed.load(Ordering::Acquire) {
+                    shared.environment.uploads.clear_connection(&connection_id);
+                }
                 let _ = completions.send((request_id, result)).await;
             }
         };
@@ -842,6 +848,7 @@ impl Driver {
     }
 
     fn finish(&mut self) {
+        self.closed.store(true, Ordering::Release);
         for (_, inflight) in self.inflight.drain() {
             inflight.cancelled.store(true, Ordering::Release);
             if let Some(abort) = inflight.abort {
@@ -851,6 +858,10 @@ impl Driver {
         self.pending_logs.clear();
         self.pending_events.clear();
         self.shared.environment.subscriptions.release(&self.epoch);
+        self.shared
+            .environment
+            .uploads
+            .clear_connection(&self.epoch);
         self.subs.clear();
         self.streams.clear();
         self.follow = None;

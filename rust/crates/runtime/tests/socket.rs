@@ -1662,6 +1662,153 @@ async fn a_late_mutation_completion_after_connection_replacement_reaches_nobody(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn disconnect_clears_staged_uploads_and_late_inflight_uploads_only_for_its_connection() {
+    bounded(async {
+        let mut dispatcher = bare_dispatcher();
+        let environment = Arc::new(Mutex::new(None));
+        let captured = environment.clone();
+        let started = Arc::new(Notify::new());
+        let gate = Arc::new(Notify::new());
+        let appended = Arc::new(AtomicUsize::new(0));
+        let (handler_started, handler_gate, handler_appended) =
+            (started.clone(), gate.clone(), appended.clone());
+        dispatcher
+            .handle(
+                "session.attachment.upload",
+                move |invocation, request: v5::SessionAttachmentUploadRequest| {
+                    let captured = captured.clone();
+                    let started = handler_started.clone();
+                    let gate = handler_gate.clone();
+                    let appended = handler_appended.clone();
+                    async move {
+                        *captured.lock().unwrap() = Some(invocation.environment.clone());
+                        let payload = request.payload;
+                        if payload.data == b"late" {
+                            started.notify_one();
+                            gate.notified().await;
+                        }
+                        let id = units(&payload.upload_id);
+                        let Some(v5::scope::Target::Session(session)) = &invocation.scope.target
+                        else {
+                            panic!("expected Session scope");
+                        };
+                        invocation.environment.uploads.append(
+                            &invocation.connection_id,
+                            session,
+                            ycoding_runtime::Piece {
+                                id: &id,
+                                index: payload.index,
+                                offset: payload.offset,
+                                last: payload.last,
+                                data: &payload.data,
+                            },
+                        )?;
+                        if payload.data == b"late" {
+                            appended.store(1, Ordering::SeqCst);
+                        }
+                        Ok(v5::SessionAttachmentUploadResult {
+                            kind: Some(v5::session_attachment_upload_result::Kind::Value2(
+                                v5::SessionAttachmentUploadResultValue2 {
+                                    received: payload.data.len() as u64,
+                                },
+                            )),
+                        })
+                    }
+                },
+            )
+            .unwrap();
+        dispatcher
+            .authorize("session.attachment.upload", |_, _| Ok(()))
+            .unwrap();
+        let server = start(services(LocalAuth::disabled(), false), dispatcher).await;
+        let mut first = Client::open(server.address(), &[]).await.unwrap();
+        let mut second = Client::open(server.address(), &[]).await.unwrap();
+        let request = |id: &str, last: bool, data: &[u8]| {
+            v5::SessionAttachmentUploadRequest {
+                payload: v5::SessionAttachmentUploadRequestPayload {
+                    upload_id: text(id),
+                    index: 0,
+                    offset: 0,
+                    last,
+                    data: data.to_vec(),
+                },
+            }
+            .encode_to_vec()
+        };
+        let complete = "1b4e28ba-2fa1-4d3b-9b5a-3f2b8f6c9d10";
+        let incomplete = "2b4e28ba-2fa1-4d3b-9b5a-3f2b8f6c9d10";
+        let retained = "3b4e28ba-2fa1-4d3b-9b5a-3f2b8f6c9d10";
+        let late = "4b4e28ba-2fa1-4d3b-9b5a-3f2b8f6c9d10";
+        for (owner, id, last, data) in [
+            (0, complete, true, b"done".as_slice()),
+            (0, incomplete, false, b"partial".as_slice()),
+            (1, retained, true, b"other".as_slice()),
+        ] {
+            let client = if owner == 0 { &mut first } else { &mut second };
+            let _: v5::SessionAttachmentUploadResult = success(
+                client
+                    .call(
+                        "session.attachment.upload",
+                        session_scope("ses_upload"),
+                        request(id, last, data),
+                    )
+                    .await,
+            );
+        }
+        let environment = environment.lock().unwrap().clone().unwrap();
+        assert_eq!(environment.uploads.retained(), (3, 16));
+        first
+            .send(
+                "session.attachment.upload",
+                session_scope("ses_upload"),
+                request(late, true, b"late"),
+            )
+            .await;
+        started.notified().await;
+        drop(first);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while environment.uploads.retained() != (1, 5) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("disconnected connection uploads were not cleared");
+        assert_eq!(
+            environment
+                .uploads
+                .resolve(
+                    &second.epoch,
+                    "ses_upload",
+                    &format!("ycoding-upload://{retained}")
+                )
+                .unwrap(),
+            b"other"
+        );
+        gate.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while appended.load(Ordering::SeqCst) == 0 || environment.uploads.retained() != (1, 5) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("late upload was not cleared");
+        assert_eq!(
+            environment
+                .uploads
+                .resolve(
+                    &second.epoch,
+                    "ses_upload",
+                    &format!("ycoding-upload://{retained}")
+                )
+                .unwrap(),
+            b"other"
+        );
+        server.shutdown().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mutations_run_in_arrival_order_per_session_and_concurrently_across_sessions() {
     bounded(async {
         let mut dispatcher = bare_dispatcher();

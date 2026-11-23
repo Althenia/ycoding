@@ -167,6 +167,137 @@ fn managed_files(fixture: &Fixture) -> usize {
     count(&fixture.path.join("data/ycoding/attachments"))
 }
 
+fn oversized_png() -> Vec<u8> {
+    let original = include_bytes!("../../core/src/resources/image/small.png");
+    let mut chunk = b"tEXtcaption\0".to_vec();
+    chunk.extend(std::iter::repeat_n(b'a', 70_000));
+    let mut crc = !0u32;
+    for byte in &chunk {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb88320 & 0u32.wrapping_sub(crc & 1));
+        }
+    }
+    let mut image = original[..original.len() - 12].to_vec();
+    image.extend_from_slice(&((chunk.len() - 4) as u32).to_be_bytes());
+    image.extend_from_slice(&chunk);
+    image.extend_from_slice(&(!crc).to_be_bytes());
+    image.extend_from_slice(&original[original.len() - 12..]);
+    image
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_staged_png_is_admitted_and_scoped_to_its_connection_and_session() {
+    let fixture = Fixture::new().await;
+    let environment = fixture.environment(true);
+    let dispatcher = standard().unwrap();
+    let image = oversized_png();
+    let id = "3b4e28ba-2fa1-4d3b-9b5a-3f2b8f6c9d10";
+    let mut staged = String::new();
+    for (index, data) in image.chunks(20_000).enumerate() {
+        let last = (index + 1) * 20_000 >= image.len();
+        let result: v5::SessionAttachmentUploadResult = success(
+            dispatcher
+                .invoke(
+                    environment.clone(),
+                    "local-a".into(),
+                    request(
+                        "session.attachment.upload",
+                        &fixture.root,
+                        upload(id, index as u64, (index * 20_000) as u64, last, data),
+                    ),
+                )
+                .await,
+        );
+        if let Some(v5::session_attachment_upload_result::Kind::Value1(value)) = result.kind {
+            staged = units(&value.uri);
+        }
+    }
+    let denied: v5::InvalidRequestError = failure(
+        dispatcher
+            .invoke(
+                environment.clone(),
+                "local-b".into(),
+                request(
+                    "session.prompt",
+                    &fixture.root,
+                    prompt(&fixture.root, "msg_foreign_upload", &[&staged]),
+                ),
+            )
+            .await,
+    );
+    assert_eq!(
+        units(&denied.message),
+        "Attachment upload is unavailable or incomplete"
+    );
+    let admitted: v5::SessionPromptResult = success(
+        dispatcher
+            .invoke(
+                environment.clone(),
+                "local-a".into(),
+                request(
+                    "session.prompt",
+                    &fixture.root,
+                    prompt(&fixture.root, "msg_local_upload", &[&staged]),
+                ),
+            )
+            .await,
+    );
+    let files = files(&admitted);
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].1, "image/png");
+    assert_eq!(read(&environment, &fixture.root, &files[0].0).await, image);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_socket_admits_an_oversized_png_with_text() {
+    let fixture = Fixture::new().await;
+    let environment = fixture.environment(true);
+    let server = support::start(environment.services.clone(), standard().unwrap()).await;
+    let mut client = support::Client::open(server.address(), &[]).await.unwrap();
+    let image = oversized_png();
+    let id = "4b4e28ba-2fa1-4d3b-9b5a-3f2b8f6c9d10";
+    let mut staged = String::new();
+    for (index, data) in image.chunks(21_000).enumerate() {
+        let last = (index + 1) * 21_000 >= image.len();
+        let request: v5::SessionAttachmentUploadRequest = decode_strict(&upload(
+            id,
+            index as u64,
+            (index * 21_000) as u64,
+            last,
+            data,
+        ))
+        .unwrap();
+        let result: v5::SessionAttachmentUploadResult = support::wire::ask(
+            &mut client,
+            "session.attachment.upload",
+            session_scope(&fixture.root),
+            request,
+        )
+        .await;
+        if let Some(v5::session_attachment_upload_result::Kind::Value1(value)) = result.kind {
+            staged = units(&value.uri);
+        }
+    }
+    assert_eq!(staged, format!("ycoding-upload://{id}"));
+    let request: v5::SessionPromptRequest =
+        decode_strict(&prompt(&fixture.root, "msg_socket_png", &[&staged])).unwrap();
+    let admitted: v5::SessionPromptResult = support::wire::ask(
+        &mut client,
+        "session.prompt",
+        session_scope(&fixture.root),
+        request,
+    )
+    .await;
+    assert_eq!(units(&admitted.data.data.text), "see attachments");
+    let files = files(&admitted);
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].1, "image/png");
+    assert_eq!(read(&environment, &fixture.root, &files[0].0).await, image);
+    drop(client);
+    server.shutdown().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn local_prompts_materialize_files_ranges_directories_data_urls_and_managed_uris_once() {
     let fixture = Fixture::new().await;
@@ -453,7 +584,7 @@ async fn remote_prompts_attach_location_files_catalog_references_and_their_own_u
         );
         assert_eq!(error.code, code);
     }
-    assert!(
+    let local_upload: v5::SessionAttachmentUploadResult = success(
         dispatcher
             .invoke(
                 environment.clone(),
@@ -464,10 +595,13 @@ async fn remote_prompts_attach_location_files_catalog_references_and_their_own_u
                     upload(id, 0, 0, true, b"x"),
                 ),
             )
-            .await
-            .is_none(),
-        "uploads are a remote-only operation"
+            .await,
     );
+    assert!(matches!(
+        local_upload.kind,
+        Some(v5::session_attachment_upload_result::Kind::Value1(_))
+    ));
+    environment.uploads.clear_connection("local");
     let inside = uri(&fixture.path.join("inside.txt"));
     let referenced = uri(&outside);
     let admitted: v5::SessionPromptResult = success(
@@ -540,7 +674,7 @@ async fn remote_prompts_attach_location_files_catalog_references_and_their_own_u
         dispatcher
             .invoke(
                 environment.clone(),
-                "remote-a".into(),
+                "local".into(),
                 request(
                     "session.prompt",
                     &fixture.root,
@@ -551,7 +685,7 @@ async fn remote_prompts_attach_location_files_catalog_references_and_their_own_u
     );
     assert_eq!(
         units(&local.message),
-        format!("Unsupported attachment URI: {uploaded}")
+        "Attachment upload is unavailable or incomplete"
     );
     assert_eq!(
         environment.uploads.retained(),

@@ -50,7 +50,7 @@ type Submission = {
   error?: string
   completed: Set<string>
   admitted?: SessionPendingUser
-  resolved?: { files: PromptInfo["files"] }
+  resolved?: { files: PromptInfo["files"]; original?: PromptInfo["files"] }
   consumed: boolean
   consumedMessage?: SessionMessageUser
   discarded?: boolean
@@ -62,6 +62,7 @@ type Submission = {
 }
 
 export function createPromptSubmissions(input: {
+  upload: (sessionID: string, piece: { uploadID: string; index: number; offset: number; last: boolean; data: Uint8Array }, signal: AbortSignal) => Promise<{ uri?: string; received?: number }>
   api: () => {
     session: Pick<
       YCodingClient["session"],
@@ -180,6 +181,29 @@ export function createPromptSubmissions(input: {
       entry.completed.add("autonomy")
     }
     announceCreated(entry)
+    const resolvedFiles = entry.resolved?.files
+    if (!entry.skillOnly && resolvedFiles && resolvedFiles.reduce((size, file) => size + file.uri.length * 2, payload.inputText.length * 2) > 48_000) {
+      update(entry, { phase: "Uploading attachments" })
+      const files = await Promise.all(resolvedFiles.map(async (file) => {
+        if (!file.uri.startsWith("data:")) return file
+        const comma = file.uri.indexOf(",")
+        const bytes = Buffer.from(file.uri.slice(comma + 1), "base64")
+        if (bytes.length === 0) return file
+        const uploadID = crypto.randomUUID()
+        let uri: string | undefined
+        for (let offset = 0, index = 0; offset < bytes.length; offset += 21_000, index++) {
+          const data = bytes.subarray(offset, offset + 21_000)
+          const last = offset + data.length === bytes.length
+          const result = await request(entry, `upload:${uploadID}:${index}`, (signal) =>
+            input.upload(sessionID, { uploadID, index, offset, last, data }, signal),
+          )
+          if (last) uri = result.uri
+        }
+        if (uri !== `ycoding-upload://${uploadID}`) throw new Error("Attachment upload was not confirmed")
+        return { ...file, uri }
+      }))
+      entry.resolved = { files, original: resolvedFiles }
+    }
     if (entry.skillOnly) {
       update(entry, { phase: "Loading skill" })
       await request(entry, "standalone", (signal) =>
@@ -320,6 +344,7 @@ export function createPromptSubmissions(input: {
       })
       .catch((error: unknown) => {
         if (!disposed) {
+          if (!entry.admitted && entry.resolved?.original) entry.resolved = { files: entry.resolved.original }
           announceCreated(entry)
           update(entry, {
             state: "attention",

@@ -65,7 +65,7 @@ function admitted(item: ReturnType<typeof submission>): YCodingEvent {
   }
 }
 
-function fixture(route: FetchHandler, promptAdmitted?: (durationMs: number) => void) {
+function fixture(route: FetchHandler, promptAdmitted?: (durationMs: number) => void, upload: Parameters<typeof createPromptSubmissions>[0]["upload"] = async () => { throw new Error("unexpected upload") }) {
   const requests: Array<{ path: string; body: { id?: string; resume?: boolean; skill?: string } }> = []
   const calls = createFetch(async (url, request) => {
     const body = request.method === "POST" ? ((await request.clone().json()) as { id?: string; resume?: boolean }) : {}
@@ -80,6 +80,7 @@ function fixture(route: FetchHandler, promptAdmitted?: (durationMs: number) => v
   const receipts: SessionPendingUser[] = []
   const manager = createPromptSubmissions({
     api: () => createApi(calls.fetch),
+    upload,
     promptAdmitted,
     admitted: (receipt) => {
       if (receipt.type === "user") receipts.push(receipt)
@@ -627,6 +628,35 @@ test("command failure retries the same admission ID and wake retry uses its cano
   }
 })
 
+test("stages an attachment at the byte limit within the upload chunk limit", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ycoding-submission-limit-"))
+  const file = path.join(root, "limit.txt")
+  const empty = path.join(root, "empty.txt")
+  await writeFile(file, Buffer.alloc(20 * 1024 * 1024, 97))
+  await writeFile(empty, "")
+  const item = submission("ses_local_limit", "read it", false)
+  item.payload.files = [{ uri: pathToFileURL(file).href, name: "limit.txt", local: true }, { uri: pathToFileURL(empty).href, name: "empty.txt", local: true }]
+  let count = 0
+  let total = 0
+  const flow = fixture(async (url) => url.pathname.endsWith("/prompt") ? json({ data: pending(item) }) : undefined, undefined, async (_session, piece) => {
+    expect(piece.index).toBe(count++)
+    expect(piece.offset).toBe(total)
+    expect(piece.data.length).toBeLessThanOrEqual(21_000)
+    total += piece.data.length
+    return piece.last ? { uri: `ycoding-upload://${piece.uploadID}` } : { received: total }
+  })
+  try {
+    flow.dispatch(item)
+    await until(() => flow.manager.list().length === 0 || flow.manager.list()[0]?.state === "attention")
+    expect(flow.manager.list()).toEqual([])
+    expect(total).toBe(20 * 1024 * 1024)
+    expect(count).toBeLessThanOrEqual(1_024)
+  } finally {
+    flow.manager.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test("sends a local file's bytes as a data URL and never its path, so the service needs no access to it", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "ycoding-submission-file-"))
   const name = "GISX_Renewal_Report Specification List_V.3.0_Draft.xlsx"
@@ -652,6 +682,48 @@ test("sends a local file's bytes as a data URL and never its path, so the servic
     expect(sent[0]!.uri.startsWith("data:")).toBe(true)
     expect(sent[0]!.uri).not.toContain("file:")
     expect(Buffer.from(sent[0]!.uri.slice(sent[0]!.uri.indexOf(",") + 1), "base64").equals(bytes)).toBe(true)
+  } finally {
+    flow.manager.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("restages retained bytes after an oversized attachment admission fails", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ycoding-submission-staged-retry-"))
+  const file = path.join(root, "retry.txt")
+  const bytes = Buffer.alloc(70_000, 97)
+  await writeFile(file, bytes)
+  const item = submission("ses_staged_retry", "read it", false)
+  item.payload.files = [{ uri: pathToFileURL(file).href, name: "retry.txt", local: true }]
+  const uploads = new Map<string, number[]>()
+  const promptIDs: string[] = []
+  let reject = true
+  const flow = fixture(async (url) => {
+    if (!url.pathname.endsWith("/prompt")) return undefined
+    const body = flow.requests.at(-1)?.body
+    if (!body) throw new Error("Missing prompt request")
+    if (!body.resume && body.id) promptIDs.push(body.id)
+    if (!body.resume && reject) {
+      reject = false
+      await rm(file)
+      return json({ _tag: "InvalidRequestError", field: "files", message: "Upload expired" }, { status: 400 })
+    }
+    return json({ data: pending(item) })
+  }, undefined, async (_session, piece) => {
+    const accumulated = uploads.get(piece.uploadID) ?? []
+    accumulated.push(...piece.data)
+    uploads.set(piece.uploadID, accumulated)
+    return piece.last ? { uri: `ycoding-upload://${piece.uploadID}` } : { received: accumulated.length }
+  })
+  try {
+    flow.dispatch(item)
+    await until(() => flow.manager.list()[0]?.state === "attention")
+    expect(flow.manager.list()[0]?.error).toBe("Upload expired")
+    flow.manager.retry(item.sessionID, item.promptID)
+    await until(() => flow.manager.list().length === 0)
+    expect(promptIDs).toEqual([item.promptID, item.promptID])
+    expect(uploads.size).toBe(2)
+    for (const uploaded of uploads.values()) expect(Buffer.from(uploaded)).toEqual(bytes)
   } finally {
     flow.manager.dispose()
     await rm(root, { recursive: true, force: true })

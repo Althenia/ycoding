@@ -351,6 +351,11 @@ function scenario(dispatch: Dispatch) {
       if (action === "pending.remove") return `${root}/pending/${params.messageID}`
       if (action === "pending.steer") return `${root}/pending/${params.messageID}/steer`
       if (action === "deleteMessage") return `${root}/message/${params.messageID}`
+      if (action === "attachment.upload") {
+        const target = dispatch.request.scope?.target
+        if (target?.case !== "session") throw new Error(`Expected Session scope for ${name}`)
+        return `/api/session/${target.value}/attachment/upload`
+      }
       if (action === "attachment.read") return `${root}/attachment/${params.digest}`
       if (action === "review.decide") return `${root}/review/${params.itemID}/decide`
       if (action.startsWith("subagent.")) {

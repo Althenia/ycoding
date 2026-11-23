@@ -38,27 +38,25 @@ pub async fn materialize(
             })
         })
         .collect::<Result<Vec<_>, Failure>>()?;
-    let inputs = if invocation.remote {
+    if invocation.remote {
         authorize(invocation, &info, &lease.info, &inputs).await?;
-        let session = convert::readable(info.id.as_lossless());
-        inputs
-            .into_iter()
-            .map(|input| {
-                let uri = convert::readable(&input.uri);
-                if !uri.starts_with(session_attachment_upload::SCHEME) {
-                    return Ok((input, None));
-                }
-                let bytes = invocation.environment.uploads.resolve(
-                    &invocation.connection_id,
-                    &session,
-                    &uri,
-                )?;
-                Ok((input, Some(bytes)))
-            })
-            .collect::<Result<Vec<_>, Failure>>()?
-    } else {
-        inputs.into_iter().map(|input| (input, None)).collect()
-    };
+    }
+    let session = convert::readable(info.id.as_lossless());
+    let inputs = inputs
+        .into_iter()
+        .map(|input| {
+            let uri = convert::readable(&input.uri);
+            if !uri.starts_with(session_attachment_upload::SCHEME) {
+                return Ok((input, None));
+            }
+            let bytes = invocation.environment.uploads.resolve(
+                &invocation.connection_id,
+                &session,
+                &uri,
+            )?;
+            Ok((input, Some(bytes)))
+        })
+        .collect::<Result<Vec<_>, Failure>>()?;
     let attachments = attachment_store::Store::new(platform.config.roots().data.clone())
         .map_err(|_| Failure::Unavailable("Managed attachments are unavailable".into()))?;
     let limits = image::Limits::from_configuration(&platform.config);

@@ -751,6 +751,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     const client = useClient()
     const submissions = createPromptSubmissions({
       api: () => client.api,
+      upload: (sessionID, piece, signal) => client.api.transport.call(
+        { method: "session.attachment.upload", operationID: 5023 },
+        { payload: piece },
+        { sessionID },
+        { signal },
+      ),
       promptAdmitted: (durationMs) => props.recordTelemetry?.("prompt.admit", durationMs),
       created: (session) => {
         setStore("session", "info", session.id, session)
@@ -1535,7 +1541,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           setStore("session", "diagnostics", event.data.sessionID, event.data.diagnostics)
           break
         case "session.prediction.updated": {
-          const words = event.data.text.trim().split(/\s+/).length
+          const words = [...new Intl.Segmenter(undefined, { granularity: "word" }).segment(event.data.text)].filter(segment => segment.isWordLike).length
           if (!event.data.text.trim() || words < 2 || words > 40 || event.data.text.length > 400 || /[\p{Cc}\p{Bidi_Control}\u2028\u2029]/u.test(event.data.text)) break
           if (store.session.predictionDismissed[event.data.sessionID] === event.data.sourceMessageID) break
           const sourceMessageID = result.session.message.list(event.data.sessionID).findLast(message => message.type === "assistant")?.id

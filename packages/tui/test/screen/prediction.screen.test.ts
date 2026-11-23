@@ -44,7 +44,7 @@ async function fixture(width = 120, height = 36, accept = "right") {
       if (request.method === "POST") { posts.push(url.pathname); return json({}) }
       if (url.pathname === "/api/location") return json(location)
       if (url.pathname === "/api/command") return json({ location, data: [{ name: "predict-audit", description: "Prediction audit fixture", template: "Review the prediction" }] })
-      if (url.pathname === "/api/skill") return json({ location, data: [{ id: "predict-audit", name: "Prediction audit fixture", description: "Review the prediction", location: directory }] })
+      if (url.pathname === "/api/skill") return json({ location, data: [{ id: "predict-audit", name: "Prediction audit fixture", description: "Review the prediction", location: directory, content: "Review the prediction" }] })
       if (url.pathname === "/api/fs/find") return json({ location, data: url.searchParams.get("type") === "file" ? [{ path: "review.ts", type: "file" }] : [] })
       if (url.pathname === "/api/session") return json({ data: sessions, cursor: {} })
       const session = sessions.find(value => url.pathname.startsWith(`/api/session/${value.id}`))
@@ -425,6 +425,17 @@ test.each(["", "   ", "Review", Array.from({ length: 41 }, () => "word").join(" 
     expect(view.screen.frame()).toContain(suggestion)
     expect(view.data.session.prediction.get(sessionID)?.text).toBe(suggestion)
     expect(view.editor.plainText).toBe("")
+    expect(view.posts).toEqual([])
+  } finally { await view.screen.dispose() }
+}, 30000)
+
+test("a Thai prediction without spaces is shown and accepted", async () => {
+  const view = await fixture()
+  try {
+    await view.predict("msg_reply", "ทดสอบระบบ")
+    await view.wait(() => view.screen.frame().includes("ทดสอบระบบ"))
+    view.screen.input.pressTab()
+    await view.wait(() => view.editor.plainText === "ทดสอบระบบ")
     expect(view.posts).toEqual([])
   } finally { await view.screen.dispose() }
 }, 30000)

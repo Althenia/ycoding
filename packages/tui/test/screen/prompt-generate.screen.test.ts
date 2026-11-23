@@ -177,7 +177,7 @@ async function landingFixture() {
       if (createdID && url.pathname === `/api/session/${createdID}/autonomy` && request.method === "PUT") {
         const body: unknown = await request.json()
         autonomy.push(body)
-        return json({ data: { mode: "normal", permissions: "yolo", guardrails: "yolo", answers: "yolo" } })
+        return json({ data: { mode: "normal", permissions: "yolo", guardrails: "yolo", answers: "yolo", effective: { permissions: "yolo", guardrails: "yolo", answers: "yolo", inherited: {}, deferred: false, guardrailsEnabled: true } } })
       }
       if (createdID && url.pathname === `/api/session/${createdID}`) return json({ data: info() })
       if (createdID && url.pathname === `/api/session/${createdID}/snapshot`) return sessionSnapshot(createdID, [], { session: info() })
@@ -407,6 +407,9 @@ test("the landing screen creates a Session, keeps the Autonomous draft, and fill
     view.screen.input.pressEnter()
     await view.wait(() => view.screen.frame().includes("1 all Manual"))
     view.screen.input.pressKey("2")
+    await view.wait(() => view.screen.frame().includes("Accept risk & enable YOLO"))
+    view.screen.input.pressArrow("down")
+    view.screen.input.pressEnter()
     await view.wait(() => view.screen.frame().includes("permissions yolo"))
     view.screen.input.pressEscape()
     await view.wait(() => !view.screen.frame().includes("1 all Manual"))

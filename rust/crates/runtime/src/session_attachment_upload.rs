@@ -151,6 +151,10 @@ impl Staging {
         self.lock().clear();
     }
 
+    pub fn clear_connection(&self, connection: &str) {
+        self.lock().retain(|(owner, _), _| owner != connection);
+    }
+
     pub fn retained(&self) -> (usize, usize) {
         let (_, uploads) = self.current();
         (

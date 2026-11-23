@@ -26,7 +26,7 @@ test("a durable admission immediately updates reactive submission readers", asyn
   let dispose = () => {}
   const manager = createRoot((cleanup) => {
     dispose = cleanup
-    const value = createPromptSubmissions({ api: () => api as never, admitted: () => {} })
+    const value = createPromptSubmissions({ api: () => api as never, upload: async () => { throw new Error("unexpected upload") }, admitted: () => {} })
     createRenderEffect(() => seen.push(value.list().some((entry) => entry.admitted !== undefined)))
     return value
   })
@@ -61,7 +61,7 @@ test("an admission response updates reactive readers before history persistence 
   let dispose = () => {}
   const manager = createRoot((cleanup) => {
     dispose = cleanup
-    const value = createPromptSubmissions({ api: () => api as never, admitted: () => {} })
+    const value = createPromptSubmissions({ api: () => api as never, upload: async () => { throw new Error("unexpected upload") }, admitted: () => {} })
     createRenderEffect(() => seen.push(value.list().some((entry) => entry.admitted !== undefined)))
     return value
   })

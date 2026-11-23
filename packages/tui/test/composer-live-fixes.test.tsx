@@ -67,6 +67,7 @@ const promptRequests: Array<{
   resume?: boolean
   files?: Array<{ uri: string; name?: string }>
 }> = []
+const uploadedImages = new Map<string, number[]>()
 let failNextWake = false
 let wakeGate: Promise<void> | undefined
 let releaseWake: (() => void) | undefined
@@ -107,6 +108,14 @@ function isSkillBody(value: unknown): value is { id: string; skill: string } {
 }
 
 async function route(url: URL, request: Request) {
+  if (url.pathname === `/api/session/${sessionID}/attachment/upload` && request.method === "POST") {
+    const body = await request.json() as { uploadID: string; offset: number; last: boolean; data: Record<string, number> }
+    const bytes = uploadedImages.get(body.uploadID) ?? []
+    expect(bytes.length).toBe(body.offset)
+    bytes.push(...Object.values(body.data))
+    uploadedImages.set(body.uploadID, bytes)
+    return json(body.last ? { uri: `ycoding-upload://${body.uploadID}` } : { received: bytes.length })
+  }
   if (url.pathname === "/api/fs/list") return json({ location, data: [] })
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
@@ -622,6 +631,41 @@ test("keeps the managed receipt and stable prompt ID when wake fails, then retri
     wakeGate = undefined
     releaseWake = undefined
     failNextWake = false
+    await screen.dispose()
+    await image.temporary.cleanup()
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30_000)
+
+test.each([false, true])("submits a valid clipboard PNG with text through the v5 prompt boundary, large=%s", async (large) => {
+  const root = await mkdtemp(path.join(tmpdir(), "ycoding-tui-png-send-"))
+  const png = Buffer.from(await Bun.file("../../rust/crates/core/src/resources/image/small.png").arrayBuffer())
+  const chunk = Buffer.alloc(70_012)
+  chunk.writeUInt32BE(70_000, 0)
+  chunk.write("tEXt", 4)
+  chunk.write("description\0", 8)
+  chunk.fill(0x61, 20, 70_008)
+  chunk.writeUInt32BE(Bun.hash.crc32(chunk.subarray(4, 70_008)), 70_008)
+  const bytes = large ? Buffer.concat([png.subarray(0, png.length - 12), chunk, png.subarray(png.length - 12)]) : png
+  const image = await materializeClipboardImage(root, async (file) => { await Bun.write(file, bytes) })
+  promptRequests.length = 0
+  uploadedImages.clear()
+  let status: () => unknown = () => undefined
+  const screen = await renderScreen({ width: 120, height: 40, args: { sessionID }, route, clipboard: { read: async () => image }, settle: "Message YCoding…", data: (data) => { status = () => data.session.submissions.list(sessionID).map(({ phase, error }) => ({ phase, error })) } })
+  try {
+    const promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, promptRow)
+    await screen.input.pasteBracketedText("")
+    await waitForFrameText(screen, "[Image 1]")
+    await screen.input.typeText("inspect synthetic image")
+    screen.input.pressEnter()
+    await waitForPromptRequests(2).catch(() => { throw new Error(JSON.stringify(status())) })
+    expect(promptRequests[0]?.text).toContain("inspect synthetic image")
+    const uri = promptRequests[0]?.files?.[0]?.uri
+    expect(uri).toBeDefined()
+    const sent = large ? Buffer.from(uploadedImages.get(uri?.replace("ycoding-upload://", "") ?? "") ?? []) : Buffer.from(uri?.split(",")[1] ?? "", "base64")
+    expect(sent).toEqual(bytes)
+  } finally {
     await screen.dispose()
     await image.temporary.cleanup()
     await rm(root, { recursive: true, force: true })
