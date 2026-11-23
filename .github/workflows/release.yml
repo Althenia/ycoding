@@ -232,6 +232,13 @@ jobs:
           cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --test daily_workflows restarting_with_a_running_root_tool_exposes_its_unknown_effect_without_resuming -- --exact
           cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --test events reconnect_reconciles_an_unacknowledged_prompt_by_its_durable_identity -- --exact
 
+      - name: Verify native startup diagnostics
+        if: matrix.suite == 'tui-runtime'
+        run: |
+          cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --test service_failed_boot failed_composition_registration_deletion_stops_owner_and_releases_listener -- --exact
+          cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --test service_failed_boot failed_store_boot_retains_native_owner_until_authenticated_exact_instance_stop -- --exact
+          cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --lib production::tests::retention_settings_fail_startup_when_the_first_load_fails -- --exact
+
       - name: Verify typed decision suites
         if: matrix.suite == 'tui-runtime'
         working-directory: packages/core
@@ -558,6 +565,28 @@ jobs:
           set -euo pipefail
           codesign --verify --deep --strict "$RUNNER_TEMP/desktop/YCoding Desktop.app"
           codesign -d -r- "$RUNNER_TEMP/desktop/YCoding Desktop.app" 2>&1 | grep -Ex "designated => identifier \"app\.ycoding\.desktop\" and certificate (leaf|root) = H\"9dd524184b0db949ffac7f0ada0ae860ac7f5f85\"" >/dev/null
+
+      - name: Verify and archive the Desktop CLI distribution
+        run: |
+          set -euo pipefail
+          dist="packages/cli/dist/cli-darwin-arm64"
+          backend="$RUNNER_TEMP/desktop/validation/YCoding Desktop.app/Contents/Resources/app/runtime/backend"
+          node -e 'const pkg = require(process.argv[1]); if (pkg.name !== "@ycoding-ai/cli-darwin-arm64" || pkg.version !== process.env.YCODING_VERSION) process.exit(1)' "$GITHUB_WORKSPACE/$dist/package.json"
+          cmp "$dist/bin/ycoding" "$backend/ycoding"
+          codesign --verify --strict -R '=identifier "app.ycoding.cli" and certificate leaf = H"9dd524184b0db949ffac7f0ada0ae860ac7f5f85"' "$dist/bin/ycoding"
+          codesign --verify --deep --strict -R '=identifier "app.ycoding.interaction" and certificate leaf = H"9dd524184b0db949ffac7f0ada0ae860ac7f5f85"' "$dist/bin/YCoding Interaction.app"
+          tar -czf "$RUNNER_TEMP/cli-darwin-arm64.tar.gz" -C packages/cli/dist cli-darwin-arm64
+
+      - name: Upload Desktop CLI distribution for verification
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-cli-distribution-darwin-arm64-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/cli-darwin-arm64.tar.gz
+            ${{ runner.temp }}/desktop/build-receipt.json
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Create and validate desktop archive
         run: bun script/release-archive.ts create-desktop "$RELEASE_VERSION" "$RUNNER_TEMP/desktop/YCoding Desktop.app" dist/release-archive/desktop-darwin-arm64

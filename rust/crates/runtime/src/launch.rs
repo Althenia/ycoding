@@ -168,6 +168,14 @@ impl fmt::Display for LaunchError {
             Self::Usage(message) | Self::Message(message) => formatter.write_str(message),
             Self::Io(error) => write!(formatter, "{error}"),
             Self::Owner(_) => formatter.write_str("production owner shutdown failed"),
+            Self::Production(crate::Failure::ServiceUnavailable { service, message })
+                if *service == crate::production::GLOBAL_CONFIGURATION =>
+            {
+                write!(
+                    formatter,
+                    "production composition failed: {service}: {message}"
+                )
+            }
             Self::Production(_) => formatter.write_str("production composition failed"),
             Self::CoreShutdown(_) => formatter.write_str("production shutdown failed"),
             Self::Shutdown { first, later } => {
@@ -501,7 +509,14 @@ async fn build_services(
     )
     .await
     .map_err(|failure| {
-        if !matches!(failure, crate::dispatch::Failure::Unavailable(_)) {
+        if !matches!(
+            failure,
+            crate::dispatch::Failure::Unavailable(_)
+                | crate::dispatch::Failure::ServiceUnavailable {
+                    service: crate::production::GLOBAL_CONFIGURATION,
+                    ..
+                }
+        ) {
             let category = match failure {
                 crate::dispatch::Failure::Invalid(_)
                 | crate::dispatch::Failure::InvalidField { .. } => "invalid",

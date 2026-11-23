@@ -2595,7 +2595,8 @@ fn retention_settings_fail_startup_when_the_first_load_fails() {
     options.file = Some(source);
     assert!(matches!(
         retention_settings(&options),
-        Err(Failure::Unavailable(_))
+        Err(Failure::ServiceUnavailable { service: GLOBAL_CONFIGURATION, message })
+            if message.contains("referenced file was not found") && !message.contains(&f.roots.config.display().to_string())
     ));
 }
 

@@ -7,22 +7,25 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.13.3 first with its release notes", async () => {
-    const entry = RELEASES[0]
-    expect(entry).toMatchObject({ version: "0.13.3", title: "Rust connection and recovery fixes", tags: ["Fixed", "Changed"] })
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.13.3.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.13.3\n")
+  test.each([
+    { index: 0, version: "0.13.4", title: "Service startup and deferred Form fixes", tags: ["Fixed"], previous: "0.13.3" },
+    { index: 1, version: "0.13.3", title: "Rust connection and recovery fixes", tags: ["Fixed", "Changed"], previous: "0.13.2" },
+  ])("lists v$version in release order with its notes", async ({ index, version, title, tags, previous }) => {
+    const entry = RELEASES[index]
+    expect(entry).toMatchObject({ version, title, tags })
+    const notes = await Bun.file(new URL(`../../../../docs/releases/v${version}.md`, import.meta.url)).text()
+    expect(notes).toStartWith(`# YCoding v${version}\n`)
     const changes = notes.split(/^## /m).flatMap((section) => {
       const tag = TAGS.find((tag) => section.startsWith(`${tag}\n`))
       if (!tag) return []
       return [...section.matchAll(/^- (.+)$/gm)].map((match) => ({ tag, text: match[1]! }))
     })
     expect(entry?.changes).toEqual(changes)
-    expect(after("0.13.3")?.version).toBe("0.13.2")
+    expect(after(version)?.version).toBe(previous)
   })
 
   test("retains the stable Rust release with its published release notes", async () => {
-    const entry = RELEASES[1]
+    const entry = byVersion("0.13.2")
     expect(entry).toMatchObject({ version: "0.13.2", title: "Rust becomes the default GitHub release", tags: ["Fixed", "Changed"] })
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.13.2.md", import.meta.url)).text()
     expect(notes).toStartWith("# YCoding v0.13.2\n")
@@ -1909,7 +1912,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 66)).toEqual([
+    expect(versions.slice(0, 67)).toEqual([
+      "0.13.4",
       "0.13.3",
       "0.13.2",
       "0.13.1",

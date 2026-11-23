@@ -26,7 +26,9 @@ const PASSWORD: &str = "synthetic-service-password";
 
 enum BootFailure {
     Store,
-    Composition,
+    MissingConfigurationReference,
+    #[cfg(unix)]
+    ConfigurationDirectory,
 }
 
 struct FailedService {
@@ -52,8 +54,14 @@ impl FailedService {
                 std::fs::create_dir_all(&invalid).unwrap();
                 command.env("YCODING_DB", invalid);
             }
-            BootFailure::Composition => {
+            BootFailure::MissingConfigurationReference => {
                 fail_composition(&directory, &mut command);
+            }
+            #[cfg(unix)]
+            BootFailure::ConfigurationDirectory => {
+                let source = directory.0.join("invalid-configuration");
+                std::fs::create_dir(&source).unwrap();
+                command.env("YCODING_CONFIG", source);
             }
         }
         let runtime = Runtime::spawn(command, &["serve", "--service"]);
@@ -352,26 +360,37 @@ async fn failed_store_boot_retains_native_owner_until_authenticated_exact_instan
 
 #[tokio::test]
 async fn failed_composition_registration_deletion_stops_owner_and_releases_listener() {
-    let mut service = FailedService::start(BootFailure::Composition);
-    service.wait_for_failed().await;
-    let error = std::fs::read_to_string(&service.startup_error).unwrap();
-    assert!(error.contains("production composition failed"), "{error}");
-    let registration = service.directory.registration("local");
-    std::fs::remove_file(&registration).unwrap();
-    let diagnostic = service.wait_and_diagnostics();
-    assert!(
-        diagnostic.contains("production composition failed"),
-        "{diagnostic}"
-    );
-    assert!(
-        diagnostic.contains(
-            "production composition diagnostic: stage=global configuration; category=unavailable"
+    for (failure, expected_cause) in [
+        (
+            BootFailure::MissingConfigurationReference,
+            "a configuration file or referenced file was not found",
         ),
-        "{diagnostic}"
-    );
-    assert!(!diagnostic.contains(&service.directory.0.display().to_string()));
-    assert!(!registration.exists());
-    assert_port_released(&service.url).await;
+        #[cfg(unix)]
+        (
+            BootFailure::ConfigurationDirectory,
+            "a configuration file or referenced file points to a directory",
+        ),
+    ] {
+        let mut service = FailedService::start(failure);
+        service.wait_for_failed().await;
+        let error = std::fs::read_to_string(&service.startup_error).unwrap();
+        let expected = format!(
+            "production composition failed: global configuration: {expected_cause}. Check the global configuration and any files it references."
+        );
+        assert_eq!(error, expected);
+        let registration = service.directory.registration("local");
+        std::fs::remove_file(&registration).unwrap();
+        let diagnostic = service.wait_and_diagnostics();
+        assert!(diagnostic.contains(&expected), "{diagnostic}");
+        assert!(diagnostic.contains(
+            "production composition diagnostic: stage=global configuration; category=unavailable"
+        ));
+        assert!(!diagnostic.contains("missing-model.txt"));
+        assert!(!diagnostic.contains("invalid-configuration"));
+        assert!(!diagnostic.contains(&service.directory.0.display().to_string()));
+        assert!(!registration.exists());
+        assert_port_released(&service.url).await;
+    }
 }
 
 #[tokio::test]

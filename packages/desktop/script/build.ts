@@ -26,6 +26,16 @@ export async function assertToolchain(dependency: string, arch: string, iconset?
   }
 }
 
+async function measure<T>(phase: string, work: () => Promise<T>): Promise<T> {
+  if (process.env.GITHUB_ACTIONS !== "true") return work()
+  console.error(`desktop-build phase=${phase} start=${new Date().toISOString()}`)
+  try {
+    return await work()
+  } finally {
+    console.error(`desktop-build phase=${phase} end=${new Date().toISOString()}`)
+  }
+}
+
 async function main() {
   const desktop = path.resolve(import.meta.dir, "..")
   if (process.platform !== "darwin") throw new Error("The native desktop app build currently requires macOS.")
@@ -33,8 +43,9 @@ async function main() {
   const boundary: BuildBoundary = {
     assertSigning: () => assertLocalArtifactSigning(),
     assertToolchain: () => assertToolchain(dependency, process.arch, path.join(desktop, "icon.iconset")),
-    prepare: () => prepareBackend(),
-    run: (command, env) => Bun.spawn([...command], { cwd: desktop, env: env ? { ...process.env, ...env } : process.env, stdout: "inherit", stderr: "inherit" }).exited,
+    prepare: () => measure("backend", () => prepareBackend()),
+    run: (command, env) => measure(command.includes("build:frontend") ? "frontend" : "electrobun", () =>
+      Bun.spawn([...command], { cwd: desktop, env: env ? { ...process.env, ...env } : process.env, stdout: "inherit", stderr: "inherit" }).exited),
     codesign: async (args) => {
       const child = Bun.spawn(["/usr/bin/codesign", ...args], { stdout: "pipe", stderr: "pipe" })
       const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])

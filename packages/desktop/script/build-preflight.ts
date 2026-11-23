@@ -188,11 +188,23 @@ export async function buildDesktop(boundary: BuildBoundary, input: { argv: reado
   await fs.writeFile(lock, token, { flag: "wx" })
   const build = async () => {
     await fs.mkdir(output)
-    const version = (await boundary.prepare()).version
-    const prepared = await fileDigest(path.join(desktop, "runtime/backend.json"))
     const frontend = [input.bun, "run", "build:frontend"]
     const command = [input.bun, "run", "electrobun", "build", "--env=stable"]
-    if (await boundary.run(frontend) !== 0) throw new Error("The frontend build failed.")
+    const prepare = async () => {
+      const { version } = await boundary.prepare()
+      return { version, prepared: await fileDigest(path.join(desktop, "runtime/backend.json")) }
+    }
+    const buildFrontend = async () => {
+      if (await boundary.run(frontend) !== 0) throw new Error("The frontend build failed.")
+      const entry = await fs.lstat(path.join(desktop, "dist/index.html")).catch((error: unknown) => { if (missing(error)) return undefined; throw error })
+      if (!entry?.isFile() || entry.size === 0) throw new Error("The frontend build did not produce dist/index.html.")
+    }
+    const [backend, view] = await Promise.allSettled([prepare(), buildFrontend()])
+    if (backend.status === "rejected" && view.status === "rejected")
+      throw new AggregateError([backend.reason, view.reason], "The backend preparation and frontend build failed.")
+    if (backend.status === "rejected") throw backend.reason
+    if (view.status === "rejected") throw view.reason
+    const { version, prepared } = backend.value
     if (await boundary.run(command, signIdentity ? { ELECTROBUN_DEVELOPER_ID: signIdentity } : undefined) !== 0) throw new Error("The Electrobun build failed.")
     return finalizeBuild(boundary, { desktop, output, arch: input.arch, prepared, version, lockfile, lockDigest, frontend, command, signing: signIdentity?.toLowerCase() })
   }

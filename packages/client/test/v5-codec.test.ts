@@ -15,8 +15,55 @@ import {
   LosslessStringSchema,
   SessionReview_OriginSchema,
   SessionReview_OriginValue3Schema,
+  session_review_decide_RequestSchema,
 } from "@ycoding-ai/protocol/v5"
 import { encodeDomain, decodeDomain } from "../src/v5/codec.js"
+
+test.each([
+  {
+    label: "keyed form answer",
+    decision: { kind: "question", answers: { q0: "Green", q1: false, q2: 0, q3: ["A", "B"] } },
+    branch: "value1",
+    answerBranch: "value1",
+  },
+  {
+    label: "question answer list",
+    decision: { kind: "question", answers: [["Green"], ["A", "B"]] },
+    branch: "value1",
+    answerBranch: "value2",
+  },
+  {
+    label: "permission denial",
+    decision: { kind: "permission", reply: "reject" },
+    branch: "value4",
+    answerBranch: undefined,
+  },
+])("REQ-WIRE-004 encodes a Review decision with a $label", ({ decision, branch, answerBranch }) => {
+  const schema = session_review_decide_RequestSchema
+  const request = { params: { sessionID: "ses_review", itemID: "rev_review" }, payload: { decision } }
+  const bytes = encodeDomain(schema.typeName, request)
+  const wire = decodeStrict(schema, bytes).payload?.decision?.kind
+  expect(wire?.case).toBe(branch)
+  if (wire?.case === "value1") expect(wire.value.answers?.kind.case).toBe(answerBranch)
+  expect(decodeDomain(schema.typeName, bytes)).toStrictEqual(request)
+})
+
+test("REQ-WIRE-004 rejects invalid Review decision fields and answer values", () => {
+  for (const decision of [
+    { kind: "question", answers: { q0: { label: "Green" } } },
+    { kind: "question", answers: { q0: null } },
+    { kind: "question", answers: { q0: ["Green", false] } },
+    { kind: "question", answers: { q0: "Green" }, reply: "reject" },
+    { kind: "permission", reply: "deny" },
+  ]) {
+    expect(() =>
+      encodeDomain(session_review_decide_RequestSchema.typeName, {
+        params: { sessionID: "ses_review", itemID: "rev_review" },
+        payload: { decision },
+      }),
+    ).toThrow("Domain union has no v5 branch")
+  }
+})
 
 test("REQ-WIRE-004 preserves lone UTF-16 units, empty strings and explicit profile values", () => {
   const model = { id: "a\ud800b😀", providerID: "", variant: "", profile: "owner\udfff" }

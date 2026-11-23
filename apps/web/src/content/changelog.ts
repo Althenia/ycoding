@@ -22,6 +22,16 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.13.4",
+    date: "2026-11-23",
+    title: "Service startup and deferred Form fixes",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "When the Rust service cannot load global configuration at startup, the CLI explains what to check without exposing configuration values or private paths." },
+      { tag: "Fixed", text: "Clients can submit deferred Form answers by field name, including checkbox and number values." },
+    ],
+  },
+  {
     version: "0.13.3",
     date: "2026-11-23",
     title: "Rust connection and recovery fixes",

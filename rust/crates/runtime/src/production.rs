@@ -428,9 +428,8 @@ impl Core {
             global.directory = global.roots.config.clone();
         }
         global.project = false;
-        let global = Arc::new(
-            config::Configuration::load(global).map_err(|_| unavailable("global configuration"))?,
-        );
+        let global =
+            Arc::new(config::Configuration::load(global).map_err(global_configuration_error)?);
         let configuration = factory.configuration(&global)?;
         let sessions = Service::new(client.clone());
         reconcile(&sessions, &client).await?;
@@ -2920,9 +2919,7 @@ fn retention_settings(
         config::Configuration::load(options)
             .map(|configuration| retention::settings(&configuration))
     };
-    let last = Arc::new(Mutex::new(
-        load().map_err(|_| unavailable("global configuration"))?,
-    ));
+    let last = Arc::new(Mutex::new(load().map_err(global_configuration_error)?));
     Ok(Arc::new(move || {
         let mut last = last.lock().unwrap_or_else(PoisonError::into_inner);
         match load() {
@@ -3802,4 +3799,34 @@ fn field<'a>(value: Option<&'a JsonValue>, key: &str) -> Option<&'a JsonValue> {
 fn unavailable(service: &'static str) -> Failure {
     eprintln!("production composition diagnostic: stage={service}; category=unavailable");
     Failure::Unavailable(format!("{service} unavailable"))
+}
+
+pub(crate) const GLOBAL_CONFIGURATION: &str = "global configuration";
+
+fn global_configuration_error(error: config::Error) -> Failure {
+    use std::error::Error as _;
+
+    eprintln!(
+        "production composition diagnostic: stage={GLOBAL_CONFIGURATION}; category=unavailable"
+    );
+    let cause = match error
+        .source()
+        .and_then(|cause| cause.downcast_ref::<std::io::Error>())
+    {
+        Some(cause) if cause.kind() == std::io::ErrorKind::NotFound => {
+            "a configuration file or referenced file was not found"
+        }
+        Some(cause) if cause.kind() == std::io::ErrorKind::PermissionDenied => {
+            "a configuration file or referenced file could not be read because access was denied"
+        }
+        Some(cause) if cause.kind() == std::io::ErrorKind::IsADirectory => {
+            "a configuration file or referenced file points to a directory"
+        }
+        Some(_) => "a configuration file or referenced file could not be read",
+        None => "the configuration could not be loaded",
+    };
+    Failure::ServiceUnavailable {
+        service: GLOBAL_CONFIGURATION,
+        message: format!("{cause}. Check the global configuration and any files it references."),
+    }
 }

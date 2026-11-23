@@ -39,6 +39,13 @@ function record(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
+function mapEntryField(schema: Schema) {
+  const [field] = schema.fields
+  return schema.fields.length === 1 && field?.fieldKind === "list" && field.listKind === "message" && field.name === "entries"
+    ? field
+    : undefined
+}
+
 function toMessage(
   schema: Schema,
   value: unknown,
@@ -73,17 +80,17 @@ function toMessage(
   }
   const [collection] = schema.fields
   if (schema.fields.length === 1 && collection?.fieldKind === "list") {
-    const field = collection
-    if (field.name === "entries" && field.listKind === "message") {
+    const entry = mapEntryField(schema)
+    if (entry) {
       const entries = Object.entries(record(value))
       if (entries.length > WireLimit.TOTAL_FIELDS - work.fields) throw new Error("Domain field limit")
       return create(schema, {
-        [field.localName]: entries.map(([key, value]) => toField(field, { key, value }, depth + 1, work)),
+        [entry.localName]: entries.map(([key, value]) => toField(entry, { key, value }, depth + 1, work)),
       })
     }
     if (!Array.isArray(value)) throw new Error("Expected domain list")
     if (value.length > WireLimit.TOTAL_FIELDS - work.fields) throw new Error("Domain field limit")
-    return create(schema, { [field.localName]: value.map((item) => toField(field, item, depth + 1, work)) })
+    return create(schema, { [collection.localName]: value.map((item) => toField(collection, item, depth + 1, work)) })
   }
   const [union] = schema.oneofs
   if (union && schema.oneofs.length === 1 && schema.fields.every((field) => field.oneof)) {
@@ -97,6 +104,7 @@ function toMessage(
         field.message.typeName !== "ycoding.v5.LosslessString" &&
         field.message.typeName !== "ycoding.v5.Value" &&
         field.message.oneofs.length === 0 &&
+        !mapEntryField(field.message) &&
         typeof value === "object" &&
         value !== null &&
         !Array.isArray(value)
@@ -199,16 +207,16 @@ function fromMessage(schema: Schema, value: unknown): unknown {
   }
   const [collection] = schema.fields
   if (schema.fields.length === 1 && collection?.fieldKind === "list") {
-    const field = collection
-    const items = input[field.localName]
+    const items = input[collection.localName]
     if (!Array.isArray(items)) throw new Error("Missing v5 collection")
-    if (field.name === "entries" && field.listKind === "message") {
-      const entries = items.map((item) => record(fromMessage(field.message, item)))
+    const entry = mapEntryField(schema)
+    if (entry) {
+      const entries = items.map((item) => record(fromMessage(entry.message, item)))
       if (new Set(entries.map((entry) => entry.key)).size !== entries.length)
         throw new Error("Duplicate domain object key")
       return Object.fromEntries(entries.map((entry) => [entry.key, entry.value]))
     }
-    return items.map((item) => fromField(field, item))
+    return items.map((item) => fromField(collection, item))
   }
   const [union] = schema.oneofs
   if (union && schema.oneofs.length === 1 && schema.fields.every((field) => field.oneof)) {

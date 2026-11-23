@@ -10,6 +10,10 @@ type Payload = { manifest?: string; metadata?: string | null; archive?: "corrupt
 const hash = "synthetic1hash"
 const identity = "9dd524184b0db949ffac7f0ada0ae860ac7f5f85"
 const requirement = (sha1: string, name = "app.ycoding.desktop", anchor = "leaf") => `Executable=/synthetic/YCoding Desktop.app/Contents/MacOS/launcher\ndesignated => identifier "${name}" and certificate ${anchor} = H"${sha1}"\n`
+const packagedBackendChecks = (app: string) => [
+  `codesign --verify --strict -R =identifier "app.ycoding.cli" and certificate leaf = H"${identity}" ${path.join(app, "Contents/Resources/app/runtime/backend/ycoding")}`,
+  `codesign --verify --strict --deep -R =identifier "app.ycoding.interaction" and certificate leaf = H"${identity}" ${path.join(app, "Contents/Resources/app/runtime/backend/YCoding Interaction.app")}`,
+]
 const bundlePlist = (version: string, short: string | null = version) => `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>app.ycoding.desktop</string><key>CFBundleVersion</key><string>${version}</string>${short === null ? "" : `<key>CFBundleShortVersionString</key><string>${short}</string>`}</dict></plist>`
 
 async function writeStableApp(contents: string, payload: Payload) {
@@ -27,7 +31,8 @@ async function writeStableApp(contents: string, payload: Payload) {
   const stage = path.join(path.dirname(contents), "stage")
   const inner = path.join(stage, "YCoding Desktop.app/Contents")
   await fs.mkdir(path.join(inner, "MacOS"), { recursive: true })
-  await fs.mkdir(path.join(inner, "Resources/app/runtime"), { recursive: true })
+  await fs.mkdir(path.join(inner, "Resources/app/runtime/backend/YCoding Interaction.app"), { recursive: true })
+  await fs.writeFile(path.join(inner, "Resources/app/runtime/backend/ycoding"), "synthetic-backend", { mode: 0o755 })
   await fs.writeFile(path.join(inner, "Info.plist"), bundlePlist(payload.innerVersion ?? payload.version ?? "1.2.3", payload.shortVersion))
   await fs.writeFile(path.join(inner, "Resources/version.json"), JSON.stringify({ version: payload.payloadVersion ?? "1.2.3", hash }))
   if (payload.resources !== "missing") { await fs.mkdir(path.join(inner, "_CodeSignature")); await fs.writeFile(path.join(inner, "_CodeSignature/CodeResources"), "synthetic-release-seal") }
@@ -70,13 +75,17 @@ async function fixture(payload: Payload = {}) {
     run: async (args, env) => {
       events.push(args.join(" "))
       envs.push(env)
-      if (args.includes("build:frontend")) { await fs.mkdir(path.join(desktop, "dist")); return 0 }
+      if (args.includes("build:frontend")) {
+        await fs.mkdir(path.join(desktop, "dist"))
+        await fs.writeFile(path.join(desktop, "dist/index.html"), "synthetic-frontend")
+        return 0
+      }
       await writeStableApp(path.join(desktop, "build/stable-macos-arm64/YCoding Desktop.app/Contents"), payload)
       return 0
     },
   }
   const run = (overrides: Partial<BuildBoundary> = {}, argv = [`--outdir=${output}`]) => buildDesktop({ ...boundary, ...overrides }, { argv, desktop, bun: "/bun", arch: "arm64" })
-  return { root, desktop, output, events, envs, run }
+  return { root, desktop, output, events, envs, run, boundary }
 }
 
 test("arguments require one fresh output and reject isolated smoke", () => {
@@ -121,6 +130,7 @@ test("standalone build copies the verified app and writes a digest-bound receipt
     const receipt = await f.run()
     expect(f.events.slice(0, 5)).toEqual(["signing", "toolchain", "prepare", "/bun run build:frontend", "/bun run electrobun build --env=stable"])
     expect(f.events.slice(5)).toEqual([
+      ...packagedBackendChecks(path.join(f.output, "validation/YCoding Desktop.app")),
       `codesign --force --sign - ${path.join(f.output, "validation/YCoding Desktop.app")}`,
       `codesign --force --sign - ${path.join(f.desktop, "build/stable-macos-arm64/YCoding Desktop.app")}`,
       `codesign --verify --deep --strict ${path.join(f.output, "YCoding Desktop.app")}`,
@@ -136,6 +146,97 @@ test("standalone build copies the verified app and writes a digest-bound receipt
     expect(receipt.lock.sha256).toBe(await fileDigest(path.join(f.root, "repo/bun.lock")))
     expect(JSON.parse(await fs.readFile(path.join(f.output, "build-receipt.json"), "utf8"))).toEqual(receipt)
     expect(await fs.stat(path.join(f.desktop, ".ycoding-desktop-build.lock")).then(() => true, () => false)).toBe(false)
+  } finally { await fs.rm(f.root, { recursive: true, force: true }) }
+})
+
+test.each([
+  { first: "backend", fails: false },
+  { first: "frontend", fails: false },
+  { first: "backend", fails: true },
+  { first: "frontend", fails: true },
+] as const)("overlapping producers settle safely when $first finishes first (failure: $fails)", async ({ first, fails }) => {
+  const f = await fixture()
+  const lock = path.join(f.desktop, ".ycoding-desktop-build.lock")
+  const receipt = path.join(f.output, "build-receipt.json")
+  const backendError = new Error("backend producer failed")
+  const producers = {
+    backend: { release: Promise.withResolvers<void>(), finished: Promise.withResolvers<void>() },
+    frontend: { release: Promise.withResolvers<void>(), finished: Promise.withResolvers<void>() },
+  }
+  const started: string[] = []
+  const backendStarted = Promise.withResolvers<void>()
+  let packagingCalls = 0
+  const build = f.run({
+    prepare: async () => {
+      started.push("backend")
+      backendStarted.resolve()
+      await producers.backend.release.promise
+      try {
+        expect(await fs.readFile(lock, "utf8")).not.toBe("")
+        if (first === "backend" && fails) throw backendError
+        return await f.boundary.prepare()
+      } finally { producers.backend.finished.resolve() }
+    },
+    run: async (args, env) => {
+      if (args.includes("build:frontend")) {
+        started.push("frontend")
+        await producers.frontend.release.promise
+        try {
+          expect(await fs.readFile(lock, "utf8")).not.toBe("")
+          if (first === "frontend" && fails) return 1
+          return await f.boundary.run(args, env)
+        } finally { producers.frontend.finished.resolve() }
+      }
+      packagingCalls++
+      expect(await fs.readFile(path.join(f.desktop, "runtime/backend.json"), "utf8")).toBe("synthetic-manifest")
+      expect(await fs.readFile(path.join(f.desktop, "dist/index.html"), "utf8")).toBe("synthetic-frontend")
+      return f.boundary.run(args, env)
+    },
+  }).then((value) => ({ value }), (error: unknown) => ({ error }))
+  try {
+    await backendStarted.promise
+    const token = await fs.readFile(lock, "utf8")
+    expect(started.toSorted()).toEqual(["backend", "frontend"])
+    producers[first].release.resolve()
+    await producers[first].finished.promise
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(await fs.readFile(lock, "utf8")).toBe(token)
+    expect(await fs.stat(receipt).then(() => true, () => false)).toBe(false)
+    expect(packagingCalls).toBe(0)
+    producers[first === "backend" ? "frontend" : "backend"].release.resolve()
+    const result = await build
+    expect(await fs.stat(lock).then(() => true, () => false)).toBe(false)
+    if (fails) {
+      expect(packagingCalls).toBe(0)
+      expect(await fs.stat(receipt).then(() => true, () => false)).toBe(false)
+      if (first === "backend") expect(result).toEqual({ error: backendError })
+      else expect(result).toMatchObject({ error: { message: "The frontend build failed." } })
+    } else {
+      expect(packagingCalls).toBe(1)
+      expect(result).toEqual({ value: JSON.parse(await fs.readFile(receipt, "utf8")) })
+    }
+  } finally {
+    producers.backend.release.resolve()
+    producers.frontend.release.resolve()
+    await build
+    await fs.rm(f.root, { recursive: true, force: true })
+  }
+})
+
+test.each(["backend manifest", "frontend entry"] as const)("successful commands without the %s cannot start packaging", async (missing) => {
+  const f = await fixture()
+  try {
+    const result = await f.run({
+      prepare: async () => missing === "backend manifest" ? { version: "1.2.3" } : f.boundary.prepare(),
+      run: async (args, env) => {
+        if (missing === "frontend entry" && args.includes("build:frontend")) return 0
+        return f.boundary.run(args, env)
+      },
+    }).catch((error: unknown) => error)
+    expect(result).toBeInstanceOf(Error)
+    expect(result).toHaveProperty("message", expect.stringContaining(missing === "backend manifest" ? "backend.json" : "dist/index.html"))
+    expect(f.events).not.toContain("/bun run electrobun build --env=stable")
+    expect(await fs.stat(path.join(f.output, "build-receipt.json")).then(() => true, () => false)).toBe(false)
   } finally { await fs.rm(f.root, { recursive: true, force: true }) }
 })
 
@@ -183,11 +284,9 @@ test("an existing lock and a changed runtime manifest stop the build without a r
 
   const changed = await fixture()
   try {
-    let calls = 0
-    await expect(changed.run({ run: async () => {
-      calls++
-      if (calls === 2) await fs.writeFile(path.join(changed.desktop, "runtime/backend.json"), "changed")
-      return 0
+    await expect(changed.run({ run: async (args, env) => {
+      if (!args.includes("build:frontend")) await fs.writeFile(path.join(changed.desktop, "runtime/backend.json"), "changed")
+      return changed.boundary.run(args, env)
     } })).rejects.toThrow("manifest changed")
     expect(await fs.stat(path.join(changed.output, "build-receipt.json")).then(() => true, () => false)).toBe(false)
   } finally { await fs.rm(changed.root, { recursive: true, force: true }) }
@@ -274,7 +373,7 @@ test("a local build passes no signing environment and ad-hoc seals the archived 
   try {
     const receipt = await f.run()
     expect(f.envs).toEqual([undefined, undefined])
-    expect(f.events.filter((event) => event.startsWith("codesign"))).toHaveLength(4)
+    expect(f.events.filter((event) => event.startsWith("codesign"))).toHaveLength(6)
     expect(receipt.signing).toEqual({ type: "ad-hoc" })
     expect(JSON.parse(await fs.readFile(path.join(f.output, "build-receipt.json"), "utf8")).signing).toEqual({ type: "ad-hoc" })
     const extracted = path.join(f.root, "archived-payload")
@@ -318,6 +417,7 @@ test("a signed build verifies and pins the designated requirement of the outer a
     const outer = path.join(f.output, "YCoding Desktop.app")
     const inner = path.join(f.output, "validation/YCoding Desktop.app")
     expect(f.events.filter((event) => event.startsWith("codesign"))).toEqual([
+      ...packagedBackendChecks(inner),
       `codesign --verify --deep --strict ${outer}`, `codesign -d -r- ${outer}`,
       `codesign --verify --deep --strict ${inner}`, `codesign -d -r- ${inner}`,
     ])
@@ -337,11 +437,13 @@ test("a signed build accepts an uppercase identity, a root anchor and the codesi
 
 test("a failed signature check, wrong certificate, wrong identifier or missing requirement writes no receipt", async () => {
   const other = "0".repeat(40)
-  const cases: [string, (args: readonly string[], index: number) => { status: number; output: string }][] = [
-    ["verification of the outer app", (args, index) => ({ status: index === 0 ? 1 : 0, output: args[0] === "-d" ? requirement(identity) : "" })],
-    ["verification of the extracted app", (args, index) => ({ status: index === 2 ? 1 : 0, output: args[0] === "-d" ? requirement(identity) : "" })],
-    ["a wrong certificate on the outer app", (args, index) => ({ status: 0, output: args[0] === "-d" ? requirement(index === 1 ? other : identity) : "" })],
-    ["a wrong certificate on the extracted app", (args, index) => ({ status: 0, output: args[0] === "-d" ? requirement(index === 3 ? other : identity) : "" })],
+  const cases: [string, (args: readonly string[], inner: string, outer: string) => { status: number; output: string }][] = [
+    ["verification of the packaged CLI", (args) => ({ status: args.includes("-R") && path.basename(args.at(-1)!) === "ycoding" ? 1 : 0, output: requirement(identity) })],
+    ["verification of the Interaction helper", (args) => ({ status: args.includes("-R") && path.basename(args.at(-1)!) === "YCoding Interaction.app" ? 1 : 0, output: requirement(identity) })],
+    ["verification of the outer app", (args, _, outer) => ({ status: args[0] === "--verify" && args.at(-1) === outer ? 1 : 0, output: requirement(identity) })],
+    ["verification of the extracted app", (args, inner) => ({ status: args[0] === "--verify" && args.at(-1) === inner ? 1 : 0, output: requirement(identity) })],
+    ["a wrong certificate on the outer app", (args, _, outer) => ({ status: 0, output: args[0] === "-d" ? requirement(args.at(-1) === outer ? other : identity) : "" })],
+    ["a wrong certificate on the extracted app", (args, inner) => ({ status: 0, output: args[0] === "-d" ? requirement(args.at(-1) === inner ? other : identity) : "" })],
     ["a wrong identifier", (args) => ({ status: 0, output: args[0] === "-d" ? requirement(identity, "app.example.other") : "" })],
     ["a failed requirement read", (args) => ({ status: args[0] === "-d" ? 1 : 0, output: requirement(identity) })],
     ["an ad hoc requirement", (args) => ({ status: 0, output: args[0] === "-d" ? 'designated => cdhash H"1593f00c9269224608bcfc16986b4c7b1b09a2d5"\n' : "" })],
@@ -351,8 +453,11 @@ test("a failed signature check, wrong certificate, wrong identifier or missing r
   for (const [name, respond] of cases) {
     const f = await fixture()
     try {
-      let index = 0
-      await expect(f.run({ codesign: async (args) => respond(args, index++) }, signedArgv(f.output)), name).rejects.toThrow("signature")
+      const inner = path.join(f.output, "validation/YCoding Desktop.app")
+      const outer = path.join(f.output, "YCoding Desktop.app")
+      const result = await f.run({ codesign: async (args) => respond(args, inner, outer) }, signedArgv(f.output)).catch((error: unknown) => error)
+      expect(result, name).toBeInstanceOf(Error)
+      expect(result, name).toHaveProperty("message", expect.stringContaining("signature"))
       expect(await fs.stat(path.join(f.output, "build-receipt.json")).then(() => true, () => false), name).toBe(false)
       expect(await fs.stat(path.join(f.desktop, ".ycoding-desktop-build.lock")).then(() => true, () => false), name).toBe(false)
     } finally { await fs.rm(f.root, { recursive: true, force: true }) }

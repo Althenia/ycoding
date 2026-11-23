@@ -57,6 +57,24 @@ test("the Linux runtime shard runs the three exact native recovery cases after t
   })
 })
 
+test("release source verification selects the native startup diagnostic regressions", () => {
+  const verify = workflowJob(workflow, "verify-source")
+  const steps = verify.split("\n      - name: ").slice(1)
+  const selected = steps.filter((step) => step.startsWith("Verify native startup diagnostics\n"))
+  expect(selected).toHaveLength(1)
+  const cargo = "cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-runtime"
+  expect(Bun.YAML.parse(`name: ${selected[0]!.replace(/^ {8}/gm, "")}`)).toEqual({
+    name: "Verify native startup diagnostics",
+    if: "matrix.suite == 'tui-runtime'",
+    run: [
+      `${cargo} --test service_failed_boot failed_composition_registration_deletion_stops_owner_and_releases_listener -- --exact`,
+      `${cargo} --test service_failed_boot failed_store_boot_retains_native_owner_until_authenticated_exact_instance_stop -- --exact`,
+      `${cargo} --lib production::tests::retention_settings_fail_startup_when_the_first_load_fails -- --exact`,
+    ].join("\n") + "\n",
+  })
+  expect(steps.indexOf(selected[0]!)).toBeGreaterThan(steps.findIndex((step) => step.startsWith("Build and verify native runtime receipt\n")))
+})
+
 test("source verification runs the native decision follow regression files in the CLI suite", async () => {
   const verify = workflowJob(workflow, "verify-source")
   const steps = verify.split("\n      - name: ").slice(1).filter((step) => step.startsWith("Verify native decision follow\n"))
@@ -970,6 +988,24 @@ test("release workflow builds and archives the macOS desktop app from the locked
 })
 
 const desktopStep = (name: string) => workflowJob(workflow, "build-desktop").split(`      - name: ${name}\n`)[1]?.split("\n      - name: ")[0] ?? ""
+
+test("Desktop stages its actual CLI distribution for candidate checks without changing release archives", () => {
+  const desktop = workflowJob(workflow, "build-desktop")
+  const readback = desktopStep("Verify and archive the Desktop CLI distribution")
+  const upload = desktopStep("Upload Desktop CLI distribution for verification")
+  expect(readback).toContain('dist="packages/cli/dist/cli-darwin-arm64"')
+  expect(readback).toContain('"$GITHUB_WORKSPACE/$dist/package.json"')
+  expect(readback).toContain('cmp "$dist/bin/ycoding" "$backend/ycoding"')
+  expect(readback).toContain('tar -czf "$RUNNER_TEMP/cli-darwin-arm64.tar.gz" -C packages/cli/dist cli-darwin-arm64')
+  expect(upload).toContain("name: desktop-cli-distribution-darwin-arm64-${{ github.run_attempt }}")
+  expect(upload).toContain("${{ runner.temp }}/desktop/build-receipt.json")
+  expect(upload).toContain("if-no-files-found: error")
+  const order = ["Build desktop app", "Verify desktop signature", "Verify and archive the Desktop CLI distribution", "Upload Desktop CLI distribution for verification", "Upload desktop archive"].map((name) => desktop.indexOf(`- name: ${name}\n`))
+  expect(order.every((index) => index >= 0)).toBe(true)
+  expect(order).toEqual([...order].sort((a, b) => a - b))
+  expect(workflowJob(workflow, "finalize-release")).not.toContain("desktop-cli-distribution")
+  expect(workflowJob(workflow, "release-tui")).not.toContain("desktop-cli-distribution")
+})
 
 test("release workflow signs the desktop app with the pinned self-signed identity, verifies it and always removes the keychain", () => {
   const desktop = workflowJob(workflow, "build-desktop")
