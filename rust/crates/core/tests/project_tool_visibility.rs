@@ -3,9 +3,13 @@ use ycoding_core::{
     coordination::{OwnerInput, Service},
     event_feed::Feed,
     resources::{
-        agent, config, domain_state::DomainState, mcp, reference, skill, tool_output_store,
+        agent, catalog::Catalog, config, domain_state::DomainState, mcp, reference, skill,
+        tool_output_store,
     },
-    session::instruction_assembly::{self, Context},
+    session::{
+        generate,
+        instruction_assembly::{self, Context},
+    },
     tools::{
         builtin::project::{self, Project},
         context::Context as ToolContext,
@@ -13,7 +17,7 @@ use ycoding_core::{
     },
 };
 use ycoding_schema::{
-    coordination as c, parse_json,
+    DomainDecode, coordination as c, model, parse_json,
     permission::{Effect, Rule},
     session,
 };
@@ -435,4 +439,48 @@ async fn coordination_instructions_follow_each_sessions_project_role() {
     );
     assert!(coordination_voice(&world, "ses_other").await.is_none());
     assert!(coordination_voice(&world, "ses_absent").await.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rendered_system_prompts_require_explicit_steer_only_for_coordinators() {
+    let world = world().await;
+    let agent = agent::empty("build".into());
+    let catalog = Catalog::default();
+    let selection =
+        model::Ref::decode(&parse_json(r#"{"providerID":"openai","id":"gpt-5"}"#).unwrap())
+            .unwrap();
+    let directives = [
+        "As Master, send work instructions to supervisor subagents with `subagent_control`.",
+        "As supervisor, send work instructions to owned Project members with `project`.",
+        r#"For every such send, including the initial assignment, set `delivery: "steer"` explicitly."#,
+        "If a send's outcome is uncertain, check the target's native Session state before retrying. Retry only if you confirm that the instruction was not accepted.",
+    ];
+    for (session, is_coordinator) in [
+        ("ses_master", true),
+        ("ses_supervisor", true),
+        ("ses_member", false),
+    ] {
+        let session_id = id(session);
+        let ceiling = world.context.ceiling(&session_id, &[]).unwrap();
+        let sources = world
+            .context
+            .sources(vec![], &agent, &ceiling)
+            .await
+            .unwrap();
+        let observed = ycoding_core::instructions::read(&sources).await.unwrap();
+        let snapshot = world._store.client().snapshot().unwrap();
+        let initial = instruction_assembly::preview(&snapshot, &session_id, &sources, observed)
+            .unwrap()
+            .initial;
+        let system = generate::system(&agent, &catalog, &selection, &[], initial);
+        for directive in directives {
+            assert_eq!(
+                system
+                    .iter()
+                    .any(|part| part.text.to_utf8().unwrap().contains(directive)),
+                is_coordinator,
+                "{session}: {directive}"
+            );
+        }
+    }
 }

@@ -9,7 +9,7 @@ const neither = "desktop=false\nweb=false\n"
 const desktopOnly = "desktop=true\nweb=false\n"
 const webOnly = "desktop=false\nweb=true\n"
 
-function withHistory(entries: string, verify: (run: (event: string, options?: Record<string, string>) => string) => void) {
+function withHistory(entries: string, verify: (run: (event: string, options?: Record<string, string>) => string) => void, depth?: number) {
   const cwd = mkdtempSync(path.join(tmpdir(), "ycoding-ci-inputs-"))
   const git = (args: string[], stdin?: string) => {
     const result = Bun.spawnSync(["git", ...args], { cwd, stdin: stdin === undefined ? "ignore" : Buffer.from(stdin) })
@@ -27,9 +27,11 @@ function withHistory(entries: string, verify: (run: (event: string, options?: Re
       commit("main", 4, "from :2\nmerge :3\n", entries),
       "done\n",
     ].join(""))
+    const checkout = depth === undefined ? cwd : path.join(cwd, "checkout")
+    if (depth !== undefined) git(["clone", "--quiet", "--no-local", "--depth", String(depth), cwd, checkout])
     verify((event, options = {}) => {
       const result = Bun.spawnSync([process.execPath, path.join(root, "script/ci-build-inputs.ts")], {
-        cwd,
+        cwd: checkout,
         env: {
           ...process.env,
           GITHUB_EVENT_NAME: event,
@@ -89,6 +91,18 @@ test("builds both when a native comparison is missing or uncertain", () => {
     expect(run("pull_request", { CI_PR_HEAD: "a".repeat(40) })).toBe(both)
     expect(run("pull_request", { GITHUB_SHA: "a".repeat(40) })).toBe(both)
   })
+})
+
+test("selects PR builds with only the merge commit and its parents", () => {
+  const changes = 'R "packages/desktop/src/old.ts" "docs/retired.md"\n'
+  withHistory(changes, (run) => {
+    expect(run("pull_request")).toBe(desktopOnly)
+    expect(run("workflow_dispatch")).toBe(both)
+  }, 2)
+  withHistory(changes, (run) => expect(run("pull_request")).toBe(both), 1)
+
+  const checkout = workflowJobs("test")["build-inputs"]?.steps.find((step) => step.name === "Checkout comparison history")
+  expect(yamlFields(checkout?.with)["fetch-depth"]).toBe(2)
 })
 
 function yamlFields(value: unknown): Record<string, unknown> {

@@ -448,6 +448,30 @@ const gates = [
 const forbidden = [/\/tmp\//, /\block\b/i, /\b\d+(\.\d+)? ?(MiB|GiB|MB|GB)\b/, /\bses_[a-z0-9]/i, /\bslot\.lock\b/]
 
 describe("Master hierarchy prompt assembly", () => {
+  it.effect("requires explicit steer delivery in coordinator system prompts only", () =>
+    Effect.gen(function* () {
+      const { coordination, group } = yield* setupProject
+      const supervisor = Session.ID.make("ses_coord_steer_supervisor")
+      yield* insertSession(supervisor, otherSessionID)
+      yield* coordination.setOwner(group.id, { sessionID, ownerSessionID: supervisor })
+
+      const master = systemText(yield* requestFor(otherSessionID, "Coordinate the team"))
+      const owner = systemText(yield* requestFor(supervisor, "Supervise the member"))
+      const member = systemText(yield* requestFor(sessionID, "Member work"))
+      for (const directive of [
+        "As Master, send work instructions to supervisor subagents with `subagent_control`.",
+        "As supervisor, send work instructions to owned Project members with `project`.",
+        'For every such send, including the initial assignment, set `delivery: "steer"` explicitly.',
+        "If a send's outcome is uncertain, check the target's native Session state before retrying. Retry only if you confirm that the instruction was not accepted.",
+      ]) {
+        const rendered = JSON.stringify(directive).slice(1, -1)
+        expect(master).toContain(rendered)
+        expect(owner).toContain(rendered)
+        expect(member).not.toContain(rendered)
+      }
+    }),
+  )
+
   it.effect("a Master's assembled prompt states the hierarchy and claims no unimplemented ownership controls", () =>
     Effect.gen(function* () {
       yield* setupProject
