@@ -22,6 +22,22 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.13.3",
+    date: "2026-11-23",
+    title: "Rust connection and recovery fixes",
+    tags: ["Fixed", "Changed"],
+    changes: [
+      { tag: "Fixed", text: "Rust sends Antigravity requests through the OAuth gateway and reports an incomplete response as a failure when the stream ends without a finish reason." },
+      { tag: "Fixed", text: "The terminal composer uploads large clipboard images in chunks before sending the prompt, so the image does not have to fit in one message." },
+      { tag: "Fixed", text: "Next-message suggestions in the terminal can include languages such as Thai that do not use spaces between words." },
+      { tag: "Fixed", text: "After an unexpected stop, the server records the outcome of any tool still running as unknown. It does not retry the tool or resume the interrupted root Session." },
+      { tag: "Fixed", text: "Project startup can pick up pending inputs that were admitted but never processed, without admitting them twice or replaying completed work. Paused Projects stay paused." },
+      { tag: "Fixed", text: "Chrome enrollment requires a successful handshake with the signed macOS helper. Invalid profile labels are rejected before the consent prompt opens." },
+      { tag: "Fixed", text: "The first Usage read can wait for accounting data to become ready rather than immediately reporting it unavailable." },
+      { tag: "Changed", text: "A Dots thread response must contain either a decision or answers. Requests with both or neither are rejected." },
+    ],
+  },
+  {
     version: "0.13.2",
     date: "2026-11-22",
     title: "Rust becomes the default GitHub release",
