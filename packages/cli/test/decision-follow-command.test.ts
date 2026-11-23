@@ -99,8 +99,8 @@ async function deliveryFixture(routes: DeliveryRoutes, deliver: string[]) {
       for (const row of rows) lines.push(JSON.parse(row) as Record<string, unknown>)
     }
   })()
-  const until = async (predicate: () => boolean, label: string) => {
-    for (const started = Date.now(); !predicate();) {
+  const until = async (predicate: () => boolean | Promise<boolean>, label: string) => {
+    for (const started = Date.now(); !(await predicate());) {
       if (Date.now() - started > 8000) throw new Error(`Missing installed delivery ${label}`)
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
@@ -238,6 +238,14 @@ test("installed follow delivers to dot at the Dot's current root, follows a root
     asked = true
     f.event({ type: "guardrail.asked", id: "evt_rotated", sourceEpoch: "epoch_synthetic", data: { sessionID: "ses_root", id: "grq_rotated" } })
     await f.until(() => f.lines.some((value) => value.kind === "delivery" && (value.events as { id: string }[]).some((event) => event.id === "grq_rotated")), "rotated decision delivery")
+    await f.until(() => f.lines.some((value) => value.kind === "delivery" && Array.isArray(value.events) &&
+      value.events.some((event: unknown) => typeof event === "object" && event !== null &&
+        "type" in event && event.type === "watch.reconciliation" && "reason" in event && event.reason === "open-questions")),
+      "open-questions reconciliation delivery")
+    await f.until(async () => {
+      const delivery: FollowState["delivery"] = (await f.state()).delivery
+      return delivery?.targets.some((target) => target.target === "dot" && target.outbox.length === 0 && target.inflight === undefined) ?? false
+    }, "saved empty Dot delivery ledger")
     expect(f.sent[0]).toMatchObject({ threadID: "thr_root_one", mode: "send" })
     const rotated = f.sent.filter((value) => String(value.text).includes("guardrail grq_rotated pending in ses_root."))
     expect(rotated).toHaveLength(1)
@@ -246,12 +254,9 @@ test("installed follow delivers to dot at the Dot's current root, follows a root
     const deliveries = f.lines.filter((value) => value.kind === "delivery")
     expect(deliveries[0]).toMatchObject({ target: "dot", threadID: "thr_root_one", mode: "send", outcome: "delivered" })
     expect(deliveries.slice(1).every((value) => value.target === "dot" && value.threadID === "thr_root_two" && value.mode === "send" && value.outcome === "delivered")).toBe(true)
-  } finally {
     expect((await f.finish()).stderr).toBe("")
-  }
-  try {
     expect((await f.state()).delivery).toEqual({ announced: ["guardrail\0ses_root\0grq_rotated"], targets: [{ target: "dot", outbox: [] }] })
-  } finally { await f.cleanup() }
+  } finally { await f.finish().finally(() => f.cleanup()) }
 }, 30_000)
 
 test("installed follow names the upstream rejection code and message in the failed delivery record and its stderr line", async () => {
