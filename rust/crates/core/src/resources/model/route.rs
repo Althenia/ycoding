@@ -179,6 +179,8 @@ pub fn from_catalog_model_with_claude(
 fn antigravity_model(
     info: &model::Info,
     credential: Option<&credential::Value>,
+    environment: &BTreeMap<String, String>,
+    version: &str,
 ) -> Result<Model, Error> {
     if info.package.as_ref().and_then(|package| package.as_str()) != Some("aisdk:@ai-sdk/google") {
         return Err(Error::UnsupportedPackage);
@@ -215,7 +217,7 @@ fn antigravity_model(
         }
         settings.0 = fields;
     }
-    let base = from_catalog_model_base(&cleaned, credential)?;
+    let base = from_catalog_package(&cleaned, credential, environment, version)?;
     let mut result = ycoding_ai::antigravity::route(ycoding_ai::antigravity::Config {
         access: Some(Credential::value(access)),
         base_url: field(&settings, "baseURL")
@@ -235,9 +237,6 @@ pub fn from_catalog_model(
     info: &model::Info,
     credential: Option<&credential::Value>,
 ) -> Result<Model, Error> {
-    if info.provider_id.0 == "antigravity".into() {
-        return antigravity_model(info, credential);
-    }
     if info.provider_id.0 == "muse".into() {
         return super::super::muse::from_catalog_model(
             info,
@@ -262,6 +261,18 @@ pub(crate) fn from_catalog_model_base(
 }
 
 pub(super) fn from_catalog_model_environment(
+    info: &model::Info,
+    credential: Option<&credential::Value>,
+    environment: &BTreeMap<String, String>,
+    version: &str,
+) -> Result<Model, Error> {
+    if info.provider_id.0 == "antigravity".into() {
+        return antigravity_model(info, credential, environment, version);
+    }
+    from_catalog_package(info, credential, environment, version)
+}
+
+fn from_catalog_package(
     info: &model::Info,
     credential: Option<&credential::Value>,
     environment: &BTreeMap<String, String>,

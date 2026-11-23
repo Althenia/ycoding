@@ -1,7 +1,7 @@
 use ycoding_ai::llm::{Message, Request};
 use ycoding_core::resources::{
     catalog::models_dev,
-    model::{Error, from_catalog_model, with_variant},
+    model::{Error, ProviderContext, from_catalog_model, with_variant},
 };
 use ycoding_schema::{
     DomainDecode, DomainEncode, JsonValue, credential, integration_id::IntegrationMethodId,
@@ -137,6 +137,51 @@ fn variant_gateway_model_reaches_envelope_without_leaking_the_setting() {
         stringify_json(&info.settings.as_ref().map(|s| s.encode()).unwrap())
             .contains("antigravityModelID")
     );
+}
+
+#[tokio::test]
+async fn selected_antigravity_model_uses_the_oauth_gateway() {
+    let info = with_variant(
+        info(
+            r#"{"thinkingConfig":{"includeThoughts":true,"thinkingLevel":"medium"}}"#,
+            &[(
+                "high",
+                r#"{"thinkingConfig":{"includeThoughts":true,"thinkingLevel":"high"},"antigravityModelID":"gemini-3.8-flash-high"}"#,
+            )],
+        ),
+        Some(&"high".into()),
+    )
+    .unwrap();
+    let context = ProviderContext::new(Default::default(), "fixture").unwrap();
+    let model = context
+        .selected_model(
+            &info,
+            Some(&oauth(Some("project-9"))),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let mut request = Request::new(model.clone());
+    request.messages.push(Message::user("Hi"));
+    let prepared = model.route.prepare(&request).unwrap();
+    assert_eq!(
+        prepared.url.as_str(),
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"
+    );
+    assert_eq!(prepared.headers["authorization"], "Bearer google-access");
+    assert!(!prepared.headers.contains_key("x-goog-api-key"));
+    assert_eq!(
+        field(&prepared.wire_body, "project"),
+        Some(&JsonValue::String("project-9".into()))
+    );
+    assert_eq!(
+        field(&prepared.wire_body, "model"),
+        Some(&JsonValue::String("gemini-3.8-flash-high".into()))
+    );
+    assert!(!stringify_json(&prepared.wire_body).contains("antigravityModelID"));
 }
 
 #[test]
