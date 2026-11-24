@@ -22,59 +22,6 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
-    version: "0.13.4",
-    date: "2026-11-23",
-    title: "Clearer startup errors and deferred Form fixes",
-    tags: ["Fixed"],
-    changes: [
-      { tag: "Fixed", text: "If startup fails because a global configuration file or a file it references is missing, is a directory, or cannot be read, the CLI explains what to check without exposing configuration values or private paths." },
-      { tag: "Fixed", text: "Clients can submit deferred Form answers by field name, including checkbox and number values." },
-      { tag: "Fixed", text: "Pinning a Session that is already pinned no longer writes to the database." },
-    ],
-  },
-  {
-    version: "0.13.3",
-    date: "2026-11-23",
-    title: "Rust connection and recovery fixes",
-    tags: ["Fixed", "Changed"],
-    changes: [
-      { tag: "Fixed", text: "Rust sends Antigravity requests through the OAuth gateway and reports an incomplete response as a failure when the stream ends without a finish reason." },
-      { tag: "Fixed", text: "The terminal composer uploads large clipboard images in chunks before sending the prompt, so the image does not have to fit in one message." },
-      { tag: "Fixed", text: "Next-message suggestions in the terminal can include languages such as Thai that do not use spaces between words." },
-      { tag: "Fixed", text: "After an unexpected stop, the server records the outcome of any tool still running as unknown. It does not retry the tool or resume the interrupted root Session." },
-      { tag: "Fixed", text: "Project startup can pick up pending inputs that were admitted but never processed, without admitting them twice or replaying completed work. Paused Projects stay paused." },
-      { tag: "Fixed", text: "Chrome enrollment requires a successful handshake with the signed macOS helper. Invalid profile labels are rejected before the consent prompt opens." },
-      { tag: "Fixed", text: "The first Usage read can wait for accounting data to become ready rather than immediately reporting it unavailable." },
-      { tag: "Changed", text: "A Dots thread response must contain either a decision or answers. Requests with both or neither are rejected." },
-    ],
-  },
-  {
-    version: "0.13.2",
-    date: "2026-11-22",
-    title: "Rust becomes the default GitHub release",
-    tags: ["Fixed", "Changed"],
-    changes: [
-      { tag: "Fixed", text: "Keep Machine Awake on macOS prevents the display and system from sleeping due to inactivity. The TUI and Web show the display hold separately. Closing the lid can still put the Mac to sleep." },
-      { tag: "Fixed", text: "Rust keeps the reusable prompt prefix stable on Codex, Claude Code, and Antigravity when Session state changes. Each provider still decides whether to reuse cached content." },
-      { tag: "Fixed", text: "Rust announces a change to active Session instructions once, rather than repeating it on the next turn." },
-      { tag: "Fixed", text: "On macOS, Ctrl+V in the terminal composer attaches copied images and supported files copied in Finder." },
-      { tag: "Fixed", text: "Rust recovers the Session store after an unclean shutdown and can start with a verified pre-prune backup even when there is no pre-upgrade copy." },
-      { tag: "Changed", text: "Stable Rust releases take the GitHub Latest badge. Existing Bun archives remain available, and switching an existing Bun installation to Rust still requires an explicit choice." },
-      { tag: "Changed", text: "New CLI and Desktop downloads are for Apple Silicon. Earlier releases retain their original platform archives." },
-      { tag: "Changed", text: "Terminal, Desktop, and Web show OpenAI, Claude, Antigravity, OpenRouter, and Custom OpenAI-compatible Endpoint in the connect menu. Rust preserves credentials and Session history for retired providers but does not start new requests through them." },
-    ],
-  },
-  {
-    version: "0.13.1",
-    date: "2026-11-22",
-    title: "Fresh Rust installs and clearer connection errors",
-    tags: ["Fixed", "Changed"],
-    changes: [
-      { tag: "Fixed", text: "Rust returns a structured authentication error when a client checks a password-protected server without valid credentials. The CLI can now explain how to connect instead of reporting an incompatible health response." },
-      { tag: "Changed", text: "The shell installer selects the newest stable Rust release on a fresh installation and stops if none is available. Rust keeps its own store and does not import Bun Sessions or data." },
-    ],
-  },
-  {
     version: "0.13.0",
     date: "2026-11-22",
     title: "Rust for new installations",
