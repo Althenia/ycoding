@@ -941,6 +941,5 @@ pub fn latency_sample(values: &[Value]) -> Result<telemetry::Sample, Error> {
             _ => object.field(field, &value_number(value)?),
         };
     }
-    telemetry::Sample::decode(&object.finish())
-        .map_err(|error| Error::Record(Box::new(error)))
+    telemetry::Sample::decode(&object.finish()).map_err(|error| Error::Record(Box::new(error)))
 }

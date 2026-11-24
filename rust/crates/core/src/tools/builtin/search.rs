@@ -9,6 +9,8 @@ use crate::{
 use std::{
     collections::HashSet,
     fs,
+    future::Future,
+    io,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -136,13 +138,16 @@ impl Tool for Search {
             }
             if matches!(self.kind, Kind::Glob) {
                 let entries = self
-                    .service
-                    .glob(&search::GlobInput {
-                        pattern: pattern.clone(),
-                        path,
-                        limit: Some(limit.unwrap_or(100)),
-                    })
-                    .map_err(|error| self.failure(&pattern, Failure::message(error.to_string())))?;
+                    .run_search(
+                        &context,
+                        &pattern,
+                        self.service.clone().glob_background(search::GlobInput {
+                            pattern: pattern.clone(),
+                            path,
+                            limit: Some(limit.unwrap_or(100)),
+                        }),
+                    )
+                    .await?;
                 let text = if entries.is_empty() {
                     "No files found".into()
                 } else {
@@ -175,28 +180,31 @@ impl Tool for Search {
                 .await
                 .map_err(|error| self.failure(&pattern, error))?;
             }
-            let external;
             let (service, search_path, source) = if managed {
                 let parent = resolved.parent().unwrap();
-                external = search::Service::new(
+                let external = search::Service::new(
                     parent,
                     search::Backend::Ripgrep {
                         binary: self.ripgrep.clone(),
                     },
                 )
                 .map_err(|error| self.failure(&pattern, Failure::message(error.to_string())))?;
-                (&external, Some(filename.into()), parent)
+                (Arc::new(external), Some(filename.into()), parent)
             } else {
-                (self.service.as_ref(), path, root.as_path())
+                (self.service.clone(), path, root.as_path())
             };
-            let mut matches = service
-                .grep(&search::GrepInput {
-                    pattern: pattern.clone(),
-                    path: search_path,
-                    include,
-                    limit: Some(limit.unwrap_or(100)),
-                })
-                .map_err(|error| self.failure(&pattern, Failure::message(error.to_string())))?;
+            let mut matches = self
+                .run_search(
+                    &context,
+                    &pattern,
+                    service.grep_background(search::GrepInput {
+                        pattern: pattern.clone(),
+                        path: search_path,
+                        include,
+                        limit: Some(limit.unwrap_or(100)),
+                    }),
+                )
+                .await?;
             for matched in &mut matches {
                 let absolute = source.join(matched.entry.path.as_lossless().as_str().unwrap());
                 self.authorize(
@@ -254,6 +262,19 @@ impl Tool for Search {
     }
 }
 impl Search {
+    async fn run_search<T>(
+        &self,
+        context: &Context,
+        pattern: &str,
+        search: impl Future<Output = io::Result<T>>,
+    ) -> Result<T, Failure> {
+        tokio::select! {
+            biased;
+            () = context.cancellation.cancelled() => Err(Failure::Cancelled),
+            result = search => result.map_err(|error| self.failure(pattern, Failure::message(error.to_string()))),
+        }
+    }
+
     fn failure(&self, pattern: &str, error: Failure) -> Failure {
         match error {
             Failure::Cancelled | Failure::Defect(_) => error,

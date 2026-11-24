@@ -161,7 +161,7 @@ async fn held_writer_append_settles_with_unchanged_consent_and_exact_samples() {
             .rev()
             .map(|sample| telemetry::PageEntry {
                 received_at: ycoding_core::ycoding_schema::schema::Int::new(123).unwrap(),
-                sample: sample,
+                sample,
             })
             .collect::<Vec<_>>()
     );

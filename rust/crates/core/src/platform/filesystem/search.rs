@@ -7,8 +7,8 @@ use std::{
     collections::HashSet,
     io::{self, BufRead, BufReader, Read},
     path::PathBuf,
-    process::{Child, Command, Stdio},
-    sync::{Arc, Condvar, Mutex},
+    process::{Child, Command, ExitStatus, Stdio},
+    sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError},
     thread::JoinHandle,
     time::Duration,
 };
@@ -45,9 +45,101 @@ struct Index {
 }
 #[derive(Default)]
 struct Running {
+    process: Mutex<ProcessState>,
+    changed: Condvar,
+}
+#[derive(Default)]
+struct ProcessState {
     child: Option<Child>,
     cancelled: bool,
 }
+impl Running {
+    fn lock(&self) -> MutexGuard<'_, ProcessState> {
+        self.process.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn cancel(&self) {
+        let mut state = self.lock();
+        if !state.cancelled {
+            state.cancelled = true;
+            if let Some(child) = state.child.as_mut() {
+                terminate(child);
+            }
+            self.changed.notify_all();
+        }
+    }
+
+    fn wait(&self) -> io::Result<ExitStatus> {
+        let mut state = self.lock();
+        loop {
+            if state.cancelled {
+                let mut child = state.child.take().expect("Ripgrep child installed");
+                drop(state);
+                return child.wait();
+            }
+            if let Some(status) = state
+                .child
+                .as_mut()
+                .expect("Ripgrep child installed")
+                .try_wait()?
+            {
+                state.child = None;
+                return Ok(status);
+            }
+            state = self
+                .changed
+                .wait_timeout(state, Duration::from_millis(10))
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+    }
+}
+
+fn terminate(child: &mut Child) {
+    if let Err(error) = child.kill() {
+        tracing::warn!(%error, "Failed to stop ripgrep");
+    }
+}
+
+struct ReapOnDrop<'a>(&'a Running);
+impl Drop for ReapOnDrop<'_> {
+    fn drop(&mut self) {
+        let child = self.0.lock().child.take();
+        if let Some(mut child) = child {
+            terminate(&mut child);
+            if let Err(error) = child.wait() {
+                tracing::warn!(%error, "Failed to reap ripgrep");
+            }
+        }
+    }
+}
+
+struct CancelSearch {
+    running: Arc<Running>,
+    abort: tokio::task::AbortHandle,
+}
+impl Drop for CancelSearch {
+    fn drop(&mut self) {
+        self.running.cancel();
+        self.abort.abort();
+    }
+}
+
+async fn background_search<T: Send + 'static>(
+    search: impl FnOnce(&Running) -> io::Result<T> + Send + 'static,
+) -> io::Result<T> {
+    let running = Arc::new(Running::default());
+    let worker = {
+        let running = running.clone();
+        tokio::task::spawn_blocking(move || search(&running))
+    };
+    let _cancel = CancelSearch {
+        running,
+        abort: worker.abort_handle(),
+    };
+    worker.await.map_err(io::Error::other)?
+}
+
 enum State {
     Deferred {
         backend: Arc<dyn Fn() -> io::Result<Backend> + Send + Sync>,
@@ -58,7 +150,7 @@ enum State {
     Ripgrep {
         binary: PathBuf,
         index: Arc<(Mutex<Index>, Condvar)>,
-        running: Arc<Mutex<Running>>,
+        running: Arc<Running>,
         worker: std::sync::OnceLock<JoinHandle<()>>,
     },
 }
@@ -152,7 +244,7 @@ impl Service {
             Backend::Ripgrep { binary } => State::Ripgrep {
                 binary,
                 index: Arc::new((Mutex::new(Index::default()), Condvar::new())),
-                running: Arc::new(Mutex::new(Running::default())),
+                running: Arc::new(Running::default()),
                 worker: Default::default(),
             },
             Backend::Automatic { .. } => unreachable!(),
@@ -218,7 +310,7 @@ impl Service {
                         }
                         Ok(Some(()))
                     },
-                    Some(&child),
+                    &child,
                 );
                 if let Ok(mut index) = indexed.0.lock() {
                     index.finished = true;
@@ -410,8 +502,19 @@ impl Service {
     }
 
     pub fn glob(&self, input: &GlobInput) -> io::Result<Vec<Entry>> {
+        self.glob_with(input, &Running::default())
+    }
+
+    pub(crate) async fn glob_background(
+        self: Arc<Self>,
+        input: GlobInput,
+    ) -> io::Result<Vec<Entry>> {
+        background_search(move |running| self.glob_with(&input, running)).await
+    }
+
+    fn glob_with(&self, input: &GlobInput, running: &Running) -> io::Result<Vec<Entry>> {
         if let Some(service) = self.initialized()? {
-            return service.glob(input);
+            return service.glob_with(input, running);
         }
         let limit = checked_limit(input.limit)?;
         match &self.state {
@@ -446,7 +549,7 @@ impl Service {
             }
             State::Ripgrep { binary, .. } => {
                 let (cwd, _) = self.scope(input.path.as_deref())?;
-                rg_files(binary, &cwd, &input.pattern, limit, true)?
+                rg_files(binary, &cwd, &input.pattern, limit, running)?
                     .iter()
                     .map(|path| self.scoped_entry(&cwd, path))
                     .collect()
@@ -455,8 +558,19 @@ impl Service {
     }
 
     pub fn grep(&self, input: &GrepInput) -> io::Result<Vec<Match>> {
+        self.grep_with(input, &Running::default())
+    }
+
+    pub(crate) async fn grep_background(
+        self: Arc<Self>,
+        input: GrepInput,
+    ) -> io::Result<Vec<Match>> {
+        background_search(move |running| self.grep_with(&input, running)).await
+    }
+
+    fn grep_with(&self, input: &GrepInput, running: &Running) -> io::Result<Vec<Match>> {
         if let Some(service) = self.initialized()? {
-            return service.grep(input);
+            return service.grep_with(input, running);
         }
         let limit = checked_limit(input.limit)?;
         match &self.state {
@@ -585,7 +699,7 @@ impl Service {
                                 .collect::<io::Result<_>>()?,
                         }))
                     },
-                    None,
+                    running,
                 )
             }
         }
@@ -638,12 +752,7 @@ impl Drop for Service {
             running, worker, ..
         } = &mut self.state
         {
-            if let Ok(mut running) = running.lock() {
-                running.cancelled = true;
-                if let Some(child) = running.child.as_mut() {
-                    let _ = child.kill();
-                }
-            }
+            running.cancel();
             if let Some(worker) = worker.take()
                 && worker.join().is_err()
             {
@@ -713,13 +822,15 @@ fn rg_files(
     cwd: &std::path::Path,
     pattern: &str,
     limit: usize,
-    apply_pattern: bool,
+    running: &Running,
 ) -> io::Result<Vec<String>> {
-    let mut args = vec!["--no-config".into(), "--files".into()];
-    if apply_pattern {
-        args.push(format!("--glob={pattern}"));
-    }
-    args.extend(["--glob=!**/.git/**".into(), ".".into()]);
+    let args = [
+        "--no-config".into(),
+        "--files".into(),
+        format!("--glob={pattern}"),
+        "--glob=!**/.git/**".into(),
+        ".".into(),
+    ];
     rg(
         binary,
         cwd,
@@ -734,7 +845,7 @@ fn rg_files(
                     .replace('\\', "/"),
             ))
         },
-        None,
+        running,
     )
 }
 
@@ -745,8 +856,14 @@ fn rg<T>(
     limit: usize,
     pattern: Option<&str>,
     parse: impl Fn(&[u8]) -> io::Result<Option<T>>,
-    running: Option<&Arc<Mutex<Running>>>,
+    running: &Running,
 ) -> io::Result<Vec<T>> {
+    if running.lock().cancelled {
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "Ripgrep cancelled",
+        ));
+    }
     let mut child = Command::new(binary)
         .args(args)
         .current_dir(cwd)
@@ -754,91 +871,43 @@ fn rg<T>(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| io::Error::other("Missing ripgrep stderr"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| io::Error::other("Missing ripgrep stdout"))?;
-    let local = Arc::new(Mutex::new(Running::default()));
-    let running = running.unwrap_or(&local);
+    let stderr = child.stderr.take().expect("Ripgrep stderr piped");
+    let stdout = child.stdout.take().expect("Ripgrep stdout piped");
     {
-        let mut running = running
-            .lock()
-            .map_err(|_| io::Error::other("Ripgrep process lock poisoned"))?;
-        if running.cancelled {
-            let _ = child.kill();
+        let mut state = running.lock();
+        if state.cancelled {
+            terminate(&mut child);
         }
-        running.child = Some(child);
+        state.child = Some(child);
     }
-    let errors = std::thread::spawn(move || {
-        let mut reader = stderr;
-        let mut buffer = [0; 8192];
-        let mut retained = Vec::new();
-        loop {
-            let size = reader.read(&mut buffer)?;
-            if size == 0 {
-                return Ok::<_, io::Error>(retained);
+    let (rows, truncated, status, stderr) = std::thread::scope(|scope| {
+        let child = ReapOnDrop(running);
+        let errors = std::thread::Builder::new().spawn_scoped(scope, move || {
+            let mut reader = stderr;
+            let mut buffer = [0; 8192];
+            let mut retained = Vec::new();
+            loop {
+                let size = reader.read(&mut buffer)?;
+                if size == 0 {
+                    return Ok::<_, io::Error>(retained);
+                }
+                let take = size.min(8192_usize.saturating_sub(retained.len()));
+                retained.extend_from_slice(&buffer[..take]);
             }
-            let take = size.min(8192_usize.saturating_sub(retained.len()));
-            retained.extend_from_slice(&buffer[..take]);
+        })?;
+        let result = read_rows(BufReader::new(stdout), limit, parse);
+        if !matches!(result, Ok((_, false))) {
+            running.cancel();
         }
-    });
-    let result = (|| {
-        let mut stdout = BufReader::new(stdout);
-        let mut rows = Vec::new();
-        let mut line = Vec::new();
-        loop {
-            let buffer = stdout.fill_buf()?;
-            if buffer.is_empty() {
-                break;
-            }
-            let end = buffer
-                .iter()
-                .position(|byte| *byte == b'\n')
-                .map(|index| index + 1);
-            let size = end.unwrap_or(buffer.len());
-            if line.len() + size > 65536 {
-                return Err(io::Error::other("Ripgrep JSON record exceeded 65536 bytes"));
-            }
-            line.extend_from_slice(&buffer[..size]);
-            stdout.consume(size);
-            if end.is_none() {
-                continue;
-            }
-            if let Some(row) = parse(&line)? {
-                rows.push(row);
-            }
-            line.clear();
-            if rows.len() > limit {
-                rows.truncate(limit);
-                return Ok((rows, true));
-            }
-        }
-        if !line.is_empty()
-            && let Some(row) = parse(&line)?
-        {
-            rows.push(row);
-        }
-        Ok((rows, false))
-    })();
-    let mut child = running
-        .lock()
-        .map_err(|_| io::Error::other("Ripgrep process lock poisoned"))?
-        .child
-        .take()
-        .ok_or_else(|| io::Error::other("Ripgrep child unavailable"))?;
-    if !matches!(result, Ok((_, false))) {
-        let _ = child.kill();
-    }
-    let status = child.wait();
-    let stderr = errors
-        .join()
-        .map_err(|_| io::Error::other("Ripgrep stderr reader panicked"))??;
-    let (rows, truncated) = result?;
-    let code = status?.code().unwrap_or(-1);
+        let status = running.wait();
+        drop(child);
+        let stderr = errors
+            .join()
+            .map_err(|_| io::Error::other("Ripgrep stderr reader panicked"))??;
+        let (rows, truncated) = result?;
+        Ok::<_, io::Error>((rows, truncated, status?, stderr))
+    })?;
+    let code = status.code().unwrap_or(-1);
     if truncated {
         return Ok(rows);
     }
@@ -857,4 +926,46 @@ fn rg<T>(
         1 => Ok(Vec::new()),
         _ => Err(io::Error::other(stderr.trim().to_string())),
     }
+}
+
+fn read_rows<T>(
+    mut stdout: impl BufRead,
+    limit: usize,
+    parse: impl Fn(&[u8]) -> io::Result<Option<T>>,
+) -> io::Result<(Vec<T>, bool)> {
+    let mut rows = Vec::new();
+    let mut line = Vec::new();
+    loop {
+        let buffer = stdout.fill_buf()?;
+        if buffer.is_empty() {
+            break;
+        }
+        let end = buffer
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|index| index + 1);
+        let size = end.unwrap_or(buffer.len());
+        if line.len() + size > 65536 {
+            return Err(io::Error::other("Ripgrep JSON record exceeded 65536 bytes"));
+        }
+        line.extend_from_slice(&buffer[..size]);
+        stdout.consume(size);
+        if end.is_none() {
+            continue;
+        }
+        if let Some(row) = parse(&line)? {
+            rows.push(row);
+        }
+        line.clear();
+        if rows.len() > limit {
+            rows.truncate(limit);
+            return Ok((rows, true));
+        }
+    }
+    if !line.is_empty()
+        && let Some(row) = parse(&line)?
+    {
+        rows.push(row);
+    }
+    Ok((rows, false))
 }

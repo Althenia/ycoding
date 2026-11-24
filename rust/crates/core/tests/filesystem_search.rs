@@ -67,6 +67,48 @@ fn failed_find_index_is_not_an_empty_success() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn dropping_index_reaps_ripgrep_after_stdout_closes() {
+    use std::{fs, os::unix::fs::PermissionsExt, process::Command, time::Instant};
+
+    let fixture = Fixture::new();
+    let binary = fixture.write(
+        "fixture-rg",
+        "#!/bin/sh\nexec 1>&-\nprintf '%s\\n' \"$$\" > index.pid\nexec /bin/sleep 3\n",
+    );
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    let service = Service::new(&fixture.0, Backend::Ripgrep { binary }).unwrap();
+    assert!(!service.wait_for_scan(Duration::ZERO));
+    let start = Instant::now();
+    let pid = loop {
+        if let Ok(pid) = fs::read_to_string(fixture.0.join("index.pid"))
+            && pid.trim().parse::<u32>().is_ok_and(|pid| pid > 1)
+        {
+            break pid;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "index did not start"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let started = Instant::now();
+    drop(service);
+    let elapsed = started.elapsed();
+    let alive = Command::new("/bin/kill")
+        .args(["-0", pid.trim()])
+        .output()
+        .unwrap()
+        .status
+        .success();
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "dropping the index took {elapsed:?}"
+    );
+    assert!(!alive, "dropping the index did not reap ripgrep");
+}
+
 #[test]
 fn fff_glob_grep_and_fuzzy_find_reuse_native_engine_with_relative_shapes() {
     let fixture = Fixture::new();
