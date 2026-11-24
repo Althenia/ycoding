@@ -760,6 +760,34 @@ async fn mismatched_device_or_origin_never_reaches_the_relay_and_late_credential
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_credential_expiry_reconnects_but_device_revocation_stops() {
+    let mut relay = Relay::start(5, false, Budgets::default()).await;
+    let access = access(&relay, None);
+    let (control, connector, saved) = setup(test_dispatcher(), access.clone()).await;
+    let first = relay.opening().await;
+    wait_state(&control, State::On).await;
+    let mut status = control.observe();
+
+    first.commands.send(Command::Close(4401)).await.unwrap();
+    let second = tokio::select! {
+        opening = relay.opening() => opening,
+        failed = status.wait_for(|(_, value)| value.state == State::Error) => {
+            panic!("relay credential expiry stopped the connector: {:?}", failed.unwrap().1);
+        }
+    };
+    wait_state(&control, State::On).await;
+    assert_ne!(first.generation, second.generation);
+    assert_eq!(access.calls.load(Ordering::Acquire), 2);
+
+    second.commands.send(Command::Close(4403)).await.unwrap();
+    wait_state(&control, State::Error).await;
+    assert_eq!(access.calls.load(Ordering::Acquire), 2);
+    assert!(saved.load(Ordering::Acquire));
+    connector.shutdown().await.unwrap();
+    relay.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn established_disconnect_reconnects_and_unknown_mutations_are_never_replayed() {
     reconnect_without_replay(Some(1001)).await;
 }

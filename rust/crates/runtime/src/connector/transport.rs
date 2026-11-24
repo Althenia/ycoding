@@ -582,7 +582,15 @@ async fn connect(
                 let bytes = match incoming {
                     Some(Ok(tungstenite::Message::Binary(bytes))) => bytes,
                     Some(Ok(tungstenite::Message::Ping(_) | tungstenite::Message::Pong(_))) => continue,
-                    Some(Ok(tungstenite::Message::Close(Some(close)))) => return Err(match u16::from(close.code) { 4401 => Error::Unauthorized, 4403 => Error::Forbidden, 4409 => Error::Conflict, _ => Error::Transport }),
+                    Some(Ok(tungstenite::Message::Close(Some(close)))) => {
+                        return Err(match u16::from(close.code) {
+                            4401 if driver.established => Error::Transport,
+                            4401 => Error::Unauthorized,
+                            4403 => Error::Forbidden,
+                            4409 => Error::Conflict,
+                            _ => Error::Transport,
+                        });
+                    }
                     Some(Ok(tungstenite::Message::Text(_))) => return Err(Error::Incompatible),
                     Some(Err(tungstenite::Error::Capacity(error))) => {
                         tracing::debug!(?error, "remote websocket capacity failed");
