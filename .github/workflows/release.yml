@@ -390,13 +390,6 @@ jobs:
             rust/target/release
           key: ${{ steps.desktop-rust.outputs.release-cache-key }}
 
-      - name: Download verified runtime
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: release-runtime-darwin-arm64-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/verified-release-runtime
-          digest-mismatch: error
-
       - name: Cache Electrobun native assets
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -459,7 +452,7 @@ jobs:
         env:
           YCODING_MACOS_SIGNING_IDENTITY: YCoding Code Signing
           YCODING_MACOS_SIGNING_SHA1: 9dd524184b0db949ffac7f0ada0ae860ac7f5f85
-          YCODING_RELEASE_RUNTIME_DIR: ${{ runner.temp }}/verified-release-runtime
+          YCODING_RELEASE_RUNTIME_DIR: ${{ runner.temp }}/release-runtime
           RECEIPT_SHA256: ${{ steps.runtime.outputs.receipt-sha256 }}
           YCODING_ANTIGRAVITY_CLIENT_ID: ${{ secrets.YCODING_ANTIGRAVITY_CLIENT_ID }}
           YCODING_ANTIGRAVITY_CLIENT_SECRET: ${{ secrets.YCODING_ANTIGRAVITY_CLIENT_SECRET }}
@@ -510,7 +503,7 @@ jobs:
 
       - name: Build desktop app
         env:
-          YCODING_RELEASE_RUNTIME_DIR: ${{ runner.temp }}/verified-release-runtime
+          YCODING_RELEASE_RUNTIME_DIR: ${{ runner.temp }}/release-runtime
           RECEIPT_SHA256: ${{ steps.runtime.outputs.receipt-sha256 }}
         run: /bin/sh packages/desktop/script/build.sh --outdir="$RUNNER_TEMP/desktop" --sign-identity=9dd524184b0db949ffac7f0ada0ae860ac7f5f85
 
