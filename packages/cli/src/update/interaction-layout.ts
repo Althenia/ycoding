@@ -27,5 +27,5 @@ export function usesNativeReleaseLayout(version: string) {
 
 export function usesAppleSiliconRelease(version: string) {
   const match = /^(\d+)\.(\d+)\.(\d+)(?=$|[+-])/.exec(version)
-  return match !== null && (Number(match[1]) > 0 || Number(match[2]) > 13 || Number(match[2]) === 13 && Number(match[3]) >= 2)
+  return match !== null && (Number(match[1]) > 0 || Number(match[2]) > 13 || Number(match[2]) === 13 && Number(match[3]) !== 1)
 }

@@ -80,11 +80,12 @@ export const RELEASES: readonly ReleaseEntry[] = [
     title: "Rust for new installations",
     tags: ["Changed"],
     changes: [
-      { tag: "Changed", text: "A new installation uses the Rust runtime. On macOS or Linux, run the shell installer from the installation page. Rust starts with its own `core.redb` store and does not import Bun Session history, Usage, or saved data." },
+      { tag: "Changed", text: "The proposed replacement for v0.13.0 contains signed Rust CLI and Desktop downloads for Apple Silicon. Rust uses its own `core.redb` store and does not import Bun Session history, Usage, or saved data." },
       { tag: "Changed", text: "The default installer leaves an existing Bun installation or database alone. To stay on Bun, run `YCODING_VERSION=0.12.2 sh install.sh` using the downloaded installer. To replace the executable with Rust, let active Sessions finish and run `sh install.sh --replace-bun`. That command leaves your Bun database intact on disk." },
-      { tag: "Changed", text: "GitHub Latest stays on Bun 0.12.2, so an existing Bun installation stays on Bun when it runs `ycoding update`. On Rust, the same command checks for stable Rust releases." },
+      { tag: "Changed", text: "A verified promotion can set GitHub Latest to v0.13.0. Fresh shell installs select the highest eligible stable Rust release. CLI auto-discovery does not downgrade a newer installation; `ycoding update --version 0.13.0` selects v0.13.0 explicitly. Desktop rejects in-app downgrades; replacing a newer signed Desktop bundle with v0.13.0 is a separate manual operation." },
       { tag: "Changed", text: "Open `/remote` for Bun 0.12.x devices or `/remote/rust` for Rust devices. Both use the same Web sign-in, and existing Bun links still work." },
       { tag: "Changed", text: "The Rust runtime uses the v5 WebSocket API for Session, Project, and configuration operations. Call a named operation with `ycoding api session.list`, or use a v5 client. The Bun REST routes for these operations are not available on Rust. Run `ycoding api --help` for operation syntax and `ycoding --help` for the Rust command list." },
+      { tag: "Changed", text: "Promotion requires verification of the exact staged main commit and signed Apple Silicon packages. The release gate includes deferred Forms that retain their field names, startup with missing Project member locations, restart after the old process has closed its store, restoration of pending manual questions and Forms, and Dot and Remote reconnects after a 1012 epoch change. These checks are prerequisites for the replacement; the existing tag alone does not prove them." },
     ],
   },
   {

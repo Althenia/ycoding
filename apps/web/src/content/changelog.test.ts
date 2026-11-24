@@ -50,7 +50,7 @@ describe("release entries", () => {
     expect(after("0.13.1")?.version).toBe("0.13.0")
   })
 
-  test("retains the v0.13.0 Rust installation and Bun retention instructions", async () => {
+  test("discloses the conditions for the v0.13.0 replacement and retains the Bun instructions", async () => {
     const entry = byVersion("0.13.0")
     expect(entry).toMatchObject({ version: "0.13.0", title: "Rust for new installations", tags: ["Changed"] })
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.13.0.md", import.meta.url)).text()
@@ -60,13 +60,14 @@ describe("release entries", () => {
       if (!tag) return []
       return [...section.matchAll(/^- (.+)$/gm)].map((match) => ({ tag, text: match[1]! }))
     })
-    expect(changes).toHaveLength(5)
+    expect(changes).toHaveLength(6)
     expect(changes).toEqual(expect.arrayContaining([
       expect.objectContaining({ tag: "Changed", text: expect.stringMatching(/core\.redb.*does not import/) }),
       expect.objectContaining({ tag: "Changed", text: expect.stringMatching(/YCODING_VERSION=0\.12\.2.*--replace-bun.*Bun database intact/) }),
-      expect.objectContaining({ tag: "Changed", text: expect.stringMatching(/GitHub Latest stays on Bun 0\.12\.2.*checks for stable Rust releases/) }),
+      expect.objectContaining({ tag: "Changed", text: expect.stringMatching(/verified promotion can set GitHub Latest.*does not downgrade.*--version 0\.13\.0.*Desktop rejects in-app downgrades/) }),
       expect.objectContaining({ tag: "Changed", text: expect.stringMatching(/`\/remote` for Bun 0\.12\.x devices.*`\/remote\/rust` for Rust devices/) }),
       expect.objectContaining({ tag: "Changed", text: expect.stringMatching(/v5 WebSocket.*`ycoding api session\.list`.*not available.*`ycoding api --help`/) }),
+      expect.objectContaining({ tag: "Changed", text: expect.stringMatching(/deferred Forms.*missing Project member locations.*closed its store.*pending manual questions and Forms.*1012 epoch change.*prerequisites/) }),
     ]))
     expect(entry?.changes).toEqual(changes)
     expect(after("0.13.0")?.version).toBe("0.12.2")

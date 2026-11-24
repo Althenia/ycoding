@@ -174,7 +174,7 @@ const replacement = [
   { name: "LICENSE", content: "license 2" },
 ]
 
-async function run(server: ReturnType<typeof github>, entries = replacement, runID = "77-1") {
+async function run(server: ReturnType<typeof github>, entries = replacement, runID = "77-1", promotion?: Parameters<typeof publish>[0]["promotion"]) {
   const local = await files(entries)
   const manifestPath = path.join(local.root, "manifest.json")
   const result = await publish({
@@ -188,6 +188,7 @@ async function run(server: ReturnType<typeof github>, entries = replacement, run
     run: runID,
     files: local.paths,
     manifest: manifestPath,
+    ...(promotion ? { promotion } : {}),
   })
   const manifest: Manifest = await Bun.file(manifestPath).json()
   return { result, manifest }
@@ -456,12 +457,12 @@ test("leftover staged assets from an earlier run stop publication before any cha
 })
 
 const publicChecksums = "ycoding-0.12.0-checksums.txt"
-function fullRelease(label: string) {
-  const covered = ["ycoding-0.12.0-darwin-arm64.tar.gz", "ycoding-0.12.0-darwin-x64.tar.gz",
-    "ycoding-0.12.0-linux-x64.tar.gz", "ycoding-0.12.0-windows-x64.zip", "YCoding-Desktop-v0.12.0-darwin-arm64.zip",
-    "LICENSE", "NOTICE"].map((name) => ({ name, content: `${label}: ${name}\n` }))
-  return [...covered, { name: tag + ".md", content: `${label}: release notes\n` }, {
-    name: publicChecksums, content: covered.map(({ name, content }) => `${sha256(bytes(content))}  ${name}\n`).join(""),
+function fullRelease(label: string, version = "0.12.0", arm64Only = false) {
+  const covered = [`ycoding-${version}-darwin-arm64.tar.gz`,
+    ...(arm64Only ? [] : [`ycoding-${version}-darwin-x64.tar.gz`, `ycoding-${version}-linux-x64.tar.gz`, `ycoding-${version}-windows-x64.zip`]),
+    `YCoding-Desktop-v${version}-darwin-arm64.zip`, "LICENSE", "NOTICE"].map((name) => ({ name, content: `${label}: ${name}\n` }))
+  return [...covered, { name: `v${version}.md`, content: `${label}: release notes\n` }, {
+    name: `ycoding-${version}-checksums.txt`, content: covered.map(({ name, content }) => `${sha256(bytes(content))}  ${name}\n`).join(""),
   }]
 }
 
@@ -472,6 +473,57 @@ const historical = fullRelease("historical").map((asset) => ({ ...asset, name: `
 function snapshot(server: ReturnType<typeof github>) {
   return [...server.assets.values()].map((asset) => ({ id: asset.id, name: asset.name, digest: `sha256:${sha256(asset.content)}` }))
 }
+
+const mainPromotion = { commit: "a".repeat(40), runId: "123", promoteLatest: true }
+const oldRust = fullRelease("published", "0.13.0")
+const appleSilicon = fullRelease("candidate", "0.13.0", true)
+
+test("Gate 4: promotes six Apple Silicon assets and preserves all nine original assets", async () => {
+  const server = github({ tag: "v0.13.0", assets: oldRust, latestTag: "v0.13.4" })
+  const before = snapshot(server)
+  expect((await run(server, appleSilicon, "77-1", mainPromotion)).result.status).toBe("published")
+  const after = snapshot(server)
+  expect(after.slice(0, 9)).toEqual(before.map((asset) => ({ ...asset, name: `prior-77-1-${asset.name}` })))
+  expect(after.slice(9).map(({ name, digest }) => ({ name, digest }))).toEqual(appleSilicon.map(({ name, content }) => ({ name, digest: `sha256:${sha256(bytes(content))}` })))
+  expect(server.release.tag_name).toBe("v0.13.0")
+  expect(server.release.body).toContain(`Built from main commit ${mainPromotion.commit}, verified release run 123`)
+  expect((await server.latest()).id).toBe(releaseID)
+  expect(server.mutations().filter((call) => call.path.startsWith("/releases/assets/")).at(-1)?.name).toBe("ycoding-0.13.0-checksums.txt")
+  expect(server.mutations().some((call) => call.method === "DELETE")).toBe(false)
+  expect((await run(server, fullRelease("next", "0.13.0", true), "78-1", mainPromotion)).result.status).toBe("published")
+  expect(snapshot(server).slice(0, 9)).toEqual(after.slice(0, 9))
+})
+
+test("Gate 4: a failed 9-to-6 promotion restores all old bytes, metadata and Latest", async () => {
+  let promoted = false
+  let injectMismatch = true
+  const server = github({ tag: "v0.13.0", assets: oldRust, latestTag: "v0.13.4", fault: (call) => {
+    if (call.method === "PATCH" && call.path === `/releases/${releaseID}` && call.makeLatest === "true") promoted = true
+    if (promoted && injectMismatch && call.method === "GET" && call.path === "/releases/latest") {
+      injectMismatch = false
+      return "reject"
+    }
+  } })
+  const before = snapshot(server)
+  const releaseBefore = { ...server.release }
+  const { result } = await run(server, appleSilicon, "77-1", mainPromotion)
+  expect(result.status).toBe("restored")
+  expect(promoted).toBe(true)
+  expect(snapshot(server)).toEqual(before)
+  expect(server.release).toEqual(releaseBefore)
+  expect((await server.latest()).id).toBe(otherID)
+})
+
+test.each(["incomplete", "mixed", "corrupt", "unexpected"])("Gate 4: rejects a %s retained generation before writes", async (kind) => {
+  const prior = oldRust.map((asset) => ({ ...asset, name: `prior-76-1-${asset.name}` }))
+  if (kind === "incomplete") prior.shift()
+  if (kind === "mixed") prior[0]!.name = prior[0]!.name.replace("0.13.0", "0.13.4")
+  if (kind === "corrupt") prior[0]!.content = "other archive bytes"
+  if (kind === "unexpected") prior.push({ name: "prior-76-1-unknown.txt", content: "unknown" })
+  const server = github({ tag: "v0.13.0", assets: [...oldRust, ...prior], latestTag: "v0.13.4" })
+  expect((await run(server, appleSilicon, "77-1", mainPromotion)).result.status).toBe("refused")
+  expect(server.mutations()).toEqual([])
+})
 
 test("a complete successor swaps nine public files and leaves the nine older backups untouched", async () => {
   const server = github({ assets: [...active, ...historical] })

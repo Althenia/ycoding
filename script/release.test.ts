@@ -12,6 +12,8 @@ const workflowJob = (content: string, name: string) =>
     ?.split(/\n  [\w-]+:\n/)[0] ?? ""
 const darwinJob = "build-desktop-runtime"
 const darwinBuild = workflowJob(workflow, darwinJob)
+const stageDispatch = "${{ github.event_name == 'workflow_dispatch' && inputs.publish_staged_run_id == '' && inputs.publish_checksums == '' && !inputs.promote_latest }}"
+const promoteDispatch = "${{ github.event_name == 'workflow_dispatch' && (inputs.publish_staged_run_id != '' || inputs.publish_checksums != '' || inputs.promote_latest) }}"
 const darwinStep = (name: string) => darwinBuild.split(`      - name: ${name}\n`)[1]?.split("\n      - name: ")[0] ?? ""
 
 test("native archive finalization preserves both TUI shards and every accepted command exactly once", () => {
@@ -285,7 +287,7 @@ test("the first unified release has nonempty shared notes", async () => {
 })
 
 test("same v tag deploys web after the GitHub release is published, without GitHub write access", () => {
-  const deploy = workflow.split("\n  deploy-web:")[1]
+  const deploy = workflowJob(workflow, "deploy-web")
   expect(deploy).toContain("needs: [verify-staged-release, release-tui]")
   expect(deploy).toContain("github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
   expect(deploy).toContain("name: verified-web")
@@ -298,7 +300,7 @@ test("same v tag deploys web after the GitHub release is published, without GitH
 })
 
 test("app preview Worker deploys only after the relay and only when the repository variable opts in", () => {
-  const deploy = workflow.split("\n  deploy-web:")[1] ?? ""
+  const deploy = workflowJob(workflow, "deploy-web")
   const step = deploy.split("- name: Deploy app preview Worker")[1] ?? ""
   expect(step).toContain("if: vars.YCODING_APP_PREVIEW_DEPLOY == 'true'")
   expect(step).toContain('test -n "$CLOUDFLARE_API_TOKEN"')
@@ -354,9 +356,8 @@ test("Cloudflare deployment requires a scoped Actions token before Wrangler runs
 
 test("tag publication consumes only the verified staging run's signed archives and Web build", () => {
   const parsed: unknown = Bun.YAML.parse(workflow)
-  const dispatch = "${{ github.event_name == 'workflow_dispatch' }}"
   for (const job of ["verify-source", darwinJob, "finalize-release"]) {
-    expect(parsed).toHaveProperty("jobs." + job + ".if", dispatch)
+    expect(parsed).toHaveProperty("jobs." + job + ".if", stageDispatch)
   }
   const release = workflowJob(workflow, "release-tui")
   expect(release).toContain("needs: verify-staged-release")
@@ -408,6 +409,30 @@ test("promotion rejects lightweight tags and staging runs from the wrong source 
   } finally {
     fs.rmSync(directory, { recursive: true, force: true })
   }
+})
+
+test("Gate 4: main promotion is separate from staging and requires native approval", () => {
+  const parsed = Bun.YAML.parse(workflow)
+  expect(parsed).toHaveProperty("on.workflow_dispatch.inputs.promote_latest.type", "boolean")
+  expect(parsed).toHaveProperty("jobs.promote-release.needs", "verify-main-promotion")
+  expect(parsed).toHaveProperty("jobs.promote-release.environment", "release-production")
+  expect(parsed).toHaveProperty("jobs.deploy-promoted-web.needs", ["verify-main-promotion", "promote-release"])
+  expect(parsed).toHaveProperty("jobs.verify-main-promotion.if", promoteDispatch)
+  const verify = workflowJob(workflow, "verify-main-promotion")
+  expect(verify).toContain("bash script/release-staged-run.sh main")
+  expect(verify).toContain("VERIFIED_STAGE_RUN_ID: ${{ steps.origin.outputs.run-id }}")
+  expect(verify).toContain("bash script/release-promotion.sh signatures")
+  const promotion = workflowJob(workflow, "promote-release")
+  expect(promotion).toContain("needs.verify-main-promotion.outputs.web")
+  expect(promotion).toContain("bash script/release-promotion.sh control")
+  expect(promotion.indexOf("bash script/release-promotion.sh verify")).toBeLessThan(promotion.indexOf("bun script/release-publish.ts"))
+  expect(promotion).not.toMatch(/gh release create|git (tag|push)/)
+  const deploy = workflowJob(workflow, "deploy-promoted-web")
+  expect(deploy).toContain("artifact-ids: ${{ needs.verify-main-promotion.outputs.web }}")
+  expect(deploy).toContain("bun run deploy:cloudflare")
+  expect(deploy).not.toContain("contents: write")
+  expect(workflowJob(workflow, "verify-main-promotion")).not.toContain("contents: write")
+  expect(workflowJob(workflow, "finalize-release")).toContain("name: release-stage-")
 })
 
 test("manual release runs prepare assets without publishing or deploying", () => {
@@ -937,17 +962,21 @@ test("packaging overlaps source verification without bypassing publication or de
     ["verify-staged-release", undefined],
     ["release-tui", "verify-staged-release"],
     ["deploy-web", "[verify-staged-release, release-tui]"],
+    ["verify-main-promotion", undefined],
+    ["promote-release", "verify-main-promotion"],
+    ["deploy-promoted-web", "[verify-main-promotion, promote-release]"],
   ] as const
   expect(jobs.filter((_, index) => index % 2 === 0).sort()).toEqual(dependencies.map(([name]) => name).sort())
   for (const [name, needs] of dependencies) {
     const job = jobs[jobs.indexOf(name) + 1] ?? ""
     expect(/^    needs: (.+)$/m.exec(job)?.[1]).toBe(needs)
-    expect(/^    if: (.+)$/m.exec(job)?.[1]).toBe(
-      name === "deploy-web"
+    expect(/^    if: (.+)$/m.exec(job)?.[1]).toBe(name === "promote-release" || name === "deploy-promoted-web" ? undefined
+        : name === "verify-main-promotion" ? promoteDispatch
+        : name === "deploy-web"
         ? "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}"
         : name === "release-tui" || name === "verify-staged-release"
           ? "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}"
-          : "${{ github.event_name == 'workflow_dispatch' }}",
+          : stageDispatch,
     )
   }
   expect(workflow).not.toContain("continue-on-error:")
@@ -964,7 +993,8 @@ test("packaging overlaps source verification without bypassing publication or de
 })
 
 test("both Darwin packagers use the local runtime and receipt digest from their own dispatch attempt", () => {
-  expect(workflow.match(/^    runs-on: macos-26$/gm)).toHaveLength(1)
+  expect(darwinBuild.match(/^    runs-on: macos-26$/gm)).toHaveLength(1)
+  expect(workflowJob(workflow, "verify-main-promotion")).not.toMatch(/build:tui|script\/build\.sh|YCODING_MACOS_SIGNING_P12/)
   expect(darwinBuild).not.toContain("actions/download-artifact@")
   for (const name of ["Checkout repository", "Setup Bun", "Setup Rust", "Stage Apple Silicon release runtime", "Upload Apple Silicon release runtime", "Import macOS signing identity", "Build TUI artifact", "Build desktop app", "Remove macOS signing keychain"])
     expect(darwinBuild.split(`      - name: ${name}\n`)).toHaveLength(2)

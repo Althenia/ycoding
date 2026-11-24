@@ -365,6 +365,24 @@ describe("checkForUpdates", () => {
     expect(requests).toEqual([nativeReleasesUrl, nativeReleasesUrl, nativeReleasesUrl])
   })
 
+  test("keeps Desktop v0.13.4 when the only stable Rust release is v0.13.0", async () => {
+    await withTempDir(async (root) => {
+      const fixture = await createInstallFixture(root, { currentVersion: "0.13.4", targetVersion: "0.13.0" })
+      const urls: string[] = []
+      const fetch = async (input: string | URL | Request) => {
+        urls.push(String(input))
+        return jsonResponse([{ ...releasePayload({ version: "0.13.0" }), draft: false, prerelease: false }], nativeReleasesUrl)
+      }
+      const options = { currentVersion: "0.13.4", appBundlePath: fixture.appBundlePath, platform: "darwin", arch: "arm64", fetch } as const
+      expect(await checkForUpdates(options)).toMatchObject({ latestVersion: "0.13.0", updateAvailable: false, canInstall: false })
+      const commands: string[][] = []
+      await expect(installUpdate({ ...options, targetVersion: "0.13.0", runCommand: createCommandRunner(commands) })).rejects.toThrow("not newer")
+      expect(urls).toEqual([nativeReleasesUrl])
+      expect(commands).toEqual([])
+      expect(await readFile(path.join(fixture.appBundlePath, "Contents/Resources/installed-only.txt"), "utf8")).toBe("installed-0.13.4\n")
+    })
+  })
+
   test("reports updateAvailable false and canInstall false when latestVersion is equal to or older than currentVersion", async () => {
     await withTempDir(async (root) => {
       const appBundlePath = path.join(root, "YCoding Desktop.app")

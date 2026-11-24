@@ -103,9 +103,9 @@ function execute(root: string, args: string[]) {
 test("archive executable command prints the canonical member for its target and version", () => {
   for (const [target, release, expected] of [
     ["darwin-arm64", "0.12.1", "ycoding"],
-    ["darwin-x64", "0.13.0", "ycoding-native"],
-    ["linux-x64", "0.13.0-rc.1", "ycoding-native"],
-    ["windows-x64", "0.13.0", "ycoding.exe"],
+    ["darwin-x64", "0.13.1", "ycoding-native"],
+    ["linux-x64", "0.13.1-rc.1", "ycoding-native"],
+    ["windows-x64", "0.13.1", "ycoding.exe"],
   ] as const) {
     const result = execute(import.meta.dir, ["executable", target, release])
     expect(result.exitCode, result.stderr.toString()).toBe(0)
@@ -119,12 +119,12 @@ test("archive executable command prints the canonical member for its target and 
   }
 })
 
-test("v0.13.2 archives reject retired targets while historical releases retain them", () => {
+test("Gate 4: Rust archives reject retired targets while Bun releases retain them", () => {
   for (const target of ["darwin-x64", "linux-x64", "windows-x64"]) {
-    const current = execute(import.meta.dir, ["executable", target, "0.13.2"])
+    const current = execute(import.meta.dir, ["executable", target, "0.13.0"])
     expect(current.exitCode).not.toBe(0)
     expect(current.stderr.toString()).toContain("Apple Silicon")
-    expect(execute(import.meta.dir, ["executable", target, "0.13.1"]).exitCode).toBe(0)
+    expect(execute(import.meta.dir, ["executable", target, "0.12.2"]).exitCode).toBe(0)
   }
   expect(execute(import.meta.dir, ["executable", "darwin-arm64", "0.13.2"]).stdout.toString()).toBe("ycoding-native\n")
 })
@@ -182,7 +182,7 @@ async function archives(root: string, release = version) {
 test("0.13 Unix archive create renames only the archived executable, preserving Windows layout and public filenames", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-native-release-layout-"))
   try {
-    const release = "0.13.0-rc.1"
+    const release = "0.13.1-rc.1"
     for (const target of targets) {
       const source = await fixture(root, target, version)
       const result = execute(root, ["create", target, release, source, "prepared"])
@@ -215,7 +215,7 @@ test("0.13 Unix archive create renames only the archived executable, preserving 
 test("0.13 Unix archive finalize rejects the legacy executable but finalizes native archives", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-native-finalize-layout-"))
   try {
-    const release = "0.13.0"
+    const release = "0.13.1"
     const input = await archives(root, release)
     const wrong = execute(root, ["finalize", release, input, "rejected"])
     expect(wrong.exitCode).not.toBe(0)
@@ -373,10 +373,10 @@ test("native archive finalize needs no installed dependencies and publishes only
   }
 })
 
-test("native archive finalize accepts only the two Apple Silicon archives for v0.13.2", async () => {
+test("native archive finalize accepts only the two Apple Silicon archives for v0.13.0", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-apple-silicon-release-"))
   try {
-    const release = "0.13.2"
+    const release = "0.13.0"
     const source = await fixture(root, "darwin-arm64", version)
     const cli = execute(root, ["create", "darwin-arm64", release, source, "prepared"])
     expect(cli.exitCode, cli.stderr.toString()).toBe(0)

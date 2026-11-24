@@ -140,12 +140,12 @@ describe("update selection", () => {
 })
 
 describe("release updater", () => {
-  test("rejects Apple Silicon-only releases on Linux or Intel without fetching archives", async () => {
+  test("Gate 4: rejects Rust 0.13.0 on Linux or Intel without fetching archives", async () => {
     const fixture = await setup()
     for (const platform of ["linux", "darwin"]) {
       const urls: string[] = []
       const error = await installRelease({
-        version: "0.13.2",
+        version: "0.13.0",
         executable: fixture.executable,
         platform,
         arch: "x64",

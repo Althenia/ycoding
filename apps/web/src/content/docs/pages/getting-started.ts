@@ -37,7 +37,7 @@ export const gettingStartedPages: readonly DocPage[] = [
           {
             kind: "list",
             items: [
-              "Use an Apple Silicon Mac for v0.13.2 or later. Earlier releases retain their original downloads.",
+              "The installer requires an Apple Silicon Mac for v0.13.0 and v0.13.2 or later. For Intel macOS or Linux x64, pin a release that includes your archive, such as v0.13.1.",
               "Have credentials for a model provider you can use. YCoding's `/connect` flow stores a provider profile; provider access and model availability come from that provider.",
               "Start YCoding in the repository or project folder you want to work in. The current directory supplies the local project context.",
             ],

@@ -19,9 +19,9 @@ afterEach(async () => {
 })
 
 describe("native release installer", () => {
-  test("rejects a current release on Linux or Intel macOS before requesting release assets", async () => {
+  test("Gate 4: rejects Rust 0.13.0 on Linux or Intel macOS before requesting release assets", async () => {
     for (const system of ["Linux", "Darwin"]) {
-      const fixture = await setup({ system, machine: "x86_64", version: "0.13.2" })
+      const fixture = await setup({ system, machine: "x86_64", version: "0.13.0" })
       const result = await runInstaller(fixture, { YCODING_VERSION: "" })
       expect(result.exitCode).not.toBe(0)
       expect(result.stderr).toContain("Apple Silicon")
@@ -64,8 +64,8 @@ describe("native release installer", () => {
     expect(await releaseRequests(fixture)).toEqual([releaseListURL])
   })
 
-  test("installs Rust 0.13.0 when there is no newer stable Rust release", async () => {
-    const fixture = await nativeInstallFixture(undefined, "0.13.0")
+  test("selects Rust 0.13.0 when there is no newer stable Rust release and checks the platform before the download", async () => {
+    const fixture = await setup({ system: "Linux", machine: "x86_64", version: "0.13.0" })
     await writeFile(path.join(fixture.fixture, "releases"), JSON.stringify([
       { tag_name: "v0.12.6", draft: false, prerelease: false },
       { tag_name: "v0.13.0", draft: false, prerelease: false },
@@ -73,8 +73,9 @@ describe("native release installer", () => {
       { tag_name: "v0.14.0", draft: false, prerelease: true },
     ]))
     const result = await runInstaller(fixture, { YCODING_VERSION: "" })
-    expect(result.exitCode, result.stderr).toBe(0)
-    expect(result.stdout).toContain("Installed ycoding 0.13.0")
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain("YCoding 0.13.0 is available only for Apple Silicon")
+    expect(await releaseRequests(fixture)).toEqual([releaseListURL])
   })
 
   test("never falls back to Bun when there is no stable Rust release", async () => {

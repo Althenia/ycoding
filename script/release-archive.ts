@@ -63,6 +63,11 @@ export function releaseArchives(version: string) {
   return [...releaseTargets(version).map((target) => filename(target, version)), desktopFilename(version)]
 }
 
+export function historicalRustArchives(version: string) {
+  if (!/^0\.13\.0(?:$|[+-])/.test(version)) return undefined
+  return [...targets.map((target) => filename(target, version)), desktopFilename(version)]
+}
+
 function desktopPayload(hash: string) {
   return ["", "Contents/", "Contents/Frameworks/", "Contents/Info.plist", "Contents/MacOS/", "Contents/MacOS/launcher", "Contents/Resources/", "Contents/Resources/AppIcon.icns", "Contents/Resources/metadata.json", `Contents/Resources/${hash}.tar.zst`, "Contents/_CodeSignature/", "Contents/_CodeSignature/CodeResources"]
     .map((entry) => `${desktopApplication}/${entry}`)

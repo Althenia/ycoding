@@ -10,6 +10,18 @@ on:
         description: Release version without leading v (for example 0.7.0). Defaults to the newest docs/releases/v<version>.md file.
         required: false
         default: ""
+      publish_staged_run_id:
+        description: Successful first-attempt staging run for this exact main commit
+        type: string
+        default: ""
+      publish_checksums:
+        description: SHA-256 of the staging run's checksum manifest
+        type: string
+        default: ""
+      promote_latest:
+        description: Set GitHub Latest after verified main promotion
+        type: boolean
+        default: false
 
 concurrency:
   group: release
@@ -23,11 +35,14 @@ env:
   REQUESTED_RELEASE_VERSION: ${{ inputs.version }}
   RELEASE_REF_NAME: ${{ github.ref_name }}
   RELEASE_REF_TYPE: ${{ github.ref_type }}
+  PUBLISH_STAGED_RUN_ID: ${{ inputs.publish_staged_run_id }}
+  PUBLISH_CHECKSUMS: ${{ inputs.publish_checksums }}
+  PROMOTE_LATEST: ${{ inputs.promote_latest }}
 
 jobs:
   verify-source:
     name: verify release source (${{ matrix.suite }})
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_staged_run_id == '' && inputs.publish_checksums == '' && !inputs.promote_latest }}
     strategy:
       fail-fast: false
       matrix:
@@ -313,6 +328,7 @@ jobs:
         run: |
           cd /tmp && bun test "$GITHUB_WORKSPACE/script/install.test.ts" "$GITHUB_WORKSPACE/script/build-web-assets.test.ts" "$GITHUB_WORKSPACE/script/release.test.ts" "$GITHUB_WORKSPACE/script/release-archive.test.ts"
           bun test "$GITHUB_WORKSPACE/script/chrome-for-testing.test.ts" -t "pins one exact version whose root metadata document is the default source"
+          bun test "$GITHUB_WORKSPACE/script/release-promotion.test.ts"
 
       - name: Upload verified web build
         if: matrix.suite == 'web'
@@ -325,7 +341,7 @@ jobs:
 
   build-desktop-runtime:
     name: build Apple Silicon release packages
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_staged_run_id == '' && inputs.publish_checksums == '' && !inputs.promote_latest }}
     runs-on: macos-26
     timeout-minutes: 60
     defaults:
@@ -570,7 +586,7 @@ jobs:
   finalize-release:
     name: finalize release archives and checksums
     needs: [verify-source, build-desktop-runtime]
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_staged_run_id == '' && inputs.publish_checksums == '' && !inputs.promote_latest }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -603,6 +619,19 @@ jobs:
         with:
           name: release-checksums-${{ env.RELEASE_VERSION }}
           path: release/*-checksums.txt
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Record the original stage identity
+        if: github.ref == 'refs/heads/main' && github.ref_protected && github.run_attempt == 1
+        run: bash script/release-promotion.sh stage identity.json
+
+      - name: Upload original stage identity
+        if: github.ref == 'refs/heads/main' && github.ref_protected && github.run_attempt == 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-stage-${{ env.RELEASE_VERSION }}
+          path: identity.json
           if-no-files-found: error
           retention-days: 7
 
@@ -770,3 +799,142 @@ jobs:
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN Actions secret" >&2; exit 1; }
           bun run deploy:cloudflare-preview
+
+  verify-main-promotion:
+    name: verify protected main release inputs and signatures
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.publish_staged_run_id != '' || inputs.publish_checksums != '' || inputs.promote_latest) }}
+    runs-on: macos-26
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      run-id: ${{ steps.origin.outputs.run-id }}
+      manifest-sha256: ${{ steps.origin.outputs.checksums }}
+      archives: ${{ steps.artifacts.outputs.archives }}
+      checksums: ${{ steps.artifacts.outputs.checksums }}
+      stage: ${{ steps.artifacts.outputs.stage }}
+      web: ${{ steps.artifacts.outputs.web }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve release version
+        run: bash script/release-version.sh
+      - name: Resolve and verify the release origin
+        id: origin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash script/release-promotion.sh control
+          bash script/release-staged-run.sh main
+      - name: Select original staging artifacts
+        id: artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_STAGE_RUN_ID: ${{ steps.origin.outputs.run-id }}
+        run: bash script/release-promotion.sh artifacts
+      - uses: ./.github/actions/download-release-stage
+        with:
+          token: ${{ github.token }}
+          run-id: ${{ steps.origin.outputs.run-id }}
+          archives: ${{ steps.artifacts.outputs.archives }}
+          checksums: ${{ steps.artifacts.outputs.checksums }}
+          stage: ${{ steps.artifacts.outputs.stage }}
+          web: ${{ steps.artifacts.outputs.web }}
+      - uses: ./.github/actions/install-bun
+      - name: Verify staged bytes and pinned signatures
+        env:
+          VERIFIED_STAGE_RUN_ID: ${{ steps.origin.outputs.run-id }}
+          VERIFIED_STAGE_CHECKSUMS: ${{ steps.origin.outputs.checksums }}
+        run: |
+          bash script/release-promotion.sh verify
+          bash script/release-promotion.sh signatures
+
+  promote-release:
+    name: publish verified main release
+    needs: verify-main-promotion
+    environment: release-production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Confirm the protected release control still applies
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash script/release-promotion.sh control
+          bash script/release-version.sh
+      - uses: ./.github/actions/download-release-stage
+        with:
+          token: ${{ github.token }}
+          run-id: ${{ needs.verify-main-promotion.outputs.run-id }}
+          archives: ${{ needs.verify-main-promotion.outputs.archives }}
+          checksums: ${{ needs.verify-main-promotion.outputs.checksums }}
+          stage: ${{ needs.verify-main-promotion.outputs.stage }}
+          web: ${{ needs.verify-main-promotion.outputs.web }}
+      - uses: ./.github/actions/install-bun
+      - name: Publish verified assets without moving the historical tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_STAGE_RUN_ID: ${{ needs.verify-main-promotion.outputs.run-id }}
+          VERIFIED_STAGE_CHECKSUMS: ${{ needs.verify-main-promotion.outputs.manifest-sha256 }}
+        run: |
+          set -euo pipefail
+          bash script/release-promotion.sh verify
+          tag="v$RELEASE_VERSION"
+          notes="docs/releases/$tag.md"
+          tag_sha=$(git rev-parse "refs/tags/$tag^{commit}")
+          if [[ $tag == v0.13.0 ]]; then test "$tag_sha" = 07ad9c16e01a2fa7fbfe21e9219d30ff886e3a69; fi
+          git merge-base --is-ancestor "$tag_sha" "$GITHUB_SHA"
+          bun script/release-publish.ts --repository "$GITHUB_REPOSITORY" --tag "$tag" --title "YCoding $RELEASE_VERSION" --notes-file "$notes" --run "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --manifest release-publish-manifest.json --main-staged-run "$VERIFIED_STAGE_RUN_ID" --promote-latest "$PROMOTE_LATEST" release/* "$notes"
+      - name: Upload main publication recovery manifest
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-publish-manifest-${{ env.RELEASE_VERSION }}
+          path: release-publish-manifest.json
+          if-no-files-found: ignore
+          retention-days: 90
+
+  deploy-promoted-web:
+    name: deploy verified main Web build
+    needs: [verify-main-promotion, promote-release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.verify-main-promotion.outputs.run-id }}
+          artifact-ids: ${{ needs.verify-main-promotion.outputs.web }}
+          digest-mismatch: error
+          merge-multiple: true
+          path: apps/web/dist
+      - name: Setup Bun for Web deployment
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+      - name: Deploy verified main Web build
+        run: |
+          set -euo pipefail
+          test -s apps/web/dist/index.html && test -s apps/web/dist/_bun/index.html
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo 'Missing CLOUDFLARE_API_TOKEN Actions secret' >&2; exit 1; }
+          bun run deploy:cloudflare
+          if [[ "$DEPLOY_APP_PREVIEW" == true ]]; then bun run deploy:cloudflare-preview; fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          DEPLOY_APP_PREVIEW: ${{ vars.YCODING_APP_PREVIEW_DEPLOY }}

@@ -49,7 +49,7 @@ ycoding
 
 Type `/connect` in the composer to add a provider profile, then describe your task.
 
-YCoding v0.13.2 and later ship for Apple Silicon. For Intel macOS or Linux x64, set `YCODING_VERSION` to a historical release that includes your platform's archive. Earlier Windows downloads remain in GitHub Releases.
+YCoding v0.13.0 and v0.13.2 or later require Apple Silicon in the maintained installer. For Intel macOS or Linux x64, set `YCODING_VERSION` to a historical release that includes your platform's archive, such as v0.13.1. Historical Windows downloads are available on GitHub Releases.
 
 Run a single prompt without opening the interface:
 

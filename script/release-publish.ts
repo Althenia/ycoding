@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import path from "node:path"
-import { releaseArchives } from "./release-archive"
+import { historicalRustArchives, releaseArchives } from "./release-archive"
 import { usesNativeReleaseLayout } from "../packages/cli/src/update/interaction-layout"
 
 const stableTag = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
@@ -21,10 +21,11 @@ export type PublishInput = {
   readonly run: string
   readonly files: ReadonlyArray<string>
   readonly manifest: string
+  readonly promotion?: { readonly commit: string; readonly runId: string; readonly promoteLatest: boolean }
 }
 
 type RemoteAsset = { id: number; name: string; state: string; size: number; digest: string | null }
-type RemoteRelease = { id: number; tag: string | undefined; name: string | null; body: string | null; draft: boolean; prerelease: boolean }
+type RemoteRelease = { id: number; tag: string | undefined; name: string | null; body: string | null; draft: boolean; prerelease: boolean; immutable: boolean }
 type Rename = { id: number; from: string; to: string }
 type LocalAsset = { name: string; content: Uint8Array; sha256: string; size: number }
 type OriginalAsset = RemoteAsset & { sha256: string }
@@ -50,6 +51,10 @@ export type Manifest = {
 }
 
 export async function publish(input: PublishInput) {
+  const promotion = input.promotion
+  const notes = promotion
+    ? `${input.notes.trimEnd()}\n\nBuilt from main commit ${promotion.commit}, verified release run ${promotion.runId}\n`
+    : input.notes
   const manifest: Manifest = {
     repository: input.repository,
     tag: input.tag,
@@ -71,7 +76,7 @@ export async function publish(input: PublishInput) {
   const release = await github.release()
   const latest = await github.latest()
   if (!latest.tag) throw new Error("GitHub Latest response is missing its release tag")
-  const expectedLatest = makeLatest(input.tag, latest.tag) ? release.id : latest.id
+  const expectedLatest = promotion?.promoteLatest || makeLatest(input.tag, latest.tag) ? release.id : latest.id
   const prerelease = input.tag.split("+", 1)[0]!.includes("-")
   manifest.release = {
     id: release.id,
@@ -102,16 +107,17 @@ export async function publish(input: PublishInput) {
   await save()
 
   const failure = await stage(github, release.id, local, manifest, save)
-    .then(() => swap(github, originals, manifest, save))
-    .then(() => metadata(github, release.id, input, prerelease, latest.id === release.id))
-    .then(() => verify(github, release.id, input, originals, manifest, prerelease))
-    .then(async () => {
+    .then(() => swap(github, originals, manifest, save, promotion !== undefined))
+    .then(() => metadata(github, release.id, input.title, notes, prerelease, latest.id === release.id))
+    .then(() => verify(github, release.id, input.title, notes, originals, manifest, prerelease))
+    .then(async (assets) => {
       if (expectedLatest !== latest.id) {
         await github.edit(release.id, { make_latest: "true" }).catch(async (error: unknown) => {
           if ((await github.latest()).id !== release.id) throw error
         })
       }
       if ((await github.latest()).id !== expectedLatest) throw new Error("GitHub Latest does not match the expected release")
+      manifest.final = assets.map(describe)
     })
     .then(
       () => undefined,
@@ -119,7 +125,6 @@ export async function publish(input: PublishInput) {
     )
   if (failure === undefined) {
     manifest.status = "published"
-    manifest.final = (await github.assets(release.id)).map(describe)
     await save()
     return { status: manifest.status, manifest }
   }
@@ -144,23 +149,28 @@ async function preflight(
   local: ReadonlyArray<LocalAsset>,
 ) {
   if (!/^[1-9]\d*-[1-9]\d*$/.test(input.run)) throw new Error("Publication run must include a numeric run ID and attempt")
+  if (release.immutable) throw new Error("Release is immutable")
+  if (input.promotion && (!stableTag.test(input.tag) || release.tag !== input.tag ||
+      !/^[0-9a-f]{40}$/.test(input.promotion.commit) || !/^[1-9]\d*$/.test(input.promotion.runId)))
+    throw new Error("Main promotion requires an existing stable release and verified source")
   const names = before.map((asset) => asset.name)
   if (new Set(names).size !== names.length || new Set(before.map((asset) => asset.id)).size !== before.length)
     throw new Error("Release has duplicate asset identities")
   const staged = names.filter((name) => name.startsWith("staged-"))
   if (staged.length) throw new Error(`Release has residual staged assets: ${staged.join(", ")}`)
   const historical = before.filter((asset) => asset.name.startsWith("prior-"))
-  if (historical.length) {
+  if (input.promotion || historical.length) {
     const version = input.tag.slice(1)
-    const covered = [...releaseArchives(version), "LICENSE", "NOTICE"]
     const checksumName = `ycoding-${version}-checksums.txt`
-    const canonical = [...covered, `${input.tag}.md`, checksumName].sort()
-    const complete = (files: readonly { name: string }[]) =>
-      JSON.stringify(files.map((file) => file.name).sort()) === JSON.stringify(canonical)
+    const selected = [...releaseArchives(version), "LICENSE", "NOTICE"]
+    const legacy = historicalRustArchives(version)
+    const layouts = legacy ? [selected, [...legacy, "LICENSE", "NOTICE"]] : [selected]
+    const matches = (files: readonly { name: string }[], covered: readonly string[]) =>
+      JSON.stringify(files.map((file) => file.name).sort()) === JSON.stringify([...covered, `${input.tag}.md`, checksumName].sort())
     const current = before.filter((asset) => !asset.name.startsWith("prior-"))
-    if (release.draft || release.prerelease || !complete(current) || !complete(local))
+    if (release.draft || release.prerelease || !matches(local, selected))
       throw new Error("Retained backups require a complete public release and a complete successor")
-    validateChecksums(local.find((file) => file.name === checksumName)!.content, local, covered, "successor")
+    validateChecksums(local.find((file) => file.name === checksumName)!.content, local, selected, "successor")
     const groups = new Map<string, RemoteAsset[]>()
     for (const asset of historical) {
       const match = /^prior-([1-9]\d*-[1-9]\d*)-(.+)$/.exec(asset.name)
@@ -169,9 +179,9 @@ async function preflight(
       group.push({ ...asset, name: match[2]! })
       groups.set(match[1]!, group)
     }
-    for (const [run, group] of groups)
-      if (!complete(group)) throw new Error(`Retained asset set ${run} is incomplete`)
     return (await Promise.all([["current", current] as const, ...groups].map(async ([label, group]) => {
+      const covered = layouts.find((layout) => matches(group, layout))
+      if (!covered) throw new Error(`Retained asset set ${label} is incomplete or unexpected`)
       const snapshots = await snapshotAssets(github, group)
       const checksum = snapshots.find((asset) => asset.name === checksumName)!
       const content = await github.download(checksum.id)
@@ -254,41 +264,47 @@ async function swap(
   before: ReadonlyArray<RemoteAsset>,
   manifest: Manifest,
   save: () => Promise<number>,
+  replaceCompleteSet: boolean,
 ) {
-  const order = manifest.staged.toSorted(
-    (left, right) => Number(left.name.endsWith("-checksums.txt")) - Number(right.name.endsWith("-checksums.txt")),
+  const order = [...new Set([
+    ...manifest.staged.map(({ name }) => name),
+    ...(replaceCompleteSet ? before.filter(({ name }) => !name.startsWith("prior-")).map(({ name }) => name) : []),
+  ])].sort(
+    (left, right) => Number(left.endsWith("-checksums.txt")) - Number(right.endsWith("-checksums.txt")),
   )
-  for (const entry of order) {
-    const prior = before.find((asset) => asset.name === entry.name)
+  for (const name of order) {
+    const prior = before.find((asset) => asset.name === name)
     if (prior) {
-      const rename = { id: prior.id, from: entry.name, to: `prior-${manifest.run}-${entry.name}` }
+      const rename = { id: prior.id, from: name, to: `prior-${manifest.run}-${name}` }
       await github.rename(rename)
       manifest.renames.push(rename)
       await save()
     }
-    const rename = { id: entry.id!, from: entry.staged, to: entry.name }
+    const entry = manifest.staged.find((asset) => asset.name === name)
+    if (!entry) continue
+    const rename = { id: entry.id!, from: entry.staged, to: name }
     await github.rename(rename)
     manifest.renames.push(rename)
     await save()
   }
 }
 
-async function metadata(github: ReturnType<typeof client>, releaseID: number, input: PublishInput, prerelease: boolean, alreadyLatest: boolean) {
+async function metadata(github: ReturnType<typeof client>, releaseID: number, title: string, notes: string, prerelease: boolean, alreadyLatest: boolean) {
   await github
-    .edit(releaseID, { name: input.title, body: input.notes, draft: false, prerelease, make_latest: String(alreadyLatest && !prerelease) })
+    .edit(releaseID, { name: title, body: notes, draft: false, prerelease, make_latest: String(alreadyLatest && !prerelease) })
     .catch(async (error: unknown) => {
       const current = await github.release()
-      if (current.name === input.title && current.body === input.notes && !current.draft && current.prerelease === prerelease) return
+      if (current.name === title && current.body === notes && !current.draft && current.prerelease === prerelease) return
       throw error
     })
 }
 
 async function verify(
-  github: ReturnType<typeof client>, releaseID: number, input: PublishInput,
+  github: ReturnType<typeof client>, releaseID: number, title: string, notes: string,
   before: ReadonlyArray<OriginalAsset>, manifest: Manifest, prerelease: boolean,
 ) {
   const release = await github.release()
-  if (release.name !== input.title || release.body !== input.notes || release.draft || release.prerelease !== prerelease)
+  if (release.id !== releaseID || release.tag !== manifest.tag || release.name !== title || release.body !== notes || release.draft || release.prerelease !== prerelease)
     throw new Error("Release metadata does not match the published title and notes")
   const assets = await github.assets(releaseID)
   for (const entry of manifest.staged) {
@@ -300,6 +316,7 @@ async function verify(
   }
   await verifyOriginals(github, assets, before, (asset) => manifest.renames.find((rename) => rename.id === asset.id)?.to ?? asset.name)
   if (assets.length !== before.length + manifest.staged.length) throw new Error("Release has unexpected assets after publication")
+  return assets
 }
 
 async function restore(
@@ -331,7 +348,7 @@ async function restore(
   await verifyOriginals(github, assets, before, (asset) => asset.name)
   if (assets.length !== before.length) throw new Error("Release has unexpected assets after restoration")
   const after = await github.release()
-  if (after.name !== release.name || after.body !== release.body || after.draft !== release.draft || after.prerelease !== release.prerelease ||
+  if (after.id !== release.id || after.tag !== release.tag || after.name !== release.name || after.body !== release.body || after.draft !== release.draft || after.prerelease !== release.prerelease ||
     latest !== undefined && (await github.latest()).id !== latest) throw new Error("Release metadata was not restored")
 }
 
@@ -442,6 +459,7 @@ function readRelease(value: unknown): RemoteRelease {
     body: "body" in value && typeof value.body === "string" ? value.body : null,
     draft: "draft" in value && value.draft === true,
     prerelease: "prerelease" in value && value.prerelease === true,
+    immutable: "immutable" in value && value.immutable === true,
   }
 }
 
@@ -470,6 +488,16 @@ if (import.meta.main) {
   const notes = await Bun.file(option("notes-file")).text()
   const run = option("run")
   const manifest = option("manifest")
+  const promotion = args.includes("--main-staged-run") ? (() => {
+    const env = process.env
+    const runId = option("main-staged-run")
+    const promoteLatest = option("promote-latest")
+    if (env.GITHUB_EVENT_NAME !== "workflow_dispatch" || env.GITHUB_REF !== "refs/heads/main" ||
+        env.GITHUB_REF_PROTECTED !== "true" || env.GITHUB_REPOSITORY !== repository || !env.GITHUB_SHA ||
+        !["true", "false"].includes(promoteLatest)) throw new Error("Expected verified protected-main promotion")
+    return { commit: env.GITHUB_SHA, runId, promoteLatest: promoteLatest === "true" }
+  })() : undefined
+  if (args.some((arg) => arg.startsWith("--"))) throw new Error("Unexpected publication option")
   const token = process.env.GH_TOKEN
   if (!token) throw new Error("GH_TOKEN is required")
   const result = await publish({
@@ -483,6 +511,7 @@ if (import.meta.main) {
     run,
     files: args,
     manifest,
+    ...(promotion ? { promotion } : {}),
   })
   console.log(`Release ${tag} publication ${result.status}; manifest ${manifest}`)
   if (result.manifest.error) console.error(result.manifest.error)
