@@ -10,6 +10,9 @@ const workflowJob = (content: string, name: string) =>
     .split("\njobs:\n")[1]!
     .split(new RegExp(`(?:^|\\n)  ${name}:\\n`))[1]
     ?.split(/\n  [\w-]+:\n/)[0] ?? ""
+const darwinJob = "build-desktop-runtime"
+const darwinBuild = workflowJob(workflow, darwinJob)
+const darwinStep = (name: string) => darwinBuild.split(`      - name: ${name}\n`)[1]?.split("\n      - name: ")[0] ?? ""
 
 test("native archive finalization preserves both TUI shards and every accepted command exactly once", () => {
   const verify = workflowJob(workflow, "verify-source")
@@ -110,15 +113,15 @@ test("source verification runs the native decision follow regression files in th
   for (const file of files) expect(await Bun.file(path.join(import.meta.dir, "../packages/cli", file)).exists()).toBe(true)
 })
 
-test("native builders upload each archive once and the finalizer checks the complete set", () => {
-  const build = workflowJob(workflow, "build")
-  expect(build).toContain("timeout-minutes: 60")
+test("the Darwin job uploads each archive once and the finalizer checks the complete set", () => {
+  expect(darwinBuild).toContain("timeout-minutes: 60")
   const release = workflowJob(workflow, "finalize-release")
   expect(workflow).not.toContain("\n  package:")
-  expect(build).toContain('bun script/release-archive.ts create "${{ matrix.target }}" "$RELEASE_VERSION"')
-  expect(build).toContain("compression-level: 0")
-  expect(build).toContain("name: release-archive-${{ matrix.target }}")
-  expect(release).toContain("needs: [verify-source, build, build-desktop]")
+  expect(darwinBuild).toContain('bun script/release-archive.ts create darwin-arm64 "$RELEASE_VERSION"')
+  expect([...darwinBuild.matchAll(/^          name: (release-archive-\S+)$/gm)].map((match) => match[1])).toEqual([
+    "release-archive-darwin-arm64", "release-archive-desktop-darwin-arm64",
+  ])
+  expect(release).toContain(`needs: [verify-source, ${darwinJob}]`)
   expect(release).toContain("pattern: release-archive-*")
   expect(release).toContain("merge-multiple: true")
   expect(release).toContain('bun script/release-archive.ts finalize "$RELEASE_VERSION" downloaded release')
@@ -149,9 +152,8 @@ test("release workflow ships no Godot desktop client", () => {
 })
 
 test("release workflow packages and checksums only the Apple Silicon CLI archive", () => {
-  const build = workflowJob(workflow, "build")
-  expect([...build.matchAll(/- target: (\S+)/g)].map((match) => match[1])).toEqual(["darwin-arm64"])
-  expect(build).toContain("fail-fast: false")
+  const build = darwinBuild
+  expect(darwinStep("Verify native build host")).toContain('process.platform !== "darwin" || process.arch !== "arm64"')
   expect(build.indexOf("Verify build metadata")).toBeLessThan(build.indexOf("Create and validate native archive"))
   expect(build.indexOf("Stage native executables")).toBeLessThan(build.indexOf("Create and validate native archive"))
   expect(build.indexOf("Create and validate native archive")).toBeLessThan(build.indexOf("Upload native archive"))
@@ -169,13 +171,13 @@ test("the independent Windows PR gate still verifies a native x64 executable", (
 })
 
 test("compressed release assets are uploaded without an additional compression pass", () => {
-  const upload = workflowJob(workflow, "build").split("      - name: Upload native archive\n")[1] ?? ""
+  const upload = darwinStep("Upload native archive")
   expect(upload).toContain("compression-level: 0")
   expect(upload).toContain("if-no-files-found: error")
 })
 
 test("macOS release builds sign the app with the pinned release certificate and never fall back to ad hoc", () => {
-  const build = workflowJob(workflow, "build")
+  const build = darwinBuild
   const importStep = build.split("      - name: Import macOS signing identity")[1]?.split("      - name: Build TUI artifact")[0] ?? ""
   const stage = build.split("      - name: Verify packaged macOS signatures")[1]?.split("      - name: Upload native archive")[0] ?? ""
   expect(build).toContain("      YCODING_MACOS_SIGNING_IDENTITY: YCoding Code Signing")
@@ -224,15 +226,15 @@ test("local browser acceptance accepts installed Chrome 152 or newer", async () 
 })
 
 test("release archives include the Chrome extension beside the executable", () => {
-  expect(workflow).toContain('cp -R "dist/tui/tui-${{ matrix.target }}/bin/ycoding-chrome-extension" "$staging/"')
-  expect(workflow).toContain('"dist/release-bin/${{ matrix.target }}" "dist/release-archive/${{ matrix.target }}"')
+  expect(darwinBuild).toContain('cp -R dist/tui/tui-darwin-arm64/bin/ycoding-chrome-extension "$staging/"')
+  expect(darwinBuild).toContain('dist/release-bin/darwin-arm64 dist/release-archive/darwin-arm64')
 })
 
 test("macOS release archives stage the signed app and preserve its bundle tree", () => {
-  expect(workflow).toContain('cp -R "dist/tui/tui-${{ matrix.target }}/bin/YCoding Interaction.app" "$staging/"')
+  expect(darwinBuild).toContain('cp -R "dist/tui/tui-darwin-arm64/bin/YCoding Interaction.app" "$staging/"')
   expect(workflow).toContain('"$payload/YCoding Interaction.app"')
   expect(workflow).not.toContain("bin/ycoding-computer-use")
-  expect(workflowJob(workflow, "build")).toContain("Create and validate native archive")
+  expect(darwinBuild).toContain("Create and validate native archive")
 })
 
 test.each([
@@ -240,7 +242,7 @@ test.each([
   ["interaction", "YCoding Interaction.app", " --deep"],
 ])("the release verifies the archived %s against the pinned certificate before upload", (identifier, entry, deep) => {
   const stage = workflow.split("      - name: Verify packaged macOS signatures")[1]?.split("      - name: Upload native archive")[0] ?? ""
-  expect(stage).toContain('executable="$(bun script/release-archive.ts executable "${{ matrix.target }}" "$RELEASE_VERSION")"')
+  expect(stage).toContain('executable="$(bun script/release-archive.ts executable darwin-arm64 "$RELEASE_VERSION")"')
   expect(stage).toContain(
     String.raw`codesign --verify${deep} --strict -R "=identifier \"app.ycoding.${identifier}\" and certificate leaf = H\"$YCODING_MACOS_SIGNING_SHA1\"" "$payload/${entry}"`,
   )
@@ -254,7 +256,7 @@ test("release archives keep the layout installed updaters accept and ship the li
 })
 
 test("one v tag verifies a shared note and publishes only the TUI GitHub release", () => {
-  const verify = workflow.split("\n  verify-source:")[1]?.split("\n  build:")[0]
+  const verify = workflowJob(workflow, "verify-source")
   const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0]
   expect(workflow).toContain("      - v*")
   expect(Bun.YAML.parse(workflow)).toHaveProperty("on.push.tags", ["v*"])
@@ -307,7 +309,7 @@ test("app preview Worker deploys only after the relay and only when the reposito
 
 test("GitHub Release publication waits for every check and web deployment waits for publication", () => {
   const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0]
-  expect(workflowJob(workflow, "finalize-release")).toContain("needs: [verify-source, build, build-desktop]")
+  expect(workflowJob(workflow, "finalize-release")).toContain(`needs: [verify-source, ${darwinJob}]`)
   expect(tui).toContain("needs: verify-staged-release")
   expect(tui).toContain("github.event_name == 'push'")
   expect(workflow.split("\n  deploy-web:")[1]).toContain("needs: [verify-staged-release, release-tui]")
@@ -353,7 +355,7 @@ test("Cloudflare deployment requires a scoped Actions token before Wrangler runs
 test("tag publication consumes only the verified staging run's signed archives and Web build", () => {
   const parsed: unknown = Bun.YAML.parse(workflow)
   const dispatch = "${{ github.event_name == 'workflow_dispatch' }}"
-  for (const job of ["verify-source", "build", "build-desktop", "finalize-release"]) {
+  for (const job of ["verify-source", darwinJob, "finalize-release"]) {
     expect(parsed).toHaveProperty("jobs." + job + ".if", dispatch)
   }
   const release = workflowJob(workflow, "release-tui")
@@ -409,7 +411,7 @@ test("promotion rejects lightweight tags and staging runs from the wrong source 
 })
 
 test("manual release runs prepare assets without publishing or deploying", () => {
-  const prepare = workflow.split("\n  build:")[1]?.split("\n  release-tui:")[0]
+  const prepare = darwinBuild + workflowJob(workflow, "finalize-release")
   expect(prepare).toContain("github.event_name == 'workflow_dispatch'")
   expect(workflow).toContain("workflow_dispatch:")
   expect(workflow.split("\n  release-tui:")[1]).toContain("github.event_name == 'push'")
@@ -529,7 +531,7 @@ test("active source checks select named files without package-wide test commands
 })
 
 test("active test manifests resolve every selected file in its owning directory", async () => {
-  const source = [workflowJob(workflow, "verify-source"), workflowJob(workflow, "build"), workflowJob(testWorkflow, "source"), workflowJob(testWorkflow, "build")].join("\n      - name:")
+  const source = [workflowJob(workflow, "verify-source"), darwinBuild, workflowJob(testWorkflow, "source"), workflowJob(testWorkflow, "build")].join("\n      - name:")
   for (const step of source.split("\n      - name:")) {
     for (const command of step.split("\n").filter((line) => /\bbun test\b/.test(line))) {
       const cwd = /--cwd\s+(\S+)/.exec(command)?.[1] ?? /\n        working-directory: (\S+)/.exec(step)?.[1] ?? "."
@@ -771,7 +773,7 @@ test("release source gates include ownership, chronology and compact-footer regr
     "./test/form-contract.test.ts",
     "./test/cli/tui/session-rows-chronology.test.tsx",
   ]) expect(verify).toContain(file)
-  expect(workflowJob(workflow, "build")).toContain("bun test --cwd packages/cli ./test/import-boundaries.test.ts")
+  expect(darwinBuild).toContain("bun test --cwd packages/cli ./test/import-boundaries.test.ts")
 })
 
 test("test workflow verifies the web application and relay before the Cloudflare build", () => {
@@ -799,7 +801,6 @@ test("release and test workflows keep both relay versions in source verification
       "./test/http-bulk.test.ts",
       "./src/pwa/offline.test.ts",
       "./src/service-worker.push.test.ts",
-      "bun run typecheck:cloudflare",
       "bun run build:cloudflare",
     ]) expect(source).toContain(check)
     expect(source).not.toContain("wrangler dev")
@@ -811,6 +812,17 @@ test("release and test workflows keep both relay versions in source verification
   expect(deploy).toContain("    permissions:\n      actions: read\n      contents: read\n    steps:")
   expect(deploy).toContain("name: verified-web\n          path: apps/web/dist")
   expect(deploy).toContain("bun run deploy:cloudflare")
+})
+
+test("release verification runs the Cloudflare typecheck through the required types leg once", () => {
+  const source = workflowJob(workflow, "verify-source")
+  const types = source.split("      - name: Check workspace and types\n")[1]?.split("\n      - name: ")[0] ?? ""
+  const pkg = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "../package.json"), "utf8"))
+  expect(types).toContain("if: matrix.suite == 'types'")
+  expect(types).toContain("bun run typecheck\n")
+  expect(pkg.scripts.typecheck).toEndWith(" && bun run typecheck:cloudflare")
+  expect(source).not.toContain("bun run typecheck:cloudflare")
+  expect(workflowJob(testWorkflow, "source")).toContain("bun run typecheck:cloudflare")
 })
 
 test("active verification selects unit and mock boundaries without browser, listener or runtime suites", () => {
@@ -878,8 +890,8 @@ test("Chrome pin selector names an existing source case", async () => {
 })
 
 test("source verification legs start in parallel with the native builds", () => {
-  const verify = workflow.split("\n  verify-source:")[1]?.split("\n  build:")[0] ?? ""
-  const build = workflowJob(workflow, "build")
+  const verify = workflowJob(workflow, "verify-source")
+  const build = darwinBuild
   expect(workflowJob(workflow, "verify-source")).not.toContain("needs:")
   expect(workflowJob(workflow, "build-desktop-runtime")).not.toContain("needs:")
   expect(verify).toContain("fail-fast: false")
@@ -920,10 +932,8 @@ test("packaging overlaps source verification without bypassing publication or de
   const jobs = workflow.split("\njobs:\n")[1]!.split(/(?:^|\n)  ([\w-]+):\n/).slice(1)
   const dependencies = [
     ["verify-source", undefined],
-    ["build-desktop-runtime", undefined],
-    ["build", "build-desktop-runtime"],
-    ["build-desktop", "build-desktop-runtime"],
-    ["finalize-release", "[verify-source, build, build-desktop]"],
+    [darwinJob, undefined],
+    ["finalize-release", `[verify-source, ${darwinJob}]`],
     ["verify-staged-release", undefined],
     ["release-tui", "verify-staged-release"],
     ["deploy-web", "[verify-staged-release, release-tui]"],
@@ -942,7 +952,7 @@ test("packaging overlaps source verification without bypassing publication or de
   }
   expect(workflow).not.toContain("continue-on-error:")
   expect(workflow).toContain("permissions:\n  contents: read\n")
-  const verify = workflow.split("\n  verify-source:")[1]?.split("\n  build:")[0] ?? ""
+  const verify = workflowJob(workflow, "verify-source")
   expect(verify).not.toContain("secrets.")
   expect(verify).not.toContain("token:")
   expect(verify).not.toContain("permissions:")
@@ -953,31 +963,34 @@ test("packaging overlaps source verification without bypassing publication or de
   expect(staged).toContain("      - name: Verify tag is reachable from main\n")
 })
 
-test("Desktop and TUI only embed the exact Apple Silicon runtime from the current prep attempt", () => {
-  const producer = workflowJob(workflow, "build-desktop-runtime")
-  expect(producer).toContain("runs-on: macos-26")
-  expect(producer).toContain("receipt-sha256: ${{ steps.runtime.outputs.receipt-sha256 }}")
-  expect(producer).toContain('bun packages/cli/script/runtime.ts stage-release "$RUNNER_TEMP/release-runtime"')
-  expect(producer).toContain('shasum -a 256 < "$RUNNER_TEMP/release-runtime/receipt.json"')
-  expect(producer).toContain("name: release-runtime-darwin-arm64-${{ github.run_attempt }}")
-  expect(producer).toContain("if-no-files-found: error")
-  expect(producer).not.toContain("secrets.")
-  for (const [job, build] of [["build", "Build TUI artifact"], ["build-desktop", "Build desktop app"]]) {
-    const packager = workflowJob(workflow, job)
-    const download = packager.split("      - name: Download verified runtime\n")[1]?.split("\n      - name: ")[0] ?? ""
-    const packaging = packager.split(`      - name: ${build}\n`)[1]?.split("\n      - name: ")[0] ?? ""
-    expect(download).toContain("name: release-runtime-darwin-arm64-${{ github.run_attempt }}")
-    expect(download).toContain("digest-mismatch: error")
-    expect(download).not.toMatch(/run-id:|repository:|github-token:/)
-    expect(packager.indexOf("Download verified runtime")).toBeLessThan(packager.indexOf(build))
-    expect(packaging).toContain("YCODING_RELEASE_RUNTIME_DIR: ${{ runner.temp }}/release-runtime")
-    expect(packaging).toContain("RECEIPT_SHA256: ${{ needs.build-desktop-runtime.outputs.receipt-sha256 }}")
-    expect(packager).not.toContain("uses: ./.github/actions/setup-rust")
+test("one Darwin runner stages, verifies and embeds the runtime from its own dispatch attempt", () => {
+  expect(workflow.match(/^    runs-on: macos-26$/gm)).toHaveLength(1)
+  for (const name of ["Checkout repository", "Setup Bun", "Setup Rust", "Stage Apple Silicon release runtime", "Upload Apple Silicon release runtime", "Download verified runtime", "Import macOS signing identity", "Build TUI artifact", "Build desktop app", "Remove macOS signing keychain"])
+    expect(darwinBuild.split(`      - name: ${name}\n`)).toHaveLength(2)
+  const stage = darwinStep("Stage Apple Silicon release runtime")
+  expect(stage).toContain("id: runtime")
+  expect(stage).toContain('bun packages/cli/script/runtime.ts stage-release "$RUNNER_TEMP/release-runtime"')
+  expect(stage).toContain('shasum -a 256 < "$RUNNER_TEMP/release-runtime/receipt.json"')
+  const upload = darwinStep("Upload Apple Silicon release runtime")
+  const download = darwinStep("Download verified runtime")
+  for (const step of [upload, download]) expect(step).toContain("name: release-runtime-darwin-arm64-${{ github.run_attempt }}")
+  expect(upload).toContain("if-no-files-found: error")
+  expect(upload).toContain("path: ${{ runner.temp }}/release-runtime/")
+  expect(download).toContain("digest-mismatch: error")
+  expect(download).toContain("path: ${{ runner.temp }}/verified-release-runtime")
+  expect(download).not.toMatch(/run-id:|repository:|github-token:/)
+  const order = ["Stage Apple Silicon release runtime", "Upload Apple Silicon release runtime", "Download verified runtime", "Import macOS signing identity", "Build TUI artifact", "Build desktop app", "Remove macOS signing keychain"].map((name) => darwinBuild.indexOf(`- name: ${name}\n`))
+  expect(order).toEqual([...order].sort((a, b) => a - b))
+  expect(darwinBuild.slice(0, order[3])).not.toContain("secrets.")
+  for (const name of ["Build TUI artifact", "Build desktop app"]) {
+    const packaging = darwinStep(name)
+    expect(packaging).toContain("YCODING_RELEASE_RUNTIME_DIR: ${{ runner.temp }}/verified-release-runtime")
+    expect(packaging).toContain("RECEIPT_SHA256: ${{ steps.runtime.outputs.receipt-sha256 }}")
   }
 })
 
 test("release workflow builds and archives the macOS desktop app from the locked Electrobun package", () => {
-  const desktop = workflowJob(workflow, "build-desktop")
+  const desktop = darwinBuild
   expect(desktop).toContain("timeout-minutes: 60")
   const pinned = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "../packages/desktop/package.json"), "utf8")).dependencies.electrobun as string
   const base = `https://github.com/blackboardsh/electrobun/releases/download/v${pinned}`
@@ -1004,12 +1017,10 @@ test("release workflow builds and archives the macOS desktop app from the locked
   expect(order).toEqual([...order].sort((a, b) => a - b))
 })
 
-const desktopStep = (name: string) => workflowJob(workflow, "build-desktop").split(`      - name: ${name}\n`)[1]?.split("\n      - name: ")[0] ?? ""
-
 test("Desktop stages its actual CLI distribution for candidate checks without changing release archives", () => {
-  const desktop = workflowJob(workflow, "build-desktop")
-  const readback = desktopStep("Verify and archive the Desktop CLI distribution")
-  const upload = desktopStep("Upload Desktop CLI distribution for verification")
+  const desktop = darwinBuild
+  const readback = darwinStep("Verify and archive the Desktop CLI distribution")
+  const upload = darwinStep("Upload Desktop CLI distribution for verification")
   expect(readback).toContain('dist="packages/cli/dist/cli-darwin-arm64"')
   expect(readback).toContain('"$GITHUB_WORKSPACE/$dist/package.json"')
   expect(readback).toContain('cmp "$dist/bin/ycoding" "$backend/ycoding"')
@@ -1025,11 +1036,11 @@ test("Desktop stages its actual CLI distribution for candidate checks without ch
 })
 
 test("release workflow signs the desktop app with the pinned self-signed identity, verifies it and always removes the keychain", () => {
-  const desktop = workflowJob(workflow, "build-desktop")
-  const importStep = desktopStep("Import macOS signing identity")
-  const build = desktopStep("Build desktop app")
-  const verify = desktopStep("Verify desktop signature")
-  const cleanup = desktopStep("Remove macOS signing keychain")
+  const desktop = darwinBuild
+  const importStep = darwinStep("Import macOS signing identity")
+  const build = darwinStep("Build desktop app")
+  const verify = darwinStep("Verify desktop signature")
+  const cleanup = darwinStep("Remove macOS signing keychain")
   expect(desktop).not.toMatch(/^    env:/m)
   expect(importStep).toContain("        env:\n          YCODING_MACOS_SIGNING_P12: ${{ secrets.YCODING_MACOS_SIGNING_P12 }}\n          YCODING_MACOS_SIGNING_PASSWORD: ${{ secrets.YCODING_MACOS_SIGNING_PASSWORD }}\n          YCODING_MACOS_SIGNING_IDENTITY: YCoding Code Signing\n          YCODING_MACOS_SIGNING_SHA1: 9dd524184b0db949ffac7f0ada0ae860ac7f5f85\n")
   for (const command of [
@@ -1044,7 +1055,7 @@ test("release workflow signs the desktop app with the pinned self-signed identit
   expect(importStep).not.toContain("|| true")
   expect(importStep).not.toContain("login.keychain")
   const outside = desktop.replace(importStep, "")
-  expect(outside).not.toContain("secrets.")
+  expect(outside.replace(darwinStep("Build TUI artifact"), "")).not.toContain("secrets.")
   expect(outside).not.toContain("YCODING_MACOS_SIGNING_P12")
   expect(outside).not.toContain("YCODING_MACOS_SIGNING_PASSWORD")
   expect(build).toContain('/bin/sh packages/desktop/script/build.sh --outdir="$RUNNER_TEMP/desktop" --sign-identity=9dd524184b0db949ffac7f0ada0ae860ac7f5f85')
@@ -1144,7 +1155,7 @@ test("every Bun-installing job installs the pinned Bun through the hardened inst
   expect(setupBun).not.toContain("oven-sh/setup-bun")
   expect(setupBun.indexOf("uses: ./.github/actions/install-bun")).toBeLessThan(setupBun.indexOf("Install dependencies"))
   for (const job of ["finalize-release", "release-tui"]) expect(workflowJob(workflow, job)).toContain("      - name: Install Bun\n        uses: ./.github/actions/install-bun\n")
-  for (const job of ["verify-source", "build", "deploy-web"]) expect(workflowJob(workflow, job)).toContain("uses: ./.github/actions/setup-bun")
+  for (const job of ["verify-source", darwinJob, "deploy-web"]) expect(workflowJob(workflow, job)).toContain("uses: ./.github/actions/setup-bun")
 })
 
 test("install pins one Bun version for the release download, the setup action and the npm fallback", () => {

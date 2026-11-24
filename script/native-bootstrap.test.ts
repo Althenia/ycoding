@@ -49,10 +49,11 @@ test("the Apple Silicon runtime producer installs checksum-verified native Rust 
     expect(action).toContain(`${platform})`)
   expect(action).toContain("228cc7add4616cc14ca5e80dee83209d44449a7aee95a914ae748fa374efb078")
   const workflow = Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8")) as {
-    jobs: { build: { strategy: { matrix: { include: { target: string }[] } } }; "build-desktop-runtime": { steps: { uses?: string }[] } }
+    jobs: { "build-desktop-runtime": { "runs-on": string; steps: { name: string; uses?: string }[] } }
   }
-  expect(workflow.jobs.build.strategy.matrix.include.map((entry) => entry.target)).toEqual(["darwin-arm64"])
-  expect(workflow.jobs["build-desktop-runtime"].steps.some((step) => step.uses === "./.github/actions/setup-rust")).toBe(true)
+  const build = workflow.jobs["build-desktop-runtime"]
+  expect(build["runs-on"]).toBe("macos-26")
+  expect(build.steps.filter((step) => step.uses === "./.github/actions/setup-rust").map((step) => step.name)).toEqual(["Setup Rust"])
 })
 
 test("only the default-branch Apple Silicon runtime producer writes the release dependency cache", () => {
@@ -60,8 +61,9 @@ test("only the default-branch Apple Silicon runtime producer writes the release 
   const workflow = readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8")
   const restore = action.split("- name: Restore Apple Silicon release dependencies\n")[1]?.split("\n    - name: ")[0] ?? ""
   const save = workflow.split("- name: Save Apple Silicon release dependencies\n")[1]?.split("\n      - name: ")[0] ?? ""
-  const producer = workflow.split("\n  build-desktop-runtime:\n")[1]?.split("\n  finalize-release:\n")[0] ?? ""
-  const packagers = workflow.split("\n  build:\n")[1]?.split("\n  build-desktop-runtime:\n")[0] ?? ""
+  const build = workflow.split("\n  build-desktop-runtime:\n")[1]?.split("\n  finalize-release:\n")[0] ?? ""
+  const [producer, packagers] = build.split("\n      - name: Import macOS signing identity\n")
+  expect(packagers).toBeDefined()
   expect(restore).toContain("uses: actions/cache/restore@")
   expect(restore).toContain("rust/Cargo.lock")
   expect(restore).not.toContain("**/*.rs")
