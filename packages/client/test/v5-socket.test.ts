@@ -372,6 +372,45 @@ test("REQ-WIRE-007 oversized input is rejected before handoff without closing a 
   }
 })
 
+test("local frame pacing keeps cancelled and replaced requests unsent without replay", async () => {
+  const budgets = { clientRate: 1 }
+  const peers = [new ScriptedPeer("connection-1", budgets), new ScriptedPeer("connection-2", budgets)]
+  let sockets = 0
+  const client = make({
+    endpoint,
+    budgets,
+    socket: () => {
+      const peer = peers[sockets++]
+      queueMicrotask(() => peer.socket.open())
+      return peer.socket
+    },
+  })
+  peers[1].onRequest = (dispatch) => peers[1].result(dispatch, { typeName: health_get_ResultSchema.typeName, payload: health() })
+  try {
+    const started = peers[0].nextRequest()
+    const sentCancel = new AbortController()
+    const sent = client.health.get({ signal: sentCancel.signal }).catch((error: unknown) => error)
+    const request = await started
+    const cancel = new AbortController()
+    const cancelled = client.health.get({ signal: cancel.signal }).catch((error: unknown) => error)
+    const replaced = client.session.rename({ sessionID: "ses_owner", title: "never send" }).catch((error: unknown) => error)
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    cancel.abort()
+    expect(await cancelled).toMatchObject({ status: "unsent", operation: "health.get" })
+    expect(peers[0].requests.map((request) => request.operation.diagnosticName)).toEqual(["health.get"])
+    expect(peers[0].cancellations).toEqual([])
+    sentCancel.abort()
+    expect(await sent).toMatchObject({ status: "unknown", operation: "health.get" })
+    expect(peers[0].cancellations).toEqual([request.requestID])
+    await client.transport.reconnect()
+    expect(await replaced).toMatchObject({ status: "unsent", operation: "session.rename" })
+    expect(await client.health.get()).toMatchObject({ healthy: true })
+    expect(peers[1].requests.map((request) => request.operation.diagnosticName)).toEqual(["health.get"])
+  } finally {
+    client.transport.close()
+  }
+})
+
 test("REQ-WIRE-009/011 rediscovery replaces ownership and never replays a mutation", async () => {
   const peers = [new ScriptedPeer("connection-1"), new ScriptedPeer("connection-2")]
   let discovers = 0

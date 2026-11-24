@@ -158,7 +158,7 @@ test("palette selection turns the backend switch on and off and explains what it
     await until(
       () =>
         view.toast() ===
-        "Idle sleep held off; closing the lid may still sleep this machine. Display unreported; activity unreported. System sleep is not confirmed disabled. Deliberate locks and managed policy apply; verify automatic-lock prevention on this Mac. On battery this drains the battery and a closed lid traps heat.",
+        "Idle sleep held off; closing the lid may still sleep this machine. Use /keep-awake again to turn off the manual setting. Display unreported; activity unreported. System sleep is not confirmed disabled. Deliberate locks and managed policy apply; verify automatic-lock prevention on this Mac. On battery this drains the battery and a closed lid traps heat.",
     )
     await select("on")
     await view.app.waitForFrame((frame) => frame.includes("Awake fixture: off"))
@@ -167,6 +167,26 @@ test("palette selection turns the backend switch on and off and explains what it
     view.app.renderer.destroy()
   }
 }, 20_000)
+
+test("turning off manual keep-awake reports an independent defer hold", async () => {
+  const server = fakeServer({ state: "on", manual: true, deferHold: true })
+  const view = await renderKeepAwake({
+    ...server,
+    set: async (manual) => {
+      server.writes.push(manual)
+      return { state: "on", manual, deferHold: true }
+    },
+  })
+  try {
+    await view.app.waitForFrame((frame) => frame.includes("Awake fixture: on"))
+    view.dispatch("keepAwake.toggle")
+    await until(() => view.toast() === "Manual keep-awake is off. Session deferrals still prevent idle sleep.")
+    expect(server.writes).toEqual([false])
+    expect(view.status()).toEqual({ state: "on", manual: false, deferHold: true })
+  } finally {
+    view.app.renderer.destroy()
+  }
+})
 
 test("an unsupported backend shows its reason and receives no write", async () => {
   const server = fakeServer({ state: "unsupported", message: "Keep machine awake is available on macOS only." })
@@ -199,6 +219,22 @@ test("a backend error is surfaced and the next toggle retries", async () => {
     view.dispatch("keepAwake.toggle")
     await view.app.waitForFrame(() => failing.writes.length === 2)
     expect(failing.writes).toEqual([true, true])
+  } finally {
+    view.app.renderer.destroy()
+  }
+})
+
+test.each([
+  { state: "error", manual: true },
+  { state: "on", manual: false, deferHold: true },
+] satisfies KeepAwakeStatus[])("the first toggle in $state inverts the restored manual setting", async (status) => {
+  const server = fakeServer(status)
+  const view = await renderKeepAwake(server)
+  try {
+    await view.app.waitForFrame((frame) => frame.includes(`Awake fixture: ${status.state}`))
+    view.dispatch("keepAwake.toggle")
+    await view.app.waitForFrame(() => server.writes.length === 1)
+    expect(server.writes).toEqual([!status.manual])
   } finally {
     view.app.renderer.destroy()
   }

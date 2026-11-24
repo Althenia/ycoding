@@ -117,7 +117,7 @@ The `managed-attachments-v1` application migration rewrites legacy attachment co
 - Explicit resumes join the active execution for the same Session.
 - Repeated wakes coalesce into one follow-up drain.
 - Different Sessions run concurrently.
-- Interruption stops locally owned execution without deleting pending input.
+- Interruption stops locally owned execution without deleting pending input. Core interrupt callers join the interrupted generation's durable settlement, even when a later drain is already queued.
 
 The public interrupt operation verifies that the durable Session exists. An unknown Session fails with `SessionNotFoundError`; a known Session that is idle, settled, or not locally owned is a no-op.
 

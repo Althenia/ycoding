@@ -569,6 +569,15 @@ impl Service {
     pub fn pause(&self, id: &c::GroupId) -> Result<(), Error> {
         self.live(id, Live::Interrupted)
     }
+    pub fn pause_master(&self, id: &session::Id) -> Result<(), Error> {
+        if let Some(scope) = self
+            .scope_of(id)?
+            .filter(|scope| scope.master_session_id == *id)
+        {
+            self.pause(&scope.group_id)?;
+        }
+        Ok(())
+    }
     fn live(&self, id: &c::GroupId, value: Live) -> Result<(), Error> {
         let group = self.get(id)?;
         let key = pause_key(id);

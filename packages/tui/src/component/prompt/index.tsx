@@ -461,15 +461,15 @@ export function Prompt(props: PromptProps) {
     prompt: PromptInfo
     mode: "normal" | "shell"
     extmarkToPart: Map<number, PromptPartRef>
-    interrupt: number
     placeholder: number
   }>({
     placeholder: randomIndex(list().length),
     prompt: emptyPrompt(),
     mode: "normal",
     extmarkToPart: new Map(),
-    interrupt: 0,
   })
+  let interruptDeadline = 0
+  createEffect(on([() => props.sessionID, status], () => { interruptDeadline = 0 }))
   const temporaryAttachments = new Map<string, ClipboardTemporary>()
   const predictionShortcut = Keymap.useShortcut("prompt.prediction.accept")
   const predictionEligible = createMemo(() => {
@@ -664,34 +664,26 @@ export function Prompt(props: PromptProps) {
         category: "Session",
         enabled: status() === "running" || automationOrGoalActive(),
         run: (_input: string | undefined, event?: KeyEvent) => {
-          if (!event && props.sessionID) {
-            void client.api.session
-              .interrupt({ sessionID: props.sessionID })
-              .catch((error) => toast.show({ title: "Failed to interrupt", message: errorMessage(error), variant: "error" }))
-            dialog.clear()
-            return
+          const sessionID = props.sessionID
+          if (!sessionID) return
+          if (event) {
+            if (auto()?.visible || !input.focused) return
+            if (store.mode === "shell") {
+              setStore("mode", "normal")
+              return
+            }
+            const now = performance.now()
+            if (interruptDeadline <= now) {
+              interruptDeadline = now + 5000
+              dialog.clear()
+              return
+            }
           }
-          if (auto()?.visible) return
-          if (!input.focused) return
-          // TODO: this should be its own command
-          if (store.mode === "shell") {
-            setStore("mode", "normal")
-            return
-          }
-          if (!props.sessionID) return
-
-          setStore("interrupt", store.interrupt + 1)
-
-          setTimeout(() => {
-            setStore("interrupt", 0)
-          }, 5000)
-
-          if (store.interrupt >= 2) {
-            void client.api.session.interrupt({
-              sessionID: props.sessionID,
-            })
-            setStore("interrupt", 0)
-          }
+          interruptDeadline = 0
+          void client.api.session.interrupt({ sessionID }).catch((error) => {
+            if (!disposed && props.sessionID === sessionID)
+              toast.show({ title: "Failed to interrupt", message: errorMessage(error), variant: "error" })
+          })
           dialog.clear()
         },
       },

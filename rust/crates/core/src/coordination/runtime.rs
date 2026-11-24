@@ -1980,14 +1980,8 @@ impl Runtime {
             }
             Some("session.execution.interrupted.1") => {
                 let reason: LosslessString = object.field("reason")?;
-                if reason.as_str() == Some("user")
-                    && let Some(scope) = self
-                        .0
-                        .coordination
-                        .scope_of(id)?
-                        .filter(|scope| scope.master_session_id == *id)
-                {
-                    self.0.coordination.pause(&scope.group_id)?;
+                if reason.as_str() == Some("user") {
+                    self.0.coordination.pause_master(id)?;
                 }
                 self.member_notice(
                     id,

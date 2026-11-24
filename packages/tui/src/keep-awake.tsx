@@ -98,7 +98,7 @@ export function KeepAwakeProvider(props: ParentProps<{ server?: KeepAwakeServer 
         toast.show({
           variant: "info",
           title: "Keep machine awake",
-          message: "Held on by a deferred session; your manual setting is off and applies when the last deferral ends.",
+          message: "Manual keep-awake is off. Session deferrals still prevent idle sleep.",
           duration: 6000,
         })
       if (next.state === "on" && enabled)
@@ -106,7 +106,7 @@ export function KeepAwakeProvider(props: ParentProps<{ server?: KeepAwakeServer 
           variant: "info",
           title: "Keep machine awake",
           message:
-            `${next.lid === "on" ? "Idle and lid-closed sleep held off" : "Idle sleep held off; closing the lid may still sleep this machine"}. ${keepAwakeAssertionLabel(next)} ${next.system === "on" ? "System sleep disabled; choosing Sleep does not sleep." : "System sleep is not confirmed disabled."} Deliberate locks and managed policy apply; verify automatic-lock prevention on this Mac. On battery this drains the battery and a closed lid traps heat.`,
+            `${next.lid === "on" ? "Idle and lid-closed sleep held off" : "Idle sleep held off; closing the lid may still sleep this machine"}. Use /keep-awake again to turn off the manual setting. ${keepAwakeAssertionLabel(next)} ${next.system === "on" ? "System sleep disabled; choosing Sleep does not sleep." : "System sleep is not confirmed disabled."} Deliberate locks and managed policy apply; verify automatic-lock prevention on this Mac. On battery this drains the battery and a closed lid traps heat.`,
           duration: 6000,
         })
       if (next.state === "error" || next.state === "unsupported")

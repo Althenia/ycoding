@@ -624,8 +624,18 @@ async fn session_interrupt(
 ) -> Result<v5::SessionInterruptResult, Failure> {
     let core = invocation.core()?;
     let id = invocation.session(&request.params.session_id)?;
-    let _ = core.execution.request_interrupt(&id);
-    core.execution.await_idle(&id).await;
+    core.coordination
+        .pause_master(&id)
+        .map_err(|_| Failure::Unavailable("Project pause unavailable".into()))?;
+    core.execution
+        .interrupt(&id)
+        .await
+        .map_err(|error| match error {
+            run_coordinator::Error::Runner(error) if error.r#type.as_str() == Some("not_found") => {
+                Failure::SessionNotFound(name(&id))
+            }
+            _ => Failure::Unavailable("Session interruption unavailable".into()),
+        })?;
     Ok(v5::SessionInterruptResult { data: v5::Empty {} })
 }
 

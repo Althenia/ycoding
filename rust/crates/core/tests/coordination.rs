@@ -197,6 +197,34 @@ async fn defaults_replacement_cas_and_restart_are_observable_without_rewriting_r
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pausing_by_session_requires_the_master_and_persists_without_a_run() {
+    let (store, service, feed) = fixture();
+    let group = service
+        .create(input("ses_master", &["ses_member"]))
+        .await
+        .unwrap();
+    service.activate(&group.id).unwrap();
+
+    for id in ["ses_member", "ses_supervisor", "ses_other"] {
+        service
+            .pause_master(&session::Id::new(id).unwrap())
+            .unwrap();
+        assert!(service.get(&group.id).unwrap().active);
+    }
+
+    service.pause_master(&group.master_session_id).unwrap();
+    assert!(!service.get(&group.id).unwrap().active);
+    let reopened = Service::new(store.client(), feed);
+    let paused = reopened.get(&group.id).unwrap();
+    assert!(!paused.active);
+    assert_eq!(paused.paused_reason, Some(c::PausedReason::Interrupted));
+    reopened.activate(&group.id).unwrap();
+    let active = reopened.get(&group.id).unwrap();
+    assert!(active.active);
+    assert_eq!(active.paused_reason, None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn competing_updates_append_one_changed_event_and_feed_only_after_commit() {
     let (store, service, feed) = fixture();
     let group = service.create(input("ses_master", &[])).await.unwrap();

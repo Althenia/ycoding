@@ -1,4 +1,5 @@
 mod lid;
+mod manual;
 
 use super::process::{self, Command, Input, Output, Process};
 use std::collections::BTreeSet;
@@ -37,6 +38,7 @@ struct Inner {
     status: watch::Sender<Status>,
     worker: Mutex<Option<Worker>>,
     lid: Mutex<Option<lid::Controller>>,
+    preference: Option<PathBuf>,
     reapply: Duration,
     closed: std::sync::atomic::AtomicBool,
 }
@@ -81,6 +83,7 @@ impl Service {
             supported,
             command,
             lid::Controller::unsupported(),
+            None,
             Duration::from_secs(30),
         )
     }
@@ -91,6 +94,7 @@ impl Service {
         native: Box<dyn FnMut(bool) -> LidState + Send>,
         reapply: Duration,
     ) -> Self {
+        let preference = supported.then(|| file.with_file_name(manual::FILE));
         Self::make(
             supported,
             command,
@@ -99,6 +103,7 @@ impl Service {
             } else {
                 lid::Controller::unsupported()
             },
+            preference,
             reapply,
         )
     }
@@ -106,6 +111,7 @@ impl Service {
         supported: bool,
         command: Arc<dyn Fn() -> Command + Send + Sync>,
         lid: lid::Controller,
+        preference: Option<PathBuf>,
         reapply: Duration,
     ) -> Self {
         let mut status = initial(supported);
@@ -120,6 +126,7 @@ impl Service {
             status: watch::channel(status).0,
             worker: Mutex::new(None),
             lid: Mutex::new(Some(lid)),
+            preference,
             reapply,
             closed: std::sync::atomic::AtomicBool::new(false),
         }))
@@ -161,6 +168,7 @@ impl Service {
                                 .unwrap_or_else(PoisonError::into_inner)
                                 .take()
                                 .expect("keep-awake worker owns lid controller"),
+                            self.0.preference.clone(),
                             self.0.reapply,
                         )),
                     }
@@ -241,14 +249,26 @@ async fn run(
     command: Arc<dyn Fn() -> Command + Send + Sync>,
     supported: bool,
     mut lid: lid::Controller,
+    preference: Option<PathBuf>,
     reapply: Duration,
 ) {
     let mut active: Option<Process> = None;
     let mut manual = false;
+    let mut preference_error = None;
     let mut holds = BTreeSet::new();
     let mut base = initial(supported);
     let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + reapply, reapply);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let publish = |base: &Status, manual, holds: &BTreeSet<String>, lid, error: Option<&str>| {
+        publish(
+            &status,
+            base,
+            (preference.is_some() || !holds.is_empty()).then_some(manual),
+            !holds.is_empty(),
+            lid,
+            error,
+        );
+    };
     loop {
         let request = if let Some(process) = active.as_mut() {
             tokio::select! {
@@ -257,12 +277,12 @@ async fn run(
                     active = None;
                     base = exited(exit);
                     lid.apply(false);
-                    publish(&status, &base, manual, &holds, lid.state);
+                    publish(&base, manual, &holds, lid.state, preference_error);
                     continue;
                 }
                 _ = interval.tick() => {
                     lid.apply(true);
-                    publish(&status, &base, manual, &holds, lid.state);
+                    publish(&base, manual, &holds, lid.state, preference_error);
                     continue;
                 }
             }
@@ -283,7 +303,7 @@ async fn run(
                 };
                 lid.apply(false);
                 holds.clear();
-                publish(&status, &base, false, &holds, lid.state);
+                publish(&base, manual, &holds, lid.state, None);
                 let _ = reply.send(status.borrow().clone());
                 return;
             }
@@ -293,86 +313,119 @@ async fn run(
         if cancelable && reply.is_closed() {
             continue;
         }
-        match change {
-            Change::Manual(enabled) => manual = enabled,
+        let recovering = matches!(change, Change::Recover);
+        let requested = match change {
+            Change::Manual(enabled) => supported.then_some(enabled),
             Change::Hold(root) => {
                 holds.insert(root);
+                None
             }
             Change::Release(root) => {
                 holds.remove(&root);
+                None
             }
             Change::Recover => {
                 if active.is_none() && supported {
                     lid.apply(false);
                 }
-                publish(&status, &base, manual, &holds, lid.state);
+                if let Some(path) = &preference {
+                    match manual::read(path) {
+                        Ok(saved) => {
+                            manual = saved;
+                            preference_error = None;
+                        }
+                        Err(_) => {
+                            preference_error =
+                                Some("The manual keep-awake setting could not be read.")
+                        }
+                    }
+                }
+                None
+            }
+        };
+        let enabled = requested.unwrap_or(manual) || !holds.is_empty();
+        let mut staged = None;
+        let start = if supported && enabled && active.is_none() {
+            let spawned = tokio::select! {
+                biased;
+                _ = reply.closed(), if cancelable => continue,
+                spawned = process::spawn(command()) => spawned,
+            };
+            Some(match spawned {
+                Ok(mut child) => {
+                    let next = tokio::select! {
+                        biased;
+                        _ = reply.closed(), if cancelable => {
+                            let _ = child.kill(process::KillOptions::default()).await;
+                            continue;
+                        }
+                        exit = child.wait() => exited(exit),
+                        _ = tokio::time::sleep(Duration::from_millis(300)) => inhibitor_status(State::On),
+                    };
+                    if next.state == State::On {
+                        staged = Some(child);
+                    }
+                    next
+                }
+                Err(_) => error("The sleep inhibitor could not be started."),
+            })
+        } else {
+            None
+        };
+        if let Some(requested) = requested {
+            if preference
+                .as_deref()
+                .is_some_and(|path| manual::write(path, requested).is_err())
+            {
+                if staged.is_some() {
+                    base = stop(&mut staged).await;
+                }
+                preference_error = Some("The manual keep-awake setting could not be saved.");
+                publish(&base, manual, &holds, lid.state, preference_error);
                 let _ = reply.send(status.borrow().clone());
                 continue;
             }
+            manual = requested;
+            preference_error = None;
         }
-        if !supported {
-            publish(&status, &base, manual, &holds, LidState::Unsupported);
-            let _ = reply.send(status.borrow().clone());
-            continue;
-        }
-        if !manual && holds.is_empty() {
-            base = stop(&mut active).await;
-            lid.apply(false);
-            publish(&status, &base, manual, &holds, lid.state);
-            let _ = reply.send(status.borrow().clone());
-            continue;
-        }
-        if active.is_some() {
-            if lid.state != LidState::On {
-                lid.apply(true);
+        if supported {
+            if !enabled {
+                let was_active = active.is_some();
+                base = stop(&mut active).await;
+                if !recovering || was_active {
+                    lid.apply(false);
+                }
+            } else {
+                if let Some(next) = start {
+                    active = staged;
+                    base = next;
+                }
+                if active.is_some() && lid.state != LidState::On {
+                    lid.apply(true);
+                }
             }
-            publish(&status, &base, manual, &holds, lid.state);
-            let _ = reply.send(status.borrow().clone());
-            continue;
         }
-        let spawned = tokio::select! {
-            _ = reply.closed(), if cancelable => continue,
-            spawned = process::spawn(command()) => spawned,
-        };
-        let mut child = match spawned {
-            Ok(child) => child,
-            Err(_) => {
-                base = error("The sleep inhibitor could not be started.");
-                publish(&status, &base, manual, &holds, lid.state);
-                let _ = reply.send(status.borrow().clone());
-                continue;
-            }
-        };
-        let next = tokio::select! {
-            _ = reply.closed(), if cancelable => { let _ = child.kill(process::KillOptions::default()).await; continue; }
-            exit = child.wait() => exited(exit),
-            _ = tokio::time::sleep(Duration::from_millis(300)) => inhibitor_status(State::On),
-        };
-        if next.state == State::On {
-            active = Some(child);
-            lid.apply(true);
-        }
-        base = next;
-        publish(&status, &base, manual, &holds, lid.state);
-        if reply.send(status.borrow().clone()).is_err() && cancelable {
-            base = stop(&mut active).await;
-            lid.apply(false);
-            publish(&status, &base, manual, &holds, lid.state);
-        }
+        publish(&base, manual, &holds, lid.state, preference_error);
+        let _ = reply.send(status.borrow().clone());
     }
 }
 
 fn publish(
     status: &watch::Sender<Status>,
     base: &Status,
-    manual: bool,
-    holds: &BTreeSet<String>,
+    manual: Option<bool>,
+    deferred: bool,
     lid: LidState,
+    preference_error: Option<&str>,
 ) {
     let mut next = base.clone();
-    next.manual = (!holds.is_empty()).then_some(manual);
-    next.defer_hold = Some(!holds.is_empty());
+    next.manual = manual;
+    next.defer_hold = Some(deferred);
     next.lid = Some(lid);
+    if let Some(message) = preference_error {
+        next.state = State::Error;
+        next.message = Some(message.into());
+    }
     if next.message.is_none() {
         next.message = match lid {
             LidState::Held => Some("Lid control is held by another YCoding process.".into()),

@@ -256,11 +256,7 @@ impl Coordinator {
                 .state
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            if stop(&mut state, id, reason) {
-                state.entries.get(id).map(|entry| entry.done.subscribe())
-            } else {
-                None
-            }
+            stop(&mut state, id, reason).map(|entry| entry.done.subscribe())
         };
         let Some(receiver) = receiver else {
             return Ok(());
@@ -393,22 +389,23 @@ impl Coordinator {
     }
 }
 
-fn stop(state: &mut State, id: &session::Id, reason: InterruptReason) -> bool {
-    if let Some(entry) = state.entries.get_mut(id) {
-        if entry.stopping || entry.settling {
-            return false;
-        }
-        entry.stopping = true;
-        if entry.pending_wake
-            && let Some(transition) = state.transitions.get_mut(id)
-        {
-            transition.doorbell = true;
-        }
-        entry.pending_wake = false;
-        entry.cancel.send_replace(Some(reason));
-        return true;
+fn stop<'a>(state: &'a mut State, id: &session::Id, reason: InterruptReason) -> Option<&'a Entry> {
+    let entry = state.entries.get_mut(id)?;
+    if entry.stopping {
+        return Some(entry);
     }
-    false
+    if entry.settling {
+        return None;
+    }
+    entry.stopping = true;
+    if entry.pending_wake
+        && let Some(transition) = state.transitions.get_mut(id)
+    {
+        transition.doorbell = true;
+    }
+    entry.pending_wake = false;
+    entry.cancel.send_replace(Some(reason));
+    Some(entry)
 }
 
 fn start(

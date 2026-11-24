@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import type { KeyEvent } from "@opentui/core"
 import type { YCodingEvent } from "@ycoding-ai/client"
 import { directory as defaultDirectory, json, sessionSnapshot } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT } from "../viewport"
@@ -25,11 +26,26 @@ const session = {
  * activity pinned the header at "cooking" for a Session that had already settled.
  */
 test("an interrupted retry does not keep the header cooking", async () => {
+  const interrupts: string[] = []
+  const requested = Promise.withResolvers<void>()
+  const retried = Promise.withResolvers<void>()
+  let sessionStatus = () => "idle"
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
     args: { sessionID },
-    settle: "cooking",
-    route: (url) => {
+    settle: "retry",
+    sessionReady: true,
+    data: (value) => { sessionStatus = () => value.session.status(sessionID) },
+    route: (url, request) => {
+      if (url.pathname === `/api/session/${sessionID}/interrupt` && request.method === "POST") {
+        interrupts.push(sessionID)
+        if (interrupts.length === 2) {
+          retried.resolve()
+          return json({ data: {} })
+        }
+        requested.resolve()
+        return json({ _tag: "InvalidRequestError", message: "Interrupt unavailable", field: "sessionID" }, { status: 400 })
+      }
       if (url.pathname === "/api/location") return json(location)
       if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
       if (url.pathname === "/api/session/active") return json({ data: { [sessionID]: {} } })
@@ -43,7 +59,7 @@ test("an interrupted retry does not keep the header cooking", async () => {
               agent: "build",
               model: { providerID: "anthropic", id: "claude-opus-5" },
               content: [],
-              retry: { attempt: 2, at: Date.now() + 30_000, error: { message: "Provider unavailable" } },
+              retry: { attempt: 2, at: Date.now() + 30_000, error: { type: "provider.transport", message: "Provider unavailable" } },
               time: { created: 2 },
             },
           ], { session })
@@ -60,14 +76,75 @@ test("an interrupted retry does not keep the header cooking", async () => {
 
   try {
     expect(screen.lines()[1]).toContain("retry")
-
-    // The user interrupts while the retry is scheduled, and the drain settles as interrupted.
-    screen.events.emit({
-      id: "evt_retry_interrupted",
-      created: 5,
-      type: "session.execution.interrupted",
-      data: { sessionID, reason: "user" },
-    } as YCodingEvent)
+    await screen.waitForEventStream()
+    const execution = async (seq: number, active: boolean) => {
+      screen.events.emit({
+        id: `evt_retry_${seq}`,
+        created: seq + 3,
+        type: active ? "session.execution.started" : "session.execution.interrupted",
+        durable: { aggregateID: sessionID, seq, version: 1 },
+        location: { directory },
+        data: active ? { sessionID } : { sessionID, reason: "user" },
+      } as YCodingEvent)
+      const expected = active ? "running" : "idle"
+      const deadline = Date.now() + 2_000
+      while (sessionStatus() !== expected && Date.now() < deadline) {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        await screen.renderOnce()
+      }
+      expect(sessionStatus()).toBe(expected)
+    }
+    await execution(1, true)
+    expect(screen.renderer.currentFocusedEditor).not.toBeNull()
+    const pressEscape = () => new Promise<void>((resolve, reject) => {
+      const observe = (key: KeyEvent) => {
+        if (key.name !== "escape") return
+        clearTimeout(timeout)
+        screen.renderer.keyInput.off("keypress", observe)
+        resolve()
+      }
+      const timeout = setTimeout(() => {
+        screen.renderer.keyInput.off("keypress", observe)
+        reject(new Error("The terminal did not decode Escape"))
+      }, 2000)
+      screen.renderer.keyInput.prependListener("keypress", observe)
+      screen.input.pressEscape()
+    })
+    await pressEscape()
+    expect(interrupts).toEqual([])
+    await pressEscape()
+    const waitForInterrupt = async (request: Promise<void>) => {
+      let timeout: ReturnType<typeof setTimeout> | undefined
+      try {
+        await Promise.race([
+          request,
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(() => reject(new Error("Escape did not send a Session interrupt")), 2000)
+          }),
+        ])
+      } finally {
+        clearTimeout(timeout)
+      }
+    }
+    await waitForInterrupt(requested.promise)
+    expect(interrupts).toEqual([sessionID])
+    const failed = Date.now() + 2_000
+    while (!screen.frame().includes("Failed to interrupt") && Date.now() < failed) {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      await screen.renderOnce()
+    }
+    expect(screen.frame()).toContain("Failed to interrupt")
+    expect(sessionStatus()).toBe("running")
+    await pressEscape()
+    await execution(2, false)
+    await execution(3, true)
+    await pressEscape()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(interrupts).toEqual([sessionID])
+    await pressEscape()
+    await waitForInterrupt(retried.promise)
+    expect(interrupts).toEqual([sessionID, sessionID])
+    await execution(4, false)
 
     const deadline = Date.now() + 2_000
     while (Date.now() < deadline) {

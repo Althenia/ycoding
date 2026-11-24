@@ -2201,6 +2201,111 @@ async fn interruption_joins_owned_tool_work_and_closes_the_step_before_the_waite
     coordinator.shutdown().await.unwrap();
 }
 
+#[tokio::test]
+async fn interruption_leaves_an_active_compaction_worker_to_settle_without_resuming_the_session() {
+    use std::time::Duration;
+    use ycoding_core::{
+        event_feed::{Payload, Scope},
+        session::run_coordinator::{Error, InterruptReason},
+    };
+
+    let store = support::store();
+    let service = Service::new(store.client());
+    checkpoint::session(&store.client(), "ses_one");
+    checkpoint::user(&service, "ses_one", "Earlier prompt", 1).await;
+    checkpoint::run(
+        &service,
+        "ses_one",
+        &"Earlier answer detail. ".repeat(1_200),
+        checkpoint::Outcome::Succeeded,
+        2,
+    )
+    .await;
+    admit_input(&service, "next", "Answer the current prompt", "steer").await;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let (sent, mut requests) = mpsc::unbounded_channel();
+    let app = axum::Router::new().fallback(axum::routing::post({
+        let gate = gate.clone();
+        move |body: String| {
+            let gate = gate.clone();
+            let sent = sent.clone();
+            async move {
+                sent.send(body).unwrap();
+                gate.notified().await;
+                (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    r#"{"error":{"message":"Fixture unavailable"}}"#,
+                )
+            }
+        }
+    }));
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut services = snapshot_services(&store, &endpoint, registry(), Arc::new(WallClock));
+    services.compaction.context_safety_margin_tokens = 125_000;
+    let id = checkpoint::id("ses_one");
+    let notified = Arc::new(tokio::sync::Notify::new());
+    let notify = notified.clone();
+    let events = services
+        .events
+        .subscribe(Scope::Session(id.clone()), None, move || {
+            notify.notify_one()
+        })
+        .unwrap();
+    let coordinator = Coordinator::new(Arc::new(Local::new(services)));
+    let owner = coordinator.clone();
+    let running_id = id.clone();
+    let running = tokio::spawn(async move { owner.run(&running_id).await });
+
+    let helper = tokio::time::timeout(Duration::from_secs(5), requests.recv())
+        .await
+        .expect("the mandatory compaction helper did not start")
+        .unwrap();
+    assert!(helper.contains("Output exactly one TOON document"));
+    coordinator
+        .interrupt(&id, InterruptReason::User)
+        .await
+        .unwrap();
+    assert!(coordinator.active().is_empty());
+    assert!(matches!(
+        running.await.unwrap(),
+        Err(Error::Interrupted(InterruptReason::User))
+    ));
+    gate.notify_one();
+    let terminal = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            while let Some(item) = events.next().unwrap() {
+                if let Payload::Durable(event) = &item.payload
+                    && matches!(
+                        event.type_.as_str(),
+                        Some("session.compaction.ended.2" | "session.compaction.failed.2")
+                    )
+                {
+                    return event.type_.clone();
+                }
+            }
+            notified.notified().await;
+        }
+    })
+    .await;
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+    coordinator.shutdown().await.unwrap();
+    assert_eq!(
+        terminal
+            .expect("the compaction worker was dropped with its waiter")
+            .as_str(),
+        Some("session.compaction.ended.2")
+    );
+    assert!(service.compaction_pending(&id).await.unwrap().is_empty());
+    assert!(
+        requests.try_recv().is_err(),
+        "the interrupted Session resumed"
+    );
+}
+
 const CACHED_ZERO: &str = "data: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Answer\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":0}}}\n\ndata: [DONE]\n\n";
 const MALFORMED: &str = "data: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Partial\"},\"finish_reason\":null}]}\n\ndata: {not json}\n\n";
 const RATE_LIMITED: &str = r#"{"error":{"message":"rate limited"}}"#;

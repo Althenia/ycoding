@@ -1517,8 +1517,15 @@ export async function createSessionTransport<Client extends RunClient>(
         shell.abort()
         return
       }
-      if (state.wait) state.wait.interrupted = true
-      await sdk.session.interrupt({ sessionID: input.sessionID }).catch(() => {})
+      const wait = state.wait
+      const interrupted = wait?.interrupted ?? false
+      if (wait) wait.interrupted = true
+      try {
+        await sdk.session.interrupt({ sessionID: input.sessionID })
+      } catch (error) {
+        if (wait && state.wait === wait) wait.interrupted = interrupted
+        throw error
+      }
     },
     selectSubagent(sessionID) {
       subagents.select(sdk, sessionID)

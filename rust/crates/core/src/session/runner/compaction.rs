@@ -234,6 +234,41 @@ impl Local {
         selection: &model::Ref,
         job: &Job,
     ) -> Result<Job, compaction_job::CompactionError> {
+        let runner = self.clone();
+        let owner = owner.clone();
+        let selection = selection.clone();
+        let job = job.clone();
+        tokio::spawn(async move {
+            let lock = runner.ingress_lock(crate::instructions::join(
+                &["compact-worker:".into(), owner.id.as_lossless().clone()],
+                "",
+            ));
+            let _guard = lock.lock().await;
+            let id = compaction_execution::job_id(&job.id)?;
+            let store = &runner.0.services.store;
+            if let Some(settled) = store.compaction_job(&id)?
+                && matches!(settled.status.as_str(), Some("ended" | "failed"))
+            {
+                return Ok(settled);
+            }
+            runner
+                .execute_compaction(&owner, &selection, &job, &id)
+                .await
+        })
+        .await
+        .map_err(|_| ycoding_store::Error::Domain {
+            kind: "compaction.worker",
+            message: "Compaction worker stopped before settlement",
+        })?
+    }
+
+    async fn execute_compaction(
+        &self,
+        owner: &session::Info,
+        selection: &model::Ref,
+        job: &Job,
+        id: &session_compaction::Id,
+    ) -> Result<Job, compaction_job::CompactionError> {
         let services = &self.0.services;
         let attribution = Attribution::explicit(
             job.usage_anchor
@@ -291,8 +326,7 @@ impl Local {
                 .await
             })
         };
-        let id = compaction_execution::job_id(&job.id)?;
-        compaction_execution::run(&services.store, &*services.clock, &id, &builder).await
+        compaction_execution::run(&services.store, &*services.clock, id, &builder).await
     }
 
     async fn resolve_helper(

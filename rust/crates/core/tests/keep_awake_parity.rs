@@ -207,8 +207,16 @@ async fn unexpected_signal_exit_has_no_rearm_and_recovers_on_request() {
 #[tokio::test]
 async fn cancellation_during_grace_reaps_child_and_never_publishes_on() {
     let fixture = Arc::new(Fixture::new("cancel"));
+    let state = LidFixture::new();
     let command = fixture.clone();
-    let service = Service::with_command(true, Arc::new(move || command.command()));
+    let service = Service::with_lid(
+        true,
+        Arc::new(move || command.command()),
+        state.file(),
+        Box::new(|_| panic!("cancelled enable must not arm lid control")),
+        Duration::from_secs(30),
+    );
+    service.recover().await;
     let starting = service.clone();
     let task = tokio::spawn(async move { starting.set(true).await });
     let pid = fixture.pid().await;
@@ -217,6 +225,7 @@ async fn cancellation_during_grace_reaps_child_and_never_publishes_on() {
     assert!(task.await.unwrap_err().is_cancelled());
     service.close().await;
     assert_eq!(service.get().state, State::Off);
+    assert!(!state.manual_file().exists());
     assert!(!is_alive(pid).unwrap());
 }
 
@@ -369,6 +378,9 @@ impl LidFixture {
     fn file(&self) -> std::path::PathBuf {
         self.directory.join("lid.json")
     }
+    fn manual_file(&self) -> std::path::PathBuf {
+        self.directory.join("keep-awake-manual.json")
+    }
     fn service(&self, apply: impl FnMut(bool) -> LidState + Send + 'static) -> Service {
         Service::with_lid(
             true,
@@ -388,6 +400,111 @@ impl Drop for LidFixture {
     fn drop(&mut self) {
         std::fs::remove_dir_all(&self.directory).unwrap();
     }
+}
+
+#[tokio::test]
+async fn manual_restart_reapplies_on_and_preserves_explicit_off_during_defer() {
+    let fixture = LidFixture::new();
+    let apply = |enabled| if enabled { LidState::On } else { LidState::Off };
+    let first = fixture.service(apply);
+    assert_eq!(first.recover().await.state, State::Off);
+    assert_eq!(first.set(true).await.state, State::On);
+    first.close().await;
+    assert_eq!(first.get().state, State::Off);
+    assert!(!fixture.armed());
+
+    let second = fixture.service(apply);
+    let recovered = second.recover().await;
+    assert_eq!(recovered.state, State::On);
+    assert_eq!(recovered.display, Some(State::On));
+    assert_eq!(recovered.lid, Some(LidState::On));
+    assert_eq!(recovered.manual, Some(true));
+    assert_eq!(recovered.defer_hold, Some(false));
+    second.hold("ses_root").await;
+    let deferred = second.set(false).await;
+    assert_eq!(deferred.state, State::On);
+    assert_eq!(deferred.manual, Some(false));
+    assert_eq!(deferred.defer_hold, Some(true));
+    second.close().await;
+
+    let third = fixture.service(apply);
+    let recovered = third.recover().await;
+    assert_eq!(recovered.state, State::Off);
+    assert_eq!(recovered.manual, Some(false));
+    assert_eq!(recovered.defer_hold, Some(false));
+    assert!(
+        !serde_json::from_slice::<bool>(&std::fs::read(fixture.manual_file()).unwrap()).unwrap()
+    );
+    third.close().await;
+}
+
+#[tokio::test]
+async fn manual_restart_clears_stale_lid_state_before_applying_the_saved_on() {
+    let fixture = LidFixture::new();
+    std::fs::write(fixture.file(), r#"{"armed":true}"#).unwrap();
+    std::fs::write(fixture.manual_file(), "true").unwrap();
+    let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let service = fixture.service(move |enabled| {
+        sent.send(enabled).unwrap();
+        if enabled { LidState::On } else { LidState::Off }
+    });
+    assert_eq!(service.recover().await.state, State::On);
+    assert_eq!(received.try_recv(), Ok(false));
+    assert_eq!(received.try_recv(), Ok(true));
+    service.close().await;
+}
+
+#[tokio::test]
+async fn manual_restart_keeps_defer_only_holds_out_of_preferences() {
+    let fixture = LidFixture::new();
+    let first = fixture.service(|enabled| if enabled { LidState::On } else { LidState::Off });
+    assert_eq!(first.recover().await.state, State::Off);
+    assert_eq!(first.hold("ses_root").await.state, State::On);
+    first.close().await;
+    assert!(!fixture.manual_file().exists());
+
+    let second = fixture.service(|_| panic!("no native call without a reason to hold awake"));
+    let recovered = second.recover().await;
+    assert_eq!(recovered.state, State::Off);
+    assert_eq!(recovered.defer_hold, Some(false));
+    second.close().await;
+}
+
+#[tokio::test]
+async fn manual_restart_preserves_intent_when_the_inhibitor_cannot_start() {
+    let fixture = LidFixture::new();
+    let first = Service::with_lid(
+        true,
+        Arc::new(|| Command::new("/synthetic-private/missing-inhibitor", [] as [&str; 0])),
+        fixture.file(),
+        Box::new(|_| panic!("lid should not be applied")),
+        Duration::from_secs(30),
+    );
+    first.recover().await;
+    let error = first.set(true).await;
+    assert_eq!(error.state, State::Error);
+    assert_eq!(error.manual, Some(true));
+    first.close().await;
+
+    let second = fixture.service(|enabled| if enabled { LidState::On } else { LidState::Off });
+    assert_eq!(second.recover().await.state, State::On);
+    second.close().await;
+}
+
+#[tokio::test]
+async fn manual_restart_surfaces_unusable_preferences_without_enabling_lid_control() {
+    let fixture = LidFixture::new();
+    std::fs::create_dir(fixture.manual_file()).unwrap();
+    let service = fixture.service(|_| panic!("lid should not be applied"));
+    let recovery = service.recover().await;
+    assert_eq!(recovery.state, State::Error);
+    assert_eq!(recovery.display, Some(State::Off));
+    assert_eq!(recovery.manual, Some(false));
+    let change = service.set(true).await;
+    assert_eq!(change.state, State::Error);
+    assert_eq!(change.display, Some(State::Off));
+    assert_eq!(change.manual, Some(false));
+    service.close().await;
 }
 
 #[tokio::test]

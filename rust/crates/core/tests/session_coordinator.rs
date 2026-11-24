@@ -436,6 +436,43 @@ impl Drain for Hooks {
 }
 
 #[tokio::test]
+async fn repeated_interrupts_join_the_same_settlement_without_waiting_for_a_successor() {
+    let (_, runner, mut started) = setup();
+    let (settling, mut outcomes) = mpsc::unbounded_channel();
+    let release = Arc::new(Semaphore::new(0));
+    let coordinator = Coordinator::new(Arc::new(Hooks {
+        runner,
+        settling,
+        release: release.clone(),
+        failure: Mutex::new(None),
+        panic: false,
+    }));
+    let session = id();
+    coordinator.wake(&session).unwrap();
+    started.recv().await.unwrap();
+    coordinator
+        .request_interrupt(&session, InterruptReason::User)
+        .unwrap();
+    assert!(matches!(
+        outcomes.recv().await.unwrap(),
+        Err(Error::Interrupted(InterruptReason::User))
+    ));
+
+    let mut interrupt = Box::pin(coordinator.interrupt(&session, InterruptReason::User));
+    pending(interrupt.as_mut()).await;
+    coordinator.wake(&session).unwrap();
+    release.add_permits(1);
+    tokio::time::timeout(std::time::Duration::from_secs(2), interrupt)
+        .await
+        .expect("interrupt waited for a successor drain")
+        .unwrap();
+
+    started.recv().await.unwrap();
+    release.add_permits(1);
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn late_interrupt_is_noop_after_terminal_settlement_starts() {
     let (_, runner, mut started) = setup();
     let (settling, mut settled) = mpsc::unbounded_channel();

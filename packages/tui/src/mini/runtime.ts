@@ -340,26 +340,24 @@ async function runInteractiveRuntime<Client extends RunClient>(
       }
     },
     onInterrupt: () => {
-      if (!state.sessionID) {
+      const sessionID = state.sessionID
+      if (!sessionID) {
         return false
       }
 
-      if (state.aborting) {
-        void state.sdk.session.interrupt({ sessionID: state.sessionID })
-          .catch(() => {})
-          .finally(() => {
-            state.aborting = false
-          })
-        return true
-      }
+      if (state.aborting) return true
 
       state.aborting = true
       void (
         state.stream
           ? state.stream.then((item) => item.handle.interruptActiveTurn())
-          : state.sdk.session.interrupt({ sessionID: state.sessionID })
+          : state.sdk.session.interrupt({ sessionID })
       )
-        .catch(() => {})
+        .catch(() => {
+          if (state.sessionID === sessionID && !footer.isClosed) {
+            footer.event({ type: "stream.patch", patch: { status: "interrupt not confirmed" } })
+          }
+        })
         .finally(() => {
           state.aborting = false
         })

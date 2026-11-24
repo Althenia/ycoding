@@ -1921,6 +1921,26 @@ describe("Mini transport", () => {
     await transport.close()
   })
 
+  test("reports an interrupt request the server refused", async () => {
+    const events = feed()
+    events.push(connected())
+    const client = sdk({ streams: [events], active: () => ({ ses_1: { type: "running" } }) })
+    const transport = await createSessionTransport({
+      sdk: client,
+      sessionID: "ses_1",
+      thinking: false,
+      footer: footer().api,
+    })
+    const failure = new Error("Interrupt unavailable")
+    const interrupt = spyOn(client.session, "interrupt").mockImplementation(async () => { throw failure })
+    try {
+      await expect(transport.interruptActiveTurn()).rejects.toBe(failure)
+      expect(interrupt).toHaveBeenCalledWith({ sessionID: "ses_1" })
+    } finally {
+      await transport.close()
+    }
+  })
+
   test("overrides a configured default profile when explicitly selecting another variant", async () => {
     const events = feed()
     events.push(connected())

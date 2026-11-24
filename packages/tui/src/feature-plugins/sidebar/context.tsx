@@ -35,7 +35,7 @@ export function SidebarCacheContent(props: {
   const diagnostics = createMemo(props.diagnostics)
   const usage = createMemo(() => props.usage?.() ?? diagnostics()?.requests)
   const summarizing = createMemo(() => props.summarizing?.() ?? false)
-  const pressure = createMemo(() => (summarizing() ? props.pressure?.() : undefined))
+  const pressure = createMemo(() => props.pressure?.())
   const fallback = createMemo(() => props.fallback?.())
   const cachePercent = createMemo(() => diagnostics()?.cache.readReported ? cacheHitPercent(diagnostics()?.cache.hitRatio) : undefined)
   // A rail row right-aligns its value, so an over-long model identity would run into it. Rows are bounded
@@ -208,7 +208,7 @@ export function isConversationSummarizing(
   compactions: readonly { status: "pending" | "running" | "completed" | "failed" }[] = [],
 ) {
   return (
-    compactions.some((item) => item.status !== "completed" && item.status !== "failed") ||
+    compactions.some((item) => item.status === "running") ||
     messages.some((message) => message.type === "compaction" && !("jobID" in message) && message.status === "running")
   )
 }

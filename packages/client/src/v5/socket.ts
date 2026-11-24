@@ -68,6 +68,7 @@ type Owner = {
   timer?: ReturnType<typeof setInterval>
   detach?: () => void
   pending: Map<string, Pending>
+  normalSentAt: number[]
   streams: Map<
     string,
     { stream: DeliveryStream<unknown>; operation: OperationDescriptor; scope: Scope; closing: boolean }
@@ -181,6 +182,7 @@ export class LocalTransport {
       resolve: deferred.resolve,
       reject: deferred.reject,
       pending: new Map(),
+      normalSentAt: [],
       streams: new Map(),
       opening: 0,
     }
@@ -632,16 +634,30 @@ export class LocalTransport {
   private pump(owner: Owner) {
     if (this.#pumping || !owner.active || owner !== this.#owner || owner.socket?.readyState !== 1 || !owner.connection)
       return
+    const { connection, normalSentAt } = owner
+    const { clientRate, agentRate, rateWindowMs } = connection.budgets
+    const normalRate = Math.min(clientRate, agentRate)
     this.#pumping = true
     try {
       for (;;) {
-        const prepared = owner.connection.prepareHandoff(performance.now())
-        this.process(owner, owner.connection.takeDecisions())
+        const now = performance.now()
+        const prepared = connection.prepareHandoff(now)
+        this.process(owner, connection.takeDecisions())
         if (!prepared || !owner.active) break
-        const bytes = encodeStrict(FrameSchema, prepared.frame)
-        const decisions = owner.connection.handoff(prepared, bytes.length, performance.now())
+        const { frame } = prepared
+        const normal = frame.ledger === LedgerClass.NORMAL && frame.body.case !== "hello" && frame.body.case !== "ready"
+        if (normal && normalSentAt.length === normalRate && now - normalSentAt[0] < rateWindowMs) {
+          connection.abortPrepared(prepared)
+          break
+        }
+        const bytes = encodeStrict(FrameSchema, frame)
+        const decisions = connection.handoff(prepared, bytes.length, now)
         this.process(owner, decisions)
         if (!owner.active) break
+        if (normal) {
+          if (normalSentAt.length === normalRate) normalSentAt.shift()
+          normalSentAt.push(now)
+        }
         owner.socket.send(new Uint8Array(bytes))
       }
     } catch {

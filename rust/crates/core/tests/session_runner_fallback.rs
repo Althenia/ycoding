@@ -1506,15 +1506,7 @@ fn catalog(endpoint: &str) -> Catalog {
         entry("narrow", 2_048, 1_024),
     ]
     .join(",");
-    let mut catalog = Catalog::new(
-        models_dev::normalize(
-            &parse_json(&format!(
-                r#"{{"fake":{{"id":"fake","name":"Fake","env":[],"npm":"{PACKAGE}","api":"https://example.test/v1","models":{{{models}}}}}}}"#
-            ))
-            .unwrap(),
-        )
-        .unwrap(),
-    );
+    let mut catalog = Catalog::new(Vec::new());
     catalog
         .configure(&[parse_json(&format!(
             r#"{{"model":{{"providerID":"fake","model":"fake-model"}},"providers":{{"fake":{{"package":"{PACKAGE}","models":{{{models}}},"settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#

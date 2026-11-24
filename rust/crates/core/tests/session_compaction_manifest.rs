@@ -602,6 +602,69 @@ async fn running_a_job_stores_the_manifest_and_activates_the_checkpoint_in_one_s
 }
 
 #[tokio::test]
+async fn a_timed_out_helper_releases_the_running_job_with_a_local_checkpoint() {
+    let texts = long("timed out helper", 6);
+    let (_store, service) = prepared(&texts);
+    let job = admit(
+        &service,
+        texts.len(),
+        session_compaction::Trigger::Consider,
+        4_096,
+    )
+    .await;
+    let id = job_id(&job);
+    let mut policy = policy(1, 8);
+    policy.timeout_seconds = 1;
+    let calls = AtomicUsize::new(0);
+    let generate = |_: String| -> Pin<Box<dyn Future<Output = Option<String>> + Send>> {
+        assert_eq!(
+            service
+                .compaction_job(&id)
+                .unwrap()
+                .unwrap()
+                .status
+                .as_str(),
+            Some("running")
+        );
+        calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(std::future::pending())
+    };
+    let builder = |job: Job| -> compaction_execution::ManifestFuture<'_> {
+        let service = &service;
+        let policy = &policy;
+        let generate = &generate;
+        Box::pin(async move {
+            compaction::manifest(Input {
+                store: service,
+                job: &job,
+                policy,
+                helper_context_window: Some(100_000),
+                generate: Some(generate),
+                live_state: &no_live_state,
+            })
+            .await
+        })
+    };
+    let ended = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        run_with(&service, &id, &builder),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(ended.status.as_str(), Some("ended"));
+    assert!(ended.manifest_digest.is_some());
+    assert!(
+        service
+            .compaction_pending(&session::Id::new("ses_one").unwrap())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn a_protected_state_change_is_retried_once_per_attempt_and_other_failures_fail_the_job() {
     let texts = long("retry", 3);
     let (_store, service) = prepared(&texts);
