@@ -1,3 +1,5 @@
+#[path = "provider_contract_support/openai_http.rs"]
+mod openai_http;
 #[path = "provider_contract_support/replay.rs"]
 mod replay;
 #[path = "provider_contract_support/structured.rs"]
@@ -594,6 +596,45 @@ fn test_041_lossless_canonical_request_bytes_and_digest_restore_after_overlay_ch
     input.tools.clear();
     assert_eq!(route.prepare(&input).unwrap().encoded_body, baseline);
     assert_eq!(stringify_json(&parse_json(&baseline).unwrap()), baseline);
+}
+
+#[tokio::test]
+async fn openai_websocket_reuses_assistant_output_from_terminal_snapshot() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::{accept_async, tungstenite::Message as Frame};
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut common = Config::new(Auth::bearer(Credential::value("synthetic-key")));
+        common.base_url = Some(format!("http://{}/v1", listener.local_addr().unwrap()));
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(socket).await.unwrap();
+            let initial = socket.next().await.unwrap().unwrap().into_text().unwrap();
+            assert!(!initial.contains("previous_response_id"));
+            socket.send(Frame::Text(r#"{"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"message","id":"msg","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer"}]}]}}"#.into())).await.unwrap();
+            let followup = socket.next().await.unwrap().unwrap().into_text().unwrap();
+            let body: serde_json::Value = serde_json::from_str(&followup).unwrap();
+            assert_eq!(body["previous_response_id"], "resp_1");
+            assert_eq!(body["input"].as_array().unwrap().len(), 1);
+            assert_eq!(body["input"][0]["content"][0]["text"], "next");
+            socket.send(Frame::Text(r#"{"type":"response.completed","response":{"id":"resp_2"}}"#.into())).await.unwrap();
+        });
+        let mut request = Request::new(providers::openai("gpt-5.6", OpenAIConfig {
+            common, organization: None, project: None, transport: Transport::WebSocket,
+        }));
+        let options = |boundary| Some(parse_json(&format!(r#"{{"openai":{{"store":false,"responsesWebSocket":{{"sessionKey":"fixture-session","fingerprint":"same","messageBoundary":{boundary}}}}}}}"#)).unwrap());
+        request.messages.push(Message::user("hello"));
+        request.provider_options = options(1);
+        let executor = Executor::new(Executor::http_client().unwrap());
+        let response = executor.generate(&request).await.unwrap();
+        assert_eq!(response.text().as_str(), Some("answer"));
+        request.messages.push(response.message);
+        request.messages.push(Message::user("next"));
+        request.provider_options = options(3);
+        executor.generate(&request).await.unwrap();
+        server.await.unwrap();
+    }).await.unwrap();
 }
 
 #[tokio::test]

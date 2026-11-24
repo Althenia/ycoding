@@ -11,7 +11,10 @@ use crate::{
     route::{Protocol, StreamParser},
     websocket::{Continuation, JsonTransport, SessionMetadata},
 };
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 use ycoding_schema::{
     JsonValue, LosslessString,
     llm::{ToolContent, ToolFileContent},
@@ -25,7 +28,6 @@ impl OpenAIResponses {
     }
     fn resolved_parser(request: &Request) -> Parser {
         Parser {
-            store: openai_options::store(request),
             remote: request
                 .messages
                 .last()
@@ -340,17 +342,18 @@ pub fn prune_messages(request: &Request) -> Vec<Message> {
     messages[0].content = messages[0].content[part..].to_vec();
     messages
 }
-fn flush_text(input: &mut Vec<JsonValue>, text: &mut Vec<crate::llm::TextPart>) {
+fn assistant_phase(part: &crate::llm::TextPart) -> Option<&LosslessString> {
+    part.provider_metadata
+        .as_ref()
+        .and_then(|value| get(value, "openai"))
+        .and_then(|value| string(value, "phase"))
+        .filter(|value| matches!(value.as_str(), Some("commentary" | "final_answer")))
+}
+fn flush_text(input: &mut Vec<JsonValue>, text: &mut Vec<&crate::llm::TextPart>) {
     if text.is_empty() {
         return;
     }
-    let phase = text.iter().rev().find_map(|part| {
-        part.provider_metadata
-            .as_ref()
-            .and_then(|value| get(value, "openai"))
-            .and_then(|value| string(value, "phase"))
-            .filter(|value| matches!(value.as_str(), Some("commentary" | "final_answer")))
-    });
+    let phase = text.first().and_then(|part| assistant_phase(part));
     let mut item = json::object([("role", s("assistant"))]);
     if let Some(phase) = phase {
         json::set(&mut item, "phase", s(phase.clone()));
@@ -489,14 +492,21 @@ pub fn lower(request: &Request) -> Result<JsonValue, Error> {
             continue;
         }
         if message.role == Role::Assistant {
-            let mut text = Vec::new();
+            let mut text: Vec<&crate::llm::TextPart> = Vec::new();
             let mut reasoning_items = BTreeMap::new();
             let mut references = Vec::new();
             let mut compactions = Vec::new();
             let mut hosted = Vec::new();
             for part in &message.content {
                 match part {
-                    Part::Text(part) => text.push(part.clone()),
+                    Part::Text(part) => {
+                        if text.last().is_some_and(|previous| {
+                            assistant_phase(previous) != assistant_phase(part)
+                        }) {
+                            flush_text(&mut input, &mut text);
+                        }
+                        text.push(part);
+                    }
                     Part::Reasoning(part) => {
                         flush_text(&mut input, &mut text);
                         let Some(value) = part
@@ -807,27 +817,25 @@ pub fn lower(request: &Request) -> Result<JsonValue, Error> {
     ))
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SummaryState {
-    Active,
-    CanConclude,
-    Concluded,
-}
 #[derive(Default)]
 struct ReasoningItem {
     encrypted: Option<JsonValue>,
-    parts: BTreeMap<String, SummaryState>,
+    parts: BTreeMap<usize, LosslessString>,
 }
 #[derive(Default)]
 pub struct Parser {
-    store: Option<bool>,
     remote: bool,
     tools: Tools,
-    function_call: bool,
+    tool_arguments: BTreeMap<LosslessString, LosslessString>,
+    tool_items: Vec<JsonValue>,
+    settled_items: BTreeSet<LosslessString>,
+    settled_calls: BTreeSet<LosslessString>,
+    hosted_items: BTreeSet<LosslessString>,
     lifecycle: Lifecycle,
     text: BTreeMap<LosslessString, LosslessString>,
     phases: BTreeMap<LosslessString, LosslessString>,
     reasoning: BTreeMap<LosslessString, ReasoningItem>,
+    reasoning_active: Option<(LosslessString, usize)>,
     reasoning_observed: bool,
     terminal: bool,
     refused: bool,
@@ -858,6 +866,39 @@ fn reasoning_metadata(id: &LosslessString, encrypted: Option<&JsonValue>) -> Opt
         ),
     ]))
 }
+fn suffix(
+    previous: &LosslessString,
+    final_value: &LosslessString,
+    mismatch: &str,
+) -> Result<LosslessString, Error> {
+    let mut units = final_value.code_units();
+    for unit in previous.code_units() {
+        if units.next() != Some(unit) {
+            return Err(Error::output(mismatch));
+        }
+    }
+    Ok(LosslessString::from_utf16(units.collect()))
+}
+fn refusal(part: &JsonValue) -> bool {
+    get(part, "type").and_then(json::text) == Some("refusal")
+}
+fn message_refusal(item: &JsonValue) -> bool {
+    get(item, "type").and_then(json::text) == Some("message")
+        && get(item, "content")
+            .and_then(json::array)
+            .is_some_and(|parts| parts.iter().any(refusal))
+}
+fn function_item_id(item: &JsonValue) -> Option<&LosslessString> {
+    string(item, "id").filter(|id| !id.is_empty())
+}
+fn same_function_item(left: &JsonValue, right: &JsonValue) -> bool {
+    match (function_item_id(left), function_item_id(right)) {
+        (Some(left), Some(right)) => left == right,
+        _ => string(left, "call_id")
+            .filter(|id| !id.is_empty())
+            .is_some_and(|id| string(right, "call_id") == Some(id)),
+    }
+}
 impl Parser {
     fn phase_metadata(&self, id: &LosslessString) -> Option<JsonValue> {
         self.phases
@@ -873,14 +914,11 @@ impl Parser {
         let text = string(event, "text")
             .cloned()
             .unwrap_or_else(|| previous.clone());
-        let units = text.code_units().collect::<Vec<_>>();
-        let prior = previous.code_units().collect::<Vec<_>>();
-        if !units.starts_with(&prior) {
-            return Err(Error::output(
-                "Completed output text contradicts streamed text",
-            ));
-        }
-        let suffix = LosslessString::from_utf16(units[prior.len()..].to_vec());
+        let suffix = suffix(
+            &previous,
+            &text,
+            "Completed output text contradicts streamed text",
+        )?;
         if !suffix.is_empty() && !previous.is_empty() && !self.lifecycle.text.contains(&id) {
             return Err(Error::output("Provider changed completed output text"));
         }
@@ -893,10 +931,226 @@ impl Parser {
         self.lifecycle.end(events, &id, false, metadata);
         Ok(())
     }
-    fn output_done(&mut self, item: &JsonValue, events: &mut Vec<Event>) -> Result<(), Error> {
+    fn end_reasoning(&mut self, events: &mut Vec<Event>) {
+        if let Some((id, index)) = self.reasoning_active.take() {
+            let encrypted = self
+                .reasoning
+                .get(&id)
+                .and_then(|item| item.encrypted.as_ref());
+            self.lifecycle.end(
+                events,
+                &indexed_id(&id, &index.to_string()),
+                true,
+                reasoning_metadata(&id, encrypted),
+            );
+        }
+    }
+    fn reasoning_part(
+        &mut self,
+        id: &LosslessString,
+        index: usize,
+        delta: Option<&LosslessString>,
+        snapshot: bool,
+        events: &mut Vec<Event>,
+    ) -> Result<(), Error> {
+        let item = self.reasoning.entry(id.clone()).or_default();
+        let previous = item.parts.get(&index);
+        let active = self
+            .reasoning_active
+            .as_ref()
+            .is_some_and(|(key, part)| key == id && *part == index);
+        let chunk = match (delta, snapshot, previous) {
+            (Some(text), true, Some(previous)) => suffix(
+                previous,
+                text,
+                "Completed reasoning summary contradicts streamed reasoning",
+            )?,
+            (Some(text), _, _) => text.clone(),
+            (None, _, _) => LosslessString::default(),
+        };
+        if !active && previous.is_some() {
+            return if chunk.is_empty() {
+                Ok(())
+            } else {
+                Err(Error::output("Provider changed a closed reasoning summary"))
+            };
+        }
+        let metadata = reasoning_metadata(id, item.encrypted.as_ref());
+        let text = item.parts.entry(index).or_default();
+        if !chunk.is_empty() {
+            json::concat(text, &chunk);
+            self.reasoning_observed = true;
+        }
+        let block = indexed_id(id, &index.to_string());
+        if !active {
+            self.end_reasoning(events);
+            self.lifecycle
+                .reasoning_start(events, block.clone(), metadata);
+            self.reasoning_active = Some((id.clone(), index));
+        }
+        if !chunk.is_empty() {
+            self.lifecycle.reasoning_delta(events, block, chunk, None);
+        }
+        Ok(())
+    }
+    fn reasoning_item(
+        &mut self,
+        item: &JsonValue,
+        id: &LosslessString,
+        done: bool,
+        events: &mut Vec<Event>,
+    ) -> Result<(), Error> {
+        let state = self.reasoning.entry(id.clone()).or_default();
+        if let Some(encrypted) = string(item, "encrypted_content") {
+            state.encrypted = Some(s(encrypted.clone()));
+            self.reasoning_observed |= !encrypted.is_empty();
+        }
+        let has_parts = !state.parts.is_empty();
+        if let Some(summary) = get(item, "summary").and_then(json::array) {
+            for (index, part) in summary.iter().enumerate() {
+                if get(part, "type").and_then(json::text) == Some("summary_text") {
+                    self.reasoning_part(id, index, string(part, "text"), true, events)?;
+                }
+            }
+        }
+        if !has_parts
+            && self
+                .reasoning
+                .get(id)
+                .is_some_and(|item| item.parts.is_empty())
+        {
+            self.reasoning_part(id, 0, None, false, events)?;
+        }
+        if done
+            && self
+                .reasoning_active
+                .as_ref()
+                .is_some_and(|(key, _)| key == id)
+        {
+            self.end_reasoning(events);
+        }
+        Ok(())
+    }
+    fn start_tool(
+        &mut self,
+        item_id: Option<&LosslessString>,
+        call: &LosslessString,
+        name: &LosslessString,
+        events: &mut Vec<Event>,
+    ) -> Result<(), Error> {
+        let id = item_id.unwrap_or(call);
+        if let Some(tool) = self.tools.get(id) {
+            return if &tool.id == call && &tool.name == name {
+                Ok(())
+            } else {
+                Err(Error::output(
+                    "OpenAI Responses changed a tool call identity",
+                ))
+            };
+        }
+        if self.settled_calls.contains(call)
+            || self.tools.0.iter().any(|(_, tool)| &tool.id == call)
+        {
+            return Err(Error::output("OpenAI Responses reused a tool call ID"));
+        }
+        self.lifecycle.start(events);
+        let metadata = item_id.and_then(|id| metadata(json::object([("itemId", s(id.clone()))])));
+        self.tools.start(
+            id.clone(),
+            PendingTool {
+                id: call.clone(),
+                name: name.clone(),
+                input: LosslessString::default(),
+                metadata: metadata.clone(),
+            },
+        );
+        events.push(Event::ToolInputStart(ToolInputEvent {
+            id: call.clone(),
+            name: name.clone(),
+            provider_executed: None,
+            provider_metadata: metadata,
+        }));
+        Ok(())
+    }
+    fn settle_tool(
+        &mut self,
+        item: &JsonValue,
+        fallback: Option<&JsonValue>,
+        events: &mut Vec<Event>,
+    ) -> Result<(), Error> {
+        let field = |key| string(item, key).or_else(|| fallback.and_then(|item| string(item, key)));
+        let call = field("call_id").filter(|id| !id.is_empty());
+        let item_id = function_item_id(item)
+            .or_else(|| fallback.and_then(function_item_id))
+            .or_else(|| {
+                self.tools
+                    .0
+                    .iter()
+                    .find(|(_, tool)| call == Some(&tool.id))
+                    .map(|(id, _)| id)
+            });
+        let Some(id) = item_id.or(call) else {
+            return Ok(());
+        };
+        if !self.settled_items.insert(id.clone())
+            || field("status").is_some_and(|status| status.as_str() != Some("completed"))
+        {
+            return Ok(());
+        }
+        let pending = self.tools.get(id);
+        let Some(call) = call
+            .or_else(|| pending.map(|tool| &tool.id))
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(());
+        };
+        let Some(name) = field("name")
+            .or_else(|| pending.map(|tool| &tool.name))
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(());
+        };
+        let Some(arguments) = field("arguments")
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                self.tool_arguments
+                    .get(id)
+                    .filter(|value| !value.is_empty())
+            })
+            .or_else(|| {
+                pending
+                    .map(|tool| &tool.input)
+                    .filter(|value| !value.is_empty())
+            })
+        else {
+            return Ok(());
+        };
+        let tail = if let Some(tool) = pending {
+            suffix(
+                &tool.input,
+                arguments,
+                "Completed tool arguments contradict streamed arguments",
+            )?
+        } else {
+            arguments.clone()
+        };
+        let (id, item_id, call, name) = (id.clone(), item_id.cloned(), call.clone(), name.clone());
+        self.start_tool(item_id.as_ref(), &call, &name, events)?;
+        events.extend(self.tools.append(&id, &tail)?);
+        events.extend(self.tools.finish(&id, None));
+        self.settled_calls.insert(call);
+        Ok(())
+    }
+    fn output_done(
+        &mut self,
+        item: &JsonValue,
+        terminal: bool,
+        events: &mut Vec<Event>,
+    ) -> Result<(), Error> {
         let kind = get(item, "type").and_then(json::text).unwrap_or("");
         let id = string(item, "id").filter(|value| !value.is_empty());
         if kind == "message" {
+            self.refused |= message_refusal(item);
             if let Some(id) = id {
                 if let Some(phase) = string(item, "phase") {
                     self.phases.insert(id.clone(), phase.clone());
@@ -929,35 +1183,25 @@ impl Parser {
             return Ok(());
         }
         if kind == "function_call" {
-            if let (Some(id), Some(call), Some(name)) = (
-                id,
-                string(item, "call_id").filter(|value| !value.is_empty()),
-                string(item, "name").filter(|value| !value.is_empty()),
-            ) {
-                if self.tools.get(id).is_none() {
-                    self.tools.start(
-                        id.clone(),
-                        PendingTool {
-                            id: call.clone(),
-                            name: name.clone(),
-                            input: LosslessString::default(),
-                            metadata: None,
-                        },
-                    );
-                }
-                let result = self.tools.finish(id, string(item, "arguments").cloned());
-                if !result.is_empty() {
-                    self.lifecycle.start(events);
-                    self.function_call |= result.iter().any(|event| {
-                        matches!(event, Event::ToolCall(_) | Event::ToolInputError { .. })
-                    });
-                    events.extend(result);
+            if id.is_some() || string(item, "call_id").is_some_and(|id| !id.is_empty()) {
+                if let Some(prior) = self
+                    .tool_items
+                    .iter_mut()
+                    .find(|prior| same_function_item(prior, item))
+                {
+                    *prior = json::merge(prior, item);
+                } else {
+                    self.tool_items.push(item.clone());
                 }
             }
             return Ok(());
         }
         if compaction(item) {
             let id = id.cloned().unwrap_or_else(|| "compaction-0".into());
+            if !self.hosted_items.insert(id.clone()) {
+                return Ok(());
+            }
+            self.end_reasoning(events);
             let metadata = metadata(json::object([("opaqueCompactionItem", item.clone())]));
             self.lifecycle
                 .reasoning_start(events, id.clone(), metadata.clone());
@@ -966,28 +1210,20 @@ impl Parser {
         }
         if let Some(id) = id {
             if kind == "reasoning" {
-                let metadata = reasoning_metadata(id, get(item, "encrypted_content"));
-                if let Some(reasoning) = self.reasoning.remove(id) {
-                    for (index, status) in reasoning.parts {
-                        if matches!(status, SummaryState::Active | SummaryState::CanConclude) {
-                            self.lifecycle.end(
-                                events,
-                                &indexed_id(id, &index),
-                                true,
-                                metadata.clone(),
-                            );
-                        }
-                    }
-                } else if self.lifecycle.reasoning.contains(id) {
-                    self.lifecycle.end(events, id, true, metadata);
-                } else {
-                    self.lifecycle
-                        .reasoning_start(events, id.clone(), metadata.clone());
-                    self.lifecycle.end(events, id, true, metadata);
-                }
-                return Ok(());
+                return self.reasoning_item(
+                    item,
+                    id,
+                    terminal || string(item, "encrypted_content").is_some(),
+                    events,
+                );
             }
-            if let Some((name, input)) = hosted_input(item) {
+            if let Some((name, input)) = hosted_input(item)
+                && !matches!(
+                    get(item, "status").and_then(json::text),
+                    Some("in_progress" | "searching" | "generating" | "queued" | "incomplete")
+                )
+                && self.hosted_items.insert(id.clone())
+            {
                 self.lifecycle.start(events);
                 let metadata = metadata(json::object([("itemId", s(id.clone()))]));
                 events.push(Event::ToolCall(ToolCall {
@@ -1058,10 +1294,14 @@ impl Parser {
                 }
             }
             "response.output_text.done" => self.text_done(event, &mut events)?,
-            "response.content_part.done" => {
-                if let Some(part) = get(event, "part")
-                    .filter(|value| get(value, "type").and_then(json::text) == Some("output_text"))
-                {
+            "response.content_part.added" | "response.content_part.done" => {
+                if let Some(part) = get(event, "part") {
+                    self.refused |= refusal(part);
+                    if kind != "response.content_part.done"
+                        || get(part, "type").and_then(json::text) != Some("output_text")
+                    {
+                        return Ok(events);
+                    }
                     let mut event = event.clone();
                     if let Some(text) = get(part, "text") {
                         json::set(&mut event, "text", text.clone());
@@ -1071,20 +1311,20 @@ impl Parser {
             }
             "response.reasoning_text.delta"
             | "response.reasoning_summary.delta"
-            | "response.reasoning_summary_text.delta" => {
-                if let Some(delta) = string(event, "delta").filter(|value| !value.is_empty()) {
+            | "response.reasoning_summary_text.delta"
+            | "response.reasoning_text.done"
+            | "response.reasoning_summary.done"
+            | "response.reasoning_summary_text.done" => {
+                let done = kind.ends_with(".done");
+                if let Some(delta) = string(event, if done { "text" } else { "delta" })
+                    .filter(|value| !value.is_empty())
+                {
                     let item = string(event, "item_id")
                         .cloned()
                         .unwrap_or_else(|| "reasoning-0".into());
-                    let index = get(event, "summary_index").and_then(json::number);
-                    let id = if index.is_some() || self.reasoning.contains_key(&item) {
-                        indexed_id(&item, &index.unwrap_or(0.0).to_string())
-                    } else {
-                        item
-                    };
-                    self.lifecycle
-                        .reasoning_delta(&mut events, id, delta.clone(), None);
-                    self.reasoning_observed = true;
+                    let index =
+                        openai_options::safe_integer(get(event, "summary_index")).unwrap_or(0);
+                    self.reasoning_part(&item, index, Some(delta), done, &mut events)?;
                 }
             }
             "response.output_item.added" => {
@@ -1098,104 +1338,45 @@ impl Parser {
                                 }
                             }
                             Some("reasoning") => {
-                                self.lifecycle.reasoning_start(
-                                    &mut events,
-                                    indexed_id(id, "0"),
-                                    reasoning_metadata(id, get(item, "encrypted_content")),
-                                );
-                                self.reasoning.insert(
-                                    id.clone(),
-                                    ReasoningItem {
-                                        encrypted: get(item, "encrypted_content").cloned(),
-                                        parts: BTreeMap::from([("0".into(), SummaryState::Active)]),
-                                    },
-                                );
+                                self.reasoning_item(item, id, false, &mut events)?;
                             }
                             Some("function_call") => {
-                                self.lifecycle.start(&mut events);
-                                let metadata = metadata(json::object([("itemId", s(id.clone()))]));
-                                let call = string(item, "call_id")
-                                    .cloned()
-                                    .unwrap_or_else(|| id.clone());
-                                let name = string(item, "name").cloned().unwrap_or_default();
-                                self.tools.start(
-                                    id.clone(),
-                                    PendingTool {
-                                        id: call.clone(),
-                                        name: name.clone(),
-                                        input: string(item, "arguments")
-                                            .cloned()
-                                            .unwrap_or_default(),
-                                        metadata: metadata.clone(),
-                                    },
-                                );
-                                events.push(Event::ToolInputStart(ToolInputEvent {
-                                    id: call,
-                                    name,
-                                    provider_executed: None,
-                                    provider_metadata: metadata,
-                                }));
+                                if self.tools.get(id).is_none()
+                                    && let (Some(call), Some(name)) =
+                                        (string(item, "call_id"), string(item, "name"))
+                                    && !call.is_empty()
+                                    && !name.is_empty()
+                                {
+                                    self.start_tool(Some(id), call, name, &mut events)?;
+                                    if let Some(args) = string(item, "arguments") {
+                                        events.extend(self.tools.append(id, args)?);
+                                    }
+                                }
                             }
                             _ => {}
                         }
                     }
                 }
             }
-            "response.reasoning_summary_part.added" => {
+            "response.reasoning_summary_part.added" | "response.reasoning_summary_part.done" => {
                 if let (Some(id), Some(index)) = (
                     string(event, "item_id").filter(|value| !value.is_empty()),
-                    get(event, "summary_index").and_then(json::number),
+                    openai_options::safe_integer(get(event, "summary_index")),
                 ) {
-                    if index == 0.0 && self.reasoning.contains_key(id) {
-                        return Ok(events);
-                    }
-                    let mut item = self.reasoning.remove(id).unwrap_or_default();
-                    if index != 0.0 {
-                        for (index, state) in &mut item.parts {
-                            if *state == SummaryState::CanConclude {
-                                self.lifecycle.end(
-                                    &mut events,
-                                    &indexed_id(id, index),
-                                    true,
-                                    metadata(json::object([("itemId", s(id.clone()))])),
-                                );
-                                *state = SummaryState::Concluded;
-                            }
-                        }
-                    }
-                    let index = index.to_string();
-                    self.lifecycle.reasoning_start(
+                    self.reasoning_part(
+                        id,
+                        index,
+                        get(event, "part").and_then(|part| string(part, "text")),
+                        true,
                         &mut events,
-                        indexed_id(id, &index),
-                        reasoning_metadata(id, item.encrypted.as_ref()),
-                    );
-                    item.parts.insert(index, SummaryState::Active);
-                    self.reasoning.insert(id.clone(), item);
+                    )?;
                 }
             }
-            "response.reasoning_summary_part.done" => {
-                if let (Some(id), Some(index)) = (
-                    string(event, "item_id"),
-                    get(event, "summary_index").and_then(json::number),
-                ) && let Some(item) = self.reasoning.get_mut(id)
+            "response.function_call_arguments.done" => {
+                if let (Some(id), Some(arguments)) =
+                    (string(event, "item_id"), string(event, "arguments"))
                 {
-                    let index = index.to_string();
-                    if self.store != Some(false) {
-                        self.lifecycle.end(
-                            &mut events,
-                            &indexed_id(id, &index),
-                            true,
-                            metadata(json::object([("itemId", s(id.clone()))])),
-                        );
-                    }
-                    item.parts.insert(
-                        index,
-                        if self.store == Some(false) {
-                            SummaryState::CanConclude
-                        } else {
-                            SummaryState::Concluded
-                        },
-                    );
+                    self.tool_arguments.insert(id.clone(), arguments.clone());
                 }
             }
             "response.function_call_arguments.delta" => {
@@ -1212,57 +1393,55 @@ impl Parser {
             }
             "response.output_item.done" => {
                 if let Some(item) = get(event, "item") {
-                    self.output_done(item, &mut events)?;
+                    self.output_done(item, false, &mut events)?;
                 }
             }
-            "response.refusal.delta" | "response.refusal.done" => self.refused = true,
+            "response.refusal.delta" => {
+                self.refused |= string(event, "delta").is_some_and(json::nonblank)
+            }
+            "response.refusal.done" => self.refused = true,
             "response.completed" | "response.incomplete" => {
                 let response = get(event, "response");
-                let refused = self.refused
-                    || response
-                        .and_then(|value| get(value, "output"))
-                        .and_then(json::array)
-                        .unwrap_or(&[])
-                        .iter()
-                        .filter(|item| get(item, "type").and_then(json::text) == Some("message"))
-                        .filter_map(|item| get(item, "content").and_then(json::array))
-                        .flatten()
-                        .any(|part| get(part, "type").and_then(json::text) == Some("refusal"));
-                for item in response
+                let output = response
                     .and_then(|value| get(value, "output"))
                     .and_then(json::array)
-                    .unwrap_or(&[])
-                {
-                    if get(item, "type").and_then(json::text) == Some("message") {
-                        self.output_done(item, &mut events)?;
-                    }
-                }
-                let reason = match response
+                    .unwrap_or(&[]);
+                let refused = self.refused || output.iter().any(message_refusal);
+                let reason = response
                     .and_then(|value| get(value, "incomplete_details"))
                     .and_then(|value| get(value, "reason"))
-                    .and_then(json::text)
-                {
-                    None => {
-                        if self.function_call {
-                            FinishReason::ToolCalls
-                        } else {
-                            FinishReason::Stop
+                    .and_then(json::text);
+                let completed = kind == "response.completed"
+                    && reason.is_none()
+                    && response.is_none_or(|value| allowed(value, "status", &["completed"]));
+                let allow_calls = completed && !refused;
+                let mut tool_items = std::mem::take(&mut self.tool_items);
+                for item in output {
+                    if get(item, "type").and_then(json::text) == Some("function_call") {
+                        if allow_calls {
+                            let fallback = tool_items
+                                .iter()
+                                .position(|prior| same_function_item(prior, item))
+                                .map(|index| tool_items.remove(index));
+                            self.settle_tool(item, fallback.as_ref(), &mut events)?;
                         }
+                    } else {
+                        self.output_done(item, true, &mut events)?;
                     }
+                }
+                if allow_calls {
+                    for item in &tool_items {
+                        self.settle_tool(item, None, &mut events)?;
+                    }
+                }
+                self.end_reasoning(&mut events);
+                let reason = match reason {
+                    _ if refused => FinishReason::ContentFilter,
                     Some("max_output_tokens") => FinishReason::Length,
                     Some("content_filter") => FinishReason::ContentFilter,
-                    _ => {
-                        if self.function_call {
-                            FinishReason::ToolCalls
-                        } else {
-                            FinishReason::Unknown
-                        }
-                    }
-                };
-                let reason = if refused {
-                    FinishReason::ContentFilter
-                } else {
-                    reason
+                    _ if !completed => FinishReason::Unknown,
+                    _ if !self.settled_calls.is_empty() => FinishReason::ToolCalls,
+                    _ => FinishReason::Stop,
                 };
                 let usage = response
                     .and_then(|value| get(value, "usage"))
@@ -1280,7 +1459,7 @@ impl Parser {
                     json::set(
                         &mut extra,
                         "remoteCompactionCompleted",
-                        JsonValue::Bool(kind == "response.completed"),
+                        JsonValue::Bool(completed),
                     );
                 }
                 let metadata = if self.remote
@@ -1303,27 +1482,20 @@ impl Parser {
                 self.terminal = true;
             }
             "response.failed" | "error" => {
-                let nested = get(event, "error")
-                    .filter(|value| !matches!(value, JsonValue::Null))
-                    .or_else(|| {
-                        get(event, "response")
-                            .and_then(|value| get(value, "error"))
-                            .filter(|value| !matches!(value, JsonValue::Null))
-                    });
-                let code = string(event, "code")
-                    .filter(|value| !value.is_empty())
-                    .or_else(|| {
-                        nested
-                            .and_then(|value| string(value, "code"))
-                            .filter(|value| !value.is_empty())
-                    });
-                let message = string(event, "message")
-                    .filter(|value| !value.is_empty())
-                    .or_else(|| {
-                        nested
-                            .and_then(|value| string(value, "message"))
-                            .filter(|value| !value.is_empty())
-                    });
+                self.terminal = true;
+                let sources = [
+                    Some(event),
+                    get(event, "error"),
+                    get(event, "response").and_then(|value| get(value, "error")),
+                ];
+                let field = |key| {
+                    sources
+                        .into_iter()
+                        .flatten()
+                        .find_map(|value| string(value, key).filter(|value| !value.is_empty()))
+                };
+                let code = field("code");
+                let message = field("message");
                 let text = match (code, message) {
                     (Some(code), Some(message)) => join([code.clone(), message.clone()], ": "),
                     (code, message) => code.or(message).cloned().unwrap_or_else(|| {
@@ -1340,6 +1512,10 @@ impl Parser {
                         .map(String::from)
                         .unwrap_or_else(|| stringify_json(&s(text.clone()))),
                     code: code.and_then(LosslessString::as_str).map(String::from),
+                    status: get(event, "status")
+                        .and_then(json::number)
+                        .filter(|status| (100.0..=599.0).contains(status) && status.fract() == 0.0)
+                        .map(|status| status as u16),
                     ..Failure::default()
                 }));
             }
@@ -1415,8 +1591,14 @@ fn hosted_result(item: &JsonValue) -> Result<ToolResultValue, Error> {
         let result = result
             .as_str()
             .ok_or_else(|| Error::output("OpenAI Responses returned invalid image base64"))?;
-        crate::media::decode(&result.replace(['\r', '\n'], ""))
+        let result = result.replace(['\r', '\n'], "");
+        let bytes = crate::media::decode(&result)
             .map_err(|_| Error::output("OpenAI Responses returned invalid image base64"))?;
+        if bytes.is_empty() || crate::media::encode(&bytes) != result {
+            return Err(Error::output(
+                "OpenAI Responses returned invalid image base64",
+            ));
+        }
         let format = get(item, "output_format")
             .and_then(json::text)
             .unwrap_or("png");
@@ -1440,12 +1622,12 @@ fn validate_event(event: &JsonValue) -> Result<(), Error> {
     let valid = string(event, "type").is_some()
         && validate(
             event,
-            &["type", "delta", "text", "item_id", "message"],
-            &["code", "param"],
+            &["type", "delta", "text", "item_id", "arguments", "refusal"],
+            &["code", "param", "message"],
             &["content_index", "summary_index"],
         )
         && get(event, "part").is_none_or(|value| {
-            string(value, "type").is_some() && validate(value, &["text"], &[], &[])
+            string(value, "type").is_some() && validate(value, &["text", "refusal"], &[], &[])
         })
         && get(event, "annotation").is_none_or(|value| {
             string(value, "type").is_some() && validate(value, &["title", "url"], &[], &[])
@@ -1508,15 +1690,14 @@ fn valid_item(value: &JsonValue) -> bool {
                 "name",
                 "arguments",
                 "status",
-                "code",
                 "container_id",
                 "server_label",
-                "result",
             ],
-            &["encrypted_content"],
+            &["encrypted_content", "code", "result"],
             &[],
         )
-        && allowed(value, "phase", &["commentary", "final_answer"])
+        && (get(value, "phase") == Some(&JsonValue::Null)
+            || allowed(value, "phase", &["commentary", "final_answer"]))
         && allowed(value, "output_format", &["png", "jpeg", "webp"])
 }
 pub fn websocket_message(body: &JsonValue) -> Result<JsonValue, Error> {

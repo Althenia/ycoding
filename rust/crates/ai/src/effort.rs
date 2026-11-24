@@ -57,10 +57,14 @@ pub fn gpt6(id: &str) -> bool {
     }) {
         return false;
     }
-    matches!(
-        dated(id),
-        "gpt-6-luna" | "gpt-6-sol" | "gpt-6-astra" | "gpt-6.1-sol" | "gpt-6.1-terra"
-    )
+    gpt62(id)
+        || matches!(
+            dated(id),
+            "gpt-6-luna" | "gpt-6-sol" | "gpt-6-astra" | "gpt-6.1-sol" | "gpt-6.1-terra"
+        )
+}
+fn gpt62(id: &str) -> bool {
+    matches!(dated(id), "gpt-6.2-sol" | "gpt-6.2-astra")
 }
 pub fn anthropic_model(id: &str) -> bool {
     let id = id
@@ -202,7 +206,9 @@ pub fn mechanism(request: &Request) -> Option<Provider> {
         .and_then(|value| get(value, "effort"))
         .is_some();
     let id = request.model.id.as_str().unwrap_or_default();
-    let router_model = id.strip_prefix("openai/").is_some_and(gpt6)
+    let router_model = id
+        .strip_prefix("openai/")
+        .is_some_and(|id| gpt6(id) && !gpt62(id))
         || matches!(
             id,
             "anthropic/claude-fable-5.1" | "anthropic/claude-fable-5-1" | "anthropic/claude-opus-5"
@@ -232,7 +238,7 @@ pub fn mechanism(request: &Request) -> Option<Provider> {
     }
     if matches!(route, "openai-responses" | "openai-responses-websocket")
         && public_endpoint(endpoint, "https://api.openai.com/v1")
-        && gpt6(id)
+        && gpt6(id.strip_suffix("-fast").unwrap_or(id))
         && standard
     {
         return Some(Provider::OpenAI);
@@ -278,7 +284,7 @@ pub fn selected(request: &Request, provider: Provider) -> Option<String> {
 }
 pub fn default_effort(id: &str) -> Option<&'static str> {
     let id = id.rsplit('/').next().unwrap_or(id);
-    if dated(id) == "gpt-6-astra" {
+    if dated(id) == "gpt-6-astra" || gpt62(id.strip_suffix("-fast").unwrap_or(id)) {
         return None;
     }
     if gpt6(id) {

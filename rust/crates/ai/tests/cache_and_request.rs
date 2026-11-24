@@ -36,6 +36,116 @@ fn markers(body: &ycoding_schema::JsonValue) -> usize {
 }
 
 #[test]
+fn openai_fast_model_preserves_effort_and_other_model_ids() {
+    for family in ["sol", "astra"] {
+        let base = format!("gpt-6.2-{family}");
+        for effort in ["low", "medium", "high", "xhigh", "max"] {
+            let route = Route::openai_responses();
+            let mut request = Request::new(route.model(format!("{base}-fast")));
+            request.provider_options = Some(
+                parse_json(&format!(r#"{{"openai":{{"reasoningEffort":"{effort}"}}}}"#)).unwrap(),
+            );
+            let body = route.prepare(&request).unwrap().encoded_body;
+            assert!(body.contains(&format!("\"model\":\"{base}\"")), "{body}");
+            assert!(body.contains("\"service_tier\":\"priority\""), "{body}");
+            assert!(body.contains(&format!("\"effort\":\"{effort}\"")), "{body}");
+        }
+        for suffix in ["", "-pro", "-ultrafast"] {
+            let route = Route::openai_responses();
+            let id = format!("{base}{suffix}");
+            let body = route
+                .prepare(&Request::new(route.model(id.clone())))
+                .unwrap()
+                .encoded_body;
+            assert!(body.contains(&format!("\"model\":\"{id}\"")), "{body}");
+            assert!(!body.contains("\"service_tier\":\"priority\""), "{body}");
+        }
+    }
+    for id in ["other-fast", "gpt-6.2-other-fast", "gpt-6.2-sol-pro-fast"] {
+        let route = Route::openai_responses();
+        let body = route
+            .prepare(&Request::new(route.model(id)))
+            .unwrap()
+            .encoded_body;
+        assert!(body.contains(&format!("\"model\":\"{id}\"")), "{body}");
+        assert!(!body.contains("\"service_tier\":\"priority\""), "{body}");
+    }
+    let mut route = Route::openai_responses();
+    route.id = "openai-codex-responses".into();
+    let mut request = Request::new(route.model("gpt-6.1-terra-fast"));
+    request.provider_options = Some(parse_json(r#"{"openai":{"serviceTier":"flex"}}"#).unwrap());
+    let body = route.prepare(&request).unwrap().encoded_body;
+    assert!(body.contains("\"model\":\"gpt-6.1-terra\""), "{body}");
+    assert!(body.contains("\"service_tier\":\"flex\""), "{body}");
+    let mut route = Route::openai_responses();
+    route.id = "openai-compatible-responses".into();
+    let body = route
+        .prepare(&Request::new(route.model("gpt-6.2-sol-fast")))
+        .unwrap()
+        .encoded_body;
+    assert!(body.contains("\"model\":\"gpt-6.2-sol-fast\""), "{body}");
+    assert!(!body.contains("\"service_tier\":\"priority\""), "{body}");
+}
+
+#[test]
+fn gpt_62_responses_effort_updates_respect_mode_and_provider() {
+    for family in ["sol", "astra"] {
+        let base = format!("gpt-6.2-{family}");
+        assert_eq!(ycoding_ai::effort::default_effort(&base), None);
+        assert_eq!(
+            ycoding_ai::effort::default_effort(&format!("{base}-fast")),
+            None
+        );
+        for suffix in ["", "-fast"] {
+            for next in ["low", "medium", "high", "xhigh", "max"] {
+                let route = Route::openai_responses();
+                let mut request = Request::new(route.model(format!("{base}{suffix}")));
+                request.provider_options =
+                    Some(parse_json(r#"{"openai":{"reasoningEffort":"low"}}"#).unwrap());
+                let mut update = Message::new(Role::System, vec![]);
+                update.native = Some(
+                    parse_json(&format!(r#"{{"openai":{{"reasoningEffort":"{next}"}}}}"#)).unwrap(),
+                );
+                request.messages = vec![Message::user("first"), update, Message::user("second")];
+                let body = route.prepare(&request).unwrap().encoded_body;
+                assert!(
+                    body.contains(&format!(
+                        r#""type":"configuration_update","reasoning":{{"effort":"{next}"}}"#
+                    )),
+                    "{body}"
+                );
+                assert!(body.contains(r#""reasoning":{"effort":"low""#), "{body}");
+                assert!(!body.contains("context_management"), "{body}");
+            }
+        }
+        let route = Route::openai_responses();
+        let mut request = Request::new(route.model(base));
+        let mut update = Message::new(Role::System, vec![]);
+        update.native = Some(parse_json(r#"{"openai":{"reasoningEffort":"high"}}"#).unwrap());
+        request.messages = vec![Message::user("first"), update, Message::user("second")];
+        request.http.body = Some(parse_json(r#"{"service_tier":"ultrafast"}"#).unwrap());
+        assert!(
+            route
+                .prepare(&request)
+                .unwrap()
+                .encoded_body
+                .contains("configuration_update")
+        );
+        request.http.body = Some(parse_json(r#"{"reasoning":{"mode":"pro"}}"#).unwrap());
+        assert!(route.prepare(&request).is_err());
+        request.http.body = None;
+        request.model = ycoding_ai::providers::openrouter(
+            format!("openai/gpt-6.2-{family}"),
+            ycoding_ai::providers::OpenRouterConfig {
+                common: ycoding_ai::providers::Config::new(Auth::None),
+                reasoning: None,
+            },
+        );
+        assert!(request.model.route.prepare(&request).is_err());
+    }
+}
+
+#[test]
 fn cache_direct_compatible_auto_manual_cap_and_order() {
     let mut request = Request::new(Route::anthropic().model("claude-sonnet-4-5"));
     request.tools = vec![tool("lookup")];

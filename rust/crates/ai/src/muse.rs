@@ -511,11 +511,10 @@ impl Connection {
                 },
             )?;
         }
-        let body = normalized_body(&prepared.wire_body).map_or_else(
-            || prepared.encoded_body.clone(),
-            |body| ycoding_schema::stringify_json(&body),
-        );
-        Ok(Wire { headers, body })
+        Ok(Wire {
+            headers,
+            body: prepared.encoded_body.clone(),
+        })
     }
     pub(crate) async fn execute(
         &self,
@@ -661,21 +660,6 @@ pub fn normalize_base_url(raw: &str) -> String {
     tracing::warn!("unrecognized Muse base_url from key mint; using default");
     BASE_URL.into()
 }
-fn normalized_body(body: &JsonValue) -> Option<JsonValue> {
-    let choice = json::get(body, "tool_choice")?;
-    if json::text(choice) == Some("auto") {
-        return None;
-    }
-    let has_tools = json::get(body, "tools")
-        .and_then(json::array)
-        .is_some_and(|tools| !tools.is_empty());
-    if json::text(choice) == Some("none") || !has_tools {
-        return Some(json::remove(body, &["tool_choice", "tools"]));
-    }
-    let mut next = body.clone();
-    json::set(&mut next, "tool_choice", JsonValue::String("auto".into()));
-    Some(next)
-}
 fn deterministic_uuid(seed: &str) -> String {
     let hash = digest::digest(&digest::SHA256, seed.as_bytes())
         .as_ref()
@@ -738,6 +722,22 @@ impl Protocol for MuseProtocol {
     }
     fn lower(&self, request: &Request) -> Result<JsonValue, Error> {
         OpenAIResponses.lower(request)
+    }
+    fn wire_body(&self, _request: &Request, mut body: JsonValue) -> Result<JsonValue, Error> {
+        let Some(choice) = json::get(&body, "tool_choice") else {
+            return Ok(body);
+        };
+        if json::text(choice) == Some("auto") {
+            return Ok(body);
+        }
+        let has_tools = json::get(&body, "tools")
+            .and_then(json::array)
+            .is_some_and(|tools| !tools.is_empty());
+        if json::text(choice) == Some("none") || !has_tools {
+            return Ok(json::remove(&body, &["tool_choice", "tools"]));
+        }
+        json::set(&mut body, "tool_choice", JsonValue::String("auto".into()));
+        Ok(body)
     }
     fn parser(&self, request: &Request) -> Box<dyn StreamParser> {
         Box::new(MuseParser {

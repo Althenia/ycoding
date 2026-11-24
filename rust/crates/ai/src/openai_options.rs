@@ -158,6 +158,23 @@ pub fn lower(request: &Request, responses: bool) -> JsonValue {
         }
         return result;
     }
+    if [
+        "openai-responses",
+        "openai-responses-websocket",
+        "openai-codex-responses",
+        "openai-codex-websocket-responses",
+    ]
+    .contains(&route)
+        && let Some(base) = request
+            .model
+            .id
+            .as_str()
+            .and_then(|id| id.strip_suffix("-fast"))
+            .filter(|id| crate::effort::gpt6(id))
+    {
+        json::set(&mut result, "model", s(base));
+        json::set(&mut result, "service_tier", s("priority"));
+    }
     for (key, wire) in [
         ("instructions", "instructions"),
         ("serviceTier", "service_tier"),

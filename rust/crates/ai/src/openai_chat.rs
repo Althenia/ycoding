@@ -9,6 +9,7 @@ use crate::{
     openai_shared::{
         self, Lifecycle, PendingTool, Tools, join, metadata, pick, string, truthy, validate,
     },
+    provider_error::{Failure, Reason, classify},
     route::{Protocol, StreamParser},
 };
 use std::collections::BTreeMap;
@@ -500,14 +501,12 @@ pub struct Parser {
             LosslessString,
         ),
     >,
-    calls: Vec<Event>,
     usage: Option<crate::llm::Usage>,
     reason: Option<FinishReason>,
     lifecycle: Lifecycle,
     reasoning_field: Option<LosslessString>,
     details: Vec<JsonValue>,
     details_observed: bool,
-    reasoning_emitted: bool,
     inside: bool,
     buffer: LosslessString,
     settled: bool,
@@ -529,11 +528,45 @@ impl Parser {
         metadata(value)
     }
     fn push_event(&mut self, event: &JsonValue) -> Result<Vec<Event>, Error> {
-        validate_event(event)?;
         if self.settled {
             return Err(Error::output(
                 "Provider emitted an event after the terminal event",
             ));
+        }
+        let choice = get(event, "choices")
+            .and_then(json::array)
+            .and_then(|values| values.first());
+        if let Some(error) = [
+            get(event, "error"),
+            choice.and_then(|choice| get(choice, "error")),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|value| !matches!(value, JsonValue::Null))
+        {
+            return Err(stream_error(error));
+        }
+        validate_event(event)?;
+        let finish = choice
+            .and_then(|choice| string(choice, "finish_reason"))
+            .filter(|value| !value.is_empty());
+        if finish.and_then(LosslessString::as_str) == Some("error") {
+            return Err(Error::new(
+                Reason::UnknownProvider,
+                "OpenAI Chat reported a stream error",
+            ));
+        }
+        let finish = finish.map(|value| match value.as_str() {
+            Some("stop") => FinishReason::Stop,
+            Some("length") => FinishReason::Length,
+            Some("content_filter") => FinishReason::ContentFilter,
+            Some("function_call" | "tool_calls") => FinishReason::ToolCalls,
+            _ => FinishReason::Unknown,
+        });
+        if let (Some(previous), Some(next)) = (self.reason, finish)
+            && previous != next
+        {
+            return Err(Error::output("OpenAI Chat changed its finish reason"));
         }
         let mut events = Vec::new();
         if let Some(raw) = get(event, "usage").filter(|value| !matches!(value, JsonValue::Null)) {
@@ -544,23 +577,10 @@ impl Parser {
                 get(event, "cache_discount"),
             ));
         }
-        let choice = get(event, "choices")
-            .and_then(json::array)
-            .and_then(|values| values.first());
         let delta = choice.and_then(|choice| get(choice, "delta"));
         self.refused |= delta
             .and_then(|delta| string(delta, "refusal"))
             .is_some_and(|refusal| !refusal.is_empty());
-        let finish = choice
-            .and_then(|choice| string(choice, "finish_reason"))
-            .filter(|value| !value.is_empty())
-            .map(|value| match value.as_str() {
-                Some("stop") => FinishReason::Stop,
-                Some("length") => FinishReason::Length,
-                Some("content_filter") => FinishReason::ContentFilter,
-                Some("function_call" | "tool_calls") => FinishReason::ToolCalls,
-                _ => FinishReason::Unknown,
-            });
         let scalar = delta.and_then(|delta| {
             [
                 "reasoning_content",
@@ -576,7 +596,8 @@ impl Parser {
                     .map(|value| (field, value.clone()))
             })
         });
-        if self.reasoning_field.is_none() && !self.lifecycle.text.contains(&"text-0".into()) {
+        let text_started = !self.lifecycle.text.is_empty();
+        if self.reasoning_field.is_none() && !text_started {
             self.reasoning_field = scalar.as_ref().map(|(field, _)| (*field).into());
         }
         let detail = delta
@@ -664,17 +685,20 @@ impl Parser {
             .and_then(|delta| get(delta, "tool_calls"))
             .and_then(json::array)
             .unwrap_or(&[]);
-        if !self.lifecycle.text.contains(&"text-0".into()) {
-            if let Some(text) = reasoning {
-                self.lifecycle.reasoning_delta(
-                    &mut events,
-                    "reasoning-0".into(),
-                    text,
-                    metadata.clone(),
-                );
-            }
+        if self.reason.is_some() && !tool_deltas.is_empty() {
+            return Err(Error::output(
+                "OpenAI Chat emitted tool arguments after its finish reason",
+            ));
+        }
+        if !text_started && let Some(text) = reasoning {
+            self.lifecycle.reasoning_delta(
+                &mut events,
+                "reasoning-0".into(),
+                text,
+                metadata.clone(),
+            );
         } else if self.details_observed
-            && !self.lifecycle.reasoning.contains(&"reasoning-0".into())
+            && self.lifecycle.reasoning.is_empty()
             && (delta
                 .and_then(|delta| string(delta, "content"))
                 .is_some_and(|value| !value.is_empty())
@@ -683,7 +707,6 @@ impl Parser {
             self.lifecycle
                 .reasoning_start(&mut events, "reasoning-0".into(), metadata.clone());
         }
-        self.reasoning_emitted |= self.lifecycle.reasoning.contains(&"reasoning-0".into());
         if let Some(text) = delta.and_then(|delta| string(delta, "content")) {
             json::concat(&mut self.buffer, text);
             let (text, reasoning) = parse_think(&mut self.buffer, &mut self.inside);
@@ -691,21 +714,13 @@ impl Parser {
                 self.lifecycle.reasoning_delta(
                     &mut events,
                     "reasoning-0".into(),
-                    reasoning.clone(),
+                    reasoning,
                     metadata,
                 );
-                self.reasoning_emitted = true;
             }
             if !text.is_empty() {
-                let metadata = self.reasoning_metadata(true);
-                self.lifecycle
-                    .end(&mut events, &"reasoning-0".into(), true, metadata);
                 self.lifecycle
                     .text_delta(&mut events, "text-0".into(), text, None);
-            } else if !reasoning.is_empty() && !self.inside {
-                let metadata = self.reasoning_metadata(true);
-                self.lifecycle
-                    .end(&mut events, &"reasoning-0".into(), true, metadata);
             }
         }
         for delta in tool_deltas {
@@ -775,29 +790,36 @@ impl Parser {
             }
             events.extend(deltas);
         }
-        if self.reason.is_none() && finish.is_some() {
-            if !self.pending.is_empty() {
-                return Err(Error::output(
-                    "OpenAI Chat tool call delta is missing id or name",
-                ));
-            }
-            self.calls = self.tools.finish_all();
-        }
-        if finish.is_some() {
-            self.reason = finish;
-        }
+        self.reason = self.reason.or(finish);
         Ok(events)
     }
 }
 impl StreamParser for Parser {
     fn push(&mut self, event: &JsonValue) -> Result<Vec<Event>, Error> {
-        self.push_event(event)
+        self.push_event(event).inspect_err(|_| self.settled = true)
     }
     fn finish(&mut self) -> Result<Vec<Event>, Error> {
         if self.settled {
             return Ok(Vec::new());
         }
         self.settled = true;
+        let mut reason = self.reason.ok_or_else(Error::missing_terminal)?;
+        if self.refused {
+            reason = FinishReason::ContentFilter;
+        }
+        let calls = if matches!(reason, FinishReason::Stop | FinishReason::ToolCalls) {
+            if !self.pending.is_empty() {
+                return Err(Error::output(
+                    "OpenAI Chat tool call delta is missing id or name",
+                ));
+            }
+            self.tools.finish_all()
+        } else {
+            Vec::new()
+        };
+        if reason == FinishReason::Stop && !calls.is_empty() {
+            reason = FinishReason::ToolCalls;
+        }
         let mut events = Vec::new();
         let metadata = self.reasoning_metadata(false);
         let tail = std::mem::take(&mut self.buffer);
@@ -809,13 +831,11 @@ impl StreamParser for Parser {
                 metadata.clone(),
             );
         }
-        if self.details_observed
-            && !self.reasoning_emitted
-            && !self.lifecycle.reasoning.contains(&"reasoning-0".into())
-        {
+        if self.details_observed && self.lifecycle.reasoning.is_empty() {
             self.lifecycle
                 .reasoning_start(&mut events, "reasoning-0".into(), metadata);
         }
+        let reasoning_emitted = !self.lifecycle.reasoning.is_empty();
         let metadata = self.reasoning_metadata(true);
         self.lifecycle
             .end(&mut events, &"reasoning-0".into(), true, metadata);
@@ -823,21 +843,9 @@ impl StreamParser for Parser {
             self.lifecycle
                 .text_delta(&mut events, "text-0".into(), tail, None);
         }
-        events.append(&mut self.calls);
-        let Some(mut reason) = self.reason else {
-            return Err(Error::missing_terminal());
-        };
-        if self.refused {
-            reason = FinishReason::ContentFilter;
-        } else if reason == FinishReason::Stop
-            && events
-                .iter()
-                .any(|event| matches!(event, Event::ToolCall(_) | Event::ToolInputError { .. }))
-        {
-            reason = FinishReason::ToolCalls;
-        }
-        let mut usage = self.usage.clone();
-        if self.reasoning_emitted
+        events.extend(calls);
+        let mut usage = self.usage.take();
+        if reasoning_emitted
             && let Some(usage) = &mut usage
             && usage.reasoning_tokens.is_none()
         {
@@ -853,6 +861,41 @@ impl StreamParser for Parser {
         );
         Ok(events)
     }
+}
+fn stream_error(error: &JsonValue) -> Error {
+    let Some(message) = string(error, "message").and_then(|message| message.to_utf8().ok()) else {
+        return Error::output("Invalid OpenAI Chat stream error");
+    };
+    let status = get(error, "code")
+        .and_then(json::number)
+        .filter(|code| code.fract() == 0.0 && (400.0..=599.0).contains(code))
+        .map(|code| code as u16);
+    let code = get(error, "metadata")
+        .and_then(|metadata| string(metadata, "error_type"))
+        .or_else(|| string(error, "code"))
+        .or_else(|| string(error, "type"))
+        .and_then(|code| code.to_utf8().ok());
+    let reason = match code.as_deref() {
+        Some("content_policy_violation" | "image_content_policy_violation" | "refusal") => {
+            Some(Reason::ContentPolicy)
+        }
+        Some("payment_required") => Some(Reason::QuotaExceeded),
+        _ if status == Some(402) => Some(Reason::QuotaExceeded),
+        _ => None,
+    };
+    if let Some(reason) = reason {
+        return Error {
+            status,
+            code,
+            ..Error::new(reason, message)
+        };
+    }
+    classify(Failure {
+        message,
+        status,
+        code,
+        ..Default::default()
+    })
 }
 fn parse_think(buffer: &mut LosslessString, inside: &mut bool) -> (LosslessString, LosslessString) {
     let mut remaining = buffer.code_units().collect::<Vec<_>>();
@@ -904,6 +947,7 @@ fn validate_event(event: &JsonValue) -> Result<(), Error> {
                                         "reasoning_text",
                                         "thought",
                                         "thinking",
+                                        "refusal",
                                     ],
                                     &[],
                                 ) && get(delta, "reasoning_details").is_none_or(|value| {

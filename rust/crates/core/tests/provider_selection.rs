@@ -67,6 +67,47 @@ const NATIVE_COMPATIBLE: &[&str] = &[
 ];
 
 #[test]
+fn gpt_62_catalog_modes_keep_base_model_and_effort_variants() {
+    for family in ["sol", "astra"] {
+        let base = format!("gpt-6.2-{family}");
+        let source = parse_json(&serde_json::json!({"openai":{"id":"openai","name":"OpenAI","env":[],"npm":"@ai-sdk/openai","models":{"model":{"id":base,"name":"Model","release_date":"2026-01-01","attachment":false,"reasoning":true,"reasoning_options":[{"type":"effort","values":["low","medium","high","xhigh","max"]}],"tool_call":true,"limit":{"context":10000,"output":1000},"experimental":{"modes":{"fast":{"provider":{"body":{"service_tier":"priority"}}},"pro":{"provider":{"body":{"reasoning":{"mode":"pro"}}}},"ultrafast":{"provider":{"body":{"service_tier":"ultrafast"}}}}}}}}}).to_string()).unwrap();
+        let snapshots = models_dev::normalize(&source).unwrap();
+        let models = &snapshots[0].models;
+        for (suffix, body) in [
+            ("", None),
+            ("-fast", Some(r#"{"service_tier":"priority"}"#)),
+            ("-pro", Some(r#"{"reasoning":{"mode":"pro"}}"#)),
+            ("-ultrafast", Some(r#"{"service_tier":"ultrafast"}"#)),
+        ] {
+            let model = models
+                .iter()
+                .find(|m| m.id.as_str() == Some(&format!("{base}{suffix}")))
+                .unwrap();
+            assert_eq!(model.model_id.as_str(), Some(base.as_str()));
+            assert_eq!(
+                model.body.as_ref().map(DomainEncode::encode),
+                body.map(|value| parse_json(value).unwrap())
+            );
+            assert_eq!(
+                model
+                    .variants
+                    .iter()
+                    .map(|v| v.id.as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                ["low", "medium", "high", "xhigh", "max"]
+            );
+            for variant in &model.variants {
+                let encoded = variant.settings.as_ref().unwrap().encode();
+                assert_eq!(
+                    field(&encoded, "reasoningEffort"),
+                    Some(&variant.id.encode())
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn catalog_temperature_capabilities_inherit_across_experimental_modes() {
     let source = parse_json(r#"{"openai":{"id":"openai","name":"OpenAI","env":[],"npm":"@ai-sdk/openai","models":{"terra":{"id":"gpt-6.1-terra","name":"Terra","release_date":"2026-01-01","attachment":false,"reasoning":true,"tool_call":true,"temperature":false,"limit":{"context":10000,"output":1000},"experimental":{"modes":{"fast":{},"pro":{},"ultrafast":{}}}},"control":{"id":"gpt-runtime","name":"Runtime","release_date":"2026-01-01","attachment":false,"reasoning":false,"tool_call":true,"limit":{"context":10000,"output":1000}}}}}"#).unwrap();
     let catalog = Catalog::new(models_dev::normalize(&source).unwrap());
@@ -1228,6 +1269,65 @@ async fn test_040_runner_retry_agrees_with_physical_requests_and_terminal_consum
     coordinator.shutdown().await.unwrap();
     credentials.shutdown().await.unwrap();
     drop(reports);
+    store.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn runner_does_not_retry_after_partial_chat_output() {
+    let root = Root::new("partial-chat");
+    let store = support::store();
+    let service = Service::new(store.client());
+    let credentials = credential::Service::new(store.client());
+    credentials
+        .create(
+            "synthetic-id".into(),
+            "openai".into(),
+            None,
+            support::key("synthetic-key"),
+            1,
+        )
+        .await
+        .unwrap();
+    let replay = Replay::start(vec![Reply::stream(
+        "/v1/chat/completions",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial answer\"}}]}\n\n",
+    )])
+    .await;
+    let clock = Arc::new(ClockControl::default());
+    let coordinator = Coordinator::new(Arc::new(support::local(
+        &store,
+        Arc::new(model::Resolver::new(support::catalog(
+            &replay.base,
+            "retry-model",
+        ))),
+        "/project",
+        &root,
+        Arc::new(Executor::new(replay.client())),
+        clock.clone(),
+    )));
+    support::admit(&service, "ses_one", 1, "Return an answer").await;
+    let outcome = coordinator.run(&session::Id::new("ses_one").unwrap()).await;
+    assert_eq!(replay.finish().await.len(), 1);
+    assert!(
+        outcome.is_err(),
+        "partial output cannot settle a successful step"
+    );
+    assert!(clock.delays.lock().unwrap().is_empty());
+    let events = support::events(&store, "ses_one");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|name| name.as_str() == "session.step.failed.1")
+            .count(),
+        1
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|name| name.as_str() == "session.retry.scheduled.1")
+    );
+    coordinator.shutdown().await.unwrap();
+    credentials.shutdown().await.unwrap();
     store.shutdown().unwrap();
 }
 

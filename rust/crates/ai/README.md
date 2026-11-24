@@ -37,9 +37,9 @@ Supply a resolved `llm::Model`, `Request`, and `auth::Credential` from the upstr
 
 Resolution applies route defaults, model defaults, then request overrides. `Route::prepare` applies cache policy and lowers the protocol body; `wire_body` and `encoded_body` include permitted transport overlays. Protocol-owned fields cannot be overlaid. Query overrides preserve unrelated parameters; authentication runs after header/body assembly. JSON content type is authoritative. Anthropic protocol metadata uses the `anthropic` namespace for direct and compatible providers.
 
-Inject a configured `reqwest::Client` into `Executor`. `Executor::http_client` disables ambient proxies and redirects. `Executor::stream` returns an owned `EventStream`; `generate` assembles ordered output. Dropping the stream interrupts transport. `generate_object` forces a named tool; the caller validates its dynamic output schema.
+Inject a configured `reqwest::Client` into `Executor`. `Executor::http_client` disables ambient proxies and redirects, gives connections 30 seconds to open, and limits each read wait to 10 minutes without imposing a total request deadline. HTTP/2 sends keepalive pings during active streams. `Executor::stream` returns an owned `EventStream`; `generate` assembles ordered output. Dropping the stream interrupts transport. `generate_object` forces a named tool; the caller validates its dynamic output schema.
 
-The executor reports physical attempt `1`. Muse can remint a rejected inference key once on HTTP 401; other routes perform one physical attempt. SSE retry directives do not reconnect. A rejected WebSocket continuation does not become an HTTP request. Core owns bounded retries, interruption, and durable Step settlement. Typed failures retain classification, bounded redacted HTTP context, retry-after values and rate-limit scopes.
+The executor reports physical attempt `1`. Muse can remint a rejected inference key once on HTTP 401. SSE retry directives and failed HTTP body reads do not reconnect. A rejected WebSocket continuation does not become an HTTP request. Core owns bounded retries, interruption, and durable Step settlement. HTTP diagnostics distinguish connection, header, and body failures. They retain the sanitized status, request ID, retry hint and rate-limit scopes when the provider sends them.
 
 ## OpenAI, compatible routes and OpenRouter
 
@@ -47,7 +47,9 @@ The executor reports physical attempt `1`. Muse can remint a rejected inference 
 
 GPT-5.6+ direct routes gate their explicit cache options and breakpoints; older supported models use retention fields. Generic compatible deployments stay key-only. Direct Responses defaults to retained reasoning context and server-compaction configuration. Protocol schema order governs encoded bytes.
 
-Responses preserves encrypted reasoning and opaque compaction items, groups stateless summaries by item identity, reconciles final text without duplication, retains phase/citations, and distinguishes completed/incomplete/failed settlement. Hosted tools stay provider-executed. Chat accumulates partial tool identities/arguments, preserves reasoning fields/details including Meta Llama `thought` as reasoning, separates split `<think>` content, and settles after final usage. Unknown telemetry stays absent.
+Responses preserves encrypted reasoning and opaque compaction items, groups stateless summaries by item identity, reconciles final snapshots without duplication, and retains phase and citations. Hosted tools stay provider-executed. Chat accumulates interleaved tool arguments by index, preserves reasoning fields and late signatures, separates split `<think>` content, and settles after final usage. Meta Llama `thought` stays in reasoning. Interrupted, truncated or refused turns cannot release native local tool calls. Unknown telemetry stays absent.
+
+Direct Responses and Codex send recognized GPT-6 `-fast` models under their base ID with the priority tier unless the request sets a tier explicitly. GPT-6.2 Sol and Astra accept `configuration_update` items for supported effort levels on direct Responses in standard reasoning mode, including fast and ultrafast service tiers. Pro reasoning mode and OpenRouter do not use these updates.
 
 OpenRouter Responses rejects `store:true` and `previous_response_id`, preserves reasoning/usage and cache/session options, and emits top-level automatic cache control only for Anthropic model identities. It uses the shared error, transport, cancellation and redaction boundaries.
 
@@ -83,7 +85,7 @@ Image input accepts inline bytes and host-resolved URI/file references. Catalog 
 
 ## Framing, cache and tools
 
-SSE retains byte/UTF-8 fragments, supports LF/CRLF/CR, joins multiline data and ignores empty data/comments/retry directives/`[DONE]`. Neither `[DONE]` nor a retry directive certifies completion. WebSocket actors own connections and heartbeats; abnormal close or delayed heartbeat fails visibly. Cursor uses its distinct Connect framing/lifetime.
+SSE retains byte and UTF-8 fragments, supports LF, CRLF and CR, joins multiline data, and ignores empty data, comments and retry directives. Chat stops reading at `[DONE]` but still requires a finish reason; Responses requires a terminal response event. WebSocket actors own connections and heartbeats; abnormal close or delayed heartbeat fails visibly. Cursor uses its distinct Connect framing and lifetime.
 
 Cache policy is independent of quota reads and diagnostics. Tool schemas are normalized before provider lowering; local tool dispatch preserves validation, cancellation and success/error results. A route never executes a Session tool loop or owns durable events.
 

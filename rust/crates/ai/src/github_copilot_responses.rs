@@ -380,9 +380,29 @@ fn input(request: &Request, options: &JsonValue) -> Result<Vec<JsonValue>, Error
 struct Parser {
     inner: crate::openai_responses::Parser,
     items: BTreeMap<LosslessString, JsonValue>,
-    canonical: BTreeMap<String, LosslessString>,
+    canonical: BTreeMap<usize, LosslessString>,
 }
 impl Parser {
+    fn track_item(&mut self, mut item: JsonValue, index: Option<usize>) -> JsonValue {
+        let Some(id) = string(&item, "id").cloned() else {
+            return item;
+        };
+        let id = if get(&item, "type").and_then(json::text) == Some("reasoning")
+            && let Some(index) = index
+        {
+            self.canonical.entry(index).or_insert(id).clone()
+        } else {
+            id
+        };
+        json::set(&mut item, "id", s(id.clone()));
+        let stored = self
+            .items
+            .get(&id)
+            .map_or_else(|| item.clone(), |prior| json::merge(prior, &item));
+        self.items.insert(id, stored);
+        item
+    }
+
     fn metadata(&self, value: &mut Option<JsonValue>, id: Option<&LosslessString>, full: bool) {
         let mut extra = value
             .as_ref()
@@ -474,30 +494,25 @@ impl Parser {
 impl StreamParser for Parser {
     fn push(&mut self, event: &JsonValue) -> Result<Vec<Event>, Error> {
         let mut event = event.clone();
-        if let Some(item) = get(&event, "item") {
-            let mut item = item.clone();
-            let index = get(&event, "output_index")
-                .and_then(json::number)
-                .map(|index| index.to_string());
-            if let Some(id) = string(&item, "id") {
-                let id = if let Some(index) = index {
-                    let canonical = self
-                        .canonical
-                        .entry(index)
-                        .or_insert_with(|| id.clone())
-                        .clone();
-                    if get(&item, "type").and_then(json::text) == Some("reasoning") {
-                        canonical
-                    } else {
-                        id.clone()
-                    }
-                } else {
-                    id.clone()
-                };
-                json::set(&mut item, "id", s(id.clone()));
-                self.items.insert(id, item.clone());
-            }
+        if let Some(item) = get(&event, "item").cloned() {
+            let index = crate::openai_options::safe_integer(get(&event, "output_index"));
+            let item = self.track_item(item, index);
             json::set(&mut event, "item", item);
+        }
+        if matches!(
+            get(&event, "type").and_then(json::text),
+            Some("response.completed" | "response.incomplete")
+        ) && let Some(mut response) = get(&event, "response").cloned()
+            && let Some(output) = get(&response, "output").and_then(json::array)
+        {
+            let output = output
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(index, item)| self.track_item(item, Some(index)))
+                .collect();
+            json::set(&mut response, "output", JsonValue::Array(output));
+            json::set(&mut event, "response", response);
         }
         let mut events = self.inner.push(&event)?;
         self.convert(&mut events);

@@ -7,11 +7,25 @@ pub struct Sse {
     data: Vec<String>,
     after_cr: bool,
     first_line: bool,
+    stop_at_done: bool,
+    done: bool,
 }
 impl Sse {
+    pub(crate) fn new(stop_at_done: bool) -> Self {
+        Self {
+            stop_at_done,
+            ..Self::default()
+        }
+    }
+    pub(crate) fn done(&self) -> bool {
+        self.done
+    }
     pub fn push(&mut self, bytes: &[u8]) -> Vec<String> {
         let mut frames = Vec::new();
         for byte in bytes {
+            if self.done {
+                break;
+            }
             if self.after_cr {
                 self.after_cr = false;
                 if *byte == b'\n' {
@@ -38,7 +52,9 @@ impl Sse {
         if line.is_empty() {
             let data = self.data.join("\n");
             self.data.clear();
-            if !data.is_empty() && data != "[DONE]" {
+            if data == "[DONE]" {
+                self.done = self.stop_at_done;
+            } else if !data.is_empty() {
                 frames.push(data);
             }
         } else if let Some(data) = line.strip_prefix("data:") {

@@ -6,6 +6,9 @@ use ycoding_ai::{
 };
 use ycoding_schema::{parse_json, stringify_json};
 
+#[path = "openai_protocols/chat_parity.rs"]
+mod chat_parity;
+
 fn response(parser: &mut dyn StreamParser, frames: &[&str]) -> Result<Response, ycoding_ai::Error> {
     let mut events = Vec::new();
     for frame in frames {
@@ -489,5 +492,411 @@ fn openai_chat_and_responses_refusals_settle_as_content_filter() {
             ycoding_ai::llm::FinishReason::ContentFilter,
             "{frames:?}"
         );
+    }
+}
+
+mod responses_parity {
+    use super::*;
+    use ycoding_ai::{
+        llm::{FinishReason, Media, MediaData, Role},
+        provider_error::Reason,
+        route::Executor,
+    };
+
+    #[test]
+    fn copilot_terminal_reasoning_rotation_keeps_one_replayable_part() {
+        let mut common = ycoding_ai::providers::Config::new(ycoding_ai::auth::Auth::None);
+        common.base_url = Some("https://copilot.fixture.invalid".into());
+        let request = Request::new(
+            ycoding_ai::providers::github_copilot_sdk(
+                "o3",
+                ycoding_ai::github_copilot::Config {
+                    common,
+                    api: Some(ycoding_ai::providers::Api::Responses),
+                    user_agent: "fixture".into(),
+                },
+            )
+            .unwrap(),
+        );
+        let result = response(
+            &mut *request.model.route.protocol.parser(&request),
+            &[
+                r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_1","encrypted_content":"enc_initial"}}"#,
+                r#"{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","summary_index":0,"delta":"first"}"#,
+                r#"{"type":"response.completed","response":{"status":"completed","output":[{"type":"reasoning","id":"rs_rotated","summary":[{"type":"summary_text","text":"first and final"}],"encrypted_content":"enc_final"}]}}"#,
+            ],
+        ).unwrap();
+        let [Part::Reasoning(part)] = result.message.content.as_slice() else {
+            panic!("expected one replayable reasoning part");
+        };
+        assert_eq!(part.text.as_str(), Some("first and final"));
+        assert_eq!(
+            part.provider_metadata,
+            Some(
+                parse_json(
+                    r#"{"copilot":{"itemId":"rs_1","reasoningEncryptedContent":"enc_final"}}"#
+                )
+                .unwrap()
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn assistant_phases_and_route_specific_media_are_encoded_on_the_wire() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut route = Route::openai_responses();
+        route.endpoint.base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut reader = tokio::io::BufReader::new(&mut socket);
+            use tokio::io::AsyncBufReadExt;
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            assert_eq!(line, "POST /v1/responses HTTP/1.1\r\n");
+            let mut length = None;
+            loop {
+                line.clear();
+                assert_ne!(reader.read_line(&mut line).await.unwrap(), 0);
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = Some(value.trim().parse::<usize>().unwrap());
+                }
+            }
+            let mut body = vec![0; length.unwrap()];
+            reader.read_exact(&mut body).await.unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let event = "data: {\"type\":\"response.completed\"}\n\n";
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{event}", event.len()).as_bytes()).await.unwrap();
+            body
+        });
+        let mut request = Request::new(route.model("gpt-5.6"));
+        let text = |value: &str, phase: &str| {
+            let mut part = ycoding_ai::llm::TextPart::from(value);
+            part.provider_metadata =
+                Some(parse_json(&format!(r#"{{"openai":{{"phase":"{phase}"}}}}"#)).unwrap());
+            Part::Text(part)
+        };
+        let file = |mime: &str, filename: &str| {
+            Part::Media(Media {
+                mime: mime.into(),
+                data: MediaData::Bytes(vec![1, 2, 3]),
+                filename: Some(filename.into()),
+            })
+        };
+        request.system = vec!["initial".into()];
+        request.messages = vec![
+            Message::new(
+                Role::User,
+                vec![
+                    file("image/png", "picture.png"),
+                    file("application/pdf", "paper.pdf"),
+                ],
+            ),
+            Message::system("later"),
+            Message::assistant(vec![
+                text("checking", "commentary"),
+                text("checked", "final_answer"),
+            ]),
+        ];
+        let response = Executor::new(Executor::http_client().unwrap())
+            .generate(&request)
+            .await
+            .unwrap();
+        let body = server.await.unwrap();
+        assert_eq!(response.finish_reason, FinishReason::Stop);
+        let input = body["input"].as_array().unwrap();
+        assert_eq!(
+            input[0],
+            serde_json::json!({"role":"system","content":"initial"})
+        );
+        assert_eq!(
+            input[1]["content"][0],
+            serde_json::json!({"type":"input_image","image_url":"data:image/png;base64,AQID"})
+        );
+        assert_eq!(input[1]["content"][1]["type"], "input_text");
+        assert!(
+            input[1]["content"][1]["text"]
+                .as_str()
+                .unwrap()
+                .contains("paper.pdf (application/pdf) omitted")
+        );
+        assert_eq!(
+            input[2],
+            serde_json::json!({"role":"system","content":[{"type":"input_text","text":"later"}]})
+        );
+        assert_eq!(
+            input[3..],
+            [
+                serde_json::json!({"role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"checking"}]}),
+                serde_json::json!({"role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"checked"}]}),
+            ]
+        );
+
+        let mut config = ycoding_ai::providers::Config::new(ycoding_ai::auth::Auth::None);
+        config.base_url = Some("https://copilot.fixture.invalid".into());
+        let copilot = ycoding_ai::providers::github_copilot_sdk(
+            "o3",
+            ycoding_ai::github_copilot::Config {
+                common: config,
+                api: Some(ycoding_ai::providers::Api::Responses),
+                user_agent: "fixture".into(),
+            },
+        )
+        .unwrap();
+        let mut request = Request::new(copilot);
+        request.system = vec!["initial".into()];
+        request.messages = vec![
+            Message::new(Role::User, vec![file("application/pdf", "paper.pdf")]),
+            Message::system("later"),
+        ];
+        let prepared = request.model.route.prepare(&request).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&prepared.encoded_body).unwrap();
+        assert_eq!(
+            body["input"],
+            serde_json::json!([
+                {"role":"developer","content":"initial"},
+                {"role":"user","content":[{"type":"input_file","filename":"paper.pdf","file_data":"data:application/pdf;base64,AQID"}]},
+                {"role":"developer","content":"later"},
+            ])
+        );
+    }
+
+    #[test]
+    fn reconciles_terminal_function_calls_once_in_terminal_order() {
+        let request = Request::new(Route::openai_responses().model("fixture"));
+        let result = response(&mut OpenAIResponses::parser(&request), &[
+            r#"{"type":"response.output_item.added","item":{"type":"function_call","id":"fc_a","call_id":"call_a","name":"lookup","arguments":""}}"#,
+            r#"{"type":"response.function_call_arguments.delta","item_id":"fc_a","delta":"{\"q\":"}"#,
+            r#"{"type":"response.function_call_arguments.done","item_id":"fc_a","arguments":"{\"q\":1}"}"#,
+            r#"{"type":"response.output_item.done","item":{"type":"function_call","id":"fc_a","call_id":"call_a","name":"lookup","status":"completed"}}"#,
+            r#"{"type":"response.completed","response":{"output":[{"type":"function_call","call_id":"call_a","name":"lookup","status":"completed"},{"type":"function_call","call_id":"call_b","name":"lookup","arguments":"{\"q\":2}","status":"completed"}]}}"#,
+        ]).unwrap();
+        assert_eq!(result.finish_reason, FinishReason::ToolCalls);
+        let calls = result
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                Event::ToolCall(call) => {
+                    if call.id.as_str() == Some("call_b") {
+                        assert!(call.provider_metadata.is_none());
+                    }
+                    Some((call.id.as_str().unwrap(), stringify_json(&call.input)))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            calls,
+            [
+                ("call_a", "{\"q\":1}".into()),
+                ("call_b", "{\"q\":2}".into())
+            ]
+        );
+        for (id, arguments) in calls {
+            let input_events = result
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::ToolInputStart(call) if call.id.as_str() == Some(id) => {
+                        Some(("start", ""))
+                    }
+                    Event::ToolInputDelta { id: call, text, .. } if call.as_str() == Some(id) => {
+                        Some(("delta", text.as_str().unwrap()))
+                    }
+                    Event::ToolInputEnd(call) if call.id.as_str() == Some(id) => Some(("end", "")),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(input_events.first(), Some(&("start", "")));
+            assert_eq!(input_events.last(), Some(&("end", "")));
+            let mut body = String::new();
+            for (kind, text) in &input_events[1..input_events.len() - 1] {
+                assert_eq!(*kind, "delta");
+                body.push_str(text);
+            }
+            assert_eq!(body, arguments);
+        }
+        assert!(
+            !result
+                .events
+                .iter()
+                .any(|event| matches!(event, Event::ToolInputError { .. }))
+        );
+        assert!(matches!(result.events.last(), Some(Event::Finish(_))));
+    }
+
+    #[test]
+    fn withholds_local_calls_on_incomplete_failed_refused_or_disconnected_turns() {
+        let request = Request::new(Route::openai_responses().model("fixture"));
+        let done = parse_json(r#"{"type":"response.output_item.done","item":{"type":"function_call","id":"fc","call_id":"call","name":"lookup","arguments":"{}","status":"completed"}}"#).unwrap();
+        for (terminal, finish, error) in [
+            (
+                Some(
+                    r#"{"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}"#,
+                ),
+                Some(FinishReason::Length),
+                None,
+            ),
+            (
+                Some(r#"{"type":"response.incomplete","response":{"incomplete_details":null}}"#),
+                Some(FinishReason::Unknown),
+                None,
+            ),
+            (
+                Some(
+                    r#"{"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","message":"slow down"}}}"#,
+                ),
+                None,
+                Some(Reason::RateLimit),
+            ),
+            (
+                Some(
+                    r#"{"type":"response.completed","response":{"output":[{"type":"message","id":"msg","content":[{"type":"refusal","refusal":""}]}]}}"#,
+                ),
+                Some(FinishReason::ContentFilter),
+                None,
+            ),
+            (None, None, Some(Reason::Transport)),
+        ] {
+            let mut parser = OpenAIResponses::parser(&request);
+            let mut events = parser.push(&done).unwrap();
+            let result = match terminal {
+                Some(frame) => parser.push(&parse_json(frame).unwrap()),
+                None => parser.finish(),
+            };
+            if let Some(error) = error {
+                assert_eq!(result.unwrap_err().reason, error);
+            } else {
+                events.extend(result.unwrap());
+                events.extend(parser.finish().unwrap());
+            }
+            assert!(
+                !events.iter().any(|event| matches!(
+                    event,
+                    Event::ToolCall(_) | Event::ToolInputError { .. }
+                )),
+                "{terminal:?}"
+            );
+            assert_eq!(
+                events.iter().find_map(|event| match event {
+                    Event::Finish(finish) => Some(finish.reason),
+                    _ => None,
+                }),
+                finish
+            );
+        }
+    }
+
+    #[test]
+    fn does_not_synthesize_a_call_from_unfinished_or_absent_arguments() {
+        let request = Request::new(Route::openai_responses().model("fixture"));
+        let result = response(&mut OpenAIResponses::parser(&request), &[
+            r#"{"type":"response.output_item.added","item":{"type":"function_call","id":"fc_a","call_id":"call_a","name":"lookup","arguments":"{}"}}"#,
+            r#"{"type":"response.output_item.done","item":{"type":"function_call","id":"fc_a","call_id":"call_a","name":"lookup","arguments":"{}","status":"incomplete"}}"#,
+            r#"{"type":"response.output_item.done","item":{"type":"function_call","id":"fc_b","call_id":"call_b","name":"lookup"}}"#,
+            r#"{"type":"response.completed","response":{"output":[{"type":"function_call","id":"fc_a","call_id":"call_a","name":"lookup","arguments":"{}","status":"incomplete"}]}}"#,
+        ]).unwrap();
+        assert_eq!(result.finish_reason, FinishReason::Stop);
+        assert!(
+            !result
+                .events
+                .iter()
+                .any(|event| matches!(event, Event::ToolCall(_) | Event::ToolInputError { .. }))
+        );
+    }
+
+    #[test]
+    fn recovers_final_reasoning_summaries_and_encryption_for_replay() {
+        let route = Route::openai_responses();
+        let mut request = Request::new(route.model("fixture"));
+        let result = response(&mut OpenAIResponses::parser(&request), &[
+            r#"{"type":"response.reasoning_summary_text.delta","item_id":"rs","summary_index":0,"delta":"First "}"#,
+            r#"{"type":"response.reasoning_summary_text.done","item_id":"rs","summary_index":0,"text":"First summary"}"#,
+            r#"{"type":"response.reasoning_summary_part.done","item_id":"rs","summary_index":1,"part":{"type":"summary_text","text":"Second summary"}}"#,
+            r#"{"type":"response.output_item.done","item":{"type":"reasoning","id":"rs","encrypted_content":null}}"#,
+            r#"{"type":"response.completed","response":{"output":[{"type":"reasoning","id":"rs","summary":[{"type":"summary_text","text":"First summary"},{"type":"summary_text","text":"Second summary"}],"encrypted_content":"encrypted-state"},{"type":"message","id":"msg","content":[{"type":"output_text","text":"answer"}]}],"usage":{"input_tokens":5,"input_tokens_details":{"cached_tokens":0},"output_tokens":3}}}"#,
+        ]).unwrap();
+        assert_eq!(
+            result.reasoning().as_str(),
+            Some("First summarySecond summary")
+        );
+        let usage = result.usage.unwrap();
+        assert_eq!(usage.cache_read_input_tokens, Some(0.0));
+        assert_eq!(usage.reasoning_tokens, None);
+        assert_eq!(usage.output_may_include_unreported_reasoning, Some(true));
+        request.messages = vec![result.message];
+        let body: serde_json::Value =
+            serde_json::from_str(&stringify_json(&route.prepare(&request).unwrap().body)).unwrap();
+        assert_eq!(
+            body["input"][0],
+            serde_json::json!({"type":"reasoning","summary":[{"type":"summary_text","text":"First summary"},{"type":"summary_text","text":"Second summary"}],"encrypted_content":"encrypted-state"})
+        );
+        assert_eq!(body["input"][1]["role"], "assistant");
+    }
+
+    #[test]
+    fn hosted_terminal_items_deduplicate_and_keep_image_replay_valid() {
+        let route = Route::openai_responses();
+        let mut request = Request::new(route.model("fixture"));
+        let result = response(&mut OpenAIResponses::parser(&request), &[
+            r#"{"type":"response.output_item.done","item":{"type":"image_generation_call","id":"img","status":"completed","result":"AQ\r\nID","output_format":"png"}}"#,
+            r#"{"type":"response.completed","response":{"output":[{"type":"image_generation_call","id":"img","status":"completed","result":"AQ\r\nID","output_format":"png"},{"type":"code_interpreter_call","id":"ci","status":"completed","code":null,"container_id":"cntr","outputs":null}]}}"#,
+        ]).unwrap();
+        assert_eq!(result.finish_reason, FinishReason::Stop);
+        let hosted = result
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                Event::ToolCall(call) if call.provider_executed == Some(true) => call.name.as_str(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(hosted, ["image_generation", "code_interpreter"]);
+        request.messages = vec![result.message];
+        let body = stringify_json(&route.prepare(&request).unwrap().body);
+        assert!(body.contains("data:image/png;base64,AQID"), "{body}");
+    }
+
+    #[test]
+    fn handles_refusal_content_parts_and_preserves_upstream_error_details() {
+        let request = Request::new(Route::openai_responses().model("fixture"));
+        let reason = |frames: &[&str]| {
+            response(&mut OpenAIResponses::parser(&request), frames)
+                .unwrap()
+                .finish_reason
+        };
+        assert_eq!(
+            reason(&[
+                r#"{"type":"response.content_part.done","item_id":"msg","part":{"type":"refusal","refusal":"Cannot provide that"}}"#,
+                r#"{"type":"response.completed"}"#,
+            ]),
+            FinishReason::ContentFilter
+        );
+        assert_eq!(
+            reason(&[
+                r#"{"type":"response.refusal.delta","item_id":"msg","delta":""}"#,
+                r#"{"type":"response.completed"}"#,
+            ]),
+            FinishReason::Stop
+        );
+        let error = response(&mut OpenAIResponses::parser(&request), &[
+            r#"{"type":"error","message":null,"error":null,"response":{"error":{"code":"context_length_exceeded","message":"Input is too long"}}}"#,
+        ]).unwrap_err();
+        assert!(error.context_overflow, "{error:?}");
+        assert_eq!(error.code.as_deref(), Some("context_length_exceeded"));
+        assert_eq!(error.message, "context_length_exceeded: Input is too long");
+        let error = response(
+            &mut OpenAIResponses::parser(&request),
+            &[r#"{"type":"error","status":429,"error":{"message":"Slow down"}}"#],
+        )
+        .unwrap_err();
+        assert_eq!((error.reason, error.status), (Reason::RateLimit, Some(429)));
     }
 }

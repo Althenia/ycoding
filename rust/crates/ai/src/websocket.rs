@@ -547,11 +547,28 @@ impl Connection {
                 let kind = get(&event, "type").and_then(json::text);
                 if kind == Some("response.completed") {
                     self.terminal = true;
-                    self.response_id = get(&event, "response")
-                        .and_then(|response| get(response, "id"))
-                        .and_then(json::text)
-                        .filter(|id| !id.is_empty())
-                        .map(String::from);
+                    if let Some(response) = get(&event, "response")
+                        && get(response, "status")
+                            .is_none_or(|status| json::text(status) == Some("completed"))
+                    {
+                        self.response_id = get(response, "id")
+                            .and_then(json::text)
+                            .filter(|id| !id.is_empty())
+                            .map(String::from);
+                        if let Some(continuation) = &self.continuation
+                            && let Some(output) = get(response, "output").and_then(json::array)
+                        {
+                            self.output = output
+                                .iter()
+                                .filter(|item| {
+                                    get(item, "status")
+                                        .and_then(json::text)
+                                        .is_none_or(|status| status == "completed")
+                                })
+                                .filter_map(|item| (continuation.normalize_output)(item))
+                                .collect();
+                        }
+                    }
                 }
                 if matches!(kind, Some("response.incomplete" | "response.failed")) {
                     self.terminal = true;

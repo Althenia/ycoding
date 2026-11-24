@@ -17,7 +17,7 @@ use std::{
     future::Future,
     pin::Pin,
     sync::Arc,
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use ycoding_schema::{JsonValue, LosslessString, parse_json, provider, stringify_json};
 
@@ -493,6 +493,10 @@ impl Executor {
         Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
+            .connect_timeout(Duration::from_secs(30))
+            .read_timeout(Duration::from_secs(600))
+            .http2_keep_alive_interval(Duration::from_secs(30))
+            .http2_keep_alive_timeout(Duration::from_secs(15))
             .build()
             .map_err(|_| Error::transport("Failed to construct HTTP client", "client"))
     }
@@ -539,7 +543,8 @@ impl Executor {
             _ => "REDACTED",
         };
         let response = self.client.execute(request).await.map_err(|error| {
-            let mut error = transport_error(&error, url, request_headers);
+            let mut error = reqwest_error(&error, false);
+            error.http = Some(Box::new(http_context(&method, url, request_headers, None)));
             tracing::debug!(
                 method = diagnostic_method,
                 duration_ms = started.elapsed().as_millis() as u64,
@@ -547,13 +552,11 @@ impl Executor {
                 status = error.status,
                 "provider HTTP failure"
             );
-            if let Some(http) = &mut error.http {
-                http.method = method.to_string();
-            }
             error
         })?;
         tracing::debug!(
             method = diagnostic_method,
+            http_version = ?response.version(),
             status = response.status().as_u16(),
             duration_ms = started.elapsed().as_millis() as u64,
             "provider HTTP response"
@@ -566,30 +569,21 @@ impl Executor {
                 .protocol
                 .response_headers(&prepared.request, response.headers());
         }
-        if response.status().as_u16() < 400 {
+        if response.status().is_success() {
             return Ok(response);
         }
         let status = response.status().as_u16();
-        let response_secrets: Vec<_> = response
-            .headers()
-            .iter()
-            .filter(|(name, value)| sensitive(name.as_str()) || value.is_sensitive())
-            .filter_map(|(_, value)| value.to_str().ok().map(String::from))
-            .filter(|value| value.len() >= 4)
-            .collect();
-        let headers = headers_map(response.headers())
-            .into_iter()
-            .map(|(key, value)| (key, redact_http(&value, url, request_headers)))
-            .collect();
-        let raw = response.text().await.ok();
+        let mut http = http_context(&method, url, request_headers, Some(&response));
+        let secrets = response_secrets(response.headers());
+        let raw = response.text().await;
+        let read_failure = raw.as_ref().err().map(|error| reqwest_error(error, true));
         let raw = raw
-            .map(|body| redact_with(&redact_http(&body, url, request_headers), &response_secrets));
-        let retry = retry_after_ms(&headers, now_ms() as i64);
-        let rate_limit = rate_limit_details(&headers, retry);
-        let body_truncated = raw
+            .ok()
+            .map(|body| redact_with(&redact_http(&body, url, request_headers), &secrets));
+        http.body_truncated = raw
             .as_ref()
             .is_some_and(|body| body.encode_utf16().count() > 16384);
-        let body = raw.map(|body| {
+        http.body = raw.map(|body| {
             body.chars()
                 .scan(0, |count, ch| {
                     *count += ch.len_utf16();
@@ -597,54 +591,28 @@ impl Executor {
                 })
                 .collect::<String>()
         });
-        let message = match body.as_deref().filter(|body| !body.is_empty()) {
-            Some(body) if body.encode_utf16().count() <= 500 => {
-                format!("Provider request failed with HTTP {status}: {body}")
+        let prefix = format!("Provider request failed with HTTP {status}");
+        let message = if let Some(error) = &read_failure {
+            format!("{prefix}: {error}")
+        } else if let Some(body) = http.body.as_deref().filter(|body| !body.is_empty()) {
+            if body.encode_utf16().count() <= 500 {
+                format!("{prefix}: {body}")
+            } else if let Some(detail) = failure_detail(body) {
+                format!("{prefix}: {detail}")
+            } else {
+                prefix
             }
-            Some(body) => match failure_detail(body) {
-                Some(detail) => format!("Provider request failed with HTTP {status}: {detail}"),
-                None => format!("Provider request failed with HTTP {status}"),
-            },
-            None => format!("Provider request failed with HTTP {status}"),
+        } else {
+            prefix
         };
-        let request_id = [
-            "x-request-id",
-            "request-id",
-            "x-amzn-requestid",
-            "x-amz-request-id",
-            "x-goog-request-id",
-            "cf-ray",
-        ]
-        .into_iter()
-        .find_map(|key| headers.get(key).cloned());
-        Err(classify(Failure {
+        let mut error = classify(Failure {
             message,
             status: Some(status),
-            retry_after_ms: retry,
-            rate_limit: rate_limit.clone(),
-            http: Some(HttpContext {
-                method: method.to_string(),
-                url: redact_url(url.as_str()),
-                request_headers: redact_headers(request_headers),
-                status: Some(status),
-                response_headers: headers
-                    .into_iter()
-                    .map(|(key, value)| {
-                        let value = if sensitive(&key) {
-                            "<redacted>".into()
-                        } else {
-                            redact_http(&value, url, request_headers)
-                        };
-                        (key, value)
-                    })
-                    .collect(),
-                body,
-                body_truncated,
-                request_id: request_id.map(|id| redact_http(&id, url, request_headers)),
-                rate_limit,
-            }),
+            http: Some(http),
             ..Failure::default()
-        }))
+        });
+        error.transport_kind = read_failure.and_then(|error| error.transport_kind);
+        Err(error)
     }
     pub async fn stream(&self, request: &Request) -> Result<EventStream, Error> {
         let mut prepared = request.model.route.prepare(request)?;
@@ -690,7 +658,7 @@ impl Executor {
                     native: None,
                     transport: StreamTransport::Buffered,
                     parser,
-                    frames: VecDeque::from([frame]),
+                    frames: VecDeque::from([Frame::Json(frame)]),
                     events: VecDeque::new(),
                     terminal: false,
                     ended: false,
@@ -736,7 +704,7 @@ impl Executor {
                     native: None,
                     transport: StreamTransport::Buffered,
                     parser,
-                    frames: VecDeque::from(frames),
+                    frames: frames.into_iter().map(Frame::Json).collect(),
                     events: VecDeque::new(),
                     terminal: false,
                     ended: false,
@@ -770,7 +738,7 @@ impl Executor {
                             native: None,
                             transport: StreamTransport::Buffered,
                             parser,
-                            frames: VecDeque::from([json::object([(
+                            frames: VecDeque::from([Frame::Json(json::object([(
                                 "choices",
                                 JsonValue::Array(vec![json::object([
                                     (
@@ -782,7 +750,7 @@ impl Executor {
                                     ),
                                     ("finish_reason", json::s("stop")),
                                 ])]),
-                            )])]),
+                            )]))]),
                             events: VecDeque::new(),
                             terminal: false,
                             ended: false,
@@ -800,7 +768,7 @@ impl Executor {
                     Transport::Http(Framing::AwsEventStream) => {
                         Decoder::Aws(AwsEventStream::default())
                     }
-                    _ => Decoder::Sse(Sse::default()),
+                    _ => Decoder::Sse(Sse::new(prepared.protocol == "openai-chat")),
                 };
                 Ok(EventStream {
                     native: None,
@@ -881,6 +849,10 @@ enum Decoder {
     Sse(Sse),
     Aws(AwsEventStream),
 }
+enum Frame {
+    Sse(String),
+    Json(JsonValue),
+}
 enum StreamTransport {
     Done,
     Buffered,
@@ -897,7 +869,7 @@ pub struct EventStream {
     native: Option<Box<crate::cursor::provider::Stream>>,
     transport: StreamTransport,
     parser: Box<dyn StreamParser>,
-    frames: VecDeque<JsonValue>,
+    frames: VecDeque<Frame>,
     events: VecDeque<Event>,
     terminal: bool,
     ended: bool,
@@ -906,18 +878,43 @@ pub struct EventStream {
 }
 impl EventStream {
     pub async fn next(&mut self) -> Result<Option<Event>, Error> {
-        let result = self.next_inner().await;
-        if result.is_err() {
+        let mut result = self.next_inner().await;
+        if let Err(error) = &mut result {
+            if let StreamTransport::Http {
+                response, tracker, ..
+            } = &self.transport
+            {
+                let mut secrets = secrets(&self.redaction);
+                secrets.extend(response_secrets(response.headers()));
+                error.message = redact_with(&error.message, &secrets);
+                error.code = error.code.take().map(|code| redact_with(&code, &secrets));
+                error.http.get_or_insert_with(|| {
+                    Box::new(http_context(
+                        &reqwest::Method::POST,
+                        &self.redaction.url,
+                        &self.redaction.headers,
+                        Some(response),
+                    ))
+                });
+                tracing::debug!(
+                    protocol = self.redaction.protocol,
+                    http_version = ?response.version(),
+                    status = response.status().as_u16(),
+                    duration_ms = tracker.started.elapsed().as_millis() as u64,
+                    reason = ?error.reason,
+                    kind = error.transport_kind,
+                    "provider stream failure"
+                );
+            } else {
+                error.message = redact(&error.message, &self.redaction);
+                error.code = error.code.take().map(|code| redact(&code, &self.redaction));
+            }
             self.ended = true;
             self.events.clear();
             self.frames.clear();
             self.transport = StreamTransport::Done;
         }
-        result.map_err(|mut error| {
-            error.message = redact(&error.message, &self.redaction);
-            error.code = error.code.map(|code| redact(&code, &self.redaction));
-            error
-        })
+        result
     }
     async fn next_inner(&mut self) -> Result<Option<Event>, Error> {
         if let Some(native) = &mut self.native {
@@ -949,6 +946,15 @@ impl EventStream {
                 return Ok(None);
             }
             if let Some(frame) = self.frames.pop_front() {
+                let frame = match frame {
+                    Frame::Sse(frame) => {
+                        let Some(frame) = decode_frame(&frame, &self.redaction)? else {
+                            continue;
+                        };
+                        frame
+                    }
+                    Frame::Json(frame) => frame,
+                };
                 let terminal = self.redaction.request.model.route.protocol.terminal(&frame);
                 let events = self.parser.push(&frame)?;
                 for event in events {
@@ -973,24 +979,27 @@ impl EventStream {
                     tracker,
                     status,
                 } => {
-                    let bytes = match response.chunk().await {
-                        Ok(bytes) => bytes,
-                        Err(error) => {
-                            tracker.settle(false, true, Some(*status));
-                            return Err(read_error(&error));
+                    let bytes = if matches!(decoder, Decoder::Sse(parser) if parser.done()) {
+                        None
+                    } else {
+                        match response.chunk().await {
+                            Ok(bytes) => bytes,
+                            Err(error) => {
+                                tracker.settle(false, true, Some(*status));
+                                return Err(reqwest_error(&error, true));
+                            }
                         }
                     };
                     if let Some(bytes) = bytes {
                         match decoder {
                             Decoder::Sse(parser) => {
-                                for frame in parser.push(&bytes) {
-                                    if let Some(frame) = decode_frame(&frame, &self.redaction)? {
-                                        self.frames.push_back(frame);
-                                    }
-                                }
+                                self.frames
+                                    .extend(parser.push(&bytes).into_iter().map(Frame::Sse));
                             }
                             Decoder::Aws(parser) => match parser.push(&bytes) {
-                                Ok(frames) => self.frames.extend(frames),
+                                Ok(frames) => {
+                                    self.frames.extend(frames.into_iter().map(Frame::Json))
+                                }
                                 Err(error) => {
                                     tracker.settle(false, true, Some(*status));
                                     return Err(error);
@@ -1005,11 +1014,8 @@ impl EventStream {
                         Transport::Muse(_)
                     ) {
                         if let Decoder::Sse(parser) = decoder {
-                            for frame in parser.finish_muse() {
-                                if let Some(frame) = decode_frame(&frame, &self.redaction)? {
-                                    self.frames.push_back(frame);
-                                }
-                            }
+                            self.frames
+                                .extend(parser.finish_muse().into_iter().map(Frame::Sse));
                         }
                         self.transport = StreamTransport::Buffered;
                         continue;
@@ -1017,16 +1023,16 @@ impl EventStream {
                 }
                 StreamTransport::Language(parts) => {
                     if let Some(part) = parts.recv().await {
-                        self.frames.push_back(part?);
+                        self.frames.push_back(Frame::Json(part?));
                         continue;
                     }
                 }
                 StreamTransport::WebSocket(connection) => {
                     if let Some(frame) = connection.next().await? {
-                        self.frames.push_back(
+                        self.frames.push_back(Frame::Json(
                             parse_json(&frame)
                                 .map_err(|_| Error::output("Invalid provider stream event"))?,
-                        );
+                        ));
                         continue;
                     }
                 }
@@ -1073,31 +1079,6 @@ impl Drop for StreamTransport {
         }
     }
 }
-fn transport_error(error: &reqwest::Error, url: &Url, headers: &HeaderMap) -> Error {
-    let mut error = reqwest_error(error, false);
-    error.http = Some(Box::new(HttpContext {
-        method: "POST".into(),
-        url: redact_url(url.as_str()),
-        request_headers: redact_headers(headers),
-        status: None,
-        response_headers: BTreeMap::new(),
-        body: None,
-        body_truncated: false,
-        request_id: None,
-        rate_limit: None,
-    }));
-    error
-}
-fn read_error(error: &reqwest::Error) -> Error {
-    let error = reqwest_error(error, true);
-    tracing::debug!(
-        kind = error.transport_kind,
-        status = error.status,
-        "provider stream failure"
-    );
-    error
-}
-
 fn source_transport_kind(
     error: &(dyn std::error::Error + 'static),
 ) -> Result<Option<&'static str>, crate::provider_error::Reason> {
@@ -1121,6 +1102,20 @@ fn source_transport_kind(
             ) {
                 return Err(error.reason);
             }
+        }
+        if let Some(error) = error.downcast_ref::<h2::Error>()
+            && matches!(
+                error.reason(),
+                Some(
+                    h2::Reason::NO_ERROR
+                        | h2::Reason::CANCEL
+                        | h2::Reason::REFUSED_STREAM
+                        | h2::Reason::STREAM_CLOSED
+                        | h2::Reason::INTERNAL_ERROR
+                )
+            )
+        {
+            transient = transient.or(Some("Http2StreamClosed"));
         }
         if let Some(error) = error.downcast_ref::<std::io::Error>() {
             let kind = match error.kind() {
@@ -1159,32 +1154,46 @@ fn reqwest_error(error: &reqwest::Error, read: bool) -> Error {
     if error.is_builder() || error.is_redirect() {
         return Error::invalid("Invalid provider HTTP request");
     }
-    if error.is_decode() {
-        return Error::output("Invalid provider HTTP response");
-    }
     if let Some(status) = error.status() {
         return crate::provider_error::classify(crate::provider_error::Failure {
             status: Some(status.as_u16()),
             ..Default::default()
         });
     }
+    if error.is_timeout() {
+        return Error::transport(
+            if read {
+                "Provider HTTP response body read timed out"
+            } else if error.is_connect() {
+                "Provider HTTP connection timed out"
+            } else {
+                "Provider HTTP request timed out waiting for response headers"
+            },
+            "ETIMEDOUT",
+        );
+    }
+    let stage = if read { "response body" } else { "request" };
     let kind = match source_transport_kind(error) {
-        Err(reason) => return Error::new(reason, "Provider HTTP operation did not complete"),
+        Err(crate::provider_error::Reason::InvalidRequest) if read => {
+            return Error::output("Provider HTTP response body is malformed");
+        }
+        Err(reason) => return Error::new(reason, format!("Provider HTTP {stage} failed")),
         Ok(kind) => kind,
     };
+    if kind.is_none() && error.is_decode() {
+        return Error::output(format!("Provider HTTP {stage} could not be decoded"));
+    }
     Error::transport(
-        if error.is_timeout() {
-            "HTTP transport timed out"
-        } else {
-            "HTTP transport failed"
+        match kind {
+            Some("ConnectionClosed" | "Http2StreamClosed") => {
+                format!("Provider HTTP {stage} closed before completion")
+            }
+            Some(kind) => format!("Provider HTTP {stage} failed ({kind})"),
+            None if read => "Provider HTTP response body read failed".into(),
+            None if error.is_connect() => "Provider HTTP connection failed".into(),
+            None => "Provider HTTP request failed before receiving response headers".into(),
         },
-        kind.unwrap_or(if error.is_timeout() {
-            "Timeout"
-        } else if read {
-            "read"
-        } else {
-            "TransportError"
-        }),
+        kind.unwrap_or(if read { "read" } else { "TransportError" }),
     )
 }
 
@@ -1232,21 +1241,84 @@ mod transport_source_tests {
         }
     }
 }
-fn headers_map(headers: &HeaderMap) -> BTreeMap<String, String> {
+fn response_secrets(headers: &HeaderMap) -> Vec<String> {
     headers
         .iter()
-        .filter_map(|(name, value)| {
-            value
-                .to_str()
-                .ok()
-                .map(|value| (name.as_str().into(), value.into()))
+        .filter(|(name, value)| {
+            value.is_sensitive() || sensitive(name.as_str()) && !rate_limit_header(name.as_str())
         })
+        .filter_map(|(_, value)| value.to_str().ok())
+        .filter(|value| value.len() >= 4)
+        .map(String::from)
         .collect()
+}
+
+fn rate_limit_header(name: &str) -> bool {
+    name == "retry-after"
+        || name.starts_with("x-ratelimit-")
+        || name.starts_with("anthropic-ratelimit-")
+}
+
+fn http_context(
+    method: &reqwest::Method,
+    url: &Url,
+    request_headers: &HeaderMap,
+    response: Option<&reqwest::Response>,
+) -> HttpContext {
+    let (response_headers, rate_limit) = response.map_or_else(
+        || (BTreeMap::new(), None),
+        |response| {
+            let mut secrets = http_secrets(url, request_headers);
+            secrets.extend(response_secrets(response.headers()));
+            let limits = response
+                .headers()
+                .iter()
+                .filter_map(|(name, value)| {
+                    if !rate_limit_header(name.as_str()) || value.is_sensitive() {
+                        return None;
+                    }
+                    Some((
+                        name.to_string(),
+                        redact_with(value.to_str().ok()?, &secrets),
+                    ))
+                })
+                .collect();
+            (
+                redact_headers(response.headers())
+                    .into_iter()
+                    .map(|(key, value)| (key, redact_with(&value, &secrets)))
+                    .collect::<BTreeMap<_, _>>(),
+                rate_limit_details(&limits, retry_after_ms(&limits, now_ms() as i64)),
+            )
+        },
+    );
+    let request_id = [
+        "x-request-id",
+        "request-id",
+        "x-amzn-requestid",
+        "x-amz-request-id",
+        "x-goog-request-id",
+        "cf-ray",
+    ]
+    .into_iter()
+    .find_map(|key| response_headers.get(key).cloned());
+    HttpContext {
+        method: method.to_string(),
+        url: redact_url(url.as_str()),
+        request_headers: redact_headers(request_headers),
+        status: response.map(|response| response.status().as_u16()),
+        response_headers,
+        body: None,
+        body_truncated: false,
+        request_id,
+        rate_limit,
+    }
 }
 pub(crate) fn sensitive(name: &str) -> bool {
     let name = name.to_lowercase();
     [
         "authorization",
+        "cookie",
         "apikey",
         "api-key",
         "api_key",
@@ -1264,6 +1336,9 @@ pub fn redact_url(value: &str) -> String {
     let Ok(mut url) = Url::parse(value) else {
         return "<redacted>".into();
     };
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_fragment(None);
     let pairs: Vec<_> = url
         .query_pairs()
         .map(|(key, value)| {
