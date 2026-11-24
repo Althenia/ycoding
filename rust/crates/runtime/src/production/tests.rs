@@ -1,6 +1,4 @@
 use super::*;
-mod config_precedence;
-mod config_precedence_catalogs;
 mod configured_failure;
 mod plugin_preparation;
 mod sweep;
@@ -1328,24 +1326,18 @@ fn helper_model_priority_keeps_explicit_unavailable_selections_closed() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn configured_language_plugins_reach_runner_and_helper_inference() {
+async fn unclaimed_model_packages_fail_without_launching_the_frontend() {
     use std::os::unix::fs::PermissionsExt;
-    use ycoding_core::session::{pending, run_coordinator::Coordinator};
 
     let mut f = fixture(
-        r#"{"model":{"providerID":"fixture-language","model":"main"},"providers":{"fixture-language":{"package":"fixture-language","models":{"main":{"limit":{"context":10000,"output":1000}}}}}}"#,
+        r#"{"providers":{"fixture-language":{"package":"fixture-language","models":{"main":{"limit":{"context":10000,"output":1000}}}}}}"#,
         r#"{"plugins":["./language.mjs"]}"#,
     );
     let frontend = f.roots.data.join("plugin-frontend");
+    let started = f.roots.data.join("frontend-started");
     std::fs::write(
         &frontend,
-        format!(
-            "#!/bin/sh\nexec bun '{}'\n",
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../../packages/cli/src/plugin-host/main.ts"
-            )
-        ),
+        format!("#!/bin/sh\nprintf started > '{}'\n", started.display()),
     )
     .unwrap();
     std::fs::set_permissions(&frontend, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -1355,300 +1347,25 @@ async fn configured_language_plugins_reach_runner_and_helper_inference() {
     );
     std::fs::write(
         f.directory().join("language.mjs"),
-        r#"export default {
-          id: "fixture.inference",
-          setup: async (context) => {
-            await context.aisdk.hook("sdk", (event) => {
-              if (event.package !== "fixture-language") return
-              event.sdk = { languageModel: (id) => ({
-                doStream: async () => ({ stream: new ReadableStream({
-                  start(controller) {
-                    controller.enqueue({ type: "text-start", id: "text" })
-                    controller.enqueue({ type: "text-delta", id: "text", delta: "Native plugin inference" })
-                    controller.enqueue({ type: "text-end", id: "text" })
-                    controller.enqueue({ type: "finish", finishReason: { unified: "stop", raw: "stop" }, usage: {
-                      inputTokens: { total: 3, noCache: 3, cacheRead: 0, cacheWrite: 0 },
-                      outputTokens: { total: 1, text: 1, reasoning: 0 }
-                    } })
-                    controller.close()
-                  }
-                }) })
-              }) }
-            })
-          }
-        }"#,
+        "throw new Error('legacy module loaded')\n",
     )
     .unwrap();
-    tokio::time::timeout(Duration::from_secs(60), async {
-        let locations = f.locations();
-        let services = f.services(&locations);
-        let composed = services.production.as_ref().unwrap();
-        assert!(composed.extension_diagnostics.is_empty(), "{:?}", composed.extension_diagnostics);
-        let id = session::Id::new("ses_one").unwrap();
-        let selection = ycoding_core::ycoding_schema::model::Ref::decode(
-            &parse_json(r#"{"providerID":"fixture-language","id":"main"}"#).unwrap(),
-        ).unwrap();
-        let resolved = composed.session_generate.models.resolve_optional(None, &selection).await;
-        let event = ycoding_core::ycoding_schema::event::Id::new("evt_plugin_input").unwrap();
-        f.sessions().admit_input(pending::Request {
-            id: ycoding_core::ycoding_schema::session_message::Id::from_event(&event),
-            session_id: id.clone(),
-            input: ycoding_core::ycoding_schema::session_pending::Message::decode(
-                &parse_json(r#"{"type":"user","delivery":"steer","data":{"text":"Run the configured provider"}}"#).unwrap(),
-            ).unwrap(),
-            event_id: event,
-            created: crate::ids::now_millis(),
-        }).await.unwrap();
-        let coordinator = Coordinator::new(Arc::new(composed.runner.clone()));
-        let ran = coordinator.run(&id).await;
-        let generated = composed.session_generate.generate(
-            &id,
-            "Generate a short response".into(),
-            &ycoding_core::tools::code_mode::Cancellation::default(),
-        ).await;
-        let transcript = f.sessions().transcript(&id).unwrap();
-        coordinator.shutdown().await.unwrap();
-        composed.activation.close().await;
-        locations.close().unwrap();
-        assert_eq!(resolved.unwrap().model.route.id, "ai-sdk:fixture-language");
-        ran.unwrap();
-        assert_eq!(generated.unwrap().as_str(), Some("Native plugin inference"));
-        assert!(transcript.iter().any(|message| {
-            ycoding_core::ycoding_schema::stringify_json(&message.encode()).contains("Native plugin inference")
-        }));
-    }).await.unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn configured_local_model_package_reaches_runner_and_helper_inference() {
-    use std::os::unix::fs::PermissionsExt;
-    use ycoding_core::session::{pending, run_coordinator::Coordinator};
-
-    let discovered = std::process::Command::new("/bin/sh")
-        .args(["-c", "command -v bun"])
-        .output()
-        .unwrap();
-    assert!(discovered.status.success());
-    let bun = String::from_utf8(discovered.stdout)
-        .unwrap()
-        .trim()
-        .to_owned();
-    assert!(std::path::Path::new(&bun).is_absolute(), "{bun}");
-    let text = "Local model package inference";
-    let quoted = |value: &str| ycoding_core::ycoding_schema::stringify_json(&value.encode());
-    let mut f = fixture_with("{}", "{}", BTreeMap::new(), false);
-    let root = f.roots.home.clone();
-    let packages = f.roots.cache.join("plugins/packages");
-    let package = root.join("model-package");
-    let home = root.join("host-home");
-    let marker_path = root.join("factory-marker");
-    let postinstall = root.join("postinstall-marker");
-    let frontend = root.join("model-frontend");
-    std::fs::create_dir_all(&package).unwrap();
-    std::fs::create_dir_all(&home).unwrap();
-    std::fs::write(root.join("user.npmrc"), "").unwrap();
-    std::fs::write(root.join("global.npmrc"), "").unwrap();
-    std::fs::write(
-        package.join("package.json"),
-        r#"{"name":"fixture-local-model","version":"1.0.0","type":"module","exports":"./root.mjs","scripts":{"postinstall":__POSTINSTALL__}}"#
-            .replace(
-                "__POSTINSTALL__",
-                &quoted(&format!("touch '{}'", postinstall.display())),
-            ),
-    )
-    .unwrap();
-    std::fs::write(
-        package.join("root.mjs"),
-        r#"import { appendFileSync } from "node:fs"
-
-export function createFixtureLocal(options) {
-  const isolated = process.env.HOME === options.home && process.env.OPENAI_API_KEY === undefined
-  appendFileSync(
-    options.marker,
-    `${process.pid}\n${JSON.stringify({ name: options.name, fixtureMarker: options.fixtureMarker, isolated })}\n`,
-  )
-  return {
-    languageModel: () => ({
-      doStream: async () => ({
-        stream: new ReadableStream({
-          start(controller) {
-            controller.enqueue({ type: "text-start", id: "text" })
-            controller.enqueue({ type: "text-delta", id: "text", delta: "__TEXT__" })
-            controller.enqueue({ type: "text-end", id: "text" })
-            controller.enqueue({ type: "finish", finishReason: { unified: "stop", raw: "stop" }, usage: {
-              inputTokens: { total: 3, noCache: 3, cacheRead: 0, cacheWrite: 0 },
-              outputTokens: { total: 1, text: 1, reasoning: 0 },
-            } })
-            controller.close()
-          },
-        }),
-      }),
-    }),
-  }
-}
-"#
-        .replace("__TEXT__", text),
-    )
-    .unwrap();
-    std::fs::write(
-        &frontend,
-        format!(
-            "#!/bin/sh\nexec /usr/bin/env -i PATH=/usr/bin:/bin HOME='{home}' TMPDIR='{tmp}' XDG_CONFIG_HOME='{config}' XDG_CACHE_HOME='{cache}' XDG_DATA_HOME='{data}' XDG_STATE_HOME='{state}' npm_config_userconfig='{user}' npm_config_globalconfig='{global}' npm_config_offline=true '{bun}' '{host}' \"$@\"\n",
-            home = home.display(),
-            tmp = f.roots.tmp.display(),
-            config = f.roots.config.display(),
-            cache = f.roots.cache.display(),
-            data = f.roots.data.display(),
-            state = f.roots.state.display(),
-            user = root.join("user.npmrc").display(),
-            global = root.join("global.npmrc").display(),
-            host = concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../../packages/cli/src/plugin-host/main.ts"
-            ),
-        ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&frontend, std::fs::Permissions::from_mode(0o755)).unwrap();
-    std::fs::write(
-        f.roots.config.join("ycoding.json"),
-        r#"{"model":{"providerID":"fixture-local-model","model":"main"},"providers":{"fixture-local-model":{"package":__PACKAGE__,"settings":{"fixtureMarker":"synthetic","marker":__MARKER__,"home":__HOME__},"models":{"main":{"limit":{"context":10000,"output":1000}}}}}}"#
-            .replace("__PACKAGE__", &quoted(&format!("file:{}", package.display())))
-            .replace("__MARKER__", &quoted(marker_path.to_str().unwrap()))
-            .replace("__HOME__", &quoted(home.to_str().unwrap())),
-    )
-    .unwrap();
-    Arc::get_mut(&mut f.factory).unwrap().options.env.insert(
-        crate::launch::FRONTEND_EXECUTABLE_KEY.into(),
-        frontend.to_str().unwrap().into(),
-    );
-    let id = session::Id::new("ses_one").unwrap();
     let locations = f.locations();
     let services = f.services(&locations);
     let composed = services.production.as_ref().unwrap();
-    let diagnostics = format!("{:?}", composed.extension_diagnostics);
-    let diagnostics_empty = composed.extension_diagnostics.is_empty();
-    let route_id = format!("ai-sdk:file:{}", package.display());
-    let coordinator = Coordinator::new(Arc::new(composed.runner.clone()));
-    let work = tokio::time::timeout(Duration::from_secs(60), async {
-        let selection = ycoding_core::ycoding_schema::model::Ref::decode(
-            &parse_json(r#"{"providerID":"fixture-local-model","id":"main"}"#).unwrap(),
-        )
-        .unwrap();
-        let route = composed
-            .session_generate
-            .models
-            .resolve_optional(None, &selection)
-            .await
-            .map(|resolved| resolved.model.route.id == route_id.as_str());
-        let event = ycoding_core::ycoding_schema::event::Id::new("evt_model_package_input").unwrap();
-        let admitted = f
-            .sessions()
-            .admit_input(pending::Request {
-                id: ycoding_core::ycoding_schema::session_message::Id::from_event(&event),
-                session_id: id.clone(),
-                input: ycoding_core::ycoding_schema::session_pending::Message::decode(
-                    &parse_json(r#"{"type":"user","delivery":"steer","data":{"text":"Run the configured model package"}}"#).unwrap(),
-                )
-                .unwrap(),
-                event_id: event,
-                created: crate::ids::now_millis(),
-            })
-            .await;
-        let ran = coordinator.run(&id).await;
-        let generated = composed
-            .session_generate
-            .generate(
-                &id,
-                "Generate a short response".into(),
-                &ycoding_core::tools::code_mode::Cancellation::default(),
-            )
-            .await;
-        (route, admitted, ran, generated)
-    })
-    .await;
-    let transcript = f.sessions().transcript(&id);
-    let cleanup = tokio::time::timeout(Duration::from_secs(60), async {
-        let stopped = coordinator.shutdown().await;
-        composed.activation.close().await;
-        let closed = locations.close();
-        let globals = f.factory.globals.close().await;
-        (stopped, closed, globals)
-    })
-    .await;
-    let recorded = std::fs::read_to_string(&marker_path);
-    let installed = std::fs::read_dir(&packages).and_then(|entries| {
-        entries
-            .map(|entry| {
-                let manifest = entry?
-                    .path()
-                    .join("node_modules/fixture-local-model/package.json");
-                match std::fs::read_to_string(manifest) {
-                    Ok(value) => Ok(Some(value)),
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                    Err(error) => Err(error),
-                }
-            })
-            .collect::<Result<Vec<_>, std::io::Error>>()
-            .map(|values| values.into_iter().flatten().collect::<Vec<_>>())
-    });
-    let postinstall_ran = postinstall.exists();
-    let child_alive = recorded
-        .as_ref()
-        .ok()
-        .and_then(|value| value.lines().next())
-        .and_then(|value| value.parse::<u32>().ok())
-        .map(ycoding_core::platform::process::is_alive);
-    let cleanup_settled = matches!(&cleanup, Ok((Ok(_), Ok(_), Ok(_))))
-        && matches!(&child_alive, None | Some(Ok(false)));
-    drop(coordinator);
-    drop(services);
-    drop(locations);
-    drop(f);
-    assert!(
-        cleanup_settled,
-        "model package cleanup did not settle; retained test root"
-    );
-    let removed = std::fs::remove_dir_all(&root);
-    assert!(removed.is_ok(), "{removed:?}");
-    assert!(!root.exists());
-    let (route, admitted, ran, generated) =
-        work.expect("model package inference exceeded 60 seconds");
-    let (stopped, closed, globals) = cleanup.expect("model package cleanup exceeded 60 seconds");
-    assert!(diagnostics_empty, "{diagnostics}");
-    admitted.unwrap();
-    ran.unwrap();
-    assert!(route.unwrap());
-    assert_eq!(generated.unwrap().as_str(), Some(text));
-    assert!(transcript.unwrap().iter().any(|message| {
-        ycoding_core::ycoding_schema::stringify_json(&message.encode()).contains(text)
-    }));
-    stopped.unwrap();
-    closed.unwrap();
-    globals.unwrap();
-    let installed = installed.unwrap();
-    assert_eq!(installed.len(), 1);
-    let ycoding_core::ycoding_schema::JsonValue::Object(manifest) =
-        parse_json(&installed[0]).unwrap()
-    else {
-        panic!("installed package manifest must be an object")
-    };
-    assert_eq!(
-        manifest.get(&"name".into()),
-        Some(&"fixture-local-model".encode())
-    );
-    assert!(!postinstall_ran);
-    let recorded = recorded.unwrap();
-    let lines = recorded.lines().collect::<Vec<_>>();
-    assert!(!lines.is_empty() && lines.len() % 2 == 0, "{lines:?}");
-    assert!(lines.chunks(2).all(|entry| {
-        entry[0] == lines[0]
-            && entry[1]
-                == r#"{"name":"fixture-local-model","fixtureMarker":"synthetic","isolated":true}"#
-    }), "{lines:?}");
-    let pid = lines[0].parse::<u32>().unwrap();
-    assert_ne!(pid, std::process::id());
-    assert!(!child_alive.unwrap().unwrap());
+    let selection = ycoding_core::ycoding_schema::model::Ref::decode(
+        &parse_json(r#"{"providerID":"fixture-language","id":"main"}"#).unwrap(),
+    )
+    .unwrap();
+    let resolved = composed
+        .session_generate
+        .models
+        .resolve_optional(None, &selection)
+        .await;
+    assert!(resolved.is_err());
+    assert!(composed.extension_diagnostics.is_empty());
+    assert!(!started.exists());
+    locations.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3469,6 +3186,73 @@ fn description(services: &LocationServices) -> Option<String> {
         .get(&"god".into())
         .and_then(|agent| agent.description.as_ref())
         .and_then(|description| description.to_utf8().ok())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_plugin_edits_do_not_wake_the_location_configuration_watcher() {
+    let f = fixture("{}", "{}");
+    let project_config = f.directory().join(".ycoding");
+    let mut legacy = Vec::new();
+    for root in [&f.roots.config, &project_config] {
+        for name in ["plugin", "plugins"] {
+            let directory = root.join(name);
+            std::fs::create_dir_all(&directory).unwrap();
+            let file = directory.join("legacy.ts");
+            std::fs::write(&file, "export default {}\n").unwrap();
+            legacy.push(file);
+        }
+    }
+    let locations = f.locations();
+    let held = f.services(&locations);
+    let generation = held.production.as_ref().unwrap().generation;
+    let notify = Arc::new(tokio::sync::Notify::new());
+    let changed = f
+        .feed
+        .subscribe_types(
+            ycoding_core::event_feed::Scope::Global,
+            &["config.updated"],
+            {
+                let notify = notify.clone();
+                move || notify.notify_one()
+            },
+        )
+        .unwrap();
+    for path in legacy {
+        std::fs::write(path, "throw new Error('retired plugin')\n").unwrap();
+    }
+    let unexpected = tokio::time::timeout(Duration::from_secs(2), notify.notified()).await;
+    assert!(
+        unexpected.is_err(),
+        "legacy files triggered a configuration rebuild"
+    );
+    assert!(changed.next().unwrap().is_none());
+    assert_eq!(
+        f.services(&locations)
+            .production
+            .as_ref()
+            .unwrap()
+            .generation,
+        generation
+    );
+
+    std::fs::write(
+        project_config.join("ycoding.json"),
+        r#"{"agents":{"god":{"description":"native configuration"}}}"#,
+    )
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), notify.notified())
+        .await
+        .unwrap();
+    assert!(changed.next().unwrap().is_some());
+    let current = f.services(&locations);
+    assert_ne!(current.production.as_ref().unwrap().generation, generation);
+    assert_eq!(
+        description(&current).as_deref(),
+        Some("native configuration")
+    );
+    drop((held, current));
+    locations.close().unwrap();
+    assert_eq!(f.factory.globals.watcher.active_count().unwrap(), 0);
 }
 
 fn next_generation(f: &Fixture, locations: &Locations, after: u64) -> Arc<LocationServices> {

@@ -45,8 +45,7 @@ test.skipIf(!native)("named API reads an isolated native runtime without OpenAPI
   const project = path.join(root, "Location with spaces")
   await mkdir(project)
   const backend = Bun.spawn(
-    [native, "serve", "--stdio", "--hostname", "127.0.0.1", "--port", "0", "--frontend-executable", process.execPath,
-      "--frontend-arguments", JSON.stringify([cli])],
+    [native, "serve", "--stdio", "--hostname", "127.0.0.1", "--port", "0"],
     { cwd: root, env, stdin: "pipe", stdout: "pipe", stderr: "pipe" },
   )
   const output = backend.stdout.getReader()

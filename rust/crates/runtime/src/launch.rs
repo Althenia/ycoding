@@ -21,54 +21,6 @@ include!(concat!(env!("OUT_DIR"), "/bundled_models.rs"));
 
 pub const BETA_NAMESPACE: &str = "ycoding-beta";
 pub(crate) const FRONTEND_EXECUTABLE_KEY: &str = "YCODING_FRONTEND_EXECUTABLE";
-pub(crate) const FRONTEND_ARGUMENTS_KEY: &str = "YCODING_FRONTEND_ARGUMENTS";
-
-pub fn plugin_arguments(env: &BTreeMap<String, String>) -> Result<Vec<String>, LaunchError> {
-    let mut arguments = env
-        .get(FRONTEND_ARGUMENTS_KEY)
-        .map(|value| frontend_prefix(value))
-        .transpose()?
-        .unwrap_or_default();
-    arguments.push("plugin-host".into());
-    Ok(arguments)
-}
-
-fn frontend_prefix(value: &str) -> Result<Vec<String>, LaunchError> {
-    let invalid = || {
-        LaunchError::Usage(
-        "--frontend-arguments requires at most 32 nonempty, NUL-free strings in 8192 JSON bytes, ending with an absolute entrypoint path".into(),
-    )
-    };
-    if value.len() > 8192 {
-        return Err(invalid());
-    }
-    let JsonValue::Array(values) = parse_json(value).map_err(|_| invalid())? else {
-        return Err(invalid());
-    };
-    if values.len() > 32 {
-        return Err(invalid());
-    }
-    let prefix = values
-        .into_iter()
-        .map(|value| {
-            let JsonValue::String(value) = value else {
-                return Err(invalid());
-            };
-            let value = String::try_from(value).map_err(|_| invalid())?;
-            if value.is_empty() || value.contains('\0') {
-                return Err(invalid());
-            }
-            Ok(value)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    if prefix.last().is_some_and(|value| {
-        let path = Path::new(value);
-        !path.is_absolute() || path.file_name().is_none()
-    }) {
-        return Err(invalid());
-    }
-    Ok(prefix)
-}
 
 pub fn namespace(channel: &str) -> &'static str {
     if channel == "beta" {
@@ -93,7 +45,6 @@ Options:
   --cors <origin>    Allow one additional WebSocket origin (repeatable)
   --meeting          Start the Meeting runtime for each Location the server composes
   --frontend-executable <path>  Installed frontend executable owning native assets
-  --frontend-arguments <json>  Internal source frontend argument prefix
   --paths           Print resolved global paths as JSON without starting
   -h, --help         Print this help
   -V, --version      Print the runtime version
@@ -218,7 +169,6 @@ pub fn parse_launch(
     let mut paths = false;
     let mut meeting = false;
     let mut frontend_executable = None;
-    let mut frontend_arguments = None;
     while position < args.len() {
         let arg = &args[position];
         let (flag, inline) = match arg.split_once('=') {
@@ -266,9 +216,9 @@ pub fn parse_launch(
                 frontend_executable = Some(value);
             }
             "--frontend-arguments" => {
-                let value = take(&mut position)?;
-                frontend_prefix(&value)?;
-                frontend_arguments = Some(value);
+                return Err(LaunchError::Usage(
+                    "--frontend-arguments is unsupported".into(),
+                ));
             }
             "--port" => {
                 let value = take(&mut position)?;
@@ -288,11 +238,6 @@ pub fn parse_launch(
     if service && stdio {
         return Err(LaunchError::Usage(
             "--service and --stdio cannot be combined".into(),
-        ));
-    }
-    if frontend_arguments.is_some() && frontend_executable.is_none() {
-        return Err(LaunchError::Usage(
-            "--frontend-arguments requires --frontend-executable".into(),
         ));
     }
     let mode = if service {
@@ -335,7 +280,6 @@ pub fn parse_launch(
             .map(|v| (key.to_string(), v))
     })
     .chain(frontend_executable.map(|value| (FRONTEND_EXECUTABLE_KEY.into(), value)))
-    .chain(frontend_arguments.map(|value| (FRONTEND_ARGUMENTS_KEY.into(), value)))
     .collect::<BTreeMap<_, _>>();
     let temp = env("TMPDIR")
         .or_else(|| env("TEMP"))
@@ -547,17 +491,13 @@ fn production_environment(
             key != "YCODING_PASSWORD"
                 && key != "YCODING_SERVER_PASSWORD"
                 && key != FRONTEND_EXECUTABLE_KEY
-                && key != FRONTEND_ARGUMENTS_KEY
+                && key != "YCODING_FRONTEND_ARGUMENTS"
         })
         .chain(
-            [FRONTEND_EXECUTABLE_KEY, FRONTEND_ARGUMENTS_KEY]
-                .into_iter()
-                .filter_map(|key| {
-                    config
-                        .environment
-                        .get(key)
-                        .map(|value| (key.into(), value.clone()))
-                }),
+            config
+                .environment
+                .get(FRONTEND_EXECUTABLE_KEY)
+                .map(|value| (FRONTEND_EXECUTABLE_KEY.into(), value.clone())),
         )
         .collect()
 }
@@ -1990,17 +1930,8 @@ mod frontend_launch_tests {
     fn production_environment_retains_only_explicit_frontend_metadata() {
         let home = std::env::temp_dir().join("ycoding-frontend-rebuild");
         let executable = home.join("node").to_string_lossy().into_owned();
-        let prefix =
-            super::stringify_json(&super::JsonValue::Array(vec![super::JsonValue::String(
-                home.join("entry.mjs").to_string_lossy().as_ref().into(),
-            )]));
         let Parsed::Run(config) = parse_launch(
-            &[
-                "--frontend-executable".into(),
-                executable.clone(),
-                "--frontend-arguments".into(),
-                prefix.clone(),
-            ],
+            &["--frontend-executable".into(), executable.clone()],
             |key| (key == "HOME").then(|| home.to_string_lossy().into_owned()),
         )
         .unwrap() else {
@@ -2030,7 +1961,7 @@ mod frontend_launch_tests {
             rebuilt.get("YCODING_FRONTEND_EXECUTABLE"),
             Some(&executable)
         );
-        assert_eq!(rebuilt.get("YCODING_FRONTEND_ARGUMENTS"), Some(&prefix));
+        assert!(!rebuilt.contains_key("YCODING_FRONTEND_ARGUMENTS"));
         assert!(!rebuilt.contains_key("YCODING_PASSWORD"));
         assert!(!rebuilt.contains_key("YCODING_SERVER_PASSWORD"));
         let Parsed::Run(empty) = parse_launch(&[], |key| {

@@ -198,8 +198,8 @@ for (const input of forwardCases) {
       expect(report.args.includes("--stdio")).toBe(input.mode === "stdio")
       expect(argument("--hostname")).toBe(input.hostname)
       expect(argument("--port")).toBe(input.port === undefined ? undefined : String(input.port))
-      expect(argument("--frontend-executable")).toBe(process.execPath)
-      expect(JSON.parse(argument("--frontend-arguments") ?? "null")).toEqual([owner])
+      expect(report.args).not.toContain("--frontend-executable")
+      expect(report.args).not.toContain("--frontend-arguments")
       expect(report.version).toBe(InstallationVersion)
       expect(report.channel).toBe(InstallationChannel)
       if (input.mode !== "service") expect(report.passwordFingerprint).toBe(fingerprint("synthetic-inherited-password"))
@@ -332,7 +332,7 @@ test("C03 scope cancellation before readiness reaps the selected native process"
   }
 }, 30_000)
 
-test("C04 default private startup selects the native process and preserves its PID and frontend identity", async () => {
+test("C04 default private startup selects the native process without replaying the source frontend", async () => {
   const run = await start({ action: "private" })
   try {
     const endpoint = await run.wrapper.until((value) => value.ready === true)
@@ -341,7 +341,8 @@ test("C04 default private startup selects the native process and preserves its P
     expect(endpoint.nativePid).toBe(report.pid)
     expect(endpoint.nativePid).not.toBe(endpoint.pid)
     expect(endpoint.url).toBe("http://127.0.0.1:42617")
-    expect(report.args).toContain("--frontend-executable")
+    expect(report.args).not.toContain("--frontend-executable")
+    expect(report.args).not.toContain("--frontend-arguments")
     expect(report.version).toBe(InstallationVersion)
     expect(report.channel).toBe(InstallationChannel)
   } catch (error) {

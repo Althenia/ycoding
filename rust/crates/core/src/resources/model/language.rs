@@ -115,9 +115,9 @@ impl ProviderContext {
                             "Dynamic provider packages are disabled by plugin configuration",
                         ));
                     }
-                    activation
-                        .package_language(package, &info.encode(), &options)
-                        .await?
+                    return Err(ycoding_ai::Error::invalid(
+                        "No native or process-extension language route is available for this package",
+                    ));
                 }
             };
             from_language(info, attempt).map(Some).map_err(invalid)

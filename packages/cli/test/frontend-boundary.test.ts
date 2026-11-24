@@ -44,27 +44,6 @@ function importsRemoteControl(file: string, source: string) {
 
 const sdkHosts = ["src/plugin-host/sdk.ts", "src/node/plugin-runtime.promise.ts", "src/node/plugin-runtime.effect.ts"]
 const sdkModules = ["@ycoding-ai/plugin", "@ycoding-ai/plugin/effect", "@ycoding-ai/plugin/tool", "@ycoding-ai/plugin/effect/tool"]
-const typeOnlyHosts = ["src/native-process.ts", "src/server-process.ts", "src/user-app-api.d.ts"]
-const launcherModule = "@ycoding-ai/plugin/effect/plugin"
-
-function typeOnly(node: ts.Node) {
-  if (!ts.isImportDeclaration(node) || !node.importClause) return false
-  const clause = node.importClause
-  if (clause.isTypeOnly) return true
-  return (
-    !clause.name &&
-    !!clause.namedBindings &&
-    ts.isNamedImports(clause.namedBindings) &&
-    clause.namedBindings.elements.length > 0 &&
-    clause.namedBindings.elements.every((element) => element.isTypeOnly)
-  )
-}
-
-function allowed(file: string, specifier: string, isTypeOnly: boolean) {
-  if (sdkHosts.includes(file)) return sdkModules.includes(specifier)
-  if (typeOnlyHosts.includes(file)) return specifier === launcherModule && isTypeOnly
-  return false
-}
 
 function forbidden(file: string, source: string) {
   function visit(node: ts.Node): boolean {
@@ -84,7 +63,7 @@ function forbidden(file: string, source: string) {
       specifier &&
       ts.isStringLiteralLike(specifier) &&
       /^@ycoding-ai\/(?:core|server|meeting|plugin)(?:\/|$)/.test(specifier.text) &&
-      !allowed(file, specifier.text, typeOnly(node))
+      !(sdkHosts.includes(file) && sdkModules.includes(specifier.text))
     )
       return true
     return ts.forEachChild(node, visit) ?? false
@@ -169,20 +148,4 @@ test("import syntax preserves the exact host-only SDK allowance", () => {
       expect(forbidden("src/plugin-host/sdk-extra.ts", source)).toBe(true)
     }
   }
-})
-
-test("launcher files may only import the plugin launcher type", () => {
-  for (const file of typeOnlyHosts) {
-    expect(forbidden(file, `import type { Plugin } from "${launcherModule}"`)).toBe(false)
-    expect(forbidden(file, `import { type Plugin } from "${launcherModule}"`)).toBe(false)
-    expect(forbidden(file, `import { Plugin } from "${launcherModule}"`)).toBe(true)
-    expect(forbidden(file, `import { type Plugin, make } from "${launcherModule}"`)).toBe(true)
-    expect(forbidden(file, `import "${launcherModule}"`)).toBe(true)
-    expect(forbidden(file, `import("${launcherModule}")`)).toBe(true)
-    expect(forbidden(file, `import type { Plugin } from "@ycoding-ai/plugin"`)).toBe(true)
-    for (const module of ["@ycoding-ai/core", "@ycoding-ai/server", "@ycoding-ai/meeting"]) {
-      expect(forbidden(file, `import type { X } from "${module}"`)).toBe(true)
-    }
-  }
-  expect(forbidden("src/index.ts", `import type { Plugin } from "${launcherModule}"`)).toBe(true)
 })

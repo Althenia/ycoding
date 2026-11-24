@@ -1,11 +1,6 @@
-import { selfCommand } from "./util/process"
+import path from "node:path"
 
-export function frontendLaunchArguments(command: readonly string[] = selfCommand()) {
-  const [executable, ...prefix] = command
-  if (!executable) throw new Error("Failed to resolve frontend executable")
-  return [
-    "--frontend-executable",
-    executable,
-    ...(prefix.length === 0 ? [] : ["--frontend-arguments", JSON.stringify(prefix)]),
-  ]
+export function frontendAssetArguments(executable = process.execPath) {
+  const name = path.basename(executable, path.extname(executable)).toLowerCase()
+  return ["bun", "node", "nodejs"].includes(name) ? [] : ["--frontend-executable", executable]
 }

@@ -56,7 +56,7 @@ async fn completion(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn configured_module_and_process_callbacks_survive_private_preparation() {
+async fn configured_process_callbacks_run_without_importing_legacy_modules() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
     let (requests, mut received) = mpsc::unbounded_channel::<JsonValue>();
@@ -72,7 +72,7 @@ async fn configured_module_and_process_callbacks_survive_private_preparation() {
     });
     let mut f = fixture(
         &format!(
-            r#"{{"default_agent":"god","model":{{"providerID":"openai","model":"gpt-runtime"}},"efficiency":{{"title":"off"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"baseURL":"{endpoint}","apiKey":"synthetic-key"}}}}}},"permissions":[{{"action":"extension.family","resource":"demo","effect":"allow"}},{{"action":"extension.echo","resource":"demo","effect":"allow"}}]}}"#
+            r#"{{"default_agent":"god","model":{{"providerID":"openai","model":"gpt-runtime"}},"efficiency":{{"title":"off"}},"providers":{{"openai":{{"name":"Fixture OpenAI","package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"baseURL":"{endpoint}","apiKey":"synthetic-key"}}}}}},"permissions":[{{"action":"extension.family","resource":"demo","effect":"allow"}},{{"action":"extension.echo","resource":"demo","effect":"allow"}}]}}"#
         ),
         "{}",
     );
@@ -82,14 +82,12 @@ async fn configured_module_and_process_callbacks_survive_private_preparation() {
     let frontend = f.roots.data.join("plugin-frontend");
     std::fs::write(&records, "[]").unwrap();
     std::fs::write(directory.join("mixed.mjs"), MODULE).unwrap();
+    let launched = directory.join("frontend-launched");
     std::fs::write(
         &frontend,
         format!(
-            "#!/bin/sh\nexec bun '{}'\n",
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../../packages/cli/src/plugin-host/main.ts"
-            )
+            "#!/bin/sh\nprintf started > '{}'\nexit 1\n",
+            launched.display()
         ),
     )
     .unwrap();
@@ -146,7 +144,6 @@ async fn configured_module_and_process_callbacks_survive_private_preparation() {
         .name
         .to_utf8()
         .unwrap();
-    let setup_before = std::fs::read_to_string(directory.join("module-setup.log")).unwrap();
     let starts_before = std::fs::read_to_string(&starts).unwrap();
     let pid = std::fs::read_to_string(directory.join("extension-child.pid"))
         .unwrap()
@@ -170,7 +167,6 @@ async fn configured_module_and_process_callbacks_survive_private_preparation() {
     let ran = tokio::time::timeout(Duration::from_secs(60), coordinator.run(&id)).await;
     let transcript = f.sessions().transcript(&id).unwrap();
     let bodies = std::iter::from_fn(|| received.try_recv().ok()).collect::<Vec<_>>();
-    let setup_after = std::fs::read_to_string(directory.join("module-setup.log")).unwrap();
     let starts_after = std::fs::read_to_string(&starts).unwrap();
     coordinator.shutdown().await.unwrap();
     composed.activation.close().await;
@@ -182,16 +178,16 @@ async fn configured_module_and_process_callbacks_survive_private_preparation() {
     ran.unwrap().unwrap();
     assert_eq!(diagnostics, "[]");
     assert_eq!(config_diagnostics, "[]");
-    assert_eq!(provider_name, "Module prepared");
-    assert_eq!(setup_before, "setup\n");
-    assert_eq!(setup_after, setup_before);
+    assert_eq!(provider_name, "Fixture OpenAI");
+    assert!(!launched.exists());
+    assert!(!directory.join("module-setup.log").exists());
     assert_eq!(starts_before, format!("{pid}\n"));
     assert_eq!(starts_after, starts_before);
     assert!(!alive(pid));
     assert_eq!(bodies.len(), 2, "one tool turn and one final turn");
     for body in &bodies {
         let messages = stringify_json(field(body, "messages"));
-        assert!(messages.contains("genuine-module-context"), "{messages}");
+        assert!(!messages.contains("genuine-module-context"), "{messages}");
         assert!(messages.contains("system-B"), "{messages}");
         let JsonValue::Array(tools) = field(body, "tools") else {
             panic!("provider tools must be an array")

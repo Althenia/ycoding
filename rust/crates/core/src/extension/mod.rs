@@ -18,8 +18,8 @@ pub mod v5 {
     include!(concat!(env!("OUT_DIR"), "/ycoding.extension.v5.rs"));
 }
 pub use supervisor::{
-    Configuration, Extension, FamilyGrant, Host, Launch, Options, Plugin, PluginRuntime,
-    SessionHost, SessionServices, ToolGrant,
+    Configuration, Extension, FamilyGrant, Host, Launch, Options, SessionHost, SessionServices,
+    ToolGrant,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

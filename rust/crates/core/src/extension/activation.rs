@@ -1,14 +1,13 @@
 use super::{
-    Configuration, Error, Extension, Host, Launch, Options, Plugin, PluginRuntime, capabilities,
-    supervisor::{Declaration, ParentPreparation},
+    Configuration, Error, Extension, Host, Launch, Options, capabilities,
+    supervisor::ParentPreparation,
 };
 use crate::{
     event_feed::{Data, EventSource},
-    resources::config::capabilities::ConfigCapabilities,
     tools::{context::policy::LeafPolicy, registry::Registry},
 };
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     path::PathBuf,
     sync::{Arc, Mutex as SyncMutex},
 };
@@ -23,7 +22,6 @@ pub struct Activation {
     policy: Arc<LeafPolicy>,
     launch: Launch,
     host: Host,
-    plugins: Option<PluginRuntime>,
     parent: Option<super::ParentHandle>,
     parents: SyncMutex<Vec<(super::v5::ParentEntry, Arc<Extension>)>>,
     parent_prepare: Mutex<bool>,
@@ -31,24 +29,9 @@ pub struct Activation {
     state: Mutex<State>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-enum Spec {
-    Process(Configuration),
-    Plugin(Plugin),
-}
-impl Spec {
-    fn identity(&self) -> &str {
-        match self {
-            Self::Process(configuration) => &configuration.identity,
-            Self::Plugin(plugin) => plugin.identity(),
-        }
-    }
-}
-
 #[derive(Default)]
 struct State {
-    active: Vec<(Spec, Arc<Extension>)>,
-    packages: BTreeMap<String, Arc<Extension>>,
+    active: Vec<(Configuration, Arc<Extension>)>,
     failures: Vec<(String, Error)>,
     builtins: super::plugin::Builtins,
     closed: bool,
@@ -71,7 +54,6 @@ impl Activation {
             policy,
             launch,
             host,
-            plugins: None,
             parent: None,
             parents: Default::default(),
             parent_prepare: Mutex::new(false),
@@ -80,10 +62,6 @@ impl Activation {
         }
     }
 
-    pub fn with_plugins(mut self, runtime: PluginRuntime) -> Self {
-        self.plugins = Some(runtime);
-        self
-    }
     pub fn with_parent_plugins(mut self, parent: super::ParentHandle) -> Self {
         self.parent = Some(parent);
         self
@@ -108,16 +86,20 @@ impl Activation {
             .map(|entry| LosslessString::from(entry.id.as_str()))
             .collect::<Vec<_>>();
         let mut processes = Configuration::load(configuration, self.directory.clone())?;
-        let (mut plugins, mut pending, failures, builtins, enabled) = self
-            .resolve(configuration, processes.len() as u32, &parent_ids)
-            .await;
+        let (builtins, enabled) = super::plugin::resolve(
+            &super::plugin::operations(&configuration.entries),
+            &parent_ids,
+        );
         if let Some(parent) = &self.parent {
             for (order, entry) in entries
                 .into_iter()
-                .filter(|entry| enabled.contains(&LosslessString::from(entry.id.as_str())))
+                .filter(|entry| {
+                    let id = LosslessString::from(entry.id.as_str());
+                    enabled.contains(&id) && configuration.capabilities.plugins.allows(&id)
+                })
                 .enumerate()
             {
-                let extension = match parent
+                let extension = parent
                     .prepare(ParentPreparation {
                         entry: entry.clone(),
                         directory: self.directory.clone(),
@@ -128,16 +110,7 @@ impl Activation {
                         launch: self.launch.clone(),
                         host: self.host.clone(),
                     })
-                    .await
-                {
-                    Ok(extension) => extension,
-                    Err(error) => {
-                        for declaration in pending.into_values() {
-                            declaration.discard().await;
-                        }
-                        return Err(error);
-                    }
-                };
+                    .await?;
                 self.parents
                     .lock()
                     .unwrap_or_else(|error| error.into_inner())
@@ -148,11 +121,8 @@ impl Activation {
         for process in &mut processes {
             process.registration_order += offset;
         }
-        for plugin in &mut plugins {
-            plugin.configuration.registration_order += offset;
-        }
         let mut active = Vec::new();
-        let mut failures = failures;
+        let mut failures = Vec::new();
         for process in processes {
             match Extension::prepare_process(
                 process.clone(),
@@ -164,26 +134,9 @@ impl Activation {
             )
             .await
             {
-                Ok(extension) => active.push((Spec::Process(process), extension)),
+                Ok(extension) => active.push((process, extension)),
                 Err(error) => failures.push((process.identity, error)),
             }
-        }
-        for plugin in plugins {
-            if let Some(declaration) = pending.remove(plugin.identity()) {
-                match declaration
-                    .prepare(
-                        self.registry.clone(),
-                        plugin.configuration.registration_order,
-                    )
-                    .await
-                {
-                    Ok(extension) => active.push((Spec::Plugin(plugin), extension)),
-                    Err(error) => failures.push((plugin.identity().to_owned(), error)),
-                }
-            }
-        }
-        for declaration in pending.into_values() {
-            declaration.discard().await;
         }
         self.registry.settle_builtins(&builtins);
         let mut state = self.state.lock().await;
@@ -209,11 +162,6 @@ impl Activation {
         {
             extension.parent_services(services.clone())?;
         }
-        for (_, extension) in &self.state.lock().await.active {
-            if extension.trusted() {
-                extension.parent_services(services.clone())?;
-            }
-        }
         Ok(())
     }
 
@@ -227,27 +175,19 @@ impl Activation {
     }
 
     pub async fn activate(&self, configurations: Vec<Configuration>) -> Result<(), Error> {
-        self.apply(
-            configurations.into_iter().map(Spec::Process).collect(),
-            Vec::new(),
-            Default::default(),
-            &mut BTreeMap::new(),
-        )
-        .await
+        self.apply(configurations, Default::default()).await
     }
 
     async fn apply(
         &self,
-        configurations: Vec<Spec>,
-        failures: Vec<(String, Error)>,
+        configurations: Vec<Configuration>,
         builtins: super::plugin::Builtins,
-        pending: &mut BTreeMap<String, Declaration>,
     ) -> Result<(), Error> {
         let mut ids = BTreeSet::new();
         if configurations.iter().any(|configuration| {
-            !ids.insert(configuration.identity())
-                || capabilities::PRE.contains(&configuration.identity())
-                || capabilities::POST.contains(&configuration.identity())
+            !ids.insert(configuration.identity.as_str())
+                || capabilities::PRE.contains(&configuration.identity.as_str())
+                || capabilities::POST.contains(&configuration.identity.as_str())
         }) {
             return Err(Error::InvalidConfiguration);
         }
@@ -263,49 +203,41 @@ impl Activation {
             .eq(configurations.iter())
         {
             state.builtins = builtins;
-            if !failures.is_empty() {
-                state.failures = failures;
-            }
             return Ok(());
         }
         state.builtins = builtins;
-        state.failures = failures;
-        for extension in std::mem::take(&mut state.packages).into_values() {
-            extension.shutdown().await;
-        }
+        state.failures.clear();
         for configuration in &configurations {
             let previous = state
                 .active
                 .iter()
-                .position(|entry| entry.0.identity() == configuration.identity());
+                .position(|entry| entry.0.identity == configuration.identity);
             if let Some(previous) = previous {
                 state.active[previous].1.shutdown().await;
             }
             let previous = previous.map(|position| state.active.remove(position));
-            let failure = match self.load(configuration.clone(), pending).await {
-                Ok(Some(extension)) => {
+            let failure = match self.load(configuration.clone()).await {
+                Ok(extension) => {
                     state.active.push((configuration.clone(), extension));
                     continue;
                 }
-                Ok(None) => continue,
                 Err(error) => error,
             };
             state
                 .failures
-                .push((configuration.identity().to_owned(), failure));
+                .push((configuration.identity.clone(), failure));
             if let Some((configuration, _)) = previous {
-                match self.load(configuration.clone(), pending).await {
-                    Ok(Some(extension)) => state.active.push((configuration, extension)),
-                    Ok(None) => {}
+                match self.load(configuration.clone()).await {
+                    Ok(extension) => state.active.push((configuration, extension)),
                     Err(_) => tracing::error!(
-                        identity = configuration.identity(),
+                        identity = configuration.identity,
                         "process extension restoration failed; deactivated"
                     ),
                 }
             }
         }
         for position in (0..state.active.len()).rev() {
-            if ids.contains(state.active[position].0.identity()) {
+            if ids.contains(state.active[position].0.identity.as_str()) {
                 continue;
             }
             state.active[position].1.shutdown().await;
@@ -345,7 +277,7 @@ impl Activation {
                         state
                             .active
                             .retain(|(_, active)| !Arc::ptr_eq(active, &extension));
-                        state.failures.push((spec.identity().to_owned(), error));
+                        state.failures.push((spec.identity, error));
                     }
                 }
                 *initial = true;
@@ -357,162 +289,9 @@ impl Activation {
         for process in &mut processes {
             process.registration_order += parents.len() as u32;
         }
-        let parent_ids = self
-            .parent
-            .as_ref()
-            .map(super::ParentHandle::entries)
-            .transpose()?
-            .unwrap_or_default()
-            .into_iter()
-            .map(|entry| LosslessString::from(entry.id))
-            .collect::<Vec<_>>();
-        let (plugins, mut pending, failures, builtins, _) = self
-            .resolve(
-                configuration,
-                (parents.len() + processes.len()) as u32,
-                &parent_ids,
-            )
-            .await;
-        let applied = self
-            .apply(
-                processes
-                    .into_iter()
-                    .map(Spec::Process)
-                    .chain(plugins.into_iter().map(Spec::Plugin))
-                    .collect(),
-                failures,
-                builtins,
-                &mut pending,
-            )
-            .await;
-        for declaration in pending.into_values() {
-            declaration.discard().await;
-        }
-        applied
-    }
-
-    async fn resolve(
-        &self,
-        configuration: &crate::resources::config::Configuration,
-        offset: u32,
-        parent_ids: &[LosslessString],
-    ) -> (
-        Vec<Plugin>,
-        BTreeMap<String, Declaration>,
-        Vec<(String, Error)>,
-        super::plugin::Builtins,
-        BTreeSet<LosslessString>,
-    ) {
-        let selection = ConfigCapabilities::resolve(&configuration.entries).plugins;
-        let builtins = capabilities::PRE
-            .iter()
-            .chain(capabilities::POST)
-            .map(|id| LosslessString::from(*id))
-            .collect::<Vec<_>>();
-        let mut enabled = builtins
-            .iter()
-            .chain(parent_ids)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let mut packages: Vec<Declaration> = Vec::new();
-        let mut seen = Vec::new();
-        let mut failures: Vec<(String, Error)> = Vec::new();
-        for operation in super::plugin::operations(configuration, &self.directory) {
-            if seen.contains(&operation) {
-                continue;
-            }
-            seen.push(operation.clone());
-            let ids = builtins
-                .iter()
-                .chain(parent_ids)
-                .chain(packages.iter().map(|declaration| &declaration.id));
-            let (target, options) = match operation {
-                super::plugin::Operation::InvalidFileUrl { .. } => {
-                    failures.push(("plugin.file-url".to_owned(), Error::InvalidConfiguration));
-                    continue;
-                }
-                super::plugin::Operation::Remove(selector) => {
-                    let matched = ids
-                        .filter(|id| super::plugin::matches(&selector, id))
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    for id in &matched {
-                        enabled.remove(id);
-                    }
-                    continue;
-                }
-                super::plugin::Operation::Add { target, options } => (target, options),
-            };
-            let matched = ids
-                .filter(|id| super::plugin::matches(&target, id))
-                .cloned()
-                .collect::<Vec<_>>();
-            if !matched.is_empty() || super::plugin::selects(&target) {
-                enabled.extend(matched);
-                continue;
-            }
-            if selection.enabled == Some(false) {
-                continue;
-            }
-            let Some(runtime) = &self.plugins else {
-                let identity = super::plugin::identity(&target);
-                if !failures.iter().any(|(existing, _)| *existing == identity) {
-                    failures.push((identity, Error::Spawn));
-                }
-                continue;
-            };
-            let mut candidate =
-                super::plugin::launch(target, options, self.directory.clone(), runtime);
-            candidate.selection = selection.clone();
-            let identity = candidate.identity().to_owned();
-            let declaration = match Extension::declare(
-                candidate,
-                self.options.clone(),
-                self.policy.clone(),
-                &self.launch,
-                self.host.clone(),
-            )
-            .await
-            {
-                Ok(declaration) => declaration,
-                Err(error) => {
-                    tracing::error!(identity, %error, "process extension activation failed");
-                    failures.push((identity, error));
-                    continue;
-                }
-            };
-            if !selection.allows(&declaration.id) {
-                declaration.discard().await;
-                continue;
-            }
-            let id = declaration.id.clone();
-            match packages
-                .iter()
-                .position(|existing| existing.plugin.target == declaration.plugin.target)
-            {
-                Some(position) => {
-                    let previous = std::mem::replace(&mut packages[position], declaration);
-                    enabled.remove(&previous.id);
-                    previous.discard().await;
-                }
-                None => packages.push(declaration),
-            }
-            enabled.insert(id);
-        }
-        let mut plugins = Vec::new();
-        let mut pending = BTreeMap::new();
-        for declaration in packages {
-            if !enabled.contains(&declaration.id) {
-                declaration.discard().await;
-                continue;
-            }
-            let mut plugin = declaration.plugin.clone();
-            plugin.configuration.registration_order = offset + plugins.len() as u32;
-            pending.insert(plugin.identity().to_owned(), declaration);
-            plugins.push(plugin);
-        }
-        let settled = super::plugin::builtins_from_enabled(&builtins, &enabled);
-        (plugins, pending, failures, settled, enabled)
+        let builtins =
+            super::plugin::disabled_from_entries(&configuration.entries, &self.directory);
+        self.apply(processes, builtins).await
     }
 
     pub async fn list(&self) -> Vec<String> {
@@ -521,7 +300,7 @@ impl Activation {
             .await
             .active
             .iter()
-            .map(|entry| entry.0.identity().to_owned())
+            .map(|entry| entry.0.identity.clone())
             .collect()
     }
 
@@ -570,76 +349,10 @@ impl Activation {
         self.state.lock().await.closed
     }
 
-    pub async fn package_language(
-        &self,
-        package: &str,
-        model: &ycoding_schema::JsonValue,
-        options: &ycoding_schema::JsonValue,
-    ) -> Result<Arc<dyn ycoding_ai::route::LanguageAttempt>, ycoding_ai::Error> {
-        let failure = |error: Error| super::supervisor::language_error(error.into());
-        let runtime = self.plugins.as_ref().ok_or_else(|| failure(Error::Spawn))?;
-        let mut state = self.state.lock().await;
-        if state.closed {
-            return Err(failure(Error::Stopped));
-        }
-        if state.builtins.is_disabled("ycoding.provider.dynamic") {
-            return Err(failure(Error::Rejected));
-        }
-        let extension = match state.packages.get(package) {
-            Some(extension) => extension.clone(),
-            None => {
-                let extension = Arc::new(
-                    Extension::start_plugin(
-                        Plugin {
-                            configuration: Configuration {
-                                identity: format!("model.{}", super::plugin::identity(package)),
-                                executable: runtime.executable.clone(),
-                                args: runtime.args.clone(),
-                                directory: self.directory.clone(),
-                                grants: vec![],
-                                families: vec![],
-                                registration_order: 0,
-                            },
-                            target: package.into(),
-                            options: ycoding_schema::JsonValue::Object(Default::default()),
-                            cache: runtime.cache.clone(),
-                            setup: runtime.setup,
-                            model_package: true,
-                            selection: Default::default(),
-                        },
-                        self.options.clone(),
-                        &self.registry,
-                        self.policy.clone(),
-                        &self.launch,
-                        self.host.clone(),
-                    )
-                    .await
-                    .map_err(failure)?
-                    .ok_or_else(|| failure(Error::Negotiation))?,
-                );
-                state.packages.insert(package.into(), extension.clone());
-                extension
-            }
-        };
-        super::language::claim(&[extension], package, model, options)
-            .await?
-            .ok_or_else(|| failure(Error::Rejected))
-    }
-
     pub async fn declared_plugins(&self) -> Vec<plugin::Info> {
         self.parent_extensions()
             .into_iter()
             .filter_map(|extension| extension.declared_id().cloned())
-            .chain(
-                self.state
-                    .lock()
-                    .await
-                    .active
-                    .iter()
-                    .filter(|entry| matches!(entry.0, Spec::Plugin(_)))
-                    .filter_map(|entry| entry.1.declared_id().cloned())
-                    .collect::<Vec<_>>(),
-            )
             .map(|id| plugin::Info { id })
             .collect()
     }
@@ -668,9 +381,6 @@ impl Activation {
     pub async fn close(&self) {
         let mut state = self.state.lock().await;
         state.closed = true;
-        for extension in std::mem::take(&mut state.packages).into_values() {
-            extension.shutdown().await;
-        }
         while let Some(entry) = state.active.last() {
             entry.1.shutdown().await;
             state.active.pop();
@@ -681,47 +391,19 @@ impl Activation {
         }
     }
 
-    async fn load(
-        &self,
-        configuration: Spec,
-        pending: &mut BTreeMap<String, Declaration>,
-    ) -> Result<Option<Arc<Extension>>, Error> {
-        let id = configuration.identity().to_owned();
-        let started = match configuration {
-            Spec::Process(configuration) => Extension::start(
-                configuration,
-                self.options.clone(),
-                &self.registry,
-                self.policy.clone(),
-                &self.launch,
-                self.host.clone(),
-            )
-            .await
-            .map(Some),
-            Spec::Plugin(plugin) => match pending.remove(plugin.identity()) {
-                Some(declaration) => declaration
-                    .setup(
-                        plugin.configuration.registration_order,
-                        &self.registry,
-                        &self.launch,
-                    )
-                    .await
-                    .map(Some),
-                None => {
-                    Extension::start_plugin(
-                        plugin,
-                        self.options.clone(),
-                        &self.registry,
-                        self.policy.clone(),
-                        &self.launch,
-                        self.host.clone(),
-                    )
-                    .await
-                }
-            },
-        };
+    async fn load(&self, configuration: Configuration) -> Result<Arc<Extension>, Error> {
+        let id = configuration.identity.clone();
+        let started = Extension::start(
+            configuration,
+            self.options.clone(),
+            &self.registry,
+            self.policy.clone(),
+            &self.launch,
+            self.host.clone(),
+        )
+        .await;
         match started {
-            Ok(Some(extension)) => {
+            Ok(extension) => {
                 if self
                     .event_source
                     .emit(Data::PluginAdded(Box::new(plugin::AddedData {
@@ -731,9 +413,8 @@ impl Activation {
                 {
                     eprintln!("Plugin added event publication failed");
                 }
-                Ok(Some(Arc::new(extension)))
+                Ok(Arc::new(extension))
             }
-            Ok(None) => Ok(None),
             Err(error) => {
                 tracing::error!(identity = id, %error, "process extension activation failed");
                 Err(error)

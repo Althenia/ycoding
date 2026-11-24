@@ -1941,20 +1941,6 @@ impl Factory {
                         }
                     }),
             );
-            let plugin_runtime = self
-                .options
-                .env
-                .get(crate::launch::FRONTEND_EXECUTABLE_KEY)
-                .map(|frontend| {
-                    Ok::<_, Failure>(ycoding_core::extension::PluginRuntime {
-                        executable: frontend.into(),
-                        args: crate::launch::plugin_arguments(&self.options.env)
-                            .map_err(|_| unavailable("plugin host arguments"))?,
-                        cache: roots.cache.join("plugins"),
-                        setup: std::time::Duration::from_secs(120),
-                    })
-                })
-                .transpose()?;
             let activation = ycoding_core::extension::Activation::new(
                 directory.clone(),
                 ycoding_core::extension::Options::default(),
@@ -2043,10 +2029,7 @@ impl Factory {
                 Some(parent) => activation.with_parent_plugins(parent.clone()),
                 None => activation,
             };
-            let activation = Arc::new(match plugin_runtime {
-                Some(runtime) => activation.with_plugins(runtime),
-                None => activation,
-            });
+            let activation = Arc::new(activation);
             staged_activation = Some(activation.clone());
             providers
                 .bind_plugins(&activation)
@@ -2497,15 +2480,17 @@ impl Factory {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push(tokio::spawn(watcher));
-            composed
-                .tasks
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push(tokio::spawn(self.forward_plugin_events(
-                    composed.activation.clone(),
-                    reference.clone(),
-                    composed.watch_stop.subscribe(),
-                )));
+            if !composed.activation.extensions().await.is_empty() {
+                composed
+                    .tasks
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(tokio::spawn(self.forward_plugin_events(
+                        composed.activation.clone(),
+                        reference.clone(),
+                        composed.watch_stop.subscribe(),
+                    )));
+            }
             if boot {
                 let copies = composed.platform.copies.clone();
                 let project = services.info.project.id.as_lossless().clone();
@@ -2643,6 +2628,15 @@ impl Factory {
                     .any(|directory| file.starts_with(directory))
             })
             .collect::<Vec<_>>();
+        let legacy = disk
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                config::Entry::Directory(path) => Some(path),
+                _ => None,
+            })
+            .flat_map(|directory| [directory.join("plugin"), directory.join("plugins")])
+            .collect::<Vec<_>>();
         let subscriptions = directories
             .into_iter()
             .map(|path| (path, Kind::Directory))
@@ -2651,9 +2645,13 @@ impl Factory {
                 self.globals
                     .watcher
                     .subscribe(Input {
+                        ignore: legacy
+                            .iter()
+                            .filter(|directory| directory.starts_with(&path))
+                            .map(|directory| directory.to_string_lossy().into_owned())
+                            .collect(),
                         path,
                         kind,
-                        ignore: vec![],
                     })
                     .map_err(
                         |error| tracing::warn!(%error, "configuration source cannot be watched"),

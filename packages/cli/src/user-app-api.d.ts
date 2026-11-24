@@ -1,5 +1,4 @@
 export * as ServerProcess from "./server-process.js"
-import type { Plugin } from "@ycoding-ai/plugin/effect/plugin"
 import type { V5Client, V5Options } from "@ycoding-ai/client/v5"
 import type { Effect } from "effect"
 
@@ -8,7 +7,6 @@ export type Options = {
   readonly mode: Mode
   readonly hostname?: string
   readonly port?: number
-  readonly plugins?: ReadonlyArray<Plugin>
 }
 export type UserAppSelection = { mode: "managed" } | { mode: "external"; url: string } | { mode: "private" }
 export type UserAppOptions = { location: NonNullable<V5Options["location"]>; signal?: AbortSignal }

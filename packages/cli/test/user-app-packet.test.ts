@@ -46,7 +46,7 @@ test("packaged synthetic packet binds its actual module, declarations, frontend 
   try {
     const module = await load()
     const result = await module.readPacket(packet.url)
-    expect(result.frontend).toEqual([path.join(packet.directory, packet.files.frontend.file)])
+    expect(result.frontend).toBe(path.join(packet.directory, packet.files.frontend.file))
     expect(result.version).toBe(packet.manifest.version)
     expect(result.channel).toBe(packet.manifest.channel)
     expect(result.runtime.payload).toEqual(

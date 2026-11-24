@@ -2,8 +2,7 @@ export * as NativeProcess from "./native-process"
 
 import { Effect, Fiber, Stream } from "effect"
 import { spawn } from "node:child_process"
-import type { Plugin } from "@ycoding-ai/plugin/effect/plugin"
-import { frontendLaunchArguments } from "./frontend-launch"
+import { frontendAssetArguments } from "./frontend-launch"
 import { runtimeEnvironment, runtimeExecutable } from "./runtime-executable"
 import { InstallationChannel, InstallationVersion } from "./version"
 
@@ -16,27 +15,16 @@ export type Options = {
   readonly cwd?: string
   readonly detached?: boolean
   readonly env?: Readonly<Record<string, string>>
-  readonly plugins?: ReadonlyArray<Plugin>
 }
 
 export const start = Effect.fnUntraced(function* (options: Options) {
   const command = options.command ?? [
     yield* Effect.tryPromise(runtimeExecutable),
     "serve",
-    ...frontendLaunchArguments(),
+    ...frontendAssetArguments(),
   ]
   const [executable, ...prefix] = command
   if (!executable) return yield* Effect.fail(new Error("Failed to resolve the native runtime command"))
-  const parent = options.plugins?.length
-    ? yield* Effect.tryPromise(async () => {
-        const { PluginParent } = await import("./plugin-host/parent")
-        return {
-          attachment: PluginParent.make(options.plugins!),
-          args: PluginParent.descriptorArguments,
-          stdio: PluginParent.extraStdio,
-        }
-      })
-    : undefined
   const owned = yield* Effect.acquireRelease(
     Effect.try(() => {
       const child = spawn(
@@ -47,7 +35,6 @@ export const start = Effect.fnUntraced(function* (options: Options) {
           ...(options.hostname === undefined ? [] : ["--hostname", options.hostname]),
           ...(options.port === undefined ? [] : ["--port", String(options.port)]),
           ...(options.meeting ? ["--meeting"] : []),
-          ...(parent?.args ?? []),
         ],
         {
           cwd: options.cwd ?? process.cwd(),
@@ -58,7 +45,7 @@ export const start = Effect.fnUntraced(function* (options: Options) {
             YCODING_VERSION: InstallationVersion,
             YCODING_CHANNEL: InstallationChannel,
           },
-          stdio: ["pipe", "pipe", "pipe", ...(parent?.stdio ?? [])],
+          stdio: ["pipe", "pipe", "pipe"],
           shell: false,
           windowsHide: true,
         },
@@ -88,12 +75,10 @@ export const start = Effect.fnUntraced(function* (options: Options) {
             failures.push(cause)
           }
         }
-        await attempt(() => parent?.attachment.retire())
         await attempt(() => {
           child.stdin.end()
           if (options.mode !== "stdio" && child.exitCode === null && child.signalCode === null) child.kill("SIGTERM")
         })
-        await attempt(() => parent?.attachment.close())
         await attempt(async () => {
           const timer = setTimeout(() => {
             failures.push(new Error("Native runtime cleanup required forced termination"))
@@ -105,7 +90,6 @@ export const start = Effect.fnUntraced(function* (options: Options) {
             clearTimeout(timer)
           }
         })
-        await attempt(() => parent?.attachment.join())
         if (failures.length === 1) throw failures[0]
         if (failures.length > 1) throw new AggregateError(failures, "Native runtime cleanup failed")
       }
@@ -117,18 +101,12 @@ export const start = Effect.fnUntraced(function* (options: Options) {
         if (!result.ok) throw result.cause
       }),
   )
-  if (parent) yield* Effect.try(() => parent.attachment.attach(owned.child))
-  const attachment = parent?.attachment.run().then(
-    () => undefined,
-    (cause: unknown) => cause,
-  )
   return {
     child: owned.child,
     pid: owned.child.pid!,
     stdout: owned.child.stdout,
     stderr: owned.child.stderr,
     closed: owned.closed,
-    attachment,
     retire: () => {
       void owned.close()
     },
@@ -164,16 +142,7 @@ export const run = Effect.fnUntraced(function* (options: Options) {
             }),
         )
       yield* Effect.addFinalizer(() => Effect.sync(child.retire))
-      const result = yield* Effect.tryPromise(async () => {
-        if (!child.attachment) return child.closed
-        return Promise.race([
-          child.closed,
-          child.attachment.then((cause) => {
-            if (cause !== undefined) throw cause
-            return child.closed
-          }),
-        ])
-      })
+      const result = yield* Effect.promise(() => child.closed)
       yield* Fiber.join(output)
       yield* Fiber.join(errors)
       if (result.error) yield* Effect.fail(result.error)

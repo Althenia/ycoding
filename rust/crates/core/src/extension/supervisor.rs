@@ -340,7 +340,7 @@ impl Configuration {
                 }
             }
         }
-        if hello(self, None, &"g".repeat(128)).encoded_len() + 140 > wire::STARTUP_BYTES {
+        if hello(self, &"g".repeat(128)).encoded_len() + 140 > wire::STARTUP_BYTES {
             return Err(Error::InvalidConfiguration);
         }
         #[cfg(unix)]
@@ -358,88 +358,6 @@ impl Configuration {
         }
         Ok(())
     }
-}
-// A configured plugin is trusted by configuration: the native factory assigns that trust, and the
-// child only learns it from the host Hello, so a child process can never raise its own authority.
-#[derive(Clone, PartialEq)]
-pub struct Plugin {
-    pub(super) configuration: Configuration,
-    pub(super) target: String,
-    pub(super) options: JsonValue,
-    pub(super) cache: PathBuf,
-    pub(super) setup: Duration,
-    pub(super) model_package: bool,
-    pub(super) selection: crate::resources::config::capabilities::Selection,
-}
-impl std::fmt::Debug for Plugin {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("Plugin")
-            .field("identity", &self.configuration.identity)
-            .field("target", &self.target)
-            .finish_non_exhaustive()
-    }
-}
-impl Plugin {
-    pub fn identity(&self) -> &str {
-        &self.configuration.identity
-    }
-    pub fn target(&self) -> &str {
-        &self.target
-    }
-    pub fn options(&self) -> &JsonValue {
-        &self.options
-    }
-    pub fn configuration(&self) -> &Configuration {
-        &self.configuration
-    }
-    fn validate(&self) -> Result<(), Error> {
-        let configuration = &self.configuration;
-        if !identifier(&configuration.identity)
-            || !configuration.executable.is_absolute()
-            || !configuration.executable.is_file()
-            || !configuration.directory.is_absolute()
-            || !configuration.directory.is_dir()
-            || configuration.args.len() > 64
-            || configuration
-                .args
-                .iter()
-                .any(|arg| arg.contains('\0') || arg.len() > 4096)
-            || !configuration.grants.is_empty()
-            || !configuration.families.is_empty()
-            || self.target.is_empty()
-            || self.target.len() > 4096
-            || self.target.contains('\0')
-            || !self.cache.is_absolute()
-            || !matches!(self.options, JsonValue::Object(_))
-            || self.setup.is_zero()
-            || self.setup > Duration::from_secs(300)
-        {
-            return Err(Error::InvalidConfiguration);
-        }
-        wire::check_value(&self.options).map_err(|_| Error::InvalidConfiguration)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if std::fs::metadata(&configuration.executable)
-                .map_err(|_| Error::InvalidConfiguration)?
-                .permissions()
-                .mode()
-                & 0o111
-                == 0
-            {
-                return Err(Error::InvalidConfiguration);
-            }
-        }
-        Ok(())
-    }
-}
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PluginRuntime {
-    pub executable: PathBuf,
-    pub args: Vec<String>,
-    pub cache: PathBuf,
-    pub setup: Duration,
 }
 fn config_text(value: Option<&JsonValue>) -> Result<String, Error> {
     match value {
@@ -485,7 +403,7 @@ fn identifier(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
 }
-fn hello(configuration: &Configuration, plugin: Option<&Plugin>, generation: &str) -> v5::Hello {
+fn hello(configuration: &Configuration, generation: &str) -> v5::Hello {
     v5::Hello {
         revision: wire::REVISION,
         identity: configuration.identity.clone(),
@@ -514,12 +432,7 @@ fn hello(configuration: &Configuration, plugin: Option<&Plugin>, generation: &st
             }))
             .collect(),
         registration_order: configuration.registration_order,
-        plugin: plugin.map(|plugin| v5::PluginLaunch {
-            target: wire::text(&plugin.target.as_str().into()),
-            options: wire::value(&plugin.options),
-            cache: wire::text(&plugin.cache.to_string_lossy().as_ref().into()),
-            model_package: plugin.model_package.then_some(true),
-        }),
+        plugin: None,
         parent_plugin: None,
     }
 }
@@ -594,57 +507,6 @@ pub struct Extension {
     pub(super) declarations: Vec<v5::TransformRegistration>,
     pub(super) domains: Vec<v5::DomainRegistration>,
     declared: Option<LosslessString>,
-}
-pub(super) struct Declaration {
-    pub(super) id: ycoding_schema::LosslessString,
-    pub(super) plugin: Plugin,
-    owner: Owner,
-    receiver: mpsc::Receiver<Request>,
-    policy: Arc<LeafPolicy>,
-    elapsed: Duration,
-}
-impl Declaration {
-    pub(super) async fn prepare(
-        mut self,
-        registry: Arc<Registry>,
-        order: u32,
-    ) -> Result<Arc<Extension>, Error> {
-        self.owner.configuration.registration_order = order;
-        self.owner.registry = Some(registry);
-        self.owner.options.startup = self.plugin.setup.saturating_sub(self.elapsed);
-        Extension::reserve(self.owner, self.receiver).await
-    }
-    pub(super) async fn setup(
-        mut self,
-        order: u32,
-        registry: &Registry,
-        launch: &Launch,
-    ) -> Result<Extension, Error> {
-        self.plugin.configuration.registration_order = order;
-        let deadline = Instant::now() + self.plugin.setup.saturating_sub(self.elapsed);
-        if let Err(error) = self
-            .owner
-            .send(v5::host_frame::Body::Setup(v5::PluginSetup {}))
-            .await
-        {
-            self.owner.finish(error).await;
-            return Err(error);
-        }
-        Extension::complete(
-            self.owner,
-            self.receiver,
-            &self.plugin.configuration,
-            registry,
-            self.policy,
-            launch,
-            deadline,
-        )
-        .await
-    }
-    pub(super) async fn discard(mut self) {
-        let stopped = self.owner.stop().await;
-        self.owner.finish(stopped).await;
-    }
 }
 impl Shared {
     pub(super) fn setup_pending(&self) -> bool {
@@ -945,7 +807,7 @@ impl Extension {
             order: owner.configuration.registration_order,
             declarations: vec![],
             domains: vec![],
-            declared: owner.declared.clone(),
+            declared: None,
         });
         shared.accepting.store(true, Ordering::Release);
         *shared.task.lock().await = Some(tokio::spawn(async move {
@@ -964,7 +826,7 @@ impl Extension {
     ) -> Result<Arc<Self>, Error> {
         configuration.validate()?;
         let (mut owner, receiver, started) =
-            Self::open(&configuration, None, options, policy, launch, host).await?;
+            Self::open(&configuration, options, policy, launch, host).await?;
         owner.registry = Some(registry);
         owner.setup_deadline = Some(started + owner.options.startup);
         Self::reserve(owner, receiver).await
@@ -1049,7 +911,6 @@ impl Extension {
             seen_order: Default::default(),
             resolves: Default::default(),
             languages: Default::default(),
-            declared: None,
             registry: Some(registry),
             configuration: configuration.clone(),
             extra_tools: Default::default(),
@@ -1120,7 +981,7 @@ impl Extension {
     ) -> Result<Self, Error> {
         configuration.validate()?;
         let (owner, receiver, started) =
-            Self::open(&configuration, None, options, policy.clone(), launch, host).await?;
+            Self::open(&configuration, options, policy.clone(), launch, host).await?;
         let deadline = started + owner.options.startup;
         Self::complete(
             owner,
@@ -1133,61 +994,8 @@ impl Extension {
         )
         .await
     }
-    pub async fn start_plugin(
-        plugin: Plugin,
-        options: Options,
-        registry: &Registry,
-        policy: Arc<LeafPolicy>,
-        launch: &Launch,
-        host: Host,
-    ) -> Result<Option<Self>, Error> {
-        let declaration = Self::declare(plugin, options, policy, launch, host).await?;
-        if !declaration.plugin.selection.allows(&declaration.id) {
-            declaration.discard().await;
-            return Ok(None);
-        }
-        let order = declaration.plugin.configuration.registration_order;
-        declaration.setup(order, registry, launch).await.map(Some)
-    }
-    pub(super) async fn declare(
-        plugin: Plugin,
-        options: Options,
-        policy: Arc<LeafPolicy>,
-        launch: &Launch,
-        host: Host,
-    ) -> Result<Declaration, Error> {
-        plugin.validate()?;
-        let (mut owner, receiver, started) = Self::open(
-            &plugin.configuration,
-            Some(&plugin),
-            options,
-            policy.clone(),
-            launch,
-            host,
-        )
-        .await?;
-        let declared = tokio::select! {
-            declared = owner.declared(started + plugin.setup) => declared,
-            () = launch.cancellation.cancelled() => Err(Error::Cancelled),
-        };
-        match declared {
-            Ok(id) => Ok(Declaration {
-                id,
-                plugin,
-                owner,
-                receiver,
-                policy,
-                elapsed: started.elapsed(),
-            }),
-            Err(error) => {
-                owner.finish(error).await;
-                Err(error)
-            }
-        }
-    }
     async fn open(
         configuration: &Configuration,
-        plugin: Option<&Plugin>,
         options: Options,
         policy: Arc<LeafPolicy>,
         launch: &Launch,
@@ -1210,12 +1018,7 @@ impl Extension {
             .executable
             .to_str()
             .ok_or(Error::InvalidConfiguration)?;
-        launch.admit(
-            "extension.launch",
-            &std::iter::once(executable.to_owned())
-                .chain(plugin.map(|plugin| plugin.target.clone()))
-                .collect::<Vec<_>>(),
-        )?;
+        launch.admit("extension.launch", &[executable.to_owned()])?;
         for grant in &configuration.families {
             launch.admit(&grant.action, &grant.resources)?;
         }
@@ -1242,7 +1045,7 @@ impl Extension {
             policy,
             subscriptions: Mutex::new(BTreeMap::new()),
             pending_events: Mutex::new(BTreeSet::new()),
-            trusted: plugin.is_some(),
+            trusted: false,
             parent: false,
             parent_handle: None,
             parent_services: Default::default(),
@@ -1279,14 +1082,13 @@ impl Extension {
             seen_order: VecDeque::new(),
             resolves: BTreeMap::new(),
             languages: BTreeMap::new(),
-            declared: None,
             registry: None,
             configuration: configuration.clone(),
             extra_tools: BTreeMap::new(),
             extra_auth: Vec::new(),
         };
         let negotiated = tokio::select! {
-            negotiated = owner.hello(configuration, plugin) => negotiated,
+            negotiated = owner.hello(configuration) => negotiated,
             () = launch.cancellation.cancelled() => Err(Error::Cancelled),
         };
         match negotiated {
@@ -1335,25 +1137,7 @@ impl Extension {
                 }
             }
         }
-        let registered = if shared.trusted {
-            registry.register_batch(
-                batches
-                    .into_iter()
-                    .map(|registration| {
-                        (
-                            vec![(registration.name, registration.tool)],
-                            registry::Options {
-                                namespace: Some(registration.namespace)
-                                    .filter(|namespace| !namespace.is_empty()),
-                                codemode: !registration.direct,
-                            },
-                        )
-                    })
-                    .collect(),
-            )
-        } else {
-            registry.register_process_batch(batches)
-        };
+        let registered = registry.register_process_batch(batches);
         match registered {
             Ok(registration) => owner.registration = Some(registration),
             Err(_) => {
@@ -1376,7 +1160,6 @@ impl Extension {
         }
         shared.accepting.store(true, Ordering::Release);
         diagnose(&shared, v5::DiagnosticCode::Started);
-        let declared = owner.declared.clone();
         let task = tokio::spawn(async move {
             owner.run(receiver).await;
         });
@@ -1389,7 +1172,7 @@ impl Extension {
             order: configuration.registration_order,
             declarations: declarations.transforms,
             domains: declarations.domains,
-            declared,
+            declared: None,
         })
     }
     pub fn pid(&self) -> u32 {
@@ -2250,7 +2033,6 @@ struct Owner {
     seen_order: VecDeque<(String, String, ycoding_schema::LosslessString)>,
     resolves: BTreeMap<u64, (oneshot::Sender<Result<bool, Failed>>, Instant)>,
     languages: BTreeMap<u64, PendingLanguage>,
-    declared: Option<LosslessString>,
     registry: Option<Arc<Registry>>,
     configuration: Configuration,
     extra_tools: BTreeMap<u64, Registration>,
@@ -2434,16 +2216,11 @@ impl Owner {
             self.frames.extend(self.decoder.push(&chunk.bytes, limit)?);
         }
     }
-    async fn hello(
-        &mut self,
-        configuration: &Configuration,
-        plugin: Option<&Plugin>,
-    ) -> Result<Instant, Error> {
+    async fn hello(&mut self, configuration: &Configuration) -> Result<Instant, Error> {
         let started = Instant::now();
         tokio::time::timeout_at(started + self.options.startup, async {
             self.send(v5::host_frame::Body::Hello(hello(
                 configuration,
-                plugin,
                 &self.generation,
             )))
             .await?;
@@ -2471,9 +2248,7 @@ impl Owner {
             loop {
                 match self.next(wire::FRAME_BYTES).await?.body {
                     Some(v5::child_frame::Body::Declared(declared)) => {
-                        let id = wire::read_text(declared.id)?;
-                        self.declared = Some(id.clone());
-                        return Ok(id);
+                        return wire::read_text(declared.id);
                     }
                     Some(v5::child_frame::Body::Diagnostic(diagnostic))
                         if diagnostic.code == v5::DiagnosticCode::ChildWarning as i32 =>

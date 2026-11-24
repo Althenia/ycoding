@@ -1,6 +1,5 @@
 export * as ServerProcess from "./server-process"
 
-import type { Plugin } from "@ycoding-ai/plugin/effect/plugin"
 import { NativeProcess } from "./native-process"
 
 export { openUserApp } from "./user-app"
@@ -12,7 +11,6 @@ export type Options = {
   readonly mode: Mode
   readonly hostname?: string
   readonly port?: number
-  readonly plugins?: ReadonlyArray<Plugin>
 }
 
 export const run = (options: Options) => NativeProcess.run(options)

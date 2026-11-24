@@ -79,44 +79,6 @@ async fn collisions(host: &production_owner::Host) {
             .success()
     );
     fs::write(directory.join(".git/ycoding"), "prj_standard_sources").unwrap();
-    let bun = String::from_utf8(
-        std::process::Command::new("sh")
-            .args(["-c", "command -v bun"])
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .unwrap()
-    .trim()
-    .to_owned();
-    assert!(!bun.is_empty(), "the plugin host integration requires bun");
-    let frontend = root.join("frontend");
-    fs::write(
-        &frontend,
-        format!(
-            "#!/bin/sh\nexec '{bun}' '{}' \"$@\"\n",
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../../packages/cli/src/plugin-host/main.ts"
-            )
-        ),
-    )
-    .unwrap();
-    fs::set_permissions(
-        &frontend,
-        <fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
-    )
-    .unwrap();
-    fs::write(
-        directory.join("commands.mjs"),
-        "export default { id: \"ycoding.command\", setup: async () => {} }\n",
-    )
-    .unwrap();
-    fs::write(
-        directory.join("skills.mjs"),
-        "export default { id: \"ycoding.skill\", setup: async () => {} }\n",
-    )
-    .unwrap();
     let store = host.retain(
         Store::initialize(
             root.join("core.redb"),
@@ -194,12 +156,7 @@ async fn collisions(host: &production_owner::Host) {
                 project: true,
                 file: None,
                 content: None,
-                env: [(
-                    "YCODING_FRONTEND_EXECUTABLE".to_owned(),
-                    frontend.to_str().unwrap().to_owned(),
-                )]
-                .into_iter()
-                .collect(),
+                env: Default::default(),
             },
             catalog: models_dev::Options {
                 source: "https://example.invalid".into(),
@@ -220,12 +177,12 @@ async fn collisions(host: &production_owner::Host) {
     for (name, plugins, active) in [
         (
             "re-enabled",
-            r#"["-ycoding.command", "-ycoding.skill", "./commands.mjs", "./skills.mjs"]"#,
+            r#"["-ycoding.command", "-ycoding.skill", "ycoding.command", "ycoding.skill"]"#,
             true,
         ),
         (
             "hidden",
-            r#"["./commands.mjs", "./skills.mjs", "-ycoding.command", "-ycoding.skill"]"#,
+            r#"["ycoding.command", "ycoding.skill", "-ycoding.command", "-ycoding.skill"]"#,
             false,
         ),
     ] {

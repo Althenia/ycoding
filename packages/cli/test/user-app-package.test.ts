@@ -115,9 +115,9 @@ test("explicit host-only packaging mirrors the exact bound packet and preserves 
     const source = await readFile(path.join(artifact.directory, "user-app.packet.json"), "utf8")
     const mirrored = path.join(current.packageDirectory, "lib/user-app.packet.json")
     expect(await readFile(mirrored, "utf8")).toBe(source)
-    expect((await readPacket(pathToFileURL(mirrored))).frontend).toEqual([
+    expect((await readPacket(pathToFileURL(mirrored))).frontend).toBe(
       path.join(current.packageDirectory, "lib/frontend/synthetic-frontend"),
-    ])
+    )
     await expect(buildUserAppPackage(artifact.input, emit)).rejects.toMatchObject({ code: "EEXIST" })
     expect(await readFile(path.join(artifact.directory, "user-app.packet.json"), "utf8")).toBe(source)
     expect(realCompilationReached).toBe(0)

@@ -6,7 +6,7 @@ import { make, V5ClientError, type V5Client, type V5Options } from "@ycoding-ai/
 import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
 import { Effect, Exit, Redacted, Schema, Scope } from "effect"
 import { Env } from "./env"
-import { frontendLaunchArguments } from "./frontend-launch"
+import { frontendAssetArguments } from "./frontend-launch"
 import { FrontendPaths } from "./paths"
 import { extractRuntime } from "./runtime-executable"
 import { filename } from "./services/service-config"
@@ -148,7 +148,7 @@ export async function openUserApp(selection: UserAppSelection, options: UserAppO
           file,
           version: packet.version,
           existing: "preserve",
-          command: [...packet.frontend, "serve", "--service"],
+          command: [packet.frontend, "serve", "--service"],
           startupErrorFile: file + ".startup-error",
         }).pipe(Effect.provide(NodeFileSystem.layer)),
         { signal: opening.signal },
@@ -174,7 +174,7 @@ export async function openUserApp(selection: UserAppSelection, options: UserAppO
       cancelled()
       const owned = await Effect.runPromise(
         Standalone.start({
-          command: [executable, "serve", ...frontendLaunchArguments(packet.frontend)],
+          command: [executable, "serve", ...frontendAssetArguments(packet.frontend)],
           cwd: location.directory,
         }).pipe(Effect.provideService(Scope.Scope, scope)),
         { signal: opening.signal },

@@ -7,6 +7,7 @@ import os from "node:os"
 import path from "node:path"
 import { Schema } from "effect"
 import { streamResponse } from "../script/runtime-smoke"
+import { runtimeExecutable } from "../src/runtime-executable"
 import { ServiceConfig } from "../src/services/service-config"
 
 const packaged = process.env.YCODING_TEST_PACKAGED_CLI
@@ -15,6 +16,7 @@ const channel = process.env.YCODING_TEST_PACKAGED_CHANNEL ?? "local"
 const namespace = channel === "beta" ? "ycoding-beta" : "ycoding"
 
 test("CLI managed launch discovers Rust identity, reuses it and preserves the restart password", async () => {
+  const native = packaged ? undefined : await runtimeExecutable()
   const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-rust-cli-"))
   const file = path.join(root, "state", namespace, ServiceConfig.filename(channel))
   const environment = {
@@ -26,33 +28,21 @@ test("CLI managed launch discovers Rust identity, reuses it and preserves the re
     YCODING_CONFIG_DIR: path.join(root, "config/ycoding"),
     YCODING_DISABLE_MODELS_FETCH: "1",
     YCODING_CONFIG_PROJECT_DISABLE: "1",
-    YCODING_RUNTIME_EXECUTABLE: path.resolve(
-      import.meta.dirname,
-      "../../../rust/target/debug",
-      process.platform === "win32" ? "ycoding-runtime.exe" : "ycoding-runtime",
-    ),
+    ...(native === undefined ? {} : { YCODING_RUNTIME_EXECUTABLE: native }),
   }
   await mkdir(environment.YCODING_CONFIG_DIR, { recursive: true })
   const cli = path.resolve(import.meta.dirname, "../src/index.ts")
-  const command = packaged
-    ? [
-        "/usr/bin/env",
-        "-i",
-        `PATH=${process.env.PATH ?? "/usr/bin:/bin"}`,
-        ...Object.entries(environment)
-          .filter(([key]) => key !== "YCODING_RUNTIME_EXECUTABLE")
-          .map(([key, value]) => `${key}=${value}`),
-        packaged,
-        "serve",
-        "--service",
-        "--port",
-        "0",
-      ]
-    : [
-        process.execPath,
-        "-e",
-        `Object.assign(process.env, ${JSON.stringify(environment)}); process.argv = [process.execPath, ${JSON.stringify(cli)}, "serve", "--service", "--port", "0"]; await import(${JSON.stringify(cli)});`,
-      ]
+  const command = [
+    "/usr/bin/env",
+    "-i",
+    `PATH=${process.env.PATH ?? "/usr/bin:/bin"}`,
+    ...Object.entries(environment).map(([key, value]) => `${key}=${value}`),
+    ...(packaged ? [packaged] : [process.execPath, cli]),
+    "serve",
+    "--service",
+    "--port",
+    "0",
+  ]
   const options = { file, command, version, startupErrorFile: path.join(root, "startup-error") }
   const clients: ReturnType<typeof YCoding.make>[] = []
   try {

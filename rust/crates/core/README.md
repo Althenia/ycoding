@@ -42,7 +42,7 @@ The native catalog includes every bundled models.dev provider. Native families a
 Admitted Responses package entrypoints retain Responses routing with or without
 the optional `aisdk:` prefix.
 
-A provider or model `package` accepts any nonempty package specification (`resources/config/operations.rs::native_package_declaration`), and models.dev packages become `aisdk:`-prefixed packages (`resources/catalog/models_dev.rs`). When a Session step or helper resolves a model, `resources/model/language.rs::ProviderContext::language_model` first lets configured runtime plugins claim the package through their `aisdk` hooks, in load order (`extension/language.rs::claim`). An unclaimed package with a native route in `resources/model/mod.rs::family` keeps that route; any other package runs in a model-package host started by `extension::Activation::package_language`, and a runtime without the frontend executable fails that request. Packages are installed and executed only on that request path, never while loading configuration or composing the catalog. Top-level `plugin`, `npm` and singular `provider` keys, and provider or model `npm`, `plugin` or misplaced `package` declarations, are dropped with their declaring unit and a fail-closed `removed-keys` diagnostic (`resources/config/validation.rs::obsolete_paths`); while one is present, `Activation::reload` starts no process extension or runtime plugin (`extension::Configuration::reject_obsolete`). Normalization adds the DeepSeek provider when the source catalog lacks it. A model-level models.dev base URL takes precedence over the provider's configured base URL, and an unexpanded `${…}` template in an effective base URL fails request preparation.
+A provider or model `package` accepts any nonempty package specification (`resources/config/operations.rs::native_package_declaration`), and models.dev packages become `aisdk:`-prefixed packages (`resources/catalog/models_dev.rs`). The Location’s provider context asks eligible inherited extensions to claim the package before selecting a native provider route. Unclaimed packages without a native route fail without being installed or imported. Top-level `plugin`, `npm` and singular `provider` keys, and provider or model `npm`, `plugin` or misplaced `package` declarations, are dropped with their declaring unit and a fail-closed `removed-keys` diagnostic (`resources/config/validation.rs::obsolete_paths`); while one is present, `Activation::reload` starts no configured process extension (`extension::Configuration::reject_obsolete`). Normalization adds the DeepSeek provider when the source catalog lacks it. A model-level models.dev base URL takes precedence over the provider's configured base URL, and an unexpanded `${…}` template in an effective base URL fails request preparation.
 
 Successful local read-tool calls load nearby `AGENTS.md` files into Session
 history as durable synthetic instructions. The Location-scoped loader deduplicates
@@ -318,8 +318,7 @@ lifetime cancellation.
 Host-granted tool scopes govern registration/execution, with independent
 direct/Code Mode visibility, structured/content output, progress, safe failures,
 and normal output validation/bounding. `Configuration::validate` rejects JS/TS
-executables and Node/Bun/npm/npx launchers; JavaScript and TypeScript run as
-runtime plugins over the same channel.
+executables and Node/Bun/npm/npx launchers.
 
 Exact revision 5 and fresh process generations fence registrations/calls.
 Cancellation waits for cleanup acknowledgement or process reaping. Replacement
@@ -338,22 +337,20 @@ empty inventory when none was loaded. Failed discovery remains eligible for
 the next reconciliation; credential-backed inventories retain account-generation
 fences.
 
-`extension::Activation` owns one Location's configured processes and runtime
-plugins. Construct it with the Location directory, deadlines, `Arc<Registry>`,
+`extension::Activation` owns one Location's configured and inherited extensions.
+Construct it with the Location directory, deadlines, `Arc<Registry>`,
 captured leaf policy, the Location `Launch`, and `Host`. Bind
 `activation.event_source` to the backend feed with
 `bind(core.events.clone(), Some(location.clone()))` before activation.
-`reload(&configuration).await` resolves process configurations and runtime
-plugins and activates them; call it after initial configuration loading and
+`reload(&configuration).await` resolves built-in selection and activates process
+extensions. Call it after initial configuration loading and
 after each successful `configuration.reload()`. Resolution errors preserve the
 active generation.
 Await activation before exposing a ready Location catalog.
 
 `activate(configurations).await` serializes complete passes. An identical ordered
 configuration vector emits nothing. Equality includes identity, executable,
-arguments, directory, tool grants, family grants, and registration order; for
-runtime plugins it also includes the target, options, plugin cache, setup
-deadline, and capability selection. Every
+arguments, directory, tool grants, family grants, and registration order. Every
 definition in a changed pass closes its previous process and starts a new one;
 failed starts restore the previous configuration, and failed restores deactivate
 that identity. Other definitions still load. Removed entries close in reverse
@@ -363,64 +360,33 @@ Failures log identity/category without arguments, grants, or process output.
 Duplicate identities and collisions with native capability IDs reject the pass
 before changing active state.
 
-`list().await` returns active process and plugin identities in registration
-order. `failures().await` returns each process or plugin identity that failed in
-the latest changed pass with its categorical error, listing plugins that failed
-before setup first; failures are also logged.
-`plugin_list().await` returns native pre-capabilities, active process and plugin
-identities in the configured-extension slot, then native post-capabilities.
-Supply this snapshot to `CatalogServices.plugins` after activation and on each
-reload; catalog queries must obtain the current snapshot, not retain the
-initial vector.
-`extensions().await` supplies generation handles to `Resources::materialize`,
-`context::prepare`, and extension event delivery. Shutdown revokes held handles.
-On Location eviction, stop reload admission, await `close().await`, then release
-the registry and Location services. Close shuts all processes down in reverse
-registration order, joins cleanup, emits no activation events, and prevents
-later activation. Native IDs describe available Rust capabilities, not JS plugin
-instances or compatibility adapters.
+`list().await` returns active configured process extensions in registration
+order. `failures().await` returns the identities and errors of configured
+process extensions that could not start. `plugin_list().await` returns native
+pre-capabilities, active process extensions, then native post-capabilities.
+Refresh the catalog's plugin snapshot from the active Location generation.
+`extensions().await` supplies the generation's configured and inherited
+extension handles to resource materialization, context hooks, and event
+delivery. When a Location closes, stop admitting reloads and await
+`close().await` to revoke handles and shut down the extensions before releasing
+the registry.
 
-Runtime plugins use the same channel. `Activation::with_plugins(PluginRuntime)`
-supplies the plugin-host command (the frontend executable and its arguments,
-ending in `plugin-host`), the plugin cache, and the setup deadline. Each host
-runs in the Location directory without grants, and configuration trust admits
-its plugin calls, transforms, and registrations. `reload` reads ordered
-operations from `plugin::operations`: auto-discovered `plugin/` and `plugins/`
-files, then `plugins` entries. Each loading operation starts one host, which
-imports its module, sends `PluginDeclared` with the declared ID, and waits.
-`Activation::resolve` applies the operations in order against the IDs in
-`capabilities::{PRE, POST}` and the declared IDs of plugins loaded by earlier
-operations: a `-` selector disables matching IDs; an entry that matches one of
-those IDs, and every `*`, `<prefix>.*`, or `ycoding.*` entry, re-enables its
-matches without loading; an identical repeated entry is skipped; a re-added
-target with different options replaces its earlier host at the same position;
-and `capabilities.plugins` excludes a plugin after import. Enabled plugins then
-receive `PluginSetup` one at a time, in the order their targets were first
-added, after the process extensions in registration order. Every other host
-receives `Shutdown` and leaves no registration, listing, event, or diagnostic.
-The disableable built-in IDs in `extension::capabilities::DISABLEABLE` are
-disabled by the same operations: `extension::plugin::resolve_builtins` settles
-them from configuration alone, and `Activation` settles them after loading so a
-loaded external plugin declaring a built-in ID re-enables that built-in. The
-Activation updates its `Registry`; `Activation::builtins` supplies the settled
-set to `Catalog::settle_builtins`, `command::Service::settle_builtins`, and
-`skill::Service::settle_builtins` for the same Location generation. Operations that would disable any other built-in
-ID yield one non-fatal diagnostic naming those IDs. Import and setup share the setup
-deadline, excluding the wait for admission. Resolution starts a host for every
-loading operation on each reload, even when the resolved plugins are unchanged.
-Without a `PluginRuntime`, `failures()` reports each loading target once as
-`Error::Spawn`.
+Built-ins run in the Rust runtime. The `plugins` setting selects capabilities
+by exact ID, `*`, or a namespace pattern such as `ycoding.tool.*`. Prefix a
+selector with `-` to disable matching capabilities. A positive selector
+re-enables its matches. IDs that cannot be disabled stay active and produce
+a configuration diagnostic. The settled set controls the Location's tool
+registry, catalog, commands, skills, and model hooks. The runtime does not
+import JS or TS modules from config or from `plugin/` or `plugins/` directories.
+The runtime accepts `--frontend-executable` as asset metadata and does not
+launch it. Explicit process extensions and inherited extension connections
+still use the v5 protocol.
 
-`Activation::package_language` starts one model-package host per package on
-first use, with `PluginLaunch.model_package` set and no capability filtering,
-and closes those hosts on the next changed pass and on `close()`.
 `resources::model::language::ProviderContext::bind_plugins` binds a Location's
-provider context to its `Activation` once; a second binding fails.
-`ProviderContext::language_model` asks the bound activation's running plugins,
-in load order, to claim the model's package with `LanguageResolve`
-(`extension::language::claim`), keeps the native route for an unclaimed package
-that has one, and otherwise uses `package_language`. It fails with an
-interrupted error when the activation was dropped or closed during resolution.
+provider context once. For a model with a package, the provider context first
+asks eligible inherited extensions whether they can supply a language model.
+If none claim it, Core uses its native provider route when available. An
+unsupported package fails without installing or importing it.
 
 ### Native capability enumeration
 
@@ -440,7 +406,7 @@ extensions, post. Paths in this table are relative to `rust/crates/core/src`.
 | `ycoding.provider.alibaba`, `ycoding.provider.amazon-bedrock`, `ycoding.provider.anthropic`, `ycoding.provider.azure-cognitive-services`, `ycoding.provider.azure`, `ycoding.provider.cerebras`, `ycoding.provider.cloudflare-ai-gateway`, `ycoding.provider.cloudflare-workers-ai`, `ycoding.provider.cohere`, `ycoding.provider.deepinfra`, `ycoding.provider.gateway`, `ycoding.provider.github-copilot`, `ycoding.provider.gitlab`, `ycoding.provider.google`, `ycoding.provider.google-vertex-anthropic`, `ycoding.provider.google-vertex`, `ycoding.provider.groq`, `ycoding.provider.kilo`, `ycoding.provider.llmgateway`, `ycoding.provider.mistral`, `ycoding.provider.nvidia`, `ycoding.provider.snowflake-cortex`, `ycoding.provider.openai-compatible`, `ycoding.provider.openai`, `ycoding.provider.openrouter`, `ycoding.provider.perplexity`, `ycoding.provider.sap-ai-core`, `ycoding.provider.togetherai`, `ycoding.provider.vercel`, `ycoding.provider.venice`, `ycoding.provider.xai`, `ycoding.provider.zenmux` | `resources/model/mod.rs::family` and `resources/model/route.rs::from_catalog_model` select the supported native routes.                                                                                                                                                                                                                                                                                                       |
 | `opencode.provider.opencode`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | `resources/auth/opencode.rs::Console` implements console authorization, credential enrichment and refresh with the stable plugin ID.                                                                                                                                                                                                                                                                                          |
 | `ycoding.provider.cursor`, `ycoding.provider.muse`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `resources/cursor`, `resources/muse.rs`, and `resources/auth/{cursor,muse}.rs` supply native account/catalog/provider integrations.                                                                                                                                                                                                                                                                                           |
-| `ycoding.provider.dynamic`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | `resources/model/language.rs::ProviderContext::language_model` serves a package that no runtime plugin claims and that has no `resources/model/mod.rs::family` route through an `extension/activation.rs::Activation::package_language` model-package host, which imports `file://` URLs and absolute paths directly and installs other packages into the plugin cache.                                                       |
+| `ycoding.provider.dynamic` | `resources/model/language.rs::ProviderContext::language_model` rejects unclaimed packages without a native provider route. |
 | `ycoding.tool.patch`, `ycoding.tool.edit`, `ycoding.tool.glob`, `ycoding.tool.grep`, `ycoding.tool.read`, `ycoding.tool.shell`, `ycoding.tool.project-artifact`, `ycoding.tool.memory`, `ycoding.tool.webfetch`, `ycoding.tool.websearch`, `ycoding.tool.write`, `ycoding.tool.worktree`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Corresponding implementations in `tools/builtin`; `search.rs` provides glob and grep.                                                                                                                                                                                                                                                                                                                                         |
 | `ycoding.tool.skill`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `tools/builtin/skill.rs::SkillTool` is the model-callable `skill` tool (direct definition only, permission `skill`): it loads local, embedded, managed-artifact, and URL/directory skills through `load_local`, loads MCP-served skills under a manifest-bound approval, reads supporting files of active skills, and reports an already-active skill with `alreadyActive`.                                                   |
 | `ycoding.tool.question`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `tools/policy/questions.rs::Questions` supplies admission, answers, rejection, and pending reads.                                                                                                                                                                                                                                                                                                                             |

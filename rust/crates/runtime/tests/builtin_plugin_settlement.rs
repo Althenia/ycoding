@@ -9,22 +9,23 @@ use std::{
 };
 use ycoding_core::{
     resources::{catalog::models_dev, config},
+    ycoding_schema::DomainDecode,
     ycoding_store::{Metadata, Options, Store},
 };
 use ycoding_runtime::{Core, Production};
 
 #[test]
-fn a_loaded_plugin_declaring_a_built_in_tool_id_re_enables_that_tool() {
+fn native_tool_command_and_prompt_hook_follow_ordered_builtin_selectors() {
     production_owner::run(|host| {
         Box::pin(async move {
-            tokio::time::timeout(Duration::from_secs(120), declared_built_in_tool(host))
+            tokio::time::timeout(Duration::from_secs(120), settle_builtins(host))
                 .await
                 .unwrap();
         })
     });
 }
 
-async fn declared_built_in_tool(host: &production_owner::Host) {
+async fn settle_builtins(host: &production_owner::Host) {
     let root = std::env::temp_dir().join(format!(
         "runtime-builtin-plugin-settlement-{}-{}",
         std::process::id(),
@@ -37,26 +38,13 @@ async fn declared_built_in_tool(host: &production_owner::Host) {
     let root = fs::canonicalize(root).unwrap();
     let roots = config::Roots::development(&root).unwrap();
     roots.initialize().unwrap();
-    let bun = String::from_utf8(
-        std::process::Command::new("sh")
-            .args(["-c", "command -v bun"])
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .unwrap()
-    .trim()
-    .to_owned();
-    assert!(!bun.is_empty(), "the plugin host integration requires bun");
     let frontend = root.join("frontend");
+    let launched = root.join("frontend-launched");
     fs::write(
         &frontend,
         format!(
-            "#!/bin/sh\nexec '{bun}' '{}' \"$@\"\n",
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../../packages/cli/src/plugin-host/main.ts"
-            )
+            "#!/bin/sh\nprintf started > '{}'\nexit 1\n",
+            launched.display()
         ),
     )
     .unwrap();
@@ -68,12 +56,12 @@ async fn declared_built_in_tool(host: &production_owner::Host) {
     let cases = [
         (
             "re-enabled",
-            r#"["-ycoding.tool.webfetch", "-ycoding.command", "./declares.mjs", "./commands.mjs"]"#,
+            r#"["-ycoding.tool.webfetch", "-ycoding.command", "-ycoding.system-prompt.anthropic", "ycoding.tool.webfetch", "ycoding.command", "ycoding.system-prompt.*"]"#,
             true,
         ),
         (
             "hidden",
-            r#"["./declares.mjs", "./commands.mjs", "-ycoding.tool.webfetch", "-ycoding.command"]"#,
+            r#"["ycoding.tool.webfetch", "ycoding.command", "./declares.mjs", "-ycoding.tool.webfetch", "-ycoding.command", "-ycoding.system-prompt.anthropic"]"#,
             false,
         ),
     ];
@@ -86,13 +74,8 @@ async fn declared_built_in_tool(host: &production_owner::Host) {
         )
         .unwrap();
         fs::write(
-            directory.join("commands.mjs"),
-            "export default { id: \"ycoding.command\", setup: async () => {} }\n",
-        )
-        .unwrap();
-        fs::write(
             directory.join("ycoding.jsonc"),
-            format!("{{\"plugins\": {plugins}}}\n"),
+            format!(r#"{{"plugins": {plugins}, "providers": {{"anthropic": {{"models": {{"claude-sonnet-4": {{}}}}}}}}}}"#),
         )
         .unwrap();
     }
@@ -179,6 +162,34 @@ async fn declared_built_in_tool(host: &production_owner::Host) {
             active,
             "{name}: the bundled command follows the settled set"
         );
+        let selection = ycoding_core::ycoding_schema::model::Ref::decode(
+            &ycoding_core::ycoding_schema::parse_json(
+                r#"{"providerID":"anthropic","id":"claude-sonnet-4"}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let prompt = ycoding_core::session::generate::system(
+            &ycoding_core::resources::agent::empty("build".into()),
+            &composed.models.catalog(),
+            &selection,
+            &[],
+            "".into(),
+        );
+        let expected = if active {
+            include_str!("../../core/src/session/system_prompt/anthropic.txt")
+        } else {
+            include_str!("../../../../packages/core/src/session/runner/prompt/base.txt")
+        };
+        assert_eq!(
+            prompt
+                .iter()
+                .map(|part| part.text.as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [expected]
+        );
+        assert!(composed.extension_diagnostics.is_empty());
+        assert!(composed.activation.extensions().await.is_empty());
         assert!(
             !composed
                 .configuration
@@ -192,6 +203,10 @@ async fn declared_built_in_tool(host: &production_owner::Host) {
             "{name}"
         );
     }
+    assert!(
+        !launched.exists(),
+        "the frontend executable is only an asset path"
+    );
     core.shutdown().await.unwrap();
     drop(core);
     drop(store);

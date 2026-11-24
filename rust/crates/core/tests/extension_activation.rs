@@ -115,6 +115,57 @@ fn reaped(pids: &[u32]) {
 }
 
 #[tokio::test]
+async fn legacy_plugin_directories_have_no_runtime_presence() {
+    use ycoding_core::resources::config::{Configuration, LoadOptions, Roots};
+
+    let fixture = ToolFixture::new();
+    let (owner, registry, subscriber, location) = owner(&fixture);
+    let roots = Roots::development(&fixture.root).unwrap();
+    for base in [&roots.config, &fixture.root.join(".ycoding")] {
+        for (directory, suffix) in [("plugin", "js"), ("plugins", "ts")] {
+            let directory = base.join(directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                directory.join(format!("legacy.{suffix}")),
+                "throw new Error('unexpected import')",
+            )
+            .unwrap();
+        }
+    }
+    let config = Configuration::load(LoadOptions {
+        directory: fixture.root.clone(),
+        roots,
+        project: true,
+        file: None,
+        content: Some(r#"{"plugins":["-ycoding.tool.patch"]}"#.into()),
+        env: Default::default(),
+    })
+    .unwrap();
+
+    owner.prepare_plugins(&config).await.unwrap();
+    owner.reload(&config).await.unwrap();
+    let failures = owner.failures().await;
+    let active = owner.list().await;
+    let builtins = owner.plugin_list().await;
+    let events = events(&subscriber, &location);
+    owner.close().await;
+    fixture.cleanup();
+
+    assert!(
+        failures.is_empty(),
+        "legacy files affected activation: {failures:?}"
+    );
+    assert!(active.is_empty());
+    assert!(events.is_empty());
+    assert!(
+        !builtins
+            .iter()
+            .any(|plugin| plugin.id.as_str() == Some("ycoding.tool.patch"))
+    );
+    assert!(registry.materialize(&[]).definitions.is_empty());
+}
+
+#[tokio::test]
 async fn identical_ordered_configuration_is_a_noop_without_events_or_process_replacement() {
     let fixture = ToolFixture::new();
     let (owner, registry, subscriber, location) = owner(&fixture);
@@ -637,6 +688,7 @@ async fn plugin_list_places_native_pre_capabilities_then_extensions_then_native_
             "ycoding.tool.goal",
             "ycoding.tool.decision",
             "ycoding.tool.browser",
+            "ycoding.tool.interaction",
             "ycoding.tool.worktree",
             "trusted-process",
             "another",

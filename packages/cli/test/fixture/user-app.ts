@@ -29,8 +29,7 @@ const poison = "synthetic-secret https://synthetic.invalid/private command=/synt
 const peer = new ScriptedPeer()
 const socketClosed = Promise.withResolvers<void>()
 const processClosed = Promise.withResolvers<{ code: number | null; signal: NodeJS.Signals | null }>()
-const parentClosed = Promise.withResolvers<void>()
-const parentJoined = Promise.withResolvers<void>()
+const cleanupJoined = Promise.withResolvers<void>()
 const acquired = Promise.withResolvers<void>()
 const privateClosing = Promise.withResolvers<void>()
 const opening = new AbortController()
@@ -192,9 +191,8 @@ mock.module(path.join(root, "src/native-process.ts"), () => ({
         yield* Effect.acquireRelease(Effect.void, () =>
           Effect.promise(async () => {
             privateClosing.resolve()
-            await parentClosed.promise
             await processClosed.promise
-            await parentJoined.promise
+            await cleanupJoined.promise
             if (scenario === "private-close-failure" || scenario === "forced-termination") throw new Error(poison)
           }),
         )
@@ -369,9 +367,8 @@ try {
       "socket-auth": "authentication",
     }
     if (expectedErrors[scenario]) {
-      parentClosed.resolve()
       processClosed.resolve({ code: 0, signal: null })
-      parentJoined.resolve()
+      cleanupJoined.resolve()
       failure(await promise.catch((error: unknown) => error), expectedErrors[scenario])
       if (scenario === "signal-detach-failure") {
         expect(captures.socketClose).toBe(1)
@@ -383,9 +380,8 @@ try {
         privateClosing.promise.then(() => ({ retired: true })),
       ])
       if (!("handle" in outcome)) {
-        parentClosed.resolve()
         processClosed.resolve({ code: 0, signal: null })
-        parentJoined.resolve()
+        cleanupJoined.resolve()
         const error = await promise.catch((error: unknown) => error)
         failure(error, "unavailable")
         throw new Error("Private ownership retired before publication")
@@ -496,13 +492,12 @@ try {
       if (selection.mode === "private") {
         await privateClosing.promise
         if (scenario === "deferred-private") expect(settled).toBe(false)
-        parentClosed.resolve()
         processClosed.resolve({ code: scenario === "private-exit-failure" ? 9 : 0, signal: null })
         if (scenario === "deferred-private") {
           await Promise.resolve()
           expect(settled).toBe(false)
         }
-        parentJoined.resolve()
+        cleanupJoined.resolve()
       }
       if (
         ["socket-close-failure", "private-close-failure", "private-exit-failure", "forced-termination"].includes(
@@ -516,6 +511,7 @@ try {
         if (!child) throw new Error("No synthetic native child was acquired")
         expect(child.cwd).toBe(selectedDirectory)
         expect(child.command).toContain("--frontend-executable")
+        expect(child.command).not.toContain("--frontend-arguments")
         expect(child.command).toContain(path.join(packet.directory, packet.files.frontend.file))
       }
     }

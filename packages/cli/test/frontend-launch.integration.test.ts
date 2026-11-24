@@ -1,110 +1,114 @@
 import { expect, test } from "bun:test"
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
+import { mkdtemp, realpath, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import path from "node:path"
 
-test.skipIf(process.platform === "win32").each(["managed", "standalone"] as const)(
-  "%s source launch hands its entrypoint to the backend without shell parsing",
-  async (mode) => {
-    const directory = await mkdtemp(path.join(import.meta.dirname, ".frontend-launch-"))
-    const source = path.join(directory, "source entry; literal.ts")
-    const backend = path.join(directory, "runtime fixture")
-    const caller = path.resolve(
-      import.meta.dirname,
-      mode === "managed" ? "../src/server-process.ts" : "../src/services/standalone.ts",
-    )
-    try {
-      await writeFile(
-        backend,
-        `#!${process.execPath}
-const args = process.argv.slice(2)
-const executable = args[args.indexOf("--frontend-executable") + 1]
-const index = args.indexOf("--frontend-arguments")
-const prefix = index < 0 ? [] : JSON.parse(args[index + 1])
-const child = Bun.spawn([executable, ...prefix, "plugin-host"], { stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 5000 })
-const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
-if (code !== 0) throw new Error("Frontend relaunch failed: " + stderr)
-const report = { args, child: stdout.trim() }
-${
-  mode === "standalone"
-    ? `const url = new URL("http://127.0.0.1:1")
-url.searchParams.set("report", JSON.stringify(report))
-console.log(JSON.stringify({ url: url.href }))
-await Bun.stdin.text()`
-    : `console.log(JSON.stringify(report))`
-}
-`,
-      )
-      await chmod(backend, 0o700)
-      await writeFile(
-        source,
-        `import { Effect } from "effect"
-import { ${mode === "managed" ? "ServerProcess" : "Standalone"} } from ${JSON.stringify(caller)}
-if (process.argv[2] === "plugin-host") {
-  console.log("source entrypoint reached")
-} else {
-  ${
-    mode === "managed"
-      ? `await Effect.runPromise(Effect.scoped(ServerProcess.run({ mode: "stdio", port: 0 })))`
-      : `const endpoint = await Effect.runPromise(Effect.scoped(Standalone.start({ command: [${JSON.stringify(backend)}] })))
-  console.log(endpoint.url)`
-  }
-}
-`,
-      )
-      const child = Bun.spawn([process.execPath, source], {
-        cwd: directory,
-        env: {
-          PATH: process.env.PATH,
-          HOME: directory,
-          XDG_CONFIG_HOME: path.join(directory, "config"),
-          XDG_DATA_HOME: path.join(directory, "data"),
-          XDG_CACHE_HOME: path.join(directory, "cache"),
-          XDG_STATE_HOME: path.join(directory, "state"),
-          TMPDIR: directory,
-          YCODING_RUNTIME_EXECUTABLE: backend,
-        },
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
-        timeout: 10000,
-      })
-      try {
-        const [code, stdout, stderr] = await Promise.all([
-          child.exited,
-          new Response(child.stdout).text(),
-          new Response(child.stderr).text(),
-        ])
-        expect(code, stderr).toBe(0)
-        const report = JSON.parse(mode === "managed" ? stdout : new URL(stdout.trim()).searchParams.get("report")!)
-        expect(report.child).toBe("source entrypoint reached")
-        expect(report.args[report.args.indexOf("--frontend-executable") + 1]).toBe(process.execPath)
-        expect(JSON.parse(report.args[report.args.indexOf("--frontend-arguments") + 1])).toEqual([source])
-      } finally {
-        child.kill()
-        await child.exited
-      }
-    } finally {
-      await rm(directory, { recursive: true, force: true })
-    }
-  },
-  15000,
-)
+const native = process.env.YCODING_RUNTIME_EXECUTABLE
 
-test("frontend handoff retains source flags and keeps compiled frontends argument-free", async () => {
-  const { frontendLaunchArguments } = await import("../src/frontend-launch")
-  for (const executable of ["/compiled/ycoding", "/compiled/ycoding-node"]) {
-    expect(frontendLaunchArguments([executable])).toEqual(["--frontend-executable", executable])
+async function checkRuntime(native: string, directory: string, command: string[], assetOwner?: string) {
+  if (!native || !path.isAbsolute(native)) throw new Error("Bind YCODING_RUNTIME_EXECUTABLE to the built Rust runtime")
+  const child = Bun.spawn([...command, "serve", "--stdio", "--hostname", "127.0.0.1", "--port", "0"], {
+    cwd: directory,
+    env: {
+      PATH: process.env.PATH,
+      HOME: directory,
+      USERPROFILE: directory,
+      APPDATA: path.join(directory, "config"),
+      LOCALAPPDATA: path.join(directory, "data"),
+      XDG_CONFIG_HOME: path.join(directory, "config"),
+      XDG_DATA_HOME: path.join(directory, "data"),
+      XDG_CACHE_HOME: path.join(directory, "cache"),
+      XDG_STATE_HOME: path.join(directory, "state"),
+      YCODING_RUNTIME_EXECUTABLE: native,
+      YCODING_DB: ":memory:",
+      YCODING_DISABLE_MODELS_FETCH: "1",
+      YCODING_CONFIG_PROJECT_DISABLE: "1",
+      YCODING_PASSWORD: "synthetic-frontend-launch",
+    },
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: 30_000,
+  })
+  const stderr = new Response(child.stderr).text()
+  const output = child.stdout.pipeThrough(new TextDecoderStream()).getReader()
+  try {
+    let stdout = ""
+    while (!stdout.includes("\n")) {
+      const chunk = await output.read()
+      if (chunk.done) throw new Error(`CLI exited (${await child.exited}) before readiness: ${await stderr}`)
+      stdout += chunk.value
+    }
+    const ready: unknown = JSON.parse(stdout.split("\n", 1)[0])
+    if (typeof ready !== "object" || ready === null || !("url" in ready) || typeof ready.url !== "string")
+      throw new Error("CLI readiness did not contain a URL")
+    const { url } = ready
+    expect(new URL(url).hostname).toBe("127.0.0.1")
+    const response = await fetch(new URL("/api/health", url), {
+      headers: { Authorization: `Basic ${btoa("ycoding:synthetic-frontend-launch")}` },
+      signal: AbortSignal.timeout(5_000),
+    })
+    expect(response.ok).toBe(true)
+    const health: unknown = await response.json()
+    if (typeof health !== "object" || health === null || !("pid" in health) || typeof health.pid !== "number")
+      throw new Error("Runtime health did not contain a PID")
+    expect("healthy" in health && health.healthy).toBe(true)
+    const pid = health.pid
+    expect(pid).not.toBe(child.pid)
+    if (process.platform !== "win32") {
+      const processInfo = Bun.spawnSync(["ps", "-ww", "-p", String(pid), "-o", "command="], { stderr: "pipe" })
+      expect(processInfo.exitCode, `Runtime PID ${pid}: ${processInfo.stderr.toString().trim()}`).toBe(0)
+      const args = processInfo.stdout.toString().trim()
+      expect(args).toStartWith(`${native} serve `)
+      expect(args).not.toContain("--frontend-arguments")
+      if (assetOwner) expect(args).toContain(`--frontend-executable ${assetOwner}`)
+      else expect(args).not.toContain("--frontend-executable")
+    }
+    await child.stdin.end()
+    expect(await child.exited, await stderr).toBe(0)
+  } finally {
+    if (child.exitCode === null) child.kill()
+    await child.exited
+    await output.cancel()
   }
-  for (const command of [
-    ["/runtime/bun", "/source/entry with spaces;literal.ts"],
-    ["/runtime/node", "--experimental-ffi", "--conditions=browser", "/source/entry.mjs"],
-  ]) {
-    expect(frontendLaunchArguments(command)).toEqual([
-      "--frontend-executable",
-      command[0],
-      "--frontend-arguments",
-      JSON.stringify(command.slice(1)),
-    ])
+}
+
+const entry = path.resolve(import.meta.dirname, "../src/index.ts")
+
+test.skipIf(!native)("source CLI serves requests through the isolated Rust runtime", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "ycoding-source-launch-"))
+  try {
+    await checkRuntime(native!, directory, [process.execPath, entry])
+  } finally {
+    await rm(directory, { recursive: true, force: true })
   }
-  expect(() => frontendLaunchArguments([])).toThrow("frontend executable")
+}, 35_000)
+
+test.skipIf(!native)("compiled CLI serves requests and identifies its executable as the asset owner", async () => {
+  const directory = await realpath(await mkdtemp(path.join(tmpdir(), "ycoding-compiled-launch-")))
+  const frontend = path.join(directory, process.platform === "win32" ? "ycoding.exe" : "ycoding")
+  try {
+    const result = await Bun.build({
+      entrypoints: [entry],
+      tsconfig: path.resolve(import.meta.dirname, "../tsconfig.json"),
+      plugins: [createSolidTransformPlugin()],
+      external: ["node-gyp"],
+      compile: { outfile: frontend },
+    })
+    expect(result.success, result.logs.map(String).join("\n")).toBe(true)
+    await checkRuntime(native!, directory, [frontend], frontend)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}, 90_000)
+
+test("only installed frontends supply native asset metadata", async () => {
+  const { frontendAssetArguments } = await import("../src/frontend-launch")
+  for (const executable of ["/installed/ycoding", "/installed/ycoding-node", "/installed/ycoding.exe"]) {
+    expect(frontendAssetArguments(executable)).toEqual(["--frontend-executable", executable])
+  }
+  for (const executable of ["/runtime/bun", "/runtime/node", "/runtime/nodejs", "/runtime/node.exe"]) {
+    expect(frontendAssetArguments(executable)).toEqual([])
+  }
 })

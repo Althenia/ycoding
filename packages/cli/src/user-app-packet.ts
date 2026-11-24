@@ -85,7 +85,7 @@ export async function readPacket(url: URL) {
     return {
       version: manifest.version,
       channel: manifest.channel,
-      frontend: [frontend.filename],
+      frontend: frontend.filename,
       runtime: { payload: new Uint8Array(runtime.bytes), sha256: manifest.runtime.sha256 },
     }
   } catch {

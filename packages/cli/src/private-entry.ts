@@ -5,11 +5,6 @@ import { runtimeEnvironment, runtimeExecutable } from "./runtime-executable"
 
 export async function runPrivateEntry() {
   const args = process.argv.slice(2)
-  if (args[0] === "plugin-host") {
-    const { run } = await import("./plugin-host/main")
-    await run()
-    return true
-  }
   if (args[0] !== "-e") return false
   process.exitCode = await runRegexWorker(args)
   return true
