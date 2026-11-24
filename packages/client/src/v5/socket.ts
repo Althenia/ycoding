@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer"
 import type { WebSocketOptions } from "bun"
 import { Connection, defaultBudgets } from "@ycoding-ai/protocol/v5/connection"
 import type { Decision, ConfigurableBudgets } from "@ycoding-ai/protocol/v5/connection"
+import { sameScope } from "@ycoding-ai/protocol/v5/connection/subscription"
 import {
   create,
   encodeStrict,
@@ -336,6 +337,10 @@ export class LocalTransport {
     if (options?.signal?.aborted) abortOpening()
     try {
       await Promise.race([owner.ready, aborted.promise])
+    } catch (error) {
+      if (error instanceof V5ClientError && error.status !== "protocol")
+        throw new V5ClientError("unsent", binding.method, error.reason)
+      throw error
     } finally {
       owner.opening--
       options?.signal?.removeEventListener("abort", abortOpening)
@@ -615,8 +620,8 @@ export class LocalTransport {
       }
       if (decision.type === "resync") {
         owner.streams.forEach((subscription, id) => {
-          if (!decision.subscriptionID || decision.subscriptionID === id)
-            subscription.stream.fail(
+          if (decision.subscriptionID ? decision.subscriptionID === id : sameScope(subscription.scope, decision.scope))
+            subscription.stream.invalidate(
               new V5ClientError("resync", subscription.operation.diagnosticName, "Canonical snapshot is required"),
             )
         })

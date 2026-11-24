@@ -59,11 +59,13 @@ export class DeliveryStream<A> implements AsyncIterableIterator<A> {
   }
 
   fail(error: unknown) {
-    if (this.error !== undefined) return
-    this.error = error
-    this.queue.forEach((entry) => entry.release())
-    this.queue = []
-    this.count = 0
+    this.error ??= error
+    this.discard()
+    this.deliver()
+  }
+
+  invalidate(error: unknown) {
+    this.error ??= error
     this.deliver()
   }
 
@@ -76,10 +78,8 @@ export class DeliveryStream<A> implements AsyncIterableIterator<A> {
   }
 
   async return(): Promise<IteratorResult<A>> {
-    this.queue.forEach((entry) => entry.release())
-    this.queue = []
-    this.count = 0
     this.ended = true
+    this.discard()
     this.deliver()
     const cleanup = this.cleanup
     this.cleanup = undefined
@@ -87,14 +87,15 @@ export class DeliveryStream<A> implements AsyncIterableIterator<A> {
     return { done: true, value: undefined }
   }
 
+  private discard() {
+    const queue = this.queue
+    this.queue = []
+    this.count = 0
+    queue.forEach((entry) => entry.release())
+  }
+
   private deliver() {
     if (!this.waiting) return
-    if (this.error !== undefined) {
-      const waiting = this.waiting
-      this.waiting = undefined
-      waiting.reject(this.error)
-      return
-    }
     const entry = this.queue[0]
     const item = entry?.values.next()
     if (entry && item && !item.done) {
@@ -106,6 +107,12 @@ export class DeliveryStream<A> implements AsyncIterableIterator<A> {
       const waiting = this.waiting
       this.waiting = undefined
       waiting.resolve(item)
+      return
+    }
+    if (this.error !== undefined) {
+      const waiting = this.waiting
+      this.waiting = undefined
+      waiting.reject(this.error)
       return
     }
     if (this.ended) {

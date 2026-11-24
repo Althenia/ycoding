@@ -6,7 +6,7 @@ import { readFileSync, rmSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { DiscoverOptions, Endpoint, EnsureOptions, StopOptions } from "../service.js"
-import { pollDelay, startupTimeout } from "../service-poll.js"
+import { managedShutdownTimeout, pollDelay, startupTimeout, stopPollInterval } from "../service-poll.js"
 import { assertStopTarget } from "../service-stop.js"
 
 export * from "../service.js"
@@ -314,9 +314,8 @@ const find = Effect.fnUntraced(function* (options: { readonly file?: string }) {
   return (yield* registered(options.file, true)).service
 })
 
-// 50ms cadence bounded at ~5s, shared by stop escalation and each ensure
-// discovery window.
-const poll = Schedule.max([Schedule.spaced("50 millis"), Schedule.recurs(100)])
+const stopPoll = Schedule.spaced(stopPollInterval)
+const legacyStopPoll = Schedule.max([stopPoll, Schedule.recurs(100)])
 
 const signal = (pid: number, name: NodeJS.Signals) =>
   Effect.try({ try: () => process.kill(pid, name), catch: (cause) => cause }).pipe(Effect.ignore)
@@ -339,17 +338,25 @@ const kill = Effect.fnUntraced(function* (service: LocalService, options: StopOp
     if (options.expected) return yield* Effect.fail(new Error("The selected service did not stop"))
     return
   }
-  if (requested === "unsupported") {
-    // A stale registration may point at a reused PID. Authenticate again
-    // immediately before the legacy signal fallback.
-    const current = yield* find(options)
-    if (current === undefined || !same(current.info, service.info)) {
-      if (options.expected) return yield* Effect.fail(new Error("The registered service changed before it could be stopped"))
-      return
-    }
-    yield* signal(service.info.pid, "SIGTERM")
+  if (requested === "accepted") {
+    yield* stopped(service.info.pid).pipe(
+      Effect.retry(stopPoll),
+      Effect.timeoutOrElse({
+        duration: managedShutdownTimeout,
+        orElse: () => Effect.fail(new Error(`Timed out waiting for server process ${service.info.pid} to stop`)),
+      }),
+    )
+    return
   }
-  const done = yield* stopped(service.info.pid).pipe(Effect.retry(poll), Effect.option)
+  // A stale registration may point at a reused PID. Authenticate again
+  // immediately before the legacy signal fallback.
+  const current = yield* find(options)
+  if (current === undefined || !same(current.info, service.info)) {
+    if (options.expected) return yield* Effect.fail(new Error("The registered service changed before it could be stopped"))
+    return
+  }
+  yield* signal(service.info.pid, "SIGTERM")
+  const done = yield* stopped(service.info.pid).pipe(Effect.retry(legacyStopPoll), Effect.option)
   if (Option.isSome(done)) return
 
   const latest = yield* find(options)
@@ -358,7 +365,7 @@ const kill = Effect.fnUntraced(function* (service: LocalService, options: StopOp
     return
   }
   yield* signal(service.info.pid, "SIGKILL")
-  yield* stopped(service.info.pid).pipe(Effect.retry(poll))
+  yield* stopped(service.info.pid).pipe(Effect.retry(legacyStopPoll))
 })
 
 const decodeStopResponse = Schema.decodeUnknownOption(ServiceStatus.StopResponse)

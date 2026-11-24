@@ -6,12 +6,15 @@ Private generation target for clients derived directly from YCoding's authoritat
 
 - `@ycoding-ai/client`: zero-Effect Promise client using `fetch`.
 - `@ycoding-ai/client/effect`: rich Effect network client using an environment-provided `HttpClient`.
+- `@ycoding-ai/client/v5`: Promise client for the local binary WebSocket connector.
 
 The generated surface includes every standard HTTP group from Server's concrete API. The build compiler reads `@ycoding-ai/server/api`; the generated Effect runtime imports a client-local projection built from Protocol, with a generation-equivalence test preventing transport drift. Custom transports such as the PTY WebSocket connection remain outside the generic HTTP client. Run `bun run generate` after changing the contract and `bun run check:generated` to detect committed-output drift.
 
 The Effect entrypoint uses canonical decoded values such as `Session.ID`, `Location.Ref`, and `Prompt`. These datatypes come from the lightweight `@ycoding-ai/schema` package and are re-exported so callers depend only on the client surface. Protocol owns endpoint construction and middleware placement; Server supplies the concrete middleware keys used by the build-time API.
 
 The Promise root remains structural and has no Core or Effect runtime dependency. `/effect` depends only on Effect, Schema, and Protocol and is browser-bundle safe. Bundle-boundary tests enforce both import graphs.
+
+The local v5 client reports a request that loses its socket before transmission as `unsent`. A transmitted mutation without a result stays `unknown`; reconnect never sends it again. A scoped resync lets the affected stream deliver its buffered events in order, then fails that stream with `resync`. Other scopes keep receiving events. Closing or replacing the socket discards unread events from streams that socket still owns.
 
 ## Local service lifecycle
 

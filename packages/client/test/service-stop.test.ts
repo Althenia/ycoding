@@ -59,6 +59,32 @@ for (const client of clients) {
     expect(new URL(request.url).pathname).toBe("/api/service/stop")
   })
 
+  test(`${client.name} stop waits for an acknowledged service after its listener closes`, async () => {
+    const f = await fixture()
+    const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdio: ["ignore", "ignore", "ignore"] })
+    const info = { ...f.info, pid: child.pid }
+    await fs.writeFile(f.file, JSON.stringify(info))
+    let listening = true
+    let exitTimer: ReturnType<typeof setTimeout> | undefined
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (new Request(input, init).method === "POST") {
+        listening = false
+        exitTimer = setTimeout(() => child.kill(), 5_500)
+        return Response.json({ accepted: true })
+      }
+      if (!listening) throw new TypeError("Listener closed")
+      return Response.json({ healthy: true, version: info.version, pid: info.pid, sourceEpoch: info.id })
+    }, { preconnect: () => {} })
+    try {
+      await client.stop({ file: f.file })
+      expect(() => process.kill(info.pid, 0)).toThrow()
+    } finally {
+      clearTimeout(exitTimer)
+      child.kill()
+      await child.exited
+    }
+  }, 15_000)
+
   test(`${client.name} stop reports an unconfirmed refusal rather than successful retirement`, async () => {
     const f = await fixture(false)
     await expect(client.stop({ file: f.file, expected: f.expected })).rejects.toThrow(/did not stop/)

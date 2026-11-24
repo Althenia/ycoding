@@ -29,11 +29,14 @@ case "${1:-}" in
     main_checkout
     [[ $(git rev-parse refs/remotes/origin/main) == "$GITHUB_SHA" ]] || fail 'Protected main no longer points at the release SHA'
     endpoint="repos/$GITHUB_REPOSITORY/environments/release-production"
-    gh api "$endpoint" | jq -e '
+    [[ ${RELEASE_REVIEWER_ID:-} =~ ^[1-9][0-9]*$ ]] || fail 'The approved release reviewer ID is required'
+    gh api "$endpoint" | jq -e --arg reviewer "$RELEASE_REVIEWER_ID" '
       .name == "release-production" and .can_admins_bypass == false and
-      .deployment_branch_policy.custom_branch_policies == true and
-      any(.protection_rules[]; .type == "required_reviewers" and .prevent_self_review == true and (.reviewers | length > 0))
-    ' >/dev/null || fail 'Configure release-production with required reviewers, self-review disabled and no administrator bypass'
+      .deployment_branch_policy == {protected_branches:false, custom_branch_policies:true} and
+      ([.protection_rules[] | select(.type == "required_reviewers")] |
+        length == 1 and (.[0] | .prevent_self_review == false and
+         (.reviewers | length == 1 and (.[0] | .type == "User" and (.reviewer.id | tostring) == $reviewer))))
+    ' >/dev/null || fail 'release-production must require a decision from the sole approved reviewer and disallow administrator bypass'
     gh api "$endpoint/deployment-branch-policies?per_page=100" | jq -e '
       .total_count == 1 and (.branch_policies | length) == 1 and
       (.branch_policies[0] | .name == "main" and .type == "branch")

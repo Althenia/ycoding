@@ -15,10 +15,12 @@ import {
   session_form_cancel_RequestSchema,
   session_form_cancel_ResultSchema,
   session_create_RequestSchema,
+  session_prompt_RequestSchema,
   decodeLossless,
   HistoryPrunedErrorSchema,
 } from "@ycoding-ai/protocol/v5"
 import { isHistoryPrunedError } from "../src/promise/index.js"
+import { encodeDomain } from "../src/v5/codec.js"
 import { make } from "../src/v5/index.js"
 import { ScriptedPeer } from "./fixture/v5-peer.js"
 
@@ -756,6 +758,232 @@ test("REQ-WIRE-006 Session creation scopes match root selectors and leave child 
     const child = decodeStrict(session_create_RequestSchema, peer.requests[2].request.payload)
     expect(decodeLossless(child.payload!.parentID!)).toBe("ses_parent")
     expect(child.payload?.location).toBeUndefined()
+  } finally {
+    client.transport.close()
+  }
+})
+
+const logItem = (seq: number) => ({
+  typeName: SessionLogItemSchema.typeName,
+  payload: encodeDomain(SessionLogItemSchema.typeName, {
+    type: "session.input.withdrawn",
+    id: `evt_log_${seq}`,
+    created: seq,
+    sourceEpoch: "source-1",
+    durable: { aggregateID: "ses_log", seq, version: 1 },
+    data: { sessionID: "ses_log", inputID: `msg_log_${seq}` },
+  }),
+})
+
+const sequence = (peers: ScriptedPeer[], opened: ReadonlySet<number>) => {
+  let index = 0
+  const constructed = peers.map(() => Promise.withResolvers<void>())
+  const socket = () => {
+    const current = index++
+    const peer = peers[current]
+    constructed[current].resolve()
+    if (opened.has(current)) queueMicrotask(() => peer.socket.open())
+    return peer.socket
+  }
+  return { socket, constructed: constructed.map((entry) => entry.promise) }
+}
+
+test.each(["socket closes before Ready", "connection is replaced before Ready", "socket closes while queued"] as const)(
+  "REQ-WIRE-009 a request that is never transmitted when the %s settles unsent and one retry dispatches once",
+  async (variant) => {
+    const queued = variant === "socket closes while queued"
+    const peers = [
+      new ScriptedPeer("connection-1", queued ? { normalWindowBytes: 1 } : {}),
+      new ScriptedPeer("connection-2"),
+    ]
+    const sockets = sequence(peers, new Set(queued ? [0, 1] : [1]))
+    const client = make({ discover: async () => endpoint, socket: sockets.socket })
+    const input = { sessionID: "ses_owner", title: "retry once" }
+    try {
+      if (queued) await client.transport.ready()
+      else await sockets.constructed[0]
+      const first = client.session.rename(input).catch((error: unknown) => error)
+      await Promise.resolve()
+      await Promise.resolve()
+      if (variant === "connection is replaced before Ready") void client.transport.reconnect()
+      else peers[0].socket.close()
+      expect(await first).toMatchObject({ _tag: "V5ClientError", status: "unsent", operation: "session.rename" })
+      expect(peers[0].requests).toHaveLength(0)
+      if (variant !== "connection is replaced before Ready") await client.transport.reconnect()
+      peers[1].onRequest = (dispatch) => peers[1].reject(dispatch)
+      const rejected = await client.session.rename(input).catch((error: unknown) => error)
+      expect(rejected).toEqual({
+        _tag: "InvalidRequestError",
+        message: "Scripted rejection",
+      })
+      expect(peers[0].requests).toHaveLength(0)
+      expect(peers[1].requests).toHaveLength(1)
+      expect(
+        decodeStrict(session_rename_RequestSchema, peers[1].requests[0].request.payload).payload?.title?.encoding,
+      ).toEqual({ case: "utf8", value: "retry once" })
+      expect(client.transport.connectionEpoch).toBe("connection-2")
+    } finally {
+      client.transport.close()
+    }
+  },
+)
+
+test("REQ-WIRE-009 a transmitted mutation lost to a socket error settles unknown and is never replayed", async () => {
+  const peers = [new ScriptedPeer("connection-1"), new ScriptedPeer("connection-2")]
+  const sockets = sequence(peers, new Set([0, 1]))
+  const client = make({ discover: async () => endpoint, socket: sockets.socket })
+  try {
+    const arrived = peers[0].nextRequest()
+    const mutation = client.session
+      .prompt({ sessionID: "ses_owner", text: "uncertain", id: "msg_uncertain" })
+      .catch((error: unknown) => error)
+    await arrived
+    peers[0].socket.dispatchEvent(new Event("error"))
+    expect(await mutation).toMatchObject({ _tag: "V5ClientError", status: "unknown", operation: "session.prompt" })
+    expect(client.transport.state).toBe("closed")
+    await client.transport.reconnect()
+    peers[1].onRequest = (dispatch) =>
+      peers[1].result(dispatch, { typeName: health_get_ResultSchema.typeName, payload: health() })
+    expect(await client.health.get()).toMatchObject({ healthy: true })
+    expect(peers[0].requests.map((request) => request.operation.diagnosticName)).toEqual(["session.prompt"])
+    expect(peers[1].requests.map((request) => request.operation.diagnosticName)).toEqual(["health.get"])
+  } finally {
+    client.transport.close()
+  }
+})
+
+test("REQ-WIRE-009 retrying an unsent prompt transmits the stable input ID once", async () => {
+  const peers = [new ScriptedPeer("connection-1"), new ScriptedPeer("connection-2")]
+  const sockets = sequence(peers, new Set([1]))
+  const client = make({ discover: async () => endpoint, socket: sockets.socket })
+  const input = { sessionID: "ses_owner", text: "exactly once", id: "msg_stable" }
+  try {
+    await sockets.constructed[0]
+    const first = client.session.prompt(input).catch((error: unknown) => error)
+    await Promise.resolve()
+    peers[0].socket.close()
+    expect(await first).toMatchObject({ status: "unsent" })
+    await client.transport.reconnect()
+    peers[1].onRequest = (dispatch) => peers[1].reject(dispatch)
+    const outcomes: unknown[] = []
+    await client.session.prompt(input).then(
+      (value) => outcomes.push({ resolved: value }),
+      (error: unknown) => outcomes.push(error),
+    )
+    expect(outcomes).toEqual([{ _tag: "InvalidRequestError", message: "Scripted rejection" }])
+    expect(peers[0].requests).toHaveLength(0)
+    expect(peers[1].requests).toHaveLength(1)
+    expect(decodeStrict(session_prompt_RequestSchema, peers[1].requests[0].request.payload).payload?.id?.encoding).toEqual(
+      { case: "utf8", value: "msg_stable" },
+    )
+    expect(client.transport.state).toBe("established")
+  } finally {
+    client.transport.close()
+  }
+})
+
+const receivedResync = (peer: ScriptedPeer) => new Promise<void>((resolve) => {
+  const listener = (incoming: Event) => {
+    if (!(incoming instanceof MessageEvent) || !(incoming.data instanceof ArrayBuffer)) return
+    const frame = decodeStrict(FrameSchema, new Uint8Array(incoming.data))
+    if (frame.body.case !== "control" || frame.body.value.kind.case !== "resyncRequired") return
+    peer.socket.removeEventListener("message", listener)
+    resolve()
+  }
+  peer.socket.addEventListener("message", listener)
+})
+
+test("REQ-WIRE-011 scoped ResyncRequired follows earlier events and leaves other scopes delivering", async () => {
+  const peer = new ScriptedPeer()
+  peer.onRequest = (dispatch) => {
+    if (dispatch.operation.diagnosticName === "event.subscribe") return peer.subscribe(dispatch, "subscription-global")
+    if (dispatch.operation.diagnosticName === "session.log") return peer.subscribe(dispatch, "subscription-log")
+    peer.result(dispatch, {
+      typeName: event_unsubscribe_ResultSchema.typeName,
+      payload: encodeStrict(event_unsubscribe_ResultSchema, create(event_unsubscribe_ResultSchema, { data: {} })),
+    })
+  }
+  const client = make({
+    endpoint,
+    socket: () => {
+      queueMicrotask(() => peer.socket.open())
+      return peer.socket
+    },
+  })
+  try {
+    const events = client.event.subscribe()[Symbol.asyncIterator]()
+    expect((await events.next()).value).toMatchObject({ type: "server.connected" })
+    const log = client.session.log({ sessionID: "ses_log", follow: true })[Symbol.asyncIterator]()
+    const arrival = peer.nextRequest()
+    const first = log.next()
+    await arrival
+    const invalidation = receivedResync(peer)
+    peer.events("subscription-log", [logItem(1), logItem(2)])
+    peer.events("subscription-log", [{ typeName: SessionLogItemSchema.typeName, payload: new Uint8Array(300_000) }])
+    await invalidation
+    expect((await first).value).toMatchObject({ durable: { seq: 1 } })
+    expect((await log.next()).value).toMatchObject({ durable: { seq: 2 } })
+    expect(await log.next().catch((error: unknown) => error)).toMatchObject({ status: "resync" })
+    peer.events("subscription-global", [catalog("evt_after")])
+    expect((await events.next()).value).toMatchObject({ id: "evt_after", type: "catalog.updated" })
+    expect(client.transport.state).toBe("established")
+  } finally {
+    client.transport.close()
+  }
+})
+
+test("REQ-WIRE-011 a replaced socket cannot interleave frames and the replacement reports its source epoch", async () => {
+  const peers = [new ScriptedPeer("connection-1"), new ScriptedPeer("connection-2")]
+  peers[1].transform = (bytes) => {
+    const frame = decodeStrict(FrameSchema, bytes)
+    if (frame.body.case !== "ready") return bytes
+    frame.body.value.sourceEpoch = "source-2"
+    return encodeStrict(FrameSchema, frame)
+  }
+  peers.forEach((peer) => {
+    peer.onRequest = (dispatch) => peer.subscribe(dispatch)
+  })
+  const sockets = sequence(peers, new Set([0, 1]))
+  const client = make({ discover: async () => endpoint, socket: sockets.socket })
+  try {
+    const old = client.event.subscribe()[Symbol.asyncIterator]()
+    expect((await old.next()).value).toMatchObject({ id: "connection-1", sourceEpoch: "source-1" })
+    const interrupted = old.next().catch((error: unknown) => error)
+    await client.transport.reconnect()
+    expect(await interrupted).toMatchObject({ status: "unknown" })
+    const current = client.event.subscribe()[Symbol.asyncIterator]()
+    expect((await current.next()).value).toMatchObject({
+      type: "server.connected",
+      id: "connection-2",
+      sourceEpoch: "source-2",
+    })
+    peers[0].events("subscription-1", [catalog("evt_stale")])
+    peers[1].events("subscription-1", [catalog("evt_fresh")], "source-2")
+    expect((await current.next()).value).toMatchObject({ id: "evt_fresh" })
+    expect(client.transport.sourceEpoch).toBe("source-2")
+  } finally {
+    client.transport.close()
+  }
+})
+
+test("REQ-WIRE-011 a replacement connection discards events still buffered behind a resync", async () => {
+  const peers = [new ScriptedPeer("connection-1"), new ScriptedPeer("connection-2")]
+  peers[0].onRequest = (dispatch) => peers[0].subscribe(dispatch, "subscription-log")
+  const sockets = sequence(peers, new Set([0, 1]))
+  const client = make({ discover: async () => endpoint, socket: sockets.socket })
+  try {
+    const log = client.session.log({ sessionID: "ses_log", follow: true })[Symbol.asyncIterator]()
+    const arrival = peers[0].nextRequest()
+    const first = log.next()
+    await arrival
+    const invalidation = receivedResync(peers[0])
+    peers[0].events("subscription-log", [logItem(1), logItem(2)])
+    peers[0].events("subscription-log", [{ typeName: SessionLogItemSchema.typeName, payload: new Uint8Array(300_000) }])
+    await invalidation
+    expect((await first).value).toMatchObject({ durable: { seq: 1 } })
+    await client.transport.reconnect()
+    expect(await log.next().catch((error: unknown) => error)).toMatchObject({ status: "resync" })
+    expect(client.transport.connectionEpoch).toBe("connection-2")
   } finally {
     client.transport.close()
   }

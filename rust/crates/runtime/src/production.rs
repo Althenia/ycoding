@@ -985,6 +985,7 @@ impl Core {
             lifetime: None,
         };
         let mut core = snapshot.clone();
+        core.locations.restore_forms().await?;
         snapshot.shutdown = Arc::new(Shutdown::with_parent(context.parent_owner()));
         core.lifetime = Some(context.retain(
             context.production_retirement(),
@@ -1013,6 +1014,7 @@ impl Core {
         }
         let events = self.remote.as_ref().map(|remote| remote.server());
         if let Some(maintenance) = &self.maintenance {
+            let checkpoint = self.locations.checkpoint_forms().await;
             let released = release(
                 &maintenance.globals,
                 &maintenance.credentials,
@@ -1027,7 +1029,7 @@ impl Core {
                 Some(events) => events.shutdown().await,
                 None => Ok(()),
             };
-            return cleanup_results([released, events]);
+            return cleanup_results([checkpoint, released, events]);
         }
         let dots = match &self.dots {
             Some(dots) => dots.shutdown().await,

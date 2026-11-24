@@ -1,3 +1,5 @@
+#[path = "support/launcher.rs"]
+mod launcher;
 mod support;
 
 use std::time::Duration;
@@ -178,6 +180,131 @@ fn status(state: &v5::FormState) -> &'static str {
         v5::form_state::Kind::Value5(_) => "deferred",
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn clean_restart_restores_pending_session_forms_without_reviving_settled_forms() {
+    bounded(async {
+        let fixture = launcher::Directory::new();
+        let project = fixture.0.join("project");
+        std::fs::create_dir(&project).unwrap();
+        let directory = project.to_str().unwrap();
+        let password = "fixture-form-restart-password";
+        let launch = || {
+            let mut command = fixture.command("0.1.0", "dev");
+            command
+                .current_dir(&project)
+                .env("YCODING_PASSWORD", password);
+            launcher::Runtime::spawn(command, &["serve", "--stdio", "--port", "0"])
+        };
+        let connect = |runtime: &launcher::Runtime| {
+            let value = ycoding_core::ycoding_schema::parse_json(&runtime.ready()).unwrap();
+            let url = launcher::string(&value, "url");
+            let address = url.strip_prefix("http://").unwrap().parse().unwrap();
+            let auth = basic(password);
+            async move {
+                Client::open(address, &[("Authorization", auth)])
+                    .await
+                    .unwrap()
+            }
+        };
+        let mut runtime = launch();
+        let mut client = connect(&runtime).await;
+        let created: v5::SessionCreateResult = ask(
+            &mut client,
+            "session.create",
+            location_scope(directory),
+            v5::SessionCreateRequest {
+                payload: v5::SessionCreateRequestPayload {
+                    location: Some(v5::LocationRef {
+                        directory: text(directory),
+                        workspace_id: None,
+                    }),
+                    ..Default::default()
+                },
+            },
+        )
+        .await;
+        let session = units(&created.data.id);
+        let scope = form_scope(&session);
+        let list = || v5::SessionFormListRequest {
+            params: v5::SessionFormListRequestParams {
+                session_id: text(&session),
+            },
+        };
+        let pending: v5::SessionFormCreateResult = ask(
+            &mut client,
+            "session.form.create",
+            scope.clone(),
+            create(&session, payload(None, vec![fields().remove(0)])),
+        )
+        .await;
+        let id = units(&pending.data.id);
+        let cancelled: v5::SessionFormCreateResult = ask(
+            &mut client,
+            "session.form.create",
+            scope.clone(),
+            create(&session, payload(None, vec![fields().remove(0)])),
+        )
+        .await;
+        let _: v5::SessionFormCancelResult = ask(
+            &mut client,
+            "session.form.cancel",
+            scope.clone(),
+            v5::SessionFormCancelRequest {
+                params: cancel_target(&session, &units(&cancelled.data.id)),
+            },
+        )
+        .await;
+        drop(client);
+        drop(runtime.child.stdin.take());
+        assert!(runtime.wait().success());
+
+        let mut runtime = launch();
+        let mut client = connect(&runtime).await;
+        let reopened: v5::SessionFormListResult =
+            ask(&mut client, "session.form.list", scope.clone(), list()).await;
+        assert_eq!(reopened.data.items, vec![pending.data]);
+        let _: v5::SessionFormReplyResult = ask(
+            &mut client,
+            "session.form.reply",
+            scope.clone(),
+            v5::SessionFormReplyRequest {
+                params: reply_target(&session, &id),
+                payload: v5::FormReply {
+                    answer: answer(vec![(
+                        "name",
+                        v5::form_value::Kind::Value1(text("ada@example.test")),
+                    )]),
+                },
+            },
+        )
+        .await;
+        let answered: v5::SessionFormStateResult = ask(
+            &mut client,
+            "session.form.state",
+            scope.clone(),
+            v5::SessionFormStateRequest {
+                params: state_target(&session, &id),
+            },
+        )
+        .await;
+        assert_eq!(status(&answered.data), "answered");
+        drop(client);
+        drop(runtime.child.stdin.take());
+        assert!(runtime.wait().success());
+
+        let mut runtime = launch();
+        let mut client = connect(&runtime).await;
+        let reopened: v5::SessionFormListResult =
+            ask(&mut client, "session.form.list", scope, list()).await;
+        assert!(reopened.data.items.is_empty());
+        drop(client);
+        drop(runtime.child.stdin.take());
+        assert!(runtime.wait().success());
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn global_forms_are_created_listed_and_settled_in_the_selected_location_only() {
     bounded(async {

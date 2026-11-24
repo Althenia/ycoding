@@ -171,7 +171,7 @@ async fn chain(modes: [&str; 3]) -> Chain {
         }),
         services: Arc::new(move |_| {
             let services = services.clone();
-            Box::pin(async move { Ok(services) })
+            Box::pin(async move { Ok(Some(services)) })
         }),
         now: None,
     });

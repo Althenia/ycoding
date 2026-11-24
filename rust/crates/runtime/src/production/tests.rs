@@ -3993,3 +3993,75 @@ async fn fixture_composition_registers_the_project_tool_and_fails_closed_until_t
     drop(services);
     locations.close().unwrap();
 }
+
+#[test]
+fn startup_preserves_project_member_whose_location_is_missing() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let f = fixture("{}", "{}");
+    let directory = f.factory.options.directory.join("removed-worktree");
+    assert!(!directory.exists());
+    let directory = directory.to_str().unwrap().to_owned();
+    let mut row = catalog_fixture::record("ses_missing_location");
+    row.directory = directory.clone().into();
+    f.store
+        .submit(move |tx| SessionTable::insert(tx, &row))
+        .unwrap()
+        .wait()
+        .unwrap();
+    let member = session::Id::new("ses_missing_location").unwrap();
+    let client = f.store.client();
+    let project = ycoding_core::coordination::Service::new(client.clone(), f.feed.clone());
+    let group = runtime
+        .block_on(
+            project.create(ycoding_core::ycoding_schema::coordination::CreateInput {
+                name: "Retained work".into(),
+                master_session_id: session::Id::new("ses_one").unwrap(),
+                member_session_ids: vec![member.clone()],
+            }),
+        )
+        .unwrap();
+    let result = owner::ProductionOwner::scope(&runtime, |owner| {
+        runtime.block_on(async {
+            let configuration = f.factory.options.clone();
+            let core = Core::production(
+                &owner,
+                client.clone(),
+                Production {
+                    analytics: configuration.roots.data.join("analytics"),
+                    configuration,
+                    catalog: models_dev::Options {
+                        source: "https://models.dev".into(),
+                        cache: f.roots.cache.join("models.json"),
+                        file: None,
+                        bundled: Some(parse_json(MODELS).unwrap()),
+                        fetch: false,
+                        user_agent: "test".into(),
+                    },
+                    cursor: None,
+                    steer: None,
+                    ripgrep: "rg".into(),
+                    meeting: false,
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                project.member_of(&member).unwrap().unwrap().group_id,
+                group.id
+            );
+            let session = Service::new(client.clone()).get(&member).unwrap().unwrap();
+            assert!(core.locations.session(&member).is_err());
+            assert_eq!(
+                session.location.directory.as_lossless().as_str(),
+                Some(directory.as_str())
+            );
+            assert!(!std::path::Path::new(&directory).exists());
+            core.shutdown().await.unwrap();
+        })
+    });
+    result.body.unwrap();
+    result.cleanup.result().unwrap();
+}

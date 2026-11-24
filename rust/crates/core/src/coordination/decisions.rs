@@ -42,7 +42,7 @@ const MAX_RATIONALE: usize = 500;
 const MIN_ANSWER_CONFIDENCE: f64 = 0.8;
 
 pub type Settings = Arc<dyn Fn() -> Future<'static, c::Settings> + Send + Sync>;
-pub type Locate = Arc<dyn Fn(session::Id) -> Future<'static, Services> + Send + Sync>;
+pub type Locate = Arc<dyn Fn(session::Id) -> Future<'static, Option<Services>> + Send + Sync>;
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 pub type Current = Arc<dyn Fn() -> bool + Send + Sync>;
 pub type Check<T> = Arc<dyn Fn(T) -> Pin<Box<dyn StdFuture<Output = bool> + Send>> + Send + Sync>;
@@ -1047,7 +1047,9 @@ impl Inner {
             .limit
             .unwrap_or(DEFAULT_PENDING_LIMIT)
             .clamp(1, MAX_PENDING_LIMIT);
-        let services = (self.services)(input.target_session_id.clone()).await?;
+        let Some(services) = (self.services)(input.target_session_id.clone()).await? else {
+            return Ok(vec![]);
+        };
         let _lease = services.lease.clone();
         if !(services.is_current)() {
             return Err(Error::refused(
@@ -1117,7 +1119,9 @@ impl Inner {
         {
             return escalated("low-confidence");
         }
-        let services = (self.services)(input.target_session_id.clone()).await?;
+        let Some(services) = (self.services)(input.target_session_id.clone()).await? else {
+            return stale();
+        };
         let _lease = services.lease.clone();
         if !(services.is_current)() {
             return escalated("delegation-unavailable");
@@ -1291,7 +1295,9 @@ impl Inner {
             Ok(scope) => scope,
             Err(reason) => return Ok(base(EscalateOutcome::Escalated, Some(reason))),
         };
-        let services = (self.services)(input.target_session_id.clone()).await?;
+        let Some(services) = (self.services)(input.target_session_id.clone()).await? else {
+            return Ok(base(EscalateOutcome::Stale, None));
+        };
         let _lease = services.lease.clone();
         if !(services.is_current)() {
             return Ok(base(EscalateOutcome::Stale, None));

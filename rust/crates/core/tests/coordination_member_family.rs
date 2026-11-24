@@ -214,7 +214,7 @@ async fn family() -> Family {
         }),
         services: Arc::new(move |_| {
             let services = services.clone();
-            Box::pin(async move { Ok(services) })
+            Box::pin(async move { Ok(Some(services)) })
         }),
         now: None,
     });

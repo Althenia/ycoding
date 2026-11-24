@@ -24,13 +24,14 @@ use ycoding_core::tools::policy::{
     questions::Questions,
 };
 use ycoding_core::ycoding_schema::{
-    DomainDecode, LosslessString, guardrail, location, project_id::ProjectId, schema::AbsolutePath,
-    session, workspace_id::WorkspaceId,
+    DomainDecode, DomainEncode, LosslessString, domain, form, guardrail, location,
+    project_id::ProjectId, schema::AbsolutePath, session, workspace_id::WorkspaceId,
 };
 use ycoding_core::ycoding_store::{
     Client, Error, KeyPart, Snapshot, TableSpec,
     project::{DirectoryTable, ProjectTable},
-    session::SessionTable,
+    resources,
+    session::{Document, SessionTable},
     tuple_key,
 };
 
@@ -60,6 +61,7 @@ pub struct Configuration {
 
 type Key = (LosslessString, Option<LosslessString>);
 type Reviews = Arc<Mutex<BTreeMap<session::Id, BTreeSet<guardrail::RequestId>>>>;
+const PENDING_FORMS: &str = "session/forms/clean-restart";
 
 struct Inner {
     client: Client,
@@ -629,6 +631,67 @@ impl Locations {
         Ok(true)
     }
 
+    pub(crate) async fn checkpoint_forms(&self) -> Result<(), Failure> {
+        let mut pending = self
+            .sets()
+            .iter()
+            .flat_map(|services| services.forms.list_ordered(None))
+            .filter(|(_, form)| session::Id::new(form.session_id.clone()).is_ok())
+            .collect::<Vec<_>>();
+        if pending.is_empty() {
+            return Ok(());
+        }
+        pending.sort_by_key(|(order, _)| *order);
+        let forms = pending
+            .into_iter()
+            .map(|(_, form)| form)
+            .collect::<Vec<_>>();
+        let document = Document::<domain::Json>::new(forms.encode()).map_err(unavailable)?;
+        let now = crate::ids::now_millis();
+        self.0
+            .client
+            .submit(move |tx| resources::set_kv(tx, &PENDING_FORMS.into(), &document, now))
+            .map_err(unavailable)?
+            .await
+            .map_err(unavailable)
+    }
+
+    pub(crate) async fn restore_forms(&self) -> Result<(), Failure> {
+        let snapshot = self.0.client.snapshot().map_err(unavailable)?;
+        let Some(document) =
+            resources::get_kv(&snapshot, &PENDING_FORMS.into()).map_err(unavailable)?
+        else {
+            return Ok(());
+        };
+        drop(snapshot);
+        let forms = Vec::<form::Info>::decode(document.value())
+            .map_err(|_| Failure::Unavailable("Pending Form checkpoint is invalid".into()))?;
+        for form in forms {
+            let id = session::Id::new(form.session_id.clone())
+                .map_err(|_| Failure::Unavailable("Pending Form owner is invalid".into()))?;
+            let (session, services) = match self.session(&id) {
+                Ok(owner) => owner,
+                Err(Failure::SessionNotFound(_)) => continue,
+                Err(error) => return Err(error),
+            };
+            if session.time.archived.is_none()
+                && session.scope == ycoding_core::ycoding_schema::session_scope::Scope::Bound
+            {
+                services
+                    .forms
+                    .restore(form)
+                    .map_err(|_| Failure::Unavailable("Pending Form restoration failed".into()))?;
+            }
+        }
+        self.0
+            .client
+            .submit(|tx| resources::remove_kv(tx, &PENDING_FORMS.into()))
+            .map_err(unavailable)?
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
     pub(crate) fn close(&self) -> Result<(), Failure> {
         self.0
             .closed
@@ -837,11 +900,41 @@ impl Locations {
         directory: &LosslessString,
         workspace: Option<&LosslessString>,
     ) -> Result<Arc<LocationServices>, Failure> {
+        self.find_loaded_location(directory, workspace)?
+            .ok_or_else(|| Failure::Unavailable("Location publication is unavailable".into()))
+    }
+
+    pub(crate) fn loaded_project_session(
+        &self,
+        id: &session::Id,
+    ) -> Result<Option<Arc<LocationServices>>, Failure> {
+        let info = self
+            .0
+            .sessions
+            .get(id)
+            .map_err(unavailable)?
+            .ok_or_else(|| Failure::SessionNotFound(convert::readable(id.as_lossless())))?;
+        if info.scope == ycoding_core::ycoding_schema::session_scope::Scope::Standalone {
+            return Ok(None);
+        }
+        self.find_loaded_location(
+            info.location.directory.as_lossless(),
+            info.location
+                .workspace_id
+                .as_ref()
+                .map(WorkspaceId::as_lossless),
+        )
+    }
+
+    fn find_loaded_location(
+        &self,
+        directory: &LosslessString,
+        workspace: Option<&LosslessString>,
+    ) -> Result<Option<Arc<LocationServices>>, Failure> {
         if self.0.closed.load(std::sync::atomic::Ordering::Acquire) {
             return Err(Failure::Unavailable("Location map is closed".into()));
         }
-        self.cached_lease(&(canonical(directory)?, workspace.cloned()))
-            .ok_or_else(|| Failure::Unavailable("Location publication is unavailable".into()))
+        Ok(self.cached_lease(&(canonical(directory)?, workspace.cloned())))
     }
 
     pub(crate) fn prepare_usage_location(

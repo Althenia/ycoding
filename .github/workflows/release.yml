@@ -38,6 +38,7 @@ env:
   PUBLISH_STAGED_RUN_ID: ${{ inputs.publish_staged_run_id }}
   PUBLISH_CHECKSUMS: ${{ inputs.publish_checksums }}
   PROMOTE_LATEST: ${{ inputs.promote_latest }}
+  RELEASE_REVIEWER_ID: ${{ github.repository_owner_id }}
 
 jobs:
   verify-source:

@@ -982,7 +982,7 @@ async fn pending_requests_concatenate_by_kind_before_truncating() {
         settings: Arc::new(|| Box::pin(async { Err(coordination::Error::refused("unused")) })),
         services: Arc::new(move |_| {
             let services = services.clone();
-            Box::pin(async move { Ok(services) })
+            Box::pin(async move { Ok(Some(services)) })
         }),
         now: None,
     });

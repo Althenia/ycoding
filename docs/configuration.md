@@ -346,6 +346,8 @@ After `ycoding update` installs a release, it applies the release to the running
 
 The background update check resolves the newest release from the same GitHub Releases source and only announces its availability with the explicit `ycoding update` command. It never downloads release assets, installs an update, replaces executables, or restarts the application. An omitted `autoupdate`, `true`, and `"notify"` all enable notice-only checks for patch, minor, and major releases; `false` disables the check. Installation requires the user to run `ycoding update`.
 
+After the managed service accepts a stop, `ycoding service stop` and `ycoding service restart` wait up to two minutes for the process to exit. The HTTP listener can close before the service finishes writing and releases the store. If the process is still running at the deadline, the command fails without killing it or starting a replacement.
+
 ### Desktop client transport
 
 `ycoding desktop-bridge --stdio [--server <url> | --standalone]` is recognized but returns `Desktop bridge is unavailable: authenticated caller binding is not supported` before backend discovery. No generic stdio launch is supported, including a claimed human or app caller. The command does not resolve an endpoint, open a transport, consume identity frames, or acquire a private-server lease.

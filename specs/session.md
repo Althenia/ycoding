@@ -201,7 +201,9 @@ A committed revert withdraws reviews and unused grants whose originating message
 
 Elapsed time does not close a required-answer question, admit an answer or no-answer steer, or resume the child. A question remains waiting for its matching authorized answer or explicit cancellation. Historical `question_timed_out` events remain replayable; current execution does not produce them.
 
-Startup reconciliation preserves a `waiting` task with a durable question ID, text, and timestamp even when its owner process has died or the question is old. Task get/list/page and TeamView derive the existing `question.deferred: true` marker from the owning review item, including defer-entry conversions, without another stored authority. An answer claims the task through its existing durable transition and wakes the child; eventual completion notifies and wakes the parent. Recovery never replays a prior in-flight provider attempt. Ordinary Question-service requests and Forms are process-local and are not restored by a new service scope, even when their notification outbox rows persist.
+Startup reconciliation preserves a `waiting` task with a durable question ID, text, and timestamp even when its owner process has died or the question is old. Task get/list/page and TeamView derive the existing `question.deferred: true` marker from the owning review item, including defer-entry conversions, without another stored authority. An answer claims the task through its existing durable transition and wakes the child; eventual completion notifies and wakes the parent. Recovery never replays a prior in-flight provider attempt.
+
+A clean server shutdown saves visible pending Forms owned by bound Sessions, including manual questions from the `question` tool. On startup they keep their IDs, field definitions, and owners. A reply settles the restored Form without restarting the prior tool call or provider request. Settled Forms, global Forms, standalone Session Forms, and ordinary Question-service requests are not restored. A crash does not create a Form checkpoint.
 
 ## Native Parent Child-Model Selection
 

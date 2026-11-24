@@ -5,7 +5,7 @@ import { spawn, type ChildProcess } from "node:child_process"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { DiscoverOptions, Endpoint, Info, EnsureOptions, StopOptions } from "../service.js"
-import { pollDelay, startupTimeout } from "../service-poll.js"
+import { managedShutdownTimeout, pollDelay, startupTimeout, stopPollInterval } from "../service-poll.js"
 import { assertStopTarget } from "../service-stop.js"
 import type { ServiceHealth, ServiceStopResponse } from "./generated/types.js"
 
@@ -295,12 +295,14 @@ function stopped(pid: number) {
   }
 }
 
-async function waitUntilStopped(pid: number) {
-  for (let attempt = 0; attempt <= 100; attempt++) {
+async function waitUntilStopped(pid: number, timeout = 100 * stopPollInterval) {
+  const deadline = performance.now() + timeout
+  for (;;) {
     if (stopped(pid)) return true
-    if (attempt < 100) await delay(50)
+    const remaining = deadline - performance.now()
+    if (remaining <= 0) return false
+    await delay(Math.min(remaining, stopPollInterval))
   }
-  return false
 }
 
 function same(left: Info, right: Info) {
@@ -313,14 +315,17 @@ async function kill(service: LocalService, options: StopOptions) {
     if (options.expected) throw new Error("The selected service did not stop")
     return
   }
-  if (requested === "unsupported") {
-    const current = await find(options)
-    if (current === undefined || !same(current.info, service.info)) {
-      if (options.expected) throw new Error("The registered service changed before it could be stopped")
-      return
-    }
-    signal(service.info.pid, "SIGTERM")
+  if (requested === "accepted") {
+    if (!(await waitUntilStopped(service.info.pid, managedShutdownTimeout)))
+      throw new Error(`Timed out waiting for server process ${service.info.pid} to stop`)
+    return
   }
+  const current = await find(options)
+  if (current === undefined || !same(current.info, service.info)) {
+    if (options.expected) throw new Error("The registered service changed before it could be stopped")
+    return
+  }
+  signal(service.info.pid, "SIGTERM")
   if (await waitUntilStopped(service.info.pid)) return
 
   const latest = await find(options)

@@ -3158,7 +3158,52 @@ const adaptGroup41 = (raw: RawClient["server.interaction"]) => ({
   resume: Endpoint41_4(raw),
 })
 
-const adaptClient = (raw: RawClient) => ({
+type Client = {
+  health: ReturnType<typeof adaptGroup0>
+  server: ReturnType<typeof adaptGroup1>
+  location: ReturnType<typeof adaptGroup2>
+  agent: ReturnType<typeof adaptGroup3>
+  plugin: ReturnType<typeof adaptGroup4>
+  session: ReturnType<typeof adaptGroup5>
+  guardrail: ReturnType<typeof adaptGroup6>
+  message: ReturnType<typeof adaptGroup7>
+  model: ReturnType<typeof adaptGroup8>
+  generate: ReturnType<typeof adaptGroup9>
+  provider: ReturnType<typeof adaptGroup10>
+  providerUsage: ReturnType<typeof adaptGroup11>
+  integration: ReturnType<typeof adaptGroup12>
+  mcp: ReturnType<typeof adaptGroup13>
+  credential: ReturnType<typeof adaptGroup14>
+  project: ReturnType<typeof adaptGroup15>
+  form: ReturnType<typeof adaptGroup16>
+  permission: ReturnType<typeof adaptGroup17>
+  file: ReturnType<typeof adaptGroup18>
+  command: ReturnType<typeof adaptGroup19>
+  skill: ReturnType<typeof adaptGroup20>
+  event: ReturnType<typeof adaptGroup21>
+  pty: ReturnType<typeof adaptGroup22>
+  shell: ReturnType<typeof adaptGroup23>
+  question: ReturnType<typeof adaptGroup24>
+  reference: ReturnType<typeof adaptGroup25>
+  projectCopy: ReturnType<typeof adaptGroup26>
+  vcs: ReturnType<typeof adaptGroup27>
+  projectArtifact: ReturnType<typeof adaptGroup28>
+  debug: ReturnType<typeof adaptGroup29>
+  browser: ReturnType<typeof adaptGroup30>
+  isolatedBrowser: ReturnType<typeof adaptGroup31>
+  usage: ReturnType<typeof adaptGroup32>
+  incident: ReturnType<typeof adaptGroup33>
+  remote: ReturnType<typeof adaptGroup34>
+  keepAwake: ReturnType<typeof adaptGroup35>
+  config: ReturnType<typeof adaptGroup36>
+  review: ReturnType<typeof adaptGroup37>
+  coordination: ReturnType<typeof adaptGroup38>
+  dots: ReturnType<typeof adaptGroup39>
+  decision: ReturnType<typeof adaptGroup40>
+  sessionInteraction: ReturnType<typeof adaptGroup41>
+}
+
+const adaptClient = (raw: RawClient): Client => ({
   health: adaptGroup0(raw["server.health"]),
   server: adaptGroup1(raw["server.server"]),
   location: adaptGroup2(raw["server.location"]),

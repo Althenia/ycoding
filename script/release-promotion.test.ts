@@ -15,8 +15,8 @@ const run = {
   status: "completed", conclusion: "success",
 }
 const environment = {
-  name: "release-production", can_admins_bypass: false, deployment_branch_policy: { custom_branch_policies: true },
-  protection_rules: [{ type: "required_reviewers", prevent_self_review: true, reviewers: [{ id: 21 }] }],
+  name: "release-production", can_admins_bypass: false, deployment_branch_policy: { protected_branches: false, custom_branch_policies: true },
+  protection_rules: [{ type: "required_reviewers", prevent_self_review: false, reviewers: [{ type: "User", reviewer: { id: 21 } }] }],
 }
 const policies = { total_count: 1, branch_policies: [{ type: "branch", name: "main" }] }
 
@@ -66,6 +66,7 @@ esac
       env: {
         PATH: `${directory}:${process.env.PATH}`, GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_REF: "refs/heads/main",
         GITHUB_REF_PROTECTED: "true", GITHUB_SHA: sha, GITHUB_REPOSITORY: "example/ycoding",
+        RELEASE_REVIEWER_ID: "21",
         GITHUB_RUN_ID: "43", GITHUB_OUTPUT: path.join(directory, "output"), REQUESTED_RELEASE_VERSION: "0.13.0", RELEASE_VERSION: "0.13.0",
         PUBLISH_STAGED_RUN_ID: "42", PUBLISH_CHECKSUMS: command === "verify" ? digest : checksums, PROMOTE_LATEST: "true",
         VERIFIED_STAGE_RUN_ID: "42", VERIFIED_STAGE_CHECKSUMS: digest,
@@ -118,14 +119,18 @@ test.each([
   expect(result.outputs).toBe("")
 })
 
-test("publication accepts the native reviewer and main-only restriction", () => {
+test("publication accepts the sole native reviewer and main-only restriction", () => {
   const result = execute("control")
   expect(result.exit, result.error).toBe(0)
 })
 
 test.each([
   { environment: null }, { environment: { ...environment, can_admins_bypass: true } },
-  { environment: { ...environment, protection_rules: [] } }, { environment: { ...environment, protection_rules: [{ ...environment.protection_rules[0], prevent_self_review: false }] } },
+  { environment: { ...environment, protection_rules: [] } },
+  { environment: { ...environment, protection_rules: [{ ...environment.protection_rules[0], prevent_self_review: true }] } },
+  { environment: { ...environment, protection_rules: [{ ...environment.protection_rules[0], reviewers: [] }] } },
+  { env: { RELEASE_REVIEWER_ID: "22" } },
+  { env: { RELEASE_REVIEWER_ID: "" } },
   { policies: { ...policies, branch_policies: [{ type: "tag", name: "main" }] } },
 ])("publication fails closed without a protected production environment: %p", (fixture) => {
   expect(execute("control", fixture).exit).toBe(1)

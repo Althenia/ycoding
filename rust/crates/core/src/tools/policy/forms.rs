@@ -76,6 +76,14 @@ struct Entry {
     settled_at: Option<u64>,
     sender: Option<oneshot::Sender<form::State>>,
 }
+
+#[derive(Clone, Copy)]
+enum Admission {
+    Hidden,
+    Visible,
+    Restored,
+}
+
 struct Inner {
     authority: Authority,
     publish: Publisher,
@@ -373,16 +381,14 @@ impl Forms {
                 .is_none_or(|settled| now.saturating_sub(settled) < RETENTION)
         });
     }
-    pub fn create(&self, form: form::Info) -> Result<form::Info, Error> {
-        self.create_pending(form, true, None)
+    pub fn create(&self, mut form: form::Info) -> Result<form::Info, Error> {
+        form.assessment = None;
+        self.create_pending(form, Admission::Visible)
     }
-    fn create_pending(
-        &self,
-        mut form: form::Info,
-        visible: bool,
-        assessment: Option<form::Assessment>,
-    ) -> Result<form::Info, Error> {
-        form.assessment = assessment;
+    pub fn restore(&self, form: form::Info) -> Result<(), Error> {
+        self.create_pending(form, Admission::Restored).map(|_| ())
+    }
+    fn create_pending(&self, form: form::Info, admission: Admission) -> Result<form::Info, Error> {
         let mut forms = self
             .0
             .forms
@@ -401,13 +407,13 @@ impl Forms {
                 state: form::State::Pending,
                 automatic: None,
                 source: None,
-                visible,
+                visible: !matches!(admission, Admission::Hidden),
                 failure: None,
                 settled_at: None,
                 sender: None,
             },
         );
-        if visible
+        if matches!(admission, Admission::Visible)
             && let Err(error) = state::emit::<form::Created>(
                 &self.0.publish,
                 &form::CreatedData { form: form.clone() },
@@ -502,8 +508,14 @@ impl Forms {
             let _ = sender.send(deferred);
             return Ok(Wait::new(receiver, || {}));
         }
-        let hidden = asleep && deterministic.is_none();
-        let form = self.create_pending(form, !hidden, assessment)?;
+        let admission = if asleep && deterministic.is_none() {
+            Admission::Hidden
+        } else {
+            Admission::Visible
+        };
+        let mut form = form;
+        form.assessment = assessment;
+        let form = self.create_pending(form, admission)?;
         let (sender, receiver) = oneshot::channel();
         let order = {
             let mut forms = self

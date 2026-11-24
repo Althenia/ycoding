@@ -149,19 +149,22 @@ fn session_failure(id: &session::Id, failure: Failure) -> Error {
 
 fn locate(locations: WeakLocations) -> Locate {
     Arc::new(
-        move |id: session::Id| -> Future<'static, DecisionServices> {
+        move |id: session::Id| -> Future<'static, Option<DecisionServices>> {
             let locations = locations.clone();
             Box::pin(async move {
                 let current = locations.upgrade().ok_or_else(unavailable)?;
-                let (_, held) = current
-                    .session(&id)
-                    .map_err(|failure| session_failure(&id, failure))?;
+                let Some(held) = current
+                    .loaded_project_session(&id)
+                    .map_err(|failure| session_failure(&id, failure))?
+                else {
+                    return Ok(None);
+                };
                 if !current.is_current(&held) {
                     return Err(unavailable());
                 }
                 let pinned = held.clone();
                 let weak = current.downgrade();
-                Ok(DecisionServices {
+                Ok(Some(DecisionServices {
                     permissions: held.permissions.clone(),
                     forms: held.forms.clone(),
                     guardrails: held.guardrails.clone(),
@@ -170,7 +173,7 @@ fn locate(locations: WeakLocations) -> Locate {
                         weak.upgrade()
                             .is_some_and(|locations| locations.is_current(&pinned))
                     }),
-                })
+                }))
             })
         },
     )
