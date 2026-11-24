@@ -37,6 +37,9 @@ export const RELEASES: readonly ReleaseEntry[] = [
       { tag: "Fixed", text: "`ycoding service restart` waits for the old process to exit and release the store, even if its listener has already closed." },
       { tag: "Fixed", text: "A clean restart restores pending manual questions and Forms without reopening settled decisions." },
       { tag: "Fixed", text: "Dot and Remote clients reconnect after the server closes the socket with 1012 and opens a new epoch. Work tied to the old connection does not carry over to the new one." },
+      { tag: "Fixed", text: "Remote connections refresh credentials and reconnect when relay credentials or delivery credit expire. Device revocation still stops reconnection." },
+      { tag: "Fixed", text: "Cancelling or timing out a `glob` or `grep` call inside `execute` stops its Ripgrep process without blocking sibling tool calls." },
+      { tag: "Fixed", text: "After an unexpected stop, startup marks incomplete tool-call arguments as unexecuted before closing the interrupted Step and does not replay unfinished calls." },
     ],
   },
   {

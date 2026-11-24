@@ -17,6 +17,9 @@ mod dispatch;
 pub mod dots;
 mod ephemeral;
 mod event_subscribe;
+#[cfg(test)]
+#[path = "../../core/tests/filesystem_fixture.rs"]
+mod filesystem_fixture;
 mod form;
 mod fs;
 mod goal_decisions;

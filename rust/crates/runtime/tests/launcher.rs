@@ -1,6 +1,6 @@
 #[path = "launcher/clean_store.rs"]
 mod clean_store;
-#[path = "support/launcher.rs"]
+#[path = "support/launcher_service.rs"]
 mod launcher;
 #[path = "launcher/stable_sources.rs"]
 mod stable_sources;

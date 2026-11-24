@@ -1,4 +1,5 @@
 use super::*;
+use crate::filesystem_fixture;
 use ycoding_core::{
     session::{pending, run_coordinator::Coordinator},
     ycoding_schema::{event, session_pending, stringify_json},

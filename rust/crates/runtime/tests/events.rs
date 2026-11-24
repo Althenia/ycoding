@@ -427,7 +427,7 @@ async fn reconnect_reconciles_an_unacknowledged_prompt_by_its_durable_identity()
                 let Some(v5::session_pending_info::Kind::Value1(user)) = &item.kind else {
                     panic!("expected a pending user prompt");
                 };
-                (units(&user.id), user.admitted_seq as u64)
+                (units(&user.id), user.admitted_seq)
             })
             .collect::<Vec<_>>();
         assert_eq!(

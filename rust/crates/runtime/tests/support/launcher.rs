@@ -5,8 +5,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
-use ycoding_core::ycoding_schema::{JsonValue, parse_json};
-use ycoding_runtime::launch::service_filename;
+use ycoding_core::ycoding_schema::JsonValue;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -75,13 +74,6 @@ impl Directory {
         std::fs::create_dir_all(self.0.join("home")).unwrap();
         command
     }
-
-    pub fn registration(&self, channel: &str) -> PathBuf {
-        self.0
-            .join("state")
-            .join(ycoding_runtime::launch::namespace(channel))
-            .join(service_filename(channel))
-    }
 }
 
 impl Drop for Directory {
@@ -137,16 +129,6 @@ impl Runtime {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
-
-    pub fn signal(&self, signal: &str) {
-        assert!(
-            Command::new("kill")
-                .args([signal, &self.child.id().to_string()])
-                .status()
-                .unwrap()
-                .success()
-        );
-    }
 }
 
 impl Drop for Runtime {
@@ -159,10 +141,6 @@ impl Drop for Runtime {
             let _ = reader.join();
         }
     }
-}
-
-pub fn read(path: &std::path::Path) -> JsonValue {
-    parse_json(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
 pub fn string(value: &JsonValue, key: &str) -> String {

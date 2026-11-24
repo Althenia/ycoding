@@ -1,6 +1,6 @@
 #![cfg(unix)]
 
-#[path = "support/launcher.rs"]
+#[path = "support/launcher_service.rs"]
 mod launcher;
 mod support;
 

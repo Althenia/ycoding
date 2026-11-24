@@ -1,6 +1,9 @@
 use crate::session::{key, projector, store::Service};
 use std::ops::Bound;
-use ycoding_schema::{JsonValue, LosslessString, ObjectEncoder, session_message};
+use ycoding_schema::{
+    JsonValue, LosslessString, ObjectEncoder,
+    session_message::{AssistantContent, Info, ToolState},
+};
 use ycoding_store::{
     Error, IndexOrder, IndexQuery, KeyPart, Write,
     session::{Event, EventTable, MessageTable, NewEvent, SequenceTable},
@@ -61,7 +64,7 @@ impl Service {
                                     "unterminated Step has no assistant identity",
                                 ));
                             };
-                            settle_running_tools(tx, &sequence.aggregate_id, assistant, now)?;
+                            settle_unfinished_tools(tx, &sequence.aggregate_id, assistant, now)?;
                             projector::append(
                                 tx,
                                 &NewEvent {
@@ -98,7 +101,7 @@ impl Service {
     }
 }
 
-fn settle_running_tools(
+fn settle_unfinished_tools(
     tx: &mut Write<'_>,
     session: &LosslessString,
     assistant: &LosslessString,
@@ -110,36 +113,48 @@ fn settle_running_tools(
     else {
         return Ok(());
     };
-    let session_message::Info::Assistant(message) = row.info()? else {
+    let Info::Assistant(message) = row.info()? else {
         return Ok(());
     };
     for part in message.content {
-        if let session_message::AssistantContent::Tool(tool) = part
-            && matches!(tool.state, session_message::ToolState::Running(_))
-        {
-            projector::append(
-                tx,
-                &NewEvent {
-                    id: projector::random_event_id()?.as_lossless().clone(),
-                    aggregate_id: session.clone(),
-                    created: now,
-                    type_: "session.tool.failed.1".into(),
-                    data: ObjectEncoder::new()
-                        .field("sessionID", session)
-                        .field("assistantMessageID", assistant)
-                        .field("callID", &tool.id)
-                        .field("executed", &tool.executed.unwrap_or(false))
-                        .field(
-                            "error",
-                            &ObjectEncoder::new()
-                                .field("type", "aborted")
-                                .field("message", "The server stopped before the tool result was recorded. Its effect is unknown and it was not retried. Check what happened before trying again.")
-                                .finish(),
-                        )
-                        .finish(),
-                },
-            )?;
-        }
+        let AssistantContent::Tool(tool) = part else {
+            continue;
+        };
+        let (kind, message, executed) = match tool.state {
+            ToolState::Streaming(_) => (
+                "tool.input-json",
+                "Tool call arguments were incomplete when the service restarted and were not executed. Retry the call if it is still needed.",
+                false,
+            ),
+            ToolState::Running(_) => (
+                "aborted",
+                "The server stopped before the tool result was recorded. Its effect is unknown and it was not retried. Check what happened before trying again.",
+                tool.executed == Some(true),
+            ),
+            _ => continue,
+        };
+        projector::append(
+            tx,
+            &NewEvent {
+                id: projector::random_event_id()?.as_lossless().clone(),
+                aggregate_id: session.clone(),
+                created: now,
+                type_: "session.tool.failed.1".into(),
+                data: ObjectEncoder::new()
+                    .field("sessionID", session)
+                    .field("assistantMessageID", assistant)
+                    .field("callID", &tool.id)
+                    .field("executed", &executed)
+                    .field(
+                        "error",
+                        &ObjectEncoder::new()
+                            .field("type", kind)
+                            .field("message", message)
+                            .finish(),
+                    )
+                    .finish(),
+            },
+        )?;
     }
     Ok(())
 }

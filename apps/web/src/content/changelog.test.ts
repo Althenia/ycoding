@@ -17,7 +17,7 @@ describe("release entries", () => {
       if (!tag) return []
       return [...section.matchAll(/^- (.+)$/gm)].map((match) => ({ tag, text: match[1]! }))
     })
-    expect(changes).toHaveLength(10)
+    expect(changes).toHaveLength(13)
     expect(changes).toEqual(expect.arrayContaining([
       expect.objectContaining({ tag: "Changed", text: expect.stringMatching(/signed Rust CLI and Desktop.*Apple Silicon.*core\.redb.*does not import/) }),
       expect.objectContaining({ tag: "Changed", text: expect.stringMatching(/YCODING_VERSION=0\.12\.2.*--replace-bun.*Bun database intact/) }),
@@ -29,6 +29,9 @@ describe("release entries", () => {
       expect.objectContaining({ tag: "Fixed", text: expect.stringMatching(/service restart.*process to exit and release the store/) }),
       expect.objectContaining({ tag: "Fixed", text: expect.stringMatching(/clean restart restores pending manual questions and Forms.*settled decisions/) }),
       expect.objectContaining({ tag: "Fixed", text: expect.stringMatching(/Dot and Remote clients reconnect.*1012.*new epoch/) }),
+      expect.objectContaining({ tag: "Fixed", text: expect.stringMatching(/refresh credentials and reconnect.*relay credentials or delivery credit expire.*Device revocation still stops reconnection/) }),
+      expect.objectContaining({ tag: "Fixed", text: expect.stringMatching(/Cancelling or timing out a `glob` or `grep` call inside `execute` stops its Ripgrep process without blocking sibling tool calls/) }),
+      expect.objectContaining({ tag: "Fixed", text: expect.stringMatching(/startup marks incomplete tool-call arguments as unexecuted.*closing the interrupted Step.*does not replay unfinished calls/) }),
     ]))
     expect(entry?.changes).toEqual(changes)
     expect(after("0.13.0")?.version).toBe("0.12.2")

@@ -33,10 +33,6 @@ use ycoding_core::{
 #[allow(dead_code)]
 mod catalog_fixture;
 
-#[path = "../../../core/tests/filesystem_fixture.rs"]
-#[allow(dead_code)]
-mod filesystem_fixture;
-
 const MODELS: &str = r#"{"openai":{"id":"openai","name":"OpenAI","api":"http://127.0.0.1:1","env":["OPENAI_API_KEY"],"npm":"@ai-sdk/openai-compatible","models":{"gpt-runtime":{"id":"gpt-runtime","name":"Runtime","release_date":"2026-01-01","attachment":false,"reasoning":false,"tool_call":true,"limit":{"context":128000,"output":8192},"cost":{"input":2,"output":3}},"gpt-helper":{"id":"gpt-helper","name":"Helper","release_date":"2026-01-01","attachment":false,"reasoning":false,"tool_call":false,"limit":{"context":64000,"output":4096},"cost":{"input":1,"output":2}}}}}"#;
 
 static FIXTURE: AtomicU64 = AtomicU64::new(0);
@@ -1945,7 +1941,7 @@ async fn requested_location_quota_publishes_while_a_usage_report_is_held() {
     .expect("analytics owner must start");
     handle
         .report(vec![Query {
-            sql: "SELECT count(*) FROM usage_analytics_request".into(),
+            sql: "SELECT count(*) FROM usage_analytics_request",
             parameters: Vec::new(),
             max_rows: 1,
         }])

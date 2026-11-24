@@ -27,7 +27,7 @@ use ycoding_core::{
         KeyPart, Metadata, Options, Store,
         native::{DatabaseKind, catalog},
         project,
-        session::{Document, EventTable, SessionTable, Task, TaskTable},
+        session::{Document, EventTable, NewEvent, SessionTable, Task, TaskTable},
         tuple_key,
     },
 };
@@ -105,6 +105,7 @@ fn restarting_with_a_running_root_tool_exposes_its_unknown_effect_without_resumi
     let name = "restarting_with_a_running_root_tool_exposes_its_unknown_effect_without_resuming";
     const TOOL_STARTED: &str = "DAILY_WORKFLOW_TOOL_STARTED";
     const CALL: &str = "call_root_tool_in_flight";
+    const PARTIAL_CALL: &str = "call_root_tool_partial";
     if let Some((root, phase)) = assigned() {
         return run(move |host| {
             Box::pin(async move {
@@ -147,6 +148,26 @@ fn restarting_with_a_running_root_tool_exposes_its_unknown_effect_without_resumi
                         .reply(&asked.id, permission::Reply("once".into()), None)
                         .unwrap();
                     until(|| marker.exists().then_some(())).await;
+                    let Some(session_message::Info::Assistant(reply)) =
+                        core.sessions.latest(&session, "assistant").unwrap()
+                    else {
+                        panic!("the in-flight assistant reply is missing");
+                    };
+                    core.sessions
+                        .publish(NewEvent {
+                            id: "evt_daily_partial_tool".into(),
+                            aggregate_id: session.as_lossless().clone(),
+                            created: reply.time.created.epoch_millis(),
+                            type_: "session.tool.input.started.1".into(),
+                            data: ycoding_core::ycoding_schema::ObjectEncoder::new()
+                                .field("sessionID", &session)
+                                .field("assistantMessageID", &reply.id)
+                                .field("callID", PARTIAL_CALL)
+                                .field("name", "shell")
+                                .finish(),
+                        })
+                        .await
+                        .unwrap();
                     println!("\n{TOOL_STARTED}");
                     std::future::pending::<()>().await;
                 }
@@ -190,6 +211,25 @@ fn restarting_with_a_running_root_tool_exposes_its_unknown_effect_without_resumi
                         .contains("effect is unknown")
                 );
                 assert!(tool.time.completed.is_some());
+                let partial = reply
+                    .content
+                    .iter()
+                    .find_map(|part| match part {
+                        session_message::AssistantContent::Tool(tool)
+                            if tool.id.as_str() == Some(PARTIAL_CALL) =>
+                        {
+                            Some(tool)
+                        }
+                        _ => None,
+                    })
+                    .expect("the partial tool call is missing");
+                let session_message::ToolState::Error(error) = &partial.state else {
+                    panic!("the partial tool call stayed open after restart");
+                };
+                assert_eq!(error.error.r#type.as_str(), Some("tool.input-json"));
+                assert_eq!(partial.executed, Some(false));
+                assert!(partial.time.ran.is_none());
+                assert!(partial.time.completed.is_some());
                 core.shutdown().await.unwrap();
                 provider.stop().await;
             })

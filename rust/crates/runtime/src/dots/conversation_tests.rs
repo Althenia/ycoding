@@ -1,4 +1,5 @@
 use super::*;
+use crate::filesystem_fixture;
 use futures_util::{SinkExt, StreamExt};
 use std::{
     collections::{BTreeSet, VecDeque},
@@ -24,10 +25,6 @@ use ycoding_protocol::{
     connection::{Budgets, Config, Connection, Decision, Outcome},
     decode_strict,
 };
-
-#[allow(dead_code)]
-#[path = "../../../core/tests/filesystem_fixture.rs"]
-mod filesystem_fixture;
 
 const VALID_AUTH: &str = "Basic eWNvZGluZzpzeW50aGV0aWMtcGFzc3dvcmQ=";
 const WRONG_AUTH: &str = "Basic eWNvZGluZzp3cm9uZw==";

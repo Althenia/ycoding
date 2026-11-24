@@ -1,5 +1,5 @@
 mod launcher {
-    include!("support/launcher.rs");
+    include!("support/launcher_service.rs");
     impl Runtime {
         pub fn stdout(&mut self) -> Vec<String> {
             assert!(self.child.try_wait().unwrap().is_some());
