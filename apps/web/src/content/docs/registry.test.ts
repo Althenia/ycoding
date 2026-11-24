@@ -322,6 +322,7 @@ describe("page structure", () => {
     const requirements = page?.sections.find((section) => section.heading === "Requirements")
     expect(requirements?.blocks.find((block) => block.kind === "table")?.rows.map((row) => row[1])).toEqual(["darwin-arm64"])
     expect(JSON.stringify(requirements?.blocks)).toContain("historical release that has a matching archive")
+    expect(JSON.stringify(requirements?.blocks)).toContain("YCODING_VERSION=0.12.2 sh install.sh")
     expect(install?.blocks).toContainEqual(expect.objectContaining({
       kind: "paragraph", text: expect.stringMatching(/newest stable Rust release and stops if none is available/),
     }))
@@ -342,6 +343,25 @@ describe("page structure", () => {
     expect(blocks).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "paragraph", text: expect.stringMatching(/`\/remote`.*enrolled device running the Rust runtime.*`\/remote\/rust`.*same workspace/) }),
     ]))
+  })
+
+  test("documents the saved manual keep-awake preference separately from Session holds", () => {
+    for (const slug of ["configuration", "usage/remote"]) {
+      const text = JSON.stringify(findDocPage(slug)?.sections)
+      expect(text).toMatch(/manual.*until you turn it off/)
+      expect(text).toMatch(/no manual hold while YCoding is stopped/)
+      expect(text).toMatch(/restores the manual choice at startup/)
+      expect(text).toMatch(/deferred Session.*restore their.*holds/i)
+    }
+  })
+
+  test("documents native plugin selection and process extensions separately from Bun modules", () => {
+    const text = JSON.stringify(findDocPage("configuration/plugins")?.sections)
+    expect(text).toContain("ycoding.tool.websearch")
+    expect(text).toContain("process extensions")
+    expect(text).toContain("`extensions`")
+    expect(text).toMatch(/JavaScript and TypeScript.*npm packages.*Bun 0\.12\.x/)
+    expect(text).not.toContain(".ycoding/plugins/project.ts")
   })
 
   test("the remote guide describes family-finished and attention categories", () => {

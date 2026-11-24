@@ -646,7 +646,8 @@ export class LocalTransport {
         if (!prepared || !owner.active) break
         const { frame } = prepared
         const normal = frame.ledger === LedgerClass.NORMAL && frame.body.case !== "hello" && frame.body.case !== "ready"
-        if (normal && normalSentAt.length === normalRate && now - normalSentAt[0] < rateWindowMs) {
+        const oldest = normalSentAt[0]
+        if (normal && normalSentAt.length === normalRate && oldest !== undefined && now - oldest < rateWindowMs) {
           connection.abortPrepared(prepared)
           break
         }

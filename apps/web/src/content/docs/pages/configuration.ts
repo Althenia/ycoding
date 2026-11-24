@@ -20,7 +20,7 @@ const domainCards: DocBlock = {
     { title: "Agents", text: "Specialized behavior, availability, and step limits.", href: "/docs/configuration/agents" },
     { title: "Models", text: "Model entries, variants, capabilities, and limits.", href: "/docs/configuration/models" },
     { title: "Providers", text: "Provider entries, credentials, and profiles.", href: "/docs/configuration/providers" },
-    { title: "Plugins", text: "Plugin ordering, options, and removal.", href: "/docs/configuration/plugins" },
+    { title: "Plugins", text: "Built-in plugin selection and native process extensions.", href: "/docs/configuration/plugins" },
     { title: "MCP", text: "Local and remote servers, timeouts, and OAuth.", href: "/docs/configuration/mcp" },
     { title: "Goal", text: "Objectives and automatic continuation.", href: "/docs/configuration/goal" },
     { title: "Autonomous mode", text: "Manual, YOLO, or Auto for permissions, guardrails, and answers.", href: "/docs/configuration/autonomous" },
@@ -48,7 +48,7 @@ export const configurationPages: readonly DocPage[] = [
           },
           {
             kind: "paragraph",
-            text: "Keep machine awake is a process-local machine control, not a configuration-file preference. Use the TUI status dialog or remote Settings → Machine. It defaults to Off and on macOS prevents idle sleep and lid-closed sleep; choosing Sleep still sleeps the machine, and on battery this drains the battery while a closed lid traps heat. Linux and Windows report Unsupported. A deferred Session family holds keep-awake, including after restart. Turning defer off restores the manual setting.",
+            text: "On macOS, set Keep machine awake from the TUI status dialog or Remote Settings → Machine. The manual preference defaults to Off and stays on until you turn it off. There is no manual hold while YCoding is stopped. YCoding restores the manual choice at startup, and deferred Session families restore their separate holds. Ending defer releases that family's hold without changing the manual preference. Check the reported idle and lid status; on battery this drains the battery, and a closed lid traps heat. Linux and Windows report Unsupported.",
           },
           surfaces,
         ],
@@ -60,7 +60,7 @@ export const configurationPages: readonly DocPage[] = [
             kind: "table",
             head: ["Location", "Path", "Notes"],
             rows: [
-              ["Global config directory", "`$XDG_CONFIG_HOME/ycoding`, usually `~/.config/ycoding`", "Holds global `ycoding.json`, `ycoding.jsonc`, `cli.json`, `AGENTS.md`, and the `agents/`, `commands/`, `plugins/`, `guardrails/`, and `themes/` directories. `YCODING_CONFIG_DIR` replaces this path."],
+              ["Global config directory", "`$XDG_CONFIG_HOME/ycoding`, usually `~/.config/ycoding`", "Holds global `ycoding.json`, `ycoding.jsonc`, `cli.json`, `AGENTS.md`, and the `agents/`, `commands/`, `guardrails/`, and `themes/` directories. `YCODING_CONFIG_DIR` replaces this path."],
               ["Project file", "`ycoding.json` or `ycoding.jsonc` in the current directory or any ancestor", "Every ancestor is scanned, not only the Git root."],
               ["Project directory", "`.ycoding/` in the current directory or any ancestor", "Holds `ycoding.json`, `ycoding.jsonc`, and the same resource directories as the global config directory."],
               ["Explicit file", "The path in `YCODING_CONFIG`", "Loaded after the global files and before project files."],
@@ -102,7 +102,7 @@ export const configurationPages: readonly DocPage[] = [
               ["`agents.<id>`", "Each defined field replaces the earlier value; `request.headers` and `request.body` merge; `permissions` append; `disabled: true` removes the agent."],
               ["`providers.<id>`", "`name` and `package` replace; `settings` and `body` merge deeply; `headers` merge; each model field replaces; variants merge by `id`."],
               ["`mcp.servers.<name>`", "A later document replaces the whole server entry. `mcp.timeout` fields merge individually."],
-              ["`plugins`", "Entries from every document run in load order, after auto-discovered plugin files."],
+              ["`plugins`", "Built-in selectors apply in configuration load order."],
               ["`memory`, `tool_output`, `attachments.image`", "Each nested field merges independently."],
             ],
           },
@@ -249,7 +249,8 @@ export const configurationPages: readonly DocPage[] = [
               ["`instructions`", "string[]", "unset", "Accepted but not read by instruction discovery. Use `AGENTS.md` or skills."],
               ["`instruction_max_bytes`", "positive integer ≤ 1048576", "`51200`", "Per-file UTF-8 byte cap for ambient `AGENTS.md` instructions."],
               ["`references`", "record", "unset", "Named local directories or Git repositories used as context."],
-              ["`plugins`", "array of string | `{ package, options? }`", "unset", "Ordered plugin additions and removals."],
+              ["`plugins`", "array of strings", "unset", "Enable or disable native built-ins by ID or pattern."],
+              ["`extensions`", "array of process definitions", "unset", "Launch explicitly configured native process extensions."],
               ["`providers`", "record of provider objects", "unset", "Provider and model metadata and request overlays."],
               ["`provider_usage.codex_app_server`", "object", "unset", "Optional local Codex app-server quota source, displayed separately with unknown account attribution rather than as a stored profile."],
               ["`efficiency`", "object", "runtime-derived", "Helper models, title policy, prompt caching, Responses continuation."],
@@ -822,30 +823,27 @@ Report concrete defects with file and symbol evidence.`,
     slug: "configuration/plugins",
     title: "Plugins",
     group: "Configuration",
-    description: "Add, order, configure, and remove runtime plugins, and how plugins register hooks.",
+    description: "Select native built-ins or configure a trusted process extension in the Rust runtime.",
     sections: [
       {
         heading: "What it controls",
         blocks: [
           {
             kind: "paragraph",
-            text: "Plugins extend runtime domains: they can register tools, hooks, agents, commands, skills, integrations, references, provider transforms, and Session behavior. Built-in tools and providers are plugins too, so `plugins` can remove them.",
+            text: "Built-in tools, providers, and other integrations run inside the Rust runtime. Set `plugins` in `ycoding.jsonc` to enable or disable built-ins. JavaScript and TypeScript plugin files and npm packages are supported by the Bun 0.12.x edition; the Rust runtime does not load them.",
           },
         ],
       },
       {
-        heading: "Entry forms",
+        heading: "Select built-in plugins",
         blocks: [
           {
             kind: "table",
             head: ["Entry", "Meaning"],
             rows: [
-              ["`\"./plugins/local.ts\"`, `\"../shared/p.js\"`, `\"file:///abs/p.ts\"`", "Load a file. `./` and `../` resolve from the directory of the containing config file."],
-              ["`\"@scope/package\"`", "Install and load an npm package."],
-              ["`{ \"package\": \"@scope/package\", \"options\": { } }`", "Load a package or file and pass `options` to the plugin."],
               ["`\"ycoding.tool.websearch\"`", "Enable a plugin by exact ID."],
-              ["`\"-ycoding.tool.websearch\"`", "Remove the plugin with that ID."],
-              ["`\"*\"`, `\"ycoding.provider.*\"`", "Select every plugin, or every plugin whose ID starts with the prefix."],
+              ["`\"-ycoding.tool.websearch\"`", "Disable the plugin with that ID."],
+              ["`\"*\"`, `\"ycoding.provider.*\"`", "Enable all built-ins or all built-ins in a namespace. Prefix the selector with `-` to disable its matches."],
             ],
           },
           {
@@ -854,77 +852,29 @@ Report concrete defects with file and symbol evidence.`,
             label: "ycoding.jsonc",
             code: `{
   "plugins": [
-    { "package": "@example/ycoding-plugin", "options": { "strict": true } },
-    "./.ycoding/extra/policy.ts",
     "-ycoding.tool.websearch",
     "-ycoding.provider.xai",
   ],
 }`,
           },
+          {
+            kind: "paragraph",
+            text: "Selectors apply in configuration load order. A later positive selector can re-enable its matches. Required built-ins stay enabled and produce a configuration warning if you try to disable them.",
+          },
         ],
       },
       {
-        heading: "Ordering rules",
+        heading: "Run a process extension",
         blocks: [
           {
-            kind: "list",
-            ordered: true,
-            items: [
-              "Direct `plugin/*.ts|js` and `plugins/*.ts|js` files in the global config directory and in ancestor `.ycoding/` directories are loaded automatically. Nested files are not discovered.",
-              "`plugins` entries from every document then apply in configuration load order, so an entry can remove an auto-discovered or built-in plugin.",
-              "A later entry for the same package replaces the earlier one.",
-              "A plugin that fails to load logs `failed to load plugin` with its target; other plugins still load.",
-            ],
+            kind: "paragraph",
+            text: "Configure native process extensions under `extensions`. Each entry names an `identity` and `executable`, and can supply `args` and `grants`. Use an executable that implements the YCoding v5 extension protocol and grant only the capabilities it needs. JavaScript launchers such as Node, Bun, npm, and npx are not extension executables.",
           },
           {
             kind: "callout",
-            tone: "info",
-            title: "Hooks belong to plugins",
-            text: "There is no top-level `hooks` key and no `.ycoding/hooks/` directory. Plugins register hooks for the AI SDK, Session, and Tool domains.",
-          },
-        ],
-      },
-      {
-        heading: "Writing a plugin",
-        blocks: [
-          {
-            kind: "paragraph",
-            text: "The default export must be `define({ id, effect })` from `@ycoding-ai/plugin/effect/plugin` or `define({ id, setup })` from `@ycoding-ai/plugin/promise/plugin`. Any other shape fails with `Invalid plugin export`.",
-          },
-          {
-            kind: "code",
-            language: "ts",
-            label: ".ycoding/plugins/project.ts",
-            code: `import { define } from "@ycoding-ai/plugin/effect/plugin"
-import { Effect } from "effect"
-
-export default define({
-  id: "company.project-policy",
-  effect: Effect.fn(function* (ctx) {
-    yield* ctx.tool.transform((draft) => {
-      // Register or modify tool behavior.
-    })
-  }),
-})`,
-          },
-          {
-            kind: "code",
-            language: "ts",
-            label: ".ycoding/plugins/promise.ts",
-            code: `import { define } from "@ycoding-ai/plugin/promise/plugin"
-
-export default define({
-  id: "company.promise-policy",
-  async setup(ctx) {
-    return async () => {
-      // Optional cleanup.
-    }
-  },
-})`,
-          },
-          {
-            kind: "paragraph",
-            text: "Plugin context domains are `agent`, `aisdk`, `catalog`, `command`, `event`, `integration`, `plugin`, `reference`, `session`, `skill`, and `tool`.",
+            tone: "warning",
+            title: "Use trusted executables",
+            text: "An extension process runs with your OS account's access. YCoding grants control which YCoding operations it can register or call; they do not sandbox the process.",
           },
         ],
       },
@@ -933,7 +883,7 @@ export default define({
         blocks: [
           {
             kind: "paragraph",
-            text: "Run `ycoding plugin list`; it prints the ID of every active plugin. A removed plugin is absent, and a loaded file or package appears under the `id` it defines.",
+            text: "Run `ycoding api plugin.list` from your project to see its active built-ins and process extensions. A disabled built-in is absent. If an extension did not start, check its executable and grants.",
           },
           { kind: "related", slugs: ["configuration/mcp", "configuration/agents", "configuration/tools"] },
         ],
@@ -1776,7 +1726,7 @@ Confirm the account, cluster, namespace, and change plan.`,
           },
           {
             kind: "paragraph",
-            text: "Custom tools come from a plugin using the Tool domain or an MCP server. `.ycoding/tool/*.ts` and `.ycoding/tools/*.ts` are not loaded.",
+            text: "In the Rust runtime, custom tools come from a configured native process extension or an MCP server. `.ycoding/tool/*.ts` and `.ycoding/tools/*.ts` are not loaded.",
           },
         ],
       },

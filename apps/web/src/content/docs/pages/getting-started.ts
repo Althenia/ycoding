@@ -37,7 +37,7 @@ export const gettingStartedPages: readonly DocPage[] = [
           {
             kind: "list",
             items: [
-              "The installer requires an Apple Silicon Mac for v0.13.0 and v0.13.2 or later. For Intel macOS or Linux x64, pin a release that includes your archive, such as v0.13.1.",
+              "New Rust releases use the Apple Silicon layout introduced in v0.13.0. On Intel macOS or Linux x64, use the downloaded installer with `YCODING_VERSION=0.12.2 sh install.sh` or pin another published historical release with an archive for your platform.",
               "Have credentials for a model provider you can use. YCoding's `/connect` flow stores a provider profile; provider access and model availability come from that provider.",
               "Start YCoding in the repository or project folder you want to work in. The current directory supplies the local project context.",
             ],
@@ -122,7 +122,7 @@ export const gettingStartedPages: readonly DocPage[] = [
           },
           {
             kind: "paragraph",
-            text: "The shell installer needs `curl`, `tar`, and either `shasum` or `sha256sum`. Release installation does not require Bun. On Intel macOS or Linux x64, set `YCODING_VERSION` to a historical release that has a matching archive.",
+            text: "The shell installer needs `curl`, `tar`, and either `shasum` or `sha256sum`. Release installation does not require Bun. On Intel macOS or Linux x64, download the installer and run `YCODING_VERSION=0.12.2 sh install.sh`, or pin a published historical release that has a matching archive.",
           },
         ],
       },

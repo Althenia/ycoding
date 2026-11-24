@@ -22,6 +22,23 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.13.5",
+    date: "2026-11-24",
+    title: "One Rust workspace and native plugins",
+    tags: ["Changed", "Fixed"],
+    changes: [
+      { tag: "Changed", text: "Open `/remote` to work with enrolled Rust devices. `/remote/rust` redirects to the same workspace and preserves the rest of the path and its query. The hosted workspace now requires a Rust device." },
+      { tag: "Changed", text: "Built-in plugins run natively and can be selected with `plugins`. The Rust runtime supports configured native process extensions. To keep using JavaScript or TypeScript plugin files or npm plugin packages, stay on Bun 0.12.x." },
+      { tag: "Changed", text: "The manual macOS keep-awake setting stays on until you switch it off. YCoding releases its sleep holds when it stops and restores your manual choice at startup. Deferred Sessions restore their own holds separately." },
+      { tag: "Changed", text: 'Set the starting model when calling `project` with `action: "create"`. The `model` object takes `providerID` and `id`, with optional `profile` and `variant`.' },
+      { tag: "Fixed", text: "Interrupting a Session waits for its current turn to settle before returning. Interrupting an idle Project Master saves the pause before replying, so after a restart the Project stays paused until resumed." },
+      { tag: "Fixed", text: "The Web workspace reads and previews images in sent messages and waits for attachment uploads to finish before sending a prompt that references them." },
+      { tag: "Fixed", text: "The Web workspace shows compaction progress only while compaction is running. The context indicator continues to show the last reported measurement until a newer measurement or a reset arrives." },
+      { tag: "Fixed", text: "`execute` avoids building the full Project tool catalog up front. Tool discovery prepares the requested entries when you need them." },
+      { tag: "Fixed", text: "OpenAI streams accept keepalive messages and retain transport error details when a connection fails. Chat Completions and Responses settle local tool calls only when the provider confirms that the turn can proceed." },
+    ],
+  },
+  {
     version: "0.13.0",
     date: "2026-11-22",
     title: "Rust for new installations",
