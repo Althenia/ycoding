@@ -1081,7 +1081,7 @@ test.each([
   ["a different identifier", 'identifier "app.ycoding.computer-use" and certificate leaf = H"9dd524184b0db949ffac7f0ada0ae860ac7f5f85"', false],
   ["an unanchored identifier only", 'identifier "app.ycoding.desktop"', false],
 ])("the desktop signature check accepts only the pinned certificate: %s", (_, requirement, accepted) => {
-  const check = desktopStep("Verify desktop signature").split("\n").find((line) => line.includes("codesign -d -r-"))?.trim()
+  const check = darwinStep("Verify desktop signature").split("\n").find((line) => line.includes("codesign -d -r-"))?.trim()
   expect(check).toBeDefined()
   const command = check!.replace(/^codesign -d -r- "[^"]+" 2>&1/, 'printf "%s\\n" "designated => $REQUIREMENT"')
   const result = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", command], { env: { ...process.env, REQUIREMENT: requirement }, stdout: "pipe", stderr: "pipe" })
