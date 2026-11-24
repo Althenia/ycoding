@@ -166,18 +166,18 @@ test("keeps the normal source and Desktop checks successful on a skip and expose
 test("retains the entire release workflow, including full builds, publication and deployment", () => {
   const release = readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8")
   const jobs = workflowJobs("release")
-  const prepare = "${{ github.event_name == 'workflow_dispatch' }}"
-  const publish = "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}"
-  for (const job of ["verify-source", "build", "build-desktop", "finalize-release"]) expect(jobs[job]?.if).toBe(prepare)
+  const tagPush = "github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/tags/v')"
+  const prepare = `\${{ github.event_name == 'workflow_dispatch' || (${tagPush}) }}`
+  const publish = `\${{ ${tagPush} }}`
+  for (const job of ["verify-source", "build-desktop-runtime", "finalize-release"]) expect(jobs[job]?.if).toBe(prepare)
   for (const job of ["release-tui", "deploy-web"]) expect(jobs[job]?.if).toBe(publish)
-  expect(jobs["finalize-release"]?.needs).toEqual(["verify-source", "build", "build-desktop"])
-  expect(jobs["release-tui"]?.needs).toBe("verify-staged-release")
-  expect(jobs["deploy-web"]?.needs).toEqual(["verify-staged-release", "release-tui"])
+  expect(jobs["finalize-release"]?.needs).toEqual(["verify-source", "build-desktop-runtime"])
+  expect(jobs["release-tui"]?.needs).toBe("finalize-release")
+  expect(jobs["deploy-web"]?.needs).toBe("release-tui")
   expect(jobs["verify-source"]?.steps.find((step) => step.run === "bun run build:web")?.if).toBe("matrix.suite == 'web'")
-  const desktop = jobs["build-desktop"]?.steps.find((step) => typeof step.run === "string" && step.run.includes("packages/desktop/script/build.sh"))
+  const desktop = jobs["build-desktop-runtime"]?.steps.find((step) => typeof step.run === "string" && step.run.includes("packages/desktop/script/build.sh"))
   expect(desktop).toBeDefined()
   expect(desktop?.if).toBeUndefined()
   expect([...release.matchAll(/- suite: (\S+)/g)].map((match) => match[1])).toEqual(["types", "web", "cli", "tui-project", "tui-runtime"])
-  expect([...release.matchAll(/- target: (\S+)/g)].map((match) => match[1])).toEqual(["darwin-arm64"])
   expect(release).not.toContain("build-inputs")
 })

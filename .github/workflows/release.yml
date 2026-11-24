@@ -10,18 +10,6 @@ on:
         description: Release version without leading v (for example 0.7.0). Defaults to the newest docs/releases/v<version>.md file.
         required: false
         default: ""
-      publish_staged_run_id:
-        description: Successful first-attempt staging run for this exact main commit
-        type: string
-        default: ""
-      publish_checksums:
-        description: SHA-256 of the staging run's checksum manifest
-        type: string
-        default: ""
-      promote_latest:
-        description: Set GitHub Latest after verified main promotion
-        type: boolean
-        default: false
 
 concurrency:
   group: release
@@ -35,22 +23,17 @@ env:
   REQUESTED_RELEASE_VERSION: ${{ inputs.version }}
   RELEASE_REF_NAME: ${{ github.ref_name }}
   RELEASE_REF_TYPE: ${{ github.ref_type }}
-  PUBLISH_STAGED_RUN_ID: ${{ inputs.publish_staged_run_id }}
-  PUBLISH_CHECKSUMS: ${{ inputs.publish_checksums }}
-  PROMOTE_LATEST: ${{ inputs.promote_latest }}
-  RELEASE_REVIEWER_ID: ${{ github.repository_owner_id }}
 
 jobs:
   verify-source:
     name: verify release source (${{ matrix.suite }})
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_staged_run_id == '' && inputs.publish_checksums == '' && !inputs.promote_latest }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/tags/v')) }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - suite: types
             runner: ubuntu-24.04
-            fetch-depth: 0
           - suite: web
             runner: ubuntu-24.04
           - suite: cli
@@ -65,18 +48,16 @@ jobs:
       - name: Checkout release source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 0
+          ref: ${{ github.sha }}
+          fetch-depth: ${{ github.event_name == 'push' && 1 || 0 }}
           persist-credentials: false
+
+      - name: Verify release tag provenance
+        if: github.event_name == 'push'
+        run: bash script/release-version.sh --verify-tag
 
       - name: Resolve release version
         run: bash script/release-version.sh
-
-      - name: Verify release notes exist
-        run: |
-          set -euo pipefail
-          release_notes="docs/releases/v$RELEASE_VERSION.md"
-          test -f "$release_notes" || { echo "Missing release notes: $release_notes" >&2; exit 1; }
-          test -s "$release_notes" || { echo "Release notes are empty: $release_notes" >&2; exit 1; }
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
@@ -138,6 +119,8 @@ jobs:
         run: |
           set -euo pipefail
           source_dir="$(mktemp -d "$RUNNER_TEMP/bun-web.XXXXXX")"
+          trap 'rm -rf -- "$source_dir"' EXIT
+          git cat-file -e "$BUN_WEB_SOURCE^{commit}" || git fetch --no-tags --refmap= origin "$BUN_WEB_SOURCE"
           git archive "$BUN_WEB_SOURCE" | tar -xf - -C "$source_dir"
           (cd "$source_dir" && bun install --frozen-lockfile && bun run --cwd apps/web build)
           bun script/build-web-assets.ts --bun-dist "$source_dir/apps/web/dist"
@@ -329,7 +312,6 @@ jobs:
         run: |
           cd /tmp && bun test "$GITHUB_WORKSPACE/script/install.test.ts" "$GITHUB_WORKSPACE/script/build-web-assets.test.ts" "$GITHUB_WORKSPACE/script/release.test.ts" "$GITHUB_WORKSPACE/script/release-archive.test.ts"
           bun test "$GITHUB_WORKSPACE/script/chrome-for-testing.test.ts" -t "pins one exact version whose root metadata document is the default source"
-          bun test "$GITHUB_WORKSPACE/script/release-promotion.test.ts"
 
       - name: Upload verified web build
         if: matrix.suite == 'web'
@@ -342,7 +324,7 @@ jobs:
 
   build-desktop-runtime:
     name: build Apple Silicon release packages
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_staged_run_id == '' && inputs.publish_checksums == '' && !inputs.promote_latest }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/tags/v')) }}
     runs-on: macos-26
     timeout-minutes: 60
     defaults:
@@ -352,8 +334,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Verify release tag provenance
+        if: github.event_name == 'push'
+        run: bash script/release-version.sh --verify-tag
 
       - name: Resolve release version
         run: bash script/release-version.sh
@@ -560,6 +547,21 @@ jobs:
       - name: Create and validate desktop archive
         run: bun script/release-archive.ts create-desktop "$RELEASE_VERSION" "$RUNNER_TEMP/desktop/YCoding Desktop.app" dist/release-archive/desktop-darwin-arm64
 
+      - name: Verify archived Desktop signatures
+        run: |
+          set -euo pipefail
+          payload=$(mktemp -d "$RUNNER_TEMP/ycoding-desktop.XXXXXX")
+          trap 'rm -rf -- "$payload"' EXIT
+          tar -xf "dist/release-archive/desktop-darwin-arm64/YCoding-Desktop-v$RELEASE_VERSION-darwin-arm64.zip" -C "$payload"
+          app="$payload/YCoding Desktop.app"
+          requirement='=identifier "app.ycoding.desktop" and certificate leaf = H"9dd524184b0db949ffac7f0ada0ae860ac7f5f85"'
+          codesign --verify --deep --strict -R "$requirement" "$app"
+          resources="$app/Contents/Resources"
+          hash=$(jq -er '.hash | select(test("^[a-z0-9]+$"))' "$resources/metadata.json")
+          mkdir "$payload/inner"
+          tar -xf "$resources/$hash.tar.zst" -C "$payload/inner"
+          codesign --verify --deep --strict -R "$requirement" "$payload/inner/YCoding Desktop.app"
+
       - name: Upload desktop archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -587,11 +589,13 @@ jobs:
   finalize-release:
     name: finalize release archives and checksums
     needs: [verify-source, build-desktop-runtime]
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_staged_run_id == '' && inputs.publish_checksums == '' && !inputs.promote_latest }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/tags/v')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
+    outputs:
+      checksums-sha256: ${{ steps.finalize.outputs.checksums-sha256 }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -608,12 +612,18 @@ jobs:
           path: downloaded
           pattern: release-archive-*
           merge-multiple: true
+          digest-mismatch: error
 
       - name: Install Bun
         uses: ./.github/actions/install-bun
 
       - name: Validate release archives and checksums
-        run: bun script/release-archive.ts finalize "$RELEASE_VERSION" downloaded release
+        id: finalize
+        run: |
+          set -euo pipefail
+          bun script/release-archive.ts finalize "$RELEASE_VERSION" downloaded release
+          digest=$(sha256sum < "release/ycoding-$RELEASE_VERSION-checksums.txt" | cut -d ' ' -f 1)
+          printf 'checksums-sha256=%s\n' "$digest" >> "$GITHUB_OUTPUT"
 
       - name: Upload release checksums
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -623,62 +633,20 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Record the original stage identity
-        if: github.ref == 'refs/heads/main' && github.ref_protected && github.run_attempt == 1
-        run: bash script/release-promotion.sh stage identity.json
-
-      - name: Upload original stage identity
-        if: github.ref == 'refs/heads/main' && github.ref_protected && github.run_attempt == 1
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-stage-${{ env.RELEASE_VERSION }}
-          path: identity.json
-          if-no-files-found: error
-          retention-days: 7
-
-  verify-staged-release:
-    name: verify staged release provenance
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      actions: read
-      contents: read
-    outputs:
-      run-id: ${{ steps.stage.outputs.run-id }}
-      checksums: ${{ steps.stage.outputs.checksums }}
-    steps:
-      - name: Checkout release tag
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Verify tag is reachable from main
-        run: |
-          set -euo pipefail
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-
-      - name: Verify tag and staging run
-        id: stage
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          bash script/release-staged-run.sh
-
   release-tui:
     name: publish TUI release
-    needs: verify-staged-release
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    needs: finalize-release
+    if: ${{ github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      actions: read
       contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Resolve release version
@@ -687,28 +655,26 @@ jobs:
       - name: Download prepared target archives
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          github-token: ${{ github.token }}
-          run-id: ${{ needs.verify-staged-release.outputs.run-id }}
           path: release
           pattern: release-archive-*
           merge-multiple: true
+          digest-mismatch: error
 
       - name: Download validated checksums
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          github-token: ${{ github.token }}
-          run-id: ${{ needs.verify-staged-release.outputs.run-id }}
           name: release-checksums-${{ env.RELEASE_VERSION }}
           path: release
+          digest-mismatch: error
 
       - name: Verify publication inputs
         env:
-          EXPECTED_CHECKSUMS: ${{ needs.verify-staged-release.outputs.checksums }}
+          EXPECTED_CHECKSUMS: ${{ needs.finalize-release.outputs.checksums-sha256 }}
         run: |
           set -euo pipefail
           cp LICENSE NOTICE release/
-          printf '%s  %s\n' "$EXPECTED_CHECKSUMS" "release/ycoding-$RELEASE_VERSION-checksums.txt" | sha256sum --check
-          (cd release && sha256sum --check "ycoding-$RELEASE_VERSION-checksums.txt")
+          printf '%s  %s\n' "$EXPECTED_CHECKSUMS" "release/ycoding-$RELEASE_VERSION-checksums.txt" | sha256sum --check --strict
+          (cd release && sha256sum --check --strict "ycoding-$RELEASE_VERSION-checksums.txt")
 
       - name: Install Bun
         uses: ./.github/actions/install-bun
@@ -719,34 +685,45 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          : "${GH_TOKEN:?Missing GitHub release token}"
           version="$RELEASE_VERSION"
-          export RELEASE_TAG="v$version"
-          prev="$(gh release list --limit 100 --json tagName --jq '[.[] | select(.tagName != env.RELEASE_TAG and (.tagName | test("^v[0-9]"))) | .tagName] | first // empty' 2>/dev/null || true)"
-          prev="${prev:-$(gh api "repos/$GH_REPO/releases?per_page=100" --jq "[.[] | select(.tag_name != \"$RELEASE_TAG\" and .draft == false and (.tag_name | test(\"^v[0-9]\"))) | .tag_name] | first // empty" 2>/dev/null || true)}"
-          range="${prev:+$prev...}$RELEASE_TAG"
+          tag="v$version"
+          pages=$(gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100")
+          releases=$(jq -ce '
+            if type == "array" and length > 0 and all(.[]; type == "array") then add else error("Invalid release list") end
+            | if all(.[]; (.tag_name | type) == "string" and (.draft | type) == "boolean") then . else error("Invalid release records") end
+          ' <<< "$pages")
+          matches=$(jq --arg tag "$tag" '[.[] | select(.tag_name == $tag)] | length' <<< "$releases")
+          if (( matches > 1 )); then echo "Multiple releases found for $tag" >&2; exit 1; fi
+          prev=$(jq -r --arg tag "$tag" '[.[] | select(.tag_name != $tag and (.draft | not) and (.tag_name | test("^v[0-9]"))) | .tag_name] | first // empty' <<< "$releases")
+          range="${prev:+$prev...}$tag"
+          notes="docs/releases/$tag.md"
           {
-            cat "docs/releases/v$version.md"
-            echo ""
-            echo "**Full Changelog**: https://github.com/Althenia/ycoding/compare/$range"
+            cat "$notes"
+            printf '\n**Full Changelog**: https://github.com/%s/compare/%s\n' "$GH_REPO" "$range"
           } > release-notes.md
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            bun script/release-publish.ts --repository "$GH_REPO" --tag "$RELEASE_TAG" --title "YCoding $version" --notes-file release-notes.md --run "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --manifest release-publish-manifest.json release/* "docs/releases/v$version.md"
+          if (( matches == 1 )); then
+            bash script/release-version.sh --verify-tag
+            bun script/release-publish.ts --repository "$GH_REPO" --tag "$tag" --title "YCoding $version" --notes-file release-notes.md --run "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --manifest release-publish-manifest.json release/* "$notes"
           else
-            previous_latest="$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)"
-            latest="$(bun script/release-publish.ts latest "$RELEASE_TAG" "$previous_latest")"
+            previous_latest=$(gh api "repos/$GH_REPO/releases/latest" --jq '.tag_name | strings | select(length > 0)')
+            test -n "$previous_latest"
+            latest=$(bun script/release-publish.ts latest "$tag" "$previous_latest")
             expected_latest="$previous_latest"
-            if [[ "$latest" == "true" ]]; then expected_latest="$RELEASE_TAG"; fi
+            if [[ "$latest" == true ]]; then expected_latest="$tag"; fi
             prerelease=()
             if [[ "${version%%+*}" == *-* ]]; then prerelease+=(--prerelease); fi
-            gh release create "v$version" release/* "docs/releases/v$version.md" --verify-tag --latest="$latest" "${prerelease[@]}" --title "YCoding $version" --notes-file release-notes.md
-            if [[ "$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)" != "$expected_latest" ]]; then
+            bash script/release-version.sh --verify-tag
+            gh release create "$tag" release/* "$notes" --verify-tag --latest="$latest" "${prerelease[@]}" --title "YCoding $version" --notes-file release-notes.md
+            actual_latest=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
+            if [[ "$actual_latest" != "$expected_latest" ]]; then
               echo "GitHub Latest does not point to $expected_latest" >&2
               exit 1
             fi
           fi
 
       - name: Upload release publication manifest
-        if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-publish-manifest-${{ env.RELEASE_VERSION }}
@@ -756,18 +733,16 @@ jobs:
 
   deploy-web:
     name: deploy web (cloudflare)
-    needs: [verify-staged-release, release-tui]
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    needs: release-tui
+    if: ${{ github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
-      actions: read
       contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 1
           persist-credentials: false
 
       - name: Setup Bun
@@ -778,10 +753,9 @@ jobs:
       - name: Download verified web build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          github-token: ${{ github.token }}
-          run-id: ${{ needs.verify-staged-release.outputs.run-id }}
           name: verified-web
           path: apps/web/dist
+          digest-mismatch: error
 
       - name: Deploy to Cloudflare
         env:
@@ -789,7 +763,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN Actions secret" >&2; exit 1; }
-          test -f apps/web/dist/_bun/index.html
+          test -s apps/web/dist/index.html && test -s apps/web/dist/_bun/index.html || { echo "Missing verified Rust or Bun Web entry point" >&2; exit 1; }
           bun run deploy:cloudflare
 
       - name: Deploy app preview Worker
@@ -800,142 +774,3 @@ jobs:
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN Actions secret" >&2; exit 1; }
           bun run deploy:cloudflare-preview
-
-  verify-main-promotion:
-    name: verify protected main release inputs and signatures
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.publish_staged_run_id != '' || inputs.publish_checksums != '' || inputs.promote_latest) }}
-    runs-on: macos-26
-    timeout-minutes: 15
-    permissions:
-      actions: read
-      contents: read
-    outputs:
-      run-id: ${{ steps.origin.outputs.run-id }}
-      manifest-sha256: ${{ steps.origin.outputs.checksums }}
-      archives: ${{ steps.artifacts.outputs.archives }}
-      checksums: ${{ steps.artifacts.outputs.checksums }}
-      stage: ${{ steps.artifacts.outputs.stage }}
-      web: ${{ steps.artifacts.outputs.web }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Resolve release version
-        run: bash script/release-version.sh
-      - name: Resolve and verify the release origin
-        id: origin
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          bash script/release-promotion.sh control
-          bash script/release-staged-run.sh main
-      - name: Select original staging artifacts
-        id: artifacts
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERIFIED_STAGE_RUN_ID: ${{ steps.origin.outputs.run-id }}
-        run: bash script/release-promotion.sh artifacts
-      - uses: ./.github/actions/download-release-stage
-        with:
-          token: ${{ github.token }}
-          run-id: ${{ steps.origin.outputs.run-id }}
-          archives: ${{ steps.artifacts.outputs.archives }}
-          checksums: ${{ steps.artifacts.outputs.checksums }}
-          stage: ${{ steps.artifacts.outputs.stage }}
-          web: ${{ steps.artifacts.outputs.web }}
-      - uses: ./.github/actions/install-bun
-      - name: Verify staged bytes and pinned signatures
-        env:
-          VERIFIED_STAGE_RUN_ID: ${{ steps.origin.outputs.run-id }}
-          VERIFIED_STAGE_CHECKSUMS: ${{ steps.origin.outputs.checksums }}
-        run: |
-          bash script/release-promotion.sh verify
-          bash script/release-promotion.sh signatures
-
-  promote-release:
-    name: publish verified main release
-    needs: verify-main-promotion
-    environment: release-production
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      actions: read
-      contents: write
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Confirm the protected release control still applies
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          bash script/release-promotion.sh control
-          bash script/release-version.sh
-      - uses: ./.github/actions/download-release-stage
-        with:
-          token: ${{ github.token }}
-          run-id: ${{ needs.verify-main-promotion.outputs.run-id }}
-          archives: ${{ needs.verify-main-promotion.outputs.archives }}
-          checksums: ${{ needs.verify-main-promotion.outputs.checksums }}
-          stage: ${{ needs.verify-main-promotion.outputs.stage }}
-          web: ${{ needs.verify-main-promotion.outputs.web }}
-      - uses: ./.github/actions/install-bun
-      - name: Publish verified assets without moving the historical tag
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERIFIED_STAGE_RUN_ID: ${{ needs.verify-main-promotion.outputs.run-id }}
-          VERIFIED_STAGE_CHECKSUMS: ${{ needs.verify-main-promotion.outputs.manifest-sha256 }}
-        run: |
-          set -euo pipefail
-          bash script/release-promotion.sh verify
-          tag="v$RELEASE_VERSION"
-          notes="docs/releases/$tag.md"
-          tag_sha=$(git rev-parse "refs/tags/$tag^{commit}")
-          if [[ $tag == v0.13.0 ]]; then test "$tag_sha" = 07ad9c16e01a2fa7fbfe21e9219d30ff886e3a69; fi
-          git merge-base --is-ancestor "$tag_sha" "$GITHUB_SHA"
-          bun script/release-publish.ts --repository "$GITHUB_REPOSITORY" --tag "$tag" --title "YCoding $RELEASE_VERSION" --notes-file "$notes" --run "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --manifest release-publish-manifest.json --main-staged-run "$VERIFIED_STAGE_RUN_ID" --promote-latest "$PROMOTE_LATEST" release/* "$notes"
-      - name: Upload main publication recovery manifest
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-publish-manifest-${{ env.RELEASE_VERSION }}
-          path: release-publish-manifest.json
-          if-no-files-found: ignore
-          retention-days: 90
-
-  deploy-promoted-web:
-    name: deploy verified main Web build
-    needs: [verify-main-promotion, promote-release]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      actions: read
-      contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          github-token: ${{ github.token }}
-          run-id: ${{ needs.verify-main-promotion.outputs.run-id }}
-          artifact-ids: ${{ needs.verify-main-promotion.outputs.web }}
-          digest-mismatch: error
-          merge-multiple: true
-          path: apps/web/dist
-      - name: Setup Bun for Web deployment
-        uses: ./.github/actions/setup-bun
-        with:
-          install-flags: --frozen-lockfile
-      - name: Deploy verified main Web build
-        run: |
-          set -euo pipefail
-          test -s apps/web/dist/index.html && test -s apps/web/dist/_bun/index.html
-          test -n "$CLOUDFLARE_API_TOKEN" || { echo 'Missing CLOUDFLARE_API_TOKEN Actions secret' >&2; exit 1; }
-          bun run deploy:cloudflare
-          if [[ "$DEPLOY_APP_PREVIEW" == true ]]; then bun run deploy:cloudflare-preview; fi
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          DEPLOY_APP_PREVIEW: ${{ vars.YCODING_APP_PREVIEW_DEPLOY }}

@@ -174,7 +174,7 @@ const replacement = [
   { name: "LICENSE", content: "license 2" },
 ]
 
-async function run(server: ReturnType<typeof github>, entries = replacement, runID = "77-1", promotion?: Parameters<typeof publish>[0]["promotion"]) {
+async function run(server: ReturnType<typeof github>, entries = replacement, runID = "77-1") {
   const local = await files(entries)
   const manifestPath = path.join(local.root, "manifest.json")
   const result = await publish({
@@ -188,7 +188,6 @@ async function run(server: ReturnType<typeof github>, entries = replacement, run
     run: runID,
     files: local.paths,
     manifest: manifestPath,
-    ...(promotion ? { promotion } : {}),
   })
   const manifest: Manifest = await Bun.file(manifestPath).json()
   return { result, manifest }
@@ -291,9 +290,9 @@ test("a verified Rust release replaces the Bun release as GitHub Latest", async 
 })
 
 test("repairing a historical Bun or older Rust release keeps the newer Rust release as Latest", async () => {
-  for (const tag of ["v0.12.2", "v0.13.0"]) {
-    const server = github({ assets: original, tag, latestTag: "v0.13.1" })
-    const { result } = await run(server)
+  for (const [tag, assets, successor] of [["v0.12.2", original, replacement], ["v0.13.0", oldRust, appleSilicon]] as const) {
+    const server = github({ assets, tag, latestTag: "v0.13.1" })
+    const { result } = await run(server, successor)
     expect(result.status).toBe("published")
     expect(await server.latest()).toMatchObject({ id: otherID, tag_name: "v0.13.1" })
     expect(server.mutations().some((call) => call.makeLatest === "true")).toBe(false)
@@ -308,7 +307,7 @@ test("a Rust prerelease stays out of Latest when its assets are repaired", async
   expect(await server.latest()).toMatchObject({ id: otherID, tag_name: "v0.13.1" })
 })
 
-test("a lost promotion response is reconciled without promoting the release twice", async () => {
+test("a lost Latest update response is reconciled without issuing a second update", async () => {
   const server = github({
     assets: original,
     tag: "v0.13.1",
@@ -474,54 +473,54 @@ function snapshot(server: ReturnType<typeof github>) {
   return [...server.assets.values()].map((asset) => ({ id: asset.id, name: asset.name, digest: `sha256:${sha256(asset.content)}` }))
 }
 
-const mainPromotion = { commit: "a".repeat(40), runId: "123", promoteLatest: true }
 const oldRust = fullRelease("published", "0.13.0")
 const appleSilicon = fullRelease("candidate", "0.13.0", true)
 
-test("Gate 4: promotes six Apple Silicon assets and preserves all nine original assets", async () => {
+test("tag publication archives all nine older Rust assets and does not move Latest backward", async () => {
   const server = github({ tag: "v0.13.0", assets: oldRust, latestTag: "v0.13.4" })
   const before = snapshot(server)
-  expect((await run(server, appleSilicon, "77-1", mainPromotion)).result.status).toBe("published")
+  expect((await run(server, appleSilicon)).result.status).toBe("published")
   const after = snapshot(server)
   expect(after.slice(0, 9)).toEqual(before.map((asset) => ({ ...asset, name: `prior-77-1-${asset.name}` })))
   expect(after.slice(9).map(({ name, digest }) => ({ name, digest }))).toEqual(appleSilicon.map(({ name, content }) => ({ name, digest: `sha256:${sha256(bytes(content))}` })))
   expect(server.release.tag_name).toBe("v0.13.0")
-  expect(server.release.body).toContain(`Built from main commit ${mainPromotion.commit}, verified release run 123`)
-  expect((await server.latest()).id).toBe(releaseID)
+  expect(server.release.body).toBe("new notes")
+  expect(await server.latest()).toMatchObject({ id: otherID, tag_name: "v0.13.4" })
   expect(server.mutations().filter((call) => call.path.startsWith("/releases/assets/")).at(-1)?.name).toBe("ycoding-0.13.0-checksums.txt")
   expect(server.mutations().some((call) => call.method === "DELETE")).toBe(false)
-  expect((await run(server, fullRelease("next", "0.13.0", true), "78-1", mainPromotion)).result.status).toBe("published")
+  expect((await run(server, fullRelease("next", "0.13.0", true), "78-1")).result.status).toBe("published")
   expect(snapshot(server).slice(0, 9)).toEqual(after.slice(0, 9))
 })
 
-test("Gate 4: a failed 9-to-6 promotion restores all old bytes, metadata and Latest", async () => {
-  let promoted = false
+test("a failed Apple Silicon replacement restores all nine old assets, metadata and Latest", async () => {
+  let latestChanged = false
   let injectMismatch = true
-  const server = github({ tag: "v0.13.0", assets: oldRust, latestTag: "v0.13.4", fault: (call) => {
-    if (call.method === "PATCH" && call.path === `/releases/${releaseID}` && call.makeLatest === "true") promoted = true
-    if (promoted && injectMismatch && call.method === "GET" && call.path === "/releases/latest") {
+  const server = github({ tag: "v0.13.0", assets: oldRust, latestTag: "v0.12.2", fault: (call) => {
+    if (call.method === "PATCH" && call.path === `/releases/${releaseID}` && call.makeLatest === "true") latestChanged = true
+    if (latestChanged && injectMismatch && call.method === "GET" && call.path === "/releases/latest") {
       injectMismatch = false
       return "reject"
     }
+    return undefined
   } })
   const before = snapshot(server)
   const releaseBefore = { ...server.release }
-  const { result } = await run(server, appleSilicon, "77-1", mainPromotion)
+  const { result } = await run(server, appleSilicon)
   expect(result.status).toBe("restored")
-  expect(promoted).toBe(true)
+  expect(latestChanged).toBe(true)
   expect(snapshot(server)).toEqual(before)
   expect(server.release).toEqual(releaseBefore)
-  expect((await server.latest()).id).toBe(otherID)
+  expect(await server.latest()).toMatchObject({ id: otherID, tag_name: "v0.12.2" })
 })
 
-test.each(["incomplete", "mixed", "corrupt", "unexpected"])("Gate 4: rejects a %s retained generation before writes", async (kind) => {
+test.each(["incomplete", "mixed", "corrupt", "unexpected"])("tag publication rejects %s retained Rust asset sets before writing", async (kind) => {
   const prior = oldRust.map((asset) => ({ ...asset, name: `prior-76-1-${asset.name}` }))
   if (kind === "incomplete") prior.shift()
   if (kind === "mixed") prior[0]!.name = prior[0]!.name.replace("0.13.0", "0.13.4")
   if (kind === "corrupt") prior[0]!.content = "other archive bytes"
   if (kind === "unexpected") prior.push({ name: "prior-76-1-unknown.txt", content: "unknown" })
   const server = github({ tag: "v0.13.0", assets: [...oldRust, ...prior], latestTag: "v0.13.4" })
-  expect((await run(server, appleSilicon, "77-1", mainPromotion)).result.status).toBe("refused")
+  expect((await run(server, appleSilicon)).result.status).toBe("refused")
   expect(server.mutations()).toEqual([])
 })
 

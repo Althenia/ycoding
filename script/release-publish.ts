@@ -21,7 +21,6 @@ export type PublishInput = {
   readonly run: string
   readonly files: ReadonlyArray<string>
   readonly manifest: string
-  readonly promotion?: { readonly commit: string; readonly runId: string; readonly promoteLatest: boolean }
 }
 
 type RemoteAsset = { id: number; name: string; state: string; size: number; digest: string | null }
@@ -51,10 +50,7 @@ export type Manifest = {
 }
 
 export async function publish(input: PublishInput) {
-  const promotion = input.promotion
-  const notes = promotion
-    ? `${input.notes.trimEnd()}\n\nBuilt from main commit ${promotion.commit}, verified release run ${promotion.runId}\n`
-    : input.notes
+  const { notes } = input
   const manifest: Manifest = {
     repository: input.repository,
     tag: input.tag,
@@ -76,7 +72,7 @@ export async function publish(input: PublishInput) {
   const release = await github.release()
   const latest = await github.latest()
   if (!latest.tag) throw new Error("GitHub Latest response is missing its release tag")
-  const expectedLatest = promotion?.promoteLatest || makeLatest(input.tag, latest.tag) ? release.id : latest.id
+  const expectedLatest = makeLatest(input.tag, latest.tag) ? release.id : latest.id
   const prerelease = input.tag.split("+", 1)[0]!.includes("-")
   manifest.release = {
     id: release.id,
@@ -90,7 +86,7 @@ export async function publish(input: PublishInput) {
   manifest.original = before.map(describe)
   let originals: OriginalAsset[]
   try {
-    originals = await preflight(github, input, release, before, local)
+    originals = await preflight(github, input, release, before, local, prerelease)
   } catch (error) {
     manifest.status = "refused"
     manifest.error = error instanceof Error ? error.message : String(error)
@@ -107,7 +103,7 @@ export async function publish(input: PublishInput) {
   await save()
 
   const failure = await stage(github, release.id, local, manifest, save)
-    .then(() => swap(github, originals, manifest, save, promotion !== undefined))
+    .then(() => swap(github, originals, manifest, save))
     .then(() => metadata(github, release.id, input.title, notes, prerelease, latest.id === release.id))
     .then(() => verify(github, release.id, input.title, notes, originals, manifest, prerelease))
     .then(async (assets) => {
@@ -147,28 +143,27 @@ async function preflight(
   release: RemoteRelease,
   before: ReadonlyArray<RemoteAsset>,
   local: ReadonlyArray<LocalAsset>,
+  prerelease: boolean,
 ) {
   if (!/^[1-9]\d*-[1-9]\d*$/.test(input.run)) throw new Error("Publication run must include a numeric run ID and attempt")
   if (release.immutable) throw new Error("Release is immutable")
-  if (input.promotion && (!stableTag.test(input.tag) || release.tag !== input.tag ||
-      !/^[0-9a-f]{40}$/.test(input.promotion.commit) || !/^[1-9]\d*$/.test(input.promotion.runId)))
-    throw new Error("Main promotion requires an existing stable release and verified source")
+  if (release.tag !== input.tag) throw new Error("Release does not match the requested tag")
   const names = before.map((asset) => asset.name)
   if (new Set(names).size !== names.length || new Set(before.map((asset) => asset.id)).size !== before.length)
     throw new Error("Release has duplicate asset identities")
   const staged = names.filter((name) => name.startsWith("staged-"))
   if (staged.length) throw new Error(`Release has residual staged assets: ${staged.join(", ")}`)
   const historical = before.filter((asset) => asset.name.startsWith("prior-"))
-  if (input.promotion || historical.length) {
-    const version = input.tag.slice(1)
+  const version = input.tag.slice(1)
+  const legacy = historicalRustArchives(version)
+  if (legacy || historical.length) {
     const checksumName = `ycoding-${version}-checksums.txt`
     const selected = [...releaseArchives(version), "LICENSE", "NOTICE"]
-    const legacy = historicalRustArchives(version)
     const layouts = legacy ? [selected, [...legacy, "LICENSE", "NOTICE"]] : [selected]
     const matches = (files: readonly { name: string }[], covered: readonly string[]) =>
       JSON.stringify(files.map((file) => file.name).sort()) === JSON.stringify([...covered, `${input.tag}.md`, checksumName].sort())
     const current = before.filter((asset) => !asset.name.startsWith("prior-"))
-    if (release.draft || release.prerelease || !matches(local, selected))
+    if (release.draft || release.prerelease !== prerelease || !matches(local, selected))
       throw new Error("Retained backups require a complete public release and a complete successor")
     validateChecksums(local.find((file) => file.name === checksumName)!.content, local, selected, "successor")
     const groups = new Map<string, RemoteAsset[]>()
@@ -264,11 +259,11 @@ async function swap(
   before: ReadonlyArray<RemoteAsset>,
   manifest: Manifest,
   save: () => Promise<number>,
-  replaceCompleteSet: boolean,
 ) {
+  const legacy = historicalRustArchives(manifest.tag.slice(1)) ?? []
   const order = [...new Set([
     ...manifest.staged.map(({ name }) => name),
-    ...(replaceCompleteSet ? before.filter(({ name }) => !name.startsWith("prior-")).map(({ name }) => name) : []),
+    ...before.filter(({ name }) => legacy.includes(name)).map(({ name }) => name),
   ])].sort(
     (left, right) => Number(left.endsWith("-checksums.txt")) - Number(right.endsWith("-checksums.txt")),
   )
@@ -488,15 +483,6 @@ if (import.meta.main) {
   const notes = await Bun.file(option("notes-file")).text()
   const run = option("run")
   const manifest = option("manifest")
-  const promotion = args.includes("--main-staged-run") ? (() => {
-    const env = process.env
-    const runId = option("main-staged-run")
-    const promoteLatest = option("promote-latest")
-    if (env.GITHUB_EVENT_NAME !== "workflow_dispatch" || env.GITHUB_REF !== "refs/heads/main" ||
-        env.GITHUB_REF_PROTECTED !== "true" || env.GITHUB_REPOSITORY !== repository || !env.GITHUB_SHA ||
-        !["true", "false"].includes(promoteLatest)) throw new Error("Expected verified protected-main promotion")
-    return { commit: env.GITHUB_SHA, runId, promoteLatest: promoteLatest === "true" }
-  })() : undefined
   if (args.some((arg) => arg.startsWith("--"))) throw new Error("Unexpected publication option")
   const token = process.env.GH_TOKEN
   if (!token) throw new Error("GH_TOKEN is required")
@@ -511,7 +497,6 @@ if (import.meta.main) {
     run,
     files: args,
     manifest,
-    ...(promotion ? { promotion } : {}),
   })
   console.log(`Release ${tag} publication ${result.status}; manifest ${manifest}`)
   if (result.manifest.error) console.error(result.manifest.error)

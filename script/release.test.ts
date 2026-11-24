@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 
 const workflow = await Bun.file(path.join(import.meta.dir, "../.github/workflows/release.yml")).text()
 const testWorkflow = await Bun.file(path.join(import.meta.dir, "../.github/workflows/test.yml")).text()
@@ -12,8 +13,6 @@ const workflowJob = (content: string, name: string) =>
     ?.split(/\n  [\w-]+:\n/)[0] ?? ""
 const darwinJob = "build-desktop-runtime"
 const darwinBuild = workflowJob(workflow, darwinJob)
-const stageDispatch = "${{ github.event_name == 'workflow_dispatch' && inputs.publish_staged_run_id == '' && inputs.publish_checksums == '' && !inputs.promote_latest }}"
-const promoteDispatch = "${{ github.event_name == 'workflow_dispatch' && (inputs.publish_staged_run_id != '' || inputs.publish_checksums != '' || inputs.promote_latest) }}"
 const darwinStep = (name: string) => darwinBuild.split(`      - name: ${name}\n`)[1]?.split("\n      - name: ")[0] ?? ""
 
 test("native archive finalization preserves both TUI shards and every accepted command exactly once", () => {
@@ -140,7 +139,7 @@ test("native archive finalization deploys the verified web artifact without rebu
   expect(verify).toContain("name: verified-web")
   expect(verify).toContain("path: apps/web/dist/")
   expect(verify.indexOf("run: bun run build:web")).toBeLessThan(verify.indexOf("name: verified-web"))
-  expect(deploy).toContain("needs: [verify-staged-release, release-tui]")
+  expect(deploy).toContain("needs: release-tui")
   expect(deploy).toContain("name: verified-web")
   expect(deploy).toContain("path: apps/web/dist")
   expect(deploy).not.toContain("bun run build:web")
@@ -254,7 +253,7 @@ test("release archives keep the layout installed updaters accept and ship the li
   expect(workflow).not.toContain('cp LICENSE NOTICE "$staging/"')
   expect(workflow).not.toMatch(/ycoding-chrome-extension LICENSE/)
   expect(workflow).toContain('bun script/release-archive.ts finalize "$RELEASE_VERSION" downloaded release')
-  expect(workflow.split("\n  release-tui:")[1]).toContain("gh release create \"v$version\" release/*")
+  expect(workflowJob(workflow, "release-tui")).toContain('gh release create "$tag" release/* "$notes"')
 })
 
 test("one v tag verifies a shared note and publishes only the TUI GitHub release", () => {
@@ -264,18 +263,17 @@ test("one v tag verifies a shared note and publishes only the TUI GitHub release
   expect(Bun.YAML.parse(workflow)).toHaveProperty("on.push.tags", ["v*"])
   expect(workflow).not.toContain("      - tui-v*")
   expect(workflow).not.toContain("      - web-v*")
-  expect(verify).toContain('release_notes="docs/releases/v$RELEASE_VERSION.md"')
+  expect(verify).toContain("run: bash script/release-version.sh")
   expect(verify).toContain("bun test --cwd apps/web ./src/content/changelog.test.ts")
   expect(verify).toContain("bun test --cwd packages/remote ./test/contract.test.ts")
   expect(verify).toContain("bun test --cwd apps/web ./test/remote-store-container.test.ts")
   expect(verify).not.toContain("bun run test:integration:remote")
   expect(verify).toContain("bun run build:cloudflare")
-  expect(tui).toContain("if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}")
-  expect(tui).toContain('gh release create "v$version"')
+  expect(tui).toContain("if: ${{ github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/tags/v') }}")
+  expect(tui).toContain('gh release create "$tag"')
   expect(tui?.match(/--title "[^"]+"/g)).toEqual(['--title "YCoding $version"', '--title "YCoding $version"'])
-  expect(tui).toContain('"docs/releases/v$version.md" --verify-tag')
+  expect(tui).toContain('notes="docs/releases/$tag.md"')
   expect(tui).toContain('test("^v[0-9]")')
-  expect(tui).toContain('test(\\"^v[0-9]\\")')
   expect(tui).toContain("contents: write")
   expect((workflow.match(/gh release create /g) ?? []).length).toBe(1)
 })
@@ -288,8 +286,8 @@ test("the first unified release has nonempty shared notes", async () => {
 
 test("same v tag deploys web after the GitHub release is published, without GitHub write access", () => {
   const deploy = workflowJob(workflow, "deploy-web")
-  expect(deploy).toContain("needs: [verify-staged-release, release-tui]")
-  expect(deploy).toContain("github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
+  expect(deploy).toContain("needs: release-tui")
+  expect(deploy).toContain("github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/tags/v')")
   expect(deploy).toContain("name: verified-web")
   expect(deploy).toContain("bun run deploy:cloudflare")
   expect(deploy?.indexOf("name: verified-web")).toBeLessThan(deploy?.indexOf("bun run deploy:cloudflare") ?? -1)
@@ -309,40 +307,99 @@ test("app preview Worker deploys only after the relay and only when the reposito
   expect(workflow.split("\n  deploy-web:")[0]).not.toContain("deploy:cloudflare-preview")
 })
 
-test("GitHub Release publication waits for every check and web deployment waits for publication", () => {
-  const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0]
-  expect(workflowJob(workflow, "finalize-release")).toContain(`needs: [verify-source, ${darwinJob}]`)
-  expect(tui).toContain("needs: verify-staged-release")
-  expect(tui).toContain("github.event_name == 'push'")
-  expect(workflow.split("\n  deploy-web:")[1]).toContain("needs: [verify-staged-release, release-tui]")
+test("publish and deploy consume only digest-checked artifacts from the current run", () => {
+  const finalizer = workflowJob(workflow, "finalize-release")
+  const release = workflowJob(workflow, "release-tui")
+  const deploy = workflowJob(workflow, "deploy-web")
+  for (const [job, downloads] of [[finalizer, 1], [release, 2], [deploy, 1]] as const) {
+    expect(job).not.toMatch(/run-id:|github-token:|artifact-ids:/)
+    expect(job.match(/digest-mismatch: error/g)).toHaveLength(downloads)
+  }
+  expect(finalizer).toContain("name: release-checksums-")
+  expect(finalizer).not.toMatch(/gh release|release-publish-manifest/)
+  expect(release).toContain("needs.finalize-release.outputs.checksums-sha256")
+  expect(release).toContain("cp LICENSE NOTICE release/")
+  expect(release.match(/sha256sum --check --strict/g)).toHaveLength(2)
+  expect(release).toContain("contents: write")
+  expect(deploy).toContain("test -s apps/web/dist/index.html && test -s apps/web/dist/_bun/index.html")
 })
 
-test("an existing release is replaced through staged, verified publication with a retained recovery manifest", () => {
-  const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0] ?? ""
-  const publish = tui.split("- name: Publish GitHub release")[1]?.split("\n      - name:")[0] ?? ""
-  expect(publish).not.toContain("already exists")
-  expect(publish.indexOf('if gh release view "$RELEASE_TAG"')).toBeLessThan(publish.indexOf("bun script/release-publish.ts --repository"))
-  expect(publish).toContain('--run "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --manifest release-publish-manifest.json release/* "docs/releases/v$version.md"')
-  expect(publish.indexOf("bun script/release-publish.ts --repository")).toBeLessThan(publish.indexOf('gh release create "v$version"'))
-  expect(tui.indexOf("- name: Install Bun")).toBeLessThan(tui.indexOf("- name: Publish GitHub release"))
-  const manifest = tui.split("- name: Upload release publication manifest")[1] ?? ""
-  expect(manifest).toContain("if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}")
+test("publication checks the tag at the write boundary and retains a replacement recovery manifest", () => {
+  const release = workflowJob(workflow, "release-tui")
+  expect(release).toContain("persist-credentials: false")
+  expect(release).toContain('bash script/release-version.sh --verify-tag\n            bun script/release-publish.ts')
+  expect(release).toContain('bash script/release-version.sh --verify-tag\n            gh release create')
+  expect(release).toContain('--run "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --manifest release-publish-manifest.json release/* "$notes"')
+  expect(release.indexOf("- name: Install Bun")).toBeLessThan(release.indexOf("- name: Publish GitHub release"))
+  const manifest = release.split("- name: Upload release publication manifest")[1] ?? ""
+  expect(manifest).toContain("if: always()")
   expect(manifest).toContain("path: release-publish-manifest.json")
-  expect(workflow).not.toContain('"$GITHUB_WORKSPACE/script/release-publish.test.ts"')
 })
 
-test("new publication selects Latest against the current release and verifies the resulting tag", () => {
-  const publish = workflow.split("- name: Publish GitHub release")[1]?.split("\n      - name:")[0] ?? ""
-  const create = publish.indexOf('gh release create "v$version"')
-  expect(publish).toContain('previous_latest="$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)"')
-  expect(publish.slice(0, create)).toContain('latest="$(bun script/release-publish.ts latest "$RELEASE_TAG" "$previous_latest")"')
-  expect(publish).toContain('gh release create "v$version" release/* "docs/releases/v$version.md" --verify-tag --latest="$latest"')
-  expect(publish).toContain('if [[ "${version%%+*}" == *-* ]]; then prerelease+=(--prerelease); fi')
-  expect(publish).toContain('"${prerelease[@]}" --title')
-  expect(publish).toContain('expected_latest="$previous_latest"')
-  expect(publish).toContain('expected_latest="$RELEASE_TAG"')
-  expect(publish.indexOf('"$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)" != "$expected_latest"')).toBeGreaterThan(create)
-  expect(publish).not.toContain("v0.12.2")
+test.each([
+  ["existing", "0.13.2", [[{ tag_name: "v0.12.2", draft: false }], [{ tag_name: "v0.13.2", draft: true }]], "v0.12.2", true],
+  ["new stable", "0.13.2", [[{ tag_name: "v0.12.2", draft: false }]], "v0.13.2", true],
+  ["new prerelease", "0.13.2-rc.1", [[{ tag_name: "v0.12.2", draft: false }]], "v0.12.2", true],
+  ["wrong Latest", "0.13.2", [[]], "v0.12.2", false],
+  ["incomplete API response", "0.13.2", [], "v0.13.2", false],
+  ["invalid API records", "0.13.2", [[{ message: "Bad credentials" }]], "v0.13.2", false],
+  ["failed API request", "0.13.2", null, "v0.13.2", false],
+] as const)("the publication step handles %s without guessing release state", (scenario, version, pages, latestAfter, success) => {
+  const publish = workflowJob(workflow, "release-tui").split("- name: Publish GitHub release")[1]?.split("\n      - name:")[0] ?? ""
+  const command = /^ {8}run: \|\n([\s\S]*)/m.exec(publish)?.[1]
+  expect(command).toBeDefined()
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ycoding-release-step-"))
+  try {
+    const notes = `docs/releases/v${version}.md`
+    fs.mkdirSync(path.join(directory, "docs/releases"), { recursive: true })
+    fs.mkdirSync(path.join(directory, "script"))
+    fs.mkdirSync(path.join(directory, "release"))
+    fs.writeFileSync(path.join(directory, "release/asset"), "archive")
+    fs.writeFileSync(path.join(directory, notes), "Tagged notes\n")
+    fs.writeFileSync(path.join(directory, "script/release-version.sh"), '[ "$1" = --verify-tag ] || exit 2\nprintf "checked tag\\n" >> calls\n')
+    fs.writeFileSync(path.join(directory, "calls"), "")
+    fs.writeFileSync(path.join(directory, "gh"), [
+      '#!/bin/sh',
+      'case "$1 $2" in',
+      '  "api --paginate") [ "$3" = --slurp ] && [ -n "$RELEASE_PAGES" ] || exit 1; printf "%s\\n" "$RELEASE_PAGES" ;;',
+      '  "api repos/example/ycoding/releases/latest") if [ -e created ]; then printf "%s\\n" "$LATEST_AFTER"; else echo v0.12.2; fi ;;',
+      '  "release create") printf "create %s\\n" "$*" >> calls; touch created ;;',
+      '  *) exit 2 ;;',
+      'esac',
+    ].join("\n"), { mode: 0o755 })
+    fs.writeFileSync(path.join(directory, "bun"), [
+      '#!/bin/sh',
+      'case "$2" in',
+      '  latest) exec "$REAL_BUN" "$PUBLISHER" latest "$3" "$4" ;;',
+      '  --repository) printf "replace %s\\n" "$*" >> calls ;;',
+      '  *) exit 2 ;;',
+      'esac',
+    ].join("\n"), { mode: 0o755 })
+    const result = Bun.spawnSync(["bash", "-c", command!], {
+      cwd: directory,
+      env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, GH_TOKEN: "fixture", GH_REPO: "example/ycoding",
+        RELEASE_VERSION: version, GITHUB_RUN_ID: "77", GITHUB_RUN_ATTEMPT: "1", LATEST_AFTER: latestAfter,
+        RELEASE_PAGES: pages === null ? "" : JSON.stringify(pages), REAL_BUN: process.execPath, PUBLISHER: path.join(import.meta.dir, "release-publish.ts") },
+    })
+    expect(result.success, result.stderr.toString()).toBe(success)
+    const calls = fs.readFileSync(path.join(directory, "calls"), "utf8")
+    if (scenario === "existing") {
+      expect(calls).toStartWith("checked tag\nreplace ")
+      expect(calls).toContain(`--tag v${version}`)
+      expect(calls).not.toContain("create ")
+    } else if (scenario.startsWith("new") || scenario === "wrong Latest") {
+      expect(calls).toStartWith(`checked tag\ncreate release create v${version} `)
+      expect(calls).toContain(`release/asset ${notes} --verify-tag --latest=${scenario !== "new prerelease"}`)
+      expect(calls.includes(" --prerelease ")).toBe(scenario === "new prerelease")
+    } else {
+      expect(calls).toBe("")
+    }
+    if (success) expect(fs.readFileSync(path.join(directory, "release-notes.md"), "utf8")).toBe(
+      `Tagged notes\n\n**Full Changelog**: https://github.com/example/ycoding/compare/v0.12.2...v${version}\n`,
+    )
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 test("Cloudflare deployment requires a scoped Actions token before Wrangler runs", () => {
@@ -352,106 +409,6 @@ test("Cloudflare deployment requires a scoped Actions token before Wrangler runs
   expect(deploy?.indexOf('test -n "$CLOUDFLARE_API_TOKEN"')).toBeLessThan(
     deploy?.indexOf("bun run deploy:cloudflare") ?? -1,
   )
-})
-
-test("tag publication consumes only the verified staging run's signed archives and Web build", () => {
-  const parsed: unknown = Bun.YAML.parse(workflow)
-  for (const job of ["verify-source", darwinJob, "finalize-release"]) {
-    expect(parsed).toHaveProperty("jobs." + job + ".if", stageDispatch)
-  }
-  const release = workflowJob(workflow, "release-tui")
-  expect(release).toContain("needs: verify-staged-release")
-  expect(release.match(/run-id: /g)).toHaveLength(2)
-  expect(workflowJob(workflow, "deploy-web")).toContain("run-id: ")
-  expect(workflowJob(workflow, "verify-staged-release")).toContain("actions: read")
-})
-
-test("promotion rejects lightweight tags and staging runs from the wrong source or attempt", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ycoding-release-staging-"))
-  try {
-    const git = (args: string[], stdin = "") => {
-      const result = Bun.spawnSync(["git", ...args], { cwd: directory, stdin: Buffer.from(stdin) })
-      if (result.exitCode !== 0) throw new Error(result.stderr.toString())
-      return result.stdout.toString().trim()
-    }
-    git(["init", "--quiet"])
-    const tree = git(["mktree"])
-    const author = "Release Fixture <release@example.test> 0 +0000"
-    const sha = git(["hash-object", "-t", "commit", "-w", "--stdin"], `tree ${tree}\nauthor ${author}\ncommitter ${author}\n\nfixture\n`)
-    const checksums = "1".repeat(64)
-    const tag = "refs/tags/v0.13.1"
-    const annotated = git(["mktag"], `object ${sha}\ntype commit\ntag v0.13.1\ntagger ${author}\n\nVerified release run 42 checksums ${checksums}\n`)
-    fs.writeFileSync(path.join(directory, "gh"), '#!/bin/sh\n[ "$1 $2" = "api repos/example/ycoding/actions/runs/42" ] || exit 2\nprintf "%s\\n" "$RUN_RESPONSE"\n', { mode: 0o755 })
-    const output = path.join(directory, "output")
-    const run = {
-      event: "workflow_dispatch", path: ".github/workflows/release.yml", head_repository: { full_name: "example/ycoding" },
-      head_sha: sha, run_attempt: 1, status: "completed", conclusion: "success",
-    }
-    const resolve = (head: string, response: typeof run) => {
-      git(["update-ref", tag, head])
-      fs.writeFileSync(output, "")
-      return Bun.spawnSync(["bash", path.join(import.meta.dir, "release-staged-run.sh")], {
-        cwd: directory,
-        env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, GITHUB_REF: tag, GITHUB_SHA: sha,
-          GITHUB_REPOSITORY: "example/ycoding", GITHUB_OUTPUT: output, RUN_RESPONSE: JSON.stringify(response) },
-      })
-    }
-    const accepted = resolve(annotated, run)
-    expect(accepted.exitCode, accepted.stderr.toString()).toBe(0)
-    expect(fs.readFileSync(output, "utf8")).toBe(`run-id=42\nchecksums=${checksums}\n`)
-    for (const [head, response] of [
-      [sha, run], [annotated, { ...run, head_sha: "a".repeat(40) }], [annotated, { ...run, run_attempt: 2 }],
-      [annotated, { ...run, event: "push" }], [annotated, { ...run, conclusion: "failure" }],
-    ] as const) {
-      expect(resolve(head, response).exitCode).not.toBe(0)
-      expect(fs.readFileSync(output, "utf8")).toBe("")
-    }
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true })
-  }
-})
-
-test("Gate 4: main promotion is separate from staging and requires native approval", () => {
-  const parsed = Bun.YAML.parse(workflow)
-  expect(parsed).toHaveProperty("on.workflow_dispatch.inputs.promote_latest.type", "boolean")
-  expect(parsed).toHaveProperty("jobs.promote-release.needs", "verify-main-promotion")
-  expect(parsed).toHaveProperty("jobs.promote-release.environment", "release-production")
-  expect(parsed).toHaveProperty("jobs.deploy-promoted-web.needs", ["verify-main-promotion", "promote-release"])
-  expect(parsed).toHaveProperty("jobs.verify-main-promotion.if", promoteDispatch)
-  const verify = workflowJob(workflow, "verify-main-promotion")
-  expect(verify).toContain("bash script/release-staged-run.sh main")
-  expect(verify).toContain("VERIFIED_STAGE_RUN_ID: ${{ steps.origin.outputs.run-id }}")
-  expect(verify).toContain("bash script/release-promotion.sh signatures")
-  const promotion = workflowJob(workflow, "promote-release")
-  expect(promotion).toContain("needs.verify-main-promotion.outputs.web")
-  expect(promotion).toContain("bash script/release-promotion.sh control")
-  expect(promotion.indexOf("bash script/release-promotion.sh verify")).toBeLessThan(promotion.indexOf("bun script/release-publish.ts"))
-  expect(promotion).not.toMatch(/gh release create|git (tag|push)/)
-  const deploy = workflowJob(workflow, "deploy-promoted-web")
-  expect(deploy).toContain("artifact-ids: ${{ needs.verify-main-promotion.outputs.web }}")
-  expect(deploy).toContain("bun run deploy:cloudflare")
-  expect(deploy).not.toContain("contents: write")
-  expect(workflowJob(workflow, "verify-main-promotion")).not.toContain("contents: write")
-  expect(workflowJob(workflow, "finalize-release")).toContain("name: release-stage-")
-})
-
-test("manual release runs prepare assets without publishing or deploying", () => {
-  const prepare = darwinBuild + workflowJob(workflow, "finalize-release")
-  expect(prepare).toContain("github.event_name == 'workflow_dispatch'")
-  expect(workflow).toContain("workflow_dispatch:")
-  expect(workflow.split("\n  release-tui:")[1]).toContain("github.event_name == 'push'")
-  expect(workflow.split("\n  deploy-web:")[1]).toContain("github.event_name == 'push'")
-})
-
-test("release dispatch finalizes with read-only contents access and never schedules publication", () => {
-  const parsed: unknown = Bun.YAML.parse(workflow)
-  const tagPush = "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}"
-  expect(parsed).toHaveProperty("jobs.finalize-release.permissions.contents", "read")
-  expect(parsed).toHaveProperty("jobs.release-tui.if", tagPush)
-  expect(parsed).toHaveProperty("jobs.release-tui.needs", "verify-staged-release")
-  expect(parsed).toHaveProperty("jobs.release-tui.permissions.contents", "write")
-  expect(workflowJob(workflow, "finalize-release")).not.toMatch(/gh release|release-publish-manifest/)
-  expect(workflowJob(workflow, "release-tui")).toContain("sha256sum --check")
 })
 
 test("release contexts stay out of the version resolver's shell source", () => {
@@ -487,6 +444,7 @@ test.each([
   ["", "v0.13.0", "tag", "0.13.0"],
   ["", "v0.11.0-preview", "branch", "0.13.1"],
   ["0.12.04", "preview", "branch", null],
+  ["0.12.0-rc.01", "preview", "branch", null],
   ["0.12.0\nANOTHER=value", "preview", "branch", null],
   ["0.12.0$(printf unexpected)", "preview", "branch", null],
   ["", "v0.12.0/invalid", "tag", null],
@@ -497,7 +455,9 @@ test.each([
     const initial = "EXISTING=value\n"
     fs.writeFileSync(envFile, initial)
     fs.mkdirSync(path.join(directory, "docs/releases"), { recursive: true })
-    for (const version of ["0.12.2", "0.13.1", "0.13.0"]) fs.writeFileSync(path.join(directory, `docs/releases/v${version}.md`), "Release notes\n")
+    for (const version of ["0.12.0", "0.12.0-rc.1+build.2", "0.12.2", "0.13.1", "0.13.0"]) {
+      fs.writeFileSync(path.join(directory, `docs/releases/v${version}.md`), "Release notes\n")
+    }
     const result = Bun.spawnSync(["bash", path.join(import.meta.dir, "release-version.sh")], {
       cwd: directory,
       env: { ...process.env, REQUESTED_RELEASE_VERSION: requested, RELEASE_REF_NAME: ref, RELEASE_REF_TYPE: type, GITHUB_ENV: envFile },
@@ -509,6 +469,25 @@ test.each([
     expect(fs.readFileSync(envFile, "utf8")).toBe(
       expected === null ? initial : `${initial}RELEASE_VERSION=${expected}\nYCODING_VERSION=${expected}\n`,
     )
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test.each(["missing", "empty"])("a release with %s notes fails before exporting its version", (notes) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ycoding-release-notes-"))
+  try {
+    const envFile = path.join(directory, "github-env")
+    fs.writeFileSync(envFile, "")
+    if (notes === "empty") {
+      fs.mkdirSync(path.join(directory, "docs/releases"), { recursive: true })
+      fs.writeFileSync(path.join(directory, "docs/releases/v0.13.0.md"), "")
+    }
+    const result = Bun.spawnSync(["bash", path.join(import.meta.dir, "release-version.sh")], {
+      cwd: directory, env: { ...process.env, REQUESTED_RELEASE_VERSION: "0.13.0", GITHUB_ENV: envFile },
+    })
+    expect(result.exitCode, result.stderr.toString()).toBe(1)
+    expect(fs.readFileSync(envFile, "utf8")).toBe("")
   } finally {
     fs.rmSync(directory, { recursive: true, force: true })
   }
@@ -531,6 +510,7 @@ test("the verified Web artifact includes the published Bun v0.12.2 site", () => 
   const compose = source.split("- name: Add Bun Web to the production build")[1]?.split("\n      - name:")[0] ?? ""
   expect(compose).toContain("if: matrix.suite == 'web'")
   expect(compose).toContain("BUN_WEB_SOURCE: 14936fbcd50a5afacaf168f2db23e12732312802")
+  expect(compose).toContain('git cat-file -e "$BUN_WEB_SOURCE^{commit}" || git fetch --no-tags --refmap= origin "$BUN_WEB_SOURCE"')
   expect(compose).toContain('git archive "$BUN_WEB_SOURCE"')
   expect(compose).toContain('bun script/build-web-assets.ts --bun-dist "$source_dir/apps/web/dist"')
   expect(source.indexOf("- name: Add Bun Web to the production build")).toBeLessThan(source.indexOf("name: verified-web"))
@@ -832,9 +812,9 @@ test("release and test workflows keep both relay versions in source verification
   }
   expect(releaseSource).toContain("ac_wire_002_handshake_invalid_input_matrix_dispatches_nothing")
   const deploy = workflowJob(workflow, "deploy-web")
-  expect(deploy).toContain("needs: [verify-staged-release, release-tui]")
+  expect(deploy).toContain("needs: release-tui")
   expect(workflow).toContain("\npermissions:\n  contents: read\n")
-  expect(deploy).toContain("    permissions:\n      actions: read\n      contents: read\n    steps:")
+  expect(deploy).toContain("    permissions:\n      contents: read\n    steps:")
   expect(deploy).toContain("name: verified-web\n          path: apps/web/dist")
   expect(deploy).toContain("bun run deploy:cloudflare")
 })
@@ -953,31 +933,31 @@ test("source verification legs start in parallel with the native builds", () => 
   expect(build).not.toMatch(/smoke:|service-smoke|isolated-browser-smoke|test:integration:/)
 })
 
-test("packaging overlaps source verification without bypassing publication or deployment gates", () => {
+test("one release run gates publication and deployment on its own verification and archives", () => {
+  const parsed: unknown = Bun.YAML.parse(workflow)
+  expect(parsed).toHaveProperty("on.workflow_dispatch.inputs", {
+    version: { description: expect.any(String), required: false, default: "" },
+  })
+  expect(parsed).toHaveProperty("on.push.tags", ["v*"])
+  expect(parsed).toHaveProperty("concurrency", { group: "release", "cancel-in-progress": false })
+  expect(parsed).toHaveProperty("permissions", { contents: "read" })
   const jobs = workflow.split("\njobs:\n")[1]!.split(/(?:^|\n)  ([\w-]+):\n/).slice(1)
   const dependencies = [
     ["verify-source", undefined],
     [darwinJob, undefined],
     ["finalize-release", `[verify-source, ${darwinJob}]`],
-    ["verify-staged-release", undefined],
-    ["release-tui", "verify-staged-release"],
-    ["deploy-web", "[verify-staged-release, release-tui]"],
-    ["verify-main-promotion", undefined],
-    ["promote-release", "verify-main-promotion"],
-    ["deploy-promoted-web", "[verify-main-promotion, promote-release]"],
+    ["release-tui", "finalize-release"],
+    ["deploy-web", "release-tui"],
   ] as const
   expect(jobs.filter((_, index) => index % 2 === 0).sort()).toEqual(dependencies.map(([name]) => name).sort())
+  const tagPush = "github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/tags/v')"
   for (const [name, needs] of dependencies) {
     const job = jobs[jobs.indexOf(name) + 1] ?? ""
     expect(/^    needs: (.+)$/m.exec(job)?.[1]).toBe(needs)
-    expect(/^    if: (.+)$/m.exec(job)?.[1]).toBe(name === "promote-release" || name === "deploy-promoted-web" ? undefined
-        : name === "verify-main-promotion" ? promoteDispatch
-        : name === "deploy-web"
-        ? "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}"
-        : name === "release-tui" || name === "verify-staged-release"
-          ? "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}"
-          : stageDispatch,
-    )
+    expect(/^    if: (.+)$/m.exec(job)?.[1]).toBe(name === "release-tui" || name === "deploy-web"
+      ? `\${{ ${tagPush} }}` : `\${{ github.event_name == 'workflow_dispatch' || (${tagPush}) }}`)
+    expect(job).not.toMatch(/^    environment:/m)
+    if (name !== "release-tui") expect(job).not.toContain("contents: write")
   }
   expect(workflow).not.toContain("continue-on-error:")
   expect(workflow).toContain("permissions:\n  contents: read\n")
@@ -985,16 +965,11 @@ test("packaging overlaps source verification without bypassing publication or de
   expect(verify).not.toContain("secrets.")
   expect(verify).not.toContain("token:")
   expect(verify).not.toContain("permissions:")
-  expect(verify).toMatch(/- name: Checkout release source\n[^\n]+\n        with:\n          fetch-depth: 0\n/)
   expect(verify).toContain("persist-credentials: false")
-  const staged = workflowJob(workflow, "verify-staged-release")
-  expect(staged).toContain("git merge-base --is-ancestor \"$GITHUB_SHA\" origin/main")
-  expect(staged).toContain("      - name: Verify tag is reachable from main\n")
 })
 
 test("both Darwin packagers use the local runtime and receipt digest from their own dispatch attempt", () => {
   expect(darwinBuild.match(/^    runs-on: macos-26$/gm)).toHaveLength(1)
-  expect(workflowJob(workflow, "verify-main-promotion")).not.toMatch(/build:tui|script\/build\.sh|YCODING_MACOS_SIGNING_P12/)
   expect(darwinBuild).not.toContain("actions/download-artifact@")
   for (const name of ["Checkout repository", "Setup Bun", "Setup Rust", "Stage Apple Silicon release runtime", "Upload Apple Silicon release runtime", "Import macOS signing identity", "Build TUI artifact", "Build desktop app", "Remove macOS signing keychain"])
     expect(darwinBuild.split(`      - name: ${name}\n`)).toHaveLength(2)
@@ -1016,6 +991,17 @@ test("both Darwin packagers use the local runtime and receipt digest from their 
     expect(packaging).toContain("YCODING_RELEASE_RUNTIME_DIR: ${{ runner.temp }}/release-runtime\n")
     expect(packaging).toContain("RECEIPT_SHA256: ${{ steps.runtime.outputs.receipt-sha256 }}")
   }
+})
+
+test("source and package jobs reject unsafe tags and missing notes before setup", () => {
+  for (const job of [workflowJob(workflow, "verify-source"), darwinBuild]) {
+    const order = ["ref: ${{ github.sha }}", "persist-credentials: false", "- name: Verify release tag provenance",
+      "bash script/release-version.sh --verify-tag", "run: bash script/release-version.sh\n", "- name: Setup Bun"].map((step) => job.indexOf(step))
+    expect(order.every((index) => index >= 0)).toBe(true)
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+  }
+  expect(darwinBuild.indexOf("- name: Setup Bun")).toBeLessThan(darwinBuild.indexOf("- name: Setup Rust"))
+  expect(darwinBuild.indexOf("- name: Setup Rust")).toBeLessThan(darwinBuild.indexOf("- name: Import macOS signing identity"))
 })
 
 test("release workflow builds and archives the macOS desktop app from the locked Electrobun package", () => {
@@ -1094,6 +1080,11 @@ test("release workflow signs the desktop app with the pinned self-signed identit
   expect(verify).toContain('codesign --verify --deep --strict "$RUNNER_TEMP/desktop/YCoding Desktop.app"')
   expect(verify).toContain('codesign -d -r- "$RUNNER_TEMP/desktop/YCoding Desktop.app" 2>&1 | grep -Ex "designated => identifier \\"app\\.ycoding\\.desktop\\" and certificate (leaf|root) = H\\"9dd524184b0db949ffac7f0ada0ae860ac7f5f85\\""')
   expect(cleanup).toContain("        if: always()\n")
+  const archived = darwinStep("Verify archived Desktop signatures")
+  expect(archived).toContain('certificate leaf = H"9dd524184b0db949ffac7f0ada0ae860ac7f5f85"')
+  expect(archived).toContain('codesign --verify --deep --strict -R "$requirement" "$app"')
+  expect(archived).toContain('codesign --verify --deep --strict -R "$requirement" "$payload/inner/YCoding Desktop.app"')
+  expect(desktop.indexOf("- name: Verify archived Desktop signatures")).toBeLessThan(desktop.indexOf("- name: Upload desktop archive"))
   for (const command of ['security list-keychains -d user -s "${original[@]}"', 'security delete-keychain "$keychain"', 'rm -f "$RUNNER_TEMP/ycoding-signing.p12"'])
     expect(cleanup).toContain(command)
   const order = ["- name: Provision Electrobun native assets", "- name: Import macOS signing identity", "- name: Build desktop app", "- name: Verify desktop signature", "- name: Upload desktop archive", "- name: Remove macOS signing keychain"].map((marker) => desktop.indexOf(marker))
@@ -1117,38 +1108,52 @@ test.each([
   expect(result.exitCode === 0, result.stderr.toString()).toBe(accepted)
 })
 
-test.each([
-  ["ancestor", 0],
-  ["nonancestor", 1],
-  ["missing main", 128],
-] as const)("release ancestry guard uses checkout refs without a remote: %s", (scenario, status) => {
-  const guard = workflowJob(workflow, "verify-staged-release")
-    .split("      - name: Verify tag is reachable from main\n")[1]
-    ?.split("\n      - name:")[0] ?? ""
-  const command = /^ {8}run: \|\n([\s\S]*)/m.exec(guard)?.[1]
-  expect(command).toBeDefined()
+test.each(["lightweight", "annotated", "moved", "deleted", "off main", "wrong checkout"])("release provenance reads main and the exact incoming tag: %s", (scenario) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ycoding-release-ancestry-"))
   try {
-    const git = (args: string[], stdin = "") => {
-      const result = Bun.spawnSync(["git", ...args], { cwd: directory, stdin: Buffer.from(stdin), stdout: "pipe", stderr: "pipe" })
+    const git = (cwd: string, args: string[], stdin = "") => {
+      const result = Bun.spawnSync(["git", ...args], { cwd, stdin: Buffer.from(stdin), stdout: "pipe", stderr: "pipe" })
       if (result.exitCode !== 0) throw new Error(result.stderr.toString())
       return result.stdout.toString().trim()
     }
-    git(["init", "--quiet"])
-    const tree = git(["mktree"])
-    const commit = (parent?: string) => git(["hash-object", "-t", "commit", "-w", "--stdin"],
-      `tree ${tree}\n${parent ? `parent ${parent}\n` : ""}author Release Fixture <release@example.test> 0 +0000\ncommitter Release Fixture <release@example.test> 0 +0000\n\nfixture\n`)
-    const ancestor = commit()
-    const descendant = commit(ancestor)
-    if (scenario !== "missing main")
-      git(["update-ref", "refs/remotes/origin/main", scenario === "nonancestor" ? ancestor : descendant])
-    const result = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", command!], {
-      cwd: directory,
-      env: { ...process.env, GITHUB_SHA: scenario === "nonancestor" ? descendant : ancestor, GIT_TERMINAL_PROMPT: "0" },
-      stdout: "pipe",
-      stderr: "pipe",
+    const remote = path.join(directory, "origin.git")
+    git(directory, ["init", "--quiet", "--bare", remote])
+    const tree = git(remote, ["mktree"])
+    const author = "Release Fixture <release@example.test> 0 +0000"
+    const commit = (label: string, parent?: string) => git(remote, ["hash-object", "-t", "commit", "-w", "--stdin"],
+      [`tree ${tree}`, ...(parent ? [`parent ${parent}`] : []), `author ${author}`, `committer ${author}`, "", label, ""].join("\n"))
+    const released = commit("release")
+    const main = commit("main", released)
+    const outside = commit("other branch", released)
+    const sha = scenario === "off main" ? outside : released
+    const ref = "refs/tags/v0.13.2"
+    git(remote, ["update-ref", "refs/heads/main", main])
+    git(remote, ["update-ref", "refs/heads/other", outside])
+    git(remote, ["update-ref", "refs/tags/v0.13.1", main])
+    if (scenario !== "deleted") {
+      const tag = scenario === "annotated"
+        ? git(remote, ["mktag"], `object ${sha}\ntype commit\ntag v0.13.2\ntagger ${author}\n\nRelease\n`)
+        : scenario === "moved" ? main : sha
+      git(remote, ["update-ref", ref, tag])
+    }
+    const checkout = path.join(directory, "checkout")
+    git(directory, ["init", "--quiet", checkout])
+    git(checkout, ["remote", "add", "origin", pathToFileURL(remote).href])
+    git(checkout, ["fetch", "--depth=1", "--no-tags", "origin", scenario === "wrong checkout" ? main : sha])
+    git(checkout, ["checkout", "--quiet", "--detach", "FETCH_HEAD"])
+    const result = Bun.spawnSync(["bash", path.join(import.meta.dir, "release-version.sh"), "--verify-tag"], {
+      cwd: checkout,
+      env: { ...process.env, GITHUB_EVENT_NAME: "push", GITHUB_REF: ref, GITHUB_SHA: sha, GIT_TERMINAL_PROMPT: "0" },
+      stdout: "pipe", stderr: "pipe",
     })
-    expect(result.exitCode, result.stderr.toString()).toBe(status)
+    const accepted = scenario === "lightweight" || scenario === "annotated"
+    expect(result.exitCode === 0, result.stderr.toString()).toBe(accepted)
+    if (accepted) {
+      expect(git(checkout, ["for-each-ref", "--format=%(refname)", "refs/tags"])).toBe(ref)
+      expect(git(checkout, ["rev-parse", "refs/remotes/origin/main"])).toBe(main)
+    } else if (scenario === "deleted" || scenario === "wrong checkout") {
+      expect(git(checkout, ["for-each-ref", "--format=%(refname)", "refs/remotes/origin", "refs/tags"])).toBe("")
+    }
   } finally {
     fs.rmSync(directory, { recursive: true, force: true })
   }
