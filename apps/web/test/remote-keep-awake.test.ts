@@ -153,7 +153,7 @@ test("a change needs a settled supported read, sends exactly the requested flag,
   }
 })
 
-test("the manual keep-awake choice remains on across reads and defer changes until switched off", async () => {
+test("a restored manual keep-awake choice stays on after reconnect without replaying the switch", async () => {
   let manual = false
   let deferred = false
   const test = machine((operation, request) => {
@@ -168,8 +168,13 @@ test("the manual keep-awake choice remains on across reads and defer changes unt
     expect(view()).toMatchObject({ checked: false, label: "Off" })
     expect((await change(test, true)).reached).toBe(true)
     deferred = true
+    test.store.disconnect()
+    test.store.connect("dev_1")
     await load(test)
-    expect(view()).toMatchObject({ checked: true, label: "On" })
+    const restored = view()
+    expect(restored).toMatchObject({ checked: true, label: "On" })
+    expect(restored.detail).toContain("Held on by a deferred Session")
+    expect(restored.caveat).toContain("restores your manual choice at startup")
     deferred = false
     await load(test)
     expect(view()).toMatchObject({ checked: true, label: "On" })

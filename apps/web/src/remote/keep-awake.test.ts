@@ -131,7 +131,7 @@ test("every machine state keeps the macOS and lifetime caveats visible", () => {
       expect(view.caveat).toMatch(/macOS/)
       expect(view.caveat).toMatch(/idle sleep and lid-closed sleep/)
       expect(view.caveat).toMatch(/battery/)
-      expect(view.caveat).toMatch(/stops or restarts/)
+      expect(view.caveat).toContain("restores your manual choice at startup")
     }
   }
 })
@@ -199,10 +199,12 @@ test("a lid error stays visible while idle keep-awake is on", () => {
   expect(view.detail).toMatch(/lid-closed keep-awake could not be armed/)
 })
 
-test("manual keep-awake explains when the preference ends", () => {
+test("manual keep-awake distinguishes the saved choice from sleep holds", () => {
   const view = keepAwakeView({ keepAwake: ready("on"), reachable: true })
   expect(view.checked).toBe(true)
-  expect(view.caveat).toMatch(/stays on until you turn it off or YCoding stops or restarts/i)
+  expect(view.caveat).toContain("YCoding releases its sleep holds when it stops or restarts.")
+  expect(view.caveat).toContain("It restores your manual choice at startup, and the choice stays on until you turn it off.")
+  expect(view.caveat).toContain("Deferred Sessions restore their separate holds at startup.")
 })
 
 test("an older connector status without lid or sleepHold still reads as on", () => {
