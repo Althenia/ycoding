@@ -211,7 +211,7 @@ impl Tool for Project {
                     let identity = [
                         caller.as_lossless(),
                         context.message_id.as_lossless(),
-                        &context.call_id,
+                        context.invocation_id(),
                     ]
                     .map(|value| String::from_utf16_lossy(&value.code_units().collect::<Vec<_>>()))
                     .join("\0");

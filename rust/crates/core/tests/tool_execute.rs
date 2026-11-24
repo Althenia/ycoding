@@ -456,6 +456,89 @@ async fn runtime_search_follows_the_current_catalog() {
 }
 
 #[tokio::test]
+async fn execute_project_calls_and_exact_search_skip_unrelated_schema_materialization() {
+    use std::time::{Duration, Instant};
+
+    struct SlowCatalog(Arc<AtomicU64>);
+    impl Tool for SlowCatalog {
+        fn definition(&self, name: &str) -> ycoding_ai::llm::ToolDefinition {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            std::thread::sleep(Duration::from_millis(40));
+            echo("mcp fixture").definition(name)
+        }
+
+        fn permission(&self) -> Option<&str> {
+            None
+        }
+
+        fn settle(
+            &self,
+            _: JsonValue,
+            _: Context,
+        ) -> ycoding_core::tools::registry::ToolFuture<'_> {
+            Box::pin(async {
+                Ok(ToolOutput {
+                    structured: JsonValue::String("mcp fixture".into()),
+                    content: vec![],
+                })
+            })
+        }
+    }
+
+    let registry = registry();
+    let definitions = Arc::new(AtomicU64::new(0));
+    let _builtin = registry
+        .register(vec![("project".into(), echo("listed"))], Options::direct())
+        .unwrap();
+    let _peer = registry
+        .register(
+            vec![("echo".into(), Arc::new(SlowCatalog(definitions.clone())))],
+            Options {
+                namespace: Some("peer".into()),
+                codemode: true,
+            },
+        )
+        .unwrap();
+
+    let start = Instant::now();
+    let result = execute(
+        &registry,
+        r#"
+        const path = (await search({query: 'project'})).items[0].path;
+        const lists = await Promise.all([
+            tools.project({action: 'list'}),
+            tools.project({action: 'list'}),
+            tools.project({action: 'list'}),
+        ]);
+        return [path, ...lists];
+    "#,
+    )
+    .await;
+    let elapsed = start.elapsed();
+    eprintln!("three project calls and exact search: {elapsed:?}");
+    let output = text(&result);
+    assert_eq!(
+        parse_json(&output).unwrap_or_else(|_| panic!("{output}")),
+        parse_json(r#"["tools.project","listed","listed","listed"]"#).unwrap()
+    );
+    assert_eq!(
+        definitions.load(Ordering::Relaxed),
+        0,
+        "an unrelated MCP signature waited on the tool path"
+    );
+
+    let searched = execute(
+        &registry,
+        "return (await search({namespace: 'peer', query: 'peer.echo'})).items[0].signature",
+    )
+    .await;
+    assert!(text(&searched).starts_with("tools.peer.echo(input:"));
+    assert_eq!(definitions.load(Ordering::Relaxed), 1);
+    let called = execute(&registry, "return await tools.peer.echo({})").await;
+    assert_eq!(text(&called), "mcp fixture");
+}
+
+#[tokio::test]
 async fn failed_programs_flag_the_error_and_report_only_the_message() {
     let registry = registry();
     let _scope = namespaced(&registry, "github", "issue", "github");

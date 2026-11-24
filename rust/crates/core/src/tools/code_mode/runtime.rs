@@ -121,6 +121,15 @@ pub struct ToolCallEnded {
 
 pub trait ToolHost: Send + Sync {
     fn catalog(&self) -> Vec<ToolDescription>;
+    fn tool_paths(&self) -> Vec<LosslessString> {
+        self.catalog().into_iter().map(|tool| tool.path).collect()
+    }
+    fn has_tool(&self, path: &LosslessString) -> bool {
+        self.tool_paths().contains(path)
+    }
+    fn describe_tool(&self, path: &LosslessString) -> Option<ToolDescription> {
+        self.catalog().into_iter().rfind(|tool| tool.path == *path)
+    }
     fn decode_input(
         &self,
         path: &LosslessString,
@@ -196,8 +205,8 @@ impl Runtime {
         regexp: Arc<dyn super::regexp::RegExpEngine>,
         collator: Arc<Collation>,
     ) -> Result<Self, String> {
-        if host.catalog().iter().any(|tool| {
-            super::stdlib::discovery::segments(&tool.path)
+        if host.tool_paths().iter().any(|path| {
+            super::stdlib::discovery::segments(path)
                 .iter()
                 .any(LosslessString::is_empty)
         }) {

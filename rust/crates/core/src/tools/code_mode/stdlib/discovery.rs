@@ -200,14 +200,6 @@ pub(crate) fn search(vm: &Vm, args: Vec<Value>, location: &Position) -> Result<V
         state.calls.push("search".into());
         state.calls.len() - 1
     };
-    let tools = catalog(vm.host.catalog())
-        .into_iter()
-        .filter(|tool| {
-            namespace
-                .as_ref()
-                .is_none_or(|namespace| segments(&tool.path).first() == Some(namespace))
-        })
-        .collect::<Vec<_>>();
     let units = query.code_units().collect::<Vec<_>>();
     let whitespace =
         |unit: &u16| char::from_u32(*unit as u32).is_some_and(super::string::whitespace);
@@ -226,19 +218,37 @@ pub(crate) fn search(vm: &Vm, args: Vec<Value>, location: &Position) -> Result<V
             .unwrap_or(&units)
             .to_vec(),
     );
-    let exact = tools
-        .iter()
-        .find(|tool| {
-            !path.is_empty()
-                && (tool.path == path || LosslessString::from(expression(&tool.path)) == trimmed)
-        })
-        .cloned();
-    let terms = tokenize(&String::from_utf16_lossy(
-        &query.code_units().collect::<Vec<_>>(),
-    ));
-    let ranked = if let Some(exact) = exact {
-        vec![exact]
+    let in_namespace = |path: &LosslessString| {
+        namespace
+            .as_ref()
+            .is_none_or(|namespace| segments(path).first() == Some(namespace))
+    };
+    let paths = if path.is_empty() && namespace.is_none() {
+        Vec::new()
     } else {
+        vm.host.tool_paths()
+    };
+    let exact = paths.iter().find(|candidate| {
+        !path.is_empty()
+            && in_namespace(candidate)
+            && (**candidate == path || LosslessString::from(expression(candidate)) == trimmed)
+    });
+    let ranked: Vec<_> = if let Some(exact) = exact {
+        vm.host.describe_tool(exact).into_iter().collect()
+    } else {
+        let terms = tokenize(&String::from_utf16_lossy(
+            &query.code_units().collect::<Vec<_>>(),
+        ));
+        let tools = if namespace.is_some() {
+            paths
+                .into_iter()
+                .filter(in_namespace)
+                .filter_map(|path| vm.host.describe_tool(&path))
+                .collect()
+        } else {
+            vm.host.catalog()
+        };
+        let tools = catalog(tools);
         let mut ranked = tools
             .into_iter()
             .map(|tool| {

@@ -325,19 +325,30 @@ fn display_input(input: Option<JsonValue>) -> Option<JsonValue> {
 impl ToolHost for Host {
     fn catalog(&self) -> Vec<ToolDescription> {
         self.registrations
-            .iter()
-            .map(|(path, (_, entry))| {
-                let definition = entry.tool.definition(path);
-                ToolDescription::from_schemas(
-                    path.clone().into(),
-                    String::from_utf16_lossy(
-                        &definition.description.code_units().collect::<Vec<_>>(),
-                    ),
-                    &definition.input_schema,
-                    definition.output_schema.as_ref(),
-                )
-            })
+            .keys()
+            .filter_map(|path| self.describe_tool(&path.as_str().into()))
             .collect()
+    }
+    fn tool_paths(&self) -> Vec<LosslessString> {
+        self.registrations
+            .keys()
+            .map(|path| path.as_str().into())
+            .collect()
+    }
+    fn has_tool(&self, path: &LosslessString) -> bool {
+        path.as_str()
+            .is_some_and(|path| self.registrations.contains_key(path))
+    }
+    fn describe_tool(&self, path: &LosslessString) -> Option<ToolDescription> {
+        let key = path.as_str()?;
+        let (_, entry) = self.registrations.get(key)?;
+        let definition = entry.tool.definition(key);
+        Some(ToolDescription::from_schemas(
+            path.clone(),
+            String::from_utf16_lossy(&definition.description.code_units().collect::<Vec<_>>()),
+            &definition.input_schema,
+            definition.output_schema.as_ref(),
+        ))
     }
     fn decode_input(
         &self,

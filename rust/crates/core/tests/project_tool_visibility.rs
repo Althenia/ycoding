@@ -109,6 +109,7 @@ fn dummy(name: &str) -> (String, Arc<dyn Tool>) {
 }
 
 async fn world() -> World {
+    let directory = std::env::temp_dir().canonicalize().unwrap();
     let store = Store::disposable(
         StoreOptions::core(),
         native::catalog(DatabaseKind::Core),
@@ -116,12 +117,12 @@ async fn world() -> World {
     )
     .unwrap();
     store
-        .submit(|tx| {
+        .submit(move |tx| {
             project_tables::ProjectTable::insert(
                 tx,
                 &project_tables::Project {
                     id: "prj_visibility".into(),
-                    worktree: "/synthetic".into(),
+                    worktree: directory.to_str().unwrap().into(),
                     vcs: None,
                     name: None,
                     icon_url: None,
@@ -397,6 +398,351 @@ async fn an_unbound_project_runtime_fails_closed_without_a_permission_prompt() {
         !matches!(&settled, Ok(settlement) if settlement.error.is_none()),
         "{settled:?}"
     );
+}
+
+#[tokio::test]
+async fn project_create_direct_provider_advertises_the_model_object() {
+    use ycoding_ai::{auth::Credential, llm::Request, openai_codex};
+    use ycoding_schema::JsonValue;
+
+    let world = world().await;
+    let tools = world.registry.materialize(&[]);
+    let definition = tools
+        .definitions
+        .iter()
+        .find(|tool| tool.name.as_str() == Some("project"))
+        .unwrap();
+    let model = openai_codex::model(
+        "gpt-6.2-sol-fast",
+        openai_codex::Config::new(Credential::value("fixture")),
+    )
+    .unwrap();
+    let mut request = Request::new(model);
+    request.tools.push(definition.clone());
+    let body: serde_json::Value =
+        serde_json::from_str(&request.model.route.prepare(&request).unwrap().encoded_body).unwrap();
+    let parameters = &body["tools"][0]["parameters"];
+    assert_eq!(body["tools"][0]["strict"], false);
+
+    let wrong_model = provider_tool_call(
+        &request,
+        "invalid",
+        r#"{"action":"create","directory":"/","model":"openai/example"}"#,
+    )
+    .input;
+    let result = tools
+        .invoke(
+            "project",
+            wrong_model,
+            ToolContext::new("ses_master", "build", "msg_project", "invalid").unwrap(),
+        )
+        .await
+        .unwrap();
+    let ycoding_ai::llm::ToolResultValue::Error(JsonValue::String(error)) = result.result else {
+        panic!("a model string must fail before the runtime is called: {result:?}");
+    };
+    eprintln!("direct malformed model: {error:?}");
+    assert!(error.to_utf8().unwrap().contains("Expected(\"object\")"));
+
+    let wire = jsonschema::validator_for(parameters).unwrap();
+    for placement in [
+        r#""directory":"/""#,
+        r#""name":"lane","repository":"/""#,
+        r#""projectID":"prj_visibility""#,
+    ] {
+        for selection in [
+            r#""providerID":"openai","id":"example""#,
+            r#""providerID":"openai","id":"example","variant":"high","profile":"fixture""#,
+        ] {
+            let input = serde_json::from_str(&format!(
+                r#"{{"action":"create",{placement},"model":{{{selection}}}}}"#
+            ))
+            .unwrap();
+            assert!(wire.is_valid(&input), "valid placement with model: {input}");
+        }
+    }
+    for model in [
+        serde_json::json!("openai/example"),
+        serde_json::Value::Null,
+        serde_json::json!({"id":"example"}),
+        serde_json::json!({"id":"example","providerID":"openai","variant":null}),
+    ] {
+        assert!(
+            !wire.is_valid(&serde_json::json!({"action":"create","directory":"/","model":model}))
+        );
+    }
+    assert!(
+        parameters["properties"]["model"].is_object(),
+        "the direct provider's parameter table must expose the model field"
+    );
+
+    for (arguments, error) in [
+        (
+            r#"{"action":"create","directory":"/","model":null}"#,
+            "Expected(\"object\")",
+        ),
+        (
+            r#"{"action":"create","directory":"/","model":{"id":"example","providerID":"openai","profile":null}}"#,
+            "Expected(\"string\")",
+        ),
+        (
+            r#"{"action":"create","directory":"/","projectID":"prj_visibility"}"#,
+            "requires exactly one",
+        ),
+    ] {
+        let result = tools
+            .invoke(
+                "project",
+                parse_json(arguments).unwrap(),
+                ToolContext::new("ses_master", "build", "msg_project", "invalid").unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(result.result, ycoding_ai::llm::ToolResultValue::Error(JsonValue::String(message)) if message.to_utf8().unwrap().contains(error))
+        );
+    }
+}
+
+fn provider_tool_call(
+    request: &ycoding_ai::llm::Request,
+    call_id: &str,
+    arguments: &str,
+) -> ycoding_ai::llm::ToolCall {
+    use serde_json::json;
+    use ycoding_ai::llm::Event;
+
+    let mut parser = request.model.route.protocol.parser(request);
+    let item = json!({"type":"function_call","id":"item_project","call_id":call_id,"name":"project","arguments":arguments});
+    ["response.output_item.added", "response.output_item.done"]
+        .into_iter()
+        .flat_map(|kind| {
+            parser
+                .push(&parse_json(&json!({"type":kind,"item":item}).to_string()).unwrap())
+                .unwrap()
+        })
+        .find_map(|event| match event {
+            Event::ToolCall(call) => Some(call),
+            _ => None,
+        })
+        .unwrap()
+}
+
+#[tokio::test]
+async fn project_create_preserves_each_model_in_direct_and_nested_placements() {
+    use serde_json::{Value, json};
+    use ycoding_ai::{auth::Credential, llm::Request, openai_codex};
+    use ycoding_core::{
+        coordination::runtime,
+        job,
+        session::{execution, run_coordinator, store},
+    };
+    use ycoding_schema::{LosslessString, agent, permission, project, stringify_json};
+
+    struct NoWake;
+    impl execution::Locations for NoWake {
+        fn get(
+            &self,
+            _: &session::Info,
+        ) -> Result<Arc<dyn execution::Runner>, run_coordinator::Error> {
+            panic!("a member without a prompt must not start a runner")
+        }
+    }
+
+    struct NoDecisions;
+    impl runtime::Decisions for NoDecisions {
+        fn settings(&self) -> runtime::Future<'_, c::Settings> {
+            unreachable!()
+        }
+        fn pending(&self, _: runtime::PendingInput) -> runtime::Future<'_, Vec<runtime::Pending>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+        fn evaluate(
+            &self,
+            _: runtime::EvaluateInput,
+        ) -> runtime::Future<'_, runtime::DecisionResult> {
+            unreachable!()
+        }
+        fn escalate(
+            &self,
+            _: runtime::DecisionEscalateInput,
+        ) -> runtime::Future<'_, runtime::DecisionEscalateResult> {
+            unreachable!()
+        }
+    }
+
+    struct Placement(String);
+    impl runtime::MemberCreator for Placement {
+        fn agent_permissions(
+            &self,
+            _: session::Id,
+            _: agent::Id,
+        ) -> runtime::Future<'_, Option<permission::Ruleset>> {
+            Box::pin(async { Ok(Some(vec![])) })
+        }
+        fn worktree_allowed(&self, _: session::Id) -> runtime::Future<'_, bool> {
+            Box::pin(async { Ok(true) })
+        }
+        fn create_worktree(
+            &self,
+            _: runtime::CreateContext,
+            name: LosslessString,
+            repository: Option<LosslessString>,
+        ) -> runtime::Future<'_, runtime::CreatedWorktree> {
+            Box::pin(async move {
+                assert_eq!(repository, Some(self.0.as_str().into()));
+                Ok(runtime::CreatedWorktree {
+                    directory: self.0.as_str().into(),
+                    branch: name,
+                })
+            })
+        }
+        fn directory(
+            &self,
+            _: runtime::CreateContext,
+        ) -> runtime::Future<'_, runtime::CreateDirectory> {
+            let directory: LosslessString = self.0.as_str().into();
+            Box::pin(async move {
+                Ok(runtime::CreateDirectory {
+                    home: std::env::temp_dir(),
+                    open: Box::new(move |selected, missing| {
+                        Box::pin(async move {
+                            assert!(!missing);
+                            assert_eq!(selected.as_lossless(), &directory);
+                            Ok(project::Id::new("prj_visibility").unwrap())
+                        })
+                    }),
+                })
+            })
+        }
+        fn attach_location(
+            &self,
+            _: runtime::CreateContext,
+            _: session::Id,
+        ) -> runtime::Future<'_, runtime::AuthorizeLocation> {
+            unreachable!()
+        }
+    }
+
+    let world = world().await;
+    let directory = std::env::temp_dir()
+        .canonicalize()
+        .unwrap()
+        .into_os_string()
+        .into_string()
+        .unwrap();
+    let sessions = store::Service::new(world._store.client());
+    let jobs = job::Jobs::new();
+    let execution =
+        execution::Execution::install(sessions.clone(), Arc::new(NoWake), jobs.clone(), None)
+            .unwrap();
+    assert!(
+        world
+            .runtime
+            .set(runtime::Runtime::new(runtime::Options {
+                coordination: world.coordination.clone(),
+                sessions: sessions.clone(),
+                execution,
+                jobs,
+                decisions: Arc::new(NoDecisions),
+                validate_model: Arc::new(|_, _| Box::pin(async { Ok(()) })),
+                model_services: Arc::new(|_| unreachable!()),
+                creator: Some(Arc::new(Placement(directory.clone()))),
+            }))
+            .is_ok()
+    );
+
+    let tools = world.registry.materialize(&[]);
+    let model = openai_codex::model(
+        "gpt-6.2-sol-fast",
+        openai_codex::Config::new(Credential::value("fixture")),
+    )
+    .unwrap();
+    let request = Request::new(model);
+    let context =
+        |call_id: &str| ToolContext::new("ses_master", "build", "msg_project", call_id).unwrap();
+    let not_master = tools
+        .invoke(
+            "project",
+            parse_json(r#"{"action":"create","projectID":"prj_visibility"}"#).unwrap(),
+            ToolContext::new("ses_supervisor", "build", "msg_project", "unauthorized").unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(not_master.result, ycoding_ai::llm::ToolResultValue::Error(ycoding_schema::JsonValue::String(message)) if message.to_utf8().unwrap().contains("Master"))
+    );
+    let check = |result: &Value, input: &Value| {
+        assert_eq!(result["action"], "create");
+        assert_eq!(result["directory"], directory);
+        assert_eq!(result["model"], input["model"]);
+        assert_eq!(result["branch"], input["name"]);
+        assert_eq!(result["enrollment"]["member"], true);
+        let member = sessions
+            .get(&id(result["sessionID"].as_str().unwrap()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            member.model,
+            Some(model::Ref::decode(&parse_json(&input["model"].to_string()).unwrap()).unwrap())
+        );
+    };
+
+    for (index, selection) in [
+        json!({"providerID":"openai","id":"example"}),
+        json!({"providerID":"openai","id":"example","variant":"high","profile":"fixture"}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let inputs = [
+            json!({"action":"create","directory":directory,"model":selection}),
+            json!({"action":"create","name":"lane","repository":directory,"model":selection}),
+            json!({"action":"create","projectID":"prj_visibility","model":selection}),
+        ];
+        for (placement, input) in inputs.iter().enumerate() {
+            let call_id = format!("direct-{index}-{placement}");
+            let call = provider_tool_call(&request, &call_id, &input.to_string());
+            let result = tools
+                .invoke("project", call.input, context(&call_id))
+                .await
+                .unwrap();
+            let output = result
+                .output
+                .unwrap_or_else(|| panic!("{input}: {:?}", result.result));
+            check(
+                &serde_json::from_str(&stringify_json(&output.structured)).unwrap(),
+                input,
+            );
+        }
+
+        let code = format!(
+            "const found = (await search({{query: 'project'}})).items[0].path; const results = []; for (const item of {}) {{ results.push(await tools.project(item)); }} return {{found, results}};",
+            json!(inputs)
+        );
+        let start = std::time::Instant::now();
+        let result = tools
+            .invoke(
+                "execute",
+                parse_json(&json!({"code":code}).to_string()).unwrap(),
+                context(&format!("nested-{index}")),
+            )
+            .await
+            .unwrap();
+        eprintln!("three Project creates plus search: {:?}", start.elapsed());
+        let ycoding_ai::llm::ToolResultValue::Text(ycoding_schema::JsonValue::String(output)) =
+            result.result
+        else {
+            panic!("{result:?}");
+        };
+        let output = output.to_utf8().unwrap();
+        let output: Value = serde_json::from_str(&output).unwrap_or_else(|_| panic!("{output}"));
+        assert_eq!(output["found"], "tools.project");
+        assert_eq!(output["results"].as_array().unwrap().len(), inputs.len());
+        for (result, input) in output["results"].as_array().unwrap().iter().zip(&inputs) {
+            check(result, input);
+        }
+    }
 }
 
 async fn coordination_voice(world: &World, session: &str) -> Option<String> {

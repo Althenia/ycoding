@@ -1367,6 +1367,10 @@ struct HttpPeer {
 
 impl HttpPeer {
     async fn new(sse: bool) -> Self {
+        Self::start(sse, None).await
+    }
+
+    async fn start(sse: bool, discovery: Option<(Arc<Notify>, Arc<Notify>)>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/mcp", listener.local_addr().unwrap());
         let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1375,6 +1379,7 @@ impl HttpPeer {
             loop {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let reads = counter.clone();
+                let discovery = discovery.clone();
                 tokio::spawn(async move {
                     let mut request = Vec::new();
                     let mut buffer = [0u8; 4096];
@@ -1444,6 +1449,10 @@ impl HttpPeer {
                         }
                         "tools/list" => {
                             if params.get("cursor").is_none() {
+                                if let Some((entered, release)) = discovery {
+                                    entered.notify_one();
+                                    release.notified().await;
+                                }
                                 serde_json::json!({"tools": [{"name": "first", "inputSchema": {"type": "object"}}], "nextCursor": "page-2"})
                             } else {
                                 serde_json::json!({"tools": [{"name": "second", "inputSchema": {"type": "object"}}]})
@@ -1513,6 +1522,144 @@ impl HttpPeer {
         )
         .unwrap()
     }
+}
+
+#[tokio::test]
+async fn execute_finishes_while_mcp_discovery_is_pending_and_uses_policy_for_mcp_calls() {
+    use ycoding_core::{resources::mcp, tools::builtin::mcp::McpTools};
+    use ycoding_schema::DomainEncode;
+
+    let fixture = ToolFixture::new();
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let peer = HttpPeer::start(false, Some((entered.clone(), release.clone()))).await;
+    let service = Arc::new(
+        mcp::Service::new(
+            &[ycoding_core::resources::config::Entry::Document {
+                path: None,
+                info: ObjectEncoder::new()
+                    .field(
+                        "mcp",
+                        &ObjectEncoder::new()
+                            .field(
+                                "servers",
+                                &ObjectEncoder::new()
+                                    .field("peer", &peer.config(Some("good")).encode())
+                                    .finish(),
+                            )
+                            .finish(),
+                    )
+                    .finish(),
+            }],
+            fixture.root.clone(),
+            "1.0.0".into(),
+            BTreeMap::new(),
+            Default::default(),
+        )
+        .unwrap(),
+    );
+    let registry = Arc::new(fixture.registry());
+    let _builtin = registry
+        .register(
+            vec![(
+                "project".into(),
+                Arc::new(DynamicTool::new(
+                    "List Project members",
+                    JsonValue::Null,
+                    None,
+                    None,
+                    |_, _| {
+                        Box::pin(async {
+                            Ok(ToolOutput {
+                                structured: JsonValue::String("listed".into()),
+                                content: vec![],
+                            })
+                        })
+                    },
+                )),
+            )],
+            Options::direct(),
+        )
+        .unwrap();
+    let materializer = McpTools::start(
+        service.clone(),
+        registry.clone(),
+        fixture.policy.clone(),
+        None,
+    );
+    within(entered.notified()).await;
+
+    let invoke = |code: &str| {
+        let registry = registry.clone();
+        let input = ObjectEncoder::new().field("code", code).finish();
+        let context = fixture.context();
+        async move {
+            registry
+                .materialize(&[])
+                .invoke("execute", input, context)
+                .await
+                .unwrap()
+        }
+    };
+    let start = std::time::Instant::now();
+    let builtin = tokio::time::timeout(
+        Duration::from_secs(1),
+        invoke(
+            r#"
+        const path = (await search({query: 'project'})).items[0].path;
+        const lists = await Promise.all([tools.project({}), tools.project({}), tools.project({})]);
+        return [path, ...lists];
+    "#,
+        ),
+    )
+    .await;
+    eprintln!(
+        "built-ins with an MCP tools/list response held: {:?}",
+        start.elapsed()
+    );
+    assert!(!registry.available(&[]).contains("peer_first"));
+    release.notify_one();
+    let builtin =
+        builtin.expect("the built-in program must settle before MCP discovery is released");
+    let ToolResultValue::Text(JsonValue::String(text)) = builtin.result else {
+        panic!("{builtin:?}")
+    };
+    assert_eq!(
+        parse_json(&text.to_utf8().unwrap()).unwrap(),
+        parse_json(r#"["tools.project","listed","listed","listed"]"#).unwrap()
+    );
+
+    within(async {
+        while !registry.available(&[]).contains("peer_first") {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    let discovery = within(invoke(
+        "return (await search({namespace: 'peer', query: 'peer.first'})).items[0].path",
+    ))
+    .await;
+    assert_eq!(
+        discovery.result,
+        ToolResultValue::Text(JsonValue::String("tools.peer.first".into()))
+    );
+    let result = within(invoke("return await tools.peer.first({})")).await;
+    assert_eq!(
+        result.result,
+        ToolResultValue::Text(JsonValue::String("http-called".into()))
+    );
+    fixture.deny("peer_first", "*");
+    let denied = within(invoke("return await tools.peer.first({})")).await;
+    assert_eq!(
+        denied.result,
+        ToolResultValue::Text(JsonValue::String("Unable to execute peer_first".into()))
+    );
+
+    materializer.stop().await.unwrap();
+    service.shutdown().await.unwrap();
+    peer.task.abort();
+    assert!(peer.task.await.unwrap_err().is_cancelled());
+    fixture.cleanup();
 }
 
 #[tokio::test]

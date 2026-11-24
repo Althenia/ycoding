@@ -1435,10 +1435,11 @@ impl Vm {
             }
             Value::Tool(path) => {
                 let name = super::stdlib::discovery::joined(path);
+                let paths = self.host.tool_paths();
                 if !path.is_empty()
-                    && !self.host.catalog().iter().any(|tool| {
-                        super::stdlib::discovery::segments(&tool.path).starts_with(path)
-                    })
+                    && !paths
+                        .iter()
+                        .any(|tool| super::stdlib::discovery::segments(tool).starts_with(path))
                 {
                     return Err(Fault {
                         kind: DiagnosticKind::UnknownTool,
@@ -1453,8 +1454,8 @@ impl Vm {
                     });
                 }
                 let mut keys = Vec::new();
-                for tool in self.host.catalog() {
-                    let segments = super::stdlib::discovery::segments(&tool.path);
+                for tool in paths {
+                    let segments = super::stdlib::discovery::segments(&tool);
                     if segments.starts_with(path)
                         && let Some(key) = segments.get(path.len())
                         && !keys.contains(key)
@@ -2041,12 +2042,12 @@ impl Vm {
     ) -> Result<Value, Fault> {
         let name = super::stdlib::discovery::joined(&path);
         let label = super::stdlib::discovery::display(&name);
-        if !self.host.catalog().iter().any(|tool| tool.path == name) {
+        if !self.host.has_tool(&name) {
             let message = if self
                 .host
-                .catalog()
+                .tool_paths()
                 .iter()
-                .any(|tool| super::stdlib::discovery::segments(&tool.path).starts_with(&path))
+                .any(|tool| super::stdlib::discovery::segments(tool).starts_with(&path))
             {
                 format!("Tool '{label}' is not callable.")
             } else {
