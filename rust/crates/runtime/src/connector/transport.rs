@@ -524,17 +524,12 @@ async fn connect(
                 .machine
                 .handoff(prepared, length, driver.now())
                 .map_err(protocol_error)?;
-            if decisions
-                .iter()
-                .any(|decision| {
-                    if let Decision::Closed(close) = decision {
-                        tracing::debug!(category = ?close.category, code = close.code, length, "remote connection closed at handoff");
-                        return true;
-                    }
-                    false
-                })
-            {
-                return Err(Error::Incompatible);
+            if let Some(close) = decisions.into_iter().find_map(|decision| match decision {
+                Decision::Closed(close) => Some(close),
+                _ => None,
+            }) {
+                tracing::debug!(category = ?close.category, code = close.code, length, "remote connection closed at handoff");
+                return Err(driver.protocol_close(close.category));
             }
             socket
                 .start_send_unpin(tungstenite::Message::Binary(bytes.into()))
@@ -551,19 +546,17 @@ async fn connect(
             .map_err(|_| Error::Transport)?;
             next_send = Instant::now() + Duration::from_millis(25);
         }
-        if driver
+        if let Some(close) = driver
             .machine
             .take_decisions()
-            .iter()
-            .any(|decision| {
-                if let Decision::Closed(close) = decision {
-                    tracing::debug!(category = ?close.category, code = close.code, "remote connection closed while scheduling");
-                    return true;
-                }
-                false
+            .into_iter()
+            .find_map(|decision| match decision {
+                Decision::Closed(close) => Some(close),
+                _ => None,
             })
         {
-            return Err(Error::Incompatible);
+            tracing::debug!(category = ?close.category, code = close.code, "remote connection closed while scheduling");
+            return Err(driver.protocol_close(close.category));
         }
         tokio::select! {
             _ = &mut expiry => return Err(Error::Transport),
@@ -674,7 +667,7 @@ async fn connect(
                         Decision::Closed(close) => {
                             tracing::debug!(category = ?close.category, code = close.code, "remote connection closed while receiving");
                             let _ = tokio::time::timeout(Duration::from_secs(1), socket.close(Some(tungstenite::protocol::CloseFrame { code: close.code.into(), reason: close.reason().into() }))).await;
-                            return Err(Error::Incompatible);
+                            return Err(driver.protocol_close(close.category));
                         },
                         Decision::Send(_) => {},
                         _ => {
@@ -697,6 +690,14 @@ fn protocol_error(error: ProtocolError) -> Error {
 }
 
 impl Driver {
+    fn protocol_close(&self, category: ProtocolError) -> Error {
+        if self.established {
+            protocol_error(category)
+        } else {
+            Error::Incompatible
+        }
+    }
+
     fn now(&self) -> u64 {
         self.started.elapsed().as_millis() as u64
     }

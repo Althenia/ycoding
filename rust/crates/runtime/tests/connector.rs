@@ -1,7 +1,7 @@
 mod connector_support;
 mod support;
 
-use connector_support::{Command, Relay};
+use connector_support::{Command, FirstConnection, Relay};
 use prost::{Message, Name};
 use std::{
     sync::{
@@ -171,19 +171,24 @@ async fn setup(
     dispatcher: Dispatcher,
     access: Arc<Access>,
 ) -> (Control, Connector, Arc<AtomicBool>) {
+    setup_with_budgets(dispatcher, access, Budgets::default()).await
+}
+
+async fn setup_with_budgets(
+    dispatcher: Dispatcher,
+    access: Arc<Access>,
+    budgets: Budgets,
+) -> (Control, Connector, Arc<AtomicBool>) {
     let saved = Arc::new(AtomicBool::new(false));
     let control = Control::load(Arc::new(Saved(saved.clone())), unenrolled()).await;
     let mut settings = Settings::new(access);
     settings.reconnect_initial = Duration::from_millis(30);
     settings.reconnect_max = Duration::from_millis(100);
     settings.conflict_delay = Duration::from_millis(100);
-    let connector = Connector::start(
-        control.clone(),
-        settings,
-        environment(Some(control.clone())),
-        Arc::new(dispatcher),
-    )
-    .unwrap();
+    let mut environment = environment(Some(control.clone()));
+    Arc::get_mut(&mut environment).unwrap().services.budgets = budgets;
+    let connector =
+        Connector::start(control.clone(), settings, environment, Arc::new(dispatcher)).unwrap();
     control.set(true).await.unwrap();
     (control, connector, saved)
 }
@@ -781,10 +786,80 @@ async fn relay_credential_expiry_reconnects_but_device_revocation_stops() {
 
     second.commands.send(Command::Close(4403)).await.unwrap();
     wait_state(&control, State::Error).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), relay.openings.recv())
+            .await
+            .is_err()
+    );
     assert_eq!(access.calls.load(Ordering::Acquire), 2);
     assert!(saved.load(Ordering::Acquire));
     connector.shutdown().await.unwrap();
     relay.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn initial_relay_4401_stops_before_establishment_without_retrying() {
+    let mut relay = Relay::spawn(
+        5,
+        false,
+        Budgets::default(),
+        FirstConnection::CloseBeforeReady(4401),
+    )
+    .await;
+    let access = access(&relay, None);
+    let (control, connector, saved) = setup(test_dispatcher(), access.clone()).await;
+    let first = relay.opening().await;
+    wait_state(&control, State::Error).await;
+    relay.closed(first.generation).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), relay.openings.recv())
+            .await
+            .is_err()
+    );
+    assert_eq!(access.calls.load(Ordering::Acquire), 1);
+    assert!(saved.load(Ordering::Acquire));
+    connector.shutdown().await.unwrap();
+    relay.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn expired_delivery_credit_reconnects_instead_of_stopping_the_connector() {
+    let mut relay = Relay::spawn(
+        5,
+        false,
+        Budgets::default(),
+        FirstConnection::WithholdInventoryCredit,
+    )
+    .await;
+    let access = access(&relay, None);
+    let (control, connector, _) = setup_with_budgets(
+        test_dispatcher(),
+        access.clone(),
+        Budgets {
+            delivery_timeout_ms: 500,
+            ..Budgets::default()
+        },
+    )
+    .await;
+    let first = relay.opening().await;
+    relay.matching(first.generation, |frame| matches!(&frame.body, Some(v5::frame::Body::Control(control)) if matches!(control.kind, Some(v5::control::Kind::InventoryInvalidated(_))))).await;
+    let mut status = control.observe();
+    let outcome = tokio::select! {
+        opening = relay.opening() => Ok(opening),
+        failed = status.wait_for(|(_, value)| value.state == State::Error) => Err(failed.unwrap().1.clone()),
+    };
+    if outcome.is_ok() {
+        wait_state(&control, State::On).await;
+    }
+    connector.shutdown().await.unwrap();
+    relay.shutdown().await;
+    assert_eq!(
+        outcome
+            .expect("delivery credit expiry must be recoverable")
+            .generation,
+        first.generation + 1
+    );
+    assert_eq!(access.calls.load(Ordering::Acquire), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -49,6 +49,13 @@ pub struct Seen {
     pub frame: Option<v5::Frame>,
 }
 
+#[derive(Clone, Copy)]
+pub enum FirstConnection {
+    Normal,
+    CloseBeforeReady(u16),
+    WithholdInventoryCredit,
+}
+
 struct Shared {
     frames: mpsc::Sender<Seen>,
     openings: mpsc::Sender<Opening>,
@@ -59,6 +66,7 @@ struct Shared {
     ready_revision: u32,
     corrupt_digest: bool,
     budgets: Budgets,
+    first: FirstConnection,
 }
 
 pub struct Relay {
@@ -72,6 +80,15 @@ pub struct Relay {
 
 impl Relay {
     pub async fn start(revision: u32, corrupt_digest: bool, budgets: Budgets) -> Self {
+        Self::spawn(revision, corrupt_digest, budgets, FirstConnection::Normal).await
+    }
+
+    pub async fn spawn(
+        revision: u32,
+        corrupt_digest: bool,
+        budgets: Budgets,
+        first: FirstConnection,
+    ) -> Self {
         let (frames, receiver) = mpsc::channel(512);
         let (openings, opened) = mpsc::channel(16);
         let shared = Arc::new(Shared {
@@ -84,6 +101,7 @@ impl Relay {
             ready_revision: revision,
             corrupt_digest,
             budgets,
+            first,
         });
         let router = Router::new()
             .route("/ws/v5/agent", get(upgrade))
@@ -350,6 +368,13 @@ async fn drive(mut socket: ws::WebSocket, shared: Arc<Shared>) {
                 let bytes = match next { Some(Ok(ws::Message::Binary(bytes))) => bytes, Some(Ok(ws::Message::Ping(_) | ws::Message::Pong(_))) => continue, _ => break };
                 let frame = decode_strict::<v5::Frame>(&bytes).unwrap();
                 shared.frames.send(Seen { generation, frame: Some(frame.clone()) }).await.unwrap();
+                if generation == 1
+                    && let FirstConnection::CloseBeforeReady(code) = shared.first
+                    && matches!(frame.body, Some(v5::frame::Body::Hello(_)))
+                {
+                    socket.send(ws::Message::Close(Some(ws::CloseFrame { code, reason: "stand-in close".into() }))).await.unwrap();
+                    break;
+                }
                 let Some(token) = machine.admit_incoming(bytes.len() as u64) else { break; };
                 let ordinal = frame.delivery_ordinal;
                 let ledger = frame.ledger;
@@ -375,7 +400,13 @@ async fn drive(mut socket: ws::WebSocket, shared: Arc<Shared>) {
                             if let Some(v5::scope::Target::Session(id)) = resync.scope.target { epochs.insert(id, resync.source_epoch); }
                             assert_eq!(ledger, Some(v5::LedgerClass::Normal as i32), "Unexpected event epoch invalidation");
                         },
-                        Decision::Control(_) => {
+                        Decision::Control(control) => {
+                            if generation == 1
+                                && matches!(shared.first, FirstConnection::WithholdInventoryCredit)
+                                && matches!(control.kind, Some(v5::control::Kind::InventoryInvalidated(_)))
+                            {
+                                continue;
+                            }
                             machine.consume(v5::LedgerClass::try_from(ledger.unwrap()).unwrap(), ordinal.unwrap(), started.elapsed().as_millis() as u64).unwrap();
                         },
                         Decision::Closed(_) => closed = true,
