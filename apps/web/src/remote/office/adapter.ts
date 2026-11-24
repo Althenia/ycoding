@@ -48,7 +48,7 @@ export function officeInputFromRemote(state: RemoteStoreState): OfficeInput {
       requestCount: view.requests.length,
       activeTool: runningTool?.name,
       activity: runningTool ? toolActivity(runningTool) : undefined,
-      compacting: view.messages.some((message) => message.kind === "compaction" && (message.status === "pending" || message.status === "running")),
+      compacting: view.messages.some((message) => message.kind === "compaction" && message.status === "running"),
       thinking: unfinished?.parts.at(-1)?.kind === "reasoning",
       assistantExcerpt: excerpt || undefined,
       unknownOutcome: state.mutations.some((mutation) => mutation.sessionID === view.id && mutation.state === "unknown"),

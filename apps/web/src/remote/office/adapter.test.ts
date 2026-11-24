@@ -105,6 +105,10 @@ describe("office adapter", () => {
     expect(selected({ view: selectedView("ses_a", [{ kind: "compaction", id: "cmp_1", status: "failed" }]) })?.compacting).toBe(false)
   })
 
+  test("an admitted compaction is not active until it starts", () => {
+    expect(selected({ view: selectedView("ses_a", [{ kind: "compaction", id: "cmp_1", status: "pending" }]) })?.compacting).toBe(false)
+  })
+
   test("classifies the projected running tool and shell command without inferring from transcript text", () => {
     const activity = (name: string, command?: string) => selected({
       view: selectedView("ses_a", [assistant("msg_tool", [{ ...tool(name, "running"), ...(command === undefined ? {} : { input: { command } }) }])]),

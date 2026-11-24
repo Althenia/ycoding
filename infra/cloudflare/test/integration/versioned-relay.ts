@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { isAbsolute, join } from "node:path"
 import { checkMessageActions } from "./versioned-relay-messages"
 import { checkNativeRelay, checkStoredUsage, openWeb } from "./versioned-relay-native"
@@ -51,10 +51,7 @@ try {
   const worker = await startWorker(join(root, "worker"), assetsDirectory)
   try {
     await worker.initializeDatabase()
-    const owner = await worker.signIn(
-      "owner",
-      phase === "native" || phase === "usage" || phase === "messages" ? "/remote/rust" : "/remote/",
-    )
+    const owner = await worker.signIn("owner", "/remote/")
     assert.deepEqual(await devices(worker.origin, owner, "v4"), [], "The synthetic owner must start without devices")
     if (phase === "boundary") {
       const other = await worker.signIn("other")
@@ -81,88 +78,66 @@ try {
         }
       })
     } else if (phase === "editions") {
-      const rust = await readFile(join(worker.assetsDirectory, "index.html"), "utf8")
-      const bun = await readFile(join(worker.assetsDirectory, "_bun/index.html"), "utf8")
-      assert.notEqual(bun, rust, "Edition shells must come from distinct builds")
+      const html = await readFile(join(worker.assetsDirectory, "index.html"), "utf8")
       const navigate = { "sec-fetch-mode": "navigate", accept: "text/html" }
-      for (const [edition, html, paths] of [
-        ["Bun", bun, ["/remote", "/remote/", "/remote/session?session_id=ses_bun", "/remote/rusty"]],
-        ["Rust", rust, ["/remote/rust", "/remote/rust/", "/remote/rust/session?session_id=ses_rust"]],
-      ] as const) {
-        await check(`${edition} Web paths serve their exact built shell and entry assets`, async () => {
-          for (const path of paths) {
-            const response = await fetch(`${worker.origin}${path}`, { headers: navigate, redirect: "manual" })
-            assert.equal(response.status, 200, path)
-            assert.match(response.headers.get("content-type") ?? "", /^text\/html/)
-            assert.equal(response.headers.get("x-frame-options"), "DENY")
-            assert.match(response.headers.get("cache-control") ?? "", /must-revalidate/)
-            assert.equal((await response.text()) === html, true, `${path} served a different Web shell`)
-          }
-          const entries = [
-            ...new Set(
-              [...html.matchAll(/(?:src|href)="(\/assets\/[^"?#]+\.(?:js|css))"/g)].flatMap(([, path]) =>
-                path ? [path] : [],
-              ),
-            ),
-          ]
-          assert.ok(
-            entries.some((path) => path.endsWith(".js")),
-            "No hashed JavaScript entry found",
-          )
-          for (const path of entries) {
-            const entry = await fetch(`${worker.origin}${path}`)
-            assert.equal(entry.status, 200, path)
-            assert.notEqual(entry.headers.get("content-type")?.startsWith("text/html"), true)
-            assert.match(entry.headers.get("cache-control") ?? "", /immutable/)
-            const expected = await readFile(join(worker.assetsDirectory, path))
-            assert.equal(
-              expected.equals(Buffer.from(await entry.arrayBuffer())),
-              true,
-              `${path} differs from the asset tree`,
-            )
-          }
-        })
-      }
-      await check("internal Bun asset URLs and unauthenticated relay APIs cannot return a Web shell", async () => {
-        for (const path of ["/_bun", "/_bun/", "/_bun/index.html"]) {
+      await check("Web paths serve the exact built shell and entry assets", async () => {
+        for (const path of ["/remote", "/remote/", "/remote/session?session_id=ses_rust", "/remote/rusty"]) {
           const response = await fetch(`${worker.origin}${path}`, { headers: navigate, redirect: "manual" })
-          assert.equal(response.status, 404, path)
-          assert.equal((await response.text()).includes("<html"), false, path)
+          assert.equal(response.status, 200, path)
+          assert.match(response.headers.get("content-type") ?? "", /^text\/html/)
+          assert.equal(response.headers.get("x-frame-options"), "DENY")
+          assert.match(response.headers.get("cache-control") ?? "", /must-revalidate/)
+          assert.equal((await response.text()) === html, true, `${path} served a different Web shell`)
         }
+        const entries = [
+          ...new Set(
+            [...html.matchAll(/(?:src|href)="(\/assets\/[^"?#]+\.(?:js|css))"/g)].flatMap(([, path]) =>
+              path ? [path] : [],
+            ),
+          ),
+        ]
+        assert.ok(
+          entries.some((path) => path.endsWith(".js")),
+          "No hashed JavaScript entry found",
+        )
+        for (const path of entries) {
+          const entry = await fetch(`${worker.origin}${path}`)
+          assert.equal(entry.status, 200, path)
+          assert.notEqual(entry.headers.get("content-type")?.startsWith("text/html"), true)
+          assert.match(entry.headers.get("cache-control") ?? "", /immutable/)
+          const expected = await readFile(join(worker.assetsDirectory, path))
+          assert.equal(
+            expected.equals(Buffer.from(await entry.arrayBuffer())),
+            true,
+            `${path} differs from the asset tree`,
+          )
+        }
+      })
+      await check("legacy Rust bookmarks redirect to the same workspace path with their query", async () => {
+        for (const [oldPath, path] of [
+          ["/remote/rust", "/remote"],
+          ["/remote/rust/session?session_id=ses_rust&device_id=dev_rust", "/remote/session?session_id=ses_rust&device_id=dev_rust"],
+        ]) {
+          const response = await fetch(`${worker.origin}${oldPath}`, { headers: navigate, redirect: "manual" })
+          assert.equal(response.status, 308)
+          assert.equal(response.headers.get("location"), path)
+        }
+      })
+      await check("unauthenticated relay APIs cannot return a Web shell", async () => {
         const anonymous = await fetch(`${worker.origin}/api/me`, { headers: navigate })
         assert.equal(anonymous.status, 401)
         assert.match(anonymous.headers.get("content-type") ?? "", /^application\/json/)
       })
-      await check("local OAuth returns to each Web edition and issues an authorized session cookie", async () => {
+      await check("local OAuth returns to Web and issues an authorized session cookie", async () => {
         for (const path of [
           "/remote/",
-          "/remote/rust",
-          "/remote/rust/session?session_id=ses_rust&device_id=dev_rust",
+          "/remote/session?session_id=ses_rust&device_id=dev_rust",
         ]) {
           const cookie = await worker.signIn("owner", path)
           const shell = await fetch(`${worker.origin}${path}`, { headers: { ...navigate, cookie }, redirect: "manual" })
           assert.equal(shell.status, 200, path)
-          assert.equal((await shell.text()) === (path === "/remote/" ? bun : rust), true, path)
+          assert.equal((await shell.text()) === html, true, path)
           assert.equal((await fetch(`${worker.origin}/api/me`, { headers: { cookie } })).status, 200)
-        }
-      })
-      await check("missing Bun Web assets fail closed in Workerd without breaking the Rust shell", async () => {
-        const rustOnly = join(root, "rust-only-assets")
-        await mkdir(rustOnly)
-        await writeFile(join(rustOnly, "index.html"), rust)
-        const second = await startWorker(join(root, "worker-without-bun"), rustOnly)
-        try {
-          for (const path of ["/remote", "/remote/session"]) {
-            const response = await fetch(`${second.origin}${path}`, { headers: navigate, redirect: "manual" })
-            assert.equal(response.status, 503, path)
-            assert.equal(response.headers.get("cache-control"), "no-store")
-            assert.equal((await response.text()).includes("<html"), false, path)
-          }
-          const response = await fetch(`${second.origin}/remote/rust`, { headers: navigate, redirect: "manual" })
-          assert.equal(response.status, 200)
-          assert.equal((await response.text()) === rust, true)
-        } finally {
-          await second.close()
         }
       })
     } else if (phase === "rollback") {

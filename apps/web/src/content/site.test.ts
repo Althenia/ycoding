@@ -8,8 +8,7 @@ describe("public landing copy", () => {
       support: "Work in the terminal. Continue from your browser.",
       primaryAction: { label: "Get started", href: "/docs/getting-started" },
       workspaceActions: [
-        { label: "Bun workspace", href: "/remote" },
-        { label: "Rust workspace", href: "/remote/rust" },
+        { label: "Open workspace", href: "/remote" },
       ],
     })
     expect(SITE.installing.command).toBe("curl -fsSL https://ycoding.althenia.app/install.sh | sh")

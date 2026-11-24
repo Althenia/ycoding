@@ -1,13 +1,11 @@
-export const CACHE_PREFIX = "ycoding-web-shell-"
-export const CACHE_NAME = "ycoding-web-shell-v4"
-export const OFFLINE_FALLBACK_URL = "/offline.html"
-export const RUST_REMOTE_SHELL = "/remote/rust"
-export type RemoteShellPath = "/remote" | typeof RUST_REMOTE_SHELL
+import { REMOTE_ROOT } from "../routes"
 
-export function remoteShellPath(pathname: string): RemoteShellPath | undefined {
-  if (pathname === RUST_REMOTE_SHELL || pathname.startsWith(`${RUST_REMOTE_SHELL}/`)) return RUST_REMOTE_SHELL
-  if (pathname === "/remote" || pathname.startsWith("/remote/")) return "/remote"
-  return undefined
+export const CACHE_PREFIX = "ycoding-web-shell-"
+export const CACHE_NAME = "ycoding-web-shell-v5"
+export const OFFLINE_FALLBACK_URL = "/offline.html"
+
+export function isRemotePath(pathname: string) {
+  return pathname === REMOTE_ROOT || pathname.startsWith(`${REMOTE_ROOT}/`)
 }
 
 /**

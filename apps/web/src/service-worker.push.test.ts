@@ -177,7 +177,7 @@ test("service worker shows one notification per push including malformed and foc
     opened = ""
     shown.splice(quotaStart)
     const bunPosts: unknown[] = [], rustPosts: unknown[] = []
-    const bunClient = { ...windowClient, url: "https://relay.test/remote/rusted", postMessage: (message: unknown) => bunPosts.push(message) }
+    const bunClient = { ...windowClient, url: "https://relay.test/docs", postMessage: (message: unknown) => bunPosts.push(message) }
     const rustClient = { ...windowClient, url: "https://relay.test/remote/rust/settings", postMessage: (message: unknown) => rustPosts.push(message) }
     const rustNotice = { ...payload, noticeID: "ntc_12", relayProtocol: 5 }
     const clickLatest = () => emit("notificationclick", { notification: { data: shown.at(-1)?.options.data, close: () => undefined } })
@@ -185,7 +185,7 @@ test("service worker shows one notification per push including malformed and foc
     await emit("push", { data: { json: () => rustNotice } })
     await clickLatest()
     expect(bunPosts).toEqual([])
-    expect(opened).toBe("/remote/rust/session?session_id=ses_1&device_id=dev_1&notice_id=ntc_12")
+    expect(opened).toBe("/remote/session?session_id=ses_1&device_id=dev_1&notice_id=ntc_12")
     opened = ""
     windowClients.push(rustClient)
     await clickLatest()
@@ -196,13 +196,13 @@ test("service worker shows one notification per push including malformed and foc
     await emit("push", { data: { json: () => ({ ...rustNotice, relayProtocol: 4 }) } })
     expect(shown.at(-1)?.options.tag).not.toBe(rustTag)
     await clickLatest()
-    expect(bunPosts).toEqual(rustPosts)
-    expect(rustPosts).toHaveLength(1)
+    expect(bunPosts).toEqual([])
+    expect(rustPosts).toHaveLength(2)
     windowClients.splice(0, windowClients.length, bunClient, { ...rustClient, url: "https://elsewhere.test/remote/rust" })
     for (const [value, title, destination] of [
-      [{ ...quota, relayProtocol: 5 }, "YCoding — quota will run out", "/remote/rust/usage?device_id=dev_1"],
-      [{ category: "machine-offline", deviceID: "dev_1", offlineAt: 1_790_000_000_000, relayProtocol: 5 }, "YCoding — machine offline", "/remote/rust"],
-      [{ category: "approval-requested", deviceID: "dev_1", overflow: 5, relayProtocol: 5 }, "YCoding — more sessions need attention", "/remote/rust"],
+      [{ ...quota, relayProtocol: 5 }, "YCoding — quota will run out", "/remote/usage?device_id=dev_1"],
+      [{ category: "machine-offline", deviceID: "dev_1", offlineAt: 1_790_000_000_000, relayProtocol: 5 }, "YCoding — machine offline", "/remote"],
+      [{ category: "approval-requested", deviceID: "dev_1", overflow: 5, relayProtocol: 5 }, "YCoding — more sessions need attention", "/remote"],
     ] as const) {
       opened = ""
       await emit("push", { data: { json: () => value } })
@@ -210,8 +210,8 @@ test("service worker shows one notification per push including malformed and foc
       await clickLatest()
       expect(opened).toBe(destination)
     }
-    expect(bunPosts).toHaveLength(1)
-    expect(rustPosts).toHaveLength(1)
+    expect(bunPosts).toHaveLength(0)
+    expect(rustPosts).toHaveLength(2)
     opened = ""
     windowClients.push(rustClient)
     await emit("push", { data: { json: () => ({ ...quota, relayProtocol: 5 }) } })

@@ -41,6 +41,23 @@ test("reads file-finder entries without inventing unsafe missing fields", () => 
   expect(readFileFind({ files: "wrong" })).toBeUndefined()
 })
 
+test("reads the Rust catalog result envelope and preserves selections", () => {
+  const data = {
+    agents: [{ id: "primary", name: "Primary", mode: "primary", hidden: false, model: { providerID: "openai", id: "gpt-6", variant: "high", profile: "work" } },
+      { id: "helper", name: "Helper", mode: "subagent", hidden: true }, { id: "any", name: "Any", mode: "all", hidden: false }],
+    models: [{ providerID: "openai", providerName: "OpenAI", id: "gpt-6", name: "GPT-6", variants: ["low", "high"], enabled: false,
+      profiles: [{ name: "work", active: true, variants: ["high"] }, { name: "other", active: false }] }],
+    defaultModel: { providerID: "openai", id: "gpt-6", variant: "high", profile: "work" },
+    commands: [{ name: "test" }], skills: [{ id: "review", name: "Review", slash: true }],
+    references: [{ name: "guide", uri: "file:///guide" }], resources: [{ name: "resource", uri: "file:///resource" }],
+  } as const
+  const expected = { status: "ready" as const, ...data }
+  expect(readCatalog({ data })).toEqual(expected)
+  expect(readCatalog(data)).toEqual(expected)
+  expect(readCatalog({ ...data, data: null })).toEqual(expected)
+  expect(readCatalog({ data: {} })).toBeUndefined()
+})
+
 test("labels an unavailable profile honestly without exposing profile metadata", () => {
   expect(modelDisplayLabel({ providerID: "openai", id: "gpt-6", profile: "deleted" }, [
     { providerID: "openai", id: "gpt-6", name: "GPT-6", variants: [], profiles: [{ name: "work", active: true }] },

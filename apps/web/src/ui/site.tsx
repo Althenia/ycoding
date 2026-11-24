@@ -2,7 +2,6 @@ import { For, Show, createEffect, createSignal, onCleanup, type JSX } from "soli
 import { useLocation, useNavigate } from "@tanstack/solid-router"
 import { Link } from "./link"
 import { SITE } from "../content/site"
-import type { RemoteShellPath } from "../pwa/offline"
 import { REMOTE_ROOT } from "../routes"
 import { useTheme } from "../theme/theme-store"
 import { themePreferenceLabel } from "../theme/theme"
@@ -272,7 +271,7 @@ export function LandingPage(): JSX.Element {
   )
 }
 
-export function NotFoundPage(props: { readonly workspaceRoot?: RemoteShellPath }): JSX.Element {
+export function NotFoundPage(): JSX.Element {
   return (
     <div class="not-found">
       <div class="not-found__card">
@@ -289,7 +288,7 @@ export function NotFoundPage(props: { readonly workspaceRoot?: RemoteShellPath }
             Go home
           </Link>
         </div>
-        <a href={props.workspaceRoot ?? REMOTE_ROOT} class="text-link not-found__workspace">
+        <a href={REMOTE_ROOT} class="text-link not-found__workspace">
           <Icon name="terminal" size={16} />
           Open workspace
         </a>

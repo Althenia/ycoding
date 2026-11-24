@@ -82,7 +82,7 @@ describe("update selection", () => {
     expect(urls).toEqual([])
   })
 
-  test.each([["0.12.0", "ycoding"], ["0.13.0", "ycoding-native"]] as const)("installs the %s Interaction layout after verifying both signatures", async (version, archiveExecutable) => {
+  test.each([["0.12.0", "ycoding"], ["0.13.0", "ycoding-native"], ["0.13.1", "ycoding-native"]] as const)("installs the %s Interaction layout after verifying both signatures", async (version, archiveExecutable) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-update-interaction-"))
     temporary.push(root)
     const source = path.join(root, "source")
@@ -128,9 +128,9 @@ describe("update selection", () => {
     expect(await readFile(path.join(install, "ycoding"), "utf8")).toBe("new executable\n")
     const receiptName = ".ycoding-native-release"
     expect((await readdir(install)).sort()).toEqual([
-      ...(version === "0.13.0" ? [receiptName] : []), "YCoding Interaction.app", "ycoding", "ycoding-chrome-extension",
+      ...(version !== "0.12.0" ? [receiptName] : []), "YCoding Interaction.app", "ycoding", "ycoding-chrome-extension",
     ])
-    if (version === "0.13.0") {
+    if (version !== "0.12.0") {
       const digest = new Bun.CryptoHasher("sha256").update(await readFile(path.join(install, "ycoding"))).digest("hex")
       expect(await readFile(path.join(install, receiptName), "utf8")).toBe(`${version} ${digest}\n`)
     }
@@ -140,12 +140,12 @@ describe("update selection", () => {
 })
 
 describe("release updater", () => {
-  test("Gate 4: rejects Rust 0.13.0 on Linux or Intel without fetching archives", async () => {
+  test.each(["0.13.0", "0.13.1", "0.13.1-rc.1", "0.13.2", "1.0.0"])("rejects Rust %s on Linux or Intel without fetching archives", async (version) => {
     const fixture = await setup()
     for (const platform of ["linux", "darwin"]) {
       const urls: string[] = []
       const error = await installRelease({
-        version: "0.13.0",
+        version,
         executable: fixture.executable,
         platform,
         arch: "x64",

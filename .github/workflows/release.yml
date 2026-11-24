@@ -112,24 +112,12 @@ jobs:
         if: matrix.suite == 'web'
         run: bun run build:web
 
-      - name: Add Bun Web to the production build
-        if: matrix.suite == 'web'
-        env:
-          BUN_WEB_SOURCE: 14936fbcd50a5afacaf168f2db23e12732312802
-        run: |
-          set -euo pipefail
-          source_dir="$(mktemp -d "$RUNNER_TEMP/bun-web.XXXXXX")"
-          trap 'rm -rf -- "$source_dir"' EXIT
-          git cat-file -e "$BUN_WEB_SOURCE^{commit}" || git fetch --no-tags --refmap= origin "$BUN_WEB_SOURCE"
-          git archive "$BUN_WEB_SOURCE" | tar -xf - -C "$source_dir"
-          (cd "$source_dir" && bun install --frozen-lockfile && bun run --cwd apps/web build)
-          bun script/build-web-assets.ts --bun-dist "$source_dir/apps/web/dist"
-
       - name: Verify injected web transport boundaries
         if: matrix.suite == 'web'
         run: |
           bun test --cwd apps/web ./test/remote-store-container.test.ts
           bun test --cwd apps/web ./src/remote/endpoint.test.ts ./src/pwa/offline.test.ts ./src/service-worker.push.test.ts ./src/remote/notifications.test.ts ./src/remote/alert.test.ts ./src/remote/invite.test.ts
+          bun test --cwd apps/web ./src/remote/catalog.test.ts ./src/remote/keep-awake.test.ts
           bun test --cwd apps/web ./test/remote-http.test.ts ./test/remote-http-bulk.test.ts
           bun test --cwd apps/web ./test/remote-sync.test.ts -t 'oversized live invalidations'
           bun test --cwd packages/protocol ./test/http-bulk.test.ts
@@ -763,7 +751,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN Actions secret" >&2; exit 1; }
-          test -s apps/web/dist/index.html && test -s apps/web/dist/_bun/index.html || { echo "Missing verified Rust or Bun Web entry point" >&2; exit 1; }
+          test -s apps/web/dist/index.html || { echo "Missing verified Web entry point" >&2; exit 1; }
           bun run deploy:cloudflare
 
       - name: Deploy app preview Worker

@@ -1,5 +1,5 @@
 import { isAlertTitle, isSessionID, noticeSequence, type RemoteAlertDetail, type RemoteNoticeCategory, type RemoteQuota } from "@ycoding-ai/remote"
-import type { RemoteShellPath } from "../pwa/offline"
+import { REMOTE_ROOT } from "../routes"
 
 export type AlertNotice = { readonly deviceID: string; readonly noticeID: string }
 
@@ -42,8 +42,8 @@ export function alertTag(tag: string, relayProtocol?: 5): string {
   return relayProtocol === 5 ? `v5-${tag}` : tag
 }
 
-export function usageURL(deviceID: string, shell: RemoteShellPath = "/remote"): string {
-  return `${shell}/usage?${new URLSearchParams({ device_id: deviceID })}`
+export function usageURL(deviceID: string): string {
+  return `${REMOTE_ROOT}/usage?${new URLSearchParams({ device_id: deviceID })}`
 }
 
 export function sessionSearch(sessionID: string, deviceID?: string, noticeID?: string): { session_id: string; device_id?: string; notice_id?: string } {
@@ -61,8 +61,8 @@ export function readSessionSearch(search: unknown): { sessionID: string; deviceI
   return { sessionID, deviceID, ...(typeof noticeID === "string" && noticeSequence(noticeID) !== undefined ? { noticeID } : {}) }
 }
 
-export function sessionURL(sessionID: string, deviceID?: string, noticeID?: string, shell: RemoteShellPath = "/remote"): string {
-  return `${shell}/session?${new URLSearchParams({ session_id: sessionID, ...(deviceID === undefined ? {} : { device_id: deviceID }),
+export function sessionURL(sessionID: string, deviceID?: string, noticeID?: string): string {
+  return `${REMOTE_ROOT}/session?${new URLSearchParams({ session_id: sessionID, ...(deviceID === undefined ? {} : { device_id: deviceID }),
     ...(noticeID === undefined ? {} : { notice_id: noticeID }) })}`
 }
 

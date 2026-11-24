@@ -529,7 +529,7 @@ describe("createNotificationDelivery", () => {
 })
 
 describe("createDesktopNotifier", () => {
-  test("Rust page notifications carry their edition for Session, Usage and generic clicks without replacing Bun alerts", async () => {
+  test("canonical and legacy pages identify relay alerts consistently", async () => {
     await withFakeNotificationAsync("granted", async () => {
       const original = Reflect.get(globalThis, "location")
       const worker = fakeWorkerRegistration()
@@ -545,15 +545,15 @@ describe("createDesktopNotifier", () => {
         rust.show({ title: "Offline", body: "body", tag: "ycoding-dev_1-offline-1000" })
         await Bun.sleep(0)
         expect(worker.shown.map((entry) => entry.options.data)).toEqual([
-          { sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_2" },
+          { sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_2", relayProtocol: 5 },
           { sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_2", relayProtocol: 5 },
           { quota: true, deviceID: "dev_1", relayProtocol: 5 },
           { relayProtocol: 5 },
         ])
-        expect(worker.open.size).toBe(4)
+        expect(worker.open.size).toBe(3)
         rust.dispose()
         await Bun.sleep(0)
-        expect([...worker.open.keys()]).toEqual([notice.tag])
+        expect([...worker.open.keys()]).toEqual([])
       } finally {
         Reflect.set(globalThis, "location", original)
       }
@@ -574,12 +574,12 @@ describe("createDesktopNotifier", () => {
         detail: { title: "Fix login", need: "question" } }], "dev_1")
       await Bun.sleep(0)
       expect(worker.shown.at(-1)).toMatchObject({ title: "YCoding — question for you",
-        options: { body: "“Fix login” is waiting for your answer.", tag: "ycoding-dev_1-ntc_4", data: { sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_4" } } })
+        options: { body: "“Fix login” is waiting for your answer.", tag: "v5-ycoding-dev_1-ntc_4", data: { sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_4", relayProtocol: 5 } } })
       expect(worker.shown.at(-1)?.options).not.toHaveProperty("renotify")
       delivery.present([{ kind: "notice", notice: { id: "ntc_4", category: "approval-requested", sessionID: "ses_a", createdAt: 1 },
         detail: { title: "Fix login", need: "failed", repeat: true } }], "dev_1")
       await Bun.sleep(0)
-      expect(worker.shown.at(-1)).toMatchObject({ title: "YCoding — session failed", options: { tag: "ycoding-dev_1-ntc_4", renotify: true } })
+      expect(worker.shown.at(-1)).toMatchObject({ title: "YCoding — session failed", options: { tag: "v5-ycoding-dev_1-ntc_4", renotify: true } })
       delivery.dispose()
     })
   })
@@ -619,7 +619,7 @@ describe("createDesktopNotifier", () => {
         notifier.show({ title: "YCoding — work finished", body: "A session finished all its work.", tag: "ycoding-ses_a-agent-completed", sessionID: "ses_a" })
         await Bun.sleep(0)
         expect(registered).toEqual(["/sw.js:module"])
-        expect(worker.shown).toMatchObject([{ title: "YCoding — work finished", options: { tag: "ycoding-ses_a-agent-completed", data: { sessionID: "ses_a" } } }])
+        expect(worker.shown).toMatchObject([{ title: "YCoding — work finished", options: { tag: "v5-ycoding-ses_a-agent-completed", data: { sessionID: "ses_a", relayProtocol: 5 } } }])
         notifier.dispose()
       } finally {
         Reflect.set(globalThis, "navigator", original)
@@ -660,7 +660,7 @@ describe("createDesktopNotifier", () => {
       notifier.show({ title: "second", body: "same Session", tag: "ycoding-ses_a-error", sessionID: "ses_a" })
       notifier.show({ title: "other", body: "no Session", tag: "ycoding-dev_1-offline-1000" })
       await Bun.sleep(0)
-      expect([...worker.open.keys()].sort()).toEqual(["ycoding-dev_1-offline-1000", "ycoding-ses_a-error", "ycoding-ses_z-agent-completed"])
+      expect([...worker.open.keys()].sort()).toEqual(["v5-ycoding-dev_1-offline-1000", "v5-ycoding-ses_a-error", "ycoding-ses_z-agent-completed"])
       notifier.dispose()
       await Bun.sleep(0)
       expect([...worker.open.keys()]).toEqual(["ycoding-ses_z-agent-completed"])
@@ -676,7 +676,7 @@ describe("createDesktopNotifier", () => {
       await Bun.sleep(0)
       notifier.dispose(true)
       await Bun.sleep(0)
-      expect([...worker.open.keys()]).toEqual(["ycoding-dev_1-offline-1000"])
+      expect([...worker.open.keys()]).toEqual(["v5-ycoding-dev_1-offline-1000"])
       notifier.dispose()
       await Bun.sleep(0)
       expect([...worker.open.keys()]).toEqual([])

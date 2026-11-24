@@ -199,6 +199,12 @@ test("a lid error stays visible while idle keep-awake is on", () => {
   expect(view.detail).toMatch(/lid-closed keep-awake could not be armed/)
 })
 
+test("manual keep-awake explains when the preference ends", () => {
+  const view = keepAwakeView({ keepAwake: ready("on"), reachable: true })
+  expect(view.checked).toBe(true)
+  expect(view.caveat).toMatch(/stays on until you turn it off or YCoding stops or restarts/i)
+})
+
 test("an older connector status without lid or sleepHold still reads as on", () => {
   const view = keepAwakeView({ keepAwake: ready("on"), reachable: true })
   expect(view).toMatchObject({ checked: true, disabled: false, label: "On", tone: "neutral" })

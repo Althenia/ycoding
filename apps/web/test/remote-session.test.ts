@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { isRemoteLatencySample, type RemoteNoticeFrame } from "@ycoding-ai/remote"
-import { canReplyToRequest, hasCompactionCheckpoint, sessionExecutionLabel, visibleTranscriptMessages } from "../src/remote/projection"
+import { canReplyToRequest, contextWindowDisplay, hasCompactionCheckpoint, sessionExecutionLabel, visibleTranscriptMessages } from "../src/remote/projection"
 import { createRemoteHttp } from "../src/remote/http"
 import { latestPromptProcessing, pendingTrayItems, promptReceipt } from "../src/remote/view-model"
 import { createRemoteStore, readSessionInfo, type RemoteStore } from "../src/remote/store"
@@ -459,7 +459,7 @@ describe("remote store integration", () => {
       await test.runUntil(() => test.relay.requests.length > 0 && test.store.state().mutations.find((mutation) => mutation.operation === "session.compact")?.state === "sending", 30)
       expect(test.store.state().mutations.find((mutation) => mutation.operation === "session.compact")?.state).toBe("sending")
       expect(test.store.state().mutationToasts ?? []).toEqual([])
-      test.relay.pushEvent("ses_a", { type: "session.compaction.ended", data: { sessionID: "ses_a", jobID, boundary: { messageID: "msg_1", seq: 1 } }, created: 20 })
+      test.relay.pushEvent("ses_a", { type: "session.compaction.ended", data: { sessionID: "ses_a", jobID, revision: 1, boundary: { messageID: "msg_1", seq: 1 }, metrics: { excludedMessages: 1, excludedParts: 0, inputTokens: 1_000, retainedTokens: 400 } }, created: 20 })
       await test.runUntil(() => !test.store.state().mutations.some((mutation) => mutation.operation === "session.compact"))
       expect(await pending).toBe(true)
       expect(test.store.state().mutationToasts ?? []).toEqual([])
@@ -479,7 +479,7 @@ describe("remote store integration", () => {
       const jobID = test.relay.requests.find((request) => request.operation === "session.compact")!.input!.id as string
       test.relay.pushEvent("ses_a", { type: "session.compaction.started", data: { sessionID: "ses_a", jobID }, created: 10 })
       await test.runUntil(() => test.store.state().view?.messages.some((message) => message.kind === "compaction" && message.jobID === jobID) ?? false)
-      test.relay.pushEvent("ses_a", { type: "session.compaction.failed", data: { sessionID: "ses_a", jobID, code: "provider_failed", error: { code: "provider_failed", message: "Compaction failed: provider_failed" } }, created: 20 })
+      test.relay.pushEvent("ses_a", { type: "session.compaction.failed", data: { sessionID: "ses_a", jobID, code: "provider_failed", error: { type: "compaction.failed", message: "Compaction failed: provider_failed" } }, created: 20 })
       await test.runUntil(() => test.store.state().mutations.find((mutation) => mutation.operation === "session.compact")?.state === "failed")
       expect(await pending).toBe(false)
       expect(test.store.state().mutationToasts).toMatchObject([{ state: "failed", detail: "Compaction failed: provider_failed" }])
@@ -488,7 +488,7 @@ describe("remote store integration", () => {
 
   test("keeps a failed compaction visible and retries only explicitly with its same ID", async () => {
     const test = await harness({ handler: (request) => request.operation === "session.compact"
-      ? { ok: false, code: "internal_error", message: "Compaction failed: provider_failed" }
+      ? { ok: true, value: { data: { id: request.input?.id, sessionID: request.sessionID, trigger: "manual", status: "failed", failure: "provider_failed", requestedThrough: { messageID: "msg_1", seq: 1 }, timeCreated: 100 } } }
       : "default" })
     try {
       expect(await test.store.compactSession()).toBe(false)
@@ -516,7 +516,7 @@ describe("remote store integration", () => {
       ] },
     }
     const test = await harness({ handler: (request) => request.operation === "session.snapshot"
-      ? { ok: true, value: { session: { id: request.sessionID }, watermark: { seq: 10 }, ...pages[typeof request.input?.before === "string" ? request.input.before : "newest"] } }
+      ? { ok: true, value: { sourceEpoch: "epoch_1", session: { id: request.sessionID }, watermark: { type: "log.synced", aggregateID: request.sessionID, seq: 10 }, ...pages[typeof request.input?.before === "string" ? request.input.before : "newest"] } }
       : "default" })
     try {
       await test.store.load()
@@ -552,7 +552,7 @@ describe("remote store integration", () => {
 
   test("does not page beyond an initial checkpoint, including when a newer compaction is running", async () => {
     const test = await harness({ handler: (request) => request.operation === "session.snapshot"
-      ? { ok: true, value: { session: { id: request.sessionID }, watermark: { seq: 10 }, before: "covered", messages: [
+      ? { ok: true, value: { sourceEpoch: "epoch_1", session: { id: request.sessionID }, watermark: { type: "log.synced", aggregateID: request.sessionID, seq: 10 }, before: "covered", messages: [
         { id: "msg_complete", type: "compaction", jobID: "cmp_done", trigger: "manual", status: "completed", revision: 1, boundary: { messageID: "msg_covered", seq: 2 }, metrics: { excludedMessages: 2, excludedParts: 0, inputTokens: 100, retainedTokens: 40 }, time: { created: 3 } },
         { id: "msg_running", type: "compaction", jobID: "cmp_new", trigger: "manual", status: "running", time: { created: 4 } },
       ] } }
@@ -572,7 +572,7 @@ describe("remote store integration", () => {
     const statuses = ["pending", "running", "failed"] as const
     for (const status of statuses) {
       const test = await harness({ handler: (request) => request.operation === "session.snapshot"
-        ? { ok: true, value: { session: { id: request.sessionID }, watermark: { seq: 10 },
+        ? { ok: true, value: { sourceEpoch: "epoch_1", session: { id: request.sessionID }, watermark: { type: "log.synced", aggregateID: request.sessionID, seq: 10 },
           ...(request.input?.before ? {} : { before: "older" }), messages: request.input?.before ? [
             { id: "msg_old", type: "user", text: "old", time: { created: 1 } },
           ] : [{ id: "msg_compact", type: "compaction", jobID: "cmp_new", trigger: "manual", status,
@@ -766,7 +766,7 @@ describe("remote store integration", () => {
       ] },
       handler: (request) => request.operation === "session.compaction.list"
         ? { ok: true, value: { data: [
-          { jobID: "cmp_old", trigger: "auto", status: "completed", metrics: { ...metrics, inputTokens: 500, retainedTokens: 200 }, created: 0 },
+          { jobID: "cmp_old", trigger: "consider", status: "completed", metrics: { ...metrics, inputTokens: 500, retainedTokens: 200 }, created: 0 },
           { jobID: "cmp_latest", trigger: "manual", status: "completed", metrics, created: 2 },
         ], truncated: false, completedBefore: 0, completedCount: 2, totalSavedTokens: 900 } }
         : "default",
@@ -800,16 +800,96 @@ describe("remote store integration", () => {
     } finally { await test.stop() }
   })
 
+  test("keeps a started v5 compaction visible when another job is admitted", async () => {
+    const test = await harness()
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_a"))
+      await test.store.selectSession("ses_a")
+      const rows = () => visibleTranscriptMessages(test.store.state().view?.messages ?? []).filter((message) => message.kind === "compaction")
+      const push = (type: string, seq: number, data: Record<string, unknown>) => test.relay.pushEvent("ses_a", {
+        type: `session.compaction.${type}`, durable: { aggregateID: "ses_a", seq, version: 2 }, data,
+      })
+      push("admitted", 1, { jobID: "cmp_live", pressure: { estimatedInputTokens: 810, safeInputTokens: 950 } })
+      await test.runUntil(() => test.store.state().view?.watermark === 1)
+      expect(rows()).toEqual([])
+      push("started", 2, { jobID: "cmp_live" })
+      await test.runUntil(() => test.store.state().view?.watermark === 2)
+      expect(rows()).toMatchObject([{ jobID: "cmp_live", status: "running" }])
+      push("admitted", 3, { jobID: "cmp_next", pressure: { estimatedInputTokens: 800, safeInputTokens: 950 } })
+      await test.runUntil(() => test.store.state().view?.watermark === 3)
+      expect(rows()).toMatchObject([{ jobID: "cmp_live", status: "running" }])
+      push("ended", 4, { jobID: "cmp_live", revision: 1, boundary: { messageID: "msg_before", seq: 1 },
+        metrics: { excludedMessages: 2, excludedParts: 0, inputTokens: 810, retainedTokens: 260 } })
+      await test.runUntil(() => test.store.state().view?.watermark === 4)
+      expect(rows()).toMatchObject([{ jobID: "cmp_live", status: "completed" }])
+      push("started", 5, { jobID: "cmp_next" })
+      await test.runUntil(() => test.store.state().view?.watermark === 5)
+      expect(rows()).toMatchObject([{ jobID: "cmp_next", status: "running" }])
+      push("admitted", 6, { jobID: "cmp_superseded" })
+      push("failed", 7, { jobID: "cmp_superseded", code: "superseded", error: { type: "compaction.failed", message: "Superseded" } })
+      await test.runUntil(() => test.store.state().view?.watermark === 7)
+      expect(rows()).toMatchObject([{ jobID: "cmp_next", status: "running" }])
+    } finally { await test.stop() }
+  })
+
+  test("a v5 snapshot refresh does not rewind an 80% live context measurement to 81%", async () => {
+    const gate = Promise.withResolvers<void>()
+    const model = { providerID: "openai", id: "gpt-5" }
+    const tokens = (input: number) => ({ input, output: 0, reasoning: 0, cache: { read: 0, write: 0 } })
+    let reads = 0
+    let checkpoint = false
+    const test = await harness({ handler: async (request) => {
+      if (request.operation !== "session.snapshot") return "default" as const
+      if (++reads === 2) await gate.promise
+      return { ok: true, value: {
+        session: { id: "ses_a", model }, sourceEpoch: "epoch_1",
+        watermark: { type: "log.synced", aggregateID: "ses_a", seq: checkpoint ? 4 : 1 },
+        messages: [{ id: "msg_previous", type: "assistant", model, agent: "build", tokens: tokens(810),
+          diagnostics: { contextLimit: 1_000 }, time: { created: 1, completed: 2 }, content: [] }, ...(checkpoint ? [
+            { id: "msg_compact", type: "compaction", jobID: "cmp_live", trigger: "consider", status: "completed", revision: 1,
+              boundary: { messageID: "msg_previous", seq: 1 }, metrics: { excludedMessages: 1, excludedParts: 0, inputTokens: 800, retainedTokens: 260 }, time: { created: 3 } },
+          ] : [])],
+      } }
+    } })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_a"))
+      await test.store.selectSession("ses_a")
+      const percent = () => contextWindowDisplay(test.store.state().view, model)?.usedPercent
+      expect(percent()).toBe(81)
+      const reload = test.store.reloadMessages()
+      await test.runUntil(() => reads === 2)
+      const diagnostics = (used: number) => test.relay.pushEvent("ses_a", { type: "session.diagnostics.updated", data: { diagnostics: {
+        model, context: { total: used, limit: 1_000, remaining: 1_000 - used, percent: used / 10 },
+        tokens: { uncachedInput: used, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+        cache: { mechanism: "none", eligible: used, readReported: false, writeReported: false },
+      } } })
+      diagnostics(800)
+      await test.runUntil(() => percent() === 80)
+      gate.resolve()
+      await reload
+      expect(percent()).toBe(80)
+      await test.store.reloadMessages()
+      expect(percent()).toBe(80)
+      checkpoint = true
+      await test.store.reloadMessages()
+      expect(percent()).toBeUndefined()
+      diagnostics(260)
+      await test.runUntil(() => percent() === 26)
+    } finally { gate.resolve(); await test.stop() }
+  })
+
   test("updates a loaded compaction total once from a live completion without another history read", async () => {
     const metrics = { excludedMessages: 4, excludedParts: 0, inputTokens: 1_000, retainedTokens: 400 }
-    const test = await harness({ messages: { ses_a: [{ id: "msg_compact", type: "compaction", jobID: "cmp_live", trigger: "auto", status: "running", time: { created: 2 } }] },
-      handler: (request) => request.operation === "session.compaction.list" ? { ok: true, value: { data: [{ jobID: "cmp_live", trigger: "auto", status: "running", created: 2 }], truncated: false, completedBefore: 0, completedCount: 0, totalSavedTokens: 0 } } : "default" })
+    const test = await harness({ messages: { ses_a: [{ id: "msg_compact", type: "compaction", jobID: "cmp_live", trigger: "consider", status: "running", time: { created: 2 } }] },
+      handler: (request) => request.operation === "session.compaction.list" ? { ok: true, value: { data: [{ jobID: "cmp_live", trigger: "consider", status: "running", created: 2 }], truncated: false, completedBefore: 0, completedCount: 0, totalSavedTokens: 0 } } : "default" })
     try {
       await test.store.load()
       await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_a"))
       await test.store.selectSession("ses_a")
       await test.runUntil(() => test.store.state().view?.compactionHistory?.data.length === 1)
-      for (let index = 0; index < 2; index++) test.relay.pushEvent("ses_a", { type: "session.compaction.ended", data: { sessionID: "ses_a", jobID: "cmp_live", metrics, boundary: { messageID: "msg_before", seq: 1 } }, created: 3 })
+      for (let index = 0; index < 2; index++) test.relay.pushEvent("ses_a", { type: "session.compaction.ended", data: { sessionID: "ses_a", jobID: "cmp_live", revision: 1, metrics, boundary: { messageID: "msg_before", seq: 1 } }, created: 3 })
       await test.runUntil(() => test.store.state().view?.compactionHistory?.completedCount === 1)
       expect(test.store.state().view?.compactionHistory?.totalSavedTokens).toBe(600)
       expect(test.relay.requests.filter((request) => request.operation === "session.compaction.list")).toHaveLength(1)

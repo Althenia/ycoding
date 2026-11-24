@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 
-import { constants } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 
@@ -47,45 +46,6 @@ export async function buildWebAssets(options: { readonly root: string; readonly 
   ])
 }
 
-export async function publishBunWeb(bunDist: string, outdir: string) {
-  const shell = path.join(bunDist, "index.html")
-  const sourceAssets = path.join(bunDist, "assets")
-  const targetAssets = path.join(outdir, "assets")
-  const bunPath = path.join(outdir, "_bun")
-  if (!(await fs.lstat(shell)).isFile() || !(await fs.lstat(sourceAssets)).isDirectory()) {
-    throw new Error("Expected a Bun Web asset build")
-  }
-  if (!(await fs.lstat(path.join(outdir, "index.html"))).isFile() || !(await fs.lstat(targetAssets)).isDirectory()) {
-    throw new Error("Expected the current Web asset build")
-  }
-
-  const html = await fs.readFile(shell, "utf8")
-  const assets = await fs.readdir(sourceAssets, { withFileTypes: true })
-  const names = new Set(assets.map(({ name }) => name))
-  const referenced = [...html.matchAll(/(?:href|src)="\/assets\/([^"/]+)"/g)].map((match) => match[1])
-  if (!referenced.some((name) => name.endsWith(".js")) || referenced.some((name) => !names.has(name))) {
-    throw new Error("Bun Web asset referenced by the shell is missing")
-  }
-
-  const additions: string[] = []
-  for (const entry of assets) {
-    const name = entry.name
-    if (!entry.isFile() || !/^[A-Za-z0-9._-]+-[A-Za-z0-9_-]{6,}\.[A-Za-z0-9]+$/.test(name)) {
-      throw new Error(`Unexpected Bun Web asset: ${name}`)
-    }
-    const target = path.join(targetAssets, name)
-    const current = await fs.lstat(target, { throwIfNoEntry: false })
-    if (current === undefined) additions.push(name)
-    else if (!current.isFile() || !(await fs.readFile(target)).equals(await fs.readFile(path.join(sourceAssets, name)))) {
-      throw new Error(`Bun Web asset conflicts with the current build: ${name}`)
-    }
-  }
-
-  await fs.mkdir(bunPath)
-  await Promise.all(additions.map((name) => fs.copyFile(path.join(sourceAssets, name), path.join(targetAssets, name), constants.COPYFILE_EXCL)))
-  await fs.copyFile(shell, path.join(bunPath, "index.html"), constants.COPYFILE_EXCL)
-}
-
 async function configSchema(root: string) {
   const process = Bun.spawn({
     cmd: [
@@ -113,6 +73,5 @@ if (import.meta.main) {
   const outdir = path.join(root, "apps", "web", "dist")
   const args = process.argv.slice(2)
   if (args.length === 0) await buildWebAssets({ root, outdir })
-  else if (args.length === 2 && args[0] === "--bun-dist") await publishBunWeb(args[1], outdir)
-  else throw new Error("Use build-web-assets.ts [--bun-dist <directory>]")
+  else throw new Error("Use build-web-assets.ts")
 }

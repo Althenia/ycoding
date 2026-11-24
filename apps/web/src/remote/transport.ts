@@ -499,7 +499,8 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
       pump(value)
     }
     try {
-      const response = await http.send(`${http.path}?${httpBulkQuery(value.connection, declaration)}`, {
+      const { send } = http
+      const response = await send(`${http.path}?${httpBulkQuery(value.connection, declaration)}`, {
         credentials: "same-origin", mode: "same-origin", redirect: "error", cache: "no-store", signal,
       })
       if (signal.aborted) {

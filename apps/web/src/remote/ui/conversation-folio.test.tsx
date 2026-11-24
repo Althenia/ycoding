@@ -3,7 +3,7 @@ import type { JSX } from "solid-js"
 import { renderToString } from "solid-js/web"
 import { RemoteProvider } from "../context"
 import { createRemoteHttp } from "../http"
-import { createSessionView, type PendingRequestView, type RemoteMessageView } from "../projection"
+import { applySessionEvent, createSessionView, type PendingRequestView, type RemoteMessageView } from "../projection"
 import { createRemoteStore } from "../store"
 import { MessageRow, RequestCard, TranscriptActivityRow } from "./conversation"
 
@@ -31,6 +31,22 @@ test("transient activity renders a polite three-dot live state and no markup at 
   expect(active).toContain("Thinking")
   expect(active).toContain('class="transcript-activity__typing" aria-hidden="true"><span></span><span></span><span></span>')
   expect(render(() => <TranscriptActivityRow />)).not.toContain("transcript-activity")
+})
+
+test("a settled compaction never renders running progress", () => {
+  const started = applySessionEvent(createSessionView("ses_a"), { type: "session.compaction.started", data: { sessionID: "ses_a", jobID: "cmp_live" } }, 1)
+  const running = render(() => <MessageRow message={() => started.messages[0]!} />)
+  expect(running).toContain('data-status="running"')
+  expect(running).toContain("transcript-compaction__indeterminate")
+
+  const failed = applySessionEvent(started, { type: "session.compaction.failed", data: { sessionID: "ses_a", jobID: "cmp_live", code: "superseded", error: { type: "compaction.failed", message: "Superseded" } } }, 2)
+  const superseded = render(() => <MessageRow message={() => failed.messages[0]!} />)
+  expect(superseded).toContain("compaction superseded")
+  expect(superseded).not.toContain("transcript-compaction__indeterminate")
+  const completed: RemoteMessageView = { kind: "compaction", id: "msg_compact", status: "completed", jobID: "cmp_live" }
+  const bare = render(() => <MessageRow message={() => completed} />)
+  expect(bare).toContain('data-status="completed"')
+  expect(bare).not.toContain("transcript-compaction__indeterminate")
 })
 
 test("an assistant turn opens with a mark and one metadata line and never a section ordinal", () => {

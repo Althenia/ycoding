@@ -236,15 +236,18 @@ export function createRouter(deps: RouterDeps) {
     // this worker for every path, matched or not.
     if (isRelayPath(url.pathname)) return apiError(404, "invalid_message", "Not found")
 
-    if (url.pathname === "/_bun" || url.pathname.startsWith("/_bun/"))
-      return withSecurityHeaders(new Response("Not found", { status: 404 }))
-
     const remote = url.pathname === "/remote" || url.pathname.startsWith("/remote/")
-    const rust = url.pathname === "/remote/rust" || url.pathname.startsWith("/remote/rust/")
     const read = request.method === "GET" || request.method === "HEAD"
     if (remote && read) {
-      const response = await deps.assets?.fetch(new Request(new URL(rust ? "/" : "/_bun/", url), request))
-      if (response && (rust || response.status === 200 || response.status === 304)) return withSecurityHeaders(response)
+      const canonical = url.pathname.replace(/^\/remote(?:\/rust)+(?=\/|$)/, "/remote")
+      if (canonical !== url.pathname) {
+        return withSecurityHeaders(new Response(null, {
+          status: 308,
+          headers: { location: `${canonical}${url.search}${url.hash}` },
+        }))
+      }
+      const response = await deps.assets?.fetch(new Request(new URL("/", url), request))
+      if (response && (response.status === 200 || response.status === 304)) return withSecurityHeaders(response)
       return withSecurityHeaders(new Response(request.method === "HEAD" ? null : "Web shell unavailable", {
         status: 503,
         headers: { "cache-control": "no-store" },

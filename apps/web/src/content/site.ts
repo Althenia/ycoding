@@ -7,7 +7,6 @@
  * an account and an enrolled device.
  */
 
-import { RUST_REMOTE_SHELL } from "../pwa/offline"
 import { REMOTE_ROOT } from "../routes"
 
 const releasesURL = "https://github.com/Althenia/ycoding/releases"
@@ -42,8 +41,7 @@ export const SITE = {
     support: "Work in the terminal. Continue from your browser.",
     primaryAction: { label: "Get started", href: "/docs/getting-started" },
     workspaceActions: [
-      { label: "Bun workspace", href: REMOTE_ROOT },
-      { label: "Rust workspace", href: RUST_REMOTE_SHELL },
+      { label: "Open workspace", href: REMOTE_ROOT },
     ],
   },
   features: [

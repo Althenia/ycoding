@@ -1,7 +1,6 @@
 import { For, Show, createEffect, createMemo, createSignal, createUniqueId, onCleanup, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
 import { Collapsible } from "../../ui/collapsible"
-import { remoteDocumentPath, remoteWorkspaceRoot } from "../../routes"
 import { remoteDotsPeerLabel } from "@ycoding-ai/remote"
 import { catalogKey, modelDisplayLabel } from "../catalog"
 import { useRemote } from "../context"
@@ -51,7 +50,7 @@ type AssistantMessageView = Extract<RemoteMessageView, { kind: "assistant" }>
 function SyntheticNotice(props: { readonly notice: NonNullable<ReturnType<typeof classifySyntheticNotice>> }): JSX.Element {
   const remote = useRemote()
   const notice = props.notice
-  if (notice.kind === "member") return <div class="project-event" data-event={notice.event} role="group" aria-label={`Member update: ${notice.label}`}><span class="project-event__glyph" aria-hidden="true"><Icon name={notice.event === "failed" ? "alert" : notice.event === "completed" ? "check" : "team"} size={16} /></span><div class="project-event__heading"><strong>{notice.label}</strong><span class="project-event__status">{notice.event}<Show when={notice.escalatedBy}> by {notice.escalatedBy}</Show></span></div><Show when={notice.excerpt}>{(excerpt) => <div class="project-event__excerpt"><Markdown text={excerpt()} /></div>}</Show><a class="button button--ghost button--small" href={`${remoteDocumentPath("/remote/session", remoteWorkspaceRoot(globalThis.location?.pathname ?? ""))}?session_id=${encodeURIComponent(notice.memberSessionID)}${remote.state().activeDeviceID ? `&device_id=${encodeURIComponent(remote.state().activeDeviceID!)}` : ""}`} aria-label={`Open session ${notice.label}`} onClick={(event) => {
+  if (notice.kind === "member") return <div class="project-event" data-event={notice.event} role="group" aria-label={`Member update: ${notice.label}`}><span class="project-event__glyph" aria-hidden="true"><Icon name={notice.event === "failed" ? "alert" : notice.event === "completed" ? "check" : "team"} size={16} /></span><div class="project-event__heading"><strong>{notice.label}</strong><span class="project-event__status">{notice.event}<Show when={notice.escalatedBy}> by {notice.escalatedBy}</Show></span></div><Show when={notice.excerpt}>{(excerpt) => <div class="project-event__excerpt"><Markdown text={excerpt()} /></div>}</Show><a class="button button--ghost button--small" href={`/remote/session?session_id=${encodeURIComponent(notice.memberSessionID)}${remote.state().activeDeviceID ? `&device_id=${encodeURIComponent(remote.state().activeDeviceID!)}` : ""}`} aria-label={`Open session ${notice.label}`} onClick={(event) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
     event.preventDefault()
     window.dispatchEvent(new CustomEvent("ycoding:open-session", { detail: { sessionID: notice.memberSessionID, deviceID: remote.state().activeDeviceID } }))
@@ -628,7 +627,7 @@ function CompactionDivider(props: { readonly message: () => RemoteMessageView })
     return ""
   }
   const completed = () => current()?.status === "completed" && metrics() !== undefined
-  return <SharedCompactionDivider completed={completed()} label={label()} total={completed() && history() ? `~${compactTokenCount(history()!.totalSavedTokens)} tokens saved total` : ""} reduction={reduction()} number={completed() ? `${ordinal() === undefined ? "" : `Compression #${ordinal()} (`}~${compactTokenCount(saved())} tokens removed, ${reduction()}% reduction${ordinal() === undefined ? "" : ")"}` : ""} items={completed() ? `Items: ${metrics()!.excludedMessages} messages compressed · ${timestamp()}` : ""} />
+  return <SharedCompactionDivider completed={completed()} status={current()?.status} label={label()} total={completed() && history() ? `~${compactTokenCount(history()!.totalSavedTokens)} tokens saved total` : ""} reduction={reduction()} number={completed() ? `${ordinal() === undefined ? "" : `Compression #${ordinal()} (`}~${compactTokenCount(saved())} tokens removed, ${reduction()}% reduction${ordinal() === undefined ? "" : ")"}` : ""} items={completed() ? `Items: ${metrics()!.excludedMessages} messages compressed · ${timestamp()}` : ""} />
 }
 const guardrailAction = (request: PendingRequestView) => (request.kind === "guardrail" ? request.action : "")
 const guardrailReason = (request: PendingRequestView) => (request.kind === "guardrail" ? request.reason : "")

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { buildWebAssets, publishBunWeb } from "./build-web-assets"
+import { buildWebAssets } from "./build-web-assets"
 
 const root = path.resolve(import.meta.dirname, "..")
 const canonicalSchemaID = "https://ycoding.althenia.app/ycoding.schema.json"
@@ -47,56 +47,22 @@ async function listFiles(directory: string, prefix = ""): Promise<string[]> {
 }
 
 describe("web build asset publisher", () => {
-  test("publishes the Bun shell and hashed files without replacing the current Web or installer", async () => {
-    const { fixture, outdir } = await makeFixture({ label: "bun-web" })
+  test("rejects the retired second-shell CLI option without changing the build", async () => {
+    const { fixture, outdir } = await makeFixture({ label: "retired-option" })
     try {
+      const entry = path.join(fixture, "script", "build-web-assets.ts")
+      await fs.copyFile(path.join(root, "script", "build-web-assets.ts"), entry)
       const bunDist = path.join(fixture, "bun-dist")
-      const shell = '<script type="module" src="/assets/bun-d4F1fCo_.js"></script>'
-      await Bun.write(path.join(bunDist, "index.html"), shell)
-      await Bun.write(path.join(bunDist, "assets/bun-d4F1fCo_.js"), "Bun entry\n")
-      await Bun.write(path.join(bunDist, "assets/app-abc123.js"), "console.log('web')\n")
-      await Bun.write(path.join(bunDist, "install.sh"), "Bun installer\n")
-      await Bun.write(path.join(bunDist, "sw.js"), "Bun service worker\n")
-      const original = await Bun.file(path.join(outdir, "index.html")).text()
-      await Bun.write(path.join(outdir, "install.sh"), "Current installer\n")
-
-      await publishBunWeb(bunDist, outdir)
-
-      expect(await listFiles(outdir)).toEqual([
-        "_bun/index.html", "assets/app-abc123.js", "assets/bun-d4F1fCo_.js", "index.html", "install.sh",
-      ])
-      expect(await Bun.file(path.join(outdir, "_bun/index.html")).text()).toBe(shell)
-      expect(await Bun.file(path.join(outdir, "assets/bun-d4F1fCo_.js")).text()).toBe("Bun entry\n")
-      expect(await Bun.file(path.join(outdir, "index.html")).text()).toBe(original)
-      expect(await Bun.file(path.join(outdir, "install.sh")).text()).toBe("Current installer\n")
-    } finally {
-      await fs.rm(fixture, { recursive: true, force: true })
-    }
-  })
-
-  test.each(["collision", "missing", "symlink"] as const)("rejects a Bun shell with %s without changing the deployment", async (failure) => {
-    const { fixture, outdir } = await makeFixture({ label: `bun-web-${failure}` })
-    try {
-      const bunDist = path.join(fixture, "bun-dist")
-      const entry = failure === "collision" ? "app-abc123.js" : "bun-d4F1fCo_.js"
-      await Bun.write(path.join(bunDist, "index.html"), `<script type="module" src="/assets/${entry}"></script>`)
-      const assets = path.join(bunDist, "assets")
-      await fs.mkdir(assets)
-      if (failure === "collision") await Bun.write(path.join(assets, entry), "Different bytes\n")
-      if (failure === "symlink") await fs.symlink(path.join(outdir, "assets/app-abc123.js"), path.join(assets, entry))
+      await Bun.write(path.join(bunDist, "index.html"), '<script src="/assets/bun-abcdef.js"></script>')
+      await Bun.write(path.join(bunDist, "assets", "bun-abcdef.js"), "entry")
       const before = await listFiles(outdir)
-
-      const error: unknown = await publishBunWeb(bunDist, outdir).catch((cause: unknown) => cause)
-      expect(error).toBeInstanceOf(Error)
-      expect(error).toMatchObject({ message: expect.stringMatching(/Bun Web asset/) })
-
+      const result = Bun.spawnSync(["bun", entry, "--bun-dist", bunDist])
+      expect(result.exitCode).not.toBe(0)
       expect(await listFiles(outdir)).toEqual(before)
-      expect(await Bun.file(path.join(outdir, "assets/app-abc123.js")).text()).toBe("console.log('web')\n")
     } finally {
       await fs.rm(fixture, { recursive: true, force: true })
     }
   })
-
   test("publishes the installer, configuration assets, and font license into the web build", async () => {
     const { fixture, outdir } = await makeFixture({ label: "content" })
     try {

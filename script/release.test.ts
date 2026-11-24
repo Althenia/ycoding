@@ -321,7 +321,8 @@ test("publish and deploy consume only digest-checked artifacts from the current 
   expect(release).toContain("cp LICENSE NOTICE release/")
   expect(release.match(/sha256sum --check --strict/g)).toHaveLength(2)
   expect(release).toContain("contents: write")
-  expect(deploy).toContain("test -s apps/web/dist/index.html && test -s apps/web/dist/_bun/index.html")
+  expect(deploy).toContain("test -s apps/web/dist/index.html ||")
+  expect(deploy).not.toContain("_bun")
 })
 
 test("publication checks the tag at the write boundary and retains a replacement recovery manifest", () => {
@@ -505,15 +506,12 @@ test("release workflow verifies the web application and relay before the Cloudfl
   expect(workflow).not.toContain("isolated-browser-smoke.ts")
 })
 
-test("the verified Web artifact includes the published Bun v0.12.2 site", () => {
+test("the verified Web artifact contains only the current Web build", () => {
   const source = workflowJob(workflow, "verify-source")
-  const compose = source.split("- name: Add Bun Web to the production build")[1]?.split("\n      - name:")[0] ?? ""
-  expect(compose).toContain("if: matrix.suite == 'web'")
-  expect(compose).toContain("BUN_WEB_SOURCE: 14936fbcd50a5afacaf168f2db23e12732312802")
-  expect(compose).toContain('git cat-file -e "$BUN_WEB_SOURCE^{commit}" || git fetch --no-tags --refmap= origin "$BUN_WEB_SOURCE"')
-  expect(compose).toContain('git archive "$BUN_WEB_SOURCE"')
-  expect(compose).toContain('bun script/build-web-assets.ts --bun-dist "$source_dir/apps/web/dist"')
-  expect(source.indexOf("- name: Add Bun Web to the production build")).toBeLessThan(source.indexOf("name: verified-web"))
+  expect(source).not.toContain("BUN_WEB_SOURCE")
+  expect(source).not.toContain("--bun-dist")
+  expect(source.indexOf("bun run build:web")).toBeLessThan(source.indexOf("name: verified-web"))
+  expect(source.match(/name: verified-web/g)).toHaveLength(1)
 })
 
 test("active source checks select named files without package-wide test commands", () => {

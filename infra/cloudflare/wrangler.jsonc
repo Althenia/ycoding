@@ -24,8 +24,6 @@
       "/health",
       "/remote",
       "/remote/*",
-      "/_bun",
-      "/_bun/*",
       "/docs",
       "/docs/*",
       "/changelog",

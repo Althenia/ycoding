@@ -1,6 +1,7 @@
 import { isAlertTitle, quotaKey } from "@ycoding-ai/remote"
-import { CACHE_NAME, CACHE_PREFIX, OFFLINE_FALLBACK_URL, PRECACHE_URLS, remoteShellPath, RUST_REMOTE_SHELL, shouldCacheStaticAsset, shouldHandleNavigation } from "./pwa/offline"
+import { CACHE_NAME, CACHE_PREFIX, OFFLINE_FALLBACK_URL, PRECACHE_URLS, isRemotePath, shouldCacheStaticAsset, shouldHandleNavigation } from "./pwa/offline"
 import { alertCopy, alertTag, isAlertDeviceID, overflowCopy, quotaCopy, readQuota, sessionURL, usageURL } from "./remote/alert"
+import { REMOTE_ROOT } from "./routes"
 
 /**
  * Static shell service worker.
@@ -74,24 +75,23 @@ scope.addEventListener("push", (event: { data?: { json: () => unknown }; waitUnt
 scope.addEventListener("notificationclick", (event: { notification: { data?: unknown; close: () => void }; waitUntil: (promise: Promise<unknown>) => void }) => {
   event.notification.close()
   event.waitUntil((async () => {
-    const { fields: data, relayProtocol } = readNotificationData(event.notification.data)
-    const shell = relayProtocol === 5 ? RUST_REMOTE_SHELL : "/remote"
+    const { fields: data } = readNotificationData(event.notification.data)
     const clients = await scope.clients.matchAll({ type: "window", includeUncontrolled: true })
     const current = clients.find((client) => {
       const url = new URL(client.url)
-      return url.origin === scope.location.origin && remoteShellPath(url.pathname) === shell
+      return url.origin === scope.location.origin && isRemotePath(url.pathname)
     })
     if (data.quota === true && isAlertDeviceID(data.deviceID) && Object.keys(data).length === 2) {
       const delivered = current !== undefined && await current.focus().then(() => {
         current.postMessage({ type: "ycoding:open-usage", deviceID: data.deviceID })
         return true
       }).catch(() => false)
-      if (!delivered) await scope.clients.openWindow(usageURL(data.deviceID, shell))
+      if (!delivered) await scope.clients.openWindow(usageURL(data.deviceID))
       return
     }
     if (!isSessionID(data.sessionID)) {
       if (current && await current.focus().then(() => true, () => false)) return
-      await scope.clients.openWindow(shell)
+      await scope.clients.openWindow(REMOTE_ROOT)
       return
     }
     const deviceID = isAlertDeviceID(data.deviceID) ? data.deviceID : undefined
@@ -104,7 +104,7 @@ scope.addEventListener("notificationclick", (event: { notification: { data?: unk
       }).catch(() => false)
       if (delivered) return
     }
-    await scope.clients.openWindow(sessionURL(data.sessionID, deviceID, noticeID, shell))
+    await scope.clients.openWindow(sessionURL(data.sessionID, deviceID, noticeID))
   })())
 })
 
@@ -208,11 +208,11 @@ async function precacheShell(): Promise<void> {
 
 async function navigationResponse(request: Request): Promise<Response> {
   const pathname = new URL(request.url).pathname
-  const shell = remoteShellPath(pathname)
-  const cacheKey = shell ?? "/"
+  const remote = isRemotePath(pathname)
+  const cacheKey = remote ? REMOTE_ROOT : "/"
   const response = await fetch(request).catch(() => undefined)
   if (response !== undefined) {
-    if ((shell !== undefined || pathname === "/") && response.ok && !response.redirected && /^text\/html(?:;|$)/i.test(response.headers.get("content-type") ?? ""))
+    if ((remote || pathname === "/") && response.ok && !response.redirected && /^text\/html(?:;|$)/i.test(response.headers.get("content-type") ?? ""))
       await caches.open(CACHE_NAME).then((cache) => cache.put(cacheKey, response.clone())).catch(() => undefined)
     return response
   }

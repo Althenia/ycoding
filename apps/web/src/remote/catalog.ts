@@ -73,8 +73,9 @@ export function modelDisplayLabel(model: ModelRefView, models: readonly ModelOpt
 }
 
 export function readCatalog(value: unknown): CatalogView | undefined {
-  const catalog = record(value)
-  if (!catalog) return undefined
+  const outer = record(value)
+  if (!outer) return undefined
+  const catalog = record(outer.data) ?? outer
   const agents = Array.isArray(catalog.agents) ? catalog.agents : undefined
   const models = Array.isArray(catalog.models) ? catalog.models : undefined
   const commands = Array.isArray(catalog.commands) ? catalog.commands : undefined

@@ -46,6 +46,7 @@ async function rendered(url: string) {
 
 async function browserHistory(entry?: string) {
   if (entry) window.history.replaceState(null, "", entry)
+  const lengthBeforeRouter = window.history.length
   const router = createAppRouter()
   const host = document.createElement("div")
   document.body.append(host)
@@ -53,6 +54,7 @@ async function browserHistory(entry?: string) {
   const settle = () => new Promise((resolve) => setTimeout(resolve, 200))
   await settle()
   const start = window.history.length
+  const initial = { pathname: window.location.pathname, search: window.location.search, hash: window.location.hash, added: start - lengthBeforeRouter }
   const at = () => ({ added: window.history.length - start, pathname: window.location.pathname, search: Object.fromEntries(new URLSearchParams(window.location.search)), view: router.state.location.pathname })
   await router.navigate({ to: "/docs" })
   const pushed = at()
@@ -67,7 +69,7 @@ async function browserHistory(entry?: string) {
   const back = at()
   dispose()
   host.remove()
-  return { pushed, landing, selected, replaced, back }
+  return { initial, pushed, landing, selected, replaced, back }
 }
 
 async function build(to: string, hash?: string) {

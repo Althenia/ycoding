@@ -9,7 +9,7 @@ import type {
 } from "../src/remote/transport"
 import { createRemoteHttp } from "../src/remote/http"
 import { keepAwakeState, remoteKeys } from "../src/remote/queries"
-import type { KeepAwakeState } from "../src/remote/keep-awake"
+import { keepAwakeView, type KeepAwakeState } from "../src/remote/keep-awake"
 import { createRemoteStore } from "../src/remote/store"
 import { queriesOf } from "./remote-queries"
 import { waitFor } from "./relay-double"
@@ -151,6 +151,34 @@ test("a change needs a settled supported read, sends exactly the requested flag,
     held.resolve(ok("off"))
     test.store.dispose()
   }
+})
+
+test("the manual keep-awake choice remains on across reads and defer changes until switched off", async () => {
+  let manual = false
+  let deferred = false
+  const test = machine((operation, request) => {
+    if (operation === "keepAwake.set") manual = request?.input?.enabled === true
+    else if (operation !== "keepAwake.get") return undefined
+    return { status: "ok", value: { data: { state: manual || deferred ? "on" : "off", deferHold: deferred, ...(deferred ? { manual } : {}) } } }
+  })
+  const view = () => keepAwakeView({ keepAwake: keepAwake(test), reachable: true })
+  try {
+    test.store.connect("dev_1")
+    await load(test)
+    expect(view()).toMatchObject({ checked: false, label: "Off" })
+    expect((await change(test, true)).reached).toBe(true)
+    deferred = true
+    await load(test)
+    expect(view()).toMatchObject({ checked: true, label: "On" })
+    deferred = false
+    await load(test)
+    expect(view()).toMatchObject({ checked: true, label: "On" })
+    expect(test.count("keepAwake.set")).toBe(1)
+    expect((await change(test, false)).reached).toBe(true)
+    await load(test)
+    expect(view()).toMatchObject({ checked: false, label: "Off" })
+    expect(test.calls.filter((call) => call.operation === "keepAwake.set").map((call) => call.request?.input)).toEqual([{ enabled: true }, { enabled: false }])
+  } finally { test.store.dispose() }
 })
 
 test("an unsupported machine cannot be changed", async () => {

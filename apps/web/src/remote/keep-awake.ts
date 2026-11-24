@@ -69,7 +69,7 @@ export type KeepAwakeView = {
 
 export const keepAwakeBatteryCaution = "On battery this drains the battery and a closed lid traps heat."
 const caveat =
-  `Available on macOS. Controls idle sleep and lid-closed sleep when each part reports On; an unreported part is unconfirmed. Display holds idle display sleep; activity reports renewed user-activity assertions, not an unlocked screen. Verify automatic-lock prevention and lid behavior on this Mac; deliberate locks and managed policy apply. Choosing Sleep still sleeps unless system sleep is On; with system sleep On, a closed lid on battery stays awake until the battery dies and Sleep does not sleep. ${keepAwakeBatteryCaution} The manual preference resets when YCoding stops or restarts; sleeping families rehydrate their holds.`
+  `Available on macOS. Controls idle sleep and lid-closed sleep when each part reports On; an unreported part is unconfirmed. Display holds idle display sleep; activity reports renewed user-activity assertions, not an unlocked screen. Verify automatic-lock prevention and lid behavior on this Mac; deliberate locks and managed policy apply. Choosing Sleep still sleeps unless system sleep is On; with system sleep On, a closed lid on battery stays awake until the battery dies and Sleep does not sleep. ${keepAwakeBatteryCaution} The manual setting stays on until you turn it off or YCoding stops or restarts. Deferred Sessions restore their holds when YCoding starts.`
 const systemText = {
   off: "System sleep control off.",
   on: "System sleep disabled: a closed lid on battery stays awake until the battery dies, and Sleep does not sleep.",

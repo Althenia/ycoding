@@ -113,7 +113,7 @@ function jsonRequest(url: string, body: unknown, headers: Record<string, string>
 }
 
 describe("router: health and unknown routes", () => {
-  test("reports health, rejects unknown routes, and fails closed on a Bun deep link without assets", async () => {
+  test("reports health, rejects unknown routes, and fails closed on a remote deep link without assets", async () => {
     const h = await harness()
     expect((await h.router(new Request(`${origin}/health`))).status).toBe(200)
     expect((await h.router(new Request(`${origin}/`))).status).toBe(404)
@@ -805,7 +805,7 @@ test("v5 message and attachment bulk selectors stay on the authenticated device 
   const intruder = await signIn(h, "bulk-intruder")
   const device = await enrollDevice(h, owner.userID)
   const session = `${origin}/api/remote/devices/${device.deviceID}/sessions/ses_stream`
-  const headers = { ...sessionCookie(owner.token), origin, "x-ycoding-connection-epoch": "spoofed" }
+  const headers = { ...sessionCookie(owner.token), "sec-fetch-site": "same-origin", "x-ycoding-connection-epoch": "spoofed" }
   const selectors = "connectionEpoch=epoch_1&requestID=123&transferID=transfer_1"
   for (const [content, stream] of [["messages/msg_large", "message"], [`attachments/${"a".repeat(64)}`, "attachment"]]) {
     const url = `${session}/${content}`
@@ -820,6 +820,8 @@ test("v5 message and attachment bulk selectors stay on the authenticated device 
     const count = h.relayCalls.length
     for (const invalid of ["requestID=1", `${selectors}&connectionEpoch=other`, selectors.replace("123", "0"), selectors.replace("123", "18446744073709551616")])
       expect((await h.router(new Request(`${url}?${invalid}`, { headers }))).status).toBe(400)
+    if (stream === "attachment")
+      expect((await h.router(new Request(`${session}/attachments/${"g".repeat(64)}?${selectors}`, { headers }))).status).toBe(400)
     expect((await h.router(new Request(`${url}?${selectors}`, { headers: { ...sessionCookie(intruder.token), origin } }))).status).toBe(403)
     expect(h.relayCalls).toHaveLength(count)
   }
@@ -984,22 +986,22 @@ describe("router: static asset delegation", () => {
     expect(await (await h.router(new Request(`${origin}/`))).text()).toBe("asset")
     expect(await (await h.router(new Request(`${origin}/remote/chat`))).text()).toBe("asset")
     expect(await (await h.router(new Request(`${origin}/docs/configuration`))).text()).toBe("asset")
-    expect(seen).toEqual(["/", "/_bun/", "/docs/configuration"])
+    expect(seen).toEqual(["/", "/", "/docs/configuration"])
 
     expect((await h.router(new Request(`${origin}/api/me`))).status).toBe(401)
     expect((await h.router(new Request(`${origin}/health`))).status).toBe(200)
     expect((await h.router(new Request(`${origin}${RemoteWebSocketPath.client}?device=dev_1`))).status).toBe(426)
-    expect(seen).toEqual(["/", "/_bun/", "/docs/configuration"])
+    expect(seen).toEqual(["/", "/", "/docs/configuration"])
   })
 
-  test("routes the Bun and Rust Web shells on exact edition boundaries", async () => {
+  test("serves the root shell under /remote and redirects only the legacy Rust route segment", async () => {
     const seen: string[] = []
     const h = await harness({
       assets: {
         fetch: async (request) => {
           const url = new URL(request.url)
           seen.push(`${request.method} ${url.pathname}${url.search}`)
-          const html = url.pathname === "/_bun/" ? "Bun shell" : url.pathname === "/" ? "Rust shell" : undefined
+          const html = url.pathname === "/" ? "Web shell" : undefined
           return html === undefined
             ? new Response(null, { status: 404 })
             : new Response(request.method === "HEAD" ? null : html, { headers: { "content-type": "text/html" } })
@@ -1008,32 +1010,43 @@ describe("router: static asset delegation", () => {
     })
     for (const path of ["/remote", "/remote/", "/remote/session?session_id=ses_1", "/remote/rusty"]) {
       const response = await h.router(new Request(`${origin}${path}`))
-      expect(await response.text(), path).toBe("Bun shell")
+      expect(await response.text(), path).toBe("Web shell")
     }
-    for (const path of ["/remote/rust", "/remote/rust/", "/remote/rust/session?session_id=ses_1"]) {
-      const response = await h.router(new Request(`${origin}${path}`))
-      expect(await response.text(), path).toBe("Rust shell")
+    for (const [legacy, canonical] of [
+      ["/remote/rust", "/remote"],
+      ["/remote/rust/", "/remote/"],
+      ["/remote/rust/session?session_id=ses_1&device_id=dev_1#panel", "/remote/session?session_id=ses_1&device_id=dev_1#panel"],
+      ["/remote/rust/invite#token", "/remote/invite#token"],
+      ["/remote/rust/rust/usage", "/remote/usage"],
+    ]) {
+      const response = await h.router(new Request(`${origin}${legacy}`))
+      expect(response.status, legacy).toBe(308)
+      expect(response.headers.get("location")).toBe(canonical)
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff")
     }
+    const legacyHead = await h.router(new Request(`${origin}/remote/rust/usage?device_id=dev_1`, { method: "HEAD" }))
+    expect(legacyHead.status).toBe(308)
+    expect(legacyHead.headers.get("location")).toBe("/remote/usage?device_id=dev_1")
+    expect(await legacyHead.text()).toBe("")
     const head = await h.router(new Request(`${origin}/remote`, { method: "HEAD" }))
     expect(head.status).toBe(200)
     expect(await head.text()).toBe("")
     const docs = await h.router(new Request(`${origin}/docs/installation`, { headers: { "sec-fetch-mode": "navigate" } }))
-    expect(await docs.text()).toBe("Rust shell")
+    expect(await docs.text()).toBe("Web shell")
     expect(seen).toEqual([
-      "GET /_bun/", "GET /_bun/", "GET /_bun/", "GET /_bun/", "GET /", "GET /", "GET /", "HEAD /_bun/",
+      "GET /", "GET /", "GET /", "GET /", "HEAD /",
       "GET /docs/installation", "GET /",
     ])
   })
 
-  test("fails closed for a missing Bun Web shell and denies direct internal asset paths", async () => {
+  test("fails closed when the root shell is missing instead of trying a route-specific asset", async () => {
     const seen: string[] = []
     const h = await harness({
       assets: {
         fetch: async (request) => {
           const path = new URL(request.url).pathname
           seen.push(path)
-          if (path === "/") return new Response("Rust shell")
-          if (path === "/remote/session") return new Response("Rust fallback", { status: 200 })
+          if (path === "/remote/session") return new Response("Route fallback", { status: 200 })
           return new Response(null, { status: 404 })
         },
       },
@@ -1041,10 +1054,10 @@ describe("router: static asset delegation", () => {
     const unavailable = await h.router(new Request(`${origin}/remote/session`, { headers: { "sec-fetch-mode": "navigate" } }))
     expect(unavailable.status).toBe(503)
     expect(unavailable.headers.get("cache-control")).toBe("no-store")
-    for (const path of ["/_bun", "/_bun/", "/_bun/index.html"]) {
-      expect((await h.router(new Request(`${origin}${path}`))).status, path).toBe(404)
-    }
-    expect(seen).toEqual(["/_bun/"])
+    const head = await h.router(new Request(`${origin}/remote/session`, { method: "HEAD" }))
+    expect(head.status).toBe(503)
+    expect(await head.text()).toBe("")
+    expect(seen).toEqual(["/", "/"])
   })
 
   test("never delegates an unmatched relay path to the SPA shell", async () => {

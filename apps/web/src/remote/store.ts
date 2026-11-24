@@ -1596,6 +1596,15 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         ? { timeoutMs: RemoteLimits.goalSetTimeoutMs } : operation === "session.compact" || operation === "session.switchModel"
           ? { timeoutMs: RemoteLimits.compactionTimeoutMs } : {}) })
     const settled = await (jobSettled === undefined ? answered : Promise.race([answered, jobSettled]))
+    if (jobID !== undefined && settled.status === "ok" && settled.value !== undefined) {
+      const result: unknown = typeof settled.value === "object" && settled.value !== null ? Reflect.get(settled.value, "data") : undefined
+      if (typeof result !== "object" || result === null || Reflect.get(result, "id") !== jobID || Reflect.get(result, "sessionID") !== options.sessionID)
+        return settleCompaction(jobID, "unknown", "The machine did not report the requested compaction job")
+      if (Reflect.get(result, "status") === "failed") {
+        const failure = Reflect.get(result, "failure")
+        return settleCompaction(jobID, "failed", typeof failure === "string" ? `Compaction failed: ${failure}` : undefined)
+      }
+    }
     const uncertain: RemoteRequestOutcome = settled.status === "failed" && settled.error.code === "outcome_unknown"
       ? { status: "unknown", error: settled.error } : settled
     const outcome = operation === "session.switchModel"
@@ -1726,12 +1735,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       ...base.messages.filter((message) => (olderMessageIDs.has(message.id) || message.kind === "oversized" && message.state === "pending" || message.kind === "user" && message.state === "pending" || message.kind === "synthetic" && message.pending === true) && !snapshot.messages.some((fresh) => fresh.id === message.id)),
       ...snapshot.messages,
     ]
+    const samePosition = base?.id === sessionID && base.watermark === snapshot.watermark &&
+      snapshot.sourceEpoch !== undefined && base.sourceEpoch === snapshot.sourceEpoch
     const projected: SessionView = {
       ...(base ?? createSessionView(sessionID)),
       id: sessionID,
       messages: visibleTranscript(combined),
       generationSpeed: snapshot.generationSpeed,
-      contextWindow: snapshot.contextWindow,
+      contextWindow: samePosition ? base.contextWindow : snapshot.contextWindow,
       ...(snapshot.title === undefined ? {} : { title: snapshot.title }),
       ...(snapshot.sessionID !== sessionID || snapshot.scope === undefined ? {} : { scope: snapshot.scope }),
       ...(snapshot.agent === undefined ? {} : { agent: snapshot.agent }),
@@ -2011,7 +2022,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     try {
       const outcome = await owner.request("session.compaction.list", { sessionID, timeoutMs: 5_000 }).catch(() => undefined)
       if (token !== selectionToken || compactionRead !== read || container.state.activeSessionID !== sessionID || outcome?.status !== "ok" || container.state.view === undefined) return
-      const loaded = readCompactionHistory(outcome.value)
+      const value = outcome.value
+      const loaded = readCompactionHistory(typeof value === "object" && value !== null ? Reflect.get(value, "data") : undefined)
       if (loaded === undefined) return
       const current = read.live.reduce<SessionView>((view, item) => applySessionEvent(view, item.event, item.at),
         { ...createSessionView(sessionID), compactionHistory: loaded })

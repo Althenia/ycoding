@@ -103,9 +103,9 @@ function execute(root: string, args: string[]) {
 test("archive executable command prints the canonical member for its target and version", () => {
   for (const [target, release, expected] of [
     ["darwin-arm64", "0.12.1", "ycoding"],
-    ["darwin-x64", "0.13.1", "ycoding-native"],
-    ["linux-x64", "0.13.1-rc.1", "ycoding-native"],
-    ["windows-x64", "0.13.1", "ycoding.exe"],
+    ["darwin-arm64", "0.13.1", "ycoding-native"],
+    ["darwin-arm64", "0.13.1-rc.1", "ycoding-native"],
+    ["windows-x64", "0.12.1", "ycoding.exe"],
   ] as const) {
     const result = execute(import.meta.dir, ["executable", target, release])
     expect(result.exitCode, result.stderr.toString()).toBe(0)
@@ -179,11 +179,11 @@ async function archives(root: string, release = version) {
   return input
 }
 
-test("0.13 Unix archive create renames only the archived executable, preserving Windows layout and public filenames", async () => {
+test("0.13 archive create renames only the archived executable and preserves the public filename", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-native-release-layout-"))
   try {
     const release = "0.13.1-rc.1"
-    for (const target of targets) {
+    for (const target of ["darwin-arm64"]) {
       const source = await fixture(root, target, version)
       const result = execute(root, ["create", target, release, source, "prepared"])
       expect(result.exitCode, result.stderr.toString()).toBe(0)
@@ -202,9 +202,9 @@ test("0.13 Unix archive create renames only the archived executable, preserving 
       expect((await fs.stat(path.join(extract, "ycoding-native"))).mode & 0o111).not.toBe(0)
     }
     const windows = await windowsFixture(root)
-    const result = execute(root, ["create", "windows-x64", release, windows, "prepared"])
+    const result = execute(root, ["create", "windows-x64", "0.12.1", windows, "prepared"])
     expect(result.exitCode, result.stderr.toString()).toBe(0)
-    const listing = Bun.spawnSync(["unzip", "-Z1", path.join(root, "prepared", `ycoding-${release}-windows-x64.zip`)])
+    const listing = Bun.spawnSync(["unzip", "-Z1", path.join(root, "prepared", "ycoding-0.12.1-windows-x64.zip")])
     expect(listing.exitCode).toBe(0)
     expect(listing.stdout.toString().trim().split("\n")).toContain("ycoding.exe")
   } finally {
@@ -217,17 +217,17 @@ test("0.13 Unix archive finalize rejects the legacy executable but finalizes nat
   try {
     const release = "0.13.1"
     const input = await archives(root, release)
+    for (const target of targets.filter((target) => target !== "darwin-arm64")) await fs.rm(path.join(input, `ycoding-${release}-${target}.tar.gz`))
+    await fs.rm(path.join(input, `ycoding-${release}-windows-x64.zip`))
     const wrong = execute(root, ["finalize", release, input, "rejected"])
     expect(wrong.exitCode).not.toBe(0)
     expect(wrong.stderr.toString()).toContain("Invalid release archive entries")
-    for (const target of targets) {
-      await fs.rm(path.join(input, `ycoding-${release}-${target}.tar.gz`))
-      const result = execute(root, ["create", target, release, path.join(root, target), input])
-      expect(result.exitCode, result.stderr.toString()).toBe(0)
-    }
+    await fs.rm(path.join(input, `ycoding-${release}-darwin-arm64.tar.gz`))
+    const created = execute(root, ["create", "darwin-arm64", release, path.join(root, "darwin-arm64"), input])
+    expect(created.exitCode, created.stderr.toString()).toBe(0)
     const result = execute(root, ["finalize", release, input, "release"])
     expect(result.exitCode, result.stderr.toString()).toBe(0)
-    expect(await Bun.file(path.join(root, "release", `ycoding-${release}-checksums.txt`)).text()).toContain(`  ycoding-${release}-linux-x64.tar.gz\n`)
+    expect(await Bun.file(path.join(root, "release", `ycoding-${release}-checksums.txt`)).text()).toContain(`  ycoding-${release}-darwin-arm64.tar.gz\n`)
   } finally {
     await fs.rm(root, { recursive: true, force: true })
   }
@@ -373,10 +373,9 @@ test("native archive finalize needs no installed dependencies and publishes only
   }
 })
 
-test("native archive finalize accepts only the two Apple Silicon archives for v0.13.0", async () => {
+test.each(["0.13.0", "0.13.1", "0.13.1-rc.1"])("native archive finalize accepts only the two Apple Silicon archives for v%s", async (release) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-apple-silicon-release-"))
   try {
-    const release = "0.13.0"
     const source = await fixture(root, "darwin-arm64", version)
     const cli = execute(root, ["create", "darwin-arm64", release, source, "prepared"])
     expect(cli.exitCode, cli.stderr.toString()).toBe(0)

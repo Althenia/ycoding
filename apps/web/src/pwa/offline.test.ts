@@ -13,7 +13,7 @@ const origin = "https://ycoding.althenia.app"
 
 describe("precache list", () => {
   test("replaces the old shared navigation cache on update", () => {
-    expect(CACHE_NAME).toBe("ycoding-web-shell-v4")
+    expect(CACHE_NAME).toBe("ycoding-web-shell-v5")
   })
   test("contains only same-origin static shell paths", () => {
     expect(PRECACHE_URLS.length).toBeGreaterThan(0)
@@ -122,7 +122,7 @@ describe("shouldHandleNavigation", () => {
   })
 })
 
-test("service worker caches each remote shell separately and never substitutes a different shell offline", async () => {
+test("service worker uses one remote shell offline for canonical and legacy routes", async () => {
   const listeners = new Map<string, (event: unknown) => void>()
   const previous = Object.fromEntries(["addEventListener", "location", "caches", "fetch"].map((key) => [key, Reflect.get(globalThis, key)]))
   const html = (body: string) => new Response(body, { headers: { "content-type": "text/html; charset=utf-8" } })
@@ -152,14 +152,14 @@ test("service worker caches each remote shell separately and never substitutes a
     network = () => html("Bun shell")
     expect(await navigate("/remote/usage?device_id=dev_bun")).toBe("Bun shell")
     network = undefined
-    expect(await navigate("/remote/rust/settings")).toBe("Offline screen")
+    expect(await navigate("/remote/rust/settings")).toBe("Bun shell")
     network = () => html("Rust shell")
     expect(await navigate("/remote/rust/session?session_id=ses_rust")).toBe("Rust shell")
     network = () => Object.defineProperty(html("Redirected outside Rust"), "redirected", { value: true })
     expect(await navigate("/remote/rust/settings")).toBe("Redirected outside Rust")
     network = undefined
     expect(await navigate("/remote/rust/usage")).toBe("Rust shell")
-    expect(await navigate("/remote/rusted")).toBe("Bun shell")
+    expect(await navigate("/remote/rusted")).toBe("Rust shell")
     expect(await navigate("/")).toBe("Public shell")
     expect(await navigate("https://example.test/remote/rust")).toBeUndefined()
   } finally {

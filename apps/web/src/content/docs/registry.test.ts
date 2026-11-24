@@ -337,10 +337,10 @@ describe("page structure", () => {
     expect(JSON.stringify(page?.sections)).not.toContain("YCoding Computer Use.app")
   })
 
-  test("getting started distinguishes Bun and Rust Web addresses", () => {
+  test("getting started identifies the canonical Web workspace and legacy bookmarks", () => {
     const blocks = findDocPage("getting-started")?.sections.flatMap(({ blocks }) => blocks) ?? []
     expect(blocks).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: "paragraph", text: expect.stringMatching(/`\/remote`.*Bun 0\.12\.x.*`\/remote\/rust`.*Rust.*same Web sign-in/) }),
+      expect.objectContaining({ kind: "paragraph", text: expect.stringMatching(/`\/remote`.*enrolled device running the Rust runtime.*`\/remote\/rust`.*same workspace/) }),
     ]))
   })
 

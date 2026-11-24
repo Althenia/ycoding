@@ -2,14 +2,13 @@ import { Show, createSignal, type JSX } from "solid-js"
 import { Link } from "../../ui/link"
 import { Icon } from "../../ui/icon"
 import { BrandMark, ThemeToggle } from "../../ui/site"
-import type { RemoteShellPath } from "../../pwa/offline"
-import { REMOTE_INVITE_PATH, REMOTE_ROOT, remoteDocumentPath } from "../../routes"
+import { REMOTE_INVITE_PATH, REMOTE_ROOT } from "../../routes"
 import { createInviteHttp } from "../http"
 import { formatAccessKey, inviteLandingView, takeInviteToken, type InvitePhase } from "../invite"
 
-export function InvitePage(props: { readonly workspaceRoot: RemoteShellPath }): JSX.Element {
+export function InvitePage(): JSX.Element {
   let token = takeInviteToken(window.location.hash, () => {
-    window.history.replaceState(window.history.state, "", remoteDocumentPath(REMOTE_INVITE_PATH, props.workspaceRoot) + window.location.search)
+    window.history.replaceState(window.history.state, "", REMOTE_INVITE_PATH + window.location.search)
   })
   const [phase, setPhase] = createSignal<InvitePhase>(token ? "ready" : "invalid")
   const [key, setKey] = createSignal("")
@@ -53,7 +52,7 @@ export function InvitePage(props: { readonly workspaceRoot: RemoteShellPath }): 
             void navigator.clipboard.writeText(key()).then(() => setCopyStatus("Copied"), () => setCopyStatus("Copy unavailable"))
           }}>Copy</button>
           <Show when={copyStatus()}><p role="status" class="field__hint">{copyStatus()}</p></Show>
-          <button type="button" class="button button--primary sign-in__provider" onClick={() => window.location.assign(props.workspaceRoot === REMOTE_ROOT ? `${REMOTE_ROOT}/` : props.workspaceRoot)}>Continue</button>
+          <button type="button" class="button button--primary sign-in__provider" onClick={() => window.location.assign(REMOTE_ROOT)}>Continue</button>
         </Show>
         <Show when={phase() === "invalid"}><Link to="/remote" class="text-link">Sign in with an access key</Link></Show>
       </div>

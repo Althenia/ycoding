@@ -9,13 +9,20 @@ import { preloadCoordination, preloadKeepAwake, preloadUsage, preloadWorkspaces 
 import type { RemoteStore } from "./remote/store"
 import { RemoteShell } from "./remote/ui/shell"
 import { InvitePage } from "./remote/ui/invite"
-import { REMOTE_INVITE_PATH, REMOTE_ROOT, REMOTE_VIEWS, remoteRouteRewrite, remoteWorkspaceRoot } from "./routes"
+import { REMOTE_INVITE_PATH, REMOTE_ROOT, REMOTE_VIEWS, canonicalRemotePath, remoteRouteRewrite } from "./routes"
 import { Tooltips } from "./ui/tooltip"
 
 const remoteUnknownPath = "/remote/$"
 
 export function createAppRouter(options: { readonly createRemoteStore?: () => RemoteStore; readonly history?: RouterHistory } = {}) {
-  const workspaceRoot = remoteWorkspaceRoot(options.history?.location.pathname ?? globalThis.location?.pathname ?? "/")
+  if (options.history) {
+    const location = options.history.location
+    const path = canonicalRemotePath(location.pathname)
+    if (path !== location.pathname) options.history.replace(`${path}${location.search}${location.hash}`)
+  } else if (typeof window !== "undefined") {
+    const path = canonicalRemotePath(window.location.pathname)
+    if (path !== window.location.pathname) window.history.replaceState(window.history.state, "", `${path}${window.location.search}${window.location.hash}`)
+  }
   const rootRoute = createRootRoute({
     component: RootShell,
     notFoundComponent: () => (
@@ -60,7 +67,7 @@ export function createAppRouter(options: { readonly createRemoteStore?: () => Re
       })
       return (
         <RemoteProvider session={owned}>
-          <Show when={!unknown()} fallback={<NotFoundPage workspaceRoot={workspaceRoot} />}>
+          <Show when={!unknown()} fallback={<NotFoundPage />}>
             <RemoteShell path={pathname} />
           </Show>
         </RemoteProvider>
@@ -73,7 +80,7 @@ export function createAppRouter(options: { readonly createRemoteStore?: () => Re
     caseSensitive: true,
     defaultPreload: "intent",
     defaultPreloadStaleTime: 0,
-    rewrite: remoteRouteRewrite(workspaceRoot),
+    rewrite: remoteRouteRewrite(),
     routeTree: rootRoute.addChildren([
       marketingRoute.addChildren([
         createRoute({ getParentRoute: () => marketingRoute, path: "/", component: LandingPage }),
@@ -95,7 +102,7 @@ export function createAppRouter(options: { readonly createRemoteStore?: () => Re
         ...REMOTE_VIEWS.map((path) => createRoute({ getParentRoute: () => remoteRoute, path, loader: ({ context }) => preloads[path]?.(context.remote) })),
         createRoute({ getParentRoute: () => remoteRoute, path: "$" }),
       ]),
-      createRoute({ getParentRoute: () => rootRoute, path: REMOTE_INVITE_PATH, component: () => <InvitePage workspaceRoot={workspaceRoot} /> }),
+      createRoute({ getParentRoute: () => rootRoute, path: REMOTE_INVITE_PATH, component: InvitePage }),
     ]),
   })
 }

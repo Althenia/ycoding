@@ -32,12 +32,15 @@ test("pairs an attachment GET with its request and waits for the socket terminal
     }
     const paths: string[] = []
     let published = false
-    const read = f.transport.request("session.attachment.read", { ...assetRequest, httpBulk: { deviceID, fetch: async (path, init) => {
+    let receiver: unknown
+    const read = f.transport.request("session.attachment.read", { ...assetRequest, httpBulk: { deviceID, async fetch(this: unknown, path, init) {
+      receiver = this
       paths.push(path)
       expect(init).toMatchObject({ credentials: "same-origin", mode: "same-origin", redirect: "error", cache: "no-store" })
       return peer.readHttp(new URL(path, origin))
     } } }).then((outcome) => { published = true; return outcome })
     const handoff = await terminal.promise
+    expect(receiver).toBeUndefined()
     expect(published).toBe(false)
     const requestID = peer.requests()[0]!.id
     expect(paths).toEqual([`/api/remote/devices/${deviceID}/sessions/${sessionID}/attachments/${digest}?connectionEpoch=${peer.connection.connectionEpoch}&requestID=${requestID}&transferID=fixture-${requestID}`])

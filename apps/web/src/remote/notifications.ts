@@ -1,5 +1,4 @@
 import { noticeSequence, quotaKey, type RemoteNoticePresentation, type RemoteQuota } from "@ycoding-ai/remote"
-import { remoteShellPath, RUST_REMOTE_SHELL } from "../pwa/offline"
 import { alertCopy, alertTag, quotaCopy, type AlertNotice } from "./alert"
 import { externalKind, type ExternalKind } from "./coordination"
 import { readNotificationPreferences, type NotificationCategory, type NotificationPreferences } from "./preferences"
@@ -80,7 +79,7 @@ export function createDesktopNotifier(registration: () => Promise<DesktopRegistr
   return {
     show: (alert) => {
       if (typeof Notification === "undefined" || Notification.permission !== "granted") return
-      const relayProtocol = remoteShellPath(globalThis.location?.pathname ?? "") === RUST_REMOTE_SHELL ? 5 : undefined
+      const relayProtocol = 5
       const tag = alertTag(alert.tag, relayProtocol)
       const data = {
         ...(alert.sessionID !== undefined ? { sessionID: alert.sessionID, ...alert.notice }

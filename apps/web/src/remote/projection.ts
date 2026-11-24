@@ -684,7 +684,8 @@ export function dotSteerDisplay(message: RemoteMessageView): { readonly text: st
 }
 
 export function visibleTranscriptMessages(messages: readonly RemoteMessageView[]): readonly RemoteMessageView[] {
-  const latestCompaction = messages.findLast((message) => message.kind === "compaction" && transcriptMessageVisible(message))?.id
+  const latestCompaction = (messages.findLast((message) => message.kind === "compaction" && message.status === "running") ??
+    messages.findLast((message) => message.kind === "compaction" && transcriptMessageVisible(message)))?.id
   const visible = messages.filter((message) => transcriptMessageVisible(message) && (message.kind !== "compaction" || message.id === latestCompaction))
   const pendingInput = (message: RemoteMessageView) => message.kind === "user" && message.state === "pending" || message.kind === "synthetic" && message.pending === true
   return [...visible.filter((message) => !pendingInput(message)), ...visible.filter(pendingInput)]
@@ -1967,7 +1968,7 @@ export function visibleTranscript(messages: readonly RemoteMessageView[]): reado
   const retained = boundary < 0 ? messages : messages.filter((message, index) => index > boundary || message.kind === "compaction")
   const latestCompaction = retained.findLast((message) => message.kind === "compaction")?.id
   const checkpoint = retained.findLast((message) => message.kind === "compaction" && message.status === "completed" && !!message.boundaryMessageID)?.id
-  return retained.filter((message) => message.kind !== "compaction" || message.id === latestCompaction || message.id === checkpoint)
+  return retained.filter((message) => message.kind !== "compaction" || message.status === "running" || message.id === latestCompaction || message.id === checkpoint)
 }
 
 export function hasCompactionCheckpoint(messages: readonly RemoteMessageView[]): boolean {

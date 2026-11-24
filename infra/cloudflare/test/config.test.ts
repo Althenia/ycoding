@@ -28,8 +28,6 @@ test("adopts the existing production Worker, only the requested Cloudflare resou
       "/health",
       "/remote",
       "/remote/*",
-      "/_bun",
-      "/_bun/*",
       "/docs",
       "/docs/*",
       "/changelog",

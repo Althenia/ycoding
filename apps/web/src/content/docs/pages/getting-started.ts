@@ -65,7 +65,7 @@ export const gettingStartedPages: readonly DocPage[] = [
           },
           {
             kind: "paragraph",
-            text: "Open `/remote` for a device running Bun 0.12.x or `/remote/rust` for a device running Rust. Both remote workspaces use the same Web sign-in.",
+            text: "Open `/remote` and sign in to control an enrolled device running the Rust runtime. Bookmarks under `/remote/rust` open the same workspace.",
           },
         ],
       },
