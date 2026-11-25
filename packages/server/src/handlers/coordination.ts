@@ -20,6 +20,7 @@ export const CoordinationHandler = HttpApiBuilder.group(Api, "server.coordinatio
     .handle("coordination.settings", () => response(settings.read()))
     .handle("coordination.list", () => response(runtime.summaries()))
     .handle("coordination.get", (ctx) => response(runtime.get(ctx.params.groupID)))
+    .handle("coordination.board", (ctx) => response(runtime.board(ctx.params.groupID)))
     .handle("coordination.create", (ctx) => response(coordination.create(ctx.payload).pipe(Effect.flatMap((group) => runtime.get(group.id)))))
     .handle("coordination.update", (ctx) => response(coordination.update(ctx.params.groupID, ctx.payload).pipe(Effect.flatMap((group) => runtime.get(group.id)))))
     .handle("coordination.attach", (ctx) => response(runtime.get(ctx.params.groupID).pipe(Effect.flatMap((group) => runtime.attach(group.master.sessionID, ctx.payload, { groupID: ctx.params.groupID })))))

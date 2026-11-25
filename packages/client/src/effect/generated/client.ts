@@ -2910,6 +2910,14 @@ const Endpoint38_7 = (raw: RawClient["server.coordination"]) => (input: Endpoint
     Effect.map((value) => value.data),
   )
 
+type Endpoint38_8Request = Parameters<RawClient["server.coordination"]["coordination.board"]>[0]
+type Endpoint38_8Input = { readonly groupID: Endpoint38_8Request["params"]["groupID"] }
+const Endpoint38_8 = (raw: RawClient["server.coordination"]) => (input: Endpoint38_8Input) =>
+  raw["coordination.board"]({ params: { groupID: input["groupID"] } }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
 const adaptGroup38 = (raw: RawClient["server.coordination"]) => ({
   settings: Endpoint38_0(raw),
   list: Endpoint38_1(raw),
@@ -2919,6 +2927,7 @@ const adaptGroup38 = (raw: RawClient["server.coordination"]) => ({
   delete: Endpoint38_5(raw),
   attach: Endpoint38_6(raw),
   detach: Endpoint38_7(raw),
+  board: Endpoint38_8(raw),
 })
 
 const Endpoint39_0 = (raw: RawClient["server.dots"]) => () =>

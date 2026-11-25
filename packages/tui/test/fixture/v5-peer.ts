@@ -394,7 +394,11 @@ function scenario(dispatch: Dispatch) {
       const action = name.slice("coordination.".length)
       if (action === "settings") return "/api/coordination/settings"
       if (["list", "create"].includes(action)) return "/api/coordination"
-      return `/api/coordination/${encodeURIComponent(params.groupID!)}`
+      const root = `/api/coordination/${encodeURIComponent(params.groupID!)}`
+      if (action === "attach") return `${root}/members`
+      if (action === "detach") return `${root}/members/${encodeURIComponent(params.sessionID!)}`
+      if (action === "board") return `${root}/board`
+      return root
     }
     if (name.startsWith("projectCopy."))
       return `/experimental/project/${params.projectID}/copy${name.endsWith("refresh") ? "/refresh" : ""}`
@@ -430,7 +434,7 @@ function scenario(dispatch: Dispatch) {
       ? "POST"
       : ["event.subscribe", "session.log"].includes(name)
         ? "GET"
-        : name === "coordination.delete" ||
+        : name === "coordination.delete" || name === "coordination.detach" ||
             name.endsWith(".unarchive") ||
             name.endsWith(".unpin") ||
             name.endsWith(".remove") ||

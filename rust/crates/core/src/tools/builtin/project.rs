@@ -52,10 +52,13 @@ impl Tool for Project {
                         &runtime.inspect(caller, input).await.map_err(failure)?,
                     )
                     .finish(),
-                Input::Send(input) => flatten(
-                    "send",
-                    runtime.send(caller, input).await.map_err(failure)?.encode(),
-                )?,
+                Input::Send(input, task) => {
+                    let result = match task {
+                        Some(task) => runtime.send_task(caller, input, task).await,
+                        None => runtime.send(caller, input).await,
+                    };
+                    flatten("send", result.map_err(failure)?.encode())?
+                }
                 Input::Answer(input) => ObjectEncoder::new()
                     .field("action", "answer")
                     .field(
@@ -249,7 +252,7 @@ impl Tool for Project {
 enum Input {
     List,
     Inspect(runtime::InspectInput),
-    Send(runtime::SendInput),
+    Send(runtime::SendInput, Option<runtime::TaskOptions>),
     Answer(runtime::AnswerInput),
     Escalate(runtime::EscalateInput),
     Interrupt(runtime::InterruptInput),
@@ -302,6 +305,8 @@ fn input(value: &JsonValue) -> Result<Input, Failure> {
             "delivery",
             "messageID",
             "model",
+            "taskTitle",
+            "dependsOnTaskIDs",
         ],
         "answer" => &[
             "action",
@@ -355,13 +360,24 @@ fn input(value: &JsonValue) -> Result<Input, Failure> {
             session_id: target()?,
             request_id: bounded(&object, "requestID", 1, 256)?,
         })),
-        "send" => Ok(Input::Send(runtime::SendInput {
-            session_id: target()?,
-            text: bounded(&object, "text", 1, 32000)?,
-            delivery: object.optional("delivery").map_err(invalid)?,
-            message_id: object.optional("messageID").map_err(invalid)?,
-            model: object.optional("model").map_err(invalid)?,
-        })),
+        "send" => {
+            let title = object.optional("taskTitle").map_err(invalid)?;
+            let dependencies = object.optional("dependsOnTaskIDs").map_err(invalid)?;
+            let task = (title.is_some() || dependencies.is_some()).then(|| runtime::TaskOptions {
+                title: title.unwrap_or_else(|| "Project assignment".into()),
+                dependencies: dependencies.unwrap_or_default(),
+            });
+            Ok(Input::Send(
+                runtime::SendInput {
+                    session_id: target()?,
+                    text: bounded(&object, "text", 1, 32000)?,
+                    delivery: object.optional("delivery").map_err(invalid)?,
+                    message_id: object.optional("messageID").map_err(invalid)?,
+                    model: object.optional("model").map_err(invalid)?,
+                },
+                task,
+            ))
+        }
         "answer" => {
             let confidence: Option<f64> = object.optional("confidence").map_err(invalid)?;
             if confidence.is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value)) {

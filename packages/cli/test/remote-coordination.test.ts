@@ -50,6 +50,19 @@ test("Project reads are sessionless and preserve backend envelopes", async () =>
   expect(fixture.calls.map((call) => call.method)).toEqual(["coordinationSettings", "coordinationList", "coordinationGet"])
 })
 
+test("Project board forwards only the Project ID and reports transport errors as reads", async () => {
+  const board = { groupID: "cgrp_1", nodes: [], tasks: [], handoffs: [], reviews: [] }
+  const input = { groupID: board.groupID }
+  const fixture = await harness({ coordinationBoard: board })
+  expect(await fixture.run("coordination.board", input)).toEqual(success({ data: board }))
+  expect(await fixture.run("coordination.board", { ...input, directory: "/tmp" })).toEqual(failure("invalid_message"))
+  expect(await fixture.run("coordination.board", input, "ses_master")).toEqual(failure("invalid_message"))
+  expect(fixture.calls).toEqual([{ method: "coordinationBoard", args: [input] }])
+  const unavailable = await harness({ coordinationBoard: new LocalFailure("transport", "Socket closed") })
+  expect(await unavailable.run("coordination.board", input)).toEqual(failure("internal_error"))
+  expect(unavailable.calls).toHaveLength(1)
+})
+
 test("Project mutations verify supplied Session identities and preserve partial updates", async () => {
   const fixture = await harness({ coordinationCreate: group, coordinationUpdate: group })
   const create = { name: "Project", masterSessionID: "ses_master", memberSessionIDs: ["ses_member"] }

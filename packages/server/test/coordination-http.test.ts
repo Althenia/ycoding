@@ -75,6 +75,22 @@ test("list returns summaries from the runtime", async () => {
   expect(await result.json()).toEqual({ data: [JSON.parse(JSON.stringify(summary))] })
 })
 
+test("board is an authenticated Project read with a data envelope", async () => {
+  const board = {
+    groupID: info.id,
+    nodes: [{ sessionID: info.master.sessionID, title: "Root chat", role: "master" as const, state: "idle" as const }],
+    tasks: [], handoffs: [], reviews: [],
+  }
+  const groups: string[] = []
+  const runtime = { board: (groupID: Coordination.GroupID) => Effect.sync(() => { groups.push(groupID); return board }) }
+  await using http = fixture({}, runtime as Partial<CoordinationRuntime.Interface>)
+  const result = await http.json("/cgrp_http/board", "GET")
+  expect(result.status).toBe(200)
+  expect(await result.json()).toEqual({ data: board })
+  expect(groups).toEqual(["cgrp_http"])
+  expect(http.authorized()).toBe(1)
+})
+
 test("the authenticated Project response retains recorded ownership and omits absent ownership", async () => {
   const owner = { sessionID: "ses_supervisor", title: "Supervisor" }
   const owned = Schema.decodeUnknownSync(Coordination.Info)({

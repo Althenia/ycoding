@@ -950,6 +950,7 @@ export const wireAllocation: WireAllocation = {
       "session.guardrail.retry",
       "session.deleteMessage",
       "session.message.delete",
+      "coordination.board",
     ],
   },
 }

@@ -48,7 +48,7 @@ The operation manifest reconciles the independent endpoint and connector invento
 | `usage.ts`                                            | 3     | `usage.get`; `usage.report`; `usage.dashboard`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `vcs.ts`                                              | 3     | `vcs.status`; `vcs.branch`; `vcs.diff`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
-| `coordination.ts` | 2 | `coordination.attach`; `coordination.detach` |
+| `coordination.ts` | 3 | `coordination.attach`; `coordination.detach`; `coordination.board` |
 | `guardrail.ts` | 2 | `session.guardrail.request.cancel`; `session.guardrail.request.retry` |
 | `session.ts` | 3 | `session.pending.remove`; `session.pending.steer`; `session.deleteMessage` |
 | `interaction.ts` | 5 | `session.interaction.status`; `session.interaction.request`; `session.interaction.preview`; `session.interaction.stop`; `session.interaction.resume` |
@@ -187,6 +187,7 @@ The backend-owned configuration and enrollment operations retain IDs 2060, 2061,
 | `session.interaction.resume` | 1 | RPC: canonical `session.interaction.resume`. |
 | `coordination.attach` | 1 | RPC: canonical `coordination.attach`. |
 | `coordination.detach` | 1 | RPC: canonical `coordination.detach`. |
+| `coordination.board` | 1 | RPC: canonical `coordination.board`. |
 
 ### Relay-owned notice operations
 
@@ -286,6 +287,7 @@ The backend-owned configuration and enrollment operations retain IDs 2060, 2061,
 | coordination.delete            | coordination.delete             | 6005 | A          | S     | MUTATION |
 | coordination.attach | coordination.attach | 6006 | A | S | MUTATION |
 | coordination.detach | coordination.detach | 6007 | A | S | MUTATION |
+| coordination.board | coordination.board | 6008 | A | S | READ |
 | session.pending.remove | session.pending.remove | 4105 | A | S | MUTATION |
 | session.pending.steer | session.pending.steer | 4106 | A | S | MUTATION |
 | session.message.delete | session.deleteMessage | 4112 | A | S | MUTATION |

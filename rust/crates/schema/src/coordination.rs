@@ -1,10 +1,11 @@
 use crate::{
     DecodeError, DecodeErrorKind, DomainDecode, DomainEncode, JsonPath, JsonValue, LosslessString,
-    Nullable, ObjectDecoder, ObjectEncoder,
+    Nullable, ObjectDecoder, ObjectEncoder, agent,
     domain::{bounded_string, branded_string},
-    location,
+    location, model,
     schema::{NonNegativeInt, PositiveInt},
     session_id::SessionId,
+    session_message,
 };
 
 pub const MAX_MEMBERS: usize = 64;
@@ -57,6 +58,29 @@ crate::schema::literal_enum_type!(RequestKind, { Question => "question", Permiss
 crate::schema::literal_enum_type!(MemberState, { Idle => "idle", Running => "running", Waiting => "waiting", Failed => "failed" });
 crate::schema::literal_enum_type!(PausedReason, { Interrupted => "interrupted", Restart => "restart" });
 crate::schema::literal_enum_type!(ReleaseReason, { Completed => "completed", Released => "released" });
+
+crate::schema::literal_enum_type!(BoardRole, { Master => "master", Supervisor => "supervisor", Member => "member", Subagent => "subagent" });
+crate::schema::literal_enum_type!(BoardNodeState, { Idle => "idle", Starting => "starting", Running => "running", Waiting => "waiting", Supervising => "supervising", Cancelling => "cancelling", Cancelled => "cancelled", Completed => "completed", Failed => "failed", Lost => "lost" });
+crate::schema::literal_enum_type!(TaskState, { Queued => "queued", Blocked => "blocked", Running => "running", Waiting => "waiting", Completed => "completed", Failed => "failed", Cancelled => "cancelled" });
+
+crate::schema::record_type!(BoardNode {
+    session_id: SessionId => "sessionID", role: BoardRole => "role",
+    title: LosslessString => "title", state: BoardNodeState => "state",
+} { parent_session_id: SessionId => "parentSessionID", agent_id: agent::Id => "agentID", model: model::Ref => "model" });
+crate::schema::record_type!(TaskResult {} { message_id: session_message::Id => "messageID", summary: LosslessString => "summary" });
+crate::schema::record_type!(BoardTask {
+    task_id: session_message::Id => "taskID", title: LosslessString => "title", session_id: SessionId => "sessionID",
+    owner_session_id: SessionId => "ownerSessionID", depends_on_task_ids: Vec<session_message::Id> => "dependsOnTaskIDs",
+    state: TaskState => "state",
+} { result: TaskResult => "result" });
+crate::schema::record_type!(BoardHandoff {
+    session_id: SessionId => "sessionID", time: NonNegativeInt => "time",
+} { from_session_id: SessionId => "fromSessionID", to_session_id: SessionId => "toSessionID" });
+crate::schema::record_type!(BoardReview { session_id: SessionId => "sessionID", request: PendingRequest => "request" } {});
+crate::schema::record_type!(Board {
+    group_id: GroupId => "groupID", nodes: Vec<BoardNode> => "nodes", tasks: Vec<BoardTask> => "tasks",
+    handoffs: Vec<BoardHandoff> => "handoffs", reviews: Vec<BoardReview> => "reviews",
+} {});
 
 fn bounded_array<T>(
     values: Vec<T>,
@@ -480,6 +504,7 @@ impl DomainEncode for Escalation {
 }
 
 crate::schema::record_type!(GroupRevision { group_id: GroupId => "groupID", revision: Revision => "revision" } {});
+crate::schema::record_type!(UpdatedData { group_id: GroupId => "groupID", revision: Revision => "revision" } { session_id: SessionId => "sessionID" });
 crate::schema::record_type!(OwnerChangedData { group_id: GroupId => "groupID", revision: Revision => "revision", session_id: SessionId => "sessionID" } { owner_session_id: SessionId => "ownerSessionID", reason: ReleaseReason => "reason" });
 
 #[derive(Clone, Debug, PartialEq)]
@@ -609,7 +634,7 @@ pub mod event {
     pub struct Updated;
     impl EventType for Updated {
         const TYPE: &'static str = "coordination.updated";
-        type Data = super::GroupRevision;
+        type Data = super::UpdatedData;
     }
 
     pub struct RequestEscalated;

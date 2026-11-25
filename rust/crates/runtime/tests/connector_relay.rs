@@ -124,6 +124,13 @@ async fn real_workerd_enrollment_snapshot_events_and_release_are_driven_by_the_r
         .unwrap();
     support::insert_session("ses_real_connector", scratch.to_str().unwrap(), None).await;
     support::insert_session("ses_real_other", scratch.to_str().unwrap(), None).await;
+    let projects = ycoding_core::coordination::Service::new(
+        world().store.clone(),
+        world().core.events.clone(),
+    );
+    let project = projects.create(ycoding_core::ycoding_schema::coordination::CreateInput::decode(
+        &parse_json(r#"{"name":"Relay Swarm","masterSessionID":"ses_real_connector","memberSessionIDs":[]}"#).unwrap(),
+    ).unwrap()).await.unwrap();
     support::insert_message(
         "ses_real_connector",
         "msg_relay_input",
@@ -214,6 +221,14 @@ async fn real_workerd_enrollment_snapshot_events_and_release_are_driven_by_the_r
     harness.phase("completion-pushed");
     harness.send("{}");
     harness.phase("oversize-ready");
+    projects.activate(&project.id).unwrap();
+    projects.pause(&project.id).unwrap();
+    emit(&feed, "ses_real_other", 6);
+    harness.send(&format!(
+        "{{\"groupID\":\"{}\"}}",
+        project.id.as_lossless().as_str().unwrap()
+    ));
+    harness.phase("board-invalidations-delivered");
     for (index, (kind, data)) in [
         ("session.step.started.1", parse_json(r#"{"assistantMessageID":"msg_real_oversized","agent":"build","model":{"providerID":"fixture","id":"model"}}"#).unwrap()),
         ("session.text.started.1", parse_json(r#"{"assistantMessageID":"msg_real_oversized","ordinal":0}"#).unwrap()),

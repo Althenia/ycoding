@@ -543,6 +543,10 @@ pub(crate) fn record(event: &Ephemeral, epoch: &LosslessString) -> R<v5::EventRe
             v5::PublicEventCoordinationUpdatedData {
                 group_id: convert::wire(data.group_id.as_lossless()),
                 revision: data.revision.get() as u64,
+                session_id: data
+                    .session_id
+                    .as_ref()
+                    .map(|id| convert::wire(id.as_lossless())),
             }
         ),
         Data::CoordinationRequestEscalated(data) => envelope!(

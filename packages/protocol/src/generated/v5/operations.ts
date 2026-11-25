@@ -5385,7 +5385,7 @@ export const operations: readonly OperationDescriptor[] = [
   {
     $typeName: "ycoding.v5.OperationDescriptor",
     errorTypes: ["ycoding.v5.Connector_Error"],
-    roles: [1, 2, 3],
+    roles: [2, 3],
     sensitiveFields: [],
     roleScopes: [],
     eventTypes: [],
@@ -5681,6 +5681,24 @@ export const operations: readonly OperationDescriptor[] = [
     requestType: "ycoding.v5.coordination_detach_Request",
     resultType: "ycoding.v5.coordination_detach_Result",
   },
+  {
+    $typeName: "ycoding.v5.OperationDescriptor",
+    errorTypes: ["ycoding.v5.CoordinationError", "ycoding.v5.UnauthorizedError", "ycoding.v5.InvalidRequestError"],
+    roles: [1, 2, 3],
+    sensitiveFields: [],
+    roleScopes: [],
+    eventTypes: [],
+    operationId: 6008,
+    diagnosticName: "coordination.board",
+    scope: 1,
+    mutation: 1,
+    settlement: 1,
+    paging: 1,
+    streaming: 2,
+    sensitivity: 2,
+    requestType: "ycoding.v5.coordination_board_Request",
+    resultType: "ycoding.v5.coordination_board_Result",
+  },
 ]
 export const operationIDsByRole: Readonly<Record<PeerRole, readonly number[]>> = {
   "1": [
@@ -5696,8 +5714,8 @@ export const operationIDsByRole: Readonly<Record<PeerRole, readonly number[]>> =
     4033, 4034, 4035, 4036, 4037, 4038, 4039, 4040, 4041, 4042, 4043, 4044, 4045, 4046, 4047, 4048, 4049, 4050, 4051,
     4052, 4053, 4054, 4055, 4056, 4057, 4058, 4059, 4060, 4061, 4062, 4063, 4064, 4065, 4066, 4067, 4068, 4069, 4070,
     4071, 4072, 4073, 4074, 4075, 4076, 4077, 4078, 4079, 4080, 4081, 4082, 4083, 4084, 4085, 4086, 4087, 4088, 4089,
-    4102, 4103, 4104, 4105, 4106, 4107, 4108, 4109, 4110, 4111, 4112, 5008, 5013, 5018, 5023, 6000, 6001, 6002, 6003,
-    6004, 6005, 6006, 6007,
+    4102, 4103, 4104, 4105, 4106, 4107, 4108, 4109, 4110, 4111, 4112, 5008, 5013, 5018, 6000, 6001, 6002, 6003, 6004,
+    6005, 6006, 6007, 6008,
   ],
   "2": [
     2055, 2058, 2059, 2063, 2064, 2065, 2066, 2067, 2068, 2069, 2070, 2071, 2074, 2075, 3013, 3025, 3026, 3043, 3046,
@@ -5705,7 +5723,7 @@ export const operationIDsByRole: Readonly<Record<PeerRole, readonly number[]>> =
     4037, 4038, 4039, 4040, 4041, 4044, 4047, 4048, 4049, 4050, 4054, 4061, 4063, 4064, 4065, 4067, 4070, 4071, 4073,
     4076, 4078, 4081, 4082, 4083, 4084, 4085, 4086, 4087, 4103, 4104, 4105, 4106, 4107, 4109, 4110, 4111, 4112, 5000,
     5001, 5002, 5003, 5004, 5005, 5006, 5008, 5013, 5014, 5015, 5016, 5017, 5018, 5023, 5030, 5039, 5040, 5041, 5042,
-    5043, 5053, 6000, 6001, 6002, 6003, 6004, 6005, 6006, 6007,
+    5043, 5053, 6000, 6001, 6002, 6003, 6004, 6005, 6006, 6007, 6008,
   ],
   "3": [
     2055, 2058, 2059, 2063, 2064, 2065, 2066, 2067, 2068, 2069, 2070, 2071, 2074, 2075, 3013, 3025, 3026, 3043, 3046,
@@ -5713,7 +5731,7 @@ export const operationIDsByRole: Readonly<Record<PeerRole, readonly number[]>> =
     4037, 4038, 4039, 4040, 4041, 4044, 4047, 4048, 4049, 4050, 4054, 4061, 4063, 4064, 4065, 4067, 4070, 4071, 4073,
     4076, 4078, 4081, 4082, 4083, 4084, 4085, 4086, 4087, 4103, 4104, 4105, 4106, 4107, 4109, 4110, 4111, 4112, 5000,
     5001, 5002, 5003, 5004, 5005, 5006, 5008, 5013, 5014, 5015, 5016, 5017, 5018, 5023, 5030, 5043, 5053, 6000, 6001,
-    6002, 6003, 6004, 6005, 6006, 6007,
+    6002, 6003, 6004, 6005, 6006, 6007, 6008,
   ],
   "4": [],
   "5": [],

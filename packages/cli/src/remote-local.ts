@@ -141,6 +141,7 @@ export type LocalServer = {
   readonly coordinationList: () => ReturnType<YCodingClient["coordination"]["list"]>
   readonly coordinationCreate: (input: Parameters<YCodingClient["coordination"]["create"]>[0]) => ReturnType<YCodingClient["coordination"]["create"]>
   readonly coordinationGet: (input: Parameters<YCodingClient["coordination"]["get"]>[0]) => ReturnType<YCodingClient["coordination"]["get"]>
+  readonly coordinationBoard: (input: Parameters<YCodingClient["coordination"]["board"]>[0]) => ReturnType<YCodingClient["coordination"]["board"]>
   readonly coordinationUpdate: (input: Parameters<YCodingClient["coordination"]["update"]>[0]) => ReturnType<YCodingClient["coordination"]["update"]>
   readonly coordinationDelete: (input: Parameters<YCodingClient["coordination"]["delete"]>[0]) => ReturnType<YCodingClient["coordination"]["delete"]>
   readonly coordinationAttach: (input: Parameters<YCodingClient["coordination"]["attach"]>[0]) => ReturnType<YCodingClient["coordination"]["attach"]>
@@ -342,6 +343,7 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     coordinationList: () => call(() => client.coordination.list({ signal: AbortSignal.timeout(timeoutMs) })),
     coordinationCreate: (input) => call(() => client.coordination.create(input, { signal: AbortSignal.timeout(timeoutMs) })),
     coordinationGet: (input) => call(() => client.coordination.get(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    coordinationBoard: (input) => call(() => client.coordination.board(input, { signal: AbortSignal.timeout(timeoutMs) })),
     coordinationUpdate: (input) => call(() => client.coordination.update(input, { signal: AbortSignal.timeout(timeoutMs) })),
     coordinationDelete: (input) => call(() => client.coordination.delete(input, { signal: AbortSignal.timeout(timeoutMs) })),
     coordinationAttach: (input) => call(() => client.coordination.attach(input, { signal: AbortSignal.timeout(timeoutMs) })),

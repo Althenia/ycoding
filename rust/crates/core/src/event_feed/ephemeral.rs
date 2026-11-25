@@ -113,7 +113,7 @@ events! {
     ProjectDirectoriesUpdated(project_directories::UpdatedData) => "project.directories.updated",
     CommandUpdated(command::Empty) => "command.updated",
     ConfigUpdated(config::Empty) => "config.updated",
-    CoordinationUpdated(ycoding_schema::coordination::GroupRevision) => "coordination.updated",
+    CoordinationUpdated(ycoding_schema::coordination::UpdatedData) => "coordination.updated",
     CoordinationRequestEscalated(ycoding_schema::coordination::RequestEscalatedData) => "coordination.request.escalated",
     SkillUpdated(models_dev::Empty) => "skill.updated",
     PtyCreated(pty::InfoData) => "pty.created",
@@ -187,6 +187,7 @@ impl Data {
             Self::FormDeferred(data) => return form_session(&data.session_id),
             Self::FormAssessed(data) => return form_session(&data.session_id),
             Self::CoordinationRequestEscalated(data) => Some(&data.session_id),
+            Self::CoordinationUpdated(data) => data.session_id.as_ref(),
             _ => None,
         };
         Ok(id.cloned())

@@ -1,4 +1,4 @@
-export const CONTRACT_DIGEST = "b2762ee8881c74156632b319a063486cf4119291d8491ab76e4ae98d8cdea5f2"
+export const CONTRACT_DIGEST = "92c5aba6fcbe12469b13b0e593a7858939c7b03e1af2ad701954ada41827ea73"
 export const messages = {
   "ycoding.v5.Empty": {
     oneofs: 0,
@@ -49092,6 +49092,413 @@ export const messages = {
       },
     ],
   },
+  "ycoding.v5.coordination_board_Request_params": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "groupID",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          utf16Min: 6,
+          utf16Max: 96,
+          domainObligations: ["packages/schema/src/coordination.ts#Coordination.GroupID"],
+        },
+      },
+    ],
+  },
+  "ycoding.v5.coordination_board_Request": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "params",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.coordination_board_Request_params",
+      },
+    ],
+  },
+  "ycoding.v5.coordination_board_Result": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "data",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.Coordination_Board",
+      },
+    ],
+  },
+  "ycoding.v5.Coordination_Board": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "groupID",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          utf16Min: 6,
+          utf16Max: 96,
+          domainObligations: ["packages/schema/src/coordination.ts#Coordination.GroupID"],
+        },
+      },
+      {
+        tag: 2,
+        name: "nodes",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.Coordination_Board_nodes",
+      },
+      {
+        tag: 3,
+        name: "tasks",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.Coordination_Board_tasks",
+      },
+      {
+        tag: 4,
+        name: "handoffs",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.Coordination_Board_handoffs",
+      },
+      {
+        tag: 5,
+        name: "reviews",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.Coordination_Board_reviews",
+      },
+    ],
+  },
+  "ycoding.v5.Coordination_Board_nodes": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "items",
+        type: 11,
+        required: false,
+        repeated: true,
+        target: "ycoding.v5.Coordination_BoardNode",
+      },
+    ],
+  },
+  "ycoding.v5.Coordination_BoardNode": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "sessionID",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          domainObligations: ["packages/schema/src/session-id.ts#SessionID"],
+        },
+      },
+      {
+        tag: 2,
+        name: "parentSessionID",
+        type: 11,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          domainObligations: ["packages/schema/src/coordination.ts#Coordination.BoardNode"],
+        },
+      },
+      {
+        tag: 3,
+        name: "role",
+        type: 14,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.Coordination_BoardNode_role",
+      },
+      {
+        tag: 4,
+        name: "title",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+      },
+      {
+        tag: 5,
+        name: "state",
+        type: 14,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.Coordination_BoardNode_state",
+      },
+      {
+        tag: 6,
+        name: "agentID",
+        type: 11,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+      },
+      {
+        tag: 7,
+        name: "model",
+        type: 11,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.Model_Ref",
+      },
+    ],
+  },
+  "ycoding.v5.Coordination_Board_tasks": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "items",
+        type: 11,
+        required: false,
+        repeated: true,
+        target: "ycoding.v5.Coordination_BoardTask",
+      },
+    ],
+  },
+  "ycoding.v5.Coordination_BoardTask": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "taskID",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          domainObligations: ["packages/protocol/src/groups/coordination.ts#CoordinationGroup"],
+        },
+      },
+      {
+        tag: 2,
+        name: "title",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          utf16Min: 1,
+          utf16Max: 120,
+          domainObligations: ["packages/schema/src/coordination.ts#Coordination.BoardTask"],
+        },
+      },
+      {
+        tag: 3,
+        name: "sessionID",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          domainObligations: ["packages/schema/src/session-id.ts#SessionID"],
+        },
+      },
+      {
+        tag: 4,
+        name: "ownerSessionID",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          domainObligations: ["packages/schema/src/session-id.ts#SessionID"],
+        },
+      },
+      {
+        tag: 5,
+        name: "dependsOnTaskIDs",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.Coordination_BoardTask_dependsOnTaskIDs",
+        constraints: {
+          domainObligations: ["packages/schema/src/coordination.ts#Coordination.BoardTask"],
+        },
+      },
+      {
+        tag: 6,
+        name: "state",
+        type: 14,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.Coordination_BoardTask_state",
+      },
+      {
+        tag: 7,
+        name: "result",
+        type: 11,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.Coordination_TaskResult",
+      },
+    ],
+  },
+  "ycoding.v5.Coordination_BoardTask_dependsOnTaskIDs": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "items",
+        type: 11,
+        required: false,
+        repeated: true,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          countMax: 64,
+          domainObligations: ["packages/schema/src/coordination.ts#Coordination.BoardTask"],
+        },
+      },
+    ],
+  },
+  "ycoding.v5.Coordination_TaskResult": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "messageID",
+        type: 11,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          domainObligations: ["packages/schema/src/coordination.ts#Coordination.TaskResult"],
+        },
+      },
+      {
+        tag: 2,
+        name: "summary",
+        type: 11,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+      },
+    ],
+  },
+  "ycoding.v5.Coordination_Board_handoffs": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "items",
+        type: 11,
+        required: false,
+        repeated: true,
+        target: "ycoding.v5.Coordination_BoardHandoff",
+      },
+    ],
+  },
+  "ycoding.v5.Coordination_BoardHandoff": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "sessionID",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          domainObligations: ["packages/schema/src/session-id.ts#SessionID"],
+        },
+      },
+      {
+        tag: 2,
+        name: "fromSessionID",
+        type: 11,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          domainObligations: ["packages/schema/src/coordination.ts#Coordination.BoardHandoff"],
+        },
+      },
+      {
+        tag: 3,
+        name: "toSessionID",
+        type: 11,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          domainObligations: ["packages/schema/src/coordination.ts#Coordination.BoardHandoff"],
+        },
+      },
+      {
+        tag: 4,
+        name: "time",
+        type: 4,
+        required: true,
+        repeated: false,
+        target: "",
+        constraints: {
+          integerMin: "0",
+          integerMax: "9007199254740991",
+          domainObligations: ["packages/schema/src/coordination.ts#Coordination.BoardHandoff"],
+        },
+      },
+    ],
+  },
+  "ycoding.v5.Coordination_Board_reviews": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "items",
+        type: 11,
+        required: false,
+        repeated: true,
+        target: "ycoding.v5.Coordination_BoardReview",
+      },
+    ],
+  },
+  "ycoding.v5.Coordination_BoardReview": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "sessionID",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          domainObligations: ["packages/schema/src/session-id.ts#SessionID"],
+        },
+      },
+      {
+        tag: 2,
+        name: "request",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.Coordination_PendingRequest",
+      },
+    ],
+  },
   "ycoding.v5.PublicEvent_models_dev_refreshed": {
     oneofs: 0,
     fields: [
@@ -51854,6 +52261,17 @@ export const messages = {
         constraints: {
           integerMin: "0",
           integerMax: "9007199254740991",
+          domainObligations: ["packages/schema/src/event-manifest.ts#ServerDefinitions"],
+        },
+      },
+      {
+        tag: 3,
+        name: "sessionID",
+        type: 11,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
           domainObligations: ["packages/schema/src/event-manifest.ts#ServerDefinitions"],
         },
       },
@@ -84545,6 +84963,9 @@ export const enums = {
   "ycoding.v5.CoordinationError__tag": [1],
   "ycoding.v5.Coordination_PausedReason": [1, 2],
   "ycoding.v5.Coordination_MemberState": [1, 2, 3, 4],
+  "ycoding.v5.Coordination_BoardNode_role": [1, 2, 3, 4],
+  "ycoding.v5.Coordination_BoardNode_state": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  "ycoding.v5.Coordination_BoardTask_state": [1, 2, 3, 4, 5, 6, 7],
   "ycoding.v5.PublicEvent_models_dev_refreshed_type": [1],
   "ycoding.v5.PublicEvent_integration_updated_type": [1],
   "ycoding.v5.PublicEvent_integration_connection_updated_type": [1],
@@ -84724,10 +85145,10 @@ export const enums = {
   "ycoding.v5.ShellNotFoundError__tag": [1],
   "ycoding.v5.Telemetry_RequestSample_kind": [1],
   "ycoding.v5.Telemetry_RequestSample_operation": [
-    1, 2, 3, 4, 5, 6, 109, 86, 87, 88, 89, 90, 91, 113, 114, 7, 8, 9, 10, 112, 11, 12, 13, 14, 15, 16, 115, 123, 116,
-    17, 117, 118, 119, 120, 18, 124, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
-    40, 41, 42, 43, 121, 122, 71, 72, 44, 45, 46, 47, 48, 49, 50, 51, 52, 92, 53, 54, 55, 56, 57, 58, 59, 60, 105, 106,
-    108, 110, 111, 61, 62, 63, 64, 67, 68, 69, 70, 107, 73, 74, 75, 76, 77, 65, 66,
+    1, 2, 3, 4, 5, 6, 109, 86, 87, 88, 89, 90, 91, 113, 114, 125, 7, 8, 9, 10, 112, 11, 12, 13, 14, 15, 16, 115, 123,
+    116, 17, 117, 118, 119, 120, 18, 124, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37,
+    38, 39, 40, 41, 42, 43, 121, 122, 71, 72, 44, 45, 46, 47, 48, 49, 50, 51, 52, 92, 53, 54, 55, 56, 57, 58, 59, 60,
+    105, 106, 108, 110, 111, 61, 62, 63, 64, 67, 68, 69, 70, 107, 73, 74, 75, 76, 77, 65, 66,
   ],
   "ycoding.v5.Telemetry_RequestSample_outcome": [1, 2, 3, 4],
   "ycoding.v5.Telemetry_RequestSample_reason": [1, 2, 3, 4],

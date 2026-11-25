@@ -130,6 +130,21 @@ const restartableDatabase = Effect.gen(function* () {
 })
 
 describe("post-approval: project member assignment", () => {
+  it.effect("Board holds a dependent assignment without admitting input and preserves its task identity on retry", () => Effect.gen(function* () {
+    const fixture = yield* setup
+    yield* fixture.runtime.assign(fixture.master.id, { sessionID: fixture.alpha.id, ownerSessionID: fixture.master.id })
+    yield* fixture.runtime.assign(fixture.master.id, { sessionID: fixture.beta.id, ownerSessionID: fixture.master.id })
+    const first = yield* fixture.runtime.send(fixture.master.id, { sessionID: fixture.alpha.id, text: "Build the fixture", taskTitle: "Build" })
+    const input = { sessionID: fixture.beta.id, text: "Check the fixture", taskTitle: "Check", messageID: SessionMessage.ID.create(), dependsOnTaskIDs: [first.messageID] }
+    expect((yield* fixture.runtime.send(fixture.master.id, input)).messageID).toBe(input.messageID)
+    expect((yield* fixture.runtime.send(fixture.master.id, input)).reconciled).toBe(true)
+    yield* refused(fixture.runtime.send(fixture.master.id, { ...input, text: "Different outcome" }))
+    const board = yield* fixture.runtime.board(fixture.group.id)
+    expect(board.nodes.map((node) => node.sessionID)).not.toContain(fixture.plainChild.id)
+    expect(board.tasks.find((task) => task.taskID === input.messageID)).toMatchObject({ state: "blocked", dependsOnTaskIDs: [first.messageID] })
+    const pending = yield* fixture.db.select().from(SessionPendingTable).where(eq(SessionPendingTable.session_id, fixture.beta.id)).all().pipe(Effect.orDie)
+    expect(pending).toEqual([])
+  }), 30_000)
   it.effect("an assigned member reports its supervising owner until it is released", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
@@ -137,8 +152,23 @@ describe("post-approval: project member assignment", () => {
       expect(yield* ownerOf(fixture, fixture.alpha.id)).toEqual(ownedBy(fixture.first))
       expect(yield* ownerOf(fixture, fixture.beta.id)).toBeUndefined()
       expect(yield* ownerOf(fixture, fixture.master.id)).toBeUndefined()
+      const board = yield* fixture.runtime.board(fixture.group.id)
+      const nodes = new Map(board.nodes.map((node) => [node.sessionID, node]))
+      expect(nodes.get(fixture.master.id)).toMatchObject({ role: "master", title: "master" })
+      expect(nodes.get(fixture.first.id)).toMatchObject({ role: "supervisor", parentSessionID: fixture.master.id })
+      expect(nodes.get(fixture.alpha.id)).toMatchObject({ role: "member", parentSessionID: fixture.first.id })
+      expect(nodes.get(fixture.beta.id)).toMatchObject({ role: "member", parentSessionID: fixture.master.id })
+      expect(nodes.get(fixture.memberSubagent.id)).toMatchObject({ role: "subagent", parentSessionID: fixture.alpha.id })
+      expect(nodes.has(fixture.plainChild.id)).toBe(false)
+      expect(nodes.has(fixture.outsiderSubagent.id)).toBe(false)
       yield* fixture.runtime.release(fixture.master.id, { sessionID: fixture.alpha.id, reason: "released" })
       expect(yield* ownerOf(fixture, fixture.alpha.id)).toBeUndefined()
+      const released = yield* fixture.runtime.board(fixture.group.id)
+      expect(released.handoffs.filter((handoff) => handoff.sessionID === fixture.alpha.id)).toMatchObject([
+        { toSessionID: fixture.first.id },
+        { fromSessionID: fixture.first.id },
+      ])
+      expect(released.nodes.find((node) => node.sessionID === fixture.alpha.id)?.parentSessionID).toBe(fixture.master.id)
     }), 30_000)
 
   it.effect("the owner's turn settling, going idle or failing does not end its assignment", () =>

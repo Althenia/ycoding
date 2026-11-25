@@ -158,6 +158,50 @@ fn group_request(id: &Domain) -> Domain {
     object([("params", object([("groupID", id.clone())]))])
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn coordination_board_reuses_the_existing_root_and_excludes_unowned_children() {
+    let _serial = SERIAL.lock().await;
+    let master = "ses_swarm_board_root";
+    let child = "ses_swarm_board_unmanaged";
+    seed(&[(master, None, None), (child, Some(master), None)]);
+    let before = world()
+        .store
+        .snapshot()
+        .unwrap()
+        .get::<session::SessionTable>(&tuple_key(&[KeyPart::String(&master.into())]))
+        .unwrap()
+        .unwrap();
+    let created = call("coordination.create", create_request("Swarm", master, &[])).await;
+    let id = field(field(&created, "data"), "id");
+    let projected = call("coordination.board", group_request(id)).await;
+    let board = field(&projected, "data");
+    assert_eq!(field(board, "groupID"), id);
+    let Domain::List(nodes) = field(board, "nodes") else {
+        panic!("nodes must be a list")
+    };
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(field(&nodes[0], "sessionID"), &string(master));
+    assert_eq!(field(&nodes[0], "role"), &string("master"));
+    for key in ["tasks", "handoffs", "reviews"] {
+        assert_eq!(field(board, key), &Domain::List(vec![]));
+    }
+    let after = world()
+        .store
+        .snapshot()
+        .unwrap()
+        .get::<session::SessionTable>(&tuple_key(&[KeyPart::String(&master.into())]))
+        .unwrap()
+        .unwrap();
+    assert_eq!(after, before);
+    refused(
+        "coordination.create",
+        create_request("Invalid", child, &[]),
+        "Coordination.IneligibleSessionError",
+    )
+    .await;
+    call("coordination.delete", group_request(id)).await;
+}
+
 fn attach_request(id: &Domain, session: &str, owner: Option<&str>) -> Domain {
     let mut payload = vec![("sessionID".encode_utf16().collect(), string(session))];
     if let Some(owner) = owner {

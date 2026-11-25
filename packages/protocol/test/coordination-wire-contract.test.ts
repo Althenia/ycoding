@@ -22,7 +22,7 @@ const fields = (message: string) =>
   (messages as Record<string, { fields: readonly { tag: number; name: string }[] }>)[`ycoding.v5.${message}`]?.fields
 
 describe("coordination wire contract", () => {
-  test("the eight Project operations hold IDs 6000-6007 inside their own declared range", async () => {
+  test("the nine Project operations hold IDs 6000-6008 inside their own declared range", async () => {
     expect(await read("coordination.proto")).toContain("option (ycoding.v5.operation_range) = { first: 6000 last: 6099 };")
     for (const [name, id] of Object.entries(coordinationIDs)) {
       const descriptor = operation(name)
@@ -36,11 +36,11 @@ describe("coordination wire contract", () => {
         .filter((descriptor) => descriptor.diagnosticName.startsWith("coordination."))
         .map((descriptor) => descriptor.operationId)
         .sort(),
-    ).toEqual([6000, 6001, 6002, 6003, 6004, 6005, 6006, 6007])
+    ).toEqual([6000, 6001, 6002, 6003, 6004, 6005, 6006, 6007, 6008])
   })
 
   test("Project operations are machine-scoped private reads and mutations for local, remote and relay peers", () => {
-    const mutations = { settings: "READ", list: "READ", get: "READ", create: "MUTATION", update: "MUTATION", delete: "MUTATION" }
+    const mutations = { settings: "READ", list: "READ", get: "READ", board: "READ", create: "MUTATION", update: "MUTATION", delete: "MUTATION" }
     for (const [suffix, mutation] of Object.entries(mutations)) {
       const descriptor = operation(`coordination.${suffix}`)!
       expect(descriptor.roles).toEqual([PeerRole.LOCAL_CLIENT, PeerRole.REMOTE_CLIENT, PeerRole.RELAY])

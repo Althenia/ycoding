@@ -273,7 +273,7 @@ impl Service {
             })
             .await?;
         self.inherit_master_autonomy(&master, &members).await?;
-        self.announce(announcement, &commit.updated);
+        self.announce(announcement, &commit.updated, master);
         self.group(commit.row, commit.members)
     }
     pub async fn add_member(
@@ -349,7 +349,11 @@ impl Service {
             )
             .await?;
         }
-        self.announce(announcement, &commit.updated);
+        self.announce(
+            announcement,
+            &commit.updated,
+            session::Id::new(commit.row.master_session_id.clone())?,
+        );
         self.group(commit.row, commit.members)
     }
     pub async fn remove_member(
@@ -488,7 +492,7 @@ impl Service {
             .collect::<Vec<_>>();
         self.inherit_master_autonomy(&group.master_session_id, &added)
             .await?;
-        self.announce(announcement, &updated);
+        self.announce(announcement, &updated, group.master_session_id.clone());
         Ok(group)
     }
     pub async fn delete(&self, id: &c::GroupId) -> Result<(), Error> {
@@ -566,6 +570,18 @@ impl Service {
     pub fn activate(&self, id: &c::GroupId) -> Result<(), Error> {
         self.live(id, Live::Active)
     }
+    pub(crate) fn invalidate(&self, id: &c::GroupId) -> Result<(), Error> {
+        let group = self.get(id)?;
+        self.announce(
+            random_event_id()?.into_lossless(),
+            &c::GroupRevision {
+                group_id: id.clone(),
+                revision: group.revision,
+            },
+            group.master_session_id,
+        );
+        Ok(())
+    }
     pub fn pause(&self, id: &c::GroupId) -> Result<(), Error> {
         self.live(id, Live::Interrupted)
     }
@@ -614,13 +630,13 @@ impl Service {
             }
             live.insert(id.clone(), value);
         }
-        publish(
-            &self.feed,
+        self.announce(
             event.into_lossless(),
-            c::GroupRevision {
+            &c::GroupRevision {
                 group_id: id.clone(),
                 revision: group.revision,
             },
+            group.master_session_id,
         );
         Ok(())
     }
@@ -631,7 +647,11 @@ impl Service {
         let announcement = random_event_id()?.into_lossless();
         let commit = self.commit_unannounced(operation).await?;
         if commit.changed {
-            self.announce(announcement, &commit.updated);
+            self.announce(
+                announcement,
+                &commit.updated,
+                session::Id::new(commit.row.master_session_id.clone())?,
+            );
         }
         Ok(commit)
     }
@@ -661,8 +681,16 @@ impl Service {
             })?
             .await?)
     }
-    fn announce(&self, id: LosslessString, updated: &c::GroupRevision) {
-        publish(&self.feed, id, updated.clone());
+    fn announce(&self, id: LosslessString, updated: &c::GroupRevision, master: session::Id) {
+        publish(
+            &self.feed,
+            id,
+            c::UpdatedData {
+                group_id: updated.group_id.clone(),
+                revision: updated.revision,
+                session_id: Some(master),
+            },
+        );
     }
     fn group(&self, row: tables::Group, members: Vec<tables::Member>) -> Result<Group, Error> {
         let id = c::GroupId::new(row.id.clone())?;
@@ -816,11 +844,11 @@ fn append(
         ),
     }
 }
-fn publish(feed: &Feed, id: LosslessString, data: c::GroupRevision) {
+fn publish(feed: &Feed, id: LosslessString, data: c::UpdatedData) {
     feed.publish(event_feed::Ephemeral {
         id,
         created: chrono::Utc::now().timestamp_millis(),
-        session: None,
+        session: data.session_id.clone(),
         location: None,
         metadata: None,
         data: event_feed::Data::CoordinationUpdated(Box::new(data)),

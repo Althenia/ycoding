@@ -18,9 +18,10 @@ export const coordinationOperations = [
   "coordination.delete",
   "coordination.attach",
   "coordination.detach",
+  "coordination.board",
 ] as const
 
-const reads = ["coordination.settings", "coordination.list", "coordination.get"]
+const reads = ["coordination.settings", "coordination.list", "coordination.get", "coordination.board"]
 
 function frame(operation: string, input?: Record<string, unknown>, sessionID?: string) {
   return JSON.stringify({ type: "request", id: "req_1", operation, ...(sessionID === undefined ? {} : { sessionID }), ...(input === undefined ? {} : { input }) })
@@ -54,6 +55,13 @@ test("coordination requests accept only bounded ordinary-object inputs without a
     expect(parseClientMessage(frame("coordination.update", { ...update, ...fields })).ok).toBe(false)
   expect(parseClientMessage(frame("coordination.delete", { groupID: "cgrp_1" })).ok).toBe(true)
   expect(parseClientMessage(frame("coordination.delete", update)).ok).toBe(false)
+})
+
+test("the board relay operation accepts only a Project identity", () => {
+  expect(parseClientMessage(frame("coordination.board", { groupID: "cgrp_1" })).ok).toBe(true)
+  expect(parseClientMessage(frame("coordination.board", { groupID: "not_a_project" })).ok).toBe(false)
+  expect(parseClientMessage(frame("coordination.board", { groupID: "cgrp_1", directory: "/tmp" })).ok).toBe(false)
+  expect(parseClientMessage(frame("coordination.board", { groupID: "cgrp_1" }, "ses_member")).ok).toBe(false)
 })
 
 test("coordination attach and detach accept only exact Project and Session identities", () => {

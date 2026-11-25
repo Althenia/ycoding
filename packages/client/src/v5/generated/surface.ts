@@ -15,6 +15,7 @@ import type {
   CommandListInput,
   ConfigDiagnosticsInput,
   CoordinationAttachInput,
+  CoordinationBoardInput,
   CoordinationCreateInput,
   CoordinationDeleteInput,
   CoordinationDetachInput,
@@ -1446,6 +1447,11 @@ export const methodCoverage = [
     method: "coordination.detach",
     operation: "coordination.detach",
     operationID: 6007,
+  },
+  {
+    method: "coordination.board",
+    operation: "coordination.board",
+    operationID: 6008,
   },
   {
     method: "dots.get",
@@ -3712,6 +3718,13 @@ export function bind(transport: LocalTransport) {
         transport.call<Awaited<ReturnType<Client["coordination"]["detach"]>>>(
           { method: "coordination.detach", operationID: 6007, resultPath: ["data"], empty: false },
           { params: { groupID: input["groupID"], sessionID: input["sessionID"] } },
+          input,
+          requestOptions,
+        ),
+      board: (input: CoordinationBoardInput, requestOptions?: RequestOptions) =>
+        transport.call<Awaited<ReturnType<Client["coordination"]["board"]>>>(
+          { method: "coordination.board", operationID: 6008, resultPath: ["data"], empty: false },
+          { params: { groupID: input["groupID"] } },
           input,
           requestOptions,
         ),

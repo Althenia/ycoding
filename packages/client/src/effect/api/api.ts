@@ -2306,6 +2306,11 @@ export type Endpoint38_7Output = EffectValue<
 >["data"]
 export type CoordinationDetachOperation<E = never> = (input: Endpoint38_7Input) => Effect.Effect<Endpoint38_7Output, E>
 
+type Endpoint38_8Request = Parameters<RawClient["server.coordination"]["coordination.board"]>[0]
+export type Endpoint38_8Input = { readonly groupID: Endpoint38_8Request["params"]["groupID"] }
+export type Endpoint38_8Output = EffectValue<ReturnType<RawClient["server.coordination"]["coordination.board"]>>["data"]
+export type CoordinationBoardOperation<E = never> = (input: Endpoint38_8Input) => Effect.Effect<Endpoint38_8Output, E>
+
 export interface CoordinationApi<E = never> {
   readonly settings: CoordinationSettingsOperation<E>
   readonly list: CoordinationListOperation<E>
@@ -2315,6 +2320,7 @@ export interface CoordinationApi<E = never> {
   readonly delete: CoordinationDeleteOperation<E>
   readonly attach: CoordinationAttachOperation<E>
   readonly detach: CoordinationDetachOperation<E>
+  readonly board: CoordinationBoardOperation<E>
 }
 
 export type Endpoint39_0Output = EffectValue<ReturnType<RawClient["server.dots"]["dots.get"]>>["data"]

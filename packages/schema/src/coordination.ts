@@ -1,11 +1,15 @@
 export * as Coordination from "./coordination.js"
 
 import { Schema } from "effect"
+import { AgentID } from "./agent-id.js"
 import { ascending } from "./identifier.js"
 import { durable, ephemeral, inventory } from "./event.js"
 import { Location } from "./location.js"
+import { Model } from "./model.js"
 import { NonNegativeInt, PositiveInt, optional, statics } from "./schema.js"
 import { SessionID } from "./session-id.js"
+import { SessionMessageID } from "./session-message-id.js"
+import { SessionTaskState } from "./session-task-state.js"
 
 const boundedId = (prefix: string, identifier: string) =>
   Schema.String.check(Schema.isStartsWith(prefix), Schema.isMinLength(prefix.length + 1), Schema.isMaxLength(96)).pipe(
@@ -119,6 +123,58 @@ export const PendingRequest = Schema.Struct({
   requestSessionID: SessionID.pipe(optional),
 }).annotate({ identifier: "Coordination.PendingRequest" })
 
+export const TaskTitle = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120), Schema.isPattern(/\S/))
+export const TaskDependencies = Schema.Array(SessionMessageID.ID).check(Schema.isMaxLength(maxMembers))
+
+export interface BoardNode extends Schema.Schema.Type<typeof BoardNode> {}
+export const BoardNode = Schema.Struct({
+  sessionID: SessionID,
+  parentSessionID: SessionID.pipe(optional),
+  role: Schema.Literals(["master", "supervisor", "member", "subagent"]),
+  title: Schema.String,
+  state: Schema.Literals(["idle", ...SessionTaskState.literals]),
+  agentID: AgentID.pipe(optional),
+  model: Model.Ref.pipe(optional),
+}).annotate({ identifier: "Coordination.BoardNode" })
+
+export const TaskState = Schema.Literals(["queued", "blocked", "running", "waiting", "completed", "failed", "cancelled"])
+export interface TaskResult extends Schema.Schema.Type<typeof TaskResult> {}
+export const TaskResult = Schema.Struct({
+  messageID: SessionMessageID.ID.pipe(optional),
+  summary: Schema.String.pipe(optional),
+}).annotate({ identifier: "Coordination.TaskResult" })
+
+export interface BoardTask extends Schema.Schema.Type<typeof BoardTask> {}
+export const BoardTask = Schema.Struct({
+  taskID: SessionMessageID.ID,
+  title: TaskTitle,
+  sessionID: SessionID,
+  ownerSessionID: SessionID,
+  dependsOnTaskIDs: TaskDependencies,
+  state: TaskState,
+  result: TaskResult.pipe(optional),
+}).annotate({ identifier: "Coordination.BoardTask" })
+
+export interface BoardHandoff extends Schema.Schema.Type<typeof BoardHandoff> {}
+export const BoardHandoff = Schema.Struct({
+  sessionID: SessionID,
+  fromSessionID: SessionID.pipe(optional),
+  toSessionID: SessionID.pipe(optional),
+  time: NonNegativeInt,
+}).annotate({ identifier: "Coordination.BoardHandoff" })
+
+export interface BoardReview extends Schema.Schema.Type<typeof BoardReview> {}
+export const BoardReview = Schema.Struct({ sessionID: SessionID, request: PendingRequest }).annotate({ identifier: "Coordination.BoardReview" })
+
+export interface Board extends Schema.Schema.Type<typeof Board> {}
+export const Board = Schema.Struct({
+  groupID: GroupID,
+  nodes: Schema.Array(BoardNode),
+  tasks: Schema.Array(BoardTask),
+  handoffs: Schema.Array(BoardHandoff),
+  reviews: Schema.Array(BoardReview),
+}).annotate({ identifier: "Coordination.Board" })
+
 export interface Participant extends Schema.Schema.Type<typeof Participant> {}
 export const Participant = Schema.Struct({
   sessionID: SessionID,
@@ -176,7 +232,7 @@ export namespace Event {
   export const Updated = ephemeral({
     type: "coordination.updated",
     identifier: "Coordination.Event.Updated",
-    schema: { groupID: GroupID, revision: Revision },
+    schema: { groupID: GroupID, revision: Revision, sessionID: SessionID.pipe(optional) },
   })
   export type Updated = typeof Updated.Type
 

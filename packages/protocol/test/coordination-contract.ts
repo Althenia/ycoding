@@ -16,6 +16,7 @@ export const coordinationIDs = {
   "coordination.delete": 6005,
   "coordination.attach": 6006,
   "coordination.detach": 6007,
+  "coordination.board": 6008,
 } as const
 
 export const coordinationRange = { first: 6000, last: 6099 } as const

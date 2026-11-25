@@ -45,6 +45,8 @@ export const Input = Schema.Union([
     delivery: SessionDelivery.Delivery.pipe(Schema.optional),
     messageID: SessionMessage.ID.pipe(Schema.optional),
     model: Model.Ref.pipe(Schema.optional),
+    taskTitle: Coordination.TaskTitle.pipe(Schema.optional),
+    dependsOnTaskIDs: Coordination.TaskDependencies.pipe(Schema.optional),
   }),
   Schema.Struct({
     action: Schema.Literal("answer"),
@@ -146,6 +148,8 @@ export const Plugin = {
             ...(input.delivery === undefined ? {} : { delivery: input.delivery }),
             ...(input.messageID === undefined ? {} : { messageID: input.messageID }),
             ...(input.model === undefined ? {} : { model: input.model }),
+            ...(input.taskTitle === undefined ? {} : { taskTitle: input.taskTitle }),
+            ...(input.dependsOnTaskIDs === undefined ? {} : { dependsOnTaskIDs: input.dependsOnTaskIDs }),
           })) }
         if (input.action === "answer")
           return { action: "answer" as const, result: yield* runtime.answer(caller, input) }

@@ -1,4 +1,6 @@
+mod board;
 mod types;
+pub use board::TaskOptions;
 pub use types::{
     AnswerInput, AssignInput, AttachInput, AttachResult, AuthorizeLocation, CreateContext,
     CreateDirectory, CreateInput, CreatePrompt, CreateProvider, CreateResult, CreateTarget,
@@ -54,14 +56,39 @@ pub const INACTIVE_MESSAGE: &str =
     "Project is inactive; send a message in the master chat to resume";
 pub const HANDLED_EVENTS: &[&str] = &[
     "session.input.admitted.1",
+    "session.input.promoted.1",
+    "session.input.consumed.1",
+    "session.idle",
+    "session.renamed.1",
+    "session.model.selected.1",
+    "session.unarchived.2",
+    "session.revert.cleared.1",
+    "session.review.deferred.1",
+    "session.review.decided.1",
+    "session.review.withdrawn.1",
+    "session.review.consumed.1",
     "session.execution.started.1",
     "session.step.ended.1",
     "session.execution.interrupted.1",
     "session.execution.succeeded.1",
     "session.execution.failed.1",
     "form.created",
+    "form.replied",
+    "form.cancelled",
+    "form.timed_out",
+    "form.deferred",
     "permission.asked",
+    "permission.replied",
+    "permission.deferred",
     "guardrail.asked",
+    "guardrail.replied",
+    "guardrail.cancelled",
+    "guardrail.deferred",
+    "question.asked",
+    "question.replied",
+    "question.rejected",
+    "question.timed_out",
+    "question.deferred",
     "coordination.member.owner.changed.1",
     "coordination.group.changed.1",
     "coordination.group.deleted.1",
@@ -223,9 +250,14 @@ impl Runtime {
         }
         let scope = self.member_scope(caller, &input.session_id)?;
         let message_id = match input.message_id {
-            Some(id) => id,
+            Some(ref id) => id.clone(),
             None => session_message::Id::from_event(&random_event_id()?),
         };
+        if self.registered_task(&message_id)? {
+            return Err(Error::refused(
+                "Message identity belongs to a tracked Project task",
+            ));
+        }
         match self.lookup(&input.session_id, &message_id)? {
             Lookup::Used {
                 session_id,
@@ -278,29 +310,60 @@ impl Runtime {
         if !current.active {
             return Err(Error::refused(INACTIVE_MESSAGE));
         }
-        let waiting = self.pending(&current, caller, &input.session_id).await?;
-        if !waiting.is_empty() {
-            return Err(Error::refused(waiting_message(&input.session_id, &waiting)));
+        if let Some(reason) = self.send_gate(&current, caller, &input.session_id).await? {
+            return Err(Error::refused(reason));
         }
-        let running = self.running()?;
+        if let Some(model) = &input.model {
+            (self.0.validate_model)(input.session_id.clone(), model.clone()).await?;
+        }
+        let event_id = random_event_id()?;
+        let target = input.session_id.clone();
+        self.admit_send(&current, caller, input, message_id.clone(), event_id)
+            .await?;
+        Ok(SendResult {
+            session_id: target.clone(),
+            message_id,
+            state: self.state_of(&scope, &target).await?,
+            reconciled: false,
+        })
+    }
+
+    async fn send_gate(
+        &self,
+        current: &Scope,
+        caller: &session::Id,
+        target: &session::Id,
+    ) -> Result<Option<String>, Error> {
+        let waiting = self.pending(current, caller, target).await?;
+        if !waiting.is_empty() {
+            return Ok(Some(waiting_message(target, &waiting)));
+        }
         if let Nullable::Value(limit) = current.settings.concurrency {
+            let running = self.running()?;
             let mut busy = BTreeSet::new();
             for id in &current.member_session_ids {
                 if running.contains(id.as_lossless()) || self.0.sessions.has_pending(id)? {
                     busy.insert(id);
                 }
             }
-            if !busy.contains(&input.session_id) && busy.len() >= limit.get() as usize {
-                return Err(Error::refused(format!(
+            if !busy.contains(target) && busy.len() >= limit.get() as usize {
+                return Ok(Some(format!(
                     "Project concurrency limit {} reached",
                     limit.get()
                 )));
             }
         }
-        if let Some(model) = &input.model {
-            (self.0.validate_model)(input.session_id.clone(), model.clone()).await?;
-        }
-        let event_id = random_event_id()?;
+        Ok(None)
+    }
+
+    async fn admit_send(
+        &self,
+        current: &Scope,
+        caller: &session::Id,
+        input: SendInput,
+        message_id: session_message::Id,
+        event_id: ycoding_schema::event::Id,
+    ) -> Result<(), Error> {
         let admission = Admission {
             group_id: current.group_id.clone(),
             master_session_id: current.master_session_id.clone(),
@@ -333,12 +396,7 @@ impl Runtime {
             .unwrap_or_else(|error| error.into_inner())
             .insert(input.session_id.clone(), caller.clone());
         self.0.execution.wake(&input.session_id)?;
-        Ok(SendResult {
-            session_id: input.session_id.clone(),
-            message_id,
-            state: self.state_of(&scope, &input.session_id).await?,
-            reconciled: false,
-        })
+        Ok(())
     }
     pub async fn answer(
         &self,
@@ -1842,7 +1900,14 @@ impl Runtime {
                     return self
                         .0
                         .coordination
-                        .with_ownership(&group, self.complete_unowned_supervisors())
+                        .with_ownership(&group, async {
+                            self.complete_unowned_supervisors().await?;
+                            if event.type_.as_str() == Some("coordination.group.changed.1") {
+                                self.advance_tasks(&group).await?;
+                                self.0.coordination.invalidate(&group)?;
+                            }
+                            Ok(())
+                        })
                         .await;
                 }
                 if event.type_.as_str() == Some("session.task.updated.1") {
@@ -1854,7 +1919,10 @@ impl Runtime {
                             | Change::Lost { .. }
                             | Change::QuestionAsked { .. }
                     ) {
-                        return Ok(());
+                        let id = object.field("sessionID")?;
+                        return self
+                            .board_changed(&id, matches!(change, Change::Completed { .. }))
+                            .await;
                     }
                 }
                 let id = if event.type_.as_str() == Some("coordination.member.owner.changed.1") {
@@ -1863,35 +1931,72 @@ impl Runtime {
                     object.field("sessionID")?
                 };
                 self.under_ownership(&id, self.handle_durable(event, &id))
-                    .await
+                    .await?;
+                self.board_changed(
+                    &id,
+                    matches!(
+                        event.type_.as_str(),
+                        Some(
+                            "session.execution.succeeded.1"
+                                | "session.execution.failed.1"
+                                | "session.execution.interrupted.1"
+                                | "session.review.decided.1"
+                                | "session.review.withdrawn.1"
+                                | "session.review.consumed.1"
+                                | "session.input.admitted.1"
+                                | "session.input.consumed.1"
+                                | "session.revert.cleared.1"
+                                | "coordination.member.owner.changed.1"
+                                | "session.archived.2"
+                                | "session.unarchived.2"
+                        )
+                    ),
+                )
+                .await
             }
-            Payload::Ephemeral(event) => match &event.data {
-                event_feed::Data::FormCreated(data) => {
-                    let Ok(id) = session::Id::new(data.form.session_id.clone()) else {
-                        return Ok(());
-                    };
-                    let request = string_value(&data.form.id)?;
-                    self.request_event(&id, c::RequestKind::Question, request)
+            Payload::Ephemeral(event) => {
+                match &event.data {
+                    event_feed::Data::FormCreated(data) => {
+                        let Ok(id) = session::Id::new(data.form.session_id.clone()) else {
+                            return Ok(());
+                        };
+                        let request = string_value(&data.form.id)?;
+                        self.request_event(&id, c::RequestKind::Question, request)
+                            .await
+                    }
+                    event_feed::Data::PermissionAsked(data) => {
+                        self.request_event(
+                            &data.session_id,
+                            c::RequestKind::Permission,
+                            data.id.as_lossless().clone(),
+                        )
                         .await
-                }
-                event_feed::Data::PermissionAsked(data) => {
-                    self.request_event(
-                        &data.session_id,
-                        c::RequestKind::Permission,
-                        data.id.as_lossless().clone(),
+                    }
+                    event_feed::Data::GuardrailAsked(data) => {
+                        self.request_event(
+                            &data.session_id,
+                            c::RequestKind::Review,
+                            string_value(&data.id)?,
+                        )
+                        .await
+                    }
+                    _ => Ok(()),
+                }?;
+                if let Some(id) = event.data.session().map_err(Error::refused)? {
+                    self.board_changed(
+                        &id,
+                        !matches!(
+                            &event.data,
+                            event_feed::Data::FormCreated(_)
+                                | event_feed::Data::PermissionAsked(_)
+                                | event_feed::Data::GuardrailAsked(_)
+                                | event_feed::Data::QuestionAsked(_)
+                        ),
                     )
-                    .await
+                    .await?;
                 }
-                event_feed::Data::GuardrailAsked(data) => {
-                    self.request_event(
-                        &data.session_id,
-                        c::RequestKind::Review,
-                        string_value(&data.id)?,
-                    )
-                    .await
-                }
-                _ => Ok(()),
-            },
+                Ok(())
+            }
         }
     }
     async fn handle_durable(&self, event: &Event, id: &session::Id) -> Result<(), Error> {
@@ -2801,6 +2906,10 @@ impl Runtime {
     }
     pub async fn resume_admitted(&self) -> Result<(), Error> {
         for group in self.0.coordination.list()? {
+            self.0
+                .coordination
+                .with_ownership(&group.id, self.advance_tasks(&group.id))
+                .await?;
             for member in &group.member_session_ids {
                 self.0
                     .coordination

@@ -433,6 +433,8 @@ import type {
   CoordinationAttachOutput,
   CoordinationDetachInput,
   CoordinationDetachOutput,
+  CoordinationBoardInput,
+  CoordinationBoardOutput,
   DotsGetOutput,
   DotsSetInput,
   DotsSetOutput,
@@ -3550,6 +3552,17 @@ export function make(options: ClientOptions) {
           {
             method: "DELETE",
             path: `/api/coordination/${encodeURIComponent(input.groupID)}/members/${encodeURIComponent(input.sessionID)}`,
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      board: (input: CoordinationBoardInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: CoordinationBoardOutput }>(
+          {
+            method: "GET",
+            path: `/api/coordination/${encodeURIComponent(input.groupID)}/board`,
             successStatus: 200,
             declaredStatuses: [409, 401, 400],
             empty: false,

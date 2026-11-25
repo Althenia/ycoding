@@ -587,6 +587,7 @@ pub(crate) fn register(dispatcher: &mut Dispatcher) -> Result<(), RegistrationEr
     dispatcher.handle("coordination.settings", settings)?;
     dispatcher.handle("coordination.list", list)?;
     dispatcher.handle("coordination.get", get)?;
+    dispatcher.handle("coordination.board", board)?;
     dispatcher.handle("coordination.create", create)?;
     dispatcher.handle("coordination.update", update)?;
     dispatcher.handle("coordination.attach", attach)?;
@@ -615,6 +616,14 @@ async fn get(
     let id = convert::identifier::<c::GroupId>(&request.params.group_id)?;
     let group = runtime(&invocation)?.get(&id).await.map_err(failure)?;
     result(&ObjectEncoder::new().field("data", &group).finish())
+}
+async fn board(
+    invocation: Invocation,
+    request: v5::CoordinationBoardRequest,
+) -> Result<v5::CoordinationBoardResult, Failure> {
+    let id = convert::identifier::<c::GroupId>(&request.params.group_id)?;
+    let board = runtime(&invocation)?.board(&id).await.map_err(failure)?;
+    result(&ObjectEncoder::new().field("data", &board).finish())
 }
 async fn create(
     invocation: Invocation,

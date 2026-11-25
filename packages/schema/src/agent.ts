@@ -1,6 +1,7 @@
 export * as Agent from "./agent.js"
 
 import { Schema } from "effect"
+import { AgentID } from "./agent-id.js"
 import { ephemeral, inventory } from "./event.js"
 import { optional } from "./schema.js"
 import { Model } from "./model.js"
@@ -10,7 +11,7 @@ import { AbsolutePath, PositiveInt, statics } from "./schema.js"
 
 const Updated = ephemeral({ type: "agent.updated", schema: {} })
 
-export const ID = Schema.String.pipe(Schema.brand("Agent.ID"))
+export const ID = AgentID
 export type ID = typeof ID.Type
 
 export const Name = Schema.String.pipe(Schema.brand("Agent.Name"))

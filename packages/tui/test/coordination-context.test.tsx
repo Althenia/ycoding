@@ -569,7 +569,8 @@ test("member state changes arrive in place from coordination and execution event
       id: "evt_failed",
       created: 2,
       type: "session.execution.failed",
-      data: { sessionID: docsID },
+      durable: { aggregateID: docsID, seq: 1, version: 1 },
+      data: { sessionID: docsID, error: { type: "fixture", message: "Execution failed" } },
     } as never)
     await until(() => coordination().projects()![0]!.members[0]!.state === "failed", "docs worker failed")
     expect(

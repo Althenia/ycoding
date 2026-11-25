@@ -1402,7 +1402,7 @@ function coordinationPayload(operation: RemoteOperation, fields: Readonly<Record
   if (operation === "coordination.create")
     return { name: requireString(fields.name, "name", 120), masterSessionID: sessionID(fields.masterSessionID, "masterSessionID"), memberSessionIDs: coordinationMemberSessionIDs(fields.memberSessionIDs) }
   const groupID = coordinationIDOf(fields.groupID, "cgrp_", "groupID")
-  if (operation === "coordination.get" || operation === "coordination.delete") return { groupID }
+  if (operation === "coordination.get" || operation === "coordination.delete" || operation === "coordination.board") return { groupID }
   if (operation === "coordination.attach")
     return { groupID, sessionID: sessionID(fields.sessionID, "sessionID"),
       ...(fields.ownerSessionID === undefined ? {} : { ownerSessionID: sessionID(fields.ownerSessionID, "ownerSessionID") }) }
@@ -1439,6 +1439,7 @@ async function executeCoordination(input: OperationInput, operation: RemoteOpera
   }
   if (operation === "coordination.detach") return local.coordinationDetach(payload as Parameters<LocalServer["coordinationDetach"]>[0])
   if (operation === "coordination.get") return local.coordinationGet(payload as Parameters<LocalServer["coordinationGet"]>[0])
+  if (operation === "coordination.board") return local.coordinationBoard(payload as Parameters<LocalServer["coordinationBoard"]>[0])
   if (operation === "coordination.delete") return local.coordinationDelete(payload as Parameters<LocalServer["coordinationDelete"]>[0])
   return unknownOperation()
 }
@@ -2336,6 +2337,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "coordination.list": [],
   "coordination.create": ["name", "masterSessionID", "memberSessionIDs"],
   "coordination.get": ["groupID"],
+  "coordination.board": ["groupID"],
   "coordination.update": ["groupID", "revision", "name", "masterSessionID", "memberSessionIDs", "settings"],
   "coordination.delete": ["groupID"],
   "coordination.attach": ["groupID", "sessionID", "ownerSessionID"],

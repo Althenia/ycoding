@@ -3355,7 +3355,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     onCleanup(
       client.event.listen(({ details }) => {
-        if (["session.input.admitted", "session.execution.started", "session.step.started", "session.moved", "session.deleted", "session.archived", "session.agent.selected", "session.model.selected"].includes(details.type) && "sessionID" in details.data)
+        if (["session.input.admitted", "session.execution.started", "session.step.started", "session.moved", "session.deleted", "session.archived", "session.agent.selected", "session.model.selected"].includes(details.type) && "sessionID" in details.data && typeof details.data.sessionID === "string")
           result.session.prediction.dismiss(details.data.sessionID)
         if (details.type === "session.text.delta" || details.type === "session.reasoning.delta" || details.type === "session.tool.input.delta")
           props.recordTelemetry?.("stream.delay", Date.now() - details.created, Date.now())

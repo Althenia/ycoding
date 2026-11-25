@@ -207,8 +207,8 @@ export const layer = Layer.effect(
       if (taken) return yield* new IneligibleSessionError({ message: `Session ${taken.session} already belongs to Project ${taken.group}` })
     })
 
-    const updated = (groupID: Coordination.GroupID, revision: number) =>
-      events.publish(Coordination.Event.Updated, { groupID, revision: Coordination.Revision.make(revision) }).pipe(Effect.asVoid)
+    const updated = (groupID: Coordination.GroupID, revision: number, sessionID: Session.ID) =>
+      events.publish(Coordination.Event.Updated, { groupID, revision: Coordination.Revision.make(revision), sessionID }).pipe(Effect.asVoid)
 
     const inheritMasterAutonomy = Effect.fnUntraced(function* (masterSessionID: Session.ID, sessionIDs: ReadonlyArray<Session.ID>) {
       if (sessionIDs.length === 0) return
@@ -311,7 +311,7 @@ export const layer = Layer.effect(
               },
             )
             yield* inheritMasterAutonomy(input.masterSessionID, input.memberSessionIDs)
-            yield* updated(groupID, 0)
+            yield* updated(groupID, 0, input.masterSessionID)
             return yield* groupOf(yield* row(groupID))
           }),
         ),
@@ -378,7 +378,7 @@ export const layer = Layer.effect(
               pausedReasons.delete(groupID)
               yield* kv.remove(pauseKey(groupID))
             }
-            yield* updated(groupID, revision)
+            yield* updated(groupID, revision, masterSessionID)
             return yield* groupOf(yield* row(groupID))
           }),
         ),
@@ -402,7 +402,7 @@ export const layer = Layer.effect(
             active.delete(groupID)
             pausedReasons.delete(groupID)
             yield* kv.remove(pauseKey(groupID))
-            yield* updated(groupID, current.revision + 1)
+            yield* updated(groupID, current.revision + 1, current.master_session_id)
           }),
         ),
       ),
@@ -485,7 +485,7 @@ export const layer = Layer.effect(
                   .run().pipe(Effect.orDie, Effect.asVoid),
               },
             )
-            yield* updated(groupID, current.revision)
+            yield* updated(groupID, current.revision, current.master_session_id)
           }),
         ),
       ),
@@ -516,7 +516,7 @@ export const layer = Layer.effect(
                 : [{ definition: Coordination.Event.OwnerChanged, data: { groupID, revision, sessionID: input.sessionID, ownerSessionID: input.ownerSessionID } }]),
             ])
             if (input.preserveAutonomy !== true) yield* inheritMasterAutonomy(current.master_session_id, [input.sessionID])
-            yield* updated(groupID, revision)
+            yield* updated(groupID, revision, current.master_session_id)
             return yield* groupOf(yield* row(groupID))
           }),
         ),
@@ -546,7 +546,7 @@ export const layer = Layer.effect(
                   }),
               },
             )
-            yield* updated(groupID, revision)
+            yield* updated(groupID, revision, current.master_session_id)
             return yield* groupOf(yield* row(groupID))
           }),
         ),
@@ -560,7 +560,7 @@ export const layer = Layer.effect(
               pausedReasons.delete(groupID)
               return kv.remove(pauseKey(groupID)).pipe(
                 Effect.andThen(row(groupID)),
-                Effect.flatMap((found) => updated(groupID, found.revision)),
+                Effect.flatMap((found) => updated(groupID, found.revision, found.master_session_id)),
                 Effect.ignore,
               )
             }),
@@ -573,7 +573,7 @@ export const layer = Layer.effect(
               pausedReasons.set(groupID, "interrupted")
               return kv.set(pauseKey(groupID), true).pipe(
                 Effect.andThen(row(groupID)),
-                Effect.flatMap((found) => updated(groupID, found.revision)),
+                Effect.flatMap((found) => updated(groupID, found.revision, found.master_session_id)),
                 Effect.ignore,
               )
             }),

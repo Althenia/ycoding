@@ -41,7 +41,7 @@ test("platform slice exactly matches all 55 baseline and live endpoint declarati
   const live = platformEndpoints().map(({ endpoint }) => endpoint.identifier)
   expect(live).toHaveLength(55)
   const manifest = await generateManifest(path.resolve(import.meta.dir, "../../.."))
-  expect(manifest.counts).toEqual({ endpoint: 244, connector: 101, notice: 4 })
+  expect(manifest.counts).toEqual({ endpoint: 245, connector: 102, notice: 4 })
   expect(manifest.members.filter((member) => member.kind === "endpoint").map((member) => member.name)).toEqual(
     expect.arrayContaining(["decision.list", "dots.attach", "integration.accountSkills.read"]),
   )

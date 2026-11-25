@@ -23,6 +23,7 @@ export type TelemetryRequestSample = {
     | "coordination.delete"
     | "coordination.attach"
     | "coordination.detach"
+    | "coordination.board"
     | "workspace.list"
     | "session.list"
     | "session.active"
@@ -925,6 +926,10 @@ export type SessionReviewSubagentQuestionPayload1 = { type: "subagent_question";
 export type CoordinationPausedReason = "interrupted" | "restart"
 
 export type CoordinationMemberState = "idle" | "running" | "waiting" | "failed"
+
+export type CoordinationTaskResult = { messageID?: string; summary?: string }
+
+export type CoordinationBoardHandoff = { sessionID: string; fromSessionID?: string; toSessionID?: string; time: number }
 
 export type DotsAccess = { enabled: boolean; revision: number }
 
@@ -2736,7 +2741,7 @@ export type CoordinationEventUpdated = {
   sourceEpoch?: string
   type: "coordination.updated"
   location?: LocationRef
-  data: { groupID: CoordinationGroupID; revision: CoordinationRevision }
+  data: { groupID: CoordinationGroupID; revision: CoordinationRevision; sessionID?: string }
 }
 
 export type CoordinationDelegatedDecisions = {
@@ -2983,6 +2988,16 @@ export type ConfigDiagnostic = {
   message: string
 }
 
+export type CoordinationBoardTask = {
+  taskID: string
+  title: string
+  sessionID: string
+  ownerSessionID: string
+  dependsOnTaskIDs: Array<string>
+  state: "queued" | "blocked" | "running" | "waiting" | "completed" | "failed" | "cancelled"
+  result?: CoordinationTaskResult
+}
+
 export type DotsNativeStatus = {
   access: DotsAccess
   configuration: { ready: boolean; profile?: string; message?: string }
@@ -3216,6 +3231,26 @@ export type ModelIncidentItem = {
   profile?: ModelProfileName
   target?: ModelRef
   decidedBy?: ModelIncidentDecidedBy
+}
+
+export type CoordinationBoardNode = {
+  sessionID: string
+  parentSessionID?: string
+  role: "master" | "supervisor" | "member" | "subagent"
+  title: string
+  state:
+    | "idle"
+    | "starting"
+    | "running"
+    | "waiting"
+    | "supervising"
+    | "cancelling"
+    | "cancelled"
+    | "completed"
+    | "failed"
+    | "lost"
+  agentID?: string
+  model?: ModelRef
 }
 
 export type PermissionRuleset = Array<PermissionRule>
@@ -3663,6 +3698,8 @@ export type CoordinationParticipant = {
   drivenBy?: { sessionID: string; title: string }
   owner?: { sessionID: string; title: string }
 }
+
+export type CoordinationBoardReview = { sessionID: string; request: CoordinationPendingRequest }
 
 export type PtyCreated = {
   id: string
@@ -4216,6 +4253,14 @@ export type CoordinationInfo = {
   members: Array<CoordinationParticipant>
   settings: CoordinationGroupSettings
   time: { created: number; updated: number }
+}
+
+export type CoordinationBoard = {
+  groupID: CoordinationGroupID
+  nodes: Array<CoordinationBoardNode>
+  tasks: Array<CoordinationBoardTask>
+  handoffs: Array<CoordinationBoardHandoff>
+  reviews: Array<CoordinationBoardReview>
 }
 
 export type ProjectArtifactPromotionPreview = {
@@ -6347,6 +6392,7 @@ export type ServerTelemetryAppendInput = {
             | "coordination.delete"
             | "coordination.attach"
             | "coordination.detach"
+            | "coordination.board"
             | "workspace.list"
             | "session.list"
             | "session.active"
@@ -13478,6 +13524,10 @@ export type CoordinationDetachInput = {
 }
 
 export type CoordinationDetachOutput = { data: { sessionID: string; removed: true } }["data"]
+
+export type CoordinationBoardInput = { readonly groupID: { readonly groupID: string }["groupID"] }
+
+export type CoordinationBoardOutput = { data: CoordinationBoard }["data"]
 
 export type DotsGetOutput = { data: DotsNativeStatus }["data"]
 

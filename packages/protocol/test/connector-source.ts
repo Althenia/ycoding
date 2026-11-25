@@ -98,6 +98,7 @@ export const connectorOperations = {
   "coordination.delete": [6005, "coordination.delete", "A", "MUTATION"],
   "coordination.attach": [6006, "coordination.attach", "A", "MUTATION"],
   "coordination.detach": [6007, "coordination.detach", "A", "MUTATION"],
+  "coordination.board": [6008, "coordination.board", "A", "READ"],
   "machine.keepAwake.get": [3025, "keepAwake.get", "A", "READ"],
   "machine.keepAwake.set": [3026, "keepAwake.set", "A", "MUTATION"],
   "machine.telemetry.consent.get": [3047, "telemetry.consent.get", "A", "READ"],

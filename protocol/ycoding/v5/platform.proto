@@ -463,6 +463,7 @@ enum Telemetry_RequestSample_operation {
   TELEMETRY_REQUESTSAMPLE_OPERATION_COORDINATION_DELETE = 91 [(ycoding.v5.domain_label) = "coordination.delete"];
   TELEMETRY_REQUESTSAMPLE_OPERATION_COORDINATION_ATTACH = 113 [(ycoding.v5.domain_label) = "coordination.attach"];
   TELEMETRY_REQUESTSAMPLE_OPERATION_COORDINATION_DETACH = 114 [(ycoding.v5.domain_label) = "coordination.detach"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_COORDINATION_BOARD = 125 [(ycoding.v5.domain_label) = "coordination.board"];
   TELEMETRY_REQUESTSAMPLE_OPERATION_WORKSPACE_LIST = 7 [(ycoding.v5.domain_label) = "workspace.list"];
   TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_LIST = 8 [(ycoding.v5.domain_label) = "session.list"];
   TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_ACTIVE = 9 [(ycoding.v5.domain_label) = "session.active"];

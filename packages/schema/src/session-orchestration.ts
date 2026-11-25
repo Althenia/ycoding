@@ -9,6 +9,7 @@ import { SessionDelivery } from "./session-delivery.js"
 import { SessionID } from "./session-id.js"
 import { SessionMessage } from "./session-message.js"
 import { SessionReviewID } from "./session-review-id.js"
+import { SessionTaskState } from "./session-task-state.js"
 
 const encoder = new TextEncoder()
 export const truncateUtf8 = (input: string, bytes: number) => {
@@ -47,17 +48,7 @@ export const ProgressText = boundedText(4 * 1024)
 export const QuestionText = boundedText(8 * 1024)
 export const TerminalExcerpt = boundedText(16 * 1024)
 
-export const State = Schema.Literals([
-  "starting",
-  "running",
-  "waiting",
-  "supervising",
-  "cancelling",
-  "cancelled",
-  "completed",
-  "failed",
-  "lost",
-])
+export const State = SessionTaskState
 export type State = typeof State.Type
 
 export const TerminalState = Schema.Literals(["cancelled", "completed", "failed", "lost"])

@@ -867,6 +867,7 @@ message PublicEvent_coordination_updated_metadataEntry {
 message PublicEvent_coordination_updated_data {
   required LosslessString groupID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 6 utf16_max: 96 }];
   required uint64 revision = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" integer_min: "0" integer_max: "9007199254740991" }];
+  optional LosslessString sessionID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
 }
 
 message PublicEvent_coordination_request_escalated {

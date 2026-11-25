@@ -28,6 +28,36 @@ enum Coordination_MemberState {
   COORDINATION_MEMBERSTATE_FAILED = 4 [(ycoding.v5.domain_label) = "failed"];
 }
 
+enum Coordination_BoardNode_role {
+  COORDINATION_BOARDNODE_ROLE_MASTER = 1 [(ycoding.v5.domain_label) = "master"];
+  COORDINATION_BOARDNODE_ROLE_SUPERVISOR = 2 [(ycoding.v5.domain_label) = "supervisor"];
+  COORDINATION_BOARDNODE_ROLE_MEMBER = 3 [(ycoding.v5.domain_label) = "member"];
+  COORDINATION_BOARDNODE_ROLE_SUBAGENT = 4 [(ycoding.v5.domain_label) = "subagent"];
+}
+
+enum Coordination_BoardNode_state {
+  COORDINATION_BOARDNODE_STATE_IDLE = 1 [(ycoding.v5.domain_label) = "idle"];
+  COORDINATION_BOARDNODE_STATE_STARTING = 2 [(ycoding.v5.domain_label) = "starting"];
+  COORDINATION_BOARDNODE_STATE_RUNNING = 3 [(ycoding.v5.domain_label) = "running"];
+  COORDINATION_BOARDNODE_STATE_WAITING = 4 [(ycoding.v5.domain_label) = "waiting"];
+  COORDINATION_BOARDNODE_STATE_SUPERVISING = 5 [(ycoding.v5.domain_label) = "supervising"];
+  COORDINATION_BOARDNODE_STATE_CANCELLING = 6 [(ycoding.v5.domain_label) = "cancelling"];
+  COORDINATION_BOARDNODE_STATE_CANCELLED = 7 [(ycoding.v5.domain_label) = "cancelled"];
+  COORDINATION_BOARDNODE_STATE_COMPLETED = 8 [(ycoding.v5.domain_label) = "completed"];
+  COORDINATION_BOARDNODE_STATE_FAILED = 9 [(ycoding.v5.domain_label) = "failed"];
+  COORDINATION_BOARDNODE_STATE_LOST = 10 [(ycoding.v5.domain_label) = "lost"];
+}
+
+enum Coordination_BoardTask_state {
+  COORDINATION_BOARDTASK_STATE_QUEUED = 1 [(ycoding.v5.domain_label) = "queued"];
+  COORDINATION_BOARDTASK_STATE_BLOCKED = 2 [(ycoding.v5.domain_label) = "blocked"];
+  COORDINATION_BOARDTASK_STATE_RUNNING = 3 [(ycoding.v5.domain_label) = "running"];
+  COORDINATION_BOARDTASK_STATE_WAITING = 4 [(ycoding.v5.domain_label) = "waiting"];
+  COORDINATION_BOARDTASK_STATE_COMPLETED = 5 [(ycoding.v5.domain_label) = "completed"];
+  COORDINATION_BOARDTASK_STATE_FAILED = 6 [(ycoding.v5.domain_label) = "failed"];
+  COORDINATION_BOARDTASK_STATE_CANCELLED = 7 [(ycoding.v5.domain_label) = "cancelled"];
+}
+
 message coordination_settings_Request {
 
 }
@@ -287,6 +317,83 @@ message coordination_detach_Result_data {
   required bool removed = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/coordination.ts#CoordinationGroup" }];
 }
 
+message coordination_board_Request_params {
+  required LosslessString groupID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.GroupID" utf16_min: 6 utf16_max: 96 }];
+}
+
+message coordination_board_Request {
+  required coordination_board_Request_params params = 1;
+}
+
+message coordination_board_Result {
+  required Coordination_Board data = 1;
+}
+
+message Coordination_Board {
+  required LosslessString groupID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.GroupID" utf16_min: 6 utf16_max: 96 }];
+  required Coordination_Board_nodes nodes = 2;
+  required Coordination_Board_tasks tasks = 3;
+  required Coordination_Board_handoffs handoffs = 4;
+  required Coordination_Board_reviews reviews = 5;
+}
+
+message Coordination_Board_nodes {
+  repeated Coordination_BoardNode items = 1;
+}
+
+message Coordination_BoardNode {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-id.ts#SessionID" }];
+  optional LosslessString parentSessionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.BoardNode" }];
+  required Coordination_BoardNode_role role = 3;
+  required LosslessString title = 4;
+  required Coordination_BoardNode_state state = 5;
+  optional LosslessString agentID = 6;
+  optional Model_Ref model = 7;
+}
+
+message Coordination_Board_tasks {
+  repeated Coordination_BoardTask items = 1;
+}
+
+message Coordination_BoardTask {
+  required LosslessString taskID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/coordination.ts#CoordinationGroup" }];
+  required LosslessString title = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.BoardTask" utf16_min: 1 utf16_max: 120 }];
+  required LosslessString sessionID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-id.ts#SessionID" }];
+  required LosslessString ownerSessionID = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-id.ts#SessionID" }];
+  required Coordination_BoardTask_dependsOnTaskIDs dependsOnTaskIDs = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.BoardTask" }];
+  required Coordination_BoardTask_state state = 6;
+  optional Coordination_TaskResult result = 7;
+}
+
+message Coordination_BoardTask_dependsOnTaskIDs {
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.BoardTask" count_max: 64 }];
+}
+
+message Coordination_TaskResult {
+  optional LosslessString messageID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.TaskResult" }];
+  optional LosslessString summary = 2;
+}
+
+message Coordination_Board_handoffs {
+  repeated Coordination_BoardHandoff items = 1;
+}
+
+message Coordination_BoardHandoff {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-id.ts#SessionID" }];
+  optional LosslessString fromSessionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.BoardHandoff" }];
+  optional LosslessString toSessionID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.BoardHandoff" }];
+  required uint64 time = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/coordination.ts#Coordination.BoardHandoff" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message Coordination_Board_reviews {
+  repeated Coordination_BoardReview items = 1;
+}
+
+message Coordination_BoardReview {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-id.ts#SessionID" }];
+  required Coordination_PendingRequest request = 2;
+}
+
 service server_coordination {
   rpc coordination_settings(coordination_settings_Request) returns (coordination_settings_Result) {
     option (ycoding.v5.operation) = {
@@ -426,6 +533,24 @@ service server_coordination {
       roles: RELAY
       scope: MACHINE
       mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc coordination_board(coordination_board_Request) returns (coordination_board_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 6008
+      diagnostic_name: "coordination.board"
+      error_types: "ycoding.v5.CoordinationError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: READ
       settlement: COMPLETED
       paging: UNPAGED
       streaming: TYPED_BULK

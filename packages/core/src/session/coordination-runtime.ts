@@ -1,10 +1,12 @@
 export * as CoordinationRuntime from "./coordination-runtime"
 
 import { Coordination } from "@ycoding-ai/schema/coordination"
+import { Agent } from "@ycoding-ai/schema/agent"
 import { Form } from "@ycoding-ai/schema/form"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
-import type { Model } from "@ycoding-ai/schema/model"
+import { Model } from "@ycoding-ai/schema/model"
 import { Permission } from "@ycoding-ai/schema/permission"
+import { SessionStatusEvent } from "@ycoding-ai/schema/session-status-event"
 import path from "node:path"
 import fs from "node:fs/promises"
 import { homedir } from "node:os"
@@ -43,7 +45,7 @@ import { SessionPending } from "./pending"
 import { SessionRunnerModel } from "./runner/model"
 import { SessionSchema } from "./schema"
 import { Session } from "../session"
-import { SessionPendingTable, SessionTable, SessionTaskTable } from "./sql"
+import { SessionMessageTable, SessionPendingTable, SessionTable, SessionTaskTable } from "./sql"
 import { SessionStore } from "./store"
 import { SessionTask } from "./task"
 
@@ -65,6 +67,8 @@ export interface SendInput {
   readonly delivery?: SessionPending.Delivery
   readonly messageID?: SessionMessage.ID
   readonly model?: Model.Ref
+  readonly taskTitle?: string
+  readonly dependsOnTaskIDs?: ReadonlyArray<SessionMessage.ID>
 }
 
 export interface SendResult {
@@ -182,12 +186,44 @@ const handledEvents = [
 ] as const
 type HandledEvent = EventRuntime.SubscribePayload<typeof handledEvents>
 
+const boardEvents = [
+  ...handledEvents, SessionEvent.InputPromoted, SessionEvent.InputConsumed, SessionEvent.Renamed, SessionEvent.ModelSelected,
+  SessionEvent.Unarchived, SessionEvent.RevertEvent.Cleared, SessionStatusEvent.Idle,
+  SessionEvent.Review.Deferred, SessionEvent.Review.Decided, SessionEvent.Review.Withdrawn, SessionEvent.Review.Consumed,
+  Form.Event.Replied, Form.Event.Cancelled, Form.Event.TimedOut, Form.Event.Deferred,
+  Permission.Event.Replied, Permission.Event.Deferred,
+  Guardrail.Event.Replied, Guardrail.Event.Cancelled, Guardrail.Event.Deferred,
+] as const
+type BoardEvent = EventRuntime.SubscribePayload<typeof boardEvents>
+const boardReadinessEvents: ReadonlySet<string> = new Set([
+  SessionEvent.InputAdmitted.type, SessionEvent.InputConsumed.type, SessionEvent.Execution.Succeeded.type, SessionEvent.Execution.Failed.type,
+  SessionEvent.Execution.Interrupted.type, SessionStatusEvent.Idle.type, Coordination.Event.OwnerChanged.type, SessionEvent.Task.Updated.type,
+  SessionEvent.Archived.type, SessionEvent.Unarchived.type, SessionEvent.RevertEvent.Cleared.type, SessionEvent.Review.Decided.type,
+  SessionEvent.Review.Withdrawn.type, SessionEvent.Review.Consumed.type, Form.Event.Replied.type, Form.Event.Cancelled.type,
+  Form.Event.TimedOut.type, Permission.Event.Replied.type, Guardrail.Event.Replied.type, Guardrail.Event.Cancelled.type,
+])
+
+const taskEvent = { durable: { aggregate: "groupID", version: 1 } } as const
+const TaskRecorded = EventRuntime.durable({ type: "coordination.task.recorded", ...taskEvent,
+  schema: { groupID: Coordination.GroupID, task: Coordination.BoardTask, text: Schema.String,
+    delivery: Schema.optionalKey(Schema.Literals(["steer", "queue"])), model: Schema.optionalKey(Model.Ref) } })
+const TaskDispatched = EventRuntime.durable({ type: "coordination.task.dispatched", ...taskEvent,
+  schema: { groupID: Coordination.GroupID, taskID: SessionMessage.ID } })
+const TaskSettled = EventRuntime.durable({ type: "coordination.task.settled", ...taskEvent,
+  schema: { groupID: Coordination.GroupID, taskID: SessionMessage.ID, state: Coordination.TaskState, result: Schema.optionalKey(Coordination.TaskResult) } })
+const recordedType = versionedType(TaskRecorded.type, 1)
+const dispatchedType = versionedType(TaskDispatched.type, 1)
+const settledType = versionedType(TaskSettled.type, 1)
+const taskReceipt = (kind: string, id: SessionMessage.ID) => EventRuntime.ID.make(`evt_project_task_${kind}_${Hash.sha256(Buffer.from(id, "utf16le"))}`)
+const terminalTask = (state: Coordination.BoardTask["state"]) => state === "completed" || state === "failed" || state === "cancelled"
+
 const staleOwnerStates: ReadonlySet<string> = new Set(["cancelling", "cancelled", "failed", "lost"])
 const ownerEndingChanges: ReadonlySet<string> = new Set(["cancelled", "failed", "lost", "question_asked"])
 
 export type RecoverError = Session.ScopeUnavailableError | SessionOrchestration.ServiceUnavailableError | EventRuntime.TaskOwnerUnavailableError
 
 export interface Interface {
+  readonly board: (groupID: Coordination.GroupID) => Effect.Effect<Coordination.Board, CoordinationService.NotFoundError>
   readonly member: (caller: SessionSchema.ID, input: { readonly sessionID: SessionSchema.ID }) => Effect.Effect<MemberResult, RefusedError>
   readonly setModel: (caller: SessionSchema.ID, input: ModelInput) => Effect.Effect<MemberResult, RefusedError>
   readonly get: (groupID: Coordination.GroupID) => Effect.Effect<Coordination.Info, CoordinationService.NotFoundError>
@@ -276,7 +312,7 @@ export const authorizeMember = Effect.fn("CoordinationRuntime.authorizeMember")(
 
 const clip = (text: string) => (text.length > maxExcerpt ? `${text.slice(0, maxExcerpt - 1)}…` : text)
 
-export function make(options: Options): Omit<Interface, "setModel"> & { readonly handle: (event: HandledEvent) => Effect.Effect<void>; readonly recover: () => Effect.Effect<void, RecoverError> } {
+export function make(options: Options): Omit<Interface, "setModel"> & { readonly handle: (event: BoardEvent) => Effect.Effect<void>; readonly recover: () => Effect.Effect<void, RecoverError> } {
   const { db, events, coordination, decisions, execution, sessions, orchestration, jobs } = options
   const senders = new Map<SessionSchema.ID, SessionSchema.ID>()
   const sendLock = KeyedMutex.makeUnsafe<Coordination.GroupID>()
@@ -583,19 +619,22 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
     }
   })
 
-  const send: Interface["send"] = Effect.fn("CoordinationRuntime.send")(function* (caller, input) {
+  const send = Effect.fn("CoordinationRuntime.send")(function* (caller: SessionSchema.ID, input: SendInput, tracked = false) {
     const scope = yield* memberScope(caller, input.sessionID)
     const messageID = input.messageID ?? SessionMessage.ID.create()
     const delivery = input.delivery ?? "queue"
     return yield* sendLock.withLock(scope.groupID)(
       SessionPending.withInboxLock(input.sessionID)(
         Effect.gen(function* () {
+          if (!tracked && (yield* eventByID(taskReceipt("recorded", messageID))) !== undefined)
+            return yield* refuse("Message identity belongs to a tracked Project task")
           const existing = yield* SessionPending.lookup(db, input.sessionID, messageID).pipe(
             Effect.catchDefect((defect) =>
               defect instanceof SessionPending.LifecycleConflict ? Effect.fail(refuse(`Message ${messageID} is already used`)) : Effect.die(defect),
             ),
           )
           if (existing !== undefined) {
+            if (tracked) return yield* refuse("Message identity is already used")
             const metadata = existing.type === "user" ? existing.data.metadata : undefined
             const provenance = metadata?.coordination as { groupID?: unknown } | undefined
             if (existing.type !== "user" || existing.sessionID !== input.sessionID || metadata?.inputOrigin !== "coordination" || provenance?.groupID !== scope.groupID || existing.data.text !== input.text)
@@ -629,7 +668,7 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
                 },
               },
             },
-          })
+          }, tracked ? { id: taskReceipt("admitted", messageID) } : undefined)
           senders.set(input.sessionID, caller)
           yield* execution.wake(input.sessionID)
           return { sessionID: input.sessionID, messageID, state: yield* stateOf(scope, input.sessionID), reconciled: false }
@@ -637,6 +676,211 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
       ),
     )
   })
+
+  const eventByID = (id: EventRuntime.ID) => db.select().from(EventTable).where(eq(EventTable.id, id)).get().pipe(Effect.orDie)
+  const sessionRow = (id: SessionSchema.ID) => db.select().from(SessionTable).where(eq(SessionTable.id, id)).get().pipe(Effect.orDie)
+  const groupJournal = Effect.fnUntraced(function* (groupID: Coordination.GroupID) {
+    const rows = yield* db.select().from(EventTable).where(and(eq(EventTable.aggregate_id, groupID), inArray(EventTable.type, [
+      recordedType, dispatchedType, settledType, versionedType(Coordination.Event.OwnerChanged.type, 1), versionedType(Coordination.Event.Changed.type, 1),
+    ]))).orderBy(asc(EventTable.seq)).all().pipe(Effect.orDie)
+    const tasks = new Map<SessionMessage.ID, { task: Coordination.BoardTask; text: string; delivery?: SessionPending.Delivery; model?: Model.Ref; dispatched: boolean }>()
+    const owners = new Map<SessionSchema.ID, SessionSchema.ID | undefined>()
+    const handoffs: Coordination.BoardHandoff[] = []
+    for (const row of rows) {
+      if (row.type === recordedType) {
+        const { task, text, delivery, model } = Schema.decodeUnknownSync(TaskRecorded.data)(row.data)
+        tasks.set(task.taskID, { task, text, delivery, model, dispatched: false })
+      } else if (row.type === dispatchedType) {
+        const { taskID } = Schema.decodeUnknownSync(TaskDispatched.data)(row.data)
+        const entry = tasks.get(taskID)
+        if (entry) entry.dispatched = true
+      } else if (row.type === settledType) {
+        const { taskID, state, result } = Schema.decodeUnknownSync(TaskSettled.data)(row.data)
+        const entry = tasks.get(taskID)
+        if (entry) entry.task = { ...entry.task, state, ...(result === undefined ? {} : { result }) }
+      } else if (row.type === versionedType(Coordination.Event.OwnerChanged.type, 1)) {
+        const { sessionID, ownerSessionID } = Schema.decodeUnknownSync(Coordination.Event.OwnerChanged.data)(row.data)
+        const previous = owners.get(sessionID)
+        owners.set(sessionID, ownerSessionID)
+        handoffs.push({ sessionID, time: row.created, ...(previous === undefined ? {} : { fromSessionID: previous }), ...(ownerSessionID === undefined ? {} : { toSessionID: ownerSessionID }) })
+      } else {
+        const { memberSessionIDs } = Schema.decodeUnknownSync(Coordination.Event.Changed.data)(row.data)
+        for (const owner of owners.keys()) if (!memberSessionIDs.includes(owner)) owners.delete(owner)
+      }
+    }
+    return { tasks, handoffs }
+  })
+
+  const board: Interface["board"] = Effect.fn("CoordinationRuntime.board")(function* (groupID) {
+    const group = yield* coordination.get(groupID)
+    const { tasks, handoffs } = yield* groupJournal(groupID)
+    const { running } = yield* sessions.outstanding()
+    const owners = new Map(yield* Effect.forEach(group.memberSessionIDs, (id) => ownerOf(groupID, id).pipe(Effect.map((owner) => [id, owner?.sessionID] as const))))
+    const supervisors = new Set([...owners.values(), ...handoffs.map((handoff) => handoff.toSessionID)])
+    const nodes: Coordination.BoardNode[] = []
+    const reviews: Coordination.BoardReview[] = []
+    const waiting = new Set<SessionSchema.ID>()
+    for (const sessionID of [group.masterSessionID, ...group.memberSessionIDs]) {
+      const row = yield* sessionRow(sessionID)
+      if (row === undefined) continue
+      const master = sessionID === group.masterSessionID
+      const children: Coordination.BoardNode[] = []
+      const parents = [sessionID]
+      const seen = new Set(parents)
+      while (parents.length > 0) {
+        const parent = parents.pop()!
+        const tasks = yield* db.select({ task: SessionTaskTable, session: SessionTable }).from(SessionTaskTable)
+          .innerJoin(SessionTable, and(eq(SessionTable.id, SessionTaskTable.session_id), eq(SessionTable.parent_id, parent), isNull(SessionTable.time_archived)))
+          .where(eq(SessionTaskTable.parent_id, parent)).orderBy(asc(SessionTaskTable.session_id)).all().pipe(Effect.orDie)
+        for (const { task, session } of tasks) {
+          if (seen.has(session.id)) continue
+          seen.add(session.id)
+          parents.push(session.id)
+          const supervisor = parent === group.masterSessionID && (supervisors.has(session.id) || task.state === "supervising")
+          children.push({ sessionID: session.id, parentSessionID: parent, role: supervisor ? "supervisor" : "subagent", title: session.title,
+            state: task.state, agentID: Agent.ID.make(session.agent ?? task.agent), model: session.model ?? task.model })
+        }
+      }
+      const descendants = children.map((child) => child.sessionID)
+      const pending = yield* decisions.pending({ groupID, coordinatorSessionID: group.masterSessionID, targetSessionID: sessionID, descendantSessionIDs: descendants, limit: Coordination.maxPending })
+      for (const item of pending) {
+        const request = summarize(sessionID, item)
+        if (request.requestSessionID !== undefined && !descendants.includes(request.requestSessionID)) continue
+        reviews.push({ sessionID, request })
+        waiting.add(request.requestSessionID ?? sessionID)
+      }
+      nodes.push({ sessionID, role: master ? "master" : "member", title: row.title,
+        ...(master ? {} : { parentSessionID: owners.get(sessionID) ?? group.masterSessionID }),
+        state: running.has(sessionID) ? "running" : (yield* lastFailed(sessionID)) ? "failed" : "idle",
+        ...(row.agent === null ? {} : { agentID: Agent.ID.make(row.agent) }), ...(row.model === null ? {} : { model: row.model }),
+      }, ...children)
+    }
+    const visible = new Set(nodes.map((node) => node.sessionID))
+    return {
+      groupID, handoffs, reviews,
+      nodes: nodes.map((node) => ({ ...node, state: waiting.has(node.sessionID) ? "waiting" : node.state,
+        ...(node.role === "member" && node.parentSessionID !== undefined && !visible.has(node.parentSessionID) ? { parentSessionID: group.masterSessionID } : {}),
+      })),
+      tasks: yield* Effect.forEach([...tasks.values()], ({ task, dispatched }) => Effect.gen(function* () {
+        if (terminalTask(task.state)) return task
+        const state: Coordination.BoardTask["state"] = task.dependsOnTaskIDs.some((id) => tasks.get(id)?.task.state !== "completed") ? "blocked"
+          : reviews.some((review) => review.sessionID === task.sessionID) ? "waiting"
+          : dispatched && (yield* db.select({ id: SessionMessageTable.id }).from(SessionMessageTable).where(and(eq(SessionMessageTable.session_id, task.sessionID), eq(SessionMessageTable.id, task.taskID))).get().pipe(Effect.orDie)) !== undefined ? "running" : "queued"
+        return { ...task, state }
+      })),
+    }
+  })
+
+  const settleAssignment = (groupID: Coordination.GroupID, task: Coordination.BoardTask, state: Coordination.BoardTask["state"], result?: Coordination.TaskResult) =>
+    events.publish(TaskSettled, { groupID, taskID: task.taskID, state, ...(result === undefined ? {} : { result }) }, { id: taskReceipt("settled", task.taskID) })
+
+  const assignmentOutcome = Effect.fnUntraced(function* (task: Coordination.BoardTask) {
+    const admission = yield* eventByID(taskReceipt("admitted", task.taskID))
+    if (admission === undefined) return { state: "failed" as const, result: { summary: "Dispatch could not be verified; task was not replayed" } }
+    const rows = yield* db.select().from(EventTable).where(and(eq(EventTable.aggregate_id, task.sessionID), gt(EventTable.seq, admission.seq), inArray(EventTable.type, [
+      ...executionTypes, versionedType(SessionEvent.InputPromoted.type, 1), versionedType(SessionEvent.Step.Ended.type, 1),
+    ]))).orderBy(asc(EventTable.seq)).all().pipe(Effect.orDie)
+    let promoted = false
+    let started = false
+    let messageID: SessionMessage.ID | undefined
+    for (const row of rows) {
+      if (row.type === versionedType(SessionEvent.Execution.Started.type, 1)) started = true
+      if (row.type === versionedType(SessionEvent.InputPromoted.type, 1)) {
+        if (row.data.inputID === task.taskID) promoted = true
+        else if (promoted) return { state: "cancelled" as const }
+      }
+      if (promoted && row.type === versionedType(SessionEvent.Step.Ended.type, 1) && Schema.is(SessionMessage.ID)(row.data.assistantMessageID)) messageID = row.data.assistantMessageID
+      if (promoted && row.type === versionedType(SessionEvent.Execution.Succeeded.type, 1)) {
+        if (messageID === undefined) return { state: "completed" as const }
+        const latest = yield* SessionHistory.latest(db, task.sessionID, "assistant").pipe(Effect.catchTag("Session.MessageDecodeError", () => Effect.succeed(undefined)))
+        const summary = latest?.id === messageID ? assistantExcerpt(latest) : undefined
+        return { state: "completed" as const, result: { messageID, ...(summary === undefined ? {} : { summary }) } }
+      }
+      if ((started || promoted) && row.type === failedType) {
+        const { error } = Schema.decodeUnknownSync(SessionEvent.Execution.Failed.data)(row.data)
+        if (promoted || error.type !== "interrupted") return { state: "failed" as const, result: { ...(messageID === undefined ? {} : { messageID }), summary: clip(error.message) } }
+        started = false
+      }
+      if ((started || promoted) && row.type === versionedType(SessionEvent.Execution.Interrupted.type, 1)) return { state: "cancelled" as const }
+    }
+    return undefined
+  })
+
+  const advanceTasks = Effect.fnUntraced(function* (groupID: Coordination.GroupID) {
+    const group = yield* coordination.get(groupID).pipe(Effect.option)
+    if (group._tag === "None") return
+    const { tasks } = yield* groupJournal(groupID)
+    if (tasks.size === 0) return
+    const busy = new Set<SessionSchema.ID>()
+    for (const entry of tasks.values()) {
+      if (!entry.dispatched || terminalTask(entry.task.state)) continue
+      const outcome = yield* assignmentOutcome(entry.task)
+      if (outcome === undefined) busy.add(entry.task.sessionID)
+      else {
+        yield* settleAssignment(groupID, entry.task, outcome.state, outcome.result)
+        entry.task = { ...entry.task, state: outcome.state }
+      }
+    }
+    for (const { task, dispatched, text, delivery, model } of tasks.values()) {
+      if (dispatched || terminalTask(task.state)) continue
+      const scope = yield* memberScope(task.ownerSessionID, task.sessionID).pipe(Effect.option)
+      const session = yield* sessionRow(task.sessionID)
+      if (scope._tag === "None" || scope.value.groupID !== groupID || group.value.masterSessionID !== scope.value.masterSessionID || !session || session.time_archived !== null) {
+        yield* settleAssignment(groupID, task, "cancelled")
+        continue
+      }
+      const running = yield* execution.active
+      const queued = yield* hasPendingInput(scope.value.memberSessionIDs)
+      const limit = scope.value.settings.concurrency
+      if (!scope.value.active || session.time_suspended !== null || session.revert !== null || busy.has(task.sessionID) || running.has(task.sessionID) || queued.has(task.sessionID)
+        || task.dependsOnTaskIDs.some((id) => tasks.get(id)?.task.state !== "completed")
+        || (limit !== null && scope.value.memberSessionIDs.filter((id) => running.has(id) || queued.has(id) || busy.has(id)).length >= limit)
+        || (yield* familyPending(scope.value, task.ownerSessionID, task.sessionID)).length > 0) continue
+      yield* events.publish(TaskDispatched, { groupID, taskID: task.taskID }, { id: taskReceipt("dispatched", task.taskID) })
+      const result = yield* send(task.ownerSessionID, { sessionID: task.sessionID, messageID: task.taskID, text, delivery, model }, true).pipe(Effect.result)
+      if (result._tag === "Failure") {
+        if ((yield* eventByID(taskReceipt("admitted", task.taskID))) === undefined) yield* settleAssignment(groupID, task, "failed", { summary: clip(result.failure.message) })
+        else yield* Effect.logWarning("Project task was admitted but could not be woken", { taskID: task.taskID })
+      } else busy.add(task.sessionID)
+    }
+  })
+
+  const sendTask = Effect.fnUntraced(function* (caller: SessionSchema.ID, input: SendInput) {
+    const scope = yield* memberScope(caller, input.sessionID)
+    const taskID = input.messageID ?? SessionMessage.ID.create()
+    const title = input.taskTitle ?? "Project assignment"
+    const dependsOnTaskIDs = input.dependsOnTaskIDs ?? []
+    if (!Schema.is(Coordination.TaskTitle)(title) || !Schema.is(Coordination.TaskDependencies)(dependsOnTaskIDs)
+        || new Set(dependsOnTaskIDs).size !== dependsOnTaskIDs.length || input.text.length < 1 || input.text.length > 32000)
+      return yield* refuse("Invalid Project task title, message or dependencies")
+    const { tasks } = yield* groupJournal(scope.groupID)
+    const existing = tasks.get(taskID)
+    const task: Coordination.BoardTask = { taskID, title, sessionID: input.sessionID, ownerSessionID: caller, dependsOnTaskIDs, state: "queued" }
+    if (existing !== undefined) {
+      const identity = (task: Coordination.BoardTask, text: string, delivery: SessionPending.Delivery | undefined, model: Model.Ref | undefined) =>
+        Hash.json([task.sessionID, task.ownerSessionID, task.title, task.dependsOnTaskIDs, text, delivery ?? "queue", model ?? null])
+      if (identity(existing.task, existing.text, existing.delivery, existing.model) !== identity(task, input.text, input.delivery, input.model))
+        return yield* refuse("Task identity is already used with different content")
+    } else {
+      if (!scope.active) return yield* refuse(inactiveMessage)
+      if (dependsOnTaskIDs.some((id) => !tasks.has(id))) return yield* refuse("A dependency must name a previously recorded task in this Project")
+      if ((yield* eventByID(taskReceipt("recorded", taskID))) !== undefined) return yield* refuse("Task identity is already used")
+      const used = yield* SessionPending.lookup(db, input.sessionID, taskID).pipe(Effect.catchDefect((defect) =>
+        defect instanceof SessionPending.LifecycleConflict ? Effect.fail(refuse("Message identity is already used")) : Effect.die(defect)))
+      if (used !== undefined) return yield* refuse("Message identity is already used")
+      if (input.model !== undefined) yield* options.validateModel(input.sessionID, input.model)
+      yield* events.publish(TaskRecorded, { groupID: scope.groupID, task, text: input.text,
+        ...(input.delivery === undefined ? {} : { delivery: input.delivery }), ...(input.model === undefined ? {} : { model: input.model }),
+      }, { id: taskReceipt("recorded", taskID) })
+    }
+    yield* advanceTasks(scope.groupID)
+    yield* invalidateBoard(scope.groupID)
+    return { sessionID: input.sessionID, messageID: taskID, state: yield* stateOf(scope, input.sessionID), reconciled: existing !== undefined }
+  })
+
+  const invalidateBoard = (groupID: Coordination.GroupID) => coordination.get(groupID).pipe(
+    Effect.flatMap(({ revision, masterSessionID }) => events.publish(Coordination.Event.Updated, { groupID, revision, sessionID: masterSessionID })), Effect.ignore,
+  )
 
   const answer: Interface["answer"] = Effect.fn("CoordinationRuntime.answer")(function* (caller, input) {
     const scope = yield* memberScope(caller, input.sessionID)
@@ -715,8 +959,7 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
     }))
   }).pipe(Effect.withSpan("CoordinationRuntime.attach"))
 
-  const excerptOf = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
-    const assistant = yield* SessionHistory.latest(db, sessionID, "assistant")
+  const assistantExcerpt = (assistant: SessionMessage.Info | undefined) => {
     if (assistant === undefined || assistant.type !== "assistant") return undefined
     if (assistant.error !== undefined) return clip(assistant.error.message)
     const text = assistant.content
@@ -724,7 +967,8 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
       .map((part) => part.text)
       .join("")
     return text.length > 0 ? clip(text) : undefined
-  })
+  }
+  const excerptOf = (sessionID: SessionSchema.ID) => SessionHistory.latest(db, sessionID, "assistant").pipe(Effect.map(assistantExcerpt))
 
   const titleOf = (sessionID: SessionSchema.ID) =>
     db.select({ title: SessionTable.title }).from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie, Effect.map((row) => row?.title ?? ""))
@@ -1066,6 +1310,7 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
     const types = [SessionEvent.Execution.Started, SessionEvent.Step.Ended, SessionEvent.Execution.Succeeded,
       SessionEvent.Execution.Failed, SessionEvent.Execution.Interrupted].map((definition) => versionedType(definition.type, definition.durable.version))
     for (const group of yield* coordination.list()) {
+      yield* coordination.withOwnership(group.id, advanceTasks(group.id))
       const joined = new Map<SessionSchema.ID, number>()
       let groupAfter = -1
       while (true) {
@@ -1126,9 +1371,10 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
   return {
     recover,
     get,
+    board,
     summaries,
     roster,
-    send: (caller, input) => underOwnership(caller, send(caller, input)),
+    send: (caller, input) => underOwnership(caller, input.taskTitle !== undefined || input.dependsOnTaskIDs !== undefined ? sendTask(caller, input) : send(caller, input)),
     answer: (caller, input) => underOwnership(caller, answer(caller, input)),
     interrupt: (caller, input) => underOwnership(caller, interrupt(caller, input)),
     escalate: (caller, input) => underOwnership(caller, escalate(caller, input)),
@@ -1141,13 +1387,24 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
     member,
     handle: (event) =>
       Effect.gen(function* () {
-        if (event.type === Coordination.Event.Changed.type || event.type === Coordination.Event.Deleted.type)
-          return yield* coordination.withOwnership(event.data.groupID, handle(event))
-        if (event.type === SessionEvent.Task.Updated.type && !ownerEndingChanges.has(event.data.change.type)) return
+        if (event.type === Coordination.Event.Changed.type || event.type === Coordination.Event.Deleted.type) {
+          yield* coordination.withOwnership(event.data.groupID, handle(event).pipe(Effect.andThen(advanceTasks(event.data.groupID))))
+          yield* invalidateBoard(event.data.groupID)
+          return
+        }
         const sessionID = event.type === Form.Event.Created.type ? event.data.form.sessionID : event.data.sessionID
         if (!Schema.is(SessionSchema.ID)(sessionID)) return
-        const access = yield* coordination.accessOf(sessionID)
-        return yield* (access === undefined ? handle(event) : coordination.withOwnership(access.scope.groupID, handle(event)))
+        if (handledEvents.some((definition) => definition.type === event.type) &&
+          (event.type !== SessionEvent.Task.Updated.type || ownerEndingChanges.has(event.data.change.type))) {
+          const legacy = handle(event as HandledEvent)
+          const access = yield* coordination.accessOf(sessionID)
+          yield* (access === undefined ? legacy : coordination.withOwnership(access.scope.groupID, legacy))
+        }
+        const root = yield* rootOf(sessionID)
+        const scope = (yield* coordination.scopeOf(root)) ?? (yield* coordination.memberOf(root))
+        if (scope === undefined) return
+        if (boardReadinessEvents.has(event.type)) yield* coordination.withOwnership(scope.groupID, advanceTasks(scope.groupID))
+        yield* invalidateBoard(scope.groupID)
       }).pipe(
         Effect.catchCause((cause) =>
           Cause.hasInterruptsOnly(cause) ? Effect.interrupt : Effect.logWarning("Project event handling failed", { type: event.type, cause: Cause.pretty(cause) }),
@@ -1288,7 +1545,7 @@ const layer: Layer.Layer<
           return yield* runtime.member(caller, input)
         }))
       }))).pipe(Effect.mapError(error => refuse(error.message)))
-    yield* events.subscribe(handledEvents).pipe(Stream.runForEach(runtime.handle), Effect.forkScoped({ startImmediately: true }))
+    yield* events.subscribe(boardEvents).pipe(Stream.runForEach(runtime.handle), Effect.forkScoped({ startImmediately: true }))
     yield* runtime.recover().pipe(
       Effect.catchTags({
         "Session.ScopeUnavailableError": (error) => Effect.logError("Coordination recovery could not wake Session", { error }),

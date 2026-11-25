@@ -119,10 +119,10 @@ const deadline = setTimeout(() => {
 function expect(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message)
 }
-async function command() {
+async function command<T = { deviceID: string; sourceEpoch: string }>() {
   const next = await input.next()
   if (next.done) throw new Error("Rust connector owner closed stdin")
-  return next.value as { deviceID: string; sourceEpoch: string }
+  return next.value as T
 }
 async function run(args: string[]) {
   const child = spawn([wranglerBin, ...args], { cwd: root, stdout: "pipe", stderr: "pipe" })
@@ -539,7 +539,7 @@ try {
   const owner = await command()
   const connectedDeadline = Date.now() + 30_000
   while (true) {
-    const response = await fetch(`${origin}/api/devices`, { headers: { cookie: `yc_session=${cookie}` } })
+    const response = await fetch(`${origin}/api/devices?relay=5`, { headers: { cookie: `yc_session=${cookie}` } })
     expect(response.ok, "Worker device list failed")
     const listing = (await response.json()) as { devices: { id: string; online: boolean }[] }
     const device = listing.devices.find((device) => device.id === owner.deviceID)
@@ -716,6 +716,17 @@ try {
     (frame) => frame.body.case === "control" && frame.body.value.kind.case === "resyncRequired",
   ).length
   console.log(JSON.stringify({ phase: "oversize-ready" }))
+  const { groupID } = await command<{ groupID: string }>()
+  const invalidations = await events(peers[0]!, 2, owner.sourceEpoch, affected)
+  expect(invalidations.every((event) => event.kind.case === "coordinationUpdated" &&
+    decodeLossless(event.kind.value.data!.groupID!) === groupID &&
+    event.kind.value.data!.revision === 0n &&
+    decodeLossless(event.kind.value.data!.sessionID!) === "ses_real_connector"),
+    "Same-revision Project invalidations did not reach the Master subscription")
+  const [unrelated] = await events(peers[1]!, 1, owner.sourceEpoch, healthy)
+  expect(unrelated!.kind.case === "sessionTextDelta" && unrelated!.kind.value.data!.ordinal === 6n,
+    "An unrelated Session subscription received a Project invalidation")
+  console.log(JSON.stringify({ phase: "board-invalidations-delivered" }))
   await command()
   await events(peers[0]!, 2, owner.sourceEpoch, affected)
   const resync = await peers[0]!.next("resync")

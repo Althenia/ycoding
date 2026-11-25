@@ -1025,7 +1025,6 @@ service connector {
       operation_id: 5023
       diagnostic_name: "session.attachment.upload"
       error_types: "ycoding.v5.Connector_Error"
-      roles: LOCAL_CLIENT
       roles: REMOTE_CLIENT
       roles: RELAY
       scope: SESSION

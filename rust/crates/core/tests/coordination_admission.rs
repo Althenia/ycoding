@@ -1061,6 +1061,109 @@ async fn admitted_project_input_reaches_execution_through_pause_gate_restart_and
         script.drains("ses_alpha") == 3,
         "startup must not resume explicitly interrupted unpromoted input".into(),
     );
-    execution.shutdown().await.unwrap();
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+
+    let submit = |input: &str| {
+        project.settle(
+            parse_json(input).unwrap(),
+            Context::new("ses_master", "test", "msg_master", "call_swarm").unwrap(),
+        )
+    };
+    let predecessor = r#"{"action":"send","sessionID":"ses_boot","text":"Prepare the result","messageID":"msg_swarm_first","taskTitle":"Prepare"}"#;
+    let dependent = r#"{"action":"send","sessionID":"ses_other","text":"Use the result","messageID":"msg_swarm_next","taskTitle":"Follow up","dependsOnTaskIDs":["msg_swarm_first"]}"#;
+    assert!(
+        submit(dependent).await.is_err(),
+        "a dependency must already exist"
+    );
+    script.blocking.lock().unwrap().insert("ses_boot".into());
+    submit(predecessor).await.unwrap();
+    submit(dependent).await.unwrap();
+    let next = message("msg_swarm_next");
+    assert!(sessions.pending(&next).unwrap().is_none());
+    assert!(sessions.message(&next).unwrap().is_none());
+    *waits.0.lock().unwrap() = vec![permission_wait()];
+    let board = restarted.board(&group.id).await.unwrap();
+    assert!(board.tasks.iter().any(|task| task.task_id == next
+        && task.state == c::TaskState::Blocked
+        && task.depends_on_task_ids == [message("msg_swarm_first")]));
+    assert!(board.reviews.iter().any(|review| review.session_id == alpha
+        && review.request.request_id.as_str() == Some("per_gate")));
+    assert!(
+        board
+            .nodes
+            .iter()
+            .any(|node| node.session_id == alpha && node.state == c::BoardNodeState::Waiting)
+    );
+    submit(r#"{"action":"send","sessionID":"ses_window","text":"Independent work","messageID":"msg_swarm_independent","taskTitle":"Independent"}"#).await.unwrap();
+    quiesce(execution, &window).await;
+    assert!(
+        sessions
+            .message(&message("msg_swarm_independent"))
+            .unwrap()
+            .is_some()
+    );
+    assert!(sessions.get(&master).unwrap().is_some());
+    *waits.0.lock().unwrap() = vec![];
+    script.release.add_permits(1);
+    quiesce(execution, &boot).await;
+    pump(&restarted, &subscriber).await;
+    quiesce(execution, &other).await;
+    pump(&restarted, &subscriber).await;
+    assert!(sessions.message(&next).unwrap().is_some());
+    let board = restarted.board(&group.id).await.unwrap();
+    for name in ["msg_swarm_first", "msg_swarm_next", "msg_swarm_independent"] {
+        assert_eq!(
+            board
+                .tasks
+                .iter()
+                .find(|task| task.task_id == message(name))
+                .map(|task| task.state),
+            Some(c::TaskState::Completed),
+            "{name} must settle from its own Session events"
+        );
+    }
+    let replayed = Runtime::new(options());
+    startup(&replayed).await;
+    pump(&replayed, &subscriber).await;
+    submit(dependent).await.unwrap();
+    quiesce(execution, &other).await;
+    assert_eq!(
+        ledger(&sessions, &other)
+            .iter()
+            .filter(|entry| entry.as_str() == "promoted:msg_swarm_next")
+            .count(),
+        1
+    );
+    script.failing.lock().unwrap().insert("ses_other".into());
+    submit(r#"{"action":"send","sessionID":"ses_other","text":"Fail once","messageID":"msg_swarm_failed","taskTitle":"Try"}"#).await.unwrap();
+    quiesce(execution, &other).await;
+    pump(&restarted, &subscriber).await;
+    submit(r#"{"action":"send","sessionID":"ses_window","text":"Wait for the failed task","messageID":"msg_swarm_blocked","taskTitle":"Wait","dependsOnTaskIDs":["msg_swarm_failed"]}"#).await.unwrap();
+    let board = restarted.board(&group.id).await.unwrap();
+    let failed = board
+        .tasks
+        .iter()
+        .find(|task| task.task_id == message("msg_swarm_failed"))
+        .unwrap();
+    assert_eq!(failed.state, c::TaskState::Failed);
+    assert_eq!(
+        failed
+            .result
+            .as_ref()
+            .unwrap()
+            .summary
+            .as_ref()
+            .unwrap()
+            .as_str(),
+        Some("Synthetic turn failure after start")
+    );
+    let blocked = message("msg_swarm_blocked");
+    assert!(
+        board
+            .tasks
+            .iter()
+            .any(|task| task.task_id == blocked && task.state == c::TaskState::Blocked)
+    );
+    assert!(sessions.pending(&blocked).unwrap().is_none());
+    execution.shutdown().await.unwrap();
 }

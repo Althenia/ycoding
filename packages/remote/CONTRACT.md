@@ -642,6 +642,7 @@ grouping and Session-list filters are derived from backend metadata.
 | `coordination.list` | no | `coordination.list` | `GET /api/coordination` | — |
 | `coordination.create` | no | `coordination.create` | `POST /api/coordination` | `name`, `masterSessionID`, `memberSessionIDs` |
 | `coordination.get` | no | `coordination.get` | `GET /api/coordination/:groupID` | `groupID` |
+| `coordination.board` | no | `coordination.board` | `GET /api/coordination/:groupID/board` | `groupID` |
 | `coordination.update` | no | `coordination.update` | `PATCH /api/coordination/:groupID` | `groupID`, `revision`, `name?`, `masterSessionID?`, `memberSessionIDs?`, `settings?` |
 | `coordination.delete` | no | `coordination.delete` | `DELETE /api/coordination/:groupID` | `groupID` |
 | `coordination.attach` | no | `coordination.attach` | `POST /api/coordination/:groupID/members` | `groupID`, `sessionID`, `ownerSessionID?` |

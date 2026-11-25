@@ -110,6 +110,7 @@ export const remoteOperations = [
   "coordination.delete",
   "coordination.attach",
   "coordination.detach",
+  "coordination.board",
   "machine.keepAwake.get",
   "machine.keepAwake.set",
   "machine.telemetry.consent.get",
@@ -393,6 +394,7 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "coordination.delete": "mutation",
   "coordination.attach": "mutation",
   "coordination.detach": "mutation",
+  "coordination.board": "read",
   "machine.keepAwake.get": "read",
   "machine.keepAwake.set": "mutation",
   "machine.telemetry.consent.get": "read",
@@ -1182,7 +1184,7 @@ function validCoordinationInput(operation: RemoteOperation, input: unknown): boo
     return coordinationKeys(input, ["name", "masterSessionID", "memberSessionIDs"]) && coordinationText(input.name, 120) &&
       isSessionID(input.masterSessionID) && validMemberSessionIDs(input.memberSessionIDs)
   if (!coordinationID(input.groupID, "cgrp_")) return false
-  if (operation === "coordination.get" || operation === "coordination.delete")
+  if (operation === "coordination.get" || operation === "coordination.delete" || operation === "coordination.board")
     return coordinationKeys(input, ["groupID"])
   if (operation === "coordination.attach")
     return coordinationKeys(input, ["groupID", "sessionID", "ownerSessionID"]) && isSessionID(input.sessionID) &&
