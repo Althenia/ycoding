@@ -86,7 +86,7 @@ fn active_writers_survive_and_abandoned_entries_drain_across_bounded_passes() {
     let mut sweep = Sweep::default();
     assert_eq!(sweep.run(&root, &root, now), 0);
     let count = paths.iter().filter(|p| p.exists()).count();
-    assert!(count >= 6 && count < 70);
+    assert!((6..70).contains(&count));
     assert_eq!(sweep.run(&root, &root, now), 0);
     assert!(paths.iter().all(|p| !p.exists()));
     assert!(stage.path.exists());
