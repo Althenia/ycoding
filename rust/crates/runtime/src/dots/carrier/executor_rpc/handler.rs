@@ -6,7 +6,7 @@ use super::{
     types::*,
 };
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
-use ycoding_core::ycoding_schema::JsonValue;
+use ycoding_core::{resources::config::Configuration, ycoding_schema::JsonValue};
 
 pub type Boxed<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -74,10 +74,17 @@ pub struct InitializeContext {
     pub caller: Caller,
 }
 
-#[derive(Clone, Debug)]
+pub(super) struct AuthenticatedExecutor {
+    pub global: Arc<Configuration>,
+    pub environment_id: String,
+    pub harness_key_sha256: String,
+}
+
+#[derive(Clone)]
 pub struct HandlerContext {
     pub signal: Signal,
     pub session_id: String,
+    pub(super) authenticated_executor: Option<Arc<AuthenticatedExecutor>>,
 }
 
 #[derive(Clone)]

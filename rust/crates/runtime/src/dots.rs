@@ -243,8 +243,10 @@ async fn start_native_executor(
     );
     let (owner, codex_home) = (settings.owner.clone(), settings.codex_home.clone());
     let serve_host = host.clone();
+    let serve_global = settings.global.clone();
     let serve: supervisor::Serve = Arc::new(move |opened| {
         let (prepared, host) = (published.get().cloned(), serve_host.clone());
+        let global = serve_global.clone();
         let (locations, sessions, git) = (locations.clone(), sessions.clone(), git.clone());
         let (owner, codex_home) = (owner.clone(), codex_home.clone());
         let (home, data, ca_directory) = (home.clone(), data.clone(), ca_directory.clone());
@@ -277,7 +279,7 @@ async fn start_native_executor(
                 codex_home_env: Some(codex_home),
                 system_config_path: None,
             }
-            .into_serving()
+            .into_serving(global)
             .map_err(|_| {
                 opened
                     .diagnostics

@@ -1,6 +1,7 @@
 use super::{
     credential_broker::CredentialBrokerCache,
     encoding::{base64_encode, sha256_hex, uuid_v4},
+    environment_config::{EnvironmentConfigOptions, require_full_access},
     error::{
         Attribution, AuthorizationDenied, AuthorizationInput, Authorize, AuthorizeFn, BoxFuture,
         ExecutorError, Grant, ScopeContext, run_with_grant,
@@ -26,6 +27,7 @@ use super::{
         object_get, os_text, stringify_json, trim,
     },
 };
+use crate::resources::config::Configuration;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
@@ -1714,6 +1716,71 @@ impl Executor {
             );
         }
         entry.changed.notify_waiters();
+    }
+
+    pub async fn start_authenticated_process(
+        &self,
+        params: ExecParams,
+        ctx: &HandlerContext,
+        configuration: &Configuration,
+        environment_id: &str,
+        harness_key_sha256: &str,
+    ) -> Result<ExecResult, ExecutorError> {
+        self.check_not_closed()?;
+        let (source, binding) = configuration.native_dots_full_access_executor().map_err(|error| {
+            let source = error.source_path().and_then(Path::file_name).and_then(|name| name.to_str()).unwrap_or("ycoding.json or ycoding.jsonc");
+            ExecutorError::new(-32001, format!("Cannot read the full-access grant: check dots.fullAccessExecutor in trusted global {source}"))
+        })?;
+        let source = source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("ycoding.json or ycoding.jsonc");
+        let binding = binding.ok_or_else(|| ExecutorError::new(-32001, format!("Full access is not configured: set dots.fullAccessExecutor in trusted global {source}")))?;
+        if binding.environment_id != environment_id {
+            return Err(ExecutorError::new(
+                -32001,
+                format!(
+                    "Authenticated environment does not match dots.fullAccessExecutor.environmentId in trusted global {source}"
+                ),
+            ));
+        }
+        if binding.harness_key_sha256 != harness_key_sha256 {
+            return Err(ExecutorError::new(
+                -32001,
+                format!(
+                    "Authenticated harness key does not match dots.fullAccessExecutor.harnessKeySha256 in trusted global {source}"
+                ),
+            ));
+        }
+        if policy::process_requires_sandbox(params.sandbox.as_ref()).map_err(map_policy_error)? {
+            return Err(ExecutorError::new(
+                -32001,
+                "The requested sandbox or network restrictions are incompatible with full access; use an unrestricted profile",
+            ));
+        }
+        let managed_network = params
+            .managed_network
+            .as_ref()
+            .filter(|value| !matches!(value, PValue::Null));
+        if let Some(network) = managed_network {
+            policy::read_managed_network(network).map_err(map_policy_error)?;
+        }
+        if params.enforce_managed_network == Some(true)
+            || managed_network.is_some()
+            || params.network_proxy.is_some()
+        {
+            return Err(ExecutorError::new(
+                -32001,
+                "The requested managed network or proxy is incompatible with full access; use an unrestricted network profile",
+            ));
+        }
+        require_full_access(&EnvironmentConfigOptions {
+            system_requirements_path: self.0.options.system_requirements_path.clone(),
+            managed_config_path: self.0.options.managed_config_path.clone(),
+            ..EnvironmentConfigOptions::default()
+        })
+        .await?;
+        self.start_process(params, ctx).await
     }
 
     pub async fn start_process(

@@ -858,6 +858,34 @@ fn shell_params(id: &LosslessString, root: &std::path::Path, script: &str) -> Ex
 
 #[cfg(unix)]
 #[tokio::test]
+async fn dots_spoofed_metadata_does_not_grant_full_access() {
+    let root = workspace();
+    let scope = root.join("scope");
+    let outside = root.join("outside");
+    std::fs::create_dir(&scope).unwrap();
+    std::fs::create_dir(&outside).unwrap();
+    let (executor, ctx, _, _) = executor(|_| true, &scope).await;
+    let mut params = shell_params(&"spoof".into(), &outside, "printf launched > marker");
+    params.metadata = Some(
+        parse_json(&format!(
+            r#"{{"environmentId":"env-1","harnessKeySha256":"{}"}}"#,
+            "a".repeat(64)
+        ))
+        .unwrap(),
+    );
+    params.env = vec![("CODEX_SANDBOX_MODE".into(), "danger-full-access".into())];
+    let error = executor.start_process(params, &ctx).await.unwrap_err();
+    assert_eq!(
+        error.message.as_str(),
+        Some("Operation not permitted (os error 1)")
+    );
+    assert!(!outside.join("marker").exists());
+    executor.close().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn stdout_and_stderr_drain_completely_before_exited_and_closed_publish() {
     let root = workspace();
     let observed = observed_executor(&root).await;

@@ -144,6 +144,7 @@ async fn close_clears_queues_and_signals_streams_before_waiting_for_workers() {
     let stream = Arc::new(Stream {
         instance: 1,
         cipher: Arc::new(Identity),
+        harness_key_sha256: "a".repeat(64),
         closed,
         inbound: Mutex::default(),
         queue: Mutex::new(Queue {
@@ -231,7 +232,11 @@ impl Acceptor for Accept {
                 "synthetic-authorization".into(),
             )
             .await?;
-            Ok((vec![1], Arc::new(Identity) as Arc<dyn Cipher>))
+            Ok(Accepted {
+                response: vec![1],
+                cipher: Arc::new(Identity),
+                harness_key_sha256: "a".repeat(64),
+            })
         })
     }
 }

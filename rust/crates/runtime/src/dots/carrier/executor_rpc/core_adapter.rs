@@ -564,11 +564,22 @@ impl ExecutorHandler for CoreHandler {
     ) -> Boxed<'a, Result<ExecResult, HandlerError>> {
         Box::pin(async move {
             let (context, _bridge) = core_context(&ctx);
-            let result = self
-                .executor
-                .start_process(core_exec(params), &context)
-                .await
-                .map_err(failure)?;
+            let params = core_exec(params);
+            let result = match ctx.authenticated_executor {
+                Some(peer) => {
+                    self.executor
+                        .start_authenticated_process(
+                            params,
+                            &context,
+                            &peer.global,
+                            &peer.environment_id,
+                            &peer.harness_key_sha256,
+                        )
+                        .await
+                }
+                None => self.executor.start_process(params, &context).await,
+            }
+            .map_err(failure)?;
             Ok(ExecResult {
                 process_id: result.process_id,
                 sandbox_type: result
@@ -1087,6 +1098,7 @@ impl ExecutorConnection for CoreConnection {
             let handler_context = HandlerContext {
                 signal: ctx.signal.clone(),
                 session_id: ctx.session_id.clone(),
+                authenticated_executor: None,
             };
             let request = core_http_request(params);
             let (context, bridge) = core_context(&handler_context);

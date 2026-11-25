@@ -518,6 +518,13 @@ async fn runs_bidirectional_exchange_with_the_clatter_reference_peer() {
         1088 + 1088 + TAG_LEN + 32 + 1184 + TAG_LEN
     );
 
+    let mut raw = base64_decode(initiator_key["x25519_public_key"].as_str().unwrap());
+    raw.extend(base64_decode(
+        initiator_key["mlkem768_public_key"].as_str().unwrap(),
+    ));
+    let expected = hex_encode(aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, &raw).as_ref());
+    assert_eq!(accepted.harness_key_sha256, expected);
+
     let reply = peer.finish(&accepted.response);
     assert_eq!(reply["status"], "ok", "{reply}");
     let transport = accepted.transport;

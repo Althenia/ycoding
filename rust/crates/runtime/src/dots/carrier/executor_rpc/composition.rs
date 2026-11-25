@@ -19,6 +19,7 @@ use ycoding_core::{
         executor_scope::{LibraryProvider, executor_scopes},
     },
     platform::git,
+    resources::config::Configuration,
     session::store::Service as SessionStore,
 };
 
@@ -50,10 +51,10 @@ pub struct Serving {
 }
 
 impl Composition {
-    pub fn into_serving(self) -> Result<Serving, ExecutorError> {
+    pub fn into_serving(self, global: Arc<Configuration>) -> Result<Serving, ExecutorError> {
         let (_advertised, factory) = self.into_session_factory()?;
         Ok(Serving {
-            serve: serve(factory),
+            serve: serve(factory, global),
             #[cfg(test)]
             advertised: _advertised,
         })

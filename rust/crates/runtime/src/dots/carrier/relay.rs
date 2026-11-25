@@ -52,7 +52,11 @@ impl Cipher for noise::Transport {
 pub type Authorize = Box<dyn FnOnce(noise::PublicKey, String) -> Boxed<Result<(), ()>> + Send>;
 pub type Authorizer =
     Arc<dyn Fn(noise::PublicKey, String, String) -> Boxed<Result<(), ()>> + Send + Sync>;
-pub type Accepted = (Vec<u8>, Arc<dyn Cipher>);
+pub struct Accepted {
+    pub response: Vec<u8>,
+    pub cipher: Arc<dyn Cipher>,
+    pub harness_key_sha256: String,
+}
 
 pub trait Acceptor: Send + Sync {
     fn accept(
@@ -93,10 +97,11 @@ impl Acceptor for NoiseAcceptor {
             )
             .await
             .map_err(|_| ())?;
-            Ok((
-                accepted.response,
-                Arc::new(accepted.transport) as Arc<dyn Cipher>,
-            ))
+            Ok(Accepted {
+                response: accepted.response,
+                cipher: Arc::new(accepted.transport),
+                harness_key_sha256: accepted.harness_key_sha256,
+            })
         })
     }
 }
@@ -213,6 +218,7 @@ struct Inbound {
 struct Stream {
     instance: u64,
     cipher: Arc<dyn Cipher>,
+    harness_key_sha256: String,
     closed: watch::Sender<bool>,
     inbound: Mutex<Inbound>,
     queue: Mutex<Queue>,
@@ -257,6 +263,10 @@ impl Channel {
     #[cfg(test)]
     pub fn stream_id(&self) -> &str {
         &self.stream_id
+    }
+
+    pub fn harness_key_sha256(&self) -> &str {
+        &self.stream.harness_key_sha256
     }
 
     pub fn closed(&self) -> watch::Receiver<bool> {
@@ -589,7 +599,11 @@ impl Inner {
             .acceptor
             .accept(stream_id, request, authorize)
             .await;
-        let (response, cipher) = match completed {
+        let Accepted {
+            response,
+            cipher,
+            harness_key_sha256,
+        } = match completed {
             Ok(completed) => completed,
             Err(()) => {
                 let current = {
@@ -641,6 +655,7 @@ impl Inner {
             let stream = Arc::new(Stream {
                 instance: state.next_instance,
                 cipher,
+                harness_key_sha256,
                 closed,
                 inbound: Mutex::new(Inbound::default()),
                 queue: Mutex::new(Queue::default()),

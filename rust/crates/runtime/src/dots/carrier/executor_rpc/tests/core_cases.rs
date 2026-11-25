@@ -17,17 +17,24 @@ use ycoding_core::{
     ycoding_schema::{JsonValue, stringify_json},
 };
 
-struct Allow;
-impl Authorize for Allow {
+struct Authorizer(bool);
+impl Authorize for Authorizer {
     fn authorize(
         &self,
-        _input: AuthorizationInput,
+        input: AuthorizationInput,
     ) -> BoxFuture<'static, Result<Grant, AuthorizationDenied>> {
-        Box::pin(async { Ok(Grant::noop()) })
+        let allowed = self.0 || input.action != "shell";
+        Box::pin(async move {
+            if allowed {
+                Ok(Grant::noop())
+            } else {
+                Err(AuthorizationDenied::default())
+            }
+        })
     }
 }
 
-struct Scope(String);
+struct Scope(String, bool);
 impl ExecutorScope for Scope {
     fn session_id(&self) -> String {
         "ses_synthetic".to_owned()
@@ -36,21 +43,21 @@ impl ExecutorScope for Scope {
         vec![self.0.clone()]
     }
     fn authorization(&self) -> Arc<dyn Authorize> {
-        Arc::new(Allow)
+        Arc::new(Authorizer(self.1))
     }
     fn close(&self) -> BoxFuture<'_, Result<(), ExecutorError>> {
         Box::pin(async { Ok(()) })
     }
 }
 
-struct Provider(String);
+struct Provider(String, bool);
 impl ScopeProvider for Provider {
     fn scope_for(
         &self,
         _attribution: Option<Attribution>,
         _context: ScopeContext,
     ) -> BoxFuture<'_, Result<Arc<dyn ExecutorScope>, ExecutorError>> {
-        let scope: Arc<dyn ExecutorScope> = Arc::new(Scope(self.0.clone()));
+        let scope: Arc<dyn ExecutorScope> = Arc::new(Scope(self.0.clone(), self.1));
         Box::pin(async move { Ok(scope) })
     }
 }
@@ -71,8 +78,19 @@ fn uri(path: &Path) -> String {
 }
 
 async fn served(root: &Path) -> Harness {
-    let executor = Executor::new(ExecutorOptions {
-        scope_provider: Arc::new(Provider(root.to_string_lossy().into_owned())),
+    let handler = Arc::new(CoreHandler::new(executor(root, true)));
+    let harness = Harness::over(handler, Backend::new(), unadvertised_info_fn(), None);
+    let response = harness
+        .one(&request(1, "initialize", r#"{"clientName":"synthetic"}"#))
+        .await;
+    assert!(!has(&response, "error"), "{}", stringify_json(&response));
+    assert!(harness.rpc(&notification("initialized")).await.is_empty());
+    harness
+}
+
+fn executor(root: &Path, allow_shell: bool) -> Executor {
+    Executor::new(ExecutorOptions {
+        scope_provider: Arc::new(Provider(root.to_string_lossy().into_owned(), allow_shell)),
         answer_process: None,
         base_env: BTreeMap::new(),
         session_id: None,
@@ -89,20 +107,311 @@ async fn served(root: &Path) -> Harness {
         system_config_path: Some(root.join("etc/config.toml")),
         system_requirements_path: Some(root.join("etc/requirements.toml")),
         managed_config_path: Some(root.join("etc/managed_config.toml")),
-    });
-    let handler = Arc::new(CoreHandler::new(executor));
-    let harness = Harness::over(handler, Backend::new(), unadvertised_info_fn(), None);
-    let response = harness
-        .one(&request(1, "initialize", r#"{"clientName":"synthetic"}"#))
-        .await;
-    assert!(!has(&response, "error"), "{}", stringify_json(&response));
-    assert!(harness.rpc(&notification("initialized")).await.is_empty());
-    harness
+    })
 }
 
 fn result(response: &JsonValue) -> &JsonValue {
     assert!(!has(response, "error"), "{}", stringify_json(response));
     at(response, "result")
+}
+
+#[cfg(unix)]
+mod admission {
+    use super::*;
+    use crate::dots::carrier::{
+        executor_rpc::{core_adapter::session_backend, service},
+        relay_tests::Harness as Relay,
+        supervisor::{Diagnostics, Opened, Serve, ServeFailed, Sessions, Summary},
+        test_support,
+    };
+    use ycoding_core::resources::config::{Configuration, LoadOptions, Roots};
+
+    const ENVIRONMENT: &str = "environment-fixture";
+    const STREAM: &str = "authenticated-process-stream";
+    const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    struct Fixture(PathBuf);
+
+    struct Connected {
+        relay: Relay,
+        serving: tokio::task::JoinHandle<Result<(), ServeFailed>>,
+        session_id: String,
+    }
+
+    impl Connected {
+        async fn rpc(&self, id: u32, method: &str, params: &str) -> JsonValue {
+            self.relay.message(
+                STREAM,
+                id,
+                request(i64::from(id), method, params).as_bytes(),
+            );
+            self.relay.response(STREAM, id).await
+        }
+
+        async fn close(self) {
+            self.relay.close().await;
+            self.serving.await.unwrap().unwrap();
+        }
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let root = workspace();
+            std::fs::create_dir(root.join("work")).unwrap();
+            std::fs::create_dir(root.join("work/etc")).unwrap();
+            std::fs::create_dir_all(root.join("config/ycoding")).unwrap();
+            Self(root)
+        }
+
+        fn config(&self, environment: &str, digest: &str) -> String {
+            format!(
+                r#"{{"dots":{{"enabled":true,"profile":"synthetic","fullAccessExecutor":{{"environmentId":"{environment}","harnessKeySha256":"{digest}"}}}}}}"#
+            )
+        }
+
+        fn trusted(&self, document: &str) {
+            std::fs::write(self.0.join("config/ycoding/ycoding.json"), document).unwrap();
+        }
+
+        fn requirements(&self, modes: &str) {
+            std::fs::write(self.0.join("work/etc/requirements.toml"), modes).unwrap();
+        }
+
+        fn serving(&self, allow_shell: bool) -> (Serve, Arc<Sessions>, Diagnostics) {
+            let work = self.0.join("work");
+            let spoof = self.config(ENVIRONMENT, DIGEST);
+            std::fs::write(work.join("ycoding.json"), &spoof).unwrap();
+            let global = Configuration::load(LoadOptions {
+                directory: work.clone(),
+                roots: Roots::development(&self.0).unwrap(),
+                project: true,
+                file: None,
+                content: Some(spoof),
+                env: BTreeMap::new(),
+            })
+            .unwrap();
+
+            let diagnostics = Diagnostics::new(Arc::new(|_| {}));
+            let (clock, _armed) = test_support::clock();
+            let sessions = Sessions::new(Arc::new(clock), 5_000, diagnostics.clone());
+            let serve = service::serve(
+                Arc::new(move || Ok(session_backend(executor(&work, allow_shell)))),
+                Arc::new(global),
+            );
+            (serve, sessions, diagnostics)
+        }
+
+        async fn connect(
+            serve: &Serve,
+            sessions: &Arc<Sessions>,
+            diagnostics: &Diagnostics,
+            digest: &str,
+            resume: Option<&str>,
+        ) -> Connected {
+            let mut relay = Relay::standard().with_digest(digest);
+            let channel = relay.open(STREAM).await;
+            let serving = tokio::spawn(serve(Opened {
+                channel,
+                sessions: sessions.clone(),
+                environment_id: ENVIRONMENT.into(),
+                summary: Summary::default(),
+                diagnostics: diagnostics.clone(),
+            }));
+            let params = match resume {
+                Some(id) => format!(r#"{{"clientName":"synthetic","resumeSessionId":"{id}"}}"#),
+                None => r#"{"clientName":"synthetic"}"#.to_owned(),
+            };
+            relay.message(STREAM, 0, request(1, "initialize", &params).as_bytes());
+            let response = relay.response(STREAM, 1).await;
+            let initialized = result(&response);
+            let capabilities = at(at(initialized, "environmentInfo"), "capabilities");
+            for capability in [
+                "networkProxyLaunch",
+                "networkProxyReviewDomains",
+                "credentialMasking",
+                "credentialMaskingCustomProviders",
+            ] {
+                assert!(!has(capabilities, capability));
+            }
+            assert_eq!(
+                at(capabilities, "environmentConfigRead"),
+                &JsonValue::Bool(true)
+            );
+            let session_id = str_of(at(initialized, "sessionId"));
+            relay.message(STREAM, 1, notification("initialized").as_bytes());
+            Connected {
+                relay,
+                serving,
+                session_id,
+            }
+        }
+
+        async fn start(
+            &self,
+            connected: &Connected,
+            intent: &str,
+        ) -> (JsonValue, Option<JsonValue>) {
+            let params = format!(
+                r#"{{"processId":"admission","argv":["/bin/sh","-c","printf launched > ../marker"],"cwd":"{}","metadata":{{"environmentId":"{ENVIRONMENT}","harnessKeySha256":"{DIGEST}"}},"env":{{"YCODING_CONFIG_CONTENT":"{{}}","CODEX_SANDBOX_MODE":"danger-full-access"}}{intent}}}"#,
+                uri(&self.0.join("work")),
+            );
+            let response = connected.rpc(2, "process/start", &params).await;
+            let mut closed = None;
+            if has(&response, "result") {
+                for id in 3..13 {
+                    let read = connected
+                        .rpc(
+                            id,
+                            "process/read",
+                            r#"{"processId":"admission","waitMs":500}"#,
+                        )
+                        .await;
+                    if at(result(&read), "closed") == &JsonValue::Bool(true) {
+                        closed = Some(read);
+                        break;
+                    }
+                }
+                assert!(closed.is_some(), "process did not finish");
+            }
+            (response, closed)
+        }
+
+        async fn rejects(&self, intent: &str, expected_code: i64, guidance: &str) {
+            let (serve, sessions, diagnostics) = self.serving(true);
+            let connected = Self::connect(&serve, &sessions, &diagnostics, DIGEST, None).await;
+            let (response, _) = self.start(&connected, intent).await;
+            connected.close().await;
+            sessions.shutdown().await.unwrap();
+            self.assert_rejected(&response, expected_code, guidance);
+        }
+
+        fn assert_rejected(&self, response: &JsonValue, expected_code: i64, guidance: &str) {
+            assert!(has(response, "error"), "{}", stringify_json(response));
+            assert_eq!(error_code(response), expected_code);
+            assert!(
+                error_message(response).contains(guidance),
+                "{}",
+                stringify_json(response)
+            );
+            assert!(!self.0.join("marker").exists());
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn authenticated_start_runs_full_access_with_matching_trusted_grant() {
+        let fixture = Fixture::new();
+        fixture.trusted(&fixture.config(ENVIRONMENT, DIGEST));
+        fixture.requirements(r#"allowed_sandbox_modes = ["danger-full-access"]"#);
+        let (serve, sessions, diagnostics) = fixture.serving(true);
+        let connected = Fixture::connect(&serve, &sessions, &diagnostics, DIGEST, None).await;
+        let (response, closed) = fixture
+            .start(
+                &connected,
+                r#", "sandbox":{"permissions":{"type":"disabled"}}"#,
+            )
+            .await;
+        connected.close().await;
+        sessions.shutdown().await.unwrap();
+        assert_eq!(str_of(at(result(&response), "sandboxType")), "none");
+        let closed = closed.unwrap();
+        assert_eq!(num_of(at(result(&closed), "exitCode")), 0.0);
+        assert_eq!(
+            std::fs::read_to_string(fixture.0.join("marker")).unwrap(),
+            "launched"
+        );
+    }
+
+    #[tokio::test]
+    async fn authenticated_start_rejects_missing_grant_despite_request_and_local_spoofs() {
+        let fixture = Fixture::new();
+        fixture.rejects("", -32001, "dots.fullAccessExecutor").await;
+    }
+
+    #[tokio::test]
+    async fn authenticated_start_rejects_invalid_trusted_grant() {
+        let fixture = Fixture::new();
+        fixture.trusted(&fixture.config("*", DIGEST));
+        fixture.rejects("", -32001, "ycoding.json").await;
+    }
+
+    #[tokio::test]
+    async fn authenticated_start_rejects_grants_for_another_environment_or_key() {
+        for (environment, digest, guidance) in [
+            ("other-environment", DIGEST, "environmentId"),
+            (ENVIRONMENT, &"b".repeat(64), "harnessKeySha256"),
+        ] {
+            let fixture = Fixture::new();
+            fixture.trusted(&fixture.config(environment, digest));
+            fixture.rejects("", -32001, guidance).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn authenticated_start_rejects_incompatible_sandbox_and_network_requests() {
+        let fixture = Fixture::new();
+        fixture.trusted(&fixture.config(ENVIRONMENT, DIGEST));
+        fixture.rejects(r#", "sandbox":{"permissions":{"type":"managed","network":"enabled","file_system":{"type":"restricted","entries":[]}},"sandboxOverride":"bypassSandboxFirstAttempt"}"#, -32001, "sandbox").await;
+        fixture.rejects(r#", "sandbox":{"permissions":{"type":"managed","network":"restricted","file_system":{"type":"unrestricted"}}}"#, -32001, "network").await;
+        fixture
+            .rejects(r#", "enforceManagedNetwork":true"#, -32001, "network")
+            .await;
+        fixture
+            .rejects(
+                r#", "managedNetwork":{"loopbackPorts":[],"allowLocalBinding":false}"#,
+                -32001,
+                "network",
+            )
+            .await;
+        fixture.rejects(r#", "networkProxy":{"proxy":{"enabled":true,"mode":"limited","enableSocks5":false,"enableSocks5Udp":false,"allowUpstreamProxy":false,"dangerouslyAllowAllUnixSockets":false,"allowLocalBinding":false},"auditMetadata":{}}"#, -32001, "proxy").await;
+    }
+
+    #[tokio::test]
+    async fn authenticated_start_enforces_host_deployment_requirements() {
+        let fixture = Fixture::new();
+        fixture.trusted(&fixture.config(ENVIRONMENT, DIGEST));
+        fixture.requirements(r#"allowed_sandbox_modes = ["read-only"]"#);
+        fixture.rejects("", -32001, "requirements.toml").await;
+    }
+
+    #[tokio::test]
+    async fn authenticated_start_keeps_shell_authorization() {
+        let fixture = Fixture::new();
+        fixture.trusted(&fixture.config(ENVIRONMENT, DIGEST));
+        let (serve, sessions, diagnostics) = fixture.serving(false);
+        let connected = Fixture::connect(&serve, &sessions, &diagnostics, DIGEST, None).await;
+        let (response, _) = fixture.start(&connected, "").await;
+        connected.close().await;
+        sessions.shutdown().await.unwrap();
+        fixture.assert_rejected(&response, -32001, "Permission denied");
+    }
+
+    #[tokio::test]
+    async fn authenticated_start_checks_the_current_peer_after_resume() {
+        let fixture = Fixture::new();
+        fixture.trusted(&fixture.config(ENVIRONMENT, DIGEST));
+        let (serve, sessions, diagnostics) = fixture.serving(true);
+        let first = Fixture::connect(&serve, &sessions, &diagnostics, DIGEST, None).await;
+        let id = first.session_id.clone();
+        let (response, closed) = fixture.start(&first, "").await;
+        first.close().await;
+        result(&response);
+        assert!(closed.is_some());
+        std::fs::remove_file(fixture.0.join("marker")).unwrap();
+
+        let resumed =
+            Fixture::connect(&serve, &sessions, &diagnostics, &"b".repeat(64), Some(&id)).await;
+        assert_eq!(resumed.session_id, id);
+        let (response, _) = fixture.start(&resumed, "").await;
+        resumed.close().await;
+        sessions.shutdown().await.unwrap();
+        fixture.assert_rejected(&response, -32001, "harnessKeySha256");
+    }
 }
 
 #[tokio::test]

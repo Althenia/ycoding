@@ -1045,6 +1045,63 @@ fn path_text(path: &Option<PathBuf>, fallback: &str) -> String {
     )
 }
 
+pub async fn require_full_access(options: &EnvironmentConfigOptions) -> Result<(), ExecutorError> {
+    let requirements_file = path_text(&options.system_requirements_path, SYSTEM_REQUIREMENTS_PATH);
+    let managed_file = path_text(&options.managed_config_path, MANAGED_CONFIG_PATH);
+    for (file, managed) in [(&requirements_file, false), (&managed_file, true)] {
+        let contents = match tokio::fs::read_to_string(file).await {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(ExecutorError::new(
+                    -32603,
+                    format!(
+                        "failed to read deployment requirements {file}: {}",
+                        io_message(&error)
+                    ),
+                ));
+            }
+        };
+        let config = parse_file(file, &contents).map_err(|_| {
+            ExecutorError::new(
+                -32603,
+                format!("invalid TOML in deployment requirements {file}"),
+            )
+        })?;
+        let requirements = if managed {
+            legacy_requirements(&config).map_err(|_| {
+                ExecutorError::new(
+                    -32603,
+                    format!("invalid deployment requirements in {file}; check sandbox_mode and approval settings"),
+                )
+            })?
+        } else {
+            config
+        };
+        if let Some(value) = requirements.get("allowed_sandbox_modes") {
+            let TomlValue::Array(modes) = value else {
+                return Err(ExecutorError::new(
+                    -32603,
+                    format!("invalid allowed_sandbox_modes in {file}"),
+                ));
+            };
+            if !modes.iter().all(|mode| matches!(mode, TomlValue::String(mode) if ["read-only", "workspace-write", "danger-full-access"].contains(&mode.as_str()))) {
+                return Err(ExecutorError::new(-32603, format!("invalid allowed_sandbox_modes in {file}")));
+            }
+            if !modes
+                .iter()
+                .any(|mode| matches!(mode, TomlValue::String(mode) if mode == "danger-full-access"))
+            {
+                return Err(ExecutorError::new(
+                    -32001,
+                    format!("deployment requirements in {file} prohibit danger-full-access"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn load_stacks(
     cwd: &str,
     codex_home: &str,

@@ -751,7 +751,17 @@ fn read_sandbox(value: &JsonValue) -> Result<ParsedSandbox, PolicyError> {
         _ => Err(bad_sandbox()),
     }
 }
-fn read_managed_network(value: &JsonValue) -> Result<(), PolicyError> {
+pub(super) fn process_requires_sandbox(sandbox: Option<&JsonValue>) -> Result<bool, PolicyError> {
+    let sandbox = present(sandbox).map(read_sandbox).transpose()?;
+    Ok(sandbox.is_some_and(|sandbox| {
+        sandbox.profile == Profile::External
+            || sandbox.restricted
+            || sandbox.network == "restricted"
+            || sandbox.override_mode == "escalatedSandboxWithRestrictions"
+    }))
+}
+
+pub(super) fn read_managed_network(value: &JsonValue) -> Result<(), PolicyError> {
     let context = record(value)?;
     let ports = object_get(context, "loopbackPorts")
         .and_then(array)

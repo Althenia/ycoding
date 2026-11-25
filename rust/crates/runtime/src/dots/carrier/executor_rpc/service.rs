@@ -13,7 +13,7 @@ use crate::dots::carrier::supervisor::{
     Serve, ServeFailed, Summary,
 };
 use std::sync::{Arc, Mutex};
-use ycoding_core::ycoding_schema::JsonValue;
+use ycoding_core::{resources::config::Configuration, ycoding_schema::JsonValue};
 
 pub type CloseFn = Box<dyn FnOnce() -> Boxed<'static, Result<(), ()>> + Send>;
 
@@ -118,6 +118,7 @@ impl Resources for HandlerResources {
 
 pub struct SupervisedHandler {
     connection: Connection,
+    authenticated_executor: Option<Arc<AuthenticatedExecutor>>,
 }
 
 fn backend(resources: &Arc<dyn Resources>) -> Result<&HandlerResources, HandlerError> {
@@ -127,8 +128,12 @@ fn backend(resources: &Arc<dyn Resources>) -> Result<&HandlerResources, HandlerE
 }
 
 impl SupervisedHandler {
+    #[cfg(test)]
     pub fn new(connection: Connection) -> Self {
-        Self { connection }
+        Self {
+            connection,
+            authenticated_executor: None,
+        }
     }
 
     pub fn detach(&self) {
@@ -143,7 +148,14 @@ pub fn environment_info_of(handler: &Arc<SupervisedHandler>) -> EnvironmentInfoF
         let future: Boxed<'static, Result<EnvironmentInfo, HandlerError>> = Box::pin(async move {
             let resources = handler.connection.attached().map_err(refusal)?;
             let backend = backend(&resources)?;
-            (backend.environment_info)().await
+            let mut info = (backend.environment_info)().await?;
+            if handler.authenticated_executor.is_some() {
+                info.capabilities.network_proxy_launch = None;
+                info.capabilities.network_proxy_review_domains = None;
+                info.capabilities.credential_masking = None;
+                info.capabilities.credential_masking_custom_providers = None;
+            }
+            Ok(info)
         });
         future
     })
@@ -222,7 +234,21 @@ impl ExecutorHandler for SupervisedHandler {
         })
     }
 
-    delegate!(start_process, ExecParams, ExecResult);
+    fn start_process<'a>(
+        &'a self,
+        params: ExecParams,
+        mut ctx: HandlerContext,
+    ) -> Boxed<'a, Result<ExecResult, HandlerError>> {
+        Box::pin(async move {
+            let resources = self.connection.attached().map_err(refusal)?;
+            ctx.authenticated_executor = self.authenticated_executor.clone();
+            backend(&resources)?
+                .handler
+                .start_process(params, ctx)
+                .await
+        })
+    }
+
     delegate!(read_process, ReadParams, ReadResult);
     delegate!(write_process, WriteParams, WriteResult);
     delegate!(signal_process, SignalParams, ());
@@ -305,10 +331,19 @@ fn record_summary(summary: &Summary, record: &DiagnosticRecord) {
     }
 }
 
-async fn serve_channel(factory: SessionFactory, opened: Opened) -> Result<(), ServeFailed> {
-    let handler = Arc::new(SupervisedHandler::new(
-        opened.sessions.connect(opener(factory)),
-    ));
+async fn serve_channel(
+    factory: SessionFactory,
+    global: Arc<Configuration>,
+    opened: Opened,
+) -> Result<(), ServeFailed> {
+    let handler = Arc::new(SupervisedHandler {
+        connection: opened.sessions.connect(opener(factory)),
+        authenticated_executor: Some(Arc::new(AuthenticatedExecutor {
+            global,
+            environment_id: opened.environment_id,
+            harness_key_sha256: opened.channel.harness_key_sha256().to_owned(),
+        })),
+    });
     let summary = opened.summary.clone();
     let observer: DiagnosticObserver = Arc::new(move |record| {
         record_summary(&summary, &record);
@@ -329,11 +364,11 @@ async fn serve_channel(factory: SessionFactory, opened: Opened) -> Result<(), Se
     }
 }
 
-pub fn serve(factory: SessionFactory) -> Serve {
+pub fn serve(factory: SessionFactory, global: Arc<Configuration>) -> Serve {
     Arc::new(move |opened| {
-        let factory = factory.clone();
+        let (factory, global) = (factory.clone(), global.clone());
         let future: PortBoxed<Result<(), ServeFailed>> =
-            Box::pin(async move { serve_channel(factory, opened).await });
+            Box::pin(async move { serve_channel(factory, global, opened).await });
         future
     })
 }

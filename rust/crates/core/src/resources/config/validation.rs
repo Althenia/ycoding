@@ -28,6 +28,8 @@ enum Shape {
     Advisory,
     Dots,
     DotsName,
+    DotsEnvironment,
+    DotsDigest,
     McpServer,
     McpTimeout,
 }
@@ -267,6 +269,13 @@ const DOTS: Shape = Shape::Object(&[
     optional("enabled", Shape::Bool),
     optional("profile", Shape::Nonempty),
     optional("name", Shape::DotsName),
+    optional(
+        "fullAccessExecutor",
+        Shape::Object(&[
+            required("environmentId", Shape::DotsEnvironment),
+            required("harnessKeySha256", Shape::DotsDigest),
+        ]),
+    ),
 ]);
 const ACCOUNT_CONNECTORS: Shape = Shape::Object(&[optional(
     "chatgpt",
@@ -756,6 +765,20 @@ fn inspect(value: &JsonValue, shape: Shape, path: &JsonPath) -> Result<JsonValue
                 Shape::Enum(allowed) => domain::literal_enum(value, allowed, path).is_ok(),
                 Shape::Color => agent::Color::decode(value).is_ok(),
                 Shape::MemoryLimit => shell::MemoryLimitMb::decode(value).is_ok(),
+                Shape::DotsEnvironment => LosslessString::decode(value).is_ok_and(|text| {
+                    text.as_str().is_some_and(|s| {
+                        (1..=256).contains(&s.len())
+                            && s.bytes()
+                                .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+                    })
+                }),
+                Shape::DotsDigest => LosslessString::decode(value).is_ok_and(|text| {
+                    text.as_str().is_some_and(|s| {
+                        s.len() == 64
+                            && s.bytes()
+                                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                    })
+                }),
                 Shape::DotsName => LosslessString::decode(value).is_ok_and(|text| {
                     let units = text.code_units().collect::<Vec<_>>();
                     (1..=100).contains(&units.len())

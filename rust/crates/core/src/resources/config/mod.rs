@@ -15,6 +15,7 @@ mod roots;
 pub mod standalone;
 mod validation;
 mod variable;
+pub use native_dots::FullAccessExecutorBinding;
 pub use operations::{
     Endpoint, EndpointApi, EndpointModel, EndpointWorker, Mutation, MutationPolicy,
     ProviderConfiguration, Scope, Target, WriteError, native_package_declaration,
@@ -413,8 +414,20 @@ fn load_file(
         }
         Err(cause) => return Err(roots::io_error(path, cause)),
     };
+    let decoded = decode_file(path, options, &text)?;
+    diagnostics.extend(decoded.diagnostics);
+    if let Some(info) = decoded.info {
+        entries.push(Entry::Document {
+            path: Some(path.into()),
+            info,
+        });
+    }
+    Ok(())
+}
+
+fn decode_file(path: &Path, options: &LoadOptions, text: &str) -> Result<DecodedDocument, Error> {
     let text = variable::substitute(
-        &text,
+        text,
         ParseSource::Path(path),
         &options.roots.os_home,
         &options.env,
@@ -427,15 +440,7 @@ fn load_file(
         message: "Configuration source path is not valid Unicode".into(),
         cause: None,
     })?;
-    let decoded = decode_document(&text, target);
-    diagnostics.extend(decoded.diagnostics);
-    if let Some(info) = decoded.info {
-        entries.push(Entry::Document {
-            path: Some(path.into()),
-            info,
-        });
-    }
-    Ok(())
+    Ok(decode_document(&text, target))
 }
 
 fn read_text(path: &Path) -> std::io::Result<String> {

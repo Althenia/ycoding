@@ -16,7 +16,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::{Notify, Semaphore, mpsc};
 use ycoding_core::dots::noise;
 
 fn frame(stream: &str, body: Body) -> Vec<u8> {
@@ -308,6 +308,7 @@ struct Fake {
     mode: Mutex<Mode>,
     gate: Arc<Semaphore>,
     calls: AtomicUsize,
+    digest: Mutex<String>,
 }
 impl Acceptor for Fake {
     fn accept(
@@ -317,6 +318,7 @@ impl Acceptor for Fake {
         authorize: Authorize,
     ) -> Pin<Box<dyn Future<Output = Result<Accepted, ()>> + Send>> {
         let mode = *self.mode.lock().unwrap();
+        let digest = self.digest.lock().unwrap().clone();
         self.calls.fetch_add(1, Ordering::SeqCst);
         let gate = self.gate.clone();
         Box::pin(async move {
@@ -338,18 +340,20 @@ impl Acceptor for Fake {
                     .await?;
                 }
             }
-            Ok((
-                b"handshake-response".to_vec(),
-                Arc::new(Xor) as Arc<dyn Cipher>,
-            ))
+            Ok(Accepted {
+                response: b"handshake-response".to_vec(),
+                cipher: Arc::new(Xor),
+                harness_key_sha256: digest,
+            })
         })
     }
 }
 
-struct Harness {
+pub(super) struct Harness {
     carrier: Carrier,
     fake: Arc<Fake>,
     sent: Arc<Mutex<Vec<Frame>>>,
+    output_ready: Arc<Notify>,
     refuse_output: Arc<AtomicBool>,
     validations: Arc<Mutex<Vec<(String, String)>>>,
     deny_validation: Arc<AtomicBool>,
@@ -364,11 +368,13 @@ impl Harness {
             mode: Mutex::new(Mode::Accept),
             gate: Arc::new(Semaphore::new(0)),
             calls: AtomicUsize::new(0),
+            digest: Mutex::new("a".repeat(64)),
         });
         let sent = Arc::new(Mutex::new(Vec::new()));
+        let output_ready = Arc::new(Notify::new());
         let refuse_output = Arc::new(AtomicBool::new(false));
         let output: Output = {
-            let (sent, refuse) = (sent.clone(), refuse_output.clone());
+            let (sent, ready, refuse) = (sent.clone(), output_ready.clone(), refuse_output.clone());
             Arc::new(move |bytes| {
                 if refuse.load(Ordering::SeqCst) {
                     return Err(());
@@ -376,6 +382,7 @@ impl Harness {
                 sent.lock()
                     .unwrap()
                     .push(wire::decode(&bytes).expect("carrier emitted an undecodable frame"));
+                ready.notify_one();
                 Ok(())
             })
         };
@@ -426,6 +433,7 @@ impl Harness {
             carrier,
             fake,
             sent,
+            output_ready,
             refuse_output,
             validations,
             deny_validation,
@@ -435,8 +443,14 @@ impl Harness {
         }
     }
 
-    fn standard() -> Self {
+    pub(super) fn standard() -> Self {
         Self::new(4 * 1024 * 1024, 32 * 1024 * 1024)
+    }
+
+    #[cfg(unix)]
+    pub(super) fn with_digest(self, digest: &str) -> Self {
+        *self.fake.digest.lock().unwrap() = digest.to_owned();
+        self
     }
 
     fn deliver(&self, stream: &str, body: Body) {
@@ -464,7 +478,7 @@ impl Harness {
         );
     }
 
-    fn message(&self, stream: &str, seq: u32, message: &[u8]) {
+    pub(super) fn message(&self, stream: &str, seq: u32, message: &[u8]) {
         self.data(stream, seq, &wire::frame_message(message).unwrap());
     }
 
@@ -482,12 +496,47 @@ impl Harness {
             .count()
     }
 
-    async fn open(&mut self, stream: &str) -> Channel {
+    pub(super) async fn open(&mut self, stream: &str) -> Channel {
         self.handshake(stream);
         tokio::time::timeout(Duration::from_secs(5), self.channels.recv())
             .await
             .expect("no channel opened")
             .unwrap()
+    }
+
+    pub(super) async fn response(
+        &self,
+        stream: &str,
+        id: u32,
+    ) -> ycoding_core::ycoding_schema::JsonValue {
+        use ycoding_core::ycoding_schema::{JsonValue, parse_json};
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let mut decoder = MessageDecoder::default();
+            let mut seen = 0;
+            loop {
+                {
+                    let sent = self.sent.lock().unwrap();
+                    for frame in &sent[seen..] {
+                        if frame.stream_id == stream && let Body::Data { payload, .. } = &frame.body {
+                            for message in decoder.push(&Xor.decrypt(payload).unwrap()).unwrap() {
+                                let response = parse_json(std::str::from_utf8(&message).unwrap()).unwrap();
+                                if matches!(&response, JsonValue::Object(object) if object.get(&"id".into()) == Some(&JsonValue::Number(f64::from(id)))) {
+                                    return response;
+                                }
+                            }
+                        }
+                    }
+                    seen = sent.len();
+                }
+                self.output_ready.notified().await;
+            }
+        })
+        .await
+        .expect("no matching RPC response")
+    }
+
+    pub(super) async fn close(self) {
+        self.carrier.close().await.unwrap();
     }
 }
 
@@ -510,6 +559,7 @@ async fn a_handshake_is_authorized_once_answered_and_opens_a_channel() {
     let mut harness = Harness::standard();
     let channel = harness.open("stream-1").await;
     assert_eq!(channel.stream_id(), "stream-1");
+    assert_eq!(channel.harness_key_sha256(), "a".repeat(64));
     assert_eq!(
         harness.validations.lock().unwrap().as_slice(),
         [("stream-1".to_owned(), "harness-authorization".to_owned())]

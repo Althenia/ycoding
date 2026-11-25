@@ -271,10 +271,11 @@ impl relay::Acceptor for Accepting {
                 "harness-authorization".into(),
             )
             .await?;
-            Ok((
-                b"handshake-response".to_vec(),
-                Arc::new(Plain) as Arc<dyn relay::Cipher>,
-            ))
+            Ok(relay::Accepted {
+                response: b"handshake-response".to_vec(),
+                cipher: Arc::new(Plain),
+                harness_key_sha256: "a".repeat(64),
+            })
         })
     }
 }

@@ -15,6 +15,7 @@ use std::{
 use ycoding_core::cca::executor::{
     PrepareExecutorError, PrepareExecutorInput, PreparedExecutor, prepare_executor,
 };
+use ycoding_core::resources::config::{LoadOptions, Roots};
 
 struct Directory(PathBuf);
 
@@ -143,7 +144,16 @@ fn advertised_metadata_is_the_frozen_core_snapshot_without_scope_effects() {
             let expected = environment_info(fixture.prepared.environment_info());
             let composition = fixture.composition();
             assert_eq!(fixture.host.subscriptions(), baseline_subscriptions);
-            let serving = composition.into_serving().unwrap();
+            let global = Configuration::load(LoadOptions {
+                directory: fixture.directory.0.clone(),
+                roots: Roots::development(&fixture.directory.0).unwrap(),
+                project: false,
+                file: None,
+                content: None,
+                env: BTreeMap::new(),
+            })
+            .unwrap();
+            let serving = composition.into_serving(Arc::new(global)).unwrap();
             assert_eq!(serving.advertised, expected);
             assert_eq!(
                 serving.advertised.shell.path.as_str(),
