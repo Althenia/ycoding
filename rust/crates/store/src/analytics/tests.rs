@@ -1230,3 +1230,51 @@ fn staged_snapshot_reads_exclude_admission_and_survive_delivery_only_writes() {
     );
     assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 4);
 }
+
+#[test]
+fn maintenance_restarts_a_rebuild_invalidated_by_a_concurrent_purge_instead_of_failing() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let (root, store, worker) = setup();
+    drop(worker);
+    put(&store, 1, 10);
+    let engine =
+        crate::analytics::Engine::start(store.client(), root.0.join("derived"), SOURCES).unwrap();
+    let (started, reached) = std::sync::mpsc::channel();
+    let (release, barrier) = std::sync::mpsc::channel();
+    *PAGE_BARRIER.lock().unwrap() = Some((started, barrier));
+    let client = store.client();
+    let invalidator = std::thread::spawn(move || {
+        reached
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .unwrap();
+        client
+            .submit(|tx| privacy_changed(tx, Vec::new(), true))
+            .unwrap()
+            .wait()
+            .unwrap();
+        release.send(()).unwrap();
+    });
+    let mut outcomes = Vec::new();
+    loop {
+        let outcome = engine.maintain().unwrap();
+        outcomes.push(outcome);
+        if outcome == crate::analytics::Maintenance::Complete {
+            break;
+        }
+        assert!(outcomes.len() < 16, "{outcomes:?}");
+    }
+    invalidator.join().unwrap();
+    assert_eq!(outcomes[0], crate::analytics::Maintenance::Pending);
+    let delivery = store
+        .snapshot()
+        .unwrap()
+        .get::<DeliveryTable>(&[])
+        .unwrap()
+        .unwrap();
+    assert!(delivery.valid && !delivery.rebuilding && !delivery.pending_purge());
+    assert_eq!(
+        engine.report(queries()).unwrap()[0],
+        vec![vec![Value::BigInt(10)]]
+    );
+    engine.shutdown().unwrap();
+}

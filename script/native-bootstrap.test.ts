@@ -36,6 +36,68 @@ test("Rust setup pins tools and verifies protoc before extracting cached archive
   expect(before).toContain("key: ${{ runner.os }}-${{ runner.arch }}-rustup-1.98.1")
 })
 
+test("optional sccache installation verifies pinned archives before use", () => {
+  const action = readFileSync(path.join(root, ".github/actions/setup-rust/action.yml"), "utf8")
+  const step = (name: string) => action.split(`- name: ${name}\n`)[1]?.split("\n    - name: ")[0] ?? ""
+  expect(action).toContain('  sccache:\n    description: "Install the checksum-verified sccache compiler wrapper"\n    required: false\n    default: "false"')
+  const restore = step("Cache sccache archive")
+  const install = step("Install sccache")
+  const save = step("Save sccache archive")
+  expect(restore).toContain("if: inputs.sccache == 'true'")
+  expect(restore).toContain("uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9")
+  expect(restore).toContain("key: ${{ runner.os }}-${{ runner.arch }}-sccache-archive-0.19.0")
+  expect(install).toContain("if: inputs.sccache == 'true'")
+  expect(install).toContain("version=0.19.0")
+  expect(install).toContain("macOS-ARM64) target=aarch64-apple-darwin; sha256=a35a0b7d622618774bc1bb8102d72562dfb21e619f88b153b370d7f89bc286af")
+  expect(install).toContain("Linux-X64) target=x86_64-unknown-linux-musl; sha256=aa73c7270c997894038c0d8f0d297865f57569e1687883322bc431713d4bb9dd")
+  expect(install).toContain('*) echo "Unsupported runner for sccache $version: $RUNNER_OS-$RUNNER_ARCH" >&2; exit 1 ;;')
+  expect(install).toContain(`test "$(shasum -a 256 < "$archive" | cut -d' ' -f1)" = "$sha256" || { echo "sccache checksum mismatch for $target" >&2; exit 1; }`)
+  const verify = install.indexOf('test "$(shasum -a 256')
+  expect(verify).toBeGreaterThan(install.indexOf('curl --fail'))
+  expect(verify).toBeLessThan(install.indexOf('tar -xzf "$archive"'))
+  expect(install.indexOf('tar -xzf "$archive"')).toBeLessThan(install.indexOf('"$executable" --version'))
+  expect(install).toContain('echo "$(dirname "$executable")" >> "$GITHUB_PATH"')
+  expect(save).toContain("uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9")
+  expect(save).toContain("if: inputs.sccache == 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && steps.sccache-archive.outputs.cache-hit != 'true'")
+  expect(save).toContain("key: ${{ steps.sccache-archive.outputs.cache-primary-key }}")
+  for (const cache of [restore, save]) expect(cache).toContain("path: ${{ runner.temp }}/sccache-archive-0.19.0")
+})
+
+test("generic Rust dependency cache keys on lockfile and vendor and saves only through the purging composite", () => {
+  const action = readFileSync(path.join(root, ".github/actions/setup-rust/action.yml"), "utf8")
+  const save = readFileSync(path.join(root, ".github/actions/setup-rust/save/action.yml"), "utf8")
+  const restore = action.split("- name: Restore Rust dependencies and build artifacts\n")[1]?.split("\n    - name: ")[0] ?? ""
+  expect(restore).toContain("if: inputs.release-cache == ''")
+  expect(restore).toContain("id: cargo-cache")
+  expect(restore).toContain("uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9")
+  expect(restore).toContain("key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml', 'rust/vendor/**') }}\n")
+  expect(restore).toContain("restore-keys: |\n          ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-\n")
+  expect(restore).not.toContain("**/*.rs")
+  expect(action).toContain("value: ${{ steps.cargo-cache.outputs.cache-hit }}")
+  expect(action).toContain("value: ${{ steps.cargo-cache.outputs.cache-primary-key }}")
+  expect(action).not.toContain("- name: Cache Rust dependencies and build artifacts")
+  const purge = save.split("- name: Remove workspace build artifacts\n")[1]?.split("\n    - name: ")[0] ?? ""
+  const saveStep = save.split("- name: Save Rust dependencies and build artifacts\n")[1] ?? ""
+  for (const step of [purge, saveStep]) expect(step).toContain("if: always() && inputs.cache-key != '' && inputs.cache-hit != 'true'")
+  expect(purge).toContain("cargo metadata --locked --manifest-path rust/Cargo.toml --no-deps")
+  expect(purge).toContain('rm -rf "$profile/build/$name"')
+  expect(saveStep).toContain("uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9")
+  expect(saveStep).toContain("key: ${{ inputs.cache-key }}")
+  expect(save.indexOf("- name: Remove workspace build artifacts")).toBeLessThan(save.indexOf("- name: Save Rust dependencies and build artifacts"))
+  expect(saveStep.match(/path: \|\n([\s\S]+?)\n\s+key:/)?.[1]?.trim().split(/\n\s*/)).toEqual(
+    restore.match(/path: \|\n([\s\S]+?)\s+key:/)?.[1]?.trim().split(/\n\s*/),
+  )
+})
+
+test("vendored timestamps normalize only after an exact dependency cache hit", () => {
+  const action = readFileSync(path.join(root, ".github/actions/setup-rust/action.yml"), "utf8")
+  const step = action.split("- name: Normalize vendored source timestamps\n")[1]?.split("\n    - name: ")[0] ?? ""
+  expect(step).toContain("if: steps.release-cache.outputs.cache-hit == 'true' || steps.cargo-cache.outputs.cache-hit == 'true'")
+  expect(step).toContain("run: find rust/vendor -exec touch -t 200001010000 {} +")
+  expect(action.indexOf("- name: Restore Apple Silicon release dependencies")).toBeLessThan(action.indexOf("- name: Normalize vendored source timestamps"))
+  expect(action.indexOf("- name: Restore Rust dependencies and build artifacts")).toBeLessThan(action.indexOf("- name: Normalize vendored source timestamps"))
+})
+
 test("Rust notices commands remain available", () => {
   const scripts = json("package.json").scripts
   expect(scripts["generate:rust-notices"]).toBe("bun script/rust-notices.ts")
@@ -75,7 +137,21 @@ test("only the default-branch Apple Silicon runtime producer writes the release 
   )
   expect(producer).toContain("- name: Save Apple Silicon release dependencies")
   expect(producer).toContain("release-cache: writer")
-  expect(producer).not.toContain("secrets.")
+  const stage = producer.split("- name: Stage Apple Silicon release runtime\n")[1]?.split("\n      - name: ")[0] ?? ""
+  const oauth = ["YCODING_ANTIGRAVITY_CLIENT_ID", "YCODING_ANTIGRAVITY_CLIENT_SECRET", "YCODING_MUSE_CLIENT_ID", "YCODING_MUSE_CLIENT_SECRET"]
+  expect([...producer.matchAll(/secrets\.([A-Z_]+)/g)].map((match) => match[1])).toEqual(oauth)
+  for (const name of oauth) expect(stage).toContain(`${name}: \${{ secrets.${name} }}`)
+  for (const name of ["YCODING_MACOS_SIGNING_P12", "YCODING_MACOS_SIGNING_PASSWORD"]) {
+    expect([...build.matchAll(new RegExp(`secrets\\.${name}`, "g"))]).toHaveLength(1)
+    expect(packagers.split("\n      - name: ")[0]).toContain(`secrets.${name}`)
+  }
+  const check = "for name in YCODING_ANTIGRAVITY_CLIENT_ID YCODING_ANTIGRAVITY_CLIENT_SECRET YCODING_MUSE_CLIENT_ID; do"
+  expect(stage.split(check)).toHaveLength(3)
+  expect(stage).toContain('test -n "${!name}" || { echo "Missing $name Actions secret" >&2; exit 1; }')
+  expect(stage).toContain('LC_ALL=C grep -qaF -- "${!name}" "$RUNNER_TEMP/release-runtime/ycoding-runtime" || { echo "The release runtime does not embed $name" >&2; exit 1; }')
+  const buildIndex = stage.indexOf('bun packages/cli/script/runtime.ts stage-release')
+  expect(buildIndex).toBeGreaterThan(stage.indexOf(check))
+  expect(buildIndex).toBeLessThan(stage.lastIndexOf(check))
   expect(packagers).not.toContain("release-cache:")
   expect(packagers).not.toContain("actions/cache/save@")
 })

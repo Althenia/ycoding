@@ -14,7 +14,7 @@ The Effect entrypoint uses canonical decoded values such as `Session.ID`, `Locat
 
 The Promise root remains structural and has no Core or Effect runtime dependency. `/effect` depends only on Effect, Schema, and Protocol and is browser-bundle safe. Bundle-boundary tests enforce both import graphs.
 
-The local v5 client reports a request that loses its socket before transmission as `unsent`. A transmitted mutation without a result stays `unknown`; reconnect never sends it again. A scoped resync lets the affected stream deliver its buffered events in order, then fails that stream with `resync`. Other scopes keep receiving events. Closing or replacing the socket discards unread events from streams that socket still owns.
+The local v5 client reports a request that loses its socket before transmission as `unsent`. `V5ClientError.status` carries that classification; its message gives the specific reason, or names the request and the next step for its status when no reason is known. A transmitted mutation without a result stays `unknown`; reconnect never sends it again. A scoped resync lets the affected stream deliver its buffered events in order, then fails that stream with `resync`. Other scopes keep receiving events. Closing or replacing the socket discards unread events from streams that socket still owns.
 
 ## Local service lifecycle
 

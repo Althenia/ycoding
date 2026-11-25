@@ -22,6 +22,15 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.13.5",
+    date: "2026-11-25",
+    title: "Account sign-in in release builds",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Antigravity and Muse account sign-in work in release builds." },
+    ],
+  },
+  {
     version: "0.13.1",
     date: "2026-11-25",
     title: "One Rust workspace and native plugins",

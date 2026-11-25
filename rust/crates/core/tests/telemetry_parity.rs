@@ -736,3 +736,71 @@ async fn housekeeping_that_is_already_stopped_returns_a_finished_task_without_pr
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     store.shutdown().unwrap();
 }
+
+fn delivery(store: &Store) -> analytics::Delivery {
+    store
+        .client()
+        .snapshot()
+        .unwrap()
+        .get::<analytics::DeliveryTable>(&[])
+        .unwrap()
+        .unwrap()
+}
+
+fn mirrored_rows(store: &Store) -> i64 {
+    let rows = store
+        .client()
+        .analytics()
+        .unwrap()
+        .report(vec![analytics::Query {
+            sql: "SELECT count(*) FROM web_latency",
+            parameters: Vec::new(),
+            max_rows: 1,
+        }])
+        .unwrap();
+    let analytics::Value::BigInt(count) = rows[0][0][0] else {
+        panic!("unexpected count {:?}", rows[0][0][0]);
+    };
+    count
+}
+
+#[tokio::test]
+async fn routine_cap_and_age_pruning_update_derived_analytics_without_a_rebuild() {
+    let (store, service, time) = world();
+    consent(&service, true).await;
+    let value = Document::new(sample().encode()).unwrap();
+    for offset in (0..MAX_ROWS).step_by(1000) {
+        let value = value.clone();
+        store
+            .client()
+            .submit(move |tx| {
+                for row in offset..(offset + 1000).min(MAX_ROWS) {
+                    resources::append_latency(tx, if row < 10 { 0 } else { 100 }, &value)?;
+                }
+                Ok(())
+            })
+            .unwrap()
+            .await
+            .unwrap();
+    }
+    time.store(100, Ordering::SeqCst);
+    assert_eq!(service.list(None, None).await.unwrap().data.len(), 60);
+    let settled = delivery(&store);
+    assert!(settled.valid && !settled.rebuilding && !settled.purge_all && settled.purges.is_empty());
+    for batch in 0..3 {
+        service.append(vec![sample(), sample()]).await.unwrap();
+        let current = delivery(&store);
+        assert_eq!(current.generation, settled.generation, "batch {batch}");
+        assert!(current.valid && !current.purge_all, "batch {batch}");
+        assert_eq!(count_rows(&store), MAX_ROWS);
+        assert_eq!(mirrored_rows(&store), MAX_ROWS as i64);
+    }
+    time.store(RETENTION_MS + 1, Ordering::SeqCst);
+    service.append(vec![sample()]).await.unwrap();
+    let current = delivery(&store);
+    assert_eq!(current.generation, settled.generation);
+    assert!(current.valid && !current.purge_all);
+    assert_eq!(count_rows(&store), MAX_ROWS - 3);
+    assert_eq!(mirrored_rows(&store), (MAX_ROWS - 3) as i64);
+    store.shutdown().unwrap();
+}

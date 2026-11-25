@@ -81,8 +81,7 @@ export class BinaryRelayAdapter {
     } catch {
       this.#failSocket(socket, identity.connectionID)
     }
-    await this.#armAlarm()
-    await this.#relay.settleDeliveries()
+    await this.#settleAndArm()
   }
 
   async webSocketClose(socket: WebSocket): Promise<void> {
@@ -97,8 +96,7 @@ export class BinaryRelayAdapter {
   async alarm(): Promise<void> {
     this.#relay.sweep()
     await this.#relay.confirmOffline()
-    await this.#armAlarm()
-    await this.#relay.settleDeliveries()
+    await this.#settleAndArm()
   }
 
   async #internal(pathname: string, request: Request): Promise<Response> {
@@ -117,7 +115,7 @@ export class BinaryRelayAdapter {
           throw new Error("HTTP bulk declaration is missing or invalid")
         }
         const fixed = new FixedLengthStream(BigInt(length))
-        this.ctx.waitUntil(response.body.pipeTo(fixed.writable))
+        this.ctx.waitUntil(response.body.pipeTo(fixed.writable).finally(() => this.#armAlarm()))
         const headers = new Headers(response.headers)
         headers.set("content-encoding", "identity")
         headers.set("cache-control", "no-store, no-transform")
@@ -156,6 +154,14 @@ export class BinaryRelayAdapter {
     closeSocket(socket, 1012, "EPOCH")
     this.#attached.delete(connectionID)
     this.#relay.detach(connectionID)
+  }
+
+  async #settleAndArm(): Promise<void> {
+    try {
+      await this.#relay.settleDeliveries()
+    } finally {
+      await this.#armAlarm()
+    }
   }
 
   async #armAlarm(): Promise<void> {

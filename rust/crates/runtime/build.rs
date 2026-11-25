@@ -23,12 +23,12 @@ fn regex_metadata() {
     for path in [
         script.clone(),
         root.join("packages/codemode/src/internal/regex-process.ts"),
+        root.join("packages/codemode/src/limits.ts"),
         root.join("packages/codemode/src/interpreter/regex-runtime.ts"),
         manifest.join("src/regex_worker.rs"),
     ] {
         println!("cargo:rerun-if-changed={}", path.display());
     }
-    println!("cargo:rerun-if-env-changed=PATH");
     let output = std::process::Command::new("bun")
         .arg(script)
         .current_dir(root)

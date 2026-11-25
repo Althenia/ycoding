@@ -325,7 +325,9 @@ impl Worker {
             }
             Operation::Purge => {
                 self.rebuild(cancellation, deadline)?;
-                self.finish_purge(cancellation, deadline)?;
+                while !self.finish_purge(cancellation, deadline)? {
+                    self.synchronize(cancellation, deadline)?;
+                }
                 Ok(Vec::new())
             }
             Operation::Report(captured, queries) => {
@@ -614,19 +616,25 @@ impl Worker {
         let current = self.read_state()?;
         let settled = self.rebuilt
             && self.progress.is_none()
-            && current.valid
-            && !current.rebuilding
-            && current.matches(self.store.metadata())
+            && self.active(&current)
             && !current.pending_purge();
         if !settled && self.rebuild_slice(cancellation, deadline)?.is_none() {
             return Ok(Maintenance::Pending);
         }
         cancellation.enter(Phase::DeliveryRead, None, deadline)?;
-        if self.read_state()?.pending_purge() {
-            self.finish_purge(cancellation, deadline)?;
+        if !self.active(&self.read_state()?) {
+            return Ok(Maintenance::Pending);
         }
-        self.synchronize(cancellation, deadline)?;
+        if self.synchronize(cancellation, deadline)?.pending_purge()
+            && !self.finish_purge(cancellation, deadline)?
+        {
+            return Ok(Maintenance::Pending);
+        }
         Ok(Maintenance::Complete)
+    }
+
+    fn active(&self, state: &Delivery) -> bool {
+        state.valid && !state.rebuilding && state.matches(self.store.metadata())
     }
 
     fn rebuild(
@@ -660,7 +668,7 @@ impl Worker {
         if !self.copy_slice(cancellation, deadline)? {
             return Ok(None);
         }
-        self.activate(cancellation, deadline).map(Some)
+        self.activate(cancellation, deadline)
     }
 
     fn start_rebuild(
@@ -774,7 +782,7 @@ impl Worker {
         &mut self,
         cancellation: &Cancellation,
         deadline: Instant,
-    ) -> Result<Delivery, Error> {
+    ) -> Result<Option<Delivery>, Error> {
         let generation = self
             .progress
             .as_ref()
@@ -789,7 +797,8 @@ impl Worker {
                 || current.generation != generation
                 || !current.matches(self.store.metadata())
             {
-                return Err(Error::Invalid);
+                self.progress = None;
+                return Ok(None);
             }
             let intents = snapshot.scan::<IntentTable>(
                 Bound::Unbounded,
@@ -821,7 +830,7 @@ impl Worker {
             }
             drop(snapshot);
             cancellation.enter(Phase::ActivationAcknowledge, None, deadline)?;
-            if acknowledge(&self.store, &current, intents, true)? {
+            if acknowledge(&self.store, &current, intents, true)? == Some(true) {
                 let progress = self.progress.take().ok_or(Error::Unavailable)?;
                 self.connection = Some(progress.connection);
                 self.generation = Some(generation);
@@ -829,7 +838,7 @@ impl Worker {
                 cancellation.enter(Phase::RebuildCleanup, None, deadline)?;
                 cleanup(&self.root, Some(&filename(&current)))?;
                 cancellation.enter(Phase::DeliveryRead, None, deadline)?;
-                return self.read_state();
+                return self.read_state().map(Some);
             }
         }
     }
@@ -838,12 +847,12 @@ impl Worker {
         &mut self,
         cancellation: &Cancellation,
         deadline: Instant,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         cancellation.check(deadline)?;
         self.staged.take();
         let active = self.read_state()?;
         if !active.valid || active.rebuilding || active.applied != active.order {
-            return Err(Error::Invalid);
+            return Ok(false);
         }
         cancellation.enter(Phase::PurgeCleanup, None, deadline)?;
         cleanup(&self.root, Some(&filename(&active)))?;
@@ -870,10 +879,7 @@ impl Worker {
                 Ok(true)
             })?
             .wait()?;
-        if !cleared {
-            return Err(Error::Invalid);
-        }
-        Ok(())
+        Ok(cleared)
     }
 }
 
@@ -898,9 +904,9 @@ fn acknowledge(
     captured: &Delivery,
     intents: Vec<Intent>,
     activate: bool,
-) -> Result<bool, Error> {
+) -> Result<Option<bool>, Error> {
     let captured = captured.clone();
-    let result = store
+    Ok(store
         .submit(move |tx| {
             let mut current = tx
                 .get::<DeliveryTable>(&[])?
@@ -935,8 +941,7 @@ fn acknowledge(
             tx.put::<DeliveryTable>(&current)?;
             Ok(Some(activated))
         })?
-        .wait()?;
-    result.ok_or(Error::Invalid)
+        .wait()?)
 }
 
 fn apply(

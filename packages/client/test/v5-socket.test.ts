@@ -847,6 +847,10 @@ test.each(["socket closes before Ready", "connection is replaced before Ready", 
       if (variant === "connection is replaced before Ready") void client.transport.reconnect()
       else peers[0].socket.close()
       expect(await first).toMatchObject({ _tag: "V5ClientError", status: "unsent", operation: "session.rename" })
+      if (queued)
+        expect(((await first) as Error).message).toBe(
+          "Request session.rename was not sent to the YCoding server, so nothing changed. Try again.",
+        )
       expect(peers[0].requests).toHaveLength(0)
       if (variant !== "connection is replaced before Ready") await client.transport.reconnect()
       peers[1].onRequest = (dispatch) => peers[1].reject(dispatch)
@@ -866,6 +870,34 @@ test.each(["socket closes before Ready", "connection is replaced before Ready", 
     }
   },
 )
+
+test("REQ-WIRE-009 a full pending-request budget rejects new work unsent with the reason", async () => {
+  const peer = new ScriptedPeer()
+  const client = make({
+    endpoint,
+    socket: () => {
+      queueMicrotask(() => peer.socket.open())
+      return peer.socket
+    },
+    budgets: { pendingRequests: 1 },
+  })
+  try {
+    await client.transport.ready()
+    const arrival = peer.nextRequest()
+    const held = client.health.get().catch((error: unknown) => error)
+    await arrival
+    const rejected = await client.health.get().catch((error: unknown) => error)
+    expect(rejected).toMatchObject({ _tag: "V5ClientError", status: "unsent", operation: "health.get" })
+    expect((rejected as Error).message).toBe(
+      "Too many requests are waiting for the YCoding server. Try again when earlier requests finish.",
+    )
+    expect(peer.requests).toHaveLength(1)
+    client.transport.close()
+    expect(await held).toMatchObject({ status: "unknown" })
+  } finally {
+    client.transport.close()
+  }
+})
 
 test("REQ-WIRE-009 a transmitted mutation lost to a socket error settles unknown and is never replayed", async () => {
   const peers = [new ScriptedPeer("connection-1"), new ScriptedPeer("connection-2")]

@@ -10,6 +10,12 @@ import { modelsSource } from "./generate"
 import { metadata } from "./regex-worker-metadata"
 
 const root = path.resolve(import.meta.dirname, "../../..")
+const providerClientVariables = [
+  "YCODING_ANTIGRAVITY_CLIENT_ID",
+  "YCODING_ANTIGRAVITY_CLIENT_SECRET",
+  "YCODING_MUSE_CLIENT_ID",
+  "YCODING_MUSE_CLIENT_SECRET",
+]
 
 function runtimeEnvironment() {
   return { ...process.env, YCODING_BUNDLED_MODELS_PATH: path.resolve(modelsSource) }
@@ -24,11 +30,33 @@ async function compileRuntime(env: NodeJS.ProcessEnv) {
   const targetDirectory = workspace.target_directory
   const runtime = workspace.packages.find((item) => item.name === "ycoding-runtime")
   if (!runtime) throw new Error("Cargo metadata omitted the native runtime package")
+  const dependencies = spawnSync(
+    "cargo",
+    [
+      "build",
+      "--timings",
+      "--locked",
+      "--manifest-path",
+      path.join(root, "rust/Cargo.toml"),
+      "--release",
+      "-p",
+      "ycoding-runtime",
+      "--lib",
+    ],
+    {
+      cwd: root,
+      stdio: ["ignore", "inherit", "inherit"],
+      env: Object.fromEntries(Object.entries(env).filter(([name]) => !providerClientVariables.includes(name))),
+    },
+  )
+  if (dependencies.error) throw dependencies.error
+  if (dependencies.status !== 0) throw new Error(`Rust payload build failed (${dependencies.status ?? dependencies.signal})`)
   const result = spawnSync(
     "cargo",
     [
       "build",
       "--message-format=json-render-diagnostics",
+      "--timings",
       "--locked",
       "--manifest-path",
       path.join(root, "rust/Cargo.toml"),

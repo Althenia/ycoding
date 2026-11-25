@@ -31,12 +31,6 @@ impl OAuthClient {
             secret: secret.into(),
         })
     }
-    pub fn embedded() -> Option<Self> {
-        Self::new(
-            option_env!("YCODING_ANTIGRAVITY_CLIENT_ID")?,
-            option_env!("YCODING_ANTIGRAVITY_CLIENT_SECRET"),
-        )
-    }
     pub(super) fn id(&self) -> &str {
         &self.id
     }

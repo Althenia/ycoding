@@ -11,7 +11,7 @@ resolver = "3"
 
 [profile.release]
 opt-level = "z"
-lto = "thin"
+lto = false
 codegen-units = 16
 strip = "symbols"
 debug = false

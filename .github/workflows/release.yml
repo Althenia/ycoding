@@ -124,7 +124,7 @@ jobs:
           bun test --cwd apps/web ./src/remote/catalog.test.ts ./src/remote/keep-awake.test.ts
           bun test --cwd apps/web ./test/remote-http.test.ts ./test/remote-http-bulk.test.ts
           bun test --cwd apps/web ./test/remote-sync.test.ts -t 'oversized live invalidations'
-          bun test --cwd packages/protocol ./test/http-bulk.test.ts
+          bun test --cwd packages/protocol ./test/http-bulk.test.ts ./test/connection-deadline.test.ts
           bun test --cwd apps/web ./test/dots.test.ts ./src/remote/ui/dots-composer.test.ts
           bun test --cwd apps/web ./test/remote-todo.test.ts -t "a connector that never answers todo.list does not hold Session hydration or raise a state notice|a superseded same-Session read cannot overwrite reconnect's newer todo list"
           bun test --cwd apps/web ./test/remote-guardrail.test.ts -t "preserves inspectable guardrail metadata in the family read"
@@ -135,7 +135,7 @@ jobs:
           bun test --cwd infra/cloudflare ./test/mcp-boundary.test.ts ./test/relay-core.test.ts ./test/auth-service.test.ts ./test/push-coordination-filter.test.ts ./test/device-alias.test.ts
           bun test --cwd infra/cloudflare ./test/router.test.ts -t 'websocket upgrades|message stream forwards|v5 message and attachment bulk selectors|relay presence|closes every device|after rotation|revokes an owned device|static asset delegation'
           bun test --cwd infra/cloudflare ./test/config.test.ts ./test/push-send.test.ts ./test/push-router.test.ts
-          bun test --cwd infra/cloudflare ./test/relay-authority.test.ts ./test/relay-handoff.test.ts ./test/relay-http.test.ts ./test/relay-mcp.test.ts ./test/relay-resync.test.ts
+          bun test --cwd infra/cloudflare ./test/relay-authority.test.ts ./test/relay-handoff.test.ts ./test/relay-http.test.ts ./test/relay-mcp.test.ts ./test/relay-resync.test.ts ./test/relay-deadline.test.ts ./test/relay-adapter-alarm.test.ts
           bun run build:cloudflare
 
       - name: Verify CLI suites
@@ -197,6 +197,7 @@ jobs:
         run: bun test --cwd script ./native-bootstrap.test.ts ./native-setup-release.test.ts ./runtime-receipt.test.ts "$GITHUB_WORKSPACE/packages/cli/test/runtime-build.test.ts"
 
       - name: Setup Rust for native contracts
+        id: native-rust
         if: matrix.suite == 'tui-runtime'
         uses: ./.github/actions/setup-rust
         with:
@@ -237,7 +238,7 @@ jobs:
           cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-store --lib engine::tests::ordinary_empty_submissions_and_both_reclaim_passes_sync -- --exact
 
       - name: Verify typed decision suites
-        if: matrix.suite == 'tui-runtime'
+        if: matrix.suite == 'tui-project'
         working-directory: packages/core
         run: bun test test/decision-agent-provider.test.ts test/decision-agent.test.ts test/decision-judgment.test.ts test/decision.test.ts test/session-guardrail-service.test.ts
 
@@ -254,15 +255,15 @@ jobs:
         run: bun test --cwd packages/core --timeout 40000 ./test/database-migration.test.ts ./test/coordination-decisions-native.test.ts ./test/coordination-decision-runtime.test.ts ./test/coordination-instructions.test.ts ./test/coordination-model-request.test.ts ./test/session-projector.test.ts
 
       - name: Verify footer state and short-terminal controls
-        if: matrix.suite == 'tui-runtime'
+        if: matrix.suite == 'tui-project'
         run: bun test --cwd packages/tui --timeout 40000 ./test/session-footer-autonomy.test.tsx ./test/isolated-browser-dialog.test.tsx ./test/cli/tui/projects-layout.test.tsx ./test/theme-v1-parity.test.ts
 
       - name: Verify session switcher grouping
-        if: matrix.suite == 'tui-runtime'
+        if: matrix.suite == 'tui-project'
         run: bun test --cwd packages/tui --timeout 40000 ./test/dialog-session-list-groups.test.tsx
 
       - name: Verify compact Project and transcript layouts
-        if: matrix.suite == 'tui-runtime'
+        if: matrix.suite == 'tui-project'
         run: |
           bun test --cwd packages/tui --timeout 40000 ./test/cli/tui/session-rows-chronology.test.tsx ./test/cli/tui/sidebar-cache.test.tsx ./test/design-md.test.ts
           bun test --cwd packages/tui --timeout 40000 ./test/screen/subagent-picker-capture.test.tsx -t "captures populated subagent picker states at reference terminal dimensions|sizes picker metadata to the measured composer width with and without the docked rail"
@@ -280,7 +281,7 @@ jobs:
           bun test --cwd packages/tui --timeout 40000 ./test/screen/dots.screen.test.ts -t "remote source attribution accepts resident reactive metadata"
 
       - name: Verify question grading and native Form views
-        if: matrix.suite == 'tui-runtime'
+        if: matrix.suite == 'tui-project'
         run: |
           bun test --cwd packages/core --timeout 40000 ./test/question-grading.test.ts
           bun test --cwd packages/core --timeout 40000 ./test/yolo-decision.test.ts -t "graded values retain their original mapping when an environment credential rotates during evaluation"
@@ -289,7 +290,7 @@ jobs:
           bun test --cwd packages/tui --timeout 40000 ./test/cli/tui/inline-tool-wrap-snapshot.test.tsx -t "filters malformed nested tool wire data|preserves native question selection modes|renders parsed multi-choice recommendations"
 
       - name: Verify subagent model selection boundaries
-        if: matrix.suite == 'tui-runtime'
+        if: matrix.suite == 'tui-project'
         run: |
           bun test --cwd packages/schema ./test/subagent-model-selection.test.ts
           bun test --cwd packages/core --timeout 40000 ./test/session-step-boundary.test.ts ./test/session-subagent-model-switch.test.ts
@@ -314,11 +315,21 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Save native contract dependencies
+        if: always() && matrix.suite == 'tui-runtime' && steps.native-rust.outcome == 'success'
+        uses: ./.github/actions/setup-rust/save
+        with:
+          cache-key: ${{ steps.native-rust.outputs.cargo-cache-key }}
+          cache-hit: ${{ steps.native-rust.outputs.cargo-cache-hit }}
+
   build-desktop-runtime:
     name: build Apple Silicon release packages
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/tags/v')) }}
     runs-on: macos-26
     timeout-minutes: 60
+    env:
+      SCCACHE_CACHE_SIZE: 3G
+      RUSTC_WRAPPER: sccache
     defaults:
       run:
         shell: bash
@@ -356,15 +367,61 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           release-cache: writer
+          sccache: "true"
+
+      - name: Restore release compiler cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/sccache-store
+          key: ${{ runner.os }}-${{ runner.arch }}-sccache-0.19.0-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-sccache-0.19.0-
 
       - name: Stage Apple Silicon release runtime
         id: runtime
         shell: bash
+        env:
+          YCODING_ANTIGRAVITY_CLIENT_ID: ${{ secrets.YCODING_ANTIGRAVITY_CLIENT_ID }}
+          YCODING_ANTIGRAVITY_CLIENT_SECRET: ${{ secrets.YCODING_ANTIGRAVITY_CLIENT_SECRET }}
+          YCODING_MUSE_CLIENT_ID: ${{ secrets.YCODING_MUSE_CLIENT_ID }}
+          YCODING_MUSE_CLIENT_SECRET: ${{ secrets.YCODING_MUSE_CLIENT_SECRET }}
+          SAVES_RELEASE_CACHES: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
         run: |
           set -euo pipefail
+          for name in YCODING_ANTIGRAVITY_CLIENT_ID YCODING_ANTIGRAVITY_CLIENT_SECRET YCODING_MUSE_CLIENT_ID; do
+            test -n "${!name}" || { echo "Missing $name Actions secret" >&2; exit 1; }
+          done
           bun packages/cli/script/runtime.ts stage-release "$RUNNER_TEMP/release-runtime"
+          for name in YCODING_ANTIGRAVITY_CLIENT_ID YCODING_ANTIGRAVITY_CLIENT_SECRET YCODING_MUSE_CLIENT_ID; do
+            LC_ALL=C grep -qaF -- "${!name}" "$RUNNER_TEMP/release-runtime/ycoding-runtime" || { echo "The release runtime does not embed $name" >&2; exit 1; }
+          done
+          sccache --show-stats
+          if [ "$SAVES_RELEASE_CACHES" = true ]; then
+            sccache --stop-server >/dev/null
+            release=rust/target/release
+            rm -f "$release/ycoding-runtime" "$release/ycoding-runtime.d"
+            find "$release/deps" -maxdepth 1 -name 'ycoding_runtime-*' -exec rm -rf {} +
+            find "$release/.fingerprint" -mindepth 2 -maxdepth 2 -name 'bin-ycoding-runtime*' -exec dirname {} \; | sort -u | while IFS= read -r unit; do rm -rf "$unit"; done
+            values=()
+            for name in YCODING_ANTIGRAVITY_CLIENT_ID YCODING_ANTIGRAVITY_CLIENT_SECRET YCODING_MUSE_CLIENT_ID YCODING_MUSE_CLIENT_SECRET; do
+              if [ -n "${!name}" ]; then values+=("${!name}"); fi
+            done
+            for cached in "$HOME/.cargo/registry/index" "$HOME/.cargo/registry/cache" "$HOME/.cargo/git/db" "$release" "$SCCACHE_DIR"; do
+              test -e "$cached" || continue
+              leaked="$(printf '%s\n' "${values[@]}" | LC_ALL=C grep -rlaF -f /dev/stdin "$cached" | head -n 1 || true)"
+              test -z "$leaked" || { echo "A provider client value is present in the release cache path $leaked" >&2; exit 1; }
+            done
+          fi
           digest=$(shasum -a 256 < "$RUNNER_TEMP/release-runtime/receipt.json" | cut -d' ' -f1)
           printf 'receipt-sha256=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release build timings
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-runtime-timings-${{ github.run_attempt }}
+          path: rust/target/cargo-timings/
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Upload Apple Silicon release runtime
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -385,6 +442,13 @@ jobs:
             ~/.cargo/git/db/
             rust/target/release
           key: ${{ steps.desktop-rust.outputs.release-cache-key }}
+
+      - name: Save release compiler cache
+        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/sccache-store
+          key: ${{ runner.os }}-${{ runner.arch }}-sccache-0.19.0-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Cache Electrobun native assets
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

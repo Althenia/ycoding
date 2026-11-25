@@ -1303,6 +1303,24 @@ export class Connection {
     return decisions
   }
 
+  nextDeadline(): number | undefined {
+    if (this.phase === "closed") return undefined
+    const due = [this.deadline]
+    for (const ledger of this.ledgers.values()) {
+      const oldest = ledger.sent[0]
+      if (oldest) due.push(oldest.time + this.budgets.deliveryTimeoutMs)
+      if (ledger.grantTime !== undefined) due.push(ledger.grantTime + this.budgets.creditDelayMs)
+    }
+    for (const owner of this.httpSending.values())
+      if (owner.handed[0]) due.push(owner.handed[0].time + this.budgets.deliveryTimeoutMs)
+    for (const record of this.queue) if (record.available > this.now) due.push(record.available)
+    if (this.httpCredits.size) due.push(this.now)
+    if (this.phase === "established" && this.outstandingPing === undefined)
+      due.push(Math.max(this.lastPing + this.budgets.pingIntervalMs, this.now))
+    const next = Math.min(...due)
+    return Number.isFinite(next) ? next : undefined
+  }
+
   private check(now: number): Decision[] {
     if (!Number.isFinite(now) || now < this.now) throw new Error("monotonic time")
     this.now = now

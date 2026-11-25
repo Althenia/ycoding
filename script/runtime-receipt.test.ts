@@ -157,7 +157,7 @@ test("a Windows release receipt binds the MSVC host and exact exe bytes", async 
     expect(receipt).toMatchObject({
       schema: "ycoding.release-runtime.receipt/1", source: { commit }, target: "windows-x64", profile: "release",
       binary: { name: "ycoding-runtime.exe", bytes: 6, sha256: digest },
-      command: "cargo build --message-format=json-render-diagnostics --locked --manifest-path rust/Cargo.toml --release -p ycoding-runtime --bin ycoding-runtime",
+      command: "cargo build --message-format=json-render-diagnostics --timings --locked --manifest-path rust/Cargo.toml --release -p ycoding-runtime --bin ycoding-runtime",
       toolchain: { rustc: "rustc 1.98.1\nhost: x86_64-pc-windows-msvc", compilers: { msvc: "14.44.35207" }, image: { os: "win25" } },
     })
     expect(receipt.catalog.bundled_models_path.sha256).toMatch(/^[0-9a-f]{64}$/)

@@ -322,19 +322,22 @@ export class LocalTransport {
     stream?: DeliveryStream<unknown>,
   ): Promise<unknown> {
     const operation = operations.find((operation) => operation.operationId === binding.operationID)!
+    if (!owner.active || owner !== this.#owner) throw new V5ClientError("unsent", binding.method)
     if (
-      !owner.active ||
-      owner !== this.#owner ||
       owner.opening + owner.pending.size >=
-        (owner.connection?.budgets.pendingRequests ??
-          this.#options.budgets?.pendingRequests ??
-          defaultBudgets.pendingRequests)
+      (owner.connection?.budgets.pendingRequests ??
+        this.#options.budgets?.pendingRequests ??
+        defaultBudgets.pendingRequests)
     )
-      throw new V5ClientError("unsent", binding.method)
+      throw new V5ClientError(
+        "unsent",
+        binding.method,
+        "Too many requests are waiting for the YCoding server. Try again when earlier requests finish.",
+      )
     owner.opening++
     const aborted = Promise.withResolvers<never>()
-    const abortOpening = () =>
-      aborted.reject(new V5ClientError("unsent", binding.method, "Request cancelled before transmission"))
+    const cancelled = "Request cancelled before transmission"
+    const abortOpening = () => aborted.reject(new V5ClientError("unsent", binding.method, cancelled))
     options?.signal?.addEventListener("abort", abortOpening, { once: true })
     if (options?.signal?.aborted) abortOpening()
     try {
@@ -347,8 +350,8 @@ export class LocalTransport {
       owner.opening--
       options?.signal?.removeEventListener("abort", abortOpening)
     }
-    if (owner !== this.#owner || !owner.active || options?.signal?.aborted)
-      throw new V5ClientError("unsent", binding.method)
+    if (options?.signal?.aborted) throw new V5ClientError("unsent", binding.method, cancelled)
+    if (owner !== this.#owner || !owner.active) throw new V5ClientError("unsent", binding.method)
     const connection = owner.connection!
     const request = (() => {
       const reservation = connection.budgets.clientFrameBytes + connection.budgets.inlineBytes

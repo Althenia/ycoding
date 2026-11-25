@@ -177,9 +177,6 @@ impl Service {
                     }
                     excess -= page.len();
                 }
-                if count > MAX_ROWS {
-                    ycoding_store::analytics::privacy_changed(tx, Vec::new(), true)?;
-                }
                 Ok(Ok(samples.len()))
             })?
             .await??;
@@ -291,7 +288,6 @@ fn allowed(tx: &mut Write<'_>) -> Result<bool, ycoding_store::Error> {
         }))
 }
 fn prune(tx: &mut Write<'_>, cutoff: i64) -> Result<(), ycoding_store::Error> {
-    let mut deleted = false;
     loop {
         let page = tx.index_range::<resources::LatencyTable>(
             "web_latency_received_at_idx",
@@ -305,9 +301,8 @@ fn prune(tx: &mut Write<'_>, cutoff: i64) -> Result<(), ycoding_store::Error> {
             },
         )?;
         if page.is_empty() {
-            break;
+            return Ok(());
         }
-        deleted = true;
         for row in page {
             resources::LatencyTable::delete(
                 tx,
@@ -315,10 +310,6 @@ fn prune(tx: &mut Write<'_>, cutoff: i64) -> Result<(), ycoding_store::Error> {
             )?;
         }
     }
-    if deleted {
-        ycoding_store::analytics::privacy_changed(tx, Vec::new(), true)?;
-    }
-    Ok(())
 }
 
 async fn purge_pending(store: &Client) -> Result<(), Error> {

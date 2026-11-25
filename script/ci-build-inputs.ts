@@ -1,7 +1,7 @@
 import path from "node:path"
 
 const root = path.resolve(import.meta.dir, "..")
-const full = { desktop: true, web: true }
+const full = { desktop: true, web: true, native: true }
 const sha = /^(?!0{40}$)[0-9a-f]{40}$/
 
 function git(...args: string[]) {
@@ -50,6 +50,10 @@ const web = [
   "infra/cloudflare/wrangler.jsonc", "infra/cloudflare/wrangler.preview.jsonc",
   "script/build-web-assets.ts", "script/install.sh", "docs/examples/ycoding.jsonc",
   "assets/brand/fonts/GeistMono.woff2", "assets/brand/fonts/OFL.txt",
+]
+const native = [
+  "rust/", "protocol/", "packages/", "extensions/", "assets/", "patches/", ".github/actions/setup-rust/",
+  "script/ycoding-workspace.ts", "script/release-version.sh", "script/runtime-receipt.sh",
 ]
 const sourceTest = /^(?:apps\/web|packages\/[^/]+|infra\/cloudflare)\/src\/.*\.test(?:-helper)?\.[cm]?[jt]sx?$/
 
@@ -100,9 +104,10 @@ async function selectBuilds() {
     const inputs = changed.filter((file) => !sourceTest.test(file))
     const needsDesktop = inputs.some((file) => matches(file, desktop))
     const needsWeb = inputs.some((file) => matches(file, web))
-    if (needsDesktop || !inputs.some((file) => file.startsWith("apps/web/"))) return { desktop: needsDesktop, web: needsWeb }
+    const needsNative = inputs.some((file) => matches(file, native))
+    if (needsDesktop || !inputs.some((file) => file.startsWith("apps/web/"))) return { desktop: needsDesktop, web: needsWeb, native: needsNative }
     const borrowed = await desktopWebSources()
-    return { desktop: inputs.some((file) => borrowed.has(file)), web: needsWeb }
+    return { desktop: inputs.some((file) => borrowed.has(file)), web: needsWeb, native: needsNative }
   } catch (error) {
     console.error(`Build input selection is uncertain; running both builds: ${error instanceof Error ? error.message : String(error)}`)
     return full
@@ -110,4 +115,4 @@ async function selectBuilds() {
 }
 
 const selected = await selectBuilds()
-console.log(`desktop=${selected.desktop}\nweb=${selected.web}`)
+console.log(`desktop=${selected.desktop}\nweb=${selected.web}\nnative=${selected.native}`)

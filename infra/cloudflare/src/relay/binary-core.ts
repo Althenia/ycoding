@@ -1711,7 +1711,16 @@ export function createRelay(deps: RelayDeps) {
       flushAll()
     },
     nextDeadline() {
-      return peers.size ? deps.now() + 25 : offline ? offline.closedAt + RemoteLimits.agentOfflineConfirmMs : undefined
+      const now = deps.now()
+      const monotonic = deps.monotonic()
+      const deadlines = [...peers.values()].flatMap((peer) => {
+        const timer = peer.connection.nextDeadline()
+        return timer === undefined
+          ? [peer.identity.credentialExpiresAt]
+          : [peer.identity.credentialExpiresAt, now + (timer > monotonic ? timer - monotonic : overdueRearmMs)]
+      })
+      if (offline) deadlines.push(offline.closedAt + RemoteLimits.agentOfflineConfirmMs)
+      return deadlines.length ? Math.min(...deadlines) : undefined
     },
     async confirmOffline() {
       if (!offlineLoaded) {
@@ -1747,6 +1756,7 @@ export function createRelay(deps: RelayDeps) {
 }
 
 const quotaClaimGraceMs = 120_000
+const overdueRearmMs = 25
 function browserMember(browserSessionID: string) {
   return `browser:${browserSessionID}`
 }
