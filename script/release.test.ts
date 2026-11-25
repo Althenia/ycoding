@@ -23,14 +23,14 @@ test("native archive finalization preserves both TUI shards and every accepted c
   for (const [name, shard, hash] of [
     ["Verify transcript and approval suites", "tui-project", "f131e4462bff135d8cfd8a8a55acd1415019649c260364bf590f923992b446b2"],
     ["Verify goal continuation", "tui-project", "eba471157159a351c38806fed91e1b202a1614b594b5f2c5942eb40e1ee07129"],
-    ["Verify typed decision suites", "tui-runtime", "cff504b51cc79572eee39b1ca2a3796a57f654b8cd4aff685289d7882904be2e"],
+    ["Verify typed decision suites", "tui-project", "cff504b51cc79572eee39b1ca2a3796a57f654b8cd4aff685289d7882904be2e"],
     ["Verify Project ownership and native routing", "tui-project", "b2c051fad3b6237567b352b72d7fd8a05d3dea54f2b66649b51388d041936ba1"],
     ["Verify ownership upgrade and native decision boundaries", "tui-project", "10cb8dcc5dbb20e82da03b82faeaccf2b3f31da1f68841ac9f2c066093bc12ee"],
-    ["Verify footer state and short-terminal controls", "tui-runtime", "01be3653bc1191ba5f3db6120255da2f8f04379edaa62add22258ccad823fb67"],
-    ["Verify compact Project and transcript layouts", "tui-runtime", "7b817f020dc3bbccb9d2e63e342377564c8395f551a9453b967c4be65a363528"],
+    ["Verify footer state and short-terminal controls", "tui-project", "01be3653bc1191ba5f3db6120255da2f8f04379edaa62add22258ccad823fb67"],
+    ["Verify compact Project and transcript layouts", "tui-project", "7b817f020dc3bbccb9d2e63e342377564c8395f551a9453b967c4be65a363528"],
     ["Verify native Dots access and retirement boundaries", "tui-project", "938f5cd2eabcaa6c31134de20750085823a44b06f93467e1e2041ddac65a83e9"],
-    ["Verify question grading and native Form views", "tui-runtime", "ddaed34f767789cff87f5d822d5b2d5b1df5df47ac88e081b37f250969825d98"],
-    ["Verify subagent model selection boundaries", "tui-runtime", "a08d919abbe6505424fab1af1ecc2626e53f917794d330ace37dbf537ddd1749"],
+    ["Verify question grading and native Form views", "tui-project", "ddaed34f767789cff87f5d822d5b2d5b1df5df47ac88e081b37f250969825d98"],
+    ["Verify subagent model selection boundaries", "tui-project", "a08d919abbe6505424fab1af1ecc2626e53f917794d330ace37dbf537ddd1749"],
   ] as const) {
     const steps = verify.split("\n      - name: ").slice(1).filter((step) => step.startsWith(`${name}\n`))
     expect(steps).toHaveLength(1)
@@ -165,7 +165,8 @@ test("the independent Windows PR gate still verifies a native x64 executable", (
   const pr = workflowJob(testWorkflow, "native-windows")
   expect(pr).toContain("name: native runtime build (windows)")
   expect(pr).toContain("runs-on: windows-2025")
-  expect(pr).not.toMatch(/^    (?:if|needs):|continue-on-error:/m)
+  expect(pr).toContain("    needs: build-inputs\n    if: ${{ !cancelled() }}\n")
+  expect(pr).not.toContain("continue-on-error")
   const steps = ["uses: ./.github/actions/setup-rust", "--runtime-receipt=", "verify-embedded"].map((text) => pr.indexOf(text))
   expect(steps.every((index) => index >= 0)).toBe(true)
   expect(steps).toEqual([...steps].sort((a, b) => a - b))
@@ -714,7 +715,7 @@ test("release source gates select native task delegation and question grading", 
   )
   const questionGate =
     verify.split("      - name: Verify question grading and native Form views\n")[1]?.split("\n      - name: ")[0] ?? ""
-  expect(questionGate).toContain("if: matrix.suite == 'tui-runtime'")
+  expect(questionGate).toContain("if: matrix.suite == 'tui-project'")
   expect(questionGate).toContain(
     'bun test --cwd packages/tui --timeout 40000 ./test/cli/tui/inline-tool-wrap-snapshot.test.tsx -t "filters malformed nested tool wire data|preserves native question selection modes|renders parsed multi-choice recommendations"',
   )
@@ -748,7 +749,7 @@ test("release source gates select Form, access clients, model-selection and runn
   ).toBe(true)
   expect(verify).toContain("Verify subagent model selection boundaries")
   expect(verify).toContain(
-    "- name: Verify subagent model selection boundaries\n        if: matrix.suite == 'tui-runtime'\n        run: |",
+    "- name: Verify subagent model selection boundaries\n        if: matrix.suite == 'tui-project'\n        run: |",
   )
   for (const command of [
     "bun test --cwd packages/schema ./test/subagent-model-selection.test.ts",
@@ -942,7 +943,7 @@ test("source verification legs start in parallel with the native builds", () => 
     ["Verify CLI suites", "matrix.suite == 'cli'"],
     ["Verify Chrome extension suites", "matrix.suite == 'cli'"],
     ["Verify transcript and approval suites", "matrix.suite == 'tui-project'"],
-    ["Verify typed decision suites", "matrix.suite == 'tui-runtime'"],
+    ["Verify typed decision suites", "matrix.suite == 'tui-project'"],
     ["Verify installer and web assets", "matrix.suite == 'web'"],
   ])
     expect(verify).toContain(`      - name: ${step}\n        if: ${condition}\n`)
@@ -1011,12 +1012,113 @@ test("both Darwin packagers use the local runtime and receipt digest from their 
   expect(upload).toContain("path: ${{ runner.temp }}/release-runtime/")
   const order = ["Stage Apple Silicon release runtime", "Upload Apple Silicon release runtime", "Import macOS signing identity", "Build TUI artifact", "Build desktop app", "Remove macOS signing keychain"].map((name) => darwinBuild.indexOf(`- name: ${name}\n`))
   expect(order).toEqual([...order].sort((a, b) => a - b))
-  expect(darwinBuild.slice(0, order[2])).not.toContain("secrets.")
+  const producer = darwinBuild.slice(0, order[2])
+  const oauth = ["YCODING_ANTIGRAVITY_CLIENT_ID", "YCODING_ANTIGRAVITY_CLIENT_SECRET", "YCODING_MUSE_CLIENT_ID", "YCODING_MUSE_CLIENT_SECRET"]
+  expect([...producer.matchAll(/secrets\.([A-Z_]+)/g)].map((match) => match[1])).toEqual(oauth)
+  for (const name of oauth) expect(stage).toContain(`${name}: \${{ secrets.${name} }}`)
+  for (const name of ["YCODING_MACOS_SIGNING_P12", "YCODING_MACOS_SIGNING_PASSWORD"]) {
+    expect([...darwinBuild.matchAll(new RegExp(`secrets\\.${name}`, "g"))]).toHaveLength(1)
+    expect(darwinStep("Import macOS signing identity")).toContain(`secrets.${name}`)
+  }
+  const required = "YCODING_ANTIGRAVITY_CLIENT_ID YCODING_ANTIGRAVITY_CLIENT_SECRET YCODING_MUSE_CLIENT_ID"
+  const check = `for name in ${required}; do`
+  expect(stage.split(check)).toHaveLength(3)
+  expect(stage).toContain('test -n "${!name}" || { echo "Missing $name Actions secret" >&2; exit 1; }')
+  expect(stage).toContain('LC_ALL=C grep -qaF -- "${!name}" "$RUNNER_TEMP/release-runtime/ycoding-runtime" || { echo "The release runtime does not embed $name" >&2; exit 1; }')
+  expect(stage.match(/test -n "\$\{!name\}"/g)).toHaveLength(1)
+  expect(stage.match(/grep -qaF -- "\$\{!name\}"/g)).toHaveLength(1)
+  expect(stage).not.toMatch(/echo[^\n]*\$\{!name\}"[^\n]*>&2|printf[^\n]*\$\{!name\}"[^\n]*>>/)
+  const buildIndex = stage.indexOf('bun packages/cli/script/runtime.ts stage-release')
+  expect(stage.indexOf(check)).toBeLessThan(buildIndex)
+  expect(stage.lastIndexOf(check)).toBeGreaterThan(buildIndex)
   for (const name of ["Build TUI artifact", "Build desktop app"]) {
     const packaging = darwinStep(name)
     expect(packaging).toContain("YCODING_RELEASE_RUNTIME_DIR: ${{ runner.temp }}/release-runtime\n")
     expect(packaging).toContain("RECEIPT_SHA256: ${{ steps.runtime.outputs.receipt-sha256 }}")
   }
+})
+
+test("release runtime uses a versioned compiler cache and uploads build timings", () => {
+  const outside = workflow.replace(darwinBuild, "")
+  for (const name of ["sccache-store", 'sccache: "true"', "release-cache: writer", "Save Apple Silicon release dependencies"]) {
+    expect(outside).not.toContain(name)
+    expect(testWorkflow).not.toContain(name)
+  }
+  expect(testWorkflow).not.toContain('sccache: "true"')
+  expect(testWorkflow).not.toContain("release-cache:")
+  expect(darwinBuild).toContain("    env:\n      SCCACHE_CACHE_SIZE: 3G\n      RUSTC_WRAPPER: sccache\n    defaults:\n")
+  expect(darwinBuild).not.toContain("CARGO_INCREMENTAL")
+  expect(darwinStep("Setup Rust")).toContain('sccache: "true"')
+  for (const content of [workflow, testWorkflow]) {
+    const jobEnvironments = [...content.matchAll(/^    env:\n((?: {6}.+\n)+)/gm)].map((match) => match[1]!)
+    expect(jobEnvironments.length).toBeGreaterThan(0)
+    for (const environment of jobEnvironments) {
+      expect(environment).not.toContain("SCCACHE_DIR")
+      expect(environment).not.toContain("${{ runner.")
+    }
+  }
+  const restore = darwinStep("Restore release compiler cache")
+  const save = darwinStep("Save release compiler cache")
+  const key = '${{ runner.os }}-${{ runner.arch }}-sccache-0.19.0-${{ github.run_id }}-${{ github.run_attempt }}'
+  expect(restore).toContain("uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9")
+  expect(restore).toContain(`key: ${key}`)
+  expect(restore).toContain('restore-keys: |\n            ${{ runner.os }}-${{ runner.arch }}-sccache-0.19.0-')
+  expect(save).toContain("uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9")
+  expect(save).toContain("if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)")
+  expect(save).not.toContain("always()")
+  expect(save).toContain(`key: ${key}`)
+  for (const cache of [restore, save]) expect(cache).toContain('path: ${{ runner.temp }}/sccache-store')
+  const stage = darwinStep("Stage Apple Silicon release runtime")
+  expect(stage).toContain("SAVES_RELEASE_CACHES: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}")
+  const embed = stage.lastIndexOf('LC_ALL=C grep -qaF -- "${!name}"')
+  const stats = stage.indexOf("sccache --show-stats")
+  const guarded = stage.indexOf('if [ "$SAVES_RELEASE_CACHES" = true ]; then')
+  const stop = stage.indexOf("sccache --stop-server")
+  const purge = ['rm -f "$release/ycoding-runtime" "$release/ycoding-runtime.d"', 'find "$release/deps" -maxdepth 1 -name \'ycoding_runtime-*\' -exec rm -rf {} +', "bin-ycoding-runtime*"].map((text) => stage.indexOf(text))
+  const scan = stage.indexOf('for cached in "$HOME/.cargo/registry/index" "$HOME/.cargo/registry/cache" "$HOME/.cargo/git/db" "$release" "$SCCACHE_DIR"; do')
+  const refusal = stage.indexOf('A provider client value is present in the release cache path $leaked" >&2; exit 1')
+  const digest = stage.indexOf("digest=$(shasum")
+  expect([embed, stats, guarded, stop, ...purge, scan, refusal, digest].every((index) => index >= 0)).toBe(true)
+  expect([embed, stats, guarded, stop, ...purge, scan, refusal, digest]).toEqual([embed, stats, guarded, stop, ...purge, scan, refusal, digest].sort((a, b) => a - b))
+  expect(stage).toContain("if [ -n \"${!name}\" ]; then values+=(\"${!name}\"); fi")
+  expect(stage).toContain('LC_ALL=C grep -rlaF -f /dev/stdin "$cached"')
+  const timings = darwinStep("Upload release build timings")
+  expect(timings).toContain("uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a")
+  expect(timings).toContain('name: release-runtime-timings-${{ github.run_attempt }}')
+  expect(timings).toContain("path: rust/target/cargo-timings/\n")
+  expect(timings).toContain("if-no-files-found: error")
+  expect(timings).toContain("retention-days: 1")
+  expect(timings).not.toContain("always()")
+  const names = ["Setup Rust", "Restore release compiler cache", "Stage Apple Silicon release runtime", "Upload release build timings", "Upload Apple Silicon release runtime", "Save Apple Silicon release dependencies", "Save release compiler cache"]
+  const order = names.map((name) => darwinBuild.indexOf(`- name: ${name}\n`))
+  expect(order.every((index) => index >= 0)).toBe(true)
+  expect(order).toEqual([...order].sort((a, b) => a - b))
+  for (const name of ["Save Apple Silicon release dependencies", "Save release compiler cache"])
+    expect(darwinStep(name)).toContain("github.ref == format('refs/heads/{0}', github.event.repository.default_branch)")
+  expect(darwinStep("Save Apple Silicon release dependencies")).not.toContain("always()")
+})
+
+test("test workflow saves generic Rust dependency caches only after workspace artifacts are removed", () => {
+  const saves = [
+    ["build", "Save Rust dependencies", "needs.build-inputs.outputs.native != 'false' && steps.rust.outcome == 'success'", "steps.rust"],
+    ["native-windows", "Save Rust dependencies", "needs.build-inputs.outputs.native != 'false' && steps.rust.outcome == 'success'", "steps.rust"],
+  ] as const
+  for (const [job, name, condition, id] of saves) {
+    const step = workflowJob(testWorkflow, job).split(`      - name: ${name}\n`)[1]?.split("\n      - name: ")[0] ?? ""
+    expect(step).toContain(`if: always() && ${condition}`)
+    expect(step).toContain("uses: ./.github/actions/setup-rust/save")
+    expect(step).toContain(`cache-key: \${{ ${id}.outputs.cargo-cache-key }}`)
+    expect(step).toContain(`cache-hit: \${{ ${id}.outputs.cargo-cache-hit }}`)
+  }
+  const verify = workflowJob(workflow, "verify-source")
+  const save = verify.split("      - name: Save native contract dependencies\n")[1]?.split("\n      - name: ")[0] ?? ""
+  expect(save).toContain("if: always() && matrix.suite == 'tui-runtime' && steps.native-rust.outcome == 'success'")
+  expect(save).toContain("uses: ./.github/actions/setup-rust/save")
+  expect(save).toContain("cache-key: ${{ steps.native-rust.outputs.cargo-cache-key }}")
+  expect(save).toContain("cache-hit: ${{ steps.native-rust.outputs.cargo-cache-hit }}")
+  expect(verify).toContain("      - name: Setup Rust for native contracts\n        id: native-rust\n")
+  expect(verify).not.toContain("secrets.")
+  for (const job of ["build", "native-windows"]) expect(workflowJob(testWorkflow, job)).not.toContain("secrets.")
 })
 
 test("source and package jobs reject unsafe tags and missing notes before setup", () => {
@@ -1043,7 +1145,7 @@ test("release workflow builds and archives the macOS desktop app from the locked
   expect(desktop).toContain(`${base}/electrobun-core-darwin-arm64.tar.gz`)
   expect(desktop).toContain('echo "1ef4a4b42a957d3349f491f7fbe53153d1d5f427bacbda340c8d7fadce6b58d9  electrobun-cli-darwin-arm64.tar.gz" | shasum -a 256 -c -')
   expect(desktop).toContain('echo "474c24f3af26eb5d59ce9fa90483fef2a35974fcdedebb8df969aebc4350e62f  electrobun-core-darwin-arm64.tar.gz" | shasum -a 256 -c -')
-  expect(desktop).not.toMatch(/^    env:/m)
+  expect(desktop).toContain("    env:\n      SCCACHE_CACHE_SIZE: 3G\n      RUSTC_WRAPPER: sccache\n    defaults:\n")
   const build = '/bin/sh packages/desktop/script/build.sh --outdir="$RUNNER_TEMP/desktop" --sign-identity=9dd524184b0db949ffac7f0ada0ae860ac7f5f85'
   const archive = 'bun script/release-archive.ts create-desktop "$RELEASE_VERSION" "$RUNNER_TEMP/desktop/YCoding Desktop.app" dist/release-archive/desktop-darwin-arm64'
   expect(desktop).toContain(build)
@@ -1082,7 +1184,7 @@ test("release workflow signs the desktop app with the pinned self-signed identit
   const build = darwinStep("Build desktop app")
   const verify = darwinStep("Verify desktop signature")
   const cleanup = darwinStep("Remove macOS signing keychain")
-  expect(desktop).not.toMatch(/^    env:/m)
+  expect(desktop).toContain("    env:\n      SCCACHE_CACHE_SIZE: 3G\n      RUSTC_WRAPPER: sccache\n    defaults:\n")
   expect(importStep).toContain("        env:\n          YCODING_MACOS_SIGNING_P12: ${{ secrets.YCODING_MACOS_SIGNING_P12 }}\n          YCODING_MACOS_SIGNING_PASSWORD: ${{ secrets.YCODING_MACOS_SIGNING_PASSWORD }}\n          YCODING_MACOS_SIGNING_IDENTITY: YCoding Code Signing\n          YCODING_MACOS_SIGNING_SHA1: 9dd524184b0db949ffac7f0ada0ae860ac7f5f85\n")
   for (const command of [
     'security create-keychain -p "$keychain_password" "$keychain"',
@@ -1096,7 +1198,7 @@ test("release workflow signs the desktop app with the pinned self-signed identit
   expect(importStep).not.toContain("|| true")
   expect(importStep).not.toContain("login.keychain")
   const outside = desktop.replace(importStep, "")
-  expect(outside.replace(darwinStep("Build TUI artifact"), "")).not.toContain("secrets.")
+  expect(outside.replace(darwinStep("Build TUI artifact"), "").replace(darwinStep("Stage Apple Silicon release runtime"), "")).not.toContain("secrets.")
   expect(outside).not.toContain("YCODING_MACOS_SIGNING_P12")
   expect(outside).not.toContain("YCODING_MACOS_SIGNING_PASSWORD")
   expect(build).toContain('/bin/sh packages/desktop/script/build.sh --outdir="$RUNNER_TEMP/desktop" --sign-identity=9dd524184b0db949ffac7f0ada0ae860ac7f5f85')
@@ -1316,7 +1418,7 @@ test("source contracts and production builds run independently while legacy jobs
   expect(unit).toContain("run: GITHUB_ACTIONS=false bun turbo test")
   expect(unit).toContain("name: Cache Turbo")
   expect(source).toContain("    needs: build-inputs\n    if: ${{ !cancelled() }}\n")
-  expect(build).not.toMatch(/^    (?:if|needs):/m)
+  expect(build).toContain("    needs: build-inputs\n    if: ${{ !cancelled() }}\n")
   for (const job of [source, build]) {
     expect(job).not.toContain("continue-on-error:")
     expect(job).not.toContain("actions/cache")
@@ -1380,8 +1482,8 @@ test("the independent build matrix retains native and Node compilations on Linux
   expect(compiled).toContain("working-directory: packages/cli")
   expect(compiled).toContain("run: bun run script/build.ts --single")
   const node = lifecycle.split("      - name: Verify Node build\n")[1] ?? ""
-  expect(node).toContain("if: always()")
-  expect(node).toContain("timeout-minutes: 15")
+  expect(node).toContain("if: always() && needs.build-inputs.outputs.native != 'false'")
+  expect(node).toContain("timeout-minutes: 10")
   expect(node).toContain("run: bun run script/build-node.ts --single --skip-install --outdir=dist/node")
   expect(lifecycle).not.toContain("service-smoke")
   expect(lifecycle).toContain('node-version: "24"')
@@ -1389,6 +1491,20 @@ test("the independent build matrix retains native and Node compilations on Linux
   expect(lifecycle.indexOf('node-version: "24"')).toBeLessThan(lifecycle.indexOf('node-version: "26.4.0"'))
   expect(lifecycle.indexOf("Verify compiled service lifecycle")).toBeLessThan(lifecycle.indexOf('node-version: "26.4.0"'))
   expect(lifecycle.indexOf('node-version: "26.4.0"')).toBeLessThan(lifecycle.indexOf("Verify Node build"))
+})
+
+test("native build jobs run only for native inputs and report each skip", () => {
+  expect(testWorkflow).toContain("      native: ${{ steps.select.outputs.native }}")
+  for (const name of ["build", "native-windows"]) {
+    const job = workflowJob(testWorkflow, name)
+    const steps = job.split("\n      - name: ").slice(1)
+    const skip = steps.filter((step) => step.startsWith("Report native build skip\n"))
+    expect(skip).toHaveLength(1)
+    expect(skip[0]).toContain("if: needs.build-inputs.outputs.native == 'false'")
+    expect(skip[0]).toContain('run: echo "Native runtime build inputs are unchanged."')
+    for (const step of steps.filter((step) => !step.startsWith("Report native build skip\n")))
+      expect(step, step.split("\n")[0]).toMatch(/if: (?:always\(\) && )?needs\.build-inputs\.outputs\.native != 'false'/)
+  }
 })
 
 test("every external action in the test workflow is pinned to a full commit", () => {
@@ -1400,7 +1516,7 @@ test("every external action in the test workflow is pinned to a full commit", ()
 test("release source verification runs the typed decision suites and the guardrail failure-reason regression in the TUI leg", () => {
   const verify = workflowJob(workflow, "verify-source")
   const step = verify.split("      - name: Verify typed decision suites\n")[1]?.split("\n      - name:")[0] ?? ""
-  expect(step).toContain("if: matrix.suite == 'tui-runtime'")
+  expect(step).toContain("if: matrix.suite == 'tui-project'")
   expect(step).toContain("working-directory: packages/core")
   expect(step).toContain(
     "run: bun test test/decision-agent-provider.test.ts test/decision-agent.test.ts test/decision-judgment.test.ts test/decision.test.ts test/session-guardrail-service.test.ts",

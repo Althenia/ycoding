@@ -17,7 +17,7 @@ env:
 
 jobs:
   build-inputs:
-    name: select Desktop and Web build inputs
+    name: select Desktop, Web and native build inputs
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -25,6 +25,7 @@ jobs:
     outputs:
       desktop: ${{ steps.select.outputs.desktop }}
       web: ${{ steps.select.outputs.web }}
+      native: ${{ steps.select.outputs.native }}
     steps:
       - name: Checkout comparison history
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -198,6 +199,8 @@ jobs:
 
   build:
     name: native and Node builds (${{ matrix.settings.name }})
+    needs: build-inputs
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
@@ -205,53 +208,73 @@ jobs:
           - name: linux
             host: ubuntu-24.04
     runs-on: ${{ matrix.settings.host }}
-    timeout-minutes: 20
+    timeout-minutes: 45
     permissions:
       contents: read
     defaults:
       run:
         shell: bash
     steps:
+      - name: Report native build skip
+        if: needs.build-inputs.outputs.native == 'false'
+        run: echo "Native runtime build inputs are unchanged."
+
       - name: Checkout repository
+        if: needs.build-inputs.outputs.native != 'false'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Setup Node
+        if: needs.build-inputs.outputs.native != 'false'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
 
       - name: Setup Bun
+        if: needs.build-inputs.outputs.native != 'false'
         uses: ./.github/actions/setup-bun
         with:
           install-flags: --frozen-lockfile
 
       - name: Configure git identity
+        if: needs.build-inputs.outputs.native != 'false'
         run: |
           git config --global user.email "bot@ycoding.ai"
           git config --global user.name "ycoding"
 
       - name: Setup Rust
+        id: rust
+        if: needs.build-inputs.outputs.native != 'false'
         uses: ./.github/actions/setup-rust
 
       - name: Build native executable
+        if: needs.build-inputs.outputs.native != 'false'
         timeout-minutes: 30
         working-directory: packages/cli
         run: bun run script/build.ts --single
 
+      - name: Save Rust dependencies
+        if: always() && needs.build-inputs.outputs.native != 'false' && steps.rust.outcome == 'success'
+        uses: ./.github/actions/setup-rust/save
+        with:
+          cache-key: ${{ steps.rust.outputs.cargo-cache-key }}
+          cache-hit: ${{ steps.rust.outputs.cargo-cache-hit }}
+
       - name: Setup Node build runtime
-        if: always()
+        if: always() && needs.build-inputs.outputs.native != 'false'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "26.4.0"
 
       - name: Verify Node build
-        if: always()
-        timeout-minutes: 15
+        if: always() && needs.build-inputs.outputs.native != 'false'
+        timeout-minutes: 10
         working-directory: packages/cli
         run: bun run script/build-node.ts --single --skip-install --outdir=dist/node
 
   native-windows:
     name: native runtime build (windows)
+    needs: build-inputs
+    if: ${{ !cancelled() }}
     runs-on: windows-2025
     timeout-minutes: 60
     permissions:
@@ -262,26 +285,46 @@ jobs:
     env:
       YCODING_CHANNEL: latest
     steps:
+      - name: Report native build skip
+        if: needs.build-inputs.outputs.native == 'false'
+        run: echo "Native runtime build inputs are unchanged."
+
       - name: Checkout repository
+        if: needs.build-inputs.outputs.native != 'false'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
       - name: Resolve release version
+        if: needs.build-inputs.outputs.native != 'false'
         run: bash script/release-version.sh
 
       - name: Setup Bun
+        if: needs.build-inputs.outputs.native != 'false'
         uses: ./.github/actions/setup-bun
         with:
           install-flags: --frozen-lockfile
 
       - name: Setup Rust
+        id: rust
+        if: needs.build-inputs.outputs.native != 'false'
         uses: ./.github/actions/setup-rust
 
       - name: Build Windows native executable
+        if: needs.build-inputs.outputs.native != 'false'
+        timeout-minutes: 50
         run: bun run build:tui --target=win32-x64 --runtime-receipt="$RUNNER_TEMP/windows-runtime"
 
+      - name: Save Rust dependencies
+        if: always() && needs.build-inputs.outputs.native != 'false' && steps.rust.outcome == 'success'
+        uses: ./.github/actions/setup-rust/save
+        with:
+          cache-key: ${{ steps.rust.outputs.cargo-cache-key }}
+          cache-hit: ${{ steps.rust.outputs.cargo-cache-hit }}
+
       - name: Verify the embedded Windows runtime
+        if: needs.build-inputs.outputs.native != 'false'
+        timeout-minutes: 5
         run: bun packages/cli/script/runtime.ts verify-embedded dist/tui/tui-windows-x64/bin/ycoding.exe "$RUNNER_TEMP/windows-runtime/receipt.json"
 
   portability:

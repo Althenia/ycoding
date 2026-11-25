@@ -27,12 +27,6 @@ impl OAuthClient {
                 .map(str::to_owned),
         })
     }
-    pub fn embedded() -> Option<Self> {
-        Self::new(
-            option_env!("YCODING_MUSE_CLIENT_ID")?,
-            option_env!("YCODING_MUSE_CLIENT_SECRET"),
-        )
-    }
     pub(super) fn form<'a>(&'a self, extra: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
         let mut pairs = vec![("client_id", self.id.as_str())];
         if let Some(secret) = &self.secret {
