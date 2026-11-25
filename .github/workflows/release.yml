@@ -38,6 +38,10 @@ jobs:
             runner: ubuntu-24.04
           - suite: cli
             runner: ubuntu-24.04
+          - suite: cli-antigravity
+            runner: ubuntu-24.04
+          - suite: cli-muse
+            runner: ubuntu-24.04
           - suite: tui-project
             runner: ubuntu-24.04
           - suite: tui-runtime
@@ -152,13 +156,13 @@ jobs:
           bun test --timeout 30000 ./test/decision-watch.test.ts -t "both entrypoints advertise|already pending decision|every decision kind|completion is reported only|failed, interrupted, and rejected|timeout reports progress|resume command keeps|root accepted receipt|a family checkpoint|checkpoint boundary: rejects invalid|explicit conflicting root cursor is rejected|zero cursor against absent watermark rejects|assessment cut off by the deadline|read cut off by the deadline outside the assessment|resumed after an unavailable assessment|cancelling or killing a watch during a stalled assessment|queued work in outstanding data blocks completion only inside the watched scope"
 
       - name: Verify Antigravity provider and build fixture boundaries
-        if: matrix.suite == 'cli'
+        if: matrix.suite == 'cli-antigravity'
         run: |
           bun test --cwd packages/core ./test/plugin/provider-antigravity.test.ts ./test/plugin/provider-antigravity-signature-replay.test.ts
           bun test --cwd packages/cli/script ./antigravity-build-env.test.ts ./antigravity-build.test.ts
 
       - name: Verify Muse provider and build fixture boundaries
-        if: matrix.suite == 'cli'
+        if: matrix.suite == 'cli-muse'
         run: |
           bun test --cwd packages/core ./test/plugin/provider-muse.test.ts ./test/plugin/provider-muse-tools.test.ts ./test/provider-usage-muse.test.ts
           bun test --cwd packages/cli/script ./muse-build-env.test.ts ./muse-build.test.ts
@@ -264,7 +268,7 @@ jobs:
           bun test --cwd packages/tui --timeout 40000 ./test/screen/subagent-picker-capture.test.tsx -t "captures populated subagent picker states at reference terminal dimensions|sizes picker metadata to the measured composer width with and without the docked rail"
 
       - name: Verify native Dots access and retirement boundaries
-        if: matrix.suite == 'tui-runtime'
+        if: matrix.suite == 'tui-project'
         run: |
           bun test --cwd packages/core --timeout 40000 ./test/dots-context.test.ts ./test/dots-access.test.ts ./test/dots-access-config.test.ts ./test/dots-native.test.ts ./test/dots-native-admission.test.ts ./test/dots-native-projection.test.ts ./test/dots-native-decisions.test.ts ./test/dots-retirement-promotion.test.ts
           bun test --cwd packages/schema ./test/dots.test.ts ./test/dots-report.test.ts ./test/dots-report-state.test.ts ./test/dots-access.test.ts ./test/dots-native-source.test.ts ./test/dots-retirement.test.ts

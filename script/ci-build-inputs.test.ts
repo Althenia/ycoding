@@ -178,6 +178,6 @@ test("retains the entire release workflow, including full builds, publication an
   const desktop = jobs["build-desktop-runtime"]?.steps.find((step) => typeof step.run === "string" && step.run.includes("packages/desktop/script/build.sh"))
   expect(desktop).toBeDefined()
   expect(desktop?.if).toBeUndefined()
-  expect([...release.matchAll(/- suite: (\S+)/g)].map((match) => match[1])).toEqual(["types", "web", "cli", "tui-project", "tui-runtime"])
+  expect([...release.matchAll(/- suite: (\S+)/g)].map((match) => match[1])).toEqual(["types", "web", "cli", "cli-antigravity", "cli-muse", "tui-project", "tui-runtime"])
   expect(release).not.toContain("build-inputs")
 })
