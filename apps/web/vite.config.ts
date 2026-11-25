@@ -1,4 +1,5 @@
-import { defineConfig, type Plugin } from "vite"
+import { resolve } from "node:path"
+import { build, defineConfig, type Plugin } from "vite"
 import solidPlugin from "vite-plugin-solid"
 import { markdownAssets } from "./src/seo/llms"
 import { buildSitemap } from "./src/seo/sitemap"
@@ -43,21 +44,85 @@ function schemesPlugin(): Plugin {
   }
 }
 
+function routePrefetchPlugin(routes: readonly string[]): Plugin {
+  let base = "/"
+  let modules = new Set<string>()
+  return {
+    name: "ycoding-route-prefetch",
+    apply: "build",
+    configResolved(config) {
+      base = config.base
+      modules = new Set(routes.map((route) => resolve(config.root, route)))
+    },
+    transformIndexHtml: {
+      order: "post",
+      handler(_html, { chunk, bundle }) {
+        if (!chunk || !bundle) return []
+        const reach = (names: readonly string[], seen = new Set<string>()) => {
+          for (const name of names) {
+            const target = bundle[name]
+            if (seen.has(name) || target?.type !== "chunk") continue
+            seen.add(name)
+            reach(target.imports, seen)
+          }
+          return seen
+        }
+        const eager = reach([chunk.fileName])
+        const entries = chunk.dynamicImports.filter((name) => {
+          const target = bundle[name]
+          return target?.type === "chunk" && target.facadeModuleId !== null && modules.has(target.facadeModuleId)
+        })
+        return [...reach(entries)]
+          .filter((name) => !eager.has(name))
+          .map((name) => ({ tag: "link", attrs: { rel: "prefetch", href: `${base}${name}`, crossorigin: true }, injectTo: "head" as const }))
+      },
+    },
+  }
+}
+
+function serviceWorkerPlugin(): Plugin {
+  let root = ""
+  let outDir = ""
+  return {
+    name: "ycoding-service-worker",
+    apply: "build",
+    configResolved(config) {
+      root = config.root
+      outDir = resolve(config.root, config.build.outDir)
+    },
+    async closeBundle() {
+      await build({
+        configFile: false,
+        root,
+        logLevel: "warn",
+        build: {
+          target: "esnext",
+          outDir,
+          emptyOutDir: false,
+          copyPublicDir: false,
+          rollupOptions: {
+            input: "src/service-worker.ts",
+            output: { entryFileNames: "sw.js" },
+            treeshake: { moduleSideEffects: false },
+          },
+        },
+      })
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [solidPlugin(), sitemapPlugin(), llmsPlugin(), schemesPlugin()],
+  plugins: [solidPlugin(), sitemapPlugin(), llmsPlugin(), schemesPlugin(), routePrefetchPlugin(["src/ui/changelog.tsx"]), serviceWorkerPlugin()],
   server: { port: 3002 },
   build: {
     target: "esnext",
     rollupOptions: {
-      // The service worker is a separate module entry so it can import the shared
-      // offline policy instead of duplicating the cache rules as string literals.
       input: {
         index: "index.html",
-        "service-worker": "src/service-worker.ts",
         ...(verification ? { "verify-remote": "verify/remote.html" } : {}),
       },
       output: {
-        entryFileNames: (chunk) => (chunk.name === "service-worker" ? "sw.js" : "assets/[name]-[hash].js"),
+        manualChunks: (id) => (id.includes("/packages/protocol/") || id.includes("/node_modules/@bufbuild/") ? "protocol" : undefined),
       },
     },
   },

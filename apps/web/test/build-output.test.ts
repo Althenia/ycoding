@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { existsSync, readdirSync } from "node:fs"
+import { CACHE_NAME } from "../src/pwa/offline"
 
 /**
  * Verifies the built artifact, not the source: the shell, the service worker,
@@ -71,12 +72,23 @@ describe("built web output", () => {
     }
   })
 
+  test("loads the changelog on demand and prefetches it for the offline shell", async () => {
+    const html = await (await fetch(`${serverOrigin}/`)).text()
+    const linked = (pattern: RegExp) => [...html.matchAll(pattern)].map((match) => match[1] ?? "")
+    const read = async (paths: readonly string[]) => (await Promise.all(paths.map(async (path) => (await fetch(`${serverOrigin}${path}`)).text()))).join("\n")
+    const marker = "One Rust workspace and native plugins"
+    const eager = await read([...linked(/<script[^>]+src="(\/assets\/[^"]+\.js)"/g), ...linked(/<link rel="modulepreload"[^>]+href="(\/assets\/[^"]+\.js)"/g)])
+    const prefetched = await read(linked(/<link rel="prefetch"[^>]+href="(\/assets\/[^"]+\.js)"/g))
+    expect({ eager: eager.includes(marker), prefetched: prefetched.includes(marker), office: prefetched.includes("Phaser") }).toEqual({ eager: false, prefetched: true, office: false })
+  })
+
   test("serves the service worker from the root without hashing", async () => {
     const response = await fetch(`${serverOrigin}/sw.js`)
     expect(response.status).toBe(200)
     const source = await response.text()
-    expect(source).toContain("ycoding-web-shell-v3")
-    expect(source).not.toContain("ycoding-web-shell-v1")
+    expect(source).toContain(CACHE_NAME)
+    expect(source).not.toMatch(/\bimport\b|\bfrom\s*["']/)
+    expect(source.length).toBeLessThan(32 * 1024)
     // The blocked-path policy ships with the worker, so it skips API, auth, and socket traffic.
     expect(source).toContain('"/api"')
     expect(source).toContain('"/auth"')
@@ -127,9 +139,9 @@ describe("built web output", () => {
     // Mobile is the default composition: a single column until the tablet query.
     expect(css).toContain("grid-template-columns:minmax(0,1fr)")
     expect(css).toContain(".workspace__rail{display:none")
-    // Tablet and desktop add the Focus rail column; the collapsed rail keeps one hit-sized column.
-    expect(css).toContain(".app{grid-template-columns:var(--yc-rail-w)minmax(0,1fr)")
-    expect(css).toContain(".app--rail-collapsed{--rail-collapsed:calc(var(--yc-hit-min)+2*var(--yc-space-2))")
+    // Tablet and desktop add the activity bar and Focus rail columns; a collapsed rail closes beside the activity bar.
+    expect(css).toContain(".app{grid-template-columns:var(--yc-activity-w)var(--yc-rail-w)minmax(0,1fr)")
+    expect(css).toContain(".app--rail-collapsed{--rail-collapsed:0px;grid-template-columns:var(--yc-activity-w)var(--rail-collapsed)minmax(0,1fr)")
     expect(css).not.toContain(".workspace__activity")
   })
 

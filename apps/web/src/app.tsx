@@ -1,9 +1,8 @@
-import { Outlet, RouterProvider, createRootRoute, createRoute, createRouter, useChildMatches, useLocation, useParams, type RouterHistory } from "@tanstack/solid-router"
+import { Outlet, RouterProvider, createRootRoute, createRoute, createRouter, lazyRouteComponent, useChildMatches, useLocation, useParams, type RouterHistory } from "@tanstack/solid-router"
 import { Show, createEffect, onCleanup, type JSX } from "solid-js"
 import { useRouteMetadata } from "./seo/metadata"
 import { LandingPage, MarketingLayout, NotFoundPage } from "./ui/site"
 import { DocsIndexPage, DocsPage, useDocAnchor } from "./ui/docs"
-import { ChangelogPage } from "./ui/changelog"
 import { RemoteProvider, createRemoteSession, type RemoteSession } from "./remote/context"
 import { preloadCoordination, preloadKeepAwake, preloadUsage, preloadWorkspaces } from "./remote/preload"
 import type { RemoteStore } from "./remote/store"
@@ -13,6 +12,7 @@ import { REMOTE_INVITE_PATH, REMOTE_ROOT, REMOTE_VIEWS, canonicalRemotePath, rem
 import { Tooltips } from "./ui/tooltip"
 
 const remoteUnknownPath = "/remote/$"
+const ChangelogPage = lazyRouteComponent(() => import("./ui/changelog"), "ChangelogPage")
 
 export function createAppRouter(options: { readonly createRemoteStore?: () => RemoteStore; readonly history?: RouterHistory } = {}) {
   if (options.history) {
