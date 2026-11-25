@@ -139,5 +139,5 @@ const providers = [
 ]
 
 const integrations = [
-  { id: "anthropic", name: "Claude", methods: [], connections: [{ type: "credential" as const, id: "cred_test", label: "test" }] },
+  { id: "anthropic", name: "Claude", methods: [], connections: [{ type: "credential" as const, id: "cred_test", label: "test", active: true }] },
 ]

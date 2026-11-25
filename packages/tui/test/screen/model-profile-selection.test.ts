@@ -3,6 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { json, sessionSnapshot } from "../fixture/tui-client"
+import { InputRenderable } from "@opentui/core"
+import { DialogModel, type DialogModelResult } from "../../src/component/dialog-model"
+import { useDialog } from "../../src/ui/dialog"
+import { saveScreenCapture } from "../fixture/screen-capture"
 import { renderScreen } from "./harness"
 import type { useData } from "../../src/context/data"
 
@@ -200,4 +204,79 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, label: strin
     await new Promise<void>((resolve) => setImmediate(resolve))
   }
   throw new Error(`Timed out waiting for ${label}${frame ? `:\n${frame()}` : ""}`)
+}
+
+const lightRoutes = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-flash-thinking", "gemini-3.5-flash-lite"]
+const hydrogen = "gemini-4-hydrogen"
+const tiered = "gemini-4-hydrogen-tiered"
+
+function catalogRow(id: string, name: string, context = 1_048_576, efforts: string[] = [], target = id) {
+  return { ...model, providerID: "antigravity", id, modelID: target, name, limit: { context, output: 65_536 },
+    profiles: [{ name: "Lab", active: true, variants: efforts }], variants: efforts.map(id => ({ id })) }
+}
+
+for (const choice of ["saved favorite", "search"] as const) {
+  test(`same-name model routes remain distinct through ${choice}`, async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "ycoding-model-routes-"))
+    const providerID = "antigravity"
+    const favorite = { providerID, modelID: tiered, profile: "Lab" }
+    await Bun.write(path.join(state, "model.json"), JSON.stringify({ favorite: [favorite], recent: [], variant: { [`${providerID}/${tiered}#profile=Lab`]: "high" } }))
+    const catalog = [
+      ...lightRoutes.map(id => catalogRow(id, "Gemini 3.5 Flash Lite")),
+      catalogRow("gemini-3.1-flash-lite", "Gemini 3.1 Flash Lite"),
+      catalogRow(hydrogen, "Gemini 4 Hydrogen", 500_000, ["low", "medium", "high", "xhigh"], `${hydrogen}-medium`),
+      catalogRow(tiered, "Gemini 4 Hydrogen", 1_048_576, ["high", "xhigh"], `${tiered}-high`),
+    ]
+    let open!: () => void
+    let result: DialogModelResult | undefined
+    const fallback = route({ requests: [], integrationWrites: [] })
+    const screen = await renderScreen({ width: 120, height: 42, state, settle: "Message YCoding…",
+      data: () => { const dialog = useDialog(); open = () => dialog.replace(() => DialogModel({ onComplete: value => { result = value } })) },
+      route: (url, request) => url.pathname === "/api/model" ? json({ location, data: catalog })
+        : url.pathname === "/api/provider" ? json({ location, data: [{ id: providerID, name: "Antigravity" }] })
+        : url.pathname === "/api/integration" ? json({ location, data: [{ id: providerID, name: "Antigravity", methods: [], connections: [{ type: "credential", id: "cred_lab", label: "Lab", active: true }] }] })
+        : fallback(url, request),
+    })
+    const visible = (text: string) => waitFor(async () => { await screen.renderOnce(); return screen.frame().includes(text) }, text, screen.frame)
+    const click = async (text: string) => {
+      const rows = screen.lines()
+      const y = rows.findIndex(line => line.includes(text))
+      expect(y).toBeGreaterThanOrEqual(0)
+      await screen.mouse.click(rows[y].indexOf(text) + 1, y)
+    }
+    try {
+      open()
+      await visible("Favorites")
+      await visible("Gemini 3.1 Flash Lite")
+      for (const id of [...lightRoutes, hydrogen, tiered]) expect(screen.frame()).toMatch(new RegExp(`\\b${id.replaceAll(".", "\\.")}(?![\\w-])`))
+      const saved = screen.lines().find(line => line.includes(tiered))!
+      expect(saved).toContain("Lab")
+      expect(saved).toContain("1.048576m")
+      expect(screen.lines().find(line => line.includes("500k"))).toContain(hydrogen)
+      if (choice === "saved favorite") {
+        await saveScreenCapture("same-name-model-routes", screen)
+        await click(tiered)
+        await visible("Provider profile")
+        await click("Lab")
+        await waitFor(() => result !== undefined, "saved model selection")
+        expect(result).toEqual({ type: "selected", selection: { ...favorite, variant: "high" } })
+      } else {
+        await waitFor(() => screen.renderer.currentFocusedEditor instanceof InputRenderable, "picker search focus")
+        await screen.input.typeText(hydrogen)
+        await visible(tiered)
+        await waitFor(async () => { await screen.renderOnce(); return !screen.frame().includes("Favorites") && !screen.frame().includes("Gemini 3.1 Flash Lite") }, "filtered routes", screen.frame)
+        expect(screen.lines().filter(line => line.includes("Gemini 4 Hydrogen ·"))).toHaveLength(2)
+        await click(`Gemini 4 Hydrogen · ${hydrogen} `)
+        await visible("Provider profile")
+        await click("Lab")
+        await visible("Select variant")
+        await click("medium")
+        await waitFor(() => result !== undefined, "standard route selection")
+        expect(result).toEqual({ type: "selected", selection: { providerID, modelID: hydrogen, profile: "Lab", variant: "medium" } })
+      }
+    } finally {
+      await screen.dispose()
+      await rm(state, { recursive: true, force: true })
+    }
+  }, 30_000)
 }

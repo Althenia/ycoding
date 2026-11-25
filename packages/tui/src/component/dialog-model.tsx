@@ -68,6 +68,14 @@ export function DialogModel(props: {
   const providers = createMemo(() => new Map((data.location.provider.list(selectionLocation()) ?? []).map((item) => [item.id, item])))
   const models = createMemo(() => data.location.model.list(selectionLocation()) ?? [])
 
+  const titles = createMemo(() => {
+    const counts = new Map<string, number>()
+    const key = (model: ReturnType<typeof models>[number]) => JSON.stringify([model.providerID, model.name])
+    for (const model of models()) counts.set(key(model), (counts.get(key(model)) ?? 0) + 1)
+    return (model: ReturnType<typeof models>[number]) =>
+      counts.get(key(model))! > 1 ? `${model.name} · ${model.id}` : model.name
+  })
+
   const showExtra = createMemo(() => connected() && !props.providerID)
 
   const options = createMemo(() => {
@@ -86,7 +94,7 @@ export function DialogModel(props: {
           {
             key: item,
             value: { providerID: model.providerID, modelID: model.id, ...(item.profile === undefined ? {} : { profile: item.profile }) },
-            title: model.name,
+            title: titles()(model),
             releaseDate: model.time.released,
             description: `${provider?.name ?? model.providerID} · ${item.profile ?? "provider default"}`,
             category,
@@ -120,7 +128,7 @@ export function DialogModel(props: {
             providerID: model.providerID,
             providerName: provider?.name ?? model.providerID,
             enabled: selectable,
-            title: model.name,
+            title: titles()(model),
             releaseDate: model.time.released,
             description: model.family
               ? `${model.family}${model.enabled && model.capabilities.tools ? " · tools" : ""}`
