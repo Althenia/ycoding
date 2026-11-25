@@ -273,6 +273,7 @@ test("the publication command selects Latest only for stable Rust at least as ne
     ["v0.13.2", "v0.13.10", "false"],
     ["v0.12.2", "v0.13.1", "false"],
     ["v0.14.0-beta.1", "v0.13.1", "false"],
+    ["desktop-v0.14.0", "v0.13.1", "false"],
   ] as const
   for (const [tag, latest, expected] of cases) {
     const result = Bun.spawnSync([process.execPath, path.join(import.meta.dir, "release-publish.ts"), "latest", tag, latest])

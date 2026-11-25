@@ -239,6 +239,132 @@ function createCommandRunner(
   }
 }
 
+function nativeRelease(version: string, desktop = false) {
+  const tagName = `${desktop ? "desktop-" : ""}v${version}`
+  const release = releasePayload({ version, tagName })
+  return {
+    ...release,
+    draft: false,
+    prerelease: false,
+    assets: release.assets.map((asset) => ({
+      name: desktop ? asset.name.replace(`ycoding-${version}-checksums`, `ycoding-desktop-${version}-checksums`) : asset.name,
+      browser_download_url: asset.browser_download_url.replace(`/v${version}/`, `/${tagName}/`).replace(
+        `ycoding-${version}-checksums`, desktop ? `ycoding-desktop-${version}-checksums` : `ycoding-${version}-checksums`,
+      ),
+    })),
+  }
+}
+
+describe("native Desktop release tags", () => {
+  test.each([
+    [[nativeRelease("0.13.2"), nativeRelease("0.13.3", true)], "0.13.3", "desktop-v0.13.3"],
+    [[nativeRelease("0.13.3", true), nativeRelease("0.13.4")], "0.13.4", "v0.13.4"],
+    [[nativeRelease("0.13.4", true), nativeRelease("0.13.4")], "0.13.4", "v0.13.4"],
+    [[nativeRelease("0.13.4"), nativeRelease("0.13.4", true)], "0.13.4", "v0.13.4"],
+    [[nativeRelease("0.13.2"), { ...nativeRelease("0.14.0", true), draft: true },
+      { ...nativeRelease("0.15.0", true), prerelease: true }, nativeRelease("0.16.0-rc.1", true),
+      { ...nativeRelease("0.17.0"), tag_name: "web-v0.17.0" },
+      { ...nativeRelease("0.18.0"), tag_name: "tui-v0.18.0" }], "0.13.2", "v0.13.2"],
+  ])("selects the highest applicable release %#", async (releases, version, tag) => {
+    const result = await checkForUpdates({
+      currentVersion: "0.13.0", appBundlePath: "/synthetic/YCoding Desktop.app", platform: "darwin", arch: "arm64",
+      access: async () => {}, fetch: async () => jsonResponse(releases, nativeReleasesUrl),
+    })
+    expect(result).toMatchObject({ latestVersion: version, releaseUrl: `https://github.com/Althenia/ycoding/releases/tag/${tag}`, canInstall: true })
+  })
+
+  test("uses the release entry HTTPS URL for a Desktop-only release", async () => {
+    const release = { ...nativeRelease("0.13.3", true), html_url: "https://example.com/release" }
+    const result = await checkForUpdates({ currentVersion: "0.13.0", appBundlePath: null,
+      fetch: async () => jsonResponse([release], nativeReleasesUrl),
+    })
+    expect(result.releaseUrl).toBe("https://example.com/release")
+  })
+
+  test.each([false, true])("installs the Desktop-only release with explicit target %s", async (explicit) => {
+    await withTempDir(async (root) => {
+      const fixture = await createInstallFixture(root, { currentVersion: "0.13.0", targetVersion: "0.13.3" })
+      const urls: string[] = []
+      const base = "https://github.com/Althenia/ycoding/releases/download/desktop-v0.13.3"
+      const result = await installUpdate({
+        currentVersion: fixture.currentVersion, ...(explicit ? { targetVersion: fixture.targetVersion } : {}),
+        appBundlePath: fixture.appBundlePath, platform: "darwin", arch: "arm64",
+        fetch: async (input) => {
+          const url = String(input); urls.push(url)
+          if (url === nativeReleasesUrl) return jsonResponse([nativeRelease("0.13.2"), nativeRelease("0.13.3", true)], url)
+          if (url === `${base}/ycoding-desktop-0.13.3-checksums.txt`) return withUrl(new Response(fixture.checksumsText), url)
+          if (url === `${base}/${fixture.zipName}`) return withUrl(new Response(fixture.zipBytes), url)
+          return withUrl(new Response("not found", { status: 404 }), url)
+        },
+        runCommand: createCommandRunner([]),
+      })
+      expect(result.installedVersion).toBe("0.13.3")
+      expect(urls).toEqual([nativeReleasesUrl, `${base}/ycoding-desktop-0.13.3-checksums.txt`, `${base}/${fixture.zipName}`])
+    })
+  })
+
+  test.each([false, true])("rejects missing Desktop checksums, combined-style present: %s", async (combinedStyle) => {
+    await withTempDir(async (root) => {
+      const fixture = await createInstallFixture(root, { currentVersion: "0.13.0", targetVersion: "0.13.3" })
+      const release = nativeRelease("0.13.3", true)
+      const assets = release.assets.filter((asset) => !asset.name.endsWith("checksums.txt"))
+      if (combinedStyle) assets.push(releasePayload({ version: "0.13.3" }).assets[1]!)
+      const urls: string[] = []; const commands: string[][] = []
+      const options = { currentVersion: fixture.currentVersion, appBundlePath: fixture.appBundlePath, platform: "darwin", arch: "arm64",
+        fetch: async (input: string | URL | Request) => { const url = String(input); urls.push(url); return jsonResponse([{ ...release, assets }], url) },
+      } as const
+      expect(await checkForUpdates(options)).toMatchObject({ canInstall: false, cannotInstallReason: "The release does not publish ycoding-desktop-0.13.3-checksums.txt over HTTPS" })
+      await expect(installUpdate({ ...options, runCommand: createCommandRunner(commands) })).rejects.toThrow("ycoding-desktop-0.13.3-checksums.txt")
+      expect(urls).toEqual([nativeReleasesUrl, nativeReleasesUrl]); expect(commands).toEqual([])
+    })
+  })
+
+  test.each([
+    ["0.13.3", [nativeRelease("0.13.3", true)], "desktop-v0.13.3", "ycoding-desktop-0.13.3-checksums.txt"],
+    ["0.13.3", [nativeRelease("0.13.3", true), nativeRelease("0.13.3")], "v0.13.3", "ycoding-0.13.3-checksums.txt"],
+    ["0.14.0-rc.1", [{ ...nativeRelease("0.14.0-rc.1", true), prerelease: true }], "desktop-v0.14.0-rc.1", "ycoding-desktop-0.14.0-rc.1-checksums.txt"],
+  ])("installs explicit target %s from %s", async (targetVersion, releases, tag, checksums) => {
+    await withTempDir(async (root) => {
+      const fixture = await createInstallFixture(root, { currentVersion: "0.13.0", targetVersion })
+      const urls: string[] = []
+      const base = `https://github.com/Althenia/ycoding/releases/download/${tag}`
+      const result = await installUpdate({
+        currentVersion: fixture.currentVersion, targetVersion, appBundlePath: fixture.appBundlePath,
+        platform: "darwin", arch: "arm64", runCommand: createCommandRunner([]),
+        fetch: async (input) => {
+          const url = String(input)
+          urls.push(url)
+          if (url === nativeReleasesUrl) return jsonResponse(releases, url)
+          if (url === `${base}/${checksums}`) return withUrl(new Response(fixture.checksumsText), url)
+          if (url === `${base}/${fixture.zipName}`) return withUrl(new Response(fixture.zipBytes), url)
+          return withUrl(new Response("not found", { status: 404 }), url)
+        },
+      })
+      expect(result.installedVersion).toBe(targetVersion)
+      expect(urls).toEqual([nativeReleasesUrl, `${base}/${checksums}`, `${base}/${fixture.zipName}`])
+    })
+  })
+
+  test.each(["missing", "invalid"])("falls back to the combined tag when target metadata is %s", async (kind) => {
+    await withTempDir(async (root) => {
+      const fixture = await createInstallFixture(root, { currentVersion: "0.13.0", targetVersion: "0.13.3" })
+      const urls: string[] = []
+      const base = "https://github.com/Althenia/ycoding/releases/download/v0.13.3"
+      await installUpdate({ currentVersion: fixture.currentVersion, targetVersion: fixture.targetVersion,
+        appBundlePath: fixture.appBundlePath, platform: "darwin", arch: "arm64", runCommand: createCommandRunner([]),
+        fetch: async (input) => {
+          const url = String(input); urls.push(url)
+          if (url === nativeReleasesUrl) return jsonResponse(kind === "missing" ? [nativeRelease("0.13.4")] : {}, url)
+          if (url === `${base}/${fixture.checksumsName}`) return withUrl(new Response(fixture.checksumsText), url)
+          if (url === `${base}/${fixture.zipName}`) return withUrl(new Response(fixture.zipBytes), url)
+          return withUrl(new Response("not found", { status: 404 }), url)
+        },
+      })
+      expect(urls).toEqual([nativeReleasesUrl, `${base}/${fixture.checksumsName}`, `${base}/${fixture.zipName}`])
+    })
+  })
+})
+
 describe("desktop updater constants and bundle path resolution", () => {
   test("exports pinned GitHub release URL, bundle identifier, and signing certificate SHA-1", () => {
     expect(DESKTOP_GITHUB_LATEST_RELEASE_URL).toBe("https://api.github.com/repos/Althenia/ycoding/releases/latest")
@@ -957,7 +1083,7 @@ describe("installUpdate", () => {
         relaunching: true,
       })
       const releaseBase = `https://github.com/Althenia/ycoding/releases/download/v${targetVersion}`
-      expect(urls).toEqual([...(metadataUrl === undefined ? [] : [metadataUrl]), `${releaseBase}/${fixture.checksumsName}`, `${releaseBase}/${fixture.zipName}`])
+      expect(urls).toEqual([...(metadataUrl === undefined ? [nativeReleasesUrl] : [metadataUrl]), `${releaseBase}/${fixture.checksumsName}`, `${releaseBase}/${fixture.zipName}`])
 
       const dittoCommand = commands.find((cmd) => cmd[0] === "/usr/bin/ditto")
       expect(dittoCommand?.slice(0, 3)).toEqual(["/usr/bin/ditto", "-x", "-k"])

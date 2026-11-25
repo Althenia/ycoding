@@ -207,18 +207,19 @@ async function create(target: Target, version: string, directory: string, output
   console.log(`Prepared ${filename(target, version)}`)
 }
 
-async function finalize(version: string, directory: string, output: string) {
-  const expected = releaseArchives(version)
-  if (JSON.stringify((await fs.readdir(directory)).sort()) !== JSON.stringify([...expected].sort())) throw new Error(`Expected exactly ${expected.length} release archives for ${version}`)
+async function finalize(version: string, directory: string, output: string, desktopOnly: boolean) {
+  const expected = desktopOnly ? [desktopFilename(version)] : releaseArchives(version)
+  if (JSON.stringify((await fs.readdir(directory)).sort()) !== JSON.stringify([...expected].sort()))
+    throw new Error(desktopOnly ? `Expected exactly the Desktop release archive for ${version}` : `Expected exactly ${expected.length} release archives for ${version}`)
   await fs.mkdir(output, { recursive: true })
   if ((await fs.readdir(output)).length !== 0) throw new Error("Release output must be empty")
-  for (const target of releaseTargets(version)) await validateArchive(path.join(directory, filename(target, version)), target, version)
+  if (!desktopOnly) for (const target of releaseTargets(version)) await validateArchive(path.join(directory, filename(target, version)), target, version)
   await validateDesktopArchive(path.join(directory, desktopFilename(version)))
   for (const name of expected) await fs.copyFile(path.join(directory, name), path.join(output, name))
   for (const name of ["LICENSE", "NOTICE"]) await fs.copyFile(path.join(import.meta.dir, "..", name), path.join(output, name))
   const checksums = await Promise.all([...expected, "LICENSE", "NOTICE"].map(async (name) => `${createHash("sha256").update(new Uint8Array(await Bun.file(path.join(output, name)).arrayBuffer())).digest("hex")}  ${name}\n`))
-  await Bun.write(path.join(output, `ycoding-${version}-checksums.txt`), checksums.join(""))
-  console.log(`Validated ${expected.length} release archives and all ${checksums.length} asset checksums`)
+  await Bun.write(path.join(output, desktopOnly ? `ycoding-desktop-${version}-checksums.txt` : `ycoding-${version}-checksums.txt`), checksums.join(""))
+  console.log(desktopOnly ? `Validated the Desktop release archive and all ${checksums.length} asset checksums` : `Validated ${expected.length} release archives and all ${checksums.length} asset checksums`)
 }
 
 if (import.meta.main) await main()
@@ -239,9 +240,9 @@ async function main() {
     await createDesktop(version, path.resolve(args[2]!), path.resolve(args[3]!))
     return
   }
-  if (args[0] === "finalize" && args.length === 4) {
-    await finalize(version, path.resolve(args[2]!), path.resolve(args[3]!))
+  if ((args[0] === "finalize" || args[0] === "finalize-desktop") && args.length === 4) {
+    await finalize(version, path.resolve(args[2]!), path.resolve(args[3]!), args[0] === "finalize-desktop")
     return
   }
-  throw new Error("Use executable <target> <version>, create <target> <version> <source> <output>, create-desktop <version> <application> <output> or finalize <version> <source> <output>")
+  throw new Error("Use executable <target> <version>, create <target> <version> <source> <output>, create-desktop <version> <application> <output>, finalize <version> <source> <output> or finalize-desktop <version> <source> <output>")
 }
