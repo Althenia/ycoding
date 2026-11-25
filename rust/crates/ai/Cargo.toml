@@ -16,7 +16,6 @@ rustls-platform-verifier = "=0.7.1"
 tokio-rustls = { version = "=0.26.6", default-features = false, features = ["tls12", "aws_lc_rs"] }
 flate2 = "=1.1.10"
 ring.workspace = true
-crc32fast.workspace = true
 futures-util.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -26,3 +25,6 @@ tokio.workspace = true
 tokio-tungstenite.workspace = true
 tracing.workspace = true
 ycoding-schema = { path = "../schema" }
+
+[dev-dependencies]
+crc32fast.workspace = true

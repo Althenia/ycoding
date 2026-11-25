@@ -1,0 +1,40 @@
+name: "Save Rust dependency cache"
+description: "Keep only third-party build artifacts and save the dependency cache restored by setup-rust after an exact-key miss, even when the build failed or timed out"
+inputs:
+  cache-key:
+    description: "The cargo-cache-key output of setup-rust"
+    required: true
+  cache-hit:
+    description: "The cargo-cache-hit output of setup-rust"
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: Remove workspace build artifacts
+      if: always() && inputs.cache-key != '' && inputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        hash='[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'
+        names="$(cargo metadata --locked --manifest-path rust/Cargo.toml --no-deps --format-version 1 | jq -r '.packages[] | .name, (.targets[] | select(.kind | index("custom-build") | not) | .name)' | tr -d '\r' | sort -u)"
+        for profile in rust/target/*/; do
+          test -d "$profile/deps" || continue
+          while IFS= read -r name; do
+            unit="${name//-/_}"
+            find "$profile" -maxdepth 1 -type f \( -name "$name" -o -name "$name.d" -o -name "$name.exe" -o -name "$name.pdb" \) -delete
+            find "$profile/deps" "$profile/examples" -maxdepth 1 \( -name "$unit-$hash*" -o -name "lib$unit-$hash*" \) -exec rm -rf {} + 2>/dev/null || true
+            find "$profile/.fingerprint" "$profile/build" -maxdepth 1 -name "$name-$hash" -exec rm -rf {} + 2>/dev/null || true
+            rm -rf "$profile/build/$name"
+          done <<< "$names"
+        done
+
+    - name: Save Rust dependencies and build artifacts
+      if: always() && inputs.cache-key != '' && inputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          rust/target
+        key: ${{ inputs.cache-key }}

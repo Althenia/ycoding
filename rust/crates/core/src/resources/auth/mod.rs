@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use std::{
     fmt,
     future::Future,
-    sync::{LazyLock, Mutex},
+    sync::{LazyLock, Mutex, OnceLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use url::Url;
@@ -221,6 +221,28 @@ impl fmt::Debug for DeviceFlow {
     }
 }
 
+struct EmbeddedClients {
+    muse: Option<muse::OAuthClient>,
+    antigravity: Option<antigravity::OAuthClient>,
+}
+static EMBEDDED_CLIENTS: OnceLock<EmbeddedClients> = OnceLock::new();
+
+pub fn install_embedded_clients(
+    antigravity: Option<(&str, Option<&str>)>,
+    muse: Option<(&str, Option<&str>)>,
+) -> bool {
+    let mut installed = false;
+    EMBEDDED_CLIENTS.get_or_init(|| {
+        installed = true;
+        EmbeddedClients {
+            antigravity: antigravity
+                .and_then(|(id, secret)| antigravity::OAuthClient::new(id, secret)),
+            muse: muse.and_then(|(id, secret)| muse::OAuthClient::new(id, secret)),
+        }
+    });
+    installed
+}
+
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
@@ -245,6 +267,7 @@ impl Client {
         }
         url.set_query(None);
         url.set_fragment(None);
+        let embedded = EMBEDDED_CLIENTS.get();
         Ok(Self {
             http: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
@@ -253,8 +276,8 @@ impl Client {
                 .map_err(|_| Error::Rejected)?,
             endpoint: url.as_str().trim_end_matches('/').into(),
             user_agent: format!("ycoding/{version}"),
-            muse: muse::OAuthClient::embedded(),
-            antigravity: antigravity::OAuthClient::embedded(),
+            muse: embedded.and_then(|clients| clients.muse.clone()),
+            antigravity: embedded.and_then(|clients| clients.antigravity.clone()),
         })
     }
     pub fn with_muse_client(mut self, client: Option<muse::OAuthClient>) -> Self {

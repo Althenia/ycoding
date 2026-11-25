@@ -9,7 +9,17 @@ inputs:
     description: "Restore the shared cache written by the Apple Silicon Desktop release job"
     required: false
     default: ""
+  sccache:
+    description: "Install the checksum-verified sccache compiler wrapper"
+    required: false
+    default: "false"
 outputs:
+  cargo-cache-hit:
+    description: "Whether the dependency cache was restored by its exact key"
+    value: ${{ steps.cargo-cache.outputs.cache-hit }}
+  cargo-cache-key:
+    description: "Primary key for the dependency cache saved by setup-rust/save"
+    value: ${{ steps.cargo-cache.outputs.cache-primary-key }}
   release-cache-hit:
     description: "Whether the Apple Silicon cache was restored"
     value: ${{ steps.release-cache.outputs.cache-hit }}
@@ -103,19 +113,60 @@ runs:
         if [ "$RUNNER_OS" = "Windows" ]; then executable="$(cygpath -w "$executable")"; fi
         echo "PROTOC=$executable" >> "$GITHUB_ENV"
 
-    - name: Cache Rust dependencies and build artifacts
+    - name: Cache sccache archive
+      if: inputs.sccache == 'true'
+      id: sccache-archive
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/sccache-archive-0.19.0
+        key: ${{ runner.os }}-${{ runner.arch }}-sccache-archive-0.19.0
+
+    - name: Install sccache
+      if: inputs.sccache == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        version=0.19.0
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          macOS-ARM64) target=aarch64-apple-darwin; sha256=a35a0b7d622618774bc1bb8102d72562dfb21e619f88b153b370d7f89bc286af ;;
+          Linux-X64) target=x86_64-unknown-linux-musl; sha256=aa73c7270c997894038c0d8f0d297865f57569e1687883322bc431713d4bb9dd ;;
+          *) echo "Unsupported runner for sccache $version: $RUNNER_OS-$RUNNER_ARCH" >&2; exit 1 ;;
+        esac
+        name="sccache-v$version-$target"
+        cache="$RUNNER_TEMP/sccache-archive-$version"
+        directory="$RUNNER_TEMP/sccache-$version"
+        mkdir -p "$cache" "$directory"
+        archive="$cache/$name.tar.gz"
+        if [ -f "$archive" ] && [ "$(shasum -a 256 < "$archive" | cut -d' ' -f1)" != "$sha256" ]; then rm -f "$archive"; fi
+        if [ ! -f "$archive" ]; then
+          curl --fail --silent --show-error --location --retry 3 --output "$archive" "https://github.com/mozilla/sccache/releases/download/v$version/$name.tar.gz"
+        fi
+        test "$(shasum -a 256 < "$archive" | cut -d' ' -f1)" = "$sha256" || { echo "sccache checksum mismatch for $target" >&2; exit 1; }
+        tar -xzf "$archive" -C "$directory"
+        executable="$directory/$name/sccache"
+        test "$("$executable" --version)" = "sccache $version"
+        echo "$(dirname "$executable")" >> "$GITHUB_PATH"
+        echo "SCCACHE_DIR=$RUNNER_TEMP/sccache-store" >> "$GITHUB_ENV"
+
+    - name: Save sccache archive
+      if: inputs.sccache == 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && steps.sccache-archive.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/sccache-archive-0.19.0
+        key: ${{ steps.sccache-archive.outputs.cache-primary-key }}
+
+    - name: Restore Rust dependencies and build artifacts
       if: inputs.release-cache == ''
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      id: cargo-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           ~/.cargo/registry/index/
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
           rust/target
-        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml', 'rust/vendor/**') }}-${{ hashFiles('rust/crates/**/Cargo.toml', 'rust/crates/**/build.rs') }}-${{ hashFiles('rust/crates/**/*.rs') }}
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml', 'rust/vendor/**') }}
         restore-keys: |
-          ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml', 'rust/vendor/**') }}-${{ hashFiles('rust/crates/**/Cargo.toml', 'rust/crates/**/build.rs') }}-
-          ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml', 'rust/vendor/**') }}-
           ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-
 
     - name: Restore Apple Silicon release dependencies
@@ -129,6 +180,11 @@ runs:
           ~/.cargo/git/db/
           rust/target/release
         key: ${{ runner.os }}-${{ runner.arch }}-cargo-desktop-release-${{ hashFiles('.github/actions/setup-rust/action.yml', 'rust/Cargo.lock', 'rust/Cargo.toml', 'rust/vendor/**', 'rust/crates/**/Cargo.toml', 'rust/crates/**/build.rs') }}
+
+    - name: Normalize vendored source timestamps
+      if: steps.release-cache.outputs.cache-hit == 'true' || steps.cargo-cache.outputs.cache-hit == 'true'
+      shell: bash
+      run: find rust/vendor -exec touch -t 200001010000 {} +
 
     - name: Verify Windows native build tools
       if: runner.os == 'Windows'

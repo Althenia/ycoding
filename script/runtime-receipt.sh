@@ -16,7 +16,7 @@ case "$profile" in
   dev) ;;
   release)
     schema=ycoding.release-runtime.receipt/1
-    command="cargo build --message-format=json-render-diagnostics --locked --manifest-path rust/Cargo.toml --release -p ycoding-runtime --bin ycoding-runtime"
+    command="cargo build --message-format=json-render-diagnostics --timings --locked --manifest-path rust/Cargo.toml --release -p ycoding-runtime --bin ycoding-runtime"
     policy+=(AWS_LC_SYS_PREBUILT_NASM)
     ;;
   *) fail "RECEIPT_PROFILE must be dev or release" ;;

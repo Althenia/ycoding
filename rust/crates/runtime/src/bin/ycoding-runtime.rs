@@ -5,6 +5,12 @@ use ycoding_runtime::launch::{
 };
 
 fn main() -> ExitCode {
+    ycoding_core::resources::auth::install_embedded_clients(
+        option_env!("YCODING_ANTIGRAVITY_CLIENT_ID")
+            .map(|id| (id, option_env!("YCODING_ANTIGRAVITY_CLIENT_SECRET"))),
+        option_env!("YCODING_MUSE_CLIENT_ID")
+            .map(|id| (id, option_env!("YCODING_MUSE_CLIENT_SECRET"))),
+    );
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if let Some(result) = ycoding_runtime::regex_worker::run(&args) {
         return match result {
