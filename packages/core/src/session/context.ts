@@ -155,6 +155,16 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
       if (source.scope === "standalone") yield* source.agents.refresh().pipe(Effect.mapError(unavailable))
       const access = yield* coordination.accessOf(sessionID)
       const coordinating = (yield* coordination.scopeOf(sessionID)) !== undefined
+      const coordinationRole =
+        access === undefined
+          ? "root"
+          : access.role !== "executor"
+            ? access.role
+            : coordinating
+              ? "reviewer"
+              : session.parentID === undefined
+                ? "member"
+                : "subagent"
       const modelOverride = yield* CoordinationModel.override(db, sessionID)
       const agent = yield* agents.select(session.agent)
       if (!agent.info) return yield* new AgentNotFoundError({ sessionID: session.id, agent: session.agent ?? agent.id })
@@ -172,8 +182,20 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
       const instructions = yield* Effect.all(
         [
           builtins.load({ sessionID, capabilities, tools, scope: source.scope }),
-          ...(source.scope === "bound" ? [source.discovery.load(), source.skillInstructions.load(instructionAgent), source.referenceInstructions.load(), source.mcpInstructions.load(instructionAgent)] : []),
-          Effect.succeed(Instructions.when(access !== undefined, CoordinationInstructions.make(access?.role ?? "executor", coordinating))),
+          ...(source.scope === "bound"
+            ? [
+                source.discovery.load(),
+                source.skillInstructions.load(instructionAgent),
+                source.referenceInstructions.load(),
+                source.mcpInstructions.load(instructionAgent),
+              ]
+            : []),
+          Effect.succeed(
+            Instructions.when(
+              source.scope === "bound" && (access !== undefined || session.parentID === undefined),
+              CoordinationInstructions.make(coordinationRole),
+            ),
+          ),
           Effect.succeed(
             Instructions.when(
               InstructionBuiltIns.enabled("project-artifact-authoring", { capabilities, tools }),

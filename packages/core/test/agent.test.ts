@@ -588,15 +588,19 @@ describe("Agent", () => {
       yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
         Effect.provideService(Location.Service, Location.Service.of(testLocation)),
       )
-      const delegationRule =
-        "When the coordinator is instructed to do project work, delegate it. The master coordinates and delegates to the appropriate supervisor/owner; that supervisor creates, updates, or steers suitable member sessions, and those members execute, verify, and deliver. The master does not do project work or directly create, steer, update, or manage member sessions."
       for (const id of ["architech", "god", "zeus", "occam"]) {
         const item = yield* agent.get(Agent.ID.make(id))
-        expect(item?.system).toContain("Control only this Session's direct subagents; never another Session's children.")
-        expect(item?.system).toContain("Project ownership is separate from parent-child ownership: use Project controls only within the recorded role, without taking over member execution.")
+        expect(item?.system).toContain(
+          "Control only this Session's direct subagents; never another Session's children.",
+        )
         expect(item?.system).toContain("Membership or ancestry grants no controller authority.")
-        expect(item?.system?.split(delegationRule)).toHaveLength(2)
+        expect(item?.system).toContain(
+          "Follow the recorded Session role before applying general execution or delegation guidance.",
+        )
         for (const conflicting of [
+          "When the coordinator is instructed to do project work",
+          "`project send`",
+          "`project create`",
           "Default to direct Master",
           "Master -> member by default",
           "Master → member by default",

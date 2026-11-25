@@ -476,7 +476,7 @@ describe("project tool and model request materialization", () => {
     }),
   )
 
-  it.effect("executor children never gain the project tool from ancestry; recorded owners gain it until ownership is released", () =>
+  it.effect("executor children never gain the project tool unless they become recorded owners", () =>
     Effect.gen(function* () {
       const fixture = yield* setupProject
       const masterChild = Session.ID.make("ses_coord_master_child")
@@ -487,8 +487,10 @@ describe("project tool and model request materialization", () => {
       expect(toolNames(masterRequest)).not.toContain("project")
       for (const name of ["edit", "write", "patch"]) expect(toolNames(masterRequest)).not.toContain(name)
       expect(JSON.stringify(masterRequest?.system)).not.toContain("Coordinate and supervise only")
-      expect(JSON.stringify(masterRequest?.system)).toContain("Project role: Master's subagent. You make no Project changes")
-      expect(JSON.stringify(masterRequest?.system)).not.toContain("Project role: executor")
+      expect(JSON.stringify(masterRequest?.system)).toContain(
+        "Project role: subagent. Work read-only in the Master's family",
+      )
+      expect(JSON.stringify(masterRequest?.system)).not.toContain("Project role: member")
       yield* fixture.coordination.setOwner(fixture.group.id, { sessionID, ownerSessionID: masterChild })
       const supervising = yield* requestFor(masterChild, "Supervise the member")
       expect(toolNames(supervising)).toContain("project")

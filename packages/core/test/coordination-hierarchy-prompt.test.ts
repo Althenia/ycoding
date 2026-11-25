@@ -6,7 +6,6 @@ import { AttachmentStore } from "@ycoding-ai/core/attachment-store"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Config } from "@ycoding-ai/core/config"
 import { CoordinationService } from "@ycoding-ai/core/coordination/index"
-import { CoordinationInstructions } from "@ycoding-ai/core/coordination/instructions"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
@@ -22,6 +21,7 @@ import { Location } from "@ycoding-ai/core/location"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { McpInstructions } from "@ycoding-ai/core/mcp/instructions"
 import { Permission } from "@ycoding-ai/core/permission"
+import { AgentPlugin } from "@ycoding-ai/core/plugin/agent"
 import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
 import { PluginSupervisor } from "@ycoding-ai/core/plugin/supervisor"
 import { Project } from "@ycoding-ai/core/project"
@@ -154,6 +154,7 @@ const fixtureAgents = AppNodeBuilder.build(Agent.node).pipe(
   Layer.tap((context) => {
     const agents = Context.get(context, Agent.Service)
     return agents.transform((draft) => {
+      AgentPlugin.apply(draft)
       draft.update(Agent.ID.make("god"), (agent) => {
         agent.mode = "primary"
         agent.hidden = false
@@ -327,7 +328,7 @@ const it = testEffect(
 )
 const sessionID = Session.ID.make("ses_coord_worker")
 const otherSessionID = Session.ID.make("ses_coord_coordinator")
-const insertSession = (id: Session.ID, parentID?: Session.ID) =>
+const insertSession = (id: Session.ID, parentID?: Session.ID, agent?: string) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     yield* db
@@ -336,6 +337,7 @@ const insertSession = (id: Session.ID, parentID?: Session.ID) =>
         id,
         project_id: Project.ID.global,
         ...(parentID === undefined ? {} : { parent_id: parentID }),
+        ...(agent === undefined ? {} : { agent }),
         directory: runnerDirectory,
         title: "coordination fixture",
       })
@@ -373,283 +375,122 @@ const requestFor = (id: Session.ID, text: string) =>
     return requests.at(-1)
   })
 const systemText = (request: LLMRequest | undefined) => JSON.stringify(request?.system)
-const hierarchy = [
-  "The Project hierarchy is Master → recorded owner → executor",
-  "When the coordinator is instructed to do project work, delegate it. The master coordinates and delegates to the appropriate supervisor/owner; that supervisor creates, updates, or steers suitable member sessions, and those members execute, verify, and deliver. The master does not do project work or directly create, steer, update, or manage member sessions.",
-  "As Master, coordinate assignments, decide escalations, review integration evidence, and keep advancing independent work",
-  "As Master, decompose the user's work into independent scopes without waiting to be asked and delegate each scope (including single-member work) to the appropriate supervisor/owner, using `assign` to establish or transfer supervisor ownership.",
-  "As a supervisor, stay responsible for every Session you control until its work is verified complete",
-  "keep supervising after each turn settles",
-  "As a supervisor, resolve your members' routine issues and judgment calls yourself within your existing authority",
-  "Never send a member a message only to acknowledge a report or notification",
-]
-const unimplemented = ["owner_session_id", "enforce"]
-const sharedExecution = [
-  "Scale executor subagent fanout from 0..5 across genuinely disjoint file and check lanes",
-  "Keep small or coupled work in one Session",
-  "Never introduce ceremony, handoffs, slots, or resource-limitation throttling; run independent builds, typechecks, and selected checks directly in parallel",
-]
-const placement = [
-  "When member placement is specified, use `directory` for a chosen folder or `projectID` for an existing repository Project's canonical directory.",
-  "Use an absolute or home-relative path with `directory`, including for non-Git folders and repository subdirectories.",
-  "Use `name` with optional `repository` only for an explicitly requested managed worktree.",
-]
-const conflictingDirectMaster = [
-  "Default to direct Master",
-  "Master -> member by default",
-  "Master → member by default",
-  "more than three long-running parallel members",
-  "launch a supervisor subagent only",
-  "Directly manage Sessions owned by the Master",
-  "give each scope its own member Session through `create`",
-  "Create members or attach",
-  "manage directly owned Sessions",
-  "As Master, use `create`",
-  "As Master, use `attach`",
-  "Only the Master attaches Sessions",
-  "only the Master uses `release`",
-  "Only the Master removes a Project member",
-  "attach existing root Sessions with `attach`",
-  "Remove a settled, verified-complete member that is integrated or finished with `remove`",
-  "supervisors attach",
-  "supervisors remove",
-  "supervisors release",
-]
-const operating = [
-  "Accept a member's work as complete only from verified evidence, not from a settled turn or a status claim",
-  "Start ready work immediately as soon as its inputs are final, without slots, handoffs, ceremony, or resource-limitation waits",
-  "never hold members on ceremony, handoffs, slots, or resource-limitation waits",
-  "Give each assignment a bounded scope with standing authority for its routine continuation",
-  "do not require an acknowledgment for each command",
-  "name that writer in the assignment",
-  "Cite evidence by a compact reference such as a file, hash, or message ID instead of repeating or truncating it",
-  "When blocked, name the real dependency or approval you await; when a human answer or a cleared prerequisite arrives, continue the affected work from that event without waiting for a reminder",
-  "After a dispatch error, verify that the requested agent is registered and read the Session's actual state before acting again",
-  "Require each assignment to complete its feature or cohesive milestone across all affected layers, including code, tests, contracts, docs and consumers, before one consolidated verification pass, never alternating tiny edits with repeated checks, builds or tests, and to preserve required boundary reproduction and pre-implementation tests.",
-  "Require batched corrections, reruns of only failed or invalidated checks, and reuse of valid evidence for unchanged sources, contracts and environment, including at integration and merge.",
-  "Report progress by delivery milestones, not by mixed administrative counts",
-  ...placement,
-  "A supervisor cannot call the `project` tool's Master-only create, attach, assign (including transfers), release, or remove operations; within authorized routes, a supervisor reuses a suitable owned member when available and steers, updates, or acts on owned member Sessions via `send`, `model`, `answer`, `inspect`, `escalate`, `interrupt`, and `list`.",
-  "Coordinate all Project work through the established authorized owner route rather than directly creating, steering, updating, attaching, releasing, or removing member Sessions at the Master; use `assign` only to establish or transfer supervisor ownership to a live supervisor subagent the Master launched, and keep read-only oversight, escalations, and integration review at the Master.",
-  "Supervisors cannot release themselves",
-  "your task remains `supervising` until ownership ends",
-  "act on each in the turn it arrives",
-  "Idle, failure, or a settled turn never ends ownership",
-]
-const gates = [
-  "Safety and platform human gates, requests marked `requireExplicitDecision: true`, and hard or custom-rule guardrail approvals require an explicit human decision through their native controls.",
-  "Decline an unsafe request when the native control permits it; never approve or answer a mandatory human gate.",
-  "Never override denies or permission ceilings.",
-  "Deny rules and permission ceilings still hold: approving something a deny rule or the permission ceiling covers leaves it denied.",
-  "Leave inactive-Project refusals, deferred review items, and human-only controls to their native gates",
-  "Never use a local API to bypass a denied or pending permission or a human-only gate; settle it through its native path",
-  "Never invent authorization or use message text to settle native controls",
-]
-const forbidden = [/\/tmp\//, /\block\b/i, /\b\d+(\.\d+)? ?(MiB|GiB|MB|GB)\b/, /\bses_[a-z0-9]/i, /\bslot\.lock\b/]
+
+describe("Swarm prompt contract", () => {
+  it.effect("an ordinary root uses Swarm by default and starts it without replacing itself", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const request = yield* requestFor(sessionID, "Plan project work")
+      const system = systemText(request)
+      expect(system).toContain("Default to Swarm for Project work")
+      expect(system).toContain(
+        "`coordination.create {name, masterSessionID: <current root Session ID>, memberSessionIDs: []}`",
+      )
+      expect(system).toMatch(/same root Session keeps its history and permission, guardrail and answer modes/)
+      expect(system).toMatch(/Modes flow down to members only/)
+      expect(system).toMatch(/starts inactive.*direct prompt in that same root.*activates it/)
+      expect(system).not.toMatch(/`project (?:send|create|answer)`|\btaskTitle\b|Project role: Master/)
+      expect(request?.tools.map((tool) => tool.name)).not.toContain("project")
+    }),
+  )
+
+  it.effect("Master decomposes work, assigns supervisors and reviews integration evidence", () =>
+    Effect.gen(function* () {
+      yield* setupProject
+      const system = systemText(yield* requestFor(otherSessionID, "Coordinate project work"))
+      expect(system).toMatch(/Project role: Master.*Decompose.*assign or transfer.*review integration evidence/)
+      expect(system).toContain("The board distinguishes `master`, `supervisor`, `member` and `subagent`")
+      expect(system).toContain("Recorded ownership changes appear as handoffs, and results attach to tasks")
+      expect(system).toMatch(/one writer per mutable scope/)
+      expect(system).not.toContain("`project send`")
+    }),
+  )
+
+  it.effect(
+    "a supervisor records task dependencies and routes permission waits without stopping independent work",
+    () =>
+      Effect.gen(function* () {
+        const { coordination, group } = yield* setupProject
+        const supervisor = Session.ID.make("ses_swarm_supervisor")
+        yield* insertSession(supervisor, otherSessionID, "occam")
+        yield* coordination.setOwner(group.id, { sessionID, ownerSessionID: supervisor })
+        const system = systemText(yield* requestFor(supervisor, "Dispatch member tasks"))
+        expect(system).toMatch(/Project role: supervisor.*own.*scopes.*dependencies.*routine requests/)
+        expect(system).toMatch(/`project send`.*optional `taskTitle` and `dependsOnTaskIDs`/)
+        expect(system).toMatch(/stable delivery `messageId`.*`SessionMessage.ID`.*`taskID`/)
+        expect(system).toMatch(/dependencies.*earlier tasks in the same group/)
+        expect(system).toMatch(
+          /pending permission.*own task `waiting`.*explicit dependents.*`blocked`.*independent branches/,
+        )
+        expect(system).toContain("`blocked` is a task state, not a node state")
+        expect(system).toMatch(/resume.*native settlement/)
+        expect(system).toMatch(/native `answer`.*`escalate`/)
+        expect(system).toMatch(/human-only gates.*permission ceilings/)
+        expect(system).not.toContain("`project create`")
+      }),
+  )
+
+  it.effect("members own verification and executor children report only to their owning main", () =>
+    Effect.gen(function* () {
+      yield* setupProject
+      const executor = Session.ID.make("ses_swarm_member_executor")
+      yield* insertSession(executor, sessionID, "occam")
+      const member = systemText(yield* requestFor(sessionID, "Implement the member's scope"))
+      const child = systemText(yield* requestFor(executor, "Implement one independent part"))
+      expect(member).toMatch(/Project role: member.*own implementation and verification/)
+      expect(member).toMatch(/Delegate only independent work to your own direct subagents/)
+      expect(member).toMatch(/Report.*recorded supervisor/)
+      expect(child).toMatch(/Project role: subagent.*bounded result.*owning main Session/)
+      expect(child).toContain("no Project authority")
+      for (const system of [member, child])
+        expect(system).not.toMatch(
+          /`coordination\.create|`project (?:send|create|answer)`|\btaskTitle\b|Project role: (?:Master|supervisor)/,
+        )
+    }),
+  )
+})
 
 describe("Master hierarchy prompt assembly", () => {
-  it.effect("requires explicit steer delivery in coordinator system prompts only", () =>
-    Effect.gen(function* () {
-      const { coordination, group } = yield* setupProject
-      const supervisor = Session.ID.make("ses_coord_steer_supervisor")
-      yield* insertSession(supervisor, otherSessionID)
-      yield* coordination.setOwner(group.id, { sessionID, ownerSessionID: supervisor })
-
-      const master = systemText(yield* requestFor(otherSessionID, "Coordinate the team"))
-      const owner = systemText(yield* requestFor(supervisor, "Supervise the member"))
-      const member = systemText(yield* requestFor(sessionID, "Member work"))
-      for (const directive of [
-        "As Master, send work instructions to supervisor subagents with `subagent_control`.",
-        "As supervisor, send work instructions to owned Project members with `project`.",
-        'For every such send, including the initial assignment, set `delivery: "steer"` explicitly.',
-        "If a send's outcome is uncertain, check the target's native Session state before retrying. Retry only if you confirm that the instruction was not accepted.",
-      ]) {
-        const rendered = JSON.stringify(directive).slice(1, -1)
-        expect(master).toContain(rendered)
-        expect(owner).toContain(rendered)
-        expect(member).not.toContain(rendered)
-      }
-    }),
-  )
-
-  it.effect("a Master's assembled prompt states the hierarchy and claims no unimplemented ownership controls", () =>
+  it.effect("the Master sends supervisor work by steer and leaves member dispatch to its recorded owner", () =>
     Effect.gen(function* () {
       yield* setupProject
       const system = systemText(yield* requestFor(otherSessionID, "Coordinate the team"))
-      for (const text of hierarchy) expect(system).toContain(text)
-      for (const text of unimplemented) expect(system).not.toContain(text)
+      expect(system).toContain("Route even single-member work through a recorded supervisor")
+      expect(system).toContain("Brief supervisors through `subagent_control` with explicit steer delivery")
+      expect(system).toContain("with the resolved placement and `ownerSessionID`, without a prompt")
+      expect(system).toContain("never enroll a child or a restricted `scope: standalone` Session")
+      expect(system).not.toContain("`dependsOnTaskIDs`")
     }),
   )
 
-  it.effect("every Master request reassembles the directive verbatim from the canonical source", () =>
-    Effect.gen(function* () {
-      yield* setupProject
-      const first = systemText(yield* requestFor(otherSessionID, "Coordinate the team"))
-      const later = systemText(yield* requestFor(otherSessionID, "Review the settled member work"))
-      const canonical = JSON.stringify(CoordinationInstructions.content).slice(1, -1)
-      expect(first).toContain(canonical)
-      expect(later).toContain(canonical)
-    }),
-  )
-
-  it.effect("an ordinary Session's assembled prompt has no Master hierarchy", () =>
-    Effect.gen(function* () {
-      const session = yield* setup
-      yield* session.prompt({ sessionID, text: "Ordinary work", resume: false })
-      response = replyText("Ordinary reply", "ordinary")
-      yield* session.resume(sessionID)
-      const system = systemText(requests.at(-1))
-      expect(requests).toHaveLength(1)
-      for (const text of hierarchy) expect(system).not.toContain(text)
-    }),
-  )
-
-  it.effect("an owned member Session and its executor child get no Master hierarchy", () =>
-    Effect.gen(function* () {
-      yield* setupProject
-      const executor = Session.ID.make("ses_coord_member_executor")
-      yield* insertSession(executor, sessionID)
-      const member = systemText(yield* requestFor(sessionID, "Member work"))
-      const child = systemText(yield* requestFor(executor, "Executor work"))
-      for (const text of hierarchy) {
-        expect(member).not.toContain(text)
-        expect(child).not.toContain(text)
-      }
-    }),
-  )
-
-  it.effect("a Master's assembled prompt carries every operating directive and keeps its gates", () =>
-    Effect.gen(function* () {
-      yield* setupProject
-      const system = systemText(yield* requestFor(otherSessionID, "Coordinate the team"))
-      for (const text of operating) expect(system).toContain(text)
-      for (const text of sharedExecution) expect(system).toContain(text)
-      for (const text of gates) expect(system).toContain(text)
-    }),
-  )
-
-  it.effect("ordinary Sessions and executor children get none of the operating directives", () =>
-    Effect.gen(function* () {
-      const session = yield* setup
-      yield* session.prompt({ sessionID, text: "Ordinary work", resume: false })
-      response = replyText("Ordinary reply", "ordinary-operating")
-      yield* session.resume(sessionID)
-      const ordinary = systemText(requests.at(-1))
-      yield* setupProject
-      const executor = Session.ID.make("ses_coord_operating_executor")
-      yield* insertSession(executor, sessionID)
-      const child = systemText(yield* requestFor(executor, "Executor work"))
-      for (const text of operating) {
-        expect(ordinary).not.toContain(text)
-        expect(child).not.toContain(text)
-      }
-      for (const text of sharedExecution) {
-        expect(ordinary).not.toContain(text)
-        expect(child).toContain(text)
-      }
-    }),
-  )
-
-  it.effect("the canonical Master text names no temporary resources, measurements, or Session identities", () =>
-    Effect.gen(function* () {
-      yield* setupProject
-      const system = systemText(yield* requestFor(otherSessionID, "Coordinate the team"))
-      expect(system).toContain(JSON.stringify(CoordinationInstructions.content).slice(1, -1))
-      for (const pattern of forbidden) expect(CoordinationInstructions.content).not.toMatch(pattern)
-    }),
-  )
-
-  it.effect("the Master's own executor child receives no Master role text", () =>
-    Effect.gen(function* () {
-      yield* setupProject
-      const executor = Session.ID.make("ses_coord_master_executor")
-      yield* insertSession(executor, otherSessionID)
-      const system = systemText(yield* requestFor(executor, "Executor work"))
-      expect(system).not.toContain("Coordinate and supervise only")
-      for (const text of hierarchy) expect(system).not.toContain(text)
-      for (const text of operating) expect(system).not.toContain(text)
-    }),
-  )
-
-  it.effect("the Master delegates all member work (including single-member work) through recorded supervisors without direct member management", () =>
-    Effect.gen(function* () {
-      yield* setupProject
-      const system = systemText(yield* requestFor(otherSessionID, "Coordinate the team"))
-      expect(system).toContain("including single-member work")
-      expect(system).not.toContain("launch an owner subagent for each")
-      expect(system).not.toContain("require five subagents")
-      expect(system).toContain("For supervisor-owned Sessions, route everything through their recorded supervisor rather than directly creating, steering, updating, or managing member sessions or relaying routine events, and handle only their escalations and integration")
-      for (const text of conflictingDirectMaster) expect(system).not.toContain(text)
-      expect(system).not.toContain("Main")
-      expect(system).toContain("Do not execute a member's task, take over its tools, or control its subagents.")
-      expect(system).toContain("Verify assignments and completion evidence against the user's current direction.")
-      expect(system).toContain("Settle routine member requests through `project answer` within recorded authority in every autonomy mode, Manual included.")
-      expect(system).not.toContain("Settle every member request yourself")
-      expect(system).toContain("Deny rules and permission ceilings still hold")
-      expect(system).not.toContain("Only safety items reach the human")
-      expect(system).not.toContain("Manual-mode")
-      expect(system).not.toContain("assigns member Sessions directly")
-      expect(system).not.toContain("directly or through supervising subagents")
-    }),
-  )
-
-  it.effect("a subagent that durably owns a member Session gets the supervising text; its executor child gets the Master's-subagent text and none of it", () =>
-    Effect.gen(function* () {
-      const { coordination, group } = yield* setupProject
-      const supervisor = Session.ID.make("ses_coord_supervisor")
-      const supervisorExecutor = Session.ID.make("ses_coord_supervisor_executor")
-      yield* insertSession(supervisor, otherSessionID)
-      yield* insertSession(supervisorExecutor, supervisor)
-      yield* coordination.setOwner(group.id, { sessionID, ownerSessionID: supervisor })
-      const owned = systemText(yield* requestFor(supervisor, "Supervise the member"))
-      expect(owned).toContain("Project role: supervisor")
-      expect(owned).toContain("reuse a suitable owned member when available and steer or update owned member Sessions within authorized routes; you cannot call the `project` tool's Master-only create, attach, assign (including transfers), release, or remove operations.")
-      expect(owned).not.toContain("You cannot assign, transfer or release ownership or create members")
-      expect(owned).toContain("Do not execute a member's task, take over its tools, or control its subagents.")
-      expect(owned).toContain(JSON.stringify(CoordinationInstructions.content).slice(1, -1))
-      for (const text of hierarchy) expect(owned).toContain(text)
-      const executor = systemText(yield* requestFor(supervisorExecutor, "Executor work"))
-      expect(executor).toContain("Project role: Master's subagent. You make no Project changes")
-      expect(executor).not.toContain("Project role: executor")
-      expect(executor).not.toContain("Own execution and verification of your assigned scope.")
-      expect(executor).not.toContain("Coordinate and supervise only")
-      for (const text of [...hierarchy, ...operating]) expect(executor).not.toContain(text)
-    }),
-  )
-
-  it.effect("released ownership revokes the supervising role in the former owner's next request", () =>
+  it.effect("released ownership removes supervisor controls from the former owner's next request", () =>
     Effect.gen(function* () {
       const { coordination, group } = yield* setupProject
       const supervisor = Session.ID.make("ses_coord_released_supervisor")
-      yield* insertSession(supervisor, otherSessionID)
+      yield* insertSession(supervisor, otherSessionID, "occam")
       yield* coordination.setOwner(group.id, { sessionID, ownerSessionID: supervisor })
-      expect(systemText(yield* requestFor(supervisor, "Supervise"))).toContain("Coordinate and supervise only")
+      expect(systemText(yield* requestFor(supervisor, "Supervise"))).toContain("`project send`")
       yield* coordination.setOwner(group.id, { sessionID })
       const released = JSON.stringify(yield* requestFor(supervisor, "After release"))
       expect(released).toContain("The Project coordination role above no longer applies to this Session. Disregard it.")
-      expect(released).toContain("Project role: Master's subagent. You make no Project changes")
+      expect(released).toContain("Work read-only in the Master's family")
+      expect(released).not.toContain("`project send`")
     }),
   )
 
-  it.effect("Master and supervisor prompts distinguish exact placement and bound recovery without history deletion", () =>
+  it.effect("a supervisor's executor child can review evidence but never inherits supervisor controls", () =>
     Effect.gen(function* () {
       const { coordination, group } = yield* setupProject
-      const supervisor = Session.ID.make("ses_coord_recovery_supervisor")
-      yield* insertSession(supervisor, otherSessionID)
+      const supervisor = Session.ID.make("ses_coord_supervisor")
+      const executor = Session.ID.make("ses_coord_supervisor_executor")
+      yield* insertSession(supervisor, otherSessionID, "occam")
+      yield* insertSession(executor, supervisor, "occam")
       yield* coordination.setOwner(group.id, { sessionID, ownerSessionID: supervisor })
-      for (const id of [otherSessionID, supervisor]) {
-        const system = systemText(yield* requestFor(id, "Review member state"))
-        for (const text of [
-          ...placement,
-          "A supervisor cannot call the `project` tool's Master-only create, attach, assign (including transfers), release, or remove operations; within authorized routes, a supervisor reuses a suitable owned member when available and steers, updates, or acts on owned member Sessions via `send`, `model`, `answer`, `inspect`, `escalate`, `interrupt`, and `list`.",
-          "Detect stuck, hung or looping work from reported state and evidence; reconcile current state before one bounded recovery attempt through existing native controls.",
-          "If recovery fails or its outcome is uncertain, report the blocker with evidence and continue independent authorized work; never poll, repeatedly wake, or replay an uncertain action.",
-          "Keep every ownership and lifecycle boundary non-destructive and preserve Session and Project histories intact without deleting history as cleanup; a completed child or `task_complete` is not whole delivery completion, and unfinished member work or pending family requests stay open with their recorded owner until settled.",
-          ...gates,
-        ]) expect(system).toContain(text)
-        expect(system).not.toContain("start a member Session in its own managed worktree")
-        expect(system).not.toContain("it never limits `answer`")
-      }
+      const request = yield* requestFor(executor, "Review the check results")
+      const system = systemText(request)
+      expect(system).toContain("Work read-only in the Master's family")
+      expect(system).not.toMatch(/`project (?:send|create|list)`|\btaskTitle\b|Project role: (?:Master|supervisor)/)
+      expect(request?.tools.map((tool) => tool.name)).not.toContain("project")
     }),
   )
 })
