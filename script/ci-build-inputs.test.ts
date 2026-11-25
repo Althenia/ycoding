@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 
@@ -223,4 +223,42 @@ test("retains the entire release workflow, including full builds, publication an
     rmSync(directory, { recursive: true, force: true })
   }
   expect(release).not.toContain("build-inputs")
+})
+
+test("keeps release Cargo and sccache saves default-branch only, exact-hit vendor normalization, and release-cache inside build-desktop-runtime", () => {
+  const defaultBranch = "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+  const releaseJobs = workflowJobs("release")
+  const darwin = releaseJobs["build-desktop-runtime"]!.steps
+  expect(darwin.find((step) => step.name === "Save Apple Silicon release dependencies")?.if).toBe(
+    `${defaultBranch} && steps.desktop-rust.outputs.release-cache-hit != 'true'`,
+  )
+  expect(darwin.find((step) => step.name === "Save release compiler cache")?.if).toBe(defaultBranch)
+  expect(yamlFields(darwin.find((step) => step.name === "Stage Apple Silicon release runtime")?.env).SAVES_RELEASE_CACHES).toBe(
+    `\${{ ${defaultBranch} }}`,
+  )
+
+  const setupRust = yamlFields(Bun.YAML.parse(readFileSync(path.join(root, ".github/actions/setup-rust/action.yml"), "utf8")))
+  const setupSteps = (yamlFields(setupRust.runs).steps as unknown[]).map(yamlFields)
+  expect(setupSteps.find((step) => step.name === "Save sccache archive")?.if).toBe(
+    `inputs.sccache == 'true' && ${defaultBranch} && steps.sccache-archive.outputs.cache-hit != 'true'`,
+  )
+  expect(setupSteps.find((step) => step.name === "Normalize vendored source timestamps")?.if).toBe(
+    "steps.release-cache.outputs.cache-hit == 'true' || steps.cargo-cache.outputs.cache-hit == 'true'",
+  )
+  expect(yamlFields(setupSteps.find((step) => step.name === "Restore Apple Silicon release dependencies")?.with)).not.toHaveProperty("restore-keys")
+
+  const workflowsDir = path.join(root, ".github/workflows")
+  expect(existsSync(path.join(workflowsDir, "warm-release-cache.yml"))).toBe(false)
+  for (const file of readdirSync(workflowsDir).filter((entry) => entry.endsWith(".yml") || entry.endsWith(".yaml"))) {
+    const parsed = yamlFields(Bun.YAML.parse(readFileSync(path.join(workflowsDir, file), "utf8")))
+    for (const [jobId, raw] of Object.entries(yamlFields(parsed.jobs))) {
+      if (file === "release.yml" && jobId === "build-desktop-runtime") continue
+      const job = yamlFields(raw)
+      const steps = Array.isArray(job.steps) ? job.steps.map(yamlFields) : []
+      for (const step of steps) {
+        const withFields = step.with ? yamlFields(step.with) : {}
+        expect(withFields, `${file}:${jobId}:${String(step.name)}`).not.toHaveProperty("release-cache")
+      }
+    }
+  }
 })

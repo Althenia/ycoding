@@ -839,7 +839,7 @@ test("release source gates include ownership, chronology and compact-footer regr
     "./test/form-contract.test.ts",
     "./test/cli/tui/session-rows-chronology.test.tsx",
   ]) expect(verify).toContain(file)
-  expect(darwinBuild).toContain("bun test --cwd packages/cli ./test/import-boundaries.test.ts")
+  expect(verify).toContain("bun test --cwd packages/cli ./test/import-boundaries.test.ts")
 })
 
 test("test workflow verifies the web application and relay before the Cloudflare build", () => {
@@ -985,7 +985,7 @@ test("source verification legs start in parallel with the native builds", () => 
   expect(verify).not.toContain("puppeteer")
   expect(verify).toContain('"$GITHUB_WORKSPACE/script/chrome-for-testing.test.ts"')
   expect(verify).toContain('-t "pins one exact version whose root metadata document is the default source"')
-  expect(build).toContain("bun test --cwd packages/cli ./test/import-boundaries.test.ts")
+  expect(verify).toContain("bun test --cwd packages/cli ./test/import-boundaries.test.ts")
   expect(build).not.toMatch(/smoke:|service-smoke|isolated-browser-smoke|test:integration:/)
 })
 
@@ -996,7 +996,10 @@ test("one release run gates publication and deployment on its own verification a
     target: { description: expect.any(String), required: false, type: "choice", options: ["full", "desktop", "web"], default: "full" },
   })
   expect(parsed).toHaveProperty("on.push.tags", ["v*", "desktop-v*", "web-v*"])
-  expect(parsed).toHaveProperty("concurrency", { group: "release", "cancel-in-progress": false })
+  expect(parsed).toHaveProperty("concurrency", {
+    group: "${{ github.event_name == 'push' && 'release' || format('release-dispatch-{0}-{1}', github.ref, inputs.target || 'full') }}",
+    "cancel-in-progress": false,
+  })
   expect(parsed).toHaveProperty("permissions", { contents: "read" })
   const jobs = workflow.split("\njobs:\n")[1]!.split(/(?:^|\n)  ([\w-]+):\n/).slice(1)
   const releaseTag = "startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/desktop-v') || startsWith(github.ref, 'refs/tags/web-v')"
@@ -1206,7 +1209,7 @@ test("Desktop stages its actual CLI distribution for candidate checks without ch
   expect(readback).toContain('dist="packages/cli/dist/cli-darwin-arm64"')
   expect(readback).toContain('"$GITHUB_WORKSPACE/$dist/package.json"')
   expect(readback).toContain('cmp "$dist/bin/ycoding" "$backend/ycoding"')
-  expect(readback).toContain('tar -czf "$RUNNER_TEMP/cli-darwin-arm64.tar.gz" -C packages/cli/dist cli-darwin-arm64')
+  expect(readback).toContain('tar --options gzip:compression-level=1 -czf "$RUNNER_TEMP/cli-darwin-arm64.tar.gz" -C packages/cli/dist cli-darwin-arm64')
   expect(upload).toContain("name: desktop-cli-distribution-darwin-arm64-${{ github.run_attempt }}")
   expect(upload).toContain("${{ runner.temp }}/desktop/build-receipt.json")
   expect(upload).toContain("if-no-files-found: error")
@@ -1328,7 +1331,30 @@ test.each(["lightweight", "annotated", "moved", "deleted", "off main", "wrong ch
 
 test("release runs serialize without cancelling a preceding release", () => {
   expect(workflow).not.toContain("\n  isolated-browser-acceptance:")
-  expect(workflow).toContain("concurrency:\n  group: release\n  cancel-in-progress: false")
+  expect(workflow).toContain(
+    "concurrency:\n  group: ${{ github.event_name == 'push' && 'release' || format('release-dispatch-{0}-{1}', github.ref, inputs.target || 'full') }}\n  cancel-in-progress: false",
+  )
+})
+
+test("release cache fences remain default-branch only, exact-hit normalized, and isolated to build-desktop-runtime", async () => {
+  const workflowsDir = path.join(import.meta.dir, "../.github/workflows")
+  const workflowFiles = fs.readdirSync(workflowsDir).filter((file) => file.endsWith(".yml") || file.endsWith(".yaml")).sort()
+  expect(workflowFiles).not.toContain("warm-release-cache.yml")
+  for (const file of workflowFiles) {
+    const content = fs.readFileSync(path.join(workflowsDir, file), "utf8")
+    if (file === "release.yml") {
+      expect(content.replace(darwinBuild, "")).not.toContain("release-cache:")
+    } else {
+      expect(content, file).not.toContain("release-cache:")
+      expect(content, file).not.toContain("sccache-store")
+    }
+  }
+  const setupRust = fs.readFileSync(path.join(import.meta.dir, "../.github/actions/setup-rust/action.yml"), "utf8")
+  const defaultBranch = "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+  expect(setupRust).toContain(`if: inputs.sccache == 'true' && ${defaultBranch} && steps.sccache-archive.outputs.cache-hit != 'true'`)
+  expect(setupRust).toContain("if: steps.release-cache.outputs.cache-hit == 'true' || steps.cargo-cache.outputs.cache-hit == 'true'")
+  expect(setupRust).not.toContain("github.ref_type == 'branch'")
+  expect(workflow).not.toContain("github.ref_type == 'branch'")
 })
 
 test("obsolete Pages publishing is replaced by the web asset publisher", async () => {

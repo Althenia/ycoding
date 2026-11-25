@@ -169,6 +169,7 @@ test("only the default-branch Apple Silicon runtime producer writes the release 
   expect(packagers).toBeDefined()
   expect(restore).toContain("uses: actions/cache/restore@")
   expect(restore).toContain("rust/Cargo.lock")
+  expect(restore).not.toContain("restore-keys:")
   expect(restore).not.toContain("**/*.rs")
   expect(save).toContain("uses: actions/cache/save@")
   expect(save).toContain("github.event.repository.default_branch")

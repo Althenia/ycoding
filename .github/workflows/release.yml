@@ -23,7 +23,7 @@ on:
         default: full
 
 concurrency:
-  group: release
+  group: ${{ github.event_name == 'push' && 'release' || format('release-dispatch-{0}-{1}', github.ref, inputs.target || 'full') }}
   cancel-in-progress: false
 
 permissions:
@@ -195,6 +195,10 @@ jobs:
           bun test --cwd packages/cli ./test/interaction-platform.test.ts ./test/remote-interaction.test.ts
           bun test --cwd packages/remote ./test/interaction.test.ts
           bun test --cwd extensions/interaction-chrome ./test/interaction-chrome-controller.test.js
+
+      - name: Verify standalone TUI build boundary
+        if: matrix.suite == 'cli'
+        run: bun test --cwd packages/cli ./test/import-boundaries.test.ts
 
       - name: Verify transcript and approval suites
         if: matrix.suite == 'tui-project'
@@ -544,9 +548,6 @@ jobs:
           set -euo pipefail
           node -e 'const metadata = require("./dist/tui/tui-darwin-arm64/package.json"); if (metadata.version !== process.env.YCODING_VERSION) process.exit(1)'
 
-      - name: Verify standalone TUI build boundary
-        run: bun test --cwd packages/cli ./test/import-boundaries.test.ts
-
       - name: Stage native executables
         run: |
           set -euo pipefail
@@ -609,7 +610,7 @@ jobs:
           cmp "$dist/bin/ycoding" "$backend/ycoding"
           codesign --verify --strict -R '=identifier "app.ycoding.cli" and certificate leaf = H"9dd524184b0db949ffac7f0ada0ae860ac7f5f85"' "$dist/bin/ycoding"
           codesign --verify --deep --strict -R '=identifier "app.ycoding.interaction" and certificate leaf = H"9dd524184b0db949ffac7f0ada0ae860ac7f5f85"' "$dist/bin/YCoding Interaction.app"
-          tar -czf "$RUNNER_TEMP/cli-darwin-arm64.tar.gz" -C packages/cli/dist cli-darwin-arm64
+          tar --options gzip:compression-level=1 -czf "$RUNNER_TEMP/cli-darwin-arm64.tar.gz" -C packages/cli/dist cli-darwin-arm64
 
       - name: Upload Desktop CLI distribution for verification
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
