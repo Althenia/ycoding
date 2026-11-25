@@ -2029,7 +2029,7 @@ export function make(options: ClientOptions) {
               path: `/api/session/${encodeURIComponent(input.sessionID)}/mcp/app`,
               query: { messageID: input["messageID"], callID: input["callID"] },
               successStatus: 200,
-              declaredStatuses: [404, 403, 503, 401, 400],
+              declaredStatuses: [404, 403, 503, 400, 401],
               empty: false,
             },
             requestOptions,

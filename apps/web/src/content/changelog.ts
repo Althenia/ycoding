@@ -24,10 +24,16 @@ export const RELEASES: readonly ReleaseEntry[] = [
   {
     version: "0.13.3",
     date: "2026-11-25",
-    title: "Native Dots executor restrictions",
-    tags: ["Fixed"],
+    title: "Swarm board and MCP Apps",
+    tags: ["Added", "Fixed"],
     changes: [
+      { tag: "Added", text: "Open the Swarm board from a Project to see its Session hierarchy, owners, task dependencies, handoffs, results, and pending decisions. Start a Swarm from an eligible root Session and send the first assignment there to activate it without losing the Session's history or settings." },
+      { tag: "Added", text: "Swarm records assignments and their results against stable task IDs. When a task waits for permission or another prerequisite, its dependents wait and independent work can continue." },
+      { tag: "Added", text: "Desktop and Web can show read-only MCP Apps previews from completed tool calls. The preview runs in an isolated frame." },
       { tag: "Fixed", text: "The native Dots executor admits full-access process starts only for the peer named in trusted global configuration. Requests that need an unsupported sandbox or network restriction fail before launch instead of running with different restrictions." },
+      { tag: "Fixed", text: "Desktop and Web keep Project and Session context visible alongside the conversation. Intelligent UI tables keep their sort and keyboard focus when the transcript refreshes." },
+      { tag: "Fixed", text: "The TUI Session picker searches Recent separately from the full Session list. The model picker distinguishes routes that share a provider label." },
+      { tag: "Fixed", text: "The Chrome extension popup lets an in-flight connection status read finish before starting another one." },
     ],
   },
   {
