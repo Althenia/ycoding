@@ -1,0 +1,147 @@
+name: warm-release-cache
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - rust/**
+      - packages/cli/script/models-dev.snapshot.json
+      - packages/cli/script/regex-worker-metadata.ts
+      - packages/codemode/src/internal/regex-process.ts
+      - .github/actions/setup-rust/**
+      - .github/workflows/warm-release-cache.yml
+  workflow_dispatch:
+
+concurrency:
+  group: warm-release-cache-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  warm-macos-arm64:
+    name: warm Apple Silicon release caches
+    runs-on: macos-26
+    timeout-minutes: 55
+    env:
+      SCCACHE_CACHE_SIZE: 3G
+      RUSTC_WRAPPER: sccache
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install Bun
+        uses: ./.github/actions/install-bun
+
+      - name: Setup Rust
+        id: desktop-rust
+        uses: ./.github/actions/setup-rust
+        with:
+          release-cache: writer
+          sccache: "true"
+
+      - name: Restore release compiler cache
+        id: sccache-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/sccache-store
+          key: ${{ runner.os }}-${{ runner.arch }}-sccache-0.19.0-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-sccache-0.19.0-
+
+      - name: Warm Apple Silicon release runtime library
+        id: warm
+        run: |
+          set -euo pipefail
+          YCODING_BUNDLED_MODELS_PATH="$GITHUB_WORKSPACE/packages/cli/script/models-dev.snapshot.json" \
+            cargo build --locked --manifest-path rust/Cargo.toml --release -p ycoding-runtime --lib
+          stats="$(sccache --show-stats)"
+          printf '%s\n' "$stats"
+          misses="$(printf '%s\n' "$stats" | awk '/^Cache misses[[:space:]]+[0-9]+$/ { print $3; exit }')"
+          printf 'sccache-misses=%s\n' "${misses:-1}" >> "$GITHUB_OUTPUT"
+          sccache --stop-server >/dev/null
+          release=rust/target/release
+          hash='[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'
+          names="$(cargo metadata --locked --manifest-path rust/Cargo.toml --no-deps --format-version 1 | jq -r '.packages[] | .name, (.targets[] | select(.kind | index("custom-build") | not) | .name)' | tr -d '\r' | sort -u)"
+          third_party="$(tr -d '\r' < rust/Cargo.lock | awk '/^name = /{gsub(/"/, "", $3); package=$3} /^source = /{print package}' | tr - _ | sort -u)"
+          while IFS= read -r name; do
+            unit="${name//-/_}"
+            if grep -qxF -- "$unit" <<< "$third_party"; then continue; fi
+            find "$release" -maxdepth 1 -type f \( -name "$name" -o -name "$name.d" \) -delete
+            find "$release/deps" "$release/examples" -maxdepth 1 \( -name "$unit-$hash*" -o -name "lib$unit-$hash*" \) -exec rm -rf {} + 2>/dev/null || true
+            find "$release/.fingerprint" "$release/build" -maxdepth 1 -name "$name-$hash" -exec rm -rf {} + 2>/dev/null || true
+            rm -rf "$release/build/$name"
+          done <<< "$names"
+
+      - name: Save Apple Silicon release dependencies
+        if: github.ref_type == 'branch' && steps.desktop-rust.outputs.release-cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust/target/release
+          key: ${{ steps.desktop-rust.outputs.release-cache-key }}
+
+      - name: Save release compiler cache
+        if: github.ref_type == 'branch' && (steps.sccache-cache.outputs.cache-matched-key == '' || steps.warm.outputs.sccache-misses != '0')
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/sccache-store
+          key: ${{ runner.os }}-${{ runner.arch }}-sccache-0.19.0-${{ github.run_id }}-${{ github.run_attempt }}
+
+  warm-native-release:
+    name: warm native release dependencies (${{ matrix.settings.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - name: linux
+            host: ubuntu-24.04
+          - name: windows
+            host: windows-2025
+    runs-on: ${{ matrix.settings.host }}
+    timeout-minutes: 55
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install Bun
+        uses: ./.github/actions/install-bun
+
+      - name: Setup Rust
+        id: rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-profile: release
+
+      - name: Warm native release dependencies
+        if: steps.rust.outputs.cargo-cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          YCODING_BUNDLED_MODELS_PATH="$GITHUB_WORKSPACE/packages/cli/script/models-dev.snapshot.json" \
+            cargo build --locked --manifest-path rust/Cargo.toml --release -p ycoding-runtime --lib
+
+      - name: Save Rust dependencies
+        if: always() && github.ref_type == 'branch' && steps.rust.outcome == 'success'
+        uses: ./.github/actions/setup-rust/save
+        with:
+          cache-key: ${{ steps.rust.outputs.cargo-cache-key }}
+          cache-hit: ${{ steps.rust.outputs.cargo-cache-hit }}

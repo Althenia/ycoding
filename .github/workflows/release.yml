@@ -23,7 +23,7 @@ on:
         default: full
 
 concurrency:
-  group: release
+  group: ${{ github.event_name == 'push' && 'release' || format('release-dispatch-{0}-{1}', github.ref, inputs.target || 'full') }}
   cancel-in-progress: false
 
 permissions:
@@ -195,6 +195,10 @@ jobs:
           bun test --cwd packages/cli ./test/interaction-platform.test.ts ./test/remote-interaction.test.ts
           bun test --cwd packages/remote ./test/interaction.test.ts
           bun test --cwd extensions/interaction-chrome ./test/interaction-chrome-controller.test.js
+
+      - name: Verify standalone TUI build boundary
+        if: matrix.suite == 'cli'
+        run: bun test --cwd packages/cli ./test/import-boundaries.test.ts
 
       - name: Verify transcript and approval suites
         if: matrix.suite == 'tui-project'
@@ -389,6 +393,7 @@ jobs:
           sccache: "true"
 
       - name: Restore release compiler cache
+        id: sccache-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/sccache-store
@@ -404,7 +409,7 @@ jobs:
           YCODING_ANTIGRAVITY_CLIENT_SECRET: ${{ secrets.YCODING_ANTIGRAVITY_CLIENT_SECRET }}
           YCODING_MUSE_CLIENT_ID: ${{ secrets.YCODING_MUSE_CLIENT_ID }}
           YCODING_MUSE_CLIENT_SECRET: ${{ secrets.YCODING_MUSE_CLIENT_SECRET }}
-          SAVES_RELEASE_CACHES: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+          SAVES_RELEASE_CACHES: ${{ github.ref_type == 'branch' }}
         run: |
           set -euo pipefail
           for name in YCODING_ANTIGRAVITY_CLIENT_ID YCODING_ANTIGRAVITY_CLIENT_SECRET YCODING_MUSE_CLIENT_ID; do
@@ -414,13 +419,27 @@ jobs:
           for name in YCODING_ANTIGRAVITY_CLIENT_ID YCODING_ANTIGRAVITY_CLIENT_SECRET YCODING_MUSE_CLIENT_ID; do
             LC_ALL=C grep -qaF -- "${!name}" "$RUNNER_TEMP/release-runtime/ycoding-runtime" || { echo "The release runtime does not embed $name" >&2; exit 1; }
           done
-          sccache --show-stats
+          stats="$(sccache --show-stats)"
+          printf '%s\n' "$stats"
+          misses="$(printf '%s\n' "$stats" | awk '/^Cache misses[[:space:]]+[0-9]+$/ { print $3; exit }')"
+          printf 'sccache-misses=%s\n' "${misses:-1}" >> "$GITHUB_OUTPUT"
           if [ "$SAVES_RELEASE_CACHES" = true ]; then
             sccache --stop-server >/dev/null
             release=rust/target/release
             rm -f "$release/ycoding-runtime" "$release/ycoding-runtime.d"
             find "$release/deps" -maxdepth 1 -name 'ycoding_runtime-*' -exec rm -rf {} +
             find "$release/.fingerprint" -mindepth 2 -maxdepth 2 -name 'bin-ycoding-runtime*' -exec dirname {} \; | sort -u | while IFS= read -r unit; do rm -rf "$unit"; done
+            hash='[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'
+            names="$(cargo metadata --locked --manifest-path rust/Cargo.toml --no-deps --format-version 1 | jq -r '.packages[] | .name, (.targets[] | select(.kind | index("custom-build") | not) | .name)' | tr -d '\r' | sort -u)"
+            third_party="$(tr -d '\r' < rust/Cargo.lock | awk '/^name = /{gsub(/"/, "", $3); package=$3} /^source = /{print package}' | tr - _ | sort -u)"
+            while IFS= read -r name; do
+              unit="${name//-/_}"
+              if grep -qxF -- "$unit" <<< "$third_party"; then continue; fi
+              find "$release" -maxdepth 1 -type f \( -name "$name" -o -name "$name.d" \) -delete
+              find "$release/deps" "$release/examples" -maxdepth 1 \( -name "$unit-$hash*" -o -name "lib$unit-$hash*" \) -exec rm -rf {} + 2>/dev/null || true
+              find "$release/.fingerprint" "$release/build" -maxdepth 1 -name "$name-$hash" -exec rm -rf {} + 2>/dev/null || true
+              rm -rf "$release/build/$name"
+            done <<< "$names"
             values=()
             for name in YCODING_ANTIGRAVITY_CLIENT_ID YCODING_ANTIGRAVITY_CLIENT_SECRET YCODING_MUSE_CLIENT_ID YCODING_MUSE_CLIENT_SECRET; do
               if [ -n "${!name}" ]; then values+=("${!name}"); fi
@@ -452,7 +471,7 @@ jobs:
           retention-days: 1
 
       - name: Save Apple Silicon release dependencies
-        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && steps.desktop-rust.outputs.release-cache-hit != 'true'
+        if: github.ref_type == 'branch' && steps.desktop-rust.outputs.release-cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -463,7 +482,7 @@ jobs:
           key: ${{ steps.desktop-rust.outputs.release-cache-key }}
 
       - name: Save release compiler cache
-        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        if: github.ref_type == 'branch' && (steps.sccache-cache.outputs.cache-matched-key == '' || steps.runtime.outputs.sccache-misses != '0')
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/sccache-store
@@ -544,9 +563,6 @@ jobs:
           set -euo pipefail
           node -e 'const metadata = require("./dist/tui/tui-darwin-arm64/package.json"); if (metadata.version !== process.env.YCODING_VERSION) process.exit(1)'
 
-      - name: Verify standalone TUI build boundary
-        run: bun test --cwd packages/cli ./test/import-boundaries.test.ts
-
       - name: Stage native executables
         run: |
           set -euo pipefail
@@ -609,7 +625,7 @@ jobs:
           cmp "$dist/bin/ycoding" "$backend/ycoding"
           codesign --verify --strict -R '=identifier "app.ycoding.cli" and certificate leaf = H"9dd524184b0db949ffac7f0ada0ae860ac7f5f85"' "$dist/bin/ycoding"
           codesign --verify --deep --strict -R '=identifier "app.ycoding.interaction" and certificate leaf = H"9dd524184b0db949ffac7f0ada0ae860ac7f5f85"' "$dist/bin/YCoding Interaction.app"
-          tar -czf "$RUNNER_TEMP/cli-darwin-arm64.tar.gz" -C packages/cli/dist cli-darwin-arm64
+          tar --options gzip:compression-level=1 -czf "$RUNNER_TEMP/cli-darwin-arm64.tar.gz" -C packages/cli/dist cli-darwin-arm64
 
       - name: Upload Desktop CLI distribution for verification
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

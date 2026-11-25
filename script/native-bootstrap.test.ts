@@ -61,7 +61,7 @@ test("optional sccache installation verifies pinned archives before use", () => 
   expect(install).toContain('echo "SCCACHE_DIR=$RUNNER_TEMP/sccache-store" >> "$GITHUB_ENV"')
   expect(install.indexOf('>> "$GITHUB_PATH"')).toBeLessThan(install.indexOf('>> "$GITHUB_ENV"'))
   expect(save).toContain("uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9")
-  expect(save).toContain("if: inputs.sccache == 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && steps.sccache-archive.outputs.cache-hit != 'true'")
+  expect(save).toContain("if: inputs.sccache == 'true' && github.ref_type == 'branch' && steps.sccache-archive.outputs.cache-hit != 'true'")
   expect(save).toContain("key: ${{ steps.sccache-archive.outputs.cache-primary-key }}")
   for (const cache of [restore, save]) expect(cache).toContain("path: ${{ runner.temp }}/sccache-archive-0.19.0")
 })
@@ -73,8 +73,8 @@ test("generic Rust dependency cache keys on lockfile and vendor and saves only t
   expect(restore).toContain("if: inputs.release-cache == ''")
   expect(restore).toContain("id: cargo-cache")
   expect(restore).toContain("uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9")
-  expect(restore).toContain("key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml', 'rust/vendor/**') }}\n")
-  expect(restore).toContain("restore-keys: |\n          ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-\n")
+  expect(restore).toContain("key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-v${{ hashFiles('rust/vendor/**') }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}\n")
+  expect(restore).toContain("restore-keys: |\n          ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-v${{ hashFiles('rust/vendor/**') }}-\n          ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-profile }}-\n")
   expect(restore).not.toContain("**/*.rs")
   expect(action).toContain("value: ${{ steps.cargo-cache.outputs.cache-hit }}")
   expect(action).toContain("value: ${{ steps.cargo-cache.outputs.cache-primary-key }}")
@@ -130,10 +130,11 @@ test("workspace artifact purge keeps third-party artifacts whose names match wor
   }
 }, 120_000)
 
-test("vendored timestamps normalize only after an exact dependency cache hit", () => {
+test("vendored timestamps normalize only when the restored cache matches the current vendor hash", () => {
   const action = readFileSync(path.join(root, ".github/actions/setup-rust/action.yml"), "utf8")
   const step = action.split("- name: Normalize vendored source timestamps\n")[1]?.split("\n    - name: ")[0] ?? ""
-  expect(step).toContain("if: steps.release-cache.outputs.cache-hit == 'true' || steps.cargo-cache.outputs.cache-hit == 'true'")
+  expect(step).toContain("startsWith(steps.release-cache.outputs.cache-matched-key, format('{0}-{1}-cargo-desktop-release-v{2}-', runner.os, runner.arch, hashFiles('rust/vendor/**')))")
+  expect(step).toContain("startsWith(steps.cargo-cache.outputs.cache-matched-key, format('{0}-{1}-cargo-{2}-v{3}-', runner.os, runner.arch, inputs.cache-profile, hashFiles('rust/vendor/**')))")
   expect(step).toContain("run: find rust/vendor -exec touch -t 200001010000 {} +")
   expect(action.indexOf("- name: Restore Apple Silicon release dependencies")).toBeLessThan(action.indexOf("- name: Normalize vendored source timestamps"))
   expect(action.indexOf("- name: Restore Rust dependencies and build artifacts")).toBeLessThan(action.indexOf("- name: Normalize vendored source timestamps"))
@@ -159,7 +160,7 @@ test("the Apple Silicon runtime producer installs checksum-verified native Rust 
   expect(build.steps.filter((step) => step.uses === "./.github/actions/setup-rust").map((step) => step.name)).toEqual(["Setup Rust"])
 })
 
-test("only the default-branch Apple Silicon runtime producer writes the release dependency cache", () => {
+test("only branch runs of the Apple Silicon runtime producer write the release dependency cache", () => {
   const action = readFileSync(path.join(root, ".github/actions/setup-rust/action.yml"), "utf8")
   const workflow = readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8")
   const restore = action.split("- name: Restore Apple Silicon release dependencies\n")[1]?.split("\n    - name: ")[0] ?? ""
@@ -169,9 +170,11 @@ test("only the default-branch Apple Silicon runtime producer writes the release 
   expect(packagers).toBeDefined()
   expect(restore).toContain("uses: actions/cache/restore@")
   expect(restore).toContain("rust/Cargo.lock")
+  expect(restore).toContain("restore-keys: |\n          ${{ runner.os }}-${{ runner.arch }}-cargo-desktop-release-v${{ hashFiles('rust/vendor/**') }}-\n          ${{ runner.os }}-${{ runner.arch }}-cargo-desktop-release-\n")
   expect(restore).not.toContain("**/*.rs")
+  expect(restore).not.toContain(".github/actions/setup-rust/action.yml")
   expect(save).toContain("uses: actions/cache/save@")
-  expect(save).toContain("github.event.repository.default_branch")
+  expect(save).toContain("github.ref_type == 'branch'")
   expect(save).toContain("key: ${{ steps.desktop-rust.outputs.release-cache-key }}")
   expect(restore.match(/path: \|\n([\s\S]+?)\s+key:/)?.[1]?.trim().split(/\n\s*/)).toEqual(
     save.match(/path: \|\n([\s\S]+?)\s+key:/)?.[1]?.trim().split(/\n\s*/),

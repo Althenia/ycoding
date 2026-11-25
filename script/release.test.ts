@@ -839,7 +839,7 @@ test("release source gates include ownership, chronology and compact-footer regr
     "./test/form-contract.test.ts",
     "./test/cli/tui/session-rows-chronology.test.tsx",
   ]) expect(verify).toContain(file)
-  expect(darwinBuild).toContain("bun test --cwd packages/cli ./test/import-boundaries.test.ts")
+  expect(verify).toContain("bun test --cwd packages/cli ./test/import-boundaries.test.ts")
 })
 
 test("test workflow verifies the web application and relay before the Cloudflare build", () => {
@@ -985,7 +985,7 @@ test("source verification legs start in parallel with the native builds", () => 
   expect(verify).not.toContain("puppeteer")
   expect(verify).toContain('"$GITHUB_WORKSPACE/script/chrome-for-testing.test.ts"')
   expect(verify).toContain('-t "pins one exact version whose root metadata document is the default source"')
-  expect(build).toContain("bun test --cwd packages/cli ./test/import-boundaries.test.ts")
+  expect(verify).toContain("bun test --cwd packages/cli ./test/import-boundaries.test.ts")
   expect(build).not.toMatch(/smoke:|service-smoke|isolated-browser-smoke|test:integration:/)
 })
 
@@ -996,7 +996,10 @@ test("one release run gates publication and deployment on its own verification a
     target: { description: expect.any(String), required: false, type: "choice", options: ["full", "desktop", "web"], default: "full" },
   })
   expect(parsed).toHaveProperty("on.push.tags", ["v*", "desktop-v*", "web-v*"])
-  expect(parsed).toHaveProperty("concurrency", { group: "release", "cancel-in-progress": false })
+  expect(parsed).toHaveProperty("concurrency", {
+    group: "${{ github.event_name == 'push' && 'release' || format('release-dispatch-{0}-{1}', github.ref, inputs.target || 'full') }}",
+    "cancel-in-progress": false,
+  })
   expect(parsed).toHaveProperty("permissions", { contents: "read" })
   const jobs = workflow.split("\njobs:\n")[1]!.split(/(?:^|\n)  ([\w-]+):\n/).slice(1)
   const releaseTag = "startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/desktop-v') || startsWith(github.ref, 'refs/tags/web-v')"
@@ -1100,12 +1103,12 @@ test("release runtime uses a versioned compiler cache and uploads build timings"
   expect(restore).toContain(`key: ${key}`)
   expect(restore).toContain('restore-keys: |\n            ${{ runner.os }}-${{ runner.arch }}-sccache-0.19.0-')
   expect(save).toContain("uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9")
-  expect(save).toContain("if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)")
+  expect(save).toContain("if: github.ref_type == 'branch' && (steps.sccache-cache.outputs.cache-matched-key == '' || steps.runtime.outputs.sccache-misses != '0')")
   expect(save).not.toContain("always()")
   expect(save).toContain(`key: ${key}`)
   for (const cache of [restore, save]) expect(cache).toContain('path: ${{ runner.temp }}/sccache-store')
   const stage = darwinStep("Stage Apple Silicon release runtime")
-  expect(stage).toContain("SAVES_RELEASE_CACHES: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}")
+  expect(stage).toContain("SAVES_RELEASE_CACHES: ${{ github.ref_type == 'branch' }}")
   const embed = stage.lastIndexOf('LC_ALL=C grep -qaF -- "${!name}"')
   const stats = stage.indexOf("sccache --show-stats")
   const guarded = stage.indexOf('if [ "$SAVES_RELEASE_CACHES" = true ]; then')
@@ -1130,7 +1133,7 @@ test("release runtime uses a versioned compiler cache and uploads build timings"
   expect(order.every((index) => index >= 0)).toBe(true)
   expect(order).toEqual([...order].sort((a, b) => a - b))
   for (const name of ["Save Apple Silicon release dependencies", "Save release compiler cache"])
-    expect(darwinStep(name)).toContain("github.ref == format('refs/heads/{0}', github.event.repository.default_branch)")
+    expect(darwinStep(name)).toContain("github.ref_type == 'branch'")
   expect(darwinStep("Save Apple Silicon release dependencies")).not.toContain("always()")
 })
 
@@ -1206,7 +1209,7 @@ test("Desktop stages its actual CLI distribution for candidate checks without ch
   expect(readback).toContain('dist="packages/cli/dist/cli-darwin-arm64"')
   expect(readback).toContain('"$GITHUB_WORKSPACE/$dist/package.json"')
   expect(readback).toContain('cmp "$dist/bin/ycoding" "$backend/ycoding"')
-  expect(readback).toContain('tar -czf "$RUNNER_TEMP/cli-darwin-arm64.tar.gz" -C packages/cli/dist cli-darwin-arm64')
+  expect(readback).toContain('tar --options gzip:compression-level=1 -czf "$RUNNER_TEMP/cli-darwin-arm64.tar.gz" -C packages/cli/dist cli-darwin-arm64')
   expect(upload).toContain("name: desktop-cli-distribution-darwin-arm64-${{ github.run_attempt }}")
   expect(upload).toContain("${{ runner.temp }}/desktop/build-receipt.json")
   expect(upload).toContain("if-no-files-found: error")
@@ -1328,7 +1331,26 @@ test.each(["lightweight", "annotated", "moved", "deleted", "off main", "wrong ch
 
 test("release runs serialize without cancelling a preceding release", () => {
   expect(workflow).not.toContain("\n  isolated-browser-acceptance:")
-  expect(workflow).toContain("concurrency:\n  group: release\n  cancel-in-progress: false")
+  expect(workflow).toContain(
+    "concurrency:\n  group: ${{ github.event_name == 'push' && 'release' || format('release-dispatch-{0}-{1}', github.ref, inputs.target || 'full') }}\n  cancel-in-progress: false",
+  )
+})
+
+test("warm-release-cache warms release caches on main without secrets and pins external actions", async () => {
+  const warmer = await Bun.file(path.join(import.meta.dir, "../.github/workflows/warm-release-cache.yml")).text()
+  const parsed = Bun.YAML.parse(warmer) as {
+    on: { push: { branches: string[]; paths: string[] }; workflow_dispatch: unknown }
+    permissions: Record<string, string>
+    jobs: Record<string, { "runs-on": string }>
+  }
+  expect(parsed.on.push.branches).toEqual(["main"])
+  expect(parsed.on.push.paths).toContain("rust/**")
+  expect(parsed.permissions).toEqual({ contents: "read" })
+  expect(warmer).not.toContain("secrets.")
+  expect(parsed.jobs["warm-macos-arm64"]?.["runs-on"]).toBe("macos-26")
+  const uses = [...warmer.matchAll(/^\s+uses: (\S+)/gm)].map((match) => match[1]!)
+  expect(uses.length).toBeGreaterThan(0)
+  for (const action of uses) expect(action.startsWith("./") || /^[\w.-]+\/[\w.-]+(?:\/[\w.-]+)?@[0-9a-f]{40}$/.test(action), action).toBe(true)
 })
 
 test("obsolete Pages publishing is replaced by the web asset publisher", async () => {
@@ -1733,8 +1755,8 @@ test("a Desktop-only build skips only the CLI archive steps and keeps every Desk
     "Create and validate native archive": targetIs("full"),
     "Verify packaged macOS signatures": targetIs("full"),
     "Upload native archive": targetIs("full"),
-    "Save Apple Silicon release dependencies": "github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && steps.desktop-rust.outputs.release-cache-hit != 'true'",
-    "Save release compiler cache": "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)",
+    "Save Apple Silicon release dependencies": "github.ref_type == 'branch' && steps.desktop-rust.outputs.release-cache-hit != 'true'",
+    "Save release compiler cache": "github.ref_type == 'branch' && (steps.sccache-cache.outputs.cache-matched-key == '' || steps.runtime.outputs.sccache-misses != '0')",
     "Remove macOS signing keychain": "always()",
   })
   for (const name of ["Stage Apple Silicon release runtime", "Import macOS signing identity", "Build TUI artifact", "Build desktop app", "Verify desktop backend version",
