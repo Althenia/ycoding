@@ -282,12 +282,17 @@ describe("Agent", () => {
         Effect.provideService(Location.Service, Location.Service.of(testLocation)),
       )
 
-      const rule =
-        "- Done includes cleanup: remove the completed task's unused outputs, files, caches and temporary files. After verifying its merge with git merge-base --is-ancestor <branch> <target> and a clean git status, remove that task's worktree with git worktree remove <path> (never --force) and its branch with git branch -d (never force-delete). Preserve active, shared and unmerged work and a recovery path for everything removed."
       for (const id of ["zeus", "GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein"]) {
         const item = yield* agent.get(Agent.ID.make(id))
         if (!item?.system) throw new Error(`expected ${id} with a system prompt`)
-        expect(item.system.split(rule)).toHaveLength(2)
+        const rules = item.system.split("\n").filter((line) => line.startsWith("- Done includes cleanup:"))
+        expect(rules).toHaveLength(1)
+        const [rule] = rules
+        for (const clause of [
+          "After verifying delivery", "safe to recreate", "Session history", "delivery and rollback evidence",
+          "git merge-base --is-ancestor <branch> <target>", "git status", "git worktree list",
+          "refs/heads/<branch>", "explicit authorization",
+        ]) expect(rule).toContain(clause)
         expect(item.system.indexOf(rule)).toBeGreaterThan(item.system.indexOf("Evidence and delivery:"))
         expect(item.system.indexOf(rule)).toBeLessThan(item.system.indexOf("Tools and recovery:"))
         expect(item.system).not.toContain("leave nothing behind")

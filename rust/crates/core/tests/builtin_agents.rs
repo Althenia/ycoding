@@ -53,7 +53,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.6,
             "#e67e22",
             include_str!("../src/resources/agent/prompts/GSD.md"),
-            "25af778ddc2dddbbb43c6cbc6fb4e1630fbc8dc61620b48378bc8ac1ea05cd74",
+            "8d2cfee8369bac490aef165e2faff2015cc6c69885823413cad49445425951f1",
         ),
         (
             "architech",
@@ -62,7 +62,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.5,
             "#3498db",
             include_str!("../src/resources/agent/prompts/architech.md"),
-            "fb1b23930a779c988db732735ecf1114049c0c2f42aca60b5892f2913e03833e",
+            "82b31babea1019f35934ac4e3292e77fdd90b870b2f16bf330796298a62d5e13",
         ),
         (
             "god",
@@ -71,7 +71,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.6,
             "#f1c40f",
             include_str!("../src/resources/agent/prompts/god.md"),
-            "6ed63283d7ec52562e8f97a7594035d1e9dfd36c648968afa38005f34940b6bc",
+            "02fc2f871dea2322918dc5e7d96fa3880e4795e5b04b209ac596e9dc6e1c5759",
         ),
         (
             "yangi",
@@ -80,7 +80,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.5,
             "#2ecc71",
             include_str!("../src/resources/agent/prompts/yangi.md"),
-            "d6d13ac1ecebbd9956325d9db1a61a5dbfddb9822f50ca5b584a8d4fcd285167",
+            "1d56f821bda8c9d71d9aea942434221c0f50fcb502b91413587cfa5f8c0e554e",
         ),
         (
             "occam",
@@ -89,7 +89,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.4,
             "#2ecc71",
             include_str!("../src/resources/agent/prompts/occam.md"),
-            "e84d1a416027842ed5da0aec56d6c41c96bb74c65544a5e87e6f801f7553279d",
+            "eebf47ca5847560ab872e14d161d9c9c74818b5e9d543ec397e62d47872614c2",
         ),
         (
             "omoikane",
@@ -98,7 +98,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.5,
             "#3498db",
             include_str!("../src/resources/agent/prompts/omoikane.md"),
-            "19b22f627bf5f3b4ed025c257a88d93d7e251ce222c031577108f1a50567318c",
+            "3c23859c62a330422d251ebb3c222122bfad4d490927a70d2db567f24b7bc5bc",
         ),
         (
             "wittgenstein",
@@ -107,7 +107,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.4,
             "#95a5a6",
             include_str!("../src/resources/agent/prompts/wittgenstein.md"),
-            "8989de8e82230b00aa8c6f6c828edf17bebb2b38af508726c1fd0b28c00c85e2",
+            "77fe611ff451ac49f5af36b2c762350a96a5fa8262e164344063259f7439e323",
         ),
         (
             "zeus",
@@ -116,7 +116,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.6,
             "#f1c40f",
             include_str!("../src/resources/agent/prompts/zeus.md"),
-            "e29fc22ed6f96905801f9e9d0a8fe4bdb8a114fda9ddab741081ecf1af6a4b84",
+            "fedff9d3e114d5e603354479cae890dae176d209319891e7bb0ea6d482a59151",
         ),
     ];
     for (id, name, mode, temperature, color, source, digest) in fixtures {
@@ -800,10 +800,41 @@ fn helper_and_delivery_prompts_keep_verified_execution_and_cleanup_explicit() {
         assert!(prompts::GOAL.contains(clause), "{clause}");
     }
     assert!(prompts::BTW.contains("Obey the user's direction without arguing"));
-    assert!(prompts::PROJECT.contains("Done includes cleanup:"));
-    assert!(prompts::PROJECT.contains("git merge-base --is-ancestor <branch> <target>"));
-    assert!(prompts::PROJECT.contains("git branch -d <branch>, without force"));
-    assert!(prompts::PROJECT.contains("repository and tool-managed caches"));
+    let service = Service::new(
+        agent::builtin::catalog(&roots(), ycoding_schema::session_scope::Scope::Bound).unwrap(),
+    );
+    for id in [
+        "GSD",
+        "architech",
+        "god",
+        "yangi",
+        "occam",
+        "omoikane",
+        "wittgenstein",
+        "zeus",
+    ] {
+        let agent = service.get(&id.into()).unwrap();
+        let system = agent.system.as_ref().unwrap().to_utf8().unwrap();
+        let rule = system
+            .lines()
+            .find(|s| s.starts_with("- Done includes cleanup:"))
+            .unwrap();
+        for clause in [
+            "After verifying delivery",
+            "safe to recreate",
+            "Session history",
+            "delivery and rollback evidence",
+            "git merge-base --is-ancestor <branch> <target>",
+            "git status",
+            "git worktree remove <path>",
+            "git branch -d <branch>",
+            "git worktree list",
+            "refs/heads/<branch>",
+            "explicit authorization",
+        ] {
+            assert!(rule.contains(clause), "{id} cleanup rule missing: {clause}");
+        }
+    }
     assert!(prompts::MAIN.contains("Resolve routine child snags, failed checks, scope details, and routing adjustments yourself without escalating to the user."));
     assert!(prompts::MAIN.contains("Never pause to ask for plan sign-off, status confirmation, or permission to continue authorized work while the user's goal can be advanced."));
     assert!(prompts::CHILD.contains("Make narrow, reversible local decisions from repository evidence, diagnose root causes, and exhaust compliant local fixes before escalating anything to the parent."));
