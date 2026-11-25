@@ -3161,6 +3161,8 @@ impl Maintenance {
         let mut memory_stopped = self.stop.subscribe();
         let task = tokio::spawn(async move {
             let retention = async {
+                #[cfg(unix)]
+                let mut stages = ycoding_core::resources::staging::Sweep::default();
                 loop {
                     if *stopped.borrow() {
                         break;
@@ -3204,6 +3206,31 @@ impl Maintenance {
                             }
                         }
                         Err(_) => tracing::error!("session retention configuration unavailable"),
+                    }
+                    #[cfg(unix)]
+                    if let Ok(now) = u64::try_from(clock.now()) {
+                        let roots = factory.options.roots.clone();
+                        let time = std::time::UNIX_EPOCH + std::time::Duration::from_millis(now);
+                        match tokio::task::spawn_blocking(move || {
+                            let failures = stages.run(&roots.cache, &roots.data, time);
+                            (stages, failures)
+                        })
+                        .await
+                        {
+                            Ok((cursor, failures)) => {
+                                stages = cursor;
+                                if failures > 0 {
+                                    tracing::warn!(
+                                        failures,
+                                        "Temporary file cleanup deferred some entries"
+                                    );
+                                }
+                            }
+                            Err(_) => {
+                                stages = Default::default();
+                                tracing::warn!("Temporary file cleanup worker failed");
+                            }
+                        }
                     }
                     let pruning = active.clone();
                     match sessions.prune_history(clock.now(), move || pruning()).await {
