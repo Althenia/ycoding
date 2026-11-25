@@ -252,13 +252,6 @@ jobs:
         working-directory: packages/cli
         run: bun run script/build.ts --single
 
-      - name: Save Rust dependencies
-        if: always() && needs.build-inputs.outputs.native != 'false' && steps.rust.outcome == 'success'
-        uses: ./.github/actions/setup-rust/save
-        with:
-          cache-key: ${{ steps.rust.outputs.cargo-cache-key }}
-          cache-hit: ${{ steps.rust.outputs.cargo-cache-hit }}
-
       - name: Setup Node build runtime
         if: always() && needs.build-inputs.outputs.native != 'false'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -270,6 +263,13 @@ jobs:
         timeout-minutes: 10
         working-directory: packages/cli
         run: bun run script/build-node.ts --single --skip-install --outdir=dist/node
+
+      - name: Save Rust dependencies
+        if: always() && needs.build-inputs.outputs.native != 'false' && steps.rust.outcome == 'success'
+        uses: ./.github/actions/setup-rust/save
+        with:
+          cache-key: ${{ steps.rust.outputs.cargo-cache-key }}
+          cache-hit: ${{ steps.rust.outputs.cargo-cache-hit }}
 
   native-windows:
     name: native runtime build (windows)

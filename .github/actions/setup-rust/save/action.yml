@@ -17,10 +17,12 @@ runs:
         set -euo pipefail
         hash='[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'
         names="$(cargo metadata --locked --manifest-path rust/Cargo.toml --no-deps --format-version 1 | jq -r '.packages[] | .name, (.targets[] | select(.kind | index("custom-build") | not) | .name)' | tr -d '\r' | sort -u)"
+        third_party="$(tr -d '\r' < rust/Cargo.lock | awk '/^name = /{gsub(/"/, "", $3); package=$3} /^source = /{print package}' | tr - _ | sort -u)"
         for profile in rust/target/*/; do
           test -d "$profile/deps" || continue
           while IFS= read -r name; do
             unit="${name//-/_}"
+            if grep -qxF -- "$unit" <<< "$third_party"; then continue; fi
             find "$profile" -maxdepth 1 -type f \( -name "$name" -o -name "$name.d" -o -name "$name.exe" -o -name "$name.pdb" \) -delete
             find "$profile/deps" "$profile/examples" -maxdepth 1 \( -name "$unit-$hash*" -o -name "lib$unit-$hash*" \) -exec rm -rf {} + 2>/dev/null || true
             find "$profile/.fingerprint" "$profile/build" -maxdepth 1 -name "$name-$hash" -exec rm -rf {} + 2>/dev/null || true
