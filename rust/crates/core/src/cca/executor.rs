@@ -49,7 +49,6 @@ const MAX_RETAINED_EXITED_PROCESSES: usize = 25;
 const MAX_ACCEPTED_WRITE_IDS: usize = 4096;
 const DEFAULT_MAX_LIVE_PROCESSES: usize = 64;
 pub const CONTENT_CAPTURE_BYTES: u64 = 1024 * 1024;
-const SANDBOX_DENIAL_OUTPUT: &str = "sandbox denied: Permission denied by YCoding policy\n";
 const OUTSIDE_ROOTS_MESSAGE: &str = "Operation not permitted (os error 1)";
 
 pub type Notifier = Arc<dyn Fn(String, PValue) -> BoxFuture<'static, ()> + Send + Sync>;
@@ -2085,7 +2084,8 @@ impl Executor {
                     params,
                     attribution.as_ref(),
                     &native_cwd,
-                    &still_current(self),
+                    "the working directory is outside the permitted roots",
+                    still_current(self),
                 );
             }
             Err(error) => return Err(error),
@@ -2105,7 +2105,8 @@ impl Executor {
                 params,
                 attribution.as_ref(),
                 &resolved_cwd,
-                &still_current(self),
+                "the requested sandbox profile does not permit reading the working directory",
+                still_current(self),
             );
         }
         let external = match authorize_external_directory(&active, &resolved_cwd).await {
@@ -2116,7 +2117,8 @@ impl Executor {
                     params,
                     attribution.as_ref(),
                     &resolved_cwd,
-                    &still_current(self),
+                    "Permission denied: external directory access was not granted",
+                    still_current(self),
                 );
             }
             Err(error) => return Err(error),
@@ -2154,7 +2156,8 @@ impl Executor {
                         params,
                         attribution.as_ref(),
                         &resolved_cwd,
-                        &still_current(self),
+                        "Permission denied: shell access was not granted",
+                        still_current(self),
                     );
                 }
                 return Err(error);
@@ -2598,7 +2601,8 @@ impl Executor {
         params: &ExecParams,
         attribution: Option<&Attribution>,
         cwd: &str,
-        current: &bool,
+        reason: &str,
+        current: bool,
     ) -> Result<ExecResult, ExecutorError> {
         if !current {
             return Err(ExecutorError::session_closed());
@@ -2609,7 +2613,7 @@ impl Executor {
             params,
             vec![(
                 OutputStream::Stderr,
-                SANDBOX_DENIAL_OUTPUT.as_bytes().to_vec(),
+                format!("sandbox denied: {reason}\n").into_bytes(),
             )],
             1,
             true,

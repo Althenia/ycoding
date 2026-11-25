@@ -530,8 +530,6 @@ const MAX_RETAINED_EXITED_PROCESSES = 25
 const MAX_ACCEPTED_WRITE_IDS = 4096
 const DEFAULT_MAX_LIVE_PROCESSES = 64
 
-const SANDBOX_DENIAL_OUTPUT = "sandbox denied: Permission denied by YCoding policy\n"
-
 function sandboxPermissionDenied(): CcaExecutorError {
   return new CcaExecutorError(-32600, "Permission denied")
 }
@@ -1253,12 +1251,12 @@ export function createCcaExecutor(options: CcaExecutorOptions): CcaExecutorHandl
       })
     }
 
-    const denyAsSandbox = (cwd: string): CcaExecResult => {
+    const denyAsSandbox = (cwd: string, reason: string): CcaExecResult => {
       if (closed || processes.get(params.processId) !== procEntry) {
         throw new CcaExecutorError(-32603, "Executor session closed")
       }
       startRecording(cwd)
-      return completeWithoutSpawn([{ stream: "stderr", data: Buffer.from(SANDBOX_DENIAL_OUTPUT) }], 1, true)
+      return completeWithoutSpawn([{ stream: "stderr", data: Buffer.from(`sandbox denied: ${reason}\n`) }], 1, true)
     }
 
     let refusalCwd = ""
@@ -1292,17 +1290,19 @@ export function createCcaExecutor(options: CcaExecutorOptions): CcaExecutorHandl
         [...sandboxOperationRoots(params.sandbox), ...active.outside],
       )
     } catch (err) {
-      if (sandbox?.sandboxed && isOutsideRoots(err)) return denyAsSandbox(nativeCwd)
+      if (sandbox?.sandboxed && isOutsideRoots(err)) return denyAsSandbox(nativeCwd, "the working directory is outside the permitted roots")
       throw err
     }
     refusalCwd = resolvedCwd
-    if (sandbox?.sandboxed && !permits(sandbox.access(resolvedCwd, nativeCwd), "read")) return denyAsSandbox(resolvedCwd)
+    if (sandbox?.sandboxed && !permits(sandbox.access(resolvedCwd, nativeCwd), "read")) {
+      return denyAsSandbox(resolvedCwd, "the requested sandbox profile does not permit reading the working directory")
+    }
 
     let external: CcaAuthorizationGrant | undefined
     try {
       external = await authorizeExternalDirectory(active, resolvedCwd)
     } catch (err) {
-      if (sandbox?.sandboxed && err instanceof CcaExecutorError && err.code === -32001) return denyAsSandbox(resolvedCwd)
+      if (sandbox?.sandboxed && err instanceof CcaExecutorError && err.code === -32001) return denyAsSandbox(resolvedCwd, "Permission denied: external directory access was not granted")
       throw err
     }
     const script = shellWrapperScript(params.argv)
@@ -1317,7 +1317,7 @@ export function createCcaExecutor(options: CcaExecutorOptions): CcaExecutorHandl
       )
     } catch (err) {
       await external?.release().catch(() => {})
-      if (sandbox?.sandboxed && err instanceof CcaExecutorError && err.code === -32001) return denyAsSandbox(resolvedCwd)
+      if (sandbox?.sandboxed && err instanceof CcaExecutorError && err.code === -32001) return denyAsSandbox(resolvedCwd, "Permission denied: shell access was not granted")
       throw err
     }
 

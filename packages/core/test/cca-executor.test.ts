@@ -1501,7 +1501,7 @@ describe("CcaExecutor upstream sandbox requests", () => {
       roots: [root],
       authorize: async (input) => {
         calls.push(input)
-        if (!decide(input)) throw new Error("synthetic denial")
+        if (!decide(input)) throw new CcaAuthorizationDeniedError()
         return { release: async () => {} }
       },
       spawnImpl: ((...args: Parameters<typeof spawn>) => {
@@ -1570,9 +1570,8 @@ describe("CcaExecutor upstream sandbox requests", () => {
     expect(read).toMatchObject({ nextSeq: 4, exited: true, exitCode: 1, closed: true, failure: null, sandboxDenied: true })
     expect(read.chunks).toHaveLength(1)
     expect(read.chunks[0]).toMatchObject({ seq: 1, stream: "stderr" })
-    const stderr = Buffer.from(read.chunks[0]!.chunk, "base64").toString("utf8").toLowerCase()
-    expect(stderr).toContain("sandbox")
-    expect(stderr).toContain("permission denied")
+    const stderr = Buffer.from(read.chunks[0]!.chunk, "base64").toString("utf8")
+    expect(stderr).toBe("sandbox denied: Permission denied: shell access was not granted\n")
 
     await new Promise((resolve) => setTimeout(resolve, 20))
     const events = notifications.filter((event) => event.params?.processId === "denied")
@@ -1600,6 +1599,7 @@ describe("CcaExecutor upstream sandbox requests", () => {
     const finished = await drain(executor, ctx, "cwd-denied")
     expect(finished.sandboxDenied).toBe(true)
     expect(finished.exitCode).toBe(1)
+    expect(finished.text).toBe("sandbox denied: the requested sandbox profile does not permit reading the working directory\n")
     expect(calls.filter((call) => call.action === "shell")).toHaveLength(0)
     expect(spawns()).toBe(0)
   })
@@ -1615,7 +1615,9 @@ describe("CcaExecutor upstream sandbox requests", () => {
     expect(calls[0]).toMatchObject({ resources: [`${outside}/*`], metadata: { filepath: outside, parentDir: outside } })
     expect(calls[0]!.metadata).not.toHaveProperty("sandboxProfile")
     await executor.startProcess({ ...printf(elsewhere, "elsewhere-sandboxed"), sandbox }, ctx)
-    expect((await drain(executor, ctx, "elsewhere-sandboxed")).sandboxDenied).toBe(true)
+    expect(await drain(executor, ctx, "elsewhere-sandboxed")).toMatchObject({
+      sandboxDenied: true, text: "sandbox denied: the working directory is outside the permitted roots\n",
+    })
     await expect(executor.startProcess(printf(outside, "outside-plain"), ctx)).rejects.toMatchObject({ code: -32600, message: "Operation not permitted (os error 1)" })
     expect(calls.filter((call) => call.action === "shell")).toHaveLength(1)
   })
@@ -1626,7 +1628,9 @@ describe("CcaExecutor upstream sandbox requests", () => {
     const sandbox = sandboxFor(outside, managed([pathEntry(outside, "write")]))
     await executor.startProcess({ ...printf(outside, "outside-denied"), sandbox }, ctx)
     expect(calls.map((call) => call.action)).toEqual(["external_directory"])
-    expect((await drain(executor, ctx, "outside-denied")).sandboxDenied).toBe(true)
+    expect(await drain(executor, ctx, "outside-denied")).toMatchObject({
+      sandboxDenied: true, text: "sandbox denied: Permission denied: external directory access was not granted\n",
+    })
   })
 
   test("a shellSnapshot for an unsupported shell and a disabled network proxy launch are -32602 and spawn nothing", async () => {

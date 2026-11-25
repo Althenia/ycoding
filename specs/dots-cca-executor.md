@@ -283,7 +283,8 @@ Location roots, local Permission, and Guardrail apply to every request, as in Lo
 A `process/start` is sandboxed when its profile is `managed`, its filesystem or network is restricted, and its override is not `bypassSandboxFirstAttempt`, which is when upstream would apply a platform sandbox. YCoding denies a sandboxed start when the cwd is outside the Location roots, when the profile cannot read the cwd, or when Permission or Guardrail refuses. The denial then follows upstream's sandbox-denial semantics (`exec-server/src/local_process.rs:1097-1143`):
 
 - The start answers `{processId, sandboxType: "none"}` without spawning anything.
-- It then emits `process/output` (seq 1, stderr `sandbox denied: Permission denied by YCoding policy`), `process/exited` (seq 2, `exitCode: 1`, `sandboxDenied: true`), and `process/closed` (seq 3).
+- It then emits `process/output` (seq 1, stderr `sandbox denied: <reason>`), `process/exited` (seq 2, `exitCode: 1`, `sandboxDenied: true`), and `process/closed` (seq 3).
+- The reason identifies the check that stopped the start: working directory outside the permitted roots, working directory unreadable under the requested profile, external directory access not granted, or shell access not granted. The latter two identify the authorization step, not a particular rule or reviewer. No local path or command is included.
 - `process/read` returns that chunk with `exited`, `closed`, `exitCode: 1`, and `sandboxDenied: true`. `process/write` answers `stdinClosed`.
 
 Upstream core treats an executor-reported denial as a sandbox denial (`core/src/unified_exec/process.rs:323-350`). It may then escalate through its own approval and retry without `sandbox` (`core/src/tools/orchestrator.rs:395-560`). The retry is an unsandboxed start, which still needs local Permission and Guardrail. Unsandboxed starts keep `-32001` for an authorization denial and `-32602` for a cwd outside the roots.

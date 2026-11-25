@@ -23,7 +23,7 @@ use ycoding_core::cca::{
 };
 
 struct Policy {
-    allow: bool,
+    allow: fn(&str) -> bool,
     seen: Mutex<Vec<String>>,
 }
 
@@ -83,7 +83,7 @@ impl Authorize for Policy {
             .lock()
             .unwrap()
             .push(format!("{} {}", input.action, resources));
-        let allow = self.allow;
+        let allow = (self.allow)(&input.action);
         Box::pin(async move {
             if allow {
                 Ok(Grant::noop())
@@ -143,7 +143,7 @@ fn uri(path: &std::path::Path) -> String {
     format!("file://{}", path.display())
 }
 async fn executor(
-    allow: bool,
+    allow: fn(&str) -> bool,
     root: &std::path::Path,
 ) -> (
     Executor,
@@ -217,7 +217,7 @@ async fn environment_config_uses_explicit_requirements_and_managed_paths() {
         scope_provider: Arc::new(Provider {
             root: root.to_string_lossy().into_owned(),
             policy: Arc::new(Policy {
-                allow: true,
+                allow: |_| true,
                 seen: Mutex::new(vec![]),
             }),
         }),
@@ -323,7 +323,7 @@ async fn environment_config_uses_explicit_requirements_and_managed_paths() {
 #[tokio::test]
 async fn file_round_trip_stays_inside_roots_and_authorizes_each_use() {
     let root = workspace();
-    let (executor, ctx, policy, _) = executor(true, &root).await;
+    let (executor, ctx, policy, _) = executor(|_| true, &root).await;
     let file = root.join("note.txt");
     executor
         .write_file(
@@ -378,7 +378,7 @@ async fn file_round_trip_stays_inside_roots_and_authorizes_each_use() {
 #[tokio::test]
 async fn denied_authorization_blocks_filesystem_access() {
     let root = workspace();
-    let (executor, ctx, _, _) = executor(false, &root).await;
+    let (executor, ctx, _, _) = executor(|_| false, &root).await;
     std::fs::write(root.join("secret.txt"), b"x").unwrap();
     let error = executor
         .read_file(
@@ -406,10 +406,91 @@ async fn denied_authorization_blocks_filesystem_access() {
     assert_eq!(error.code, -32001);
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn sandboxed_start_reports_the_refusing_check_without_running_the_command() {
+    let root = workspace();
+    let outside = workspace();
+    let allowed = root.join("allowed");
+    std::fs::create_dir(&allowed).unwrap();
+    let mut diagnostics = Vec::new();
+    for (id, cwd, profile_root, expected_actions) in [
+        ("profile", &root, &allowed, vec![]),
+        ("roots", &outside, &allowed, vec![]),
+        ("external", &outside, &outside, vec!["external_directory"]),
+        ("shell", &root, &root, vec!["shell"]),
+    ] {
+        let (executor, ctx, policy, _) = executor(|action| action == "read", &root).await;
+        let sandbox = parse_json(
+            &serde_json::json!({
+                "cwd": uri(profile_root),
+                "permissions": {"type": "managed", "network": "restricted", "file_system": {
+                    "type": "restricted", "entries": []
+                }}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        executor
+            .start_process(
+                ExecParams {
+                    process_id: id.into(),
+                    argv: vec!["/bin/echo".into()],
+                    cwd: uri(cwd).into(),
+                    sandbox: Some(sandbox),
+                    ..Default::default()
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            policy
+                .seen
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|call| call.split_once(' ').unwrap().0)
+                .collect::<Vec<_>>(),
+            expected_actions,
+            "{id}"
+        );
+        let read = executor
+            .read_process(
+                ReadParams {
+                    process_id: id.into(),
+                    after_seq: None,
+                    max_bytes: None,
+                    wait_ms: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert!(read.sandbox_denied && read.closed);
+        assert_eq!(read.exit_code, Some(1));
+        assert_eq!(read.chunks.len(), 1);
+        assert_eq!(read.chunks[0].stream, OutputStream::Stderr);
+        diagnostics.push(String::from_utf8(read.chunks.into_iter().next().unwrap().chunk).unwrap());
+        executor.close().await.unwrap();
+    }
+    std::fs::remove_dir_all(root).unwrap();
+    std::fs::remove_dir(outside).unwrap();
+    assert_eq!(
+        diagnostics,
+        [
+            "sandbox denied: the requested sandbox profile does not permit reading the working directory\n",
+            "sandbox denied: the working directory is outside the permitted roots\n",
+            "sandbox denied: Permission denied: external directory access was not granted\n",
+            "sandbox denied: Permission denied: shell access was not granted\n",
+        ]
+    );
+}
+
 #[tokio::test]
 async fn create_directory_reports_created_then_existing() {
     let root = workspace();
-    let (executor, ctx, _, _) = executor(true, &root).await;
+    let (executor, ctx, _, _) = executor(|_| true, &root).await;
     let target = uri(&root.join("made"));
     assert!(matches!(
         executor.create_directory(&target, &ctx).await.unwrap(),
@@ -425,7 +506,7 @@ async fn create_directory_reports_created_then_existing() {
 #[tokio::test]
 async fn process_output_exit_code_and_environment_order_are_preserved() {
     let root = workspace();
-    let (executor, ctx, _, events) = executor(true, &root).await;
+    let (executor, ctx, _, events) = executor(|_| true, &root).await;
     let id = LosslessString::from("proc-1");
     let script = "printf '%s,%s' \"$B_ONE\" \"$A_TWO\"; exit 7";
     let env = vec![
@@ -496,7 +577,7 @@ async fn process_output_exit_code_and_environment_order_are_preserved() {
 #[tokio::test]
 async fn terminate_stops_a_running_process_and_close_releases_everything() {
     let root = workspace();
-    let (executor, ctx, _, _) = executor(true, &root).await;
+    let (executor, ctx, _, _) = executor(|_| true, &root).await;
     let id = LosslessString::from("proc-sleep");
     executor
         .start_process(
@@ -562,7 +643,7 @@ async fn terminate_stops_a_running_process_and_close_releases_everything() {
 #[tokio::test]
 async fn environment_info_advertises_the_fixed_capability_set_as_lossless_json() {
     let root = workspace();
-    let (executor, _, _, _) = executor(true, &root).await;
+    let (executor, _, _, _) = executor(|_| true, &root).await;
     let info = executor.environment_info();
     let reparsed = parse_json(&stringify_json(&info.to_json())).unwrap();
     assert_eq!(reparsed, info.to_json());
@@ -630,7 +711,7 @@ struct Observed {
 
 async fn observed_executor(root: &std::path::Path) -> Observed {
     let policy = Arc::new(Policy {
-        allow: true,
+        allow: |_| true,
         seen: Mutex::new(vec![]),
     });
     let opened = Arc::new(AtomicUsize::new(0));
