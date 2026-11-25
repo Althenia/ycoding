@@ -51,6 +51,7 @@ export type InstallUpdateOptions = {
 type Version = { readonly core: readonly string[]; readonly prerelease: readonly string[] }
 
 type Release = {
+  readonly tag: string
   readonly version: string
   readonly releaseUrl: string
   readonly publishedAt: string
@@ -98,12 +99,21 @@ export async function installUpdate(options: InstallUpdateOptions): Promise<Upda
   await assertWritable(appBundlePath, options.access ?? fsAccess)
 
   const fetcher = options.fetch ?? fetch
-  const version = options.targetVersion ?? (await fetchLatestRelease(options.currentVersion, fetcher)).version
+  const native = usesNativeReleaseLayout(options.currentVersion)
+  const release = options.targetVersion === undefined
+    ? await fetchLatestRelease(options.currentVersion, fetcher)
+    : native ? await fetchDesktopTarget(options.targetVersion, fetcher) : undefined
+  const version = options.targetVersion ?? release!.version
   requireNewer(version, current)
+  if (release?.tag.startsWith("desktop-v")) {
+    const blocker = await installBlocker(options, release)
+    if (blocker) throw new DesktopError(blocker)
+  }
+  const tag = release?.tag ?? `v${version}`
   const zipName = archiveName(version)
-  const releaseBase = `${releaseDownloadBase}/v${version}`
+  const releaseBase = `${releaseDownloadBase}/${tag}`
   const checksumsText = new TextDecoder().decode(
-    await download(fetcher, `${releaseBase}/${checksumsName(version)}`, maxChecksumsBytes, checksumsTimeoutMs),
+    await download(fetcher, `${releaseBase}/${checksumsName(version, tag)}`, maxChecksumsBytes, checksumsTimeoutMs),
   )
   const expectedDigest = checksumEntry(checksumsText, zipName)
   const runCommand = options.runCommand ?? runProcess
@@ -150,14 +160,14 @@ function archiveName(version: string) {
   return `YCoding-Desktop-v${version}-darwin-arm64.zip`
 }
 
-function checksumsName(version: string) {
-  return `ycoding-${version}-checksums.txt`
+function checksumsName(version: string, tag: string) {
+  return `ycoding-${tag.startsWith("desktop-v") ? "desktop-" : ""}${version}-checksums.txt`
 }
 
 async function installBlocker(options: CheckForUpdatesOptions, release: Release) {
   if (options.appBundlePath === null) return unbundledReason
   if (!supportedTarget(options.platform, options.arch)) return unsupportedTargetReason
-  for (const name of [archiveName(release.version), checksumsName(release.version)]) {
+  for (const name of [archiveName(release.version), checksumsName(release.version, release.tag)]) {
     const asset = release.assets.find((item) => item.name === name)
     if (!asset || !isHttpsUrl(asset.url)) return `The release does not publish ${name} over HTTPS`
   }
@@ -184,12 +194,14 @@ async function fetchLatestRelease(currentVersion: string, fetcher: UpdateFetch):
     if (!Array.isArray(data) || data.length > 20) throw new DesktopError("Rust release metadata did not contain a valid release list")
     let latest: { readonly data: Record<string, unknown>; readonly tag: string; readonly version: Version } | undefined
     for (const entry of data as readonly unknown[]) {
-      if (!isRecord(entry) || entry.draft !== false || entry.prerelease !== false ||
-        typeof entry.tag_name !== "string" || !entry.tag_name.startsWith("v")) continue
-      const value = entry.tag_name.slice(1)
+      if (!isRecord(entry) || entry.draft !== false || entry.prerelease !== false || typeof entry.tag_name !== "string") continue
+      const tag = entry.tag_name
+      const value = tag.startsWith("desktop-v") ? tag.slice(9) : tag.startsWith("v") ? tag.slice(1) : ""
       const version = parseVersion(value)
       if (!version || version.prerelease.length !== 0 || !usesNativeReleaseLayout(value)) continue
-      if (!latest || compareVersions(version, latest.version) > 0) latest = { data: entry, tag: entry.tag_name, version }
+      const order = latest ? compareVersions(version, latest.version) : 1
+      if (order > 0 || (order === 0 && tag.startsWith("v") && latest?.tag.startsWith("desktop-v")))
+        latest = { data: entry, tag, version }
     }
     if (!latest) throw new DesktopError("No stable Rust release found")
     return releaseMetadata(latest.data, latest.tag)
@@ -198,6 +210,26 @@ async function fetchLatestRelease(currentVersion: string, fetcher: UpdateFetch):
   const version = data.tag_name.startsWith("v") ? data.tag_name.slice(1) : ""
   requireVersion(version, `latest release tag ${JSON.stringify(data.tag_name)}`)
   return releaseMetadata(data, data.tag_name)
+}
+
+async function fetchDesktopTarget(targetVersion: string, fetcher: UpdateFetch): Promise<Release | undefined> {
+  try {
+    const response = await fetcher(nativeReleasesUrl, {
+      headers: { Accept: "application/vnd.github+json", "User-Agent": userAgent },
+      signal: AbortSignal.timeout(metadataTimeoutMs),
+    })
+    const data = parseJson(new TextDecoder().decode(await readLimited(response, maxMetadataBytes, "latest release metadata")))
+    if (!Array.isArray(data) || data.length > 20) return undefined
+    let desktop: Record<string, unknown> | undefined
+    for (const entry of data as readonly unknown[]) {
+      if (!isRecord(entry) || entry.draft !== false) continue
+      if (entry.tag_name === `v${targetVersion}`) return undefined
+      if (entry.tag_name === `desktop-v${targetVersion}`) desktop = entry
+    }
+    return desktop ? releaseMetadata(desktop, `desktop-v${targetVersion}`) : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function releaseMetadata(data: Record<string, unknown>, tag: string): Release {
@@ -209,7 +241,8 @@ function releaseMetadata(data: Record<string, unknown>, tag: string): Release {
       )
     : []
   return {
-    version: tag.slice(1),
+    tag,
+    version: tag.startsWith("desktop-v") ? tag.slice(9) : tag.slice(1),
     releaseUrl:
       typeof data.html_url === "string" && isHttpsUrl(data.html_url) ? data.html_url : `${releaseTagBase}/${tag}`,
     publishedAt: typeof data.published_at === "string" ? data.published_at : "",

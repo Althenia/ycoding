@@ -70,7 +70,7 @@ describe("updater release source", () => {
             version: "1.2.3",
             fetch: async (url) => {
               urls.push(url)
-              return Response.json({ tag_name: `v${latest}` })
+              return Response.json([{ draft: false, prerelease: false, tag_name: `v${latest}` }])
             },
           }),
         ),
@@ -79,8 +79,41 @@ describe("updater release source", () => {
       ),
     )
 
-    expect(urls).toEqual(["https://api.github.com/repos/Althenia/ycoding/releases/latest"])
+    expect(urls).toEqual(["https://api.github.com/repos/Althenia/ycoding/releases?per_page=20"])
     expect(notices).toEqual([`YCoding ${latest} available. Run \`ycoding update\`.`])
+  })
+
+  test("announces the newest combined release and ignores a newer Desktop-only release", async () => {
+    const fixture = await releaseFixture()
+    const urls: string[] = []
+    const notices: string[] = []
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const updater = yield* Updater.Service
+        yield* updater.check((message) => Effect.sync(() => notices.push(message)))
+      }).pipe(
+        Effect.provide(
+          Updater.layerWith({
+            local: false,
+            version: "1.2.3",
+            fetch: async (url) => {
+              urls.push(url)
+              return Response.json([
+                { draft: false, prerelease: false, tag_name: "desktop-v9.9.9" },
+                { draft: false, prerelease: false, tag_name: "v1.3.0" },
+                { draft: false, prerelease: false, tag_name: "v1.2.4" },
+              ])
+            },
+          }),
+        ),
+        Effect.provide(FrontendPaths.layerWith({ config: fixture.config })),
+        Effect.provide(NodeFileSystem.layer),
+      ),
+    )
+
+    expect(urls).toEqual(["https://api.github.com/repos/Althenia/ycoding/releases?per_page=20"])
+    expect(notices).toEqual(["YCoding 1.3.0 available. Run `ycoding update`."])
   })
 
   test("leaves an installation untouched when the policy disables updates", async () => {
@@ -98,7 +131,7 @@ describe("updater release source", () => {
             version: "1.2.3",
             fetch: async (url) => {
               urls.push(url)
-              return Response.json({ tag_name: "v1.2.4" })
+              return Response.json([{ draft: false, prerelease: false, tag_name: "v1.2.4" }])
             },
           }),
         ),
