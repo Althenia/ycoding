@@ -2422,7 +2422,9 @@ form .request__actions .button--secondary {
 .app-header__new-chat { display: none; }
 .team-control__panel.team-control--exiting { pointer-events: none; }
 @media (max-width: 1279px) {
-  .team-control__panel { position: fixed; z-index: var(--yc-z-overlay); inset-block: 0; inset-inline-end: 0; inline-size: min(var(--yc-companion-w), 100vw); }
+  .app--team-open { grid-template-rows: auto minmax(0, 1fr) minmax(0, 35%); grid-template-areas: "activity rail header" "activity rail workspace" "activity rail companion"; }
+  .app--team-open:has(> .status-strip) { grid-template-rows: auto auto minmax(0, 1fr) minmax(0, 35%); grid-template-areas: "activity rail header" "activity rail connection" "activity rail workspace" "activity rail companion"; }
+  .team-control__panel { border-inline-start: 0; border-block-start: 1px solid var(--yc-line-subtle); }
 }
 @media (min-width: 1280px) {
   .app--team-open { grid-template-columns: var(--yc-activity-w) var(--yc-rail-w) minmax(0, 1fr) min(var(--yc-companion-w), 40vw); grid-template-areas: "activity rail header companion" "activity rail workspace companion"; }
@@ -2456,6 +2458,9 @@ form .request__actions .button--secondary {
     grid-template-areas: "header" "connection" "workspace" "navigation";
   }
 
+  .app--team-open { grid-template-rows: auto minmax(0, 1fr) minmax(0, 35%) auto; grid-template-areas: "header" "workspace" "companion" "navigation"; }
+  .app--team-open:has(> .status-strip) { grid-template-rows: auto auto minmax(0, 1fr) minmax(0, 35%) auto; grid-template-areas: "header" "connection" "workspace" "companion" "navigation"; }
+
   .workspace__rail, .app > .activity-bar { display: none; }
   .companion__header > .rl-pane-kicker { display:none; }
   .app .app-header__menu,
@@ -2488,6 +2493,8 @@ form .request__actions .button--secondary {
 
   .app[data-keyboard-open] { grid-template-rows: auto minmax(0, 1fr) 0px; }
   .app[data-keyboard-open]:has(> .status-strip) { grid-template-rows: auto auto minmax(0, 1fr) 0px; }
+  .app--team-open[data-keyboard-open] { grid-template-rows: auto minmax(0, 1fr) minmax(0, 25%) 0px; }
+  .app--team-open[data-keyboard-open]:has(> .status-strip) { grid-template-rows: auto auto minmax(0, 1fr) minmax(0, 25%) 0px; }
 }
 
 @media (pointer: coarse) {
@@ -2517,6 +2524,9 @@ form .request__actions .button--secondary {
     grid-template-rows: auto auto minmax(0, 1fr);
     grid-template-areas: "navigation header" "navigation connection" "navigation workspace";
   }
+
+  .app--team-open { grid-template-rows: auto minmax(0, 1fr) minmax(0, 35%); grid-template-areas: "navigation header" "navigation workspace" "navigation companion"; }
+  .app--team-open:has(> .status-strip) { grid-template-rows: auto auto minmax(0, 1fr) minmax(0, 35%); grid-template-areas: "navigation header" "navigation connection" "navigation workspace" "navigation companion"; }
 
   .app > .app-header { min-block-size: var(--yc-header-session-h); }
   .app .app-header__inner { min-block-size: var(--yc-header-session-h); }

@@ -1,9 +1,13 @@
 use super::{
+    app::{self, AppCall, AppView, Key, Ticket},
     client::{Connection, Error, Hooks, Notification, ToolResult},
     configuration::{self, Definitions},
     instructions,
 };
-use crate::resources::{auth::integration, config::Entry};
+use crate::{
+    resources::{auth::integration, config::Entry},
+    tools::context::Context,
+};
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
@@ -14,13 +18,13 @@ use std::{
     },
 };
 use tokio::{
-    sync::{broadcast, watch},
+    sync::{Semaphore, broadcast, watch},
     task::JoinSet,
 };
 use ycoding_schema::{
     LosslessString, connection,
     mcp::{ServerConfig, Status},
-    mcp_skill,
+    mcp_skill, session, session_message,
 };
 
 #[derive(Clone, Debug)]
@@ -61,7 +65,7 @@ struct State {
 struct Authentication {
     integration_id: Option<LosslessString>,
 }
-struct Slot {
+pub(super) struct Slot {
     state: tokio::sync::Mutex<State>,
     view: watch::Sender<View>,
     ready: watch::Sender<bool>,
@@ -78,6 +82,8 @@ struct Inner {
     events: broadcast::Sender<Event>,
     tasks: Mutex<JoinSet<()>>,
     closed: AtomicBool,
+    apps: Mutex<app::Registry>,
+    app_reads: Semaphore,
 }
 #[derive(Clone)]
 pub struct Service(Arc<Inner>);
@@ -124,6 +130,8 @@ impl Service {
             events,
             tasks: Mutex::new(JoinSet::new()),
             closed: AtomicBool::new(false),
+            apps: Mutex::default(),
+            app_reads: Semaphore::new(8),
         }));
         if let Some(registry) = &service.0.hooks.integrations {
             let mut events = registry.subscribe();
@@ -406,6 +414,132 @@ impl Service {
             .call_tool(name, args, signal)
             .await
     }
+    pub(crate) fn begin_app_call(&self, context: &Context) -> Option<Ticket> {
+        if context.invocation_id.is_some() || self.0.closed.load(Ordering::Acquire) {
+            return None;
+        }
+        let key = Key::new(&context.session_id, &context.message_id, &context.call_id)?;
+        self.0.apps.lock().ok()?.begin(key)
+    }
+    pub(crate) async fn call_tool_for_app(
+        &self,
+        server: &str,
+        name: &str,
+        args: Value,
+        observe_app: bool,
+    ) -> Result<(ToolResult, Option<AppCall>), Error> {
+        if !observe_app {
+            return self
+                .call_tool(server, name, args, None)
+                .await
+                .map(|result| (result, None));
+        }
+        let slot = self.require(server)?;
+        ready(&slot).await?;
+        let (connection, uri) = {
+            let state = slot.state.lock().await;
+            if state.removed {
+                return Err(Error::NotFound(server.into()));
+            }
+            let connection = state
+                .client
+                .clone()
+                .ok_or_else(|| Error::Connect("MCP server is not connected".into()))?;
+            let uri = if connection.app_available() && name.len() <= 256 {
+                let view = slot.view.borrow();
+                let mut matches = view
+                    .tools
+                    .iter()
+                    .filter(|tool| tool.definition["name"].as_str() == Some(name));
+                matches
+                    .next()
+                    .filter(|_| matches.next().is_none())
+                    .and_then(|tool| app::declared_uri(&tool.definition))
+                    .map(str::to_owned)
+            } else {
+                None
+            };
+            (connection, uri)
+        };
+        let input = uri.as_ref().and_then(|_| app::input(&args));
+        let raw = connection.call_tool_response(name, args, None).await?;
+        let result = super::client::tool_result(&raw)?;
+        let app = uri.zip(input).and_then(|(uri, input)| {
+            if result.is_error || !connection.complete_app_response(&raw) {
+                return None;
+            }
+            Some(AppCall {
+                slot: Arc::downgrade(&slot),
+                connection: Arc::downgrade(&connection),
+                uri,
+                tool: name.into(),
+                input,
+                output: app::output(&raw)?,
+            })
+        });
+        Ok((result, app))
+    }
+    pub(crate) async fn publish_app_call(&self, context: &Context, ticket: Ticket, app: AppCall) {
+        let (Some(slot), Some(connection)) = (app.slot.upgrade(), app.connection.upgrade()) else {
+            return;
+        };
+        let state = slot.state.lock().await;
+        if let Ok(mut apps) = self.0.apps.lock()
+            && !context.cancellation.is_cancelled()
+            && self.0.active_app_origin(&state, &connection)
+        {
+            apps.publish(ticket, app);
+        }
+    }
+    pub async fn app_view(
+        &self,
+        session: &session::Id,
+        message: &session_message::Id,
+        call: &LosslessString,
+    ) -> Result<Option<AppView>, Error> {
+        let Some(key) = Key::new(session, message, call) else {
+            return Ok(None);
+        };
+        let Some(app) = self.0.apps.lock().map_err(|_| Error::Closed)?.get(&key) else {
+            return Ok(None);
+        };
+        let (Some(slot), Some(connection)) = (app.slot.upgrade(), app.connection.upgrade()) else {
+            return Ok(None);
+        };
+        let Ok(_permit) = self.0.app_reads.try_acquire() else {
+            return Ok(None);
+        };
+        let current = |state: &State| -> Result<bool, Error> {
+            Ok(self.0.active_app_origin(state, &connection)
+                && self
+                    .0
+                    .apps
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .get(&key)
+                    .is_some_and(|latest| Arc::ptr_eq(&app, &latest)))
+        };
+        {
+            let state = slot.state.lock().await;
+            if !current(&state)? {
+                return Ok(None);
+            }
+        }
+        let Some(html) = connection.read_app_resource(&app.uri).await else {
+            return Ok(None);
+        };
+        let state = slot.state.lock().await;
+        if !current(&state)? {
+            return Ok(None);
+        }
+        Ok(Some(AppView {
+            resource_uri: app.uri.clone(),
+            html,
+            tool: app.tool.clone(),
+            input: app.input.clone(),
+            output: app.output.clone(),
+        }))
+    }
     pub async fn prompt(
         &self,
         server: &str,
@@ -535,6 +669,20 @@ impl Service {
 }
 
 impl Inner {
+    fn active_app_origin(&self, state: &State, connection: &Arc<Connection>) -> bool {
+        !self.closed.load(Ordering::Acquire)
+            && !state.removed
+            && state
+                .client
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, connection))
+            && connection.app_available()
+    }
+    fn detach_apps(&self, connection: &Arc<Connection>) {
+        if let Ok(mut apps) = self.apps.lock() {
+            apps.detach(connection);
+        }
+    }
     fn publish(&self, event: Event) {
         let data = match &event {
             Event::StatusChanged(server) => Some(crate::event_feed::Data::McpStatusChanged(
@@ -783,6 +931,7 @@ async fn start(inner: &Arc<Inner>, name: &str, slot: &Arc<Slot>, state: &mut Sta
                     match notification.method.as_str() {
                         "connection/closed" => {
                             state.client = None;
+                            inner.detach_apps(&connection);
                             slot.view.send_replace(empty_view(Status::Failed(
                                 "Connection closed".into(),
                             )));
@@ -863,6 +1012,7 @@ async fn stop(inner: &Inner, name: &str, slot: &Slot, state: &mut State) -> Resu
     let Some(connection) = state.client.take() else {
         return Ok(());
     };
+    inner.detach_apps(&connection);
     slot.view.send_replace(empty_view(Status::Pending));
     connection.close().await?;
     inner.publish(Event::ToolsChanged(name.into()));

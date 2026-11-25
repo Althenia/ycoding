@@ -66,12 +66,12 @@ test("phone header, composer and companion keep every action touch-sized with gr
     }
     await page.pressKey("Tab", "Tab", 9)
     await page.evaluate(`document.querySelector('.companion-context-trigger').focus({preventScroll:true})`)
-    expect(await page.evaluate(`(()=>{const button=document.querySelector('.companion-context-trigger'),style=getComputedStyle(button);return button.matches(':focus-visible')&&parseFloat(style.outlineWidth)>=2&&style.getPropertyValue('--yc-focus').trim()===style.getPropertyValue('--yc-green-graphic').trim()})()`)).toBe(true)
+    expect(await page.evaluate(`(()=>{const button=document.querySelector('.companion-context-trigger'),style=getComputedStyle(button),probe=document.createElement('span');probe.style.color='var(--yc-focus)';button.append(probe);const color=getComputedStyle(probe).color;probe.remove();return button.matches(':focus-visible')&&parseFloat(style.outlineWidth)>=2&&style.outlineColor===color})()`)).toBe(true)
     await click(page, "Open Session context")
-    await until(page, `!!document.querySelector('dialog[open] .companion')`)
-    await touchTargets(page, 'dialog[open] .companion button,dialog[open] .overlay__head button')
+    await until(page, `!!document.querySelector('#session-companion-panel .companion')`)
+    await touchTargets(page, '#session-companion-panel .companion button')
     await page.pressEscape()
-    await until(page, `!document.querySelector('dialog[open]')`)
+    await until(page, `!document.querySelector('#session-companion-panel:not([aria-hidden="true"])')`)
     expect(await page.evaluate(`document.activeElement===document.querySelector('.companion-context-trigger')`)).toBe(true)
     await noOverflow(page)
   } finally { await page.close() }
@@ -340,8 +340,8 @@ test("phone Team inspection has an explicit return to the retained direct-child 
   try {
     await page.setReducedMotion(true)
     await click(page, "Open Team")
-    await until(page, `!!document.querySelector('dialog[open][aria-label="Team"]')`)
-    await touchTargets(page,'dialog[open] .companion__pill')
+    await until(page, `!!document.querySelector('#session-companion-panel')`)
+    await touchTargets(page,'#session-companion-panel .companion__pill')
     await click(page, "Expand Team")
     await until(page, `!!document.querySelector('dialog[open][aria-label="Team overview"] [data-action="inspect-child"]')`)
     expect(await page.evaluate(`(() => {
@@ -388,7 +388,7 @@ test("phone Team inspection has an explicit return to the retained direct-child 
     await until(page, `!document.querySelector('dialog[open][aria-label="Team overview"]')`)
     await settled(page)
     const activity = await page.evaluate(`(() => {
-      const body = document.querySelector('dialog[open][aria-label="Team"] .overlay__body');
+      const body = document.querySelector('#session-companion-panel');
       const start = body.getBoundingClientRect().left + body.clientLeft;
       return {
         fits: body.scrollWidth === body.clientWidth && [...body.querySelectorAll('.companion__header, .rl-pane-tabs-row')].every(band => { const box = band.getBoundingClientRect(); return box.left >= start && box.right <= start + body.clientWidth; }),
@@ -396,7 +396,7 @@ test("phone Team inspection has an explicit return to the retained direct-child 
       };
     })()`)
     await page.pressEscape()
-    await until(page, `!document.querySelector('dialog[open]')`)
+    await until(page, `!document.querySelector('#session-companion-panel:not([aria-hidden="true"])')`)
     expect(await page.evaluate(`document.activeElement?.getAttribute('aria-label')`)).toBe("Open Team")
     await noOverflow(page)
     expect({ inspectorGeometry, reachedEnd, activity }).toEqual({ inspectorGeometry: { ringVisible: true, verticalOwners: 1 }, reachedEnd: true, activity: { fits: true, focused: true } })

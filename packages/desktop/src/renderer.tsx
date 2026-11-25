@@ -36,6 +36,11 @@ import { ordinarySession } from "./sessions"
 import { Markdown, MarkdownClipboard } from "../../../apps/web/src/remote/ui/markdown"
 import { createInteractionControl, interactionControlVisible, interactionEventGeneration, readInteractionStatus, type InteractionView } from "../../../apps/web/src/remote/interaction-control"
 import { InteractionControl, InteractionPreview } from "../../../apps/web/src/remote/ui/interaction-control"
+import { McpApp } from "../../../apps/web/src/remote/ui/mcp-app"
+import { McpAppResult, type OpenMcpApp } from "../../../apps/web/src/remote/ui/mcp-app-result"
+import { SwarmBoard, swarmBoardView } from "../../../apps/web/src/remote/ui/swarm-board"
+import { boardUpdateGroup } from "../../../apps/web/src/remote/coordination"
+import { railGroupPartitions } from "./form-rules"
 import { chromeInteractionURL } from "./interaction-request"
 import { WORKSPACE_DESTINATIONS, SharedActivityBar, SharedTrace, SharedListColumn, SharedSessionGroups, clampListWidth, type SharedActivityItem, type SharedSessionGroup, SharedCompanionSurface, SharedCompanionTabs, SharedConversationHeader, SharedMessageTurn, SharedContextRingButton, SharedContextBreakdownPanel, SharedTurnHead, SharedRadioGroup, SharedCompactionDivider, SharedEditedFilesCard, SharedActivitySurface, SharedPageSurface, SharedSessionsSurface, SharedWorkspacesSurface, SharedUsageSurface, SharedSettingsSurface, SharedLoadingSkeleton } from "../../../apps/web/src/remote/ui/shared-workspace"
 import { DESKTOP_THEMES, isDesktopThemeID, resolveDesktopTheme, DESKTOP_BUILT_IN_SLASH_COMMANDS, desktopSlashCommand, userDeliveryStates, userPendingInputs, assistantReplyText, validateFolderSegment, parsePromptStashes, pushPromptStash, formatQuotaProviders, formatCount, formatCompactCount, formatDurationMs, formatUsd, type DesktopThemeID, activeFields, appendPage, buildAnswer, chooseModel, chooseProfile, choiceFor, choiceProblem, composerTrigger, initialValues, insertCompletion, invalidIndexes, restoredPrompt, modelLabel, pagedItems, pagingFor, problemOf, profileLabel, railGroups, restoresFocus, sameSelection, samePaging, searchTerm, selectionFor, composerSlash, valueFor, variantsFor, visibleModels, withValue, workspaceBase, classifyDesktopSynthetic, dotSteerDisplay, visibleDesktopMessages, turnEditPlacements, groupAssistantParts, toolDisplaySummary, effortStopsFor, effortStopIndex, effortStopFraction, insertTextAtSelection, isEditableKeyboardTarget, isStandardEditShortcut, sessionState, type PastedText, type StashedPrompt, type Activity, type Field, type FocusAt, type MentionPick, type ModelChoice, type SlashAction, type Paging, type Value, railGroupLabels, railGroupOrder } from "./form-rules"
@@ -354,6 +359,29 @@ function ProjectCoordination(props: { readonly group: import("./contract").Proje
   const model = (id: string) => { const value = record(id)?.model; return value ? `${value.providerID}/${value.id}` : "Model not reported" }
   const canonical = (directory: string) => props.repositories.find(repository => repository.directory === directory)?.projectWorktree ?? "Canonical path not reported"
   return <div class="desktop-coordination" data-project-coordination><div class="desktop-coordination-main"><details class="desktop-project-ownership" aria-label="Ownership & drivers"><summary>Ownership &amp; Driver Representation <span>{formatCount(members().length)} members</span></summary><p>Master Session · {props.group.master.title} · {props.group.master.sessionID}</p><ul class="desktop-ownership"><For each={members()}>{member => <li><strong>{member.title}</strong><span>Owner: {member.owner ? `${member.owner.title} · ${member.owner.sessionID}` : "Not reported"}</span><span>Driven by: {member.drivenBy ? `${member.drivenBy.title} · ${member.drivenBy.sessionID}` : "Not reported"}</span></li>}</For></ul></details><div class="desktop-table-scroll"><table aria-label="Member Sessions" class="desktop-coordination-table"><thead><tr><th>Member Title &amp; ID</th><th>State</th><th>Location</th><th>Model</th><th>Pending</th><th>Actions</th></tr></thead><tbody><For each={members()}>{member => <tr aria-selected={selected()?.sessionID === member.sessionID}><td><button type="button" class="desktop-row-select" onClick={() => setSelectedID(member.sessionID)}><strong>{member.title}</strong><small>{member.sessionID}</small></button></td><td>{member.state}</td><td><code>{member.location.directory}</code><small>Canonical: {canonical(member.location.directory)}</small></td><td>{model(member.sessionID)}</td><td>{formatCount(member.pending.length)}</td><td><button type="button" class="rl-btn" onClick={() => props.onOpen(member.sessionID)}>Open</button></td></tr>}</For></tbody></table></div><Show when={!members().length}><p>No member Sessions reported.</p></Show><details aria-label="Pending requests & escalations" class="desktop-blockers"><summary>Pending Requests &amp; Escalations <span>{formatCount(members().reduce((total, member) => total + member.pending.length, 0))}</span></summary><For each={members().flatMap(member => member.pending.map(request => ({ member, request })))} fallback={<p>No pending requests reported by this Project.</p>}>{entry => <article><div><strong>{entry.member.title} · {entry.request.kind}</strong><p>{entry.request.summary}</p><small>{entry.request.requestID}</small></div><button type="button" class="rl-btn" onClick={() => props.onOpen(entry.member.sessionID)}>Review in Session</button></article>}</For></details></div><aside class="desktop-selected-inspector" aria-label="Selected member"><Show when={selected()} fallback={<p>Select a member Session to inspect it.</p>}>{member => <><h2>{member().title}</h2><p>{member().sessionID} · {member().state}</p><dl><dt>Owner</dt><dd>{member().owner?.title ?? "Not reported"}</dd><dt>Driver</dt><dd>{member().drivenBy?.title ?? "Not reported"}</dd><dt>Working folder</dt><dd>{member().location.directory}</dd><dt>Canonical path</dt><dd>{canonical(member().location.directory)}</dd><dt>Model</dt><dd>{model(member().sessionID)}</dd><dt>Pending requests</dt><dd>{formatCount(member().pending.length)}</dd><dt>Last activity</dt><dd>{new Date(member().lastActivity).toLocaleString()}</dd></dl><button type="button" class="rl-btn" onClick={() => props.onOpen(member().sessionID)}>Open member Session</button><button type="button" class="rl-btn" onClick={() => props.onOpen(props.group.master.sessionID)}>Open Master</button></>}</Show></aside></div>
+}
+
+function DesktopSwarmBoard(props: { readonly groupID: string; readonly masterSessionID: string; readonly onOpen: (id: string) => void }) {
+  const [open, setOpen] = createSignal(false)
+  const board = observe(() => {
+    const revision = connection().revision
+    return {
+      queryKey: ["swarm-board", ...scope(), props.groupID, props.masterSessionID] as const,
+      queryFn: () => revision === undefined ? Promise.reject(new Error("Choose the current Project."))
+        : api.swarmBoard({ groupID: props.groupID, masterSessionID: props.masterSessionID, revision }),
+      enabled: reading() && revision !== undefined && open(),
+    }
+  })
+  onCleanup(api.onEvent((event) => {
+    if (open() && reading() && boardUpdateGroup(event, props.masterSessionID) === props.groupID) board.refetch()
+  }))
+  return <details class="st-section" aria-label="Swarm Board" onToggle={(event) => setOpen(event.currentTarget.open)}><summary>Swarm Board</summary>
+    <Show when={open()}>
+      <Show when={board.result().isPending}><p role="status">Reading Swarm Board…</p></Show>
+      <Show when={board.result().isError}><p role="alert">{failure(board.result().error, "Swarm Board could not be read.")}</p><button type="button" class="rl-btn" onClick={board.refetch}>Refresh Board</button></Show>
+      <Show when={reading() && !board.result().isError ? board.result().data : undefined}>{(value) => <SwarmBoard view={() => swarmBoardView(value())} onOpenSession={props.onOpen} />}</Show>
+    </Show>
+  </details>
 }
 
 function WorkspaceTargetPicker(props: { readonly directory: string; readonly locked: boolean; readonly onApply: (directory: string) => void; readonly onBrowse: () => void; readonly onClose: () => void }) {
@@ -1533,6 +1561,12 @@ function Workspace() {
   const items = createMemo(() => { const first = sessions.result().data; const current = state(); return first && current ? pagedItems(first, current) : [] })
   const statusSnapshot = () => currentSnapshot(sessions.result().data, connection().revision)
   const grouped = createMemo(() => railGroups(items(), activity(), statusSnapshot(), executionStates()))
+  const railProjects = observe(() => ({ queryKey: ["projects", ...scope()] as const, queryFn: () => api.projects(), enabled: reading() && items().length > 0 && typeof api.projects === "function" }))
+  const railMembership = createMemo(() => {
+    const result = railProjects.result().data
+    if (!result || result.revision !== connection().revision) return new Map()
+    return new Map(result.groups.flatMap((group) => [group.master, ...group.members].map((entry) => [entry.sessionID, group] as const)))
+  })
   const [railFilter, setRailFilter] = createSignal<RailFilter>("all")
   const railRows = createMemo(() => grouped().groups.flatMap((group) => group.rows.map((session) => ({ session, state: railStateOf(group.key, session.id, statusSnapshot()) }))))
   const railCount = (filter: RailFilter) => railRows().filter((row) => railMatches(filter, row.state)).length
@@ -1588,8 +1622,10 @@ function Workspace() {
   const saveListWidth = (width: number) => { setListWidth(width); try { localStorage.setItem(LIST_WIDTH_KEY, String(width)) } catch { setDesktopNotice("The Session list width applies to this window but could not be saved.") } }
   const groupRows = (key: string) => grouped().groups.find((group) => group.key === key)?.rows.length ?? 0
   const railEntries = createMemo(() => new Map(railRows().map((row) => [row.session.id, row] as const)))
-  const groupItems = createMemo(() => new Map(grouped().groups.map((group) => [group.key, group.rows.flatMap((session) => { const entry = railEntries().get(session.id); return entry && railMatches(railFilter(), entry.state) ? [session.id] : [] })] as const)))
-  const visibleGroups: readonly SharedSessionGroup<string>[] = railGroupOrder.map((key) => ({ id: key, label: railGroupLabels[key], icon: railGroupIcons[key], hue: railGroupHues[key], get items() { return groupItems().get(key) ?? [] } }))
+  const visibleGroups = createMemo<readonly SharedSessionGroup<string>[]>(() => railGroupPartitions(grouped().groups, scope(), (id) => railMembership().get(id)).map((group) => ({
+    id: group.id, label: group.label, icon: railGroupIcons[group.key], hue: railGroupHues[group.key],
+    items: group.rows.flatMap((session) => { const entry = railEntries().get(session.id); return entry && railMatches(railFilter(), entry.state) ? [session.id] : [] }),
+  })))
   const conversationRoute = () => { const path = location().pathname; return path === "/chat" || path === "/sessions" || path.startsWith("/sessions/") }
   const activeSession = () => selected() ?? lastSession()
   const needsCount = () => groupRows("needs")
@@ -1633,8 +1669,8 @@ function Workspace() {
       <Show when={pinNote()}>{(result) => <p role={result().failed ? "alert" : "status"} class={result().failed ? "desktop__error" : "desktop__muted"}>{result().text}</p>}</Show></Show>}>
       <div class="rl-nav-scroll"><Show when={!sessions.result().isPending} fallback={<SharedLoadingSkeleton kind="list" label="Loading Sessions…" />}><Show when={!sessions.result().isError} fallback={<p role="alert" class="desktop__error">Sessions could not be read. Check the connection and refresh.</p>}>
         <Show when={railRows().length > 0 || grouped().archived > 0} fallback={<p role="status">{applied() ? "No Sessions match your search." : "No Sessions in this backend."}</p>}>
-          <Show when={visibleGroups.some((group) => group.items.length)} fallback={<p role="status">{railFilter() === "all" ? "No Sessions to show." : "No Sessions match this filter."}</p>}>
-            <SharedSessionGroups label="Sessions by state" idPrefix="rail-group" groups={visibleGroups} row={(id) => <Show when={railEntries().get(id)}>{(row) => <div class="workspace__row"><Link to="/sessions/$sessionID" params={{ sessionID: row().session.id }} class="workspace__session rl-session-row" data-state={row().state} data-pinned={row().session.time.pinned !== undefined ? "true" : undefined} aria-label={`${row().session.title}, ${workspaceBase(row().session.location.directory)}, ${railStatusLabels[row().state]}`} aria-current={selected() === row().session.id ? "page" : undefined}><RailStatusIcon state={row().state} /><span class="rl-session-row-text"><span class="rl-session-row-title">{row().session.title}</span><span class="rl-session-row-meta">{workspaceBase(row().session.location.directory)}</span></span></Link>
+          <Show when={visibleGroups().some((group) => group.items.length)} fallback={<p role="status">{railFilter() === "all" ? "No Sessions to show." : "No Sessions match this filter."}</p>}>
+            <SharedSessionGroups label="Sessions by state" idPrefix="rail-group" groups={visibleGroups()} row={(id) => <Show when={railEntries().get(id)}>{(row) => <div class="workspace__row"><Link to="/sessions/$sessionID" params={{ sessionID: row().session.id }} class="workspace__session rl-session-row" data-state={row().state} data-pinned={row().session.time.pinned !== undefined ? "true" : undefined} aria-label={`${row().session.title}, ${workspaceBase(row().session.location.directory)}, ${railStatusLabels[row().state]}`} aria-current={selected() === row().session.id ? "page" : undefined}><RailStatusIcon state={row().state} /><span class="rl-session-row-text"><span class="rl-session-row-title">{row().session.title}</span><span class="rl-session-row-meta">{workspaceBase(row().session.location.directory)}</span></span></Link>
               <button type="button" class="workspace__pin rl-icon-button" data-pinned={row().session.time.pinned !== undefined ? "true" : undefined} disabled={!reading() || pinning() !== undefined} aria-label={`${row().session.time.pinned === undefined ? "Pin" : "Unpin"} ${row().session.title}`} onClick={() => void togglePin(row().session)}><Icon name="pin" /></button></div>}</Show>} />
           </Show>
           <Show when={grouped().archived}><p class="desktop__muted">{grouped().archived} archived {grouped().archived === 1 ? "Session is" : "Sessions are"} hidden.</p></Show>
@@ -1890,7 +1926,10 @@ function ComposerField(props: { label: string; value: string; locked: boolean; o
     setCaret(next.caret)
     queueMicrotask(() => { area?.focus(); area?.setSelectionRange(next.caret, next.caret) })
   }
-  return <div class="composer-field"><label class="desktop__field"><span class="desktop__sr">{props.label}</span><textarea ref={area} rows={1} wrap="off" value={props.value} readOnly={props.locked} role="combobox" aria-expanded={open()} aria-controls={open() ? listID : undefined} aria-activedescendant={open() && items()[active()] ? `${listID}-${active()}` : undefined} aria-autocomplete="list" aria-describedby="message-hint" placeholder="Message YCoding" onInput={(event) => { const value = event.currentTarget.value; if (props.pasted.length) props.onPasted(livePasted(value, props.pasted)); props.onInput(value); at(event) }} onKeyUp={at} onClick={at} onPaste={paste} onCopy={copy} onCut={copy}
+  return <div class="composer-field" onFocusOut={(event) => {
+    const next = event.relatedTarget
+    if (open() && (!(next instanceof Node) || !event.currentTarget.contains(next))) setDismissed(token())
+  }}><label class="desktop__field"><span class="desktop__sr">{props.label}</span><textarea ref={area} rows={1} wrap="off" value={props.value} readOnly={props.locked} role="combobox" aria-expanded={open()} aria-controls={open() ? listID : undefined} aria-activedescendant={open() && items()[active()] ? `${listID}-${active()}` : undefined} aria-autocomplete="list" aria-describedby="message-hint" placeholder="Message YCoding" onInput={(event) => { const value = event.currentTarget.value; if (props.pasted.length) props.onPasted(livePasted(value, props.pasted)); props.onInput(value); at(event) }} onKeyUp={at} onClick={at} onPaste={paste} onCopy={copy} onCut={copy}
     onKeyDown={(event) => {
       if (isStandardEditShortcut(event)) return
       if (open() && items().length && (event.key === "ArrowDown" || event.key === "ArrowUp")) { event.preventDefault(); setActive((index) => (index + (event.key === "ArrowDown" ? 1 : items().length - 1)) % items().length); return }
@@ -2429,11 +2468,13 @@ function DesktopToolEvidence(props: { readonly label: string; readonly text: str
   return <section class="desktop-tool-evidence"><header><strong>{props.label}</strong><button type="button" class="rl-icon-button" aria-label={`Copy ${props.label.toLowerCase()}`} data-tooltip={`Copy ${props.label.toLowerCase()}`} onClick={() => void copy()}><Icon name="copy" /></button></header><Show when={props.markdown} fallback={<pre><code>{props.text}</code></pre>}><Markdown text={props.text} /></Show><Show when={notice()}>{text => <p role="status">{text()}</p>}</Show><Show when={error()}>{text => <p role="alert">{text()}</p>}</Show></section>
 }
 
-function DesktopToolDisclosure(props: { readonly tools: ReturnType<typeof toolSteps>; readonly lastSummary?: string; readonly streaming: boolean; readonly durationLabel?: string }) {
+function DesktopToolDisclosure(props: { readonly tools: ReturnType<typeof toolSteps>; readonly lastSummary?: string; readonly streaming: boolean; readonly durationLabel?: string; readonly app?: (callID: string, text: string) => JSX.Element }) {
   const disclosure = createDesktopDisclosure(false)
   const id = `desktop-tools-${createUniqueId()}`
   const failed = () => props.tools.filter(tool => tool.status === "failed").length
-  return <section class="transcript-tools rl-tools" data-desktop-activity="tools"><button type="button" class="transcript-tools__button rl-disclosure-head" aria-expanded={disclosure.expanded()} aria-controls={id} onClick={event => disclosure.toggle(event.currentTarget)}><span class="rl-disclosure-icon"><Icon name="terminal" /></span><span class="rl-disclosure-label">{props.streaming ? "Running" : "Ran"} {formatCount(props.tools.length)} tool{props.tools.length === 1 ? "" : "s"}<Show when={failed()}> · {formatCount(failed())} failed</Show></span><span class="rl-disclosure-summary">{props.lastSummary}</span><span class="rl-disclosure-time">{props.durationLabel}</span><span class="rl-disclosure-chev"><Icon name="chevron-right" /></span></button><Show when={disclosure.present()}><div id={id} ref={disclosure.ref} class="rl-disclosure-body" inert={!disclosure.expanded()} aria-hidden={!disclosure.expanded()}><div class="rl-tools-card"><Keyed each={props.tools} by={tool => tool.id}>{tool => <article class="rl-step-card" data-status={tool().status}><header class="rl-step-head"><span class="rl-step-icon"><DesktopStateIndicator state={tool().status === "completed" ? "idle" : tool().status === "failed" ? "failed" : "running"} /></span><strong>{tool().name}</strong><span class="rl-step-summary">{tool().summary}</span><span class="rl-step-meta">{tool().status}{tool().duration ? ` · ${tool().duration}` : ""}</span></header><Show when={tool().inputText}>{text => <DesktopToolEvidence label="Input" text={text()} />}</Show><Show when={tool().outputText}>{text => <DesktopToolEvidence label="Output" text={text()} markdown={tool().markdown} />}</Show><Show when={tool().errorText}>{text => <div class="rl-step-error" role="alert"><DesktopToolEvidence label="Error" text={text()} /></div>}</Show></article>}</Keyed></div></div></Show></section>
+  return <section class="transcript-tools rl-tools" data-desktop-activity="tools"><button type="button" class="transcript-tools__button rl-disclosure-head" aria-expanded={disclosure.expanded()} aria-controls={id} onClick={event => disclosure.toggle(event.currentTarget)}><span class="rl-disclosure-icon"><Icon name="terminal" /></span><span class="rl-disclosure-label">{props.streaming ? "Running" : "Ran"} {formatCount(props.tools.length)} tool{props.tools.length === 1 ? "" : "s"}<Show when={failed()}> · {formatCount(failed())} failed</Show></span><span class="rl-disclosure-summary">{props.lastSummary}</span><span class="rl-disclosure-time">{props.durationLabel}</span><span class="rl-disclosure-chev"><Icon name="chevron-right" /></span></button><Show when={disclosure.present()}><div id={id} ref={disclosure.ref} class="rl-disclosure-body" inert={!disclosure.expanded()} aria-hidden={!disclosure.expanded()}><div class="rl-tools-card"><Keyed each={props.tools} by={tool => tool.id}>{tool => <article class="rl-step-card" data-status={tool().status}><header class="rl-step-head"><span class="rl-step-icon"><DesktopStateIndicator state={tool().status === "completed" ? "idle" : tool().status === "failed" ? "failed" : "running"} /></span><strong>{tool().name}</strong><span class="rl-step-summary">{tool().summary}</span><span class="rl-step-meta">{tool().status}{tool().duration ? ` · ${tool().duration}` : ""}</span></header><Show when={tool().inputText}>{text => <DesktopToolEvidence label="Input" text={text()} />}</Show><Show when={tool().outputText}>{text => <DesktopToolEvidence label="Output" text={text()} markdown={tool().markdown} />}</Show>
+    <Show when={tool().status === "completed" && disclosure.expanded()}>{props.app?.(tool().id, tool().outputText ?? "")}</Show>
+    <Show when={tool().errorText}>{text => <div class="rl-step-error" role="alert"><DesktopToolEvidence label="Error" text={text()} /></div>}</Show></article>}</Keyed></div></div></Show></section>
 }
 
 function DesktopReasoningDisclosure(props: { readonly defaultOpen: boolean; readonly text: string; readonly streaming: boolean; readonly durationLabel?: string }) {
@@ -2500,7 +2541,7 @@ function intermediateAssistant(message: Messages[number] | undefined): message i
   return !message.content.some(part => part.type === "text" && part.text.length > 0)
 }
 
-function TurnView(props: { sessionID: string; message: Messages[number]; continuation?: boolean; delivery?: keyof typeof deliveryLabels; onDelete: (id: string) => Promise<string | undefined> }) {
+function TurnView(props: { sessionID: string; message: Messages[number]; continuation?: boolean; delivery?: keyof typeof deliveryLabels; onDelete: (id: string) => Promise<string | undefined>; onOpenApp?: (app: OpenMcpApp) => void }) {
   const duration = (start: number, end?: number) => end === undefined ? undefined : `${Math.max(0, Math.round((end - start) / 1000))}s`
   const role = () => props.message.type
   const externalPeer = () => dotsPeerLabel(props.message.metadata)
@@ -2540,7 +2581,13 @@ function TurnView(props: { sessionID: string; message: Messages[number]; continu
           return <>
             <Show when={reasoning()}>{(value) => <For each={[thinkingExpanded()]}>{() => <DesktopReasoningDisclosure defaultOpen={thinkingExpanded()} text={value().text} streaming={!message().time.completed} durationLabel={value().created !== undefined ? duration(value().created!, value().completed) : undefined} />}</For>}</Show>
             <Show when={text()}>{(value) => <div class="transcript-message__text rl-bubble"><Markdown text={value().text} /></div>}</Show>
-            <Keyed each={tools()} by={(parts) => parts[0]!.id}>{(parts) => <><DesktopToolDisclosure tools={toolSteps(parts())} lastSummary={parts().at(-1) ? toolDisplaySummary(parts().at(-1)!.name, parts().at(-1)!.state.input) : undefined} streaming={parts().some((part) => part.state.status === "running" || part.state.status === "streaming")} durationLabel={presentation().grouping === "auto" ? duration(message().time.created, message().time.completed) : undefined} /><IntelligentUiTurnCards parts={parts()} /></>}</Keyed>
+            <Keyed each={tools()} by={(parts) => parts[0]!.id}>{(parts) => <><DesktopToolDisclosure tools={toolSteps(parts())} lastSummary={parts().at(-1) ? toolDisplaySummary(parts().at(-1)!.name, parts().at(-1)!.state.input) : undefined} streaming={parts().some((part) => part.state.status === "running" || part.state.status === "streaming")} durationLabel={presentation().grouping === "auto" ? duration(message().time.created, message().time.completed) : undefined}
+              app={(callID, text) => <Show when={reading() && props.onOpenApp}><McpAppResult scope={JSON.stringify([connection().revision, props.sessionID])} text={text}
+                  load={async () => {
+                    const revision = connection().revision
+                    return revision === undefined ? undefined : api.mcpAppView({ revision, sessionID: props.sessionID, messageID: message().id, callID })
+                  }}
+                onOpen={(app) => props.onOpenApp?.(app)} /></Show>} /><IntelligentUiTurnCards parts={parts()} /></>}</Keyed>
           </>
         }}</Keyed>
         <Show when={message().time.completed !== undefined ? assistantReplyText(message().content) : undefined}>{(reply) => <div class="transcript-message__meta"><CopyMessageButton text={reply()} /></div>}</Show>
@@ -2775,7 +2822,8 @@ function Requests(props: { data: PendingRequests; updatedAt: number; refetch: ()
   const [held, setHeld] = createSignal<ReadonlyMap<string, { readonly message?: string; readonly at: number }>>(new Map())
   const [lost, setLost] = createSignal<string>()
   const [closed, setClosed] = createSignal<string>()
-  let answered: string | undefined
+  let section: HTMLElement | undefined
+  let answered: { id: string; card?: Element } | undefined
   let shownGuardrails = new Set<string>()
   createEffect(() => {
     const current = new Set((props.data.guardrails ?? []).map((item) => item.id))
@@ -2793,17 +2841,22 @@ function Requests(props: { data: PendingRequests; updatedAt: number; refetch: ()
   }
   createEffect(() => {
     const pending = new Set(pendingRequestIDs(props.data))
-    const id = answered
-    if (id === undefined || pending.has(id)) return
+    const settled = answered
+    if (settled === undefined || pending.has(settled.id)) return
     answered = undefined
+    const { id, card } = settled
     if (held().get(id)?.message !== undefined) setLost("A reply was not confirmed and that request is no longer pending. Check the transcript to see whether it was applied.")
     setHeld((current) => new Map([...current].filter(([key]) => key !== id)))
-    queueMicrotask(() => document.getElementById("conversation-title")?.focus({ preventScroll: true }))
+    if (card) queueMicrotask(() => {
+      const active = document.activeElement
+      if (active === document.body || card.contains(active)) document.getElementById("conversation-title")?.focus({ preventScroll: true })
+    })
   })
   const answer = async (id: string, input: RequestReply) => {
     if (working()) return
     const generation = connection().generation
-    answered = id
+    const card = document.activeElement?.closest(".request")
+    answered = { id, card: card && section?.contains(card) ? card : undefined }
     setLost(undefined)
     setHeld((current) => new Map([...current].filter(([key]) => key !== id)))
     setWorking(true)
@@ -2818,7 +2871,7 @@ function Requests(props: { data: PendingRequests; updatedAt: number; refetch: ()
       }
     }
   }
-  return <section class="requests" aria-label="Requests waiting for you">
+  return <section ref={section} class="requests" aria-label="Requests waiting for you">
     <Show when={lost()}>{(message) => <p role="status" class="desktop__error">{message()}</p>}</Show>
     <For each={props.data.permissions}>{(request) => <PermissionCard request={request} locked={locked(request.id)} notice={notice(request.id)}
       onReply={(reply, message) => void answer(request.id, { kind: "permission", sessionID: props.data.sessionID, revision: props.data.revision, requestID: request.id, reply, ...(message === undefined ? {} : { message }) })} />}</For>
@@ -3113,6 +3166,15 @@ function Conversation(props: { sessionID: string }) {
   const [selectedFile, setSelectedFile] = createSignal<string>()
   const navigate = useNavigate()
   const openChanges = (path?: string) => { setSelectedFile(path); setCompanionTab("Changes"); setCompanionOpen(true) }
+  const appScope = createMemo(() => reading() ? JSON.stringify([connection().revision, props.sessionID]) : undefined)
+  const [companionApp, setCompanionApp] = createSignal<OpenMcpApp>()
+  createEffect(() => { void appScope(); setCompanionApp(undefined) })
+  const openCompanionApp = (app: OpenMcpApp) => {
+    if (app.scope !== appScope()) return
+    setCompanionApp(app)
+    setCompanionTab("Activity")
+    setCompanionOpen(true)
+  }
   const pendingRequests = () => { const data = requests.result().data; return data?.sessionID === props.sessionID && data.revision === connection().revision ? data : undefined }
   const requestCount = () => { const data = pendingRequests(); return data ? pendingRequestIDs(data).length : 0 }
   const unanswerable = () => {
@@ -3616,7 +3678,7 @@ function Conversation(props: { sessionID: string }) {
       <Show when={historyError()}><p role="alert">{historyError()}</p></Show>
       <Show when={!messages.result().isPending} fallback={<SharedLoadingSkeleton kind="conversation" label="Loading the transcript…" />}><Show when={!messages.result().isError} fallback={<div role="alert" class="desktop__error"><p>{failure(messages.result().error, "The transcript could not be read. Check the connection and refresh.")}</p><button type="button" onClick={messages.refetch} disabled={!reading()}>Refresh transcript</button></div>}>
         <Show when={turns().length} fallback={<div class="desktop-empty-transcript" role="status" aria-label="Empty transcript"><Icon name="chat" /><p>No messages in this Session yet.</p></div>}><ol class="transcript rl-thread" aria-label="Transcript"><Keyed each={turns()} by={(item) => item.id}>{(item) => <>
-          <TurnView sessionID={props.sessionID} message={item()} continuation={!findQuery().trim() && continuations().has(item().id)} delivery={deliveries().get(item().id)} onDelete={deleteMessage} />
+          <TurnView sessionID={props.sessionID} message={item()} continuation={!findQuery().trim() && continuations().has(item().id)} delivery={deliveries().get(item().id)} onDelete={deleteMessage} onOpenApp={openCompanionApp} />
           <Show when={editPlacements().get(item().id)}>{(edit) => <li class="transcript__turn transcript__edits"><SharedEditedFilesCard files={edit().files} onViewChanges={(path) => { setSelectedTurn(edit().turnID); openChanges(path) }} onUndo={() => { setSelectedTurn(edit().turnID); openChanges(); void doRevert("stage") }} undoDisabled={revertBusy() || revertUncertain() || running()} footerNote={activeRevert() ? "Staged revert · preview and confirmation required" : undefined} /></li>}</Show></>}</Keyed></ol></Show>
       </Show></Show>
       <Show when={requests.result().isError}><div role="alert" class="desktop__error"><p>Pending requests could not be read. Refresh to retry.</p><button type="button" onClick={requests.refetch} disabled={!reading()}>Refresh requests</button></div></Show>
@@ -3656,6 +3718,7 @@ function Conversation(props: { sessionID: string }) {
         headerActions={<button type="button" class="rl-icon" aria-label="Close companion" onClick={() => setCompanionOpen(false)}><Icon name="close" /></button>}
         onRefresh={() => { if (reading()) { activityRead.refetch(); sessions.refetch(); if (reportedTaskIDs().length) childSessionsRead.refetch(); messages.refetch(); requests.refetch(); pendingRead.refetch(); insightsRead.refetch() } }}
         activityContent={<div class="rl-pane-body">
+          <Show when={companionApp()?.scope === appScope() ? companionApp() : undefined}>{(app) => <section aria-label="MCP App in companion"><button type="button" class="rl-btn" onClick={() => setCompanionApp(undefined)}>Close App</button><McpApp view={app().view} fallback={<pre><code>{app().text}</code></pre>} /></section>}</Show>
           <Show when={interactionDocked() && companionTab() === "Activity" && interactionView()?.revealed ? interactionView() : undefined}>{(view) => <InteractionPreview view={view()} />}</Show>
           <Show when={activityRead.result().isPending}><SharedLoadingSkeleton kind="list" label="Reading activity…" /></Show>
           <Show when={activityRead.result().isError}><p role="alert">{failure(activityRead.result().error, "Activity could not be read. Refresh to retry.")}</p></Show>
@@ -3870,6 +3933,7 @@ function Destination(props: { name: "Projects" | "Sessions" | "Workspaces" | "Us
         <Show when={projects.result().isError}><p role="alert">{failure(projects.result().error, "Project coordination could not be read.")}</p><button type="button" class="rl-btn" onClick={projects.refetch}>Refresh coordination</button></Show>
         <Show when={selectedGroup()}>{group => <>
           <ProjectCoordination group={group()} sessions={sessionRows()} repositories={projectView()?.repositories ?? []} onOpen={id => void navigate({ to: "/sessions/$sessionID", params: { sessionID: id } })} />
+          <DesktopSwarmBoard groupID={group().id} masterSessionID={group().master.sessionID} onOpen={id => void navigate({ to: "/sessions/$sessionID", params: { sessionID: id } })} />
           <details class="st-section"><summary>Manage members</summary><DesktopProjectMembers group={group()} revision={projectView()!.revision} sessions={sessionRows()} disabled={!reading() || actionBusy() || actionUncertain() || projects.result().isFetching} onChange={performProject} onBrowseFolder={(initialDirectory, choose) => openFolderPicker({ title: "Choose folder for new member Session", mode: "directory", initialDirectory, onPick: choose })} /></details>
         </>}</Show>
       </Show>

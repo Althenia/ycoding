@@ -9,8 +9,8 @@ const root = path.resolve(import.meta.dir, "../../..")
 
 test("TEST-057 every manifest member has exactly one owner and a live descriptor or endpoint source", async () => {
   const manifest = await generateManifest(root)
-  expect(manifest.counts).toEqual({ endpoint: 244, connector: 101, notice: 4 })
-  expect(manifest.members).toHaveLength(349)
+  expect(manifest.counts).toEqual({ endpoint: 246, connector: 103, notice: 4 })
+  expect(manifest.members).toHaveLength(353)
   expect(manifest.unresolved).toEqual([])
   const keys = manifest.members.map((member) => `${member.kind}:${member.name}`)
   expect(new Set(keys).size).toBe(keys.length)
@@ -18,6 +18,12 @@ test("TEST-057 every manifest member has exactly one owner and a live descriptor
     expect(member.owner, `${member.kind}:${member.name} has no runtime owner`).toBeTruthy()
     expect(member.ownerEvidence).toBeTruthy()
     expect(member.inventoryEvidence.startsWith("specs/wire-operation-inventory.md#")).toBe(true)
+  }
+  for (const [name, owner] of [["coordination.board", "WP-008"], ["mcp.app.view", "WP-010"]]) {
+    expect(manifest.members.filter((member) => member.name === name)).toMatchObject([
+      { kind: "connector", owner, disposition: "RPC" },
+      { kind: "endpoint", owner, disposition: "RPC" },
+    ])
   }
   const byKind = (kind: string) =>
     manifest.members.filter((member) => member.kind === kind).map((member) => member.name)

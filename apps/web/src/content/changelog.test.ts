@@ -7,8 +7,21 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.13.2 first and matches its release notes", async () => {
+  test("lists v0.13.3 first and matches its release notes", async () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.13.3", title: "Native Dots executor restrictions", tags: ["Fixed"] })
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.13.3.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.13.3\n")
+    const changes = notes.split(/^## /m).flatMap((section) => {
+      const tag = TAGS.find((tag) => section.startsWith(`${tag}\n`))
+      return tag ? [...section.matchAll(/^- (.+)$/gm)].map((match) => ({ tag, text: match[1]! })) : []
+    })
+    expect(entry?.changes).toEqual(changes)
+    expect(after("0.13.3")?.version).toBe("0.13.2")
+  })
+
+  test("retains v0.13.2 and matches its release notes", async () => {
+    const entry = byVersion("0.13.2")
     expect(entry).toMatchObject({ version: "0.13.2", date: "2026-11-25", title: "Antigravity and Muse sign-in", tags: ["Fixed"] })
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.13.2.md", import.meta.url)).text()
     expect(notes).toStartWith("# YCoding v0.13.2\n")
@@ -74,7 +87,7 @@ describe("release entries", () => {
     expect(after("0.13.0")?.version).toBe("0.12.2")
   })
 
-  test.each(["0.13.3", "0.13.4", "0.13.5"])("omits v%s and its note file", async (version) => {
+  test.each(["0.13.4", "0.13.5"])("omits v%s and its note file", async (version) => {
     expect(byVersion(version)).toBeUndefined()
     expect(await Bun.file(new URL(`../../../../docs/releases/v${version}.md`, import.meta.url)).exists()).toBe(false)
   })
@@ -1919,7 +1932,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 65)).toEqual([
+    expect(versions.slice(0, 66)).toEqual([
+      "0.13.3",
       "0.13.2",
       "0.13.1",
       "0.13.0",

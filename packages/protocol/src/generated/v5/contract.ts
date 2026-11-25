@@ -1,4 +1,4 @@
-export const CONTRACT_DIGEST = "92c5aba6fcbe12469b13b0e593a7858939c7b03e1af2ad701954ada41827ea73"
+export const CONTRACT_DIGEST = "3a8ec8de13c53588c1b33ccac564598b056df8f8656f5ca1a6d09bc223f583e5"
 export const messages = {
   "ycoding.v5.Empty": {
     oneofs: 0,
@@ -79636,6 +79636,141 @@ export const messages = {
         required: true,
         repeated: false,
         target: "ycoding.v5.Mcp_ResourceCatalog",
+      },
+    ],
+  },
+  "ycoding.v5.mcp_app_view_Request_params": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "sessionID",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          domainObligations: ["packages/protocol/src/groups/mcp.ts#makeMcpGroup"],
+        },
+      },
+    ],
+  },
+  "ycoding.v5.mcp_app_view_Request_query": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "messageID",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          utf16Min: 1,
+          utf16Max: 128,
+          domainObligations: ["packages/protocol/src/groups/mcp.ts#makeMcpGroup"],
+        },
+      },
+      {
+        tag: 2,
+        name: "callID",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          utf16Min: 1,
+          utf16Max: 256,
+          domainObligations: ["packages/protocol/src/groups/mcp.ts#makeMcpGroup"],
+        },
+      },
+    ],
+  },
+  "ycoding.v5.mcp_app_view_Request": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "params",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.mcp_app_view_Request_params",
+      },
+      {
+        tag: 2,
+        name: "query",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.mcp_app_view_Request_query",
+      },
+    ],
+  },
+  "ycoding.v5.Mcp_AppView": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "resourceUri",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          utf16Min: 1,
+          utf16Max: 2048,
+          domainObligations: ["packages/schema/src/mcp.ts#Mcp.AppView"],
+        },
+      },
+      {
+        tag: 2,
+        name: "html",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          utf8BytesMax: 262144,
+          domainObligations: ["packages/schema/src/mcp.ts#Mcp.AppView"],
+        },
+      },
+      {
+        tag: 3,
+        name: "tool",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+      },
+      {
+        tag: 4,
+        name: "input",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.Value",
+      },
+      {
+        tag: 5,
+        name: "output",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.Value",
+      },
+    ],
+  },
+  "ycoding.v5.mcp_app_view_Result": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "data",
+        type: 11,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.Mcp_AppView",
       },
     ],
   },

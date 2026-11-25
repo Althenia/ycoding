@@ -899,6 +899,7 @@ describe("remote operations", () => {
       "session.interaction.preview",
       "session.interaction.stop",
       "session.interaction.resume",
+      "mcp.app.view",
       "session.message.stream",
       "session.todo.list",
       "session.subagent.list",

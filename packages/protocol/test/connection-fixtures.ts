@@ -132,10 +132,10 @@ export function subscribeRequest(scope: Scope) {
   return toBinary(event_subscribe_RequestSchema, create(event_subscribe_RequestSchema, { scope }))
 }
 
-export function subscribeTo(endpoints: ReturnType<typeof pair>, scope: Scope, subscriptionID: string, now = 0) {
+export function subscribeTo(endpoints: ReturnType<typeof pair>, scope: Scope, subscriptionID: string, now = 0, requestScope = globalScope()) {
   const admission = endpoints.client.request(
     subscribeOperation.operationId,
-    globalScope(),
+    requestScope,
     subscribeRequest(scope),
     512,
     now,

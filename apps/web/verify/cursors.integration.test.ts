@@ -95,9 +95,9 @@ test("public links and actual remote composer controls consume the shared cursor
     await page.pressEscape()
     await wait(page, `document.querySelector('dialog.overlay--agent-model') === null && document.querySelector('[aria-label="Open Team"]') !== null`)
     await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
-    await wait(page, `document.querySelector('dialog.team-view__sheet[open]') !== null`)
-    expect(await page.evaluate(`getComputedStyle(document.querySelector('dialog.team-view__sheet'),'::backdrop').cursor`)).toBe("pointer")
-    expect(await page.evaluate(`getComputedStyle(document.querySelector('dialog.team-view__sheet .overlay__surface')).cursor`)).toBe("default")
-    expect(await page.evaluate(`(() => { document.querySelector('[aria-label="Close Team"]').click(); const dialog=document.querySelector('dialog.team-view__sheet'); return {inert:dialog.inert,cursor:getComputedStyle(dialog,'::backdrop').cursor}; })()`)).toEqual({ inert: true, cursor: "not-allowed" })
+    await wait(page, `document.querySelector('#session-companion-panel') !== null`)
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('#session-companion-panel')).cursor`)).toBe("default")
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('.companion__back')).cursor`)).toBe("pointer")
+    expect(await page.evaluate(`(() => { document.querySelector('.companion__back').click(); return document.querySelector('#session-companion-panel')?.inert ?? true; })()`)).toBe(true)
   } finally { await page.close() }
 })

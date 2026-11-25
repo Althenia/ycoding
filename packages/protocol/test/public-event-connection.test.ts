@@ -9,6 +9,8 @@ import {
   PublicEventSchema,
   SessionLogItemSchema,
   PublicEvent_catalog_updatedSchema,
+  PublicEvent_coordination_updatedSchema,
+  decodeStrict,
   EventBatchSchema,
   EventRecordSchema,
   FrameSchema,
@@ -113,4 +115,35 @@ test("REQ-WIRE-006 canonical remote event requests accept Session scope and deny
         expect.objectContaining({ type: "dispatch" }),
       )
   }
+})
+
+test("the authorized Session stream preserves both Swarm invalidation shapes", () => {
+  const endpoints = realPair(PeerRole.REMOTE_CLIENT)
+  const scope = session()
+  subscribeTo(endpoints, scope, "swarm-1", 0, scope)
+  const text = (value: string) => ({ encoding: { case: "utf8" as const, value } })
+  const events = [undefined, text("ses_a")].map((sessionID, index) => {
+    const eventId = `evt_swarm_${index}`
+    const payload = encodeStrict(PublicEventSchema, create(PublicEventSchema, { kind: {
+      case: "coordinationUpdated", value: create(PublicEvent_coordination_updatedSchema, {
+        id: text(eventId), created: 0, type: 1, data: { groupID: text("cgrp_swarm"), revision: 3n, sessionID },
+      }),
+    } }))
+    return create(EventRecordSchema, { eventId, createdMs: 0n, event: { typeName: PublicEventSchema.typeName, payload } })
+  })
+  const decisions = receive(endpoints.client, create(FrameSchema, {
+    revision: 5, connectionEpoch: "connection-1", ledger: LedgerClass.EVENT, deliveryOrdinal: 1n,
+    body: { case: "eventBatch", value: create(EventBatchSchema, { subscriptionId: "swarm-1", scope, sourceEpoch: "source-1", events }) },
+  }))
+  const delivered = decisions.find((decision) => decision.type === "events")
+  expect(delivered?.batch.scope).toEqual(scope)
+  expect(delivered?.batch.events.map((entry) => {
+    const event = decodeStrict(PublicEventSchema, entry.event!.payload)
+    if (event.kind.case !== "coordinationUpdated") return undefined
+    const data = event.kind.value.data!
+    return [data.groupID?.encoding, data.revision, data.sessionID?.encoding]
+  })).toEqual([
+    [text("cgrp_swarm").encoding, 3n, undefined],
+    [text("cgrp_swarm").encoding, 3n, text("ses_a").encoding],
+  ])
 })

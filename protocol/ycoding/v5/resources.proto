@@ -4,7 +4,7 @@ import "ycoding/v5/foundation.proto";
 import "ycoding/v5/operations.proto";
 import "ycoding/v5/shared.proto";
 
-option (ycoding.v5.operation_range) = { first: 2000 last: 2083 };
+option (ycoding.v5.operation_range) = { first: 2000 last: 2084 };
 
 enum Agent_Info_mode {
   AGENT_INFO_MODE_SUBAGENT = 1 [(ycoding.v5.domain_label) = "subagent"];
@@ -2604,6 +2604,32 @@ message mcp_resource_catalog_Result {
   required Mcp_ResourceCatalog data = 2;
 }
 
+message mcp_app_view_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/mcp.ts#makeMcpGroup" }];
+}
+
+message mcp_app_view_Request_query {
+  required LosslessString messageID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/mcp.ts#makeMcpGroup" utf16_min: 1 utf16_max: 128 }];
+  required LosslessString callID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/mcp.ts#makeMcpGroup" utf16_min: 1 utf16_max: 256 }];
+}
+
+message mcp_app_view_Request {
+  required mcp_app_view_Request_params params = 1;
+  required mcp_app_view_Request_query query = 2;
+}
+
+message Mcp_AppView {
+  required LosslessString resourceUri = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/mcp.ts#Mcp.AppView" utf16_min: 1 utf16_max: 2048 }];
+  required LosslessString html = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/mcp.ts#Mcp.AppView" utf8_bytes_max: 262144 }];
+  required LosslessString tool = 3;
+  required Value input = 4;
+  required Value output = 5;
+}
+
+message mcp_app_view_Result {
+  optional Mcp_AppView data = 1;
+}
+
 message Mcp_ResourceCatalog {
   required Mcp_ResourceCatalog_resources resources = 1;
   required Mcp_ResourceCatalog_templates templates = 2;
@@ -4571,6 +4597,26 @@ service server_mcp {
       error_types: "ycoding.v5.InvalidRequestError"
       roles: LOCAL_CLIENT
       scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc mcp_app_view(mcp_app_view_Request) returns (mcp_app_view_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2084
+      diagnostic_name: "mcp.app.view"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: SESSION
       mutation: READ
       settlement: COMPLETED
       paging: UNPAGED

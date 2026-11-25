@@ -643,6 +643,7 @@ grouping and Session-list filters are derived from backend metadata.
 | `coordination.create` | no | `coordination.create` | `POST /api/coordination` | `name`, `masterSessionID`, `memberSessionIDs` |
 | `coordination.get` | no | `coordination.get` | `GET /api/coordination/:groupID` | `groupID` |
 | `coordination.board` | no | `coordination.board` | `GET /api/coordination/:groupID/board` | `groupID` |
+| `mcp.app.view` | yes | `mcp.app.view` | `GET /api/session/:sessionID/mcp/app` | `messageID`, `callID`; the App comes from the originating server and result. Clients cannot name a resource URI or invoke tools through this route. |
 | `coordination.update` | no | `coordination.update` | `PATCH /api/coordination/:groupID` | `groupID`, `revision`, `name?`, `masterSessionID?`, `memberSessionIDs?`, `settings?` |
 | `coordination.delete` | no | `coordination.delete` | `DELETE /api/coordination/:groupID` | `groupID` |
 | `coordination.attach` | no | `coordination.attach` | `POST /api/coordination/:groupID/members` | `groupID`, `sessionID`, `ownerSessionID?` |

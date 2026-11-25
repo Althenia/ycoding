@@ -465,6 +465,12 @@ let messages: readonly unknown[] = acceptedPreview ? [
     { id: "probe_mixed_reply", type: "assistant", agent: "god", model, content: [{ type: "reasoning", text: "Planning" }, { type: "text", text: "A real assistant reply" }], time: { created: 29, completed: 30 } },
   ] : responseProbe ? [] : accountParams.has("backgroundShellLifecycle") ? defaultMessages.filter((message) => message.id === "msg_assistant") : remoteScenarioData?.messages ?? defaultMessages
 
+if (accountParams.has("mcpApp")) messages = [{
+  id: "msg_mcp_app", type: "assistant", agent: "build", model,
+  content: [{ type: "tool", id: "call_report", name: "fixture_report", state: { status: "completed", input: {}, content: [{ type: "text", text: "Canonical report result" }], structured: {} } }],
+  time: { created: ago(2), completed: ago(1) },
+}]
+
 const permissionDisplay = accountParams.get("permissionDisplay")
 const permission = permissionDisplay ? {
   id: "per_fixture", sessionID, action: "chatgpt_connector_42_list_events_012345abcdef", resources: ["connector-42"],
@@ -735,6 +741,8 @@ function createFixtureStore(): Fixture {
   let streamed = false
   let nextSeq = 43
   let nextSubscriptionID = 0
+  const subscribedSessions = new Set<string>()
+  let boardPulse = 0
   let snapshotWatermark = 42
   let sourceEpoch = "epoch_fixture"
   let probeStarted = false
@@ -851,6 +859,12 @@ function createFixtureStore(): Fixture {
       return { status: "ok", value: { data: { enabled: central !== "off", categories: ["question", "permission", "review"] } } }
     }
     if (operation === "coordination.get") return group === undefined ? missing : { status: "ok", value: { data: coordinationInfo(group) } }
+    if (operation === "coordination.board") return group === undefined ? missing : { status: "ok", value: { data: {
+      groupID: group.id,
+      nodes: [group.masterSessionID, ...group.memberSessionIDs].map((id) => ({ sessionID: id, role: id === group.masterSessionID ? "master" : "member", title: participant(id).title, state: "idle" })),
+      tasks: [{ taskID: "msg_release_task", sessionID: group.masterSessionID, ownerSessionID: group.masterSessionID, dependsOnTaskIDs: [], title: `Release task ${boardPulse}`, state: "running" }],
+      handoffs: [], reviews: [],
+    } } }
     const ineligible = (groupID: string | undefined, master: string, members: readonly string[]): RemoteRequestOutcome | undefined => {
       const ids = [master, ...members]
       const refuse = (message: string): RemoteRequestOutcome => ({ status: "failed", error: { code: "invalid_message", message } })
@@ -1403,6 +1417,10 @@ function createFixtureStore(): Fixture {
         ? { kind: "tool", room: "research", text: "Reading projection.ts" }
         : { kind: "tool", room: "qa", text: "Running bun test" } })),
     ] } }
+    if (operation === "mcp.app.view" && accountParams.has("mcpApp")) {
+      if (targetSessionID !== sessionID || input?.messageID !== "msg_mcp_app" || input.callID !== "call_report") return { status: "ok", value: {} }
+      return { status: "ok", value: { data: { resourceUri: "ui://fixture/report", html: "<h1>Scoped report preview</h1>", tool: "fixture_report", input: {}, output: { content: [{ type: "text", text: "Canonical report result" }] } } } }
+    }
     if (operation === "session.snapshot") {
       const childTranscript = accountParams.get("childTranscript")
       if (targetSessionID !== sessionID && ["ready", "unavailable", "failed", "mismatched"].includes(childTranscript ?? "")) {
@@ -1567,13 +1585,23 @@ function createFixtureStore(): Fixture {
       return { status: "ok", value: null }
     }
     if (operation === "session.pending.list" && (pendingInputs.length > 0 || pendingOperations.length > 0)) return { status: "ok", value: { data: pendingInputs } }
-    if (operation === "event.subscribe") return { status: "ok", value: { subscription_id: `sub_fixture_${++nextSubscriptionID}` } }
+    if (operation === "event.subscribe") {
+      if (targetSessionID !== undefined) subscribedSessions.add(targetSessionID)
+      return { status: "ok", value: { subscription_id: `sub_fixture_${++nextSubscriptionID}` } }
+    }
+    if (operation === "event.unsubscribe" && targetSessionID !== undefined) subscribedSessions.delete(targetSessionID)
     if (operation === "session.log") return { status: "ok", value: { data: [], watermark: snapshotWatermark } }
     return { status: "ok", value: null }
   }
 
   const emitEvent = (sessionID: string, event: unknown) => handlers?.onEvents?.(sessionID, [event])
   Object.assign(window, {
+    remoteBoardUpdate: (streamSessionID: string, masterSessionID?: string) => {
+      if (!subscribedSessions.has(streamSessionID)) return false
+      boardPulse++
+      emitEvent(streamSessionID, { type: "coordination.updated", data: { groupID: "cgrp_release", revision: 1, ...(masterSessionID === undefined ? {} : { sessionID: masterSessionID }) } })
+      return true
+    },
     remoteSetSentMessages: (rows: readonly unknown[]) => { messages = rows; return store.reloadMessages() },
     remoteReadSentMessage: (inputID: string) => {
       messages = messages.map((entry) => {

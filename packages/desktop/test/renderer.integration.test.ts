@@ -88,7 +88,7 @@ function sceneResponse(call: SyntheticCall) {
   if (!captureScene) return undefined
   const envelope = (data: unknown) => ({ location, data })
   if (call.route.endsWith("/autonomy")) return { data: sceneAutonomy }
-  if (call.route === "/api/coordination") return { data: [{ id: sceneGroup.id }] }
+  if (call.route === "/api/coordination") return { data: [{ id: sceneGroup.id, name: sceneGroup.name, revision: sceneGroup.revision, active: sceneGroup.active, masterSessionID: sceneGroup.master.sessionID, memberCount: sceneGroup.members.length, settings: sceneGroup.settings, time: sceneGroup.time }] }
   if (call.route === "/api/coordination/settings") return { data: { enabled: true, categories: [] } }
   if (call.route === `/api/coordination/${sceneGroup.id}`) return { data: sceneGroup }
   if (call.route === "/api/project/inventory") return { data: [sceneRepository], cursor: {} }
@@ -188,7 +188,12 @@ beforeAll(async () => {
     if (processControls && call.route === "/api/session/ses_test/subagent/ses_child/question/qst_synthetic/answer") { waitingTask = false; return { data: processTask() } }
     if (processControls && call.method === "GET" && call.route === "/api/session/ses_child/review") return { data: stoppedTask ? [{ itemID: "rvw_recovery", sessionID: "ses_child", rootSessionID: "ses_test", sessionTitle: "Synthetic child", kind: "recovery", reason: "Synthetic stopped worker", created: 1, origin: { requestID: "recovery" }, payload: { type: "recovery", tools: [] } }] : [] }
     if (processControls && call.route === "/api/session/ses_child/review/rvw_recovery/decide") { stoppedTask = false; return new Response(null, { status: 204 }) }
-    if (call.route.endsWith("/subagent")) return { data: familyEnabled && call.route === "/api/session/ses_test/subagent" ? ["ses_child_a", "ses_child_b"].map((sessionID) => ({ sessionID, parentID: "ses_test", description: sessionID, agent: "build", model: selection(), background: true, state: "running", revision: 1, time: { created: 1, updated: 2 } })) : [], summary: { total: familyEnabled && call.route === "/api/session/ses_test/subagent" ? 2 : 0, active: familyEnabled && call.route === "/api/session/ses_test/subagent" ? 2 : 0 }, cursor: {} }
+    if (call.route.endsWith("/subagent")) {
+      const items = familyEnabled && call.route === "/api/session/ses_test/subagent"
+        ? ["ses_child_a", "ses_child_b"].map((sessionID) => ({ sessionID, parentID: "ses_test", description: sessionID, agent: "build", model: selection(), background: true, state: "running", revision: 1, time: { created: 1, updated: 2 } }))
+        : []
+      return { data: items, summary: { total: items.length, active: items.length, running: items.length, waiting: 0 }, cursor: {} }
+    }
     if (call.route.endsWith("/snapshot")) {
       const sessionID = call.route.split("/")[3]!
       const messages = transcript()
@@ -731,7 +736,7 @@ test("Desktop shows the full Companion breakdown and wraps long Activity rows", 
   const long = "UnbrokenActivityDescription".repeat(16)
   sceneRead = call => {
     if (call.route === "/api/shell") return { location, data: [{ id: "sh_synthetic", status: "running", command: `bun test ${long}`, cwd: `/synthetic/${long}`, shell: "sh", file: "output", time: { started: 1 }, metadata: { sessionID: "ses_test" } }] }
-    if (call.route.endsWith("/subagent")) return { data: [{ ...processTask(), description: long, state: "running", question: undefined, progress: { text: long, time: 2 } }], summary: { total: 1, active: 1 }, cursor: {} }
+    if (call.route.endsWith("/subagent")) return { data: [{ ...processTask(), description: long, state: "running", question: undefined, progress: { text: long, time: 2 } }], summary: { total: 1, active: 1, running: 1, waiting: 0 }, cursor: {} }
     if (call.route.endsWith("/diagnostics")) return { data: { model: selection(), context: { total: 12_000, limit: 200_000 }, tokens: { uncachedInput: 4000, output: 600, reasoning: 200, cacheRead: 8000, cacheWrite: 0 }, cache: { eligible: 8000, mechanism: "provider-reported", readReported: true, writeReported: true } } }
     return undefined
   }
@@ -756,7 +761,7 @@ test("Desktop shows the full Companion breakdown and wraps long Activity rows", 
       await wait(page, `document.querySelector(${panel}).textContent.includes(${JSON.stringify(long)})`)
       expect(await page.evaluate(`(() => { const panel = document.querySelector(${panel}), rows = [...panel.querySelectorAll('.rl-activity-row')]; return rows.length >= 2 && [panel, ...rows].every(el => el.scrollWidth <= el.clientWidth) && rows.every(row => row.querySelector('svg') && getComputedStyle(row).borderTopWidth === '0px') && [...panel.querySelectorAll('.rl-activity-row :is(strong, small)')].every(text => getComputedStyle(text).whiteSpace === 'normal' && text.scrollWidth <= text.clientWidth); })()`, decodeBoolean)).toBe(true)
     }
-  } finally { await page.close() }
+  } finally { await page.evaluate(`localStorage.removeItem('ycoding.desktop.presentation')`); await page.close() }
 }, 30_000)
 
 test("pending tray removes and steers real user messages and refreshes after a stale input", async () => {
@@ -2589,6 +2594,25 @@ test("Stitch implemented surface adedc0ab360c471d9996962413cf247d Project coordi
   } finally { await page.close() }
 }, 30_000)
 
+test("Desktop reads the Swarm Board through the selected Project's generated endpoint", async () => {
+  prepareImplementedSurface()
+  sceneRead = call => call.route === `/api/coordination/${sceneGroup.id}/board` ? { data: {
+    groupID: sceneGroup.id,
+    nodes: [{ sessionID: sceneGroup.master.sessionID, role: "master", title: "Runtime Master", state: "running" }],
+    tasks: [{ taskID: "msg_swarm_next", sessionID: sceneGroup.master.sessionID, ownerSessionID: sceneGroup.master.sessionID, dependsOnTaskIDs: [], title: "Verify native Board", state: "queued" }],
+    handoffs: [], reviews: [],
+  } } : undefined
+  const page = await openReference()
+  try {
+    await page.navigate(`${origin}/#/projects`)
+    await clickText(page, 'main button', "Coordination")
+    await wait(page, `!!document.querySelector('[aria-label="Swarm Board"] summary')`)
+    await page.evaluate(`document.querySelector('[aria-label="Swarm Board"] summary').click()`)
+    await wait(page, `document.querySelector('.swarm-board')?.textContent.includes('Verify native Board')`)
+    expect(owned?.calls.filter((call) => call.route.endsWith("/board")).map((call) => [call.method, call.route])).toEqual([["GET", `/api/coordination/${sceneGroup.id}/board`]])
+  } finally { await page.close() }
+}, 30_000)
+
 test("Stitch implemented surface 49335c0b2469436280298bda555bdc50 target picker applies with Enter and dismisses without replacing a draft", async () => {
   prepareImplementedSurface()
   let copied = false
@@ -3800,6 +3824,67 @@ test("active question controls require complete answers and send their ordered s
   } finally { await page.close() }
 }, 30_000)
 
+test("a Desktop MCP App view reads only its completed tool and leaves the draft alone", async () => {
+  pending = false
+  presentationParts = true
+  const route = "/api/session/ses_test/mcp/app"
+  sceneRead = (call) => {
+    if (call.route !== route || call.query.get("callID") !== "part_read") return undefined
+    return { data: { resourceUri: "ui://fixture/summary", html: "<p>Bound static preview</p>", tool: "fixture_report", input: {}, output: { content: [{ type: "text", text: "Canonical result" }] } } }
+  }
+  const page = await open()
+  try {
+    await message(page, "Keep this unsent draft")
+    const disclosure = `document.querySelector('.transcript-tools__button')`
+    await wait(page, disclosure)
+    await page.evaluate(`${disclosure}.click()`)
+    const action = `[...document.querySelectorAll('.rl-step-card button')].find(node => node.textContent === 'Show MCP App')`
+    await wait(page, action)
+    await page.evaluate(`${action}.click()`)
+    const companion = `document.querySelector('[aria-label="MCP App in companion"]')`
+    const openCompanion = `[...document.querySelectorAll('.rl-step-card button')].find(node => node.textContent === 'Show App in companion')`
+    await wait(page, openCompanion)
+    await wait(page, `document.querySelector('.rl-step-card iframe[sandbox="allow-scripts"]:not([hidden])')`)
+    await page.evaluate(`${openCompanion}.click()`)
+    await wait(page, companion)
+    await wait(page, `(${companion})?.querySelector('iframe[sandbox="allow-scripts"]:not([hidden])')`)
+    const reads = owned!.calls.filter((call) => call.route === route)
+    expect(reads.map((call) => [call.method, call.query.get("messageID"), call.query.get("callID")])).toEqual([["GET", "msg_response", "part_read"]])
+    expect(await page.evaluate(`document.querySelector('.rl-capsule textarea').value`, decodeString)).toBe("Keep this unsent draft")
+    expect(owned!.calls.filter((call) => call.method !== "GET" && !call.route.endsWith("/web-latency"))).toEqual([])
+  } finally { await page.evaluate(`localStorage.removeItem('ycoding.desktop.presentation')`); await page.close() }
+}, 30_000)
+
+test("an inline question settling leaves focus and unsent text in the composer", async () => {
+  pending = false
+  questionPending = true
+  const replyStarted = Promise.withResolvers<void>()
+  const releaseReply = Promise.withResolvers<void>()
+  const route = "/api/session/ses_test/question/que_active/reject"
+  sceneRead = (call) => {
+    if (call.method !== "POST" || call.route !== route) return undefined
+    replyStarted.resolve()
+    return releaseReply.promise.then(() => {
+      questionPending = false
+      return new Response(null, { status: 204 })
+    })
+  }
+  const page = await open()
+  try {
+    const card = `document.querySelector('#question-que_active')?.closest('article')`
+    await wait(page, card)
+    await page.evaluate(`(() => { const button = [...(${card}).querySelectorAll('button')].find(button => button.textContent === 'Reject question'); button.focus(); button.click(); })()`)
+    await replyStarted.promise
+    await page.evaluate(`document.querySelector('.rl-capsule textarea').focus()`)
+    await message(page, "Keep this unsent draft")
+    releaseReply.resolve()
+    await wait(page, `!(${card})`)
+    expect(await page.evaluate(`document.activeElement === document.querySelector('.rl-capsule textarea')`, decodeBoolean)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.rl-capsule textarea').value`, decodeString)).toBe("Keep this unsent draft")
+    expect(owned?.calls.filter((call) => call.method !== "GET" && !call.route.endsWith("/web-latency")).map((call) => call.route)).toEqual([route])
+  } finally { releaseReply.resolve(); await page.close() }
+}, 30_000)
+
 test("rendered parity opens composition commands without submitting their text as a prompt", async () => {
   pending = false
   const page = await open()
@@ -4222,6 +4307,7 @@ test("saved Session display choices expand reasoning, separate tool calls and re
     expect(await page.evaluate(`(() => { const button = document.querySelector('.transcript-reasoning summary'); const panel = document.getElementById(button.getAttribute('aria-controls')); return document.activeElement === button && !document.querySelector('.transcript-reasoning').open && (!panel || panel.inert && panel.getAttribute('aria-hidden') === 'true'); })()`, decodeBoolean)).toBe(true)
     await page.navigate(`${origin}/#/settings`)
     await wait(page, `document.querySelector('[aria-label="Session display"] [role="radiogroup"][aria-label="Tool calls"]')`)
+    await choose("Session companion at launch", "Closed")
     await choose("Reasoning", "Expanded")
     await choose("Tool calls", "Show each call separately")
     expect(await page.evaluate(`JSON.parse(localStorage.getItem('ycoding.desktop.presentation'))`)).toEqual({ thinking: "show", grouping: "none", companion: "hide" })
@@ -4664,6 +4750,20 @@ test("rendered parity discards a file lookup after its mention closes and never 
     await wait(page, `document.querySelector('.composer-suggestions')?.textContent.includes('src/fast.ts')`)
     expect(await page.evaluate(`document.querySelector('.composer-suggestions').textContent.includes('src/slow.ts')`)).toBe(false)
   } finally { slow.resolve(); fast.resolve(); fileGate = undefined; await page.close() }
+}, 30_000)
+
+test("leaving the composer closes file suggestions without changing the draft or submitting", async () => {
+  pending = false
+  const page = await open()
+  try {
+    await page.evaluate(`document.querySelector('.rl-capsule textarea').focus()`)
+    await message(page, "@fast")
+    await wait(page, `document.querySelector('.composer-suggestions')`)
+    await page.evaluate(`document.querySelector('#conversation-title').focus()`)
+    expect(await page.evaluate(`!!document.querySelector('.composer-suggestions')`, decodeBoolean)).toBe(false)
+    expect(await page.evaluate(`document.querySelector('.rl-capsule textarea').value`, decodeString)).toBe("@fast")
+    expect(owned?.calls.filter((call) => call.method !== "GET" && !call.route.endsWith("/web-latency"))).toEqual([])
+  } finally { await page.close() }
 }, 30_000)
 
 const desktopSnapshot = (messages: readonly unknown[]) => ({ sourceEpoch: "synthetic", session: session("ses_test"), watermark: { type: "log.synced", aggregateID: "ses_test", seq: 1000 }, messages })

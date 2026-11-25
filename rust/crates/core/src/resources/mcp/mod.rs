@@ -1,5 +1,6 @@
 use ycoding_schema::LosslessString;
 
+mod app;
 mod callback;
 pub mod client;
 pub mod configuration;
@@ -12,6 +13,8 @@ pub mod skills;
 mod stdio;
 mod transport;
 mod validation;
+pub use app::AppView;
+pub(crate) use app::{AppCall, Ticket as AppTicket};
 pub use service::{Event, ServerInfo, Service, Tool};
 
 pub fn namespace(server: &LosslessString) -> LosslessString {

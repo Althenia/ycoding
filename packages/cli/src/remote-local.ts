@@ -158,6 +158,7 @@ export type LocalServer = {
   readonly snapshot: (sessionID: string, location: LocalLocation, options?: { readonly limit?: number; readonly before?: string }, signal?: AbortSignal) => Promise<unknown>
   readonly pendingList: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly attachmentRead: (sessionID: string, location: LocalLocation, digest: string) => Promise<{ readonly mime: string; readonly bytes: number; readonly data: string }>
+  readonly mcpAppView: (sessionID: string, messageID: string, callID: string) => ReturnType<YCodingClient["mcp"]["app"]["view"]>
   readonly interactionStatus: (sessionID: string, signal?: AbortSignal) => ReturnType<YCodingClient["sessionInteraction"]["status"]>
   readonly interactionPreview: (sessionID: string, generation: string, signal?: AbortSignal) => ReturnType<YCodingClient["sessionInteraction"]["preview"]>
   readonly interactionStop: (sessionID: string, generation: string) => ReturnType<YCodingClient["sessionInteraction"]["stop"]>
@@ -363,6 +364,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       call(() => client.session.pending.list({ sessionID }, request(location, timeoutMs))),
     attachmentRead: (sessionID, location, digest) =>
       call(() => client.session.attachment.read({ sessionID, digest }, request(location, timeoutMs))),
+    mcpAppView: (sessionID, messageID, callID) =>
+      call(() => client.mcp.app.view({ sessionID, messageID, callID }, { signal: AbortSignal.timeout(timeoutMs) })),
     interactionStatus: (sessionID, signal) => call(() => client.sessionInteraction.status({ sessionID }, {
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
     })),

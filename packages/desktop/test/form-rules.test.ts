@@ -250,6 +250,19 @@ test("rail groups place a Session in the first matching group and use time.pinne
   expect(railGroups(rows.slice(0, 2), idle).groups.map((group) => group.key)).toEqual(["pinned", "recent"])
 })
 
+test("the Session rail separates Projects, environments and backend connections", async () => {
+  const rules = await import("../src/form-rules")
+  const location = { directory: "/work/same" }
+  const rows = [row("same-1", { location }), row("same-2", { location }), row("copy", { location: { ...location, workspaceID: "copy" } }), row("other", { location }), row("unknown", { location })]
+  const project = (id: string) => id === "unknown" ? undefined : { id: id === "other" ? "p2" : "p1", name: "Project" }
+  const grouped = railGroups(rows, { busy: new Set(), waiting: new Map() }).groups
+  const groups = rules.railGroupPartitions(grouped, [1, 4], project)
+  expect(groups.map((group) => group.rows.map((entry) => entry.id))).toEqual([["copy"], ["other"], ["same-1", "same-2"], ["unknown"]])
+  expect(groups[0]?.label).toContain("Environment unreported")
+  expect(groups[3]?.label).toContain("Project unreported")
+  expect(rules.railGroupPartitions(grouped, [2, 4], project).map((group) => group.id)).not.toEqual(groups.map((group) => group.id))
+})
+
 test("a subagent shows under its root and orders by activity then ID", () => {
   const rows = [row("root", { time: { updated: 1, active: 5 } }), row("child", { parentID: "root", time: { updated: 9 } }), row("b", { time: { updated: 5 } }), row("a", { time: { updated: 5 } })]
   const grouped = railGroups(rows, { busy: new Set(["child"]), waiting: new Map() })

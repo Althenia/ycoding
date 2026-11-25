@@ -82,6 +82,7 @@ export const connectorOperations = {
   "dots.detach": [2074, "dots.detach", "A", "MUTATION"],
   "dots.remove": [2075, "dots.remove", "A", "MUTATION"],
   "usage.dashboard": [2070, "usage.dashboard", "A", "READ"],
+  "mcp.app.view": [2084, "mcp.app.view", "A", "READ"],
   "usage.providers": [2055, "providerUsage.list", "B-reuse", "READ"],
   "usage.summary": [2058, "usage.get", "A", "READ"],
   "usage.report": [2059, "usage.report", "A", "READ"],

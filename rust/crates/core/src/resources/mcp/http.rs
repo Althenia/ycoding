@@ -1,12 +1,17 @@
 use super::oauth;
 use crate::resources::credential::{Info, Service};
-use reqwest::header::{AUTHORIZATION, HeaderName, HeaderValue};
+use reqwest::header::{
+    ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderName, HeaderValue, WWW_AUTHENTICATE,
+};
 use rmcp::{
-    model::ClientJsonRpcMessage,
+    model::{ClientJsonRpcMessage, ServerJsonRpcMessage},
     transport::{
         common::client_side_sse::BoxedSseResponse,
+        common::http_header::{
+            EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
+        },
         streamable_http_client::{
-            AuthRequiredError, StreamableHttpClient, StreamableHttpError,
+            AuthRequiredError, InsufficientScopeError, StreamableHttpClient, StreamableHttpError,
             StreamableHttpPostResponse,
         },
     },
@@ -36,12 +41,107 @@ impl Authentication {
         Ok(())
     }
 }
+
 #[derive(Clone)]
 pub(crate) struct Http {
     client: reqwest::Client,
     authentication: Option<Arc<Mutex<Authentication>>>,
 }
 impl Http {
+    async fn post_app(
+        &self,
+        uri: &str,
+        message: &ClientJsonRpcMessage,
+        session: Option<&str>,
+        token: Option<&str>,
+        custom: HashMap<HeaderName, HeaderValue>,
+    ) -> Result<StreamableHttpPostResponse, StreamableHttpError<reqwest::Error>> {
+        let ClientJsonRpcMessage::Request(request) = message else {
+            return Err(StreamableHttpError::UnexpectedEndOfStream);
+        };
+        let mut post = self
+            .client
+            .post(uri)
+            .header(ACCEPT, "application/json, text/event-stream");
+        if let Some(token) = token {
+            post = post.bearer_auth(token);
+        }
+        if let Some(session) = session {
+            post = post.header(HEADER_SESSION_ID, session);
+        }
+        for (key, value) in custom {
+            if ["accept", HEADER_SESSION_ID, HEADER_LAST_EVENT_ID]
+                .iter()
+                .any(|name| key.as_str().eq_ignore_ascii_case(name))
+            {
+                return Err(StreamableHttpError::ReservedHeaderConflict(key.to_string()));
+            }
+            post = post.header(key, value);
+        }
+        let mut response = post.json(message).send().await?;
+        let status = response.status();
+        if status == reqwest::StatusCode::NOT_FOUND && session.is_some() {
+            return Err(StreamableHttpError::SessionExpired);
+        }
+        if let Some(challenge) = response
+            .headers()
+            .get(WWW_AUTHENTICATE)
+            .and_then(|header| header.to_str().ok())
+        {
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                return Err(StreamableHttpError::AuthRequired(AuthRequiredError::new(
+                    challenge.to_owned(),
+                )));
+            }
+            if status == reqwest::StatusCode::FORBIDDEN {
+                return Err(StreamableHttpError::InsufficientScope(
+                    InsufficientScopeError::new(
+                        challenge.to_owned(),
+                        oauth::header_field(challenge, "scope").map(str::to_owned),
+                    ),
+                ));
+            }
+        }
+        response = response.error_for_status()?;
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        let streaming = content_type.starts_with(EVENT_STREAM_MIME_TYPE);
+        if !streaming && !content_type.starts_with(JSON_MIME_TYPE) {
+            return Err(StreamableHttpError::UnexpectedContentType(Some(
+                content_type.to_owned(),
+            )));
+        }
+        let mut buffer = Vec::new();
+        let mut sse = ycoding_ai::framing::Sse::default();
+        let mut remaining = 2 * 1024 * 1024_usize;
+        while let Some(chunk) = response.chunk().await? {
+            remaining = remaining
+                .checked_sub(chunk.len())
+                .ok_or(StreamableHttpError::UnexpectedEndOfStream)?;
+            if streaming {
+                for frame in sse.push(&chunk) {
+                    let message = super::transport::server_message(frame.as_bytes())?;
+                    if matches!(&message, ServerJsonRpcMessage::Response(result) if result.id == request.id)
+                        || matches!(&message, ServerJsonRpcMessage::Error(result) if result.id.as_ref() == Some(&request.id))
+                    {
+                        return Ok(StreamableHttpPostResponse::Json(message, None));
+                    }
+                }
+            } else {
+                buffer.extend_from_slice(&chunk);
+            }
+        }
+        if streaming {
+            return Err(StreamableHttpError::UnexpectedEndOfStream);
+        }
+        Ok(StreamableHttpPostResponse::Json(
+            super::transport::server_message(&buffer)?,
+            None,
+        ))
+    }
     pub(crate) fn new(
         name: &str,
         config: &RemoteConfig,
@@ -245,6 +345,18 @@ impl StreamableHttpClient for Http {
         custom: HashMap<HeaderName, HeaderValue>,
         max: usize,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        if super::transport::app_read(&message) {
+            return self
+                .call(auth, |token| {
+                    let custom = headers(custom.clone(), &token);
+                    let (uri, message, session) = (&uri, &message, session.as_deref());
+                    async move {
+                        self.post_app(uri, message, session, token.as_deref(), custom)
+                            .await
+                    }
+                })
+                .await;
+        }
         self.call(auth, |token| {
             self.client.post_message_with_max_sse_event_size(
                 uri.clone(),

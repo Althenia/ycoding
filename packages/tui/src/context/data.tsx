@@ -2597,7 +2597,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                   : listScopedRecentSessions({
                       list: client.api.session.list,
                       scope,
-                      pinned: false,
                       limit: 50,
                       signal,
                     }),

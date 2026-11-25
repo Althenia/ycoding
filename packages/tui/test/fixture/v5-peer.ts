@@ -341,6 +341,7 @@ function scenario(dispatch: Dispatch) {
     if (name === "event.subscribe") return "/api/event"
     if (name === "session.log") return `/api/experimental/session/${params.sessionID}/log`
     if (name === "permission.saved.remove") return `/api/permission/saved/${encodeURIComponent(params.id!)}`
+    if (name === "mcp.app.view") return `/api/session/${params.sessionID}/mcp/app`
     if (name.startsWith("session.")) {
       const action = name.slice("session.".length)
       if (["list", "create", "active", "outstanding", "completions"].includes(action))

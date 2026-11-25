@@ -5,7 +5,7 @@ use super::{
 use reqwest::header::{HeaderName, HeaderValue};
 use rmcp::{
     RoleClient,
-    model::{ClientJsonRpcMessage, ClientRequest, RequestId, ServerJsonRpcMessage},
+    model::{ClientJsonRpcMessage, ClientRequest, GetExtensions, RequestId, ServerJsonRpcMessage},
     transport::{
         Transport,
         common::client_side_sse::BoxedSseResponse,
@@ -24,6 +24,9 @@ use std::{
     time::Duration,
 };
 use tokio::sync::broadcast;
+
+#[derive(Clone)]
+pub(super) struct AppRead;
 
 #[derive(Debug)]
 pub(crate) struct SdkRetry;
@@ -61,6 +64,7 @@ impl<T: Transport<RoleClient>> Transport<RoleClient> for Pinned<T> {
         &mut self,
         message: ClientJsonRpcMessage,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
+        let app = app_read(&message);
         let mut value = serde_json::to_value(&message).expect("MCP message serialization");
         let replay = (value["method"] == "server/discover")
             .then(|| self.discovered.take())
@@ -86,9 +90,12 @@ impl<T: Transport<RoleClient>> Transport<RoleClient> for Pinned<T> {
                 params.remove("_meta");
             }
         }
-        forward(Some(self.inner.send(
-            serde_json::from_value(value).expect("MCP metadata removal preserves message"),
-        )))
+        let mut message =
+            serde_json::from_value(value).expect("MCP metadata removal preserves message");
+        if app && let ClientJsonRpcMessage::Request(request) = &mut message {
+            request.request.extensions_mut().insert(AppRead);
+        }
+        forward(Some(self.inner.send(message)))
     }
     async fn receive(&mut self) -> Option<ServerJsonRpcMessage> {
         if let Some(reply) = self.replies.pop_front() {
@@ -127,16 +134,45 @@ pub(crate) struct Renewal {
     inner: Http,
     expired: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
+    app_session_expired: Arc<AtomicBool>,
 }
 
 impl Renewal {
-    pub(crate) fn new(inner: Http, failed: Arc<AtomicBool>) -> Self {
+    pub(crate) fn new(
+        inner: Http,
+        failed: Arc<AtomicBool>,
+        app_session_expired: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             inner,
             expired: Arc::new(AtomicBool::new(false)),
             failed,
+            app_session_expired,
         }
     }
+}
+
+pub(super) fn app_read(message: &ClientJsonRpcMessage) -> bool {
+    matches!(message, ClientJsonRpcMessage::Request(request) if request.request.extensions().get::<AppRead>().is_some())
+}
+
+pub(super) fn server_message(raw: &[u8]) -> serde_json::Result<ServerJsonRpcMessage> {
+    let mut value: Value = serde_json::from_slice(raw)?;
+    if let Some(contents) = value
+        .get_mut("result")
+        .and_then(|result| result.get_mut("contents"))
+        .and_then(Value::as_array_mut)
+        && contents.iter().any(|part| {
+            part["uri"]
+                .as_str()
+                .is_some_and(|uri| uri.starts_with("ui://"))
+                && part.get("text").is_some()
+                && part.get("blob").is_some()
+        })
+    {
+        contents.clear();
+    }
+    serde_json::from_value(value)
 }
 
 impl StreamableHttpClient for Renewal {
@@ -161,6 +197,10 @@ impl StreamableHttpClient for Renewal {
         custom: HashMap<HeaderName, HeaderValue>,
         max: usize,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        let app = app_read(&message);
+        if app && self.app_session_expired.load(Ordering::Acquire) {
+            return Err(StreamableHttpError::UnexpectedEndOfStream);
+        }
         let attached = session.is_some();
         let bootstrap = match &message {
             ClientJsonRpcMessage::Request(request)
@@ -187,6 +227,10 @@ impl StreamableHttpClient for Renewal {
         };
         if attached && matches!(result, Err(StreamableHttpError::SessionExpired)) {
             self.expired.store(true, Ordering::SeqCst);
+            self.app_session_expired.store(true, Ordering::Release);
+            if app {
+                return Err(StreamableHttpError::UnexpectedEndOfStream);
+            }
         }
         if renewing {
             self.expired.store(false, Ordering::SeqCst);
@@ -216,9 +260,15 @@ impl StreamableHttpClient for Renewal {
         custom: HashMap<HeaderName, HeaderValue>,
         max: usize,
     ) -> Result<BoxedSseResponse, StreamableHttpError<Self::Error>> {
-        self.inner
+        let attached = session.is_some();
+        let result = self
+            .inner
             .get_stream_with_max_sse_event_size(uri, session, last, auth, custom, max)
-            .await
+            .await;
+        if attached && matches!(result, Err(StreamableHttpError::SessionExpired)) {
+            self.app_session_expired.store(true, Ordering::Release);
+        }
+        result
     }
     async fn delete_session(
         &self,

@@ -206,7 +206,6 @@ export async function listScopedRecentSessions(input: {
     options?: { signal?: AbortSignal },
   ) => Promise<{ readonly data: readonly SessionInfo[]; readonly cursor: { readonly next?: string | null } }>
   scope: RecentSessionScope
-  pinned?: false
   search?: string
   limit?: number
   signal?: AbortSignal
@@ -214,7 +213,7 @@ export async function listScopedRecentSessions(input: {
 }): Promise<SessionInfo[]> {
   const limit = input.limit ?? 50
   const base = {
-    ...(input.pinned === undefined ? {} : { pinned: input.pinned }),
+    pinned: false as const,
     ...(input.search === undefined ? {} : { search: input.search }),
     parentID: null,
     background: "exclude" as const,

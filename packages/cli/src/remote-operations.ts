@@ -997,6 +997,10 @@ async function run(input: OperationInput) {
       return await capturedChangesPage(input, verified, sessionID, location, request.id, validated.cursor)
     case "attachment.read":
       return await input.local.attachmentRead(sessionID, location, validated.digest)
+    case "mcp.app.view": {
+      const data = await input.local.mcpAppView(sessionID, validated.messageID, validated.callID)
+      return data === undefined ? {} : { data }
+    }
     case "session.interaction.status":
       return { data: await input.local.interactionStatus(sessionID, input.signal) }
     case "session.interaction.preview":
@@ -1281,6 +1285,7 @@ type Validated =
   | { readonly kind: "snapshot"; readonly limit?: number; readonly before?: string }
   | { readonly kind: "capturedChanges.list"; readonly cursor?: string }
   | { readonly kind: "attachment.read"; readonly digest: string }
+  | { readonly kind: "mcp.app.view"; readonly messageID: string; readonly callID: string }
   | { readonly kind: "session.interaction.status" }
   | { readonly kind: "session.interaction.preview" | "session.interaction.stop" | "session.interaction.resume"; readonly generation: string }
   | { readonly kind: "message.stream"; readonly messageID: string }
@@ -1553,6 +1558,13 @@ function validate(request: RemoteRequest): Validated {
     if (typeof fields.digest !== "string" || !/^[0-9a-f]{64}$/.test(fields.digest))
       throw new OperationError("invalid_message", "Invalid managed attachment digest")
     return { kind: "attachment.read", digest: fields.digest }
+  }
+  if (request.operation === "mcp.app.view") {
+    const id = messageID(fields.messageID)
+    const callID = requireString(fields.callID, "call ID", 256)
+    if (!/^msg_[A-Za-z0-9_-]+$/.test(id) || !/^[^\u0000-\u001f\u007f]+$/u.test(callID))
+      throw new OperationError("invalid_message", "Invalid MCP tool call identity")
+    return { kind: "mcp.app.view", messageID: id, callID }
   }
   if (request.operation === "session.interaction.status") return { kind: request.operation }
   if (request.operation === "session.interaction.preview" || request.operation === "session.interaction.stop" || request.operation === "session.interaction.resume") {
@@ -2364,6 +2376,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.pending.steer": ["messageID"],
   "session.message.delete": ["messageID"],
   "session.attachment.read": ["digest"],
+  "mcp.app.view": ["messageID", "callID"],
   "session.interaction.status": [],
   "session.interaction.preview": ["generation"],
   "session.interaction.stop": ["generation"],

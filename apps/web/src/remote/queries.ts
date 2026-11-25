@@ -1,4 +1,5 @@
 import { QueryClient, queryOptions } from "@tanstack/solid-query"
+import type { CoordinationBoard } from "../../../../packages/client/src/promise/generated/types"
 import type {
   RemoteIncidentGuidance,
   RemoteIncidentGuidanceInput,
@@ -63,6 +64,7 @@ export const remoteKeys = {
   dots: (scope: QueryScope) => [...remoteKeys.scope(scope), "dots"] as const,
   workspaces: (scope: QueryScope) => [...remoteKeys.scope(scope), "workspaces"] as const,
   coordination: (scope: QueryScope) => [...remoteKeys.scope(scope), "coordination"] as const,
+  swarmBoard: (scope: QueryScope, masterSessionID: string, groupID: string) => [...remoteKeys.scope(scope), "swarm-board", masterSessionID, groupID] as const,
   projectCandidates: (scope: QueryScope, search: string) => [...remoteKeys.scope(scope), "project-candidates", search] as const,
   childSnapshot: (scope: QueryScope, sessionID: string, revision: number) => [...remoteKeys.scope(scope), "child-snapshot", sessionID, revision] as const,
   childTeam: (scope: QueryScope, familyID: string, parentID: string, cursor?: string) => [...remoteKeys.scope(scope), "child-team", familyID, parentID, cursor ?? ""] as const,
@@ -400,6 +402,24 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
 
   const refreshCoordination = (scope: QueryScope) => refetchFresh([remoteKeys.coordination(scope)])
 
+  const swarmBoard = (scope: QueryScope | undefined, enabled: boolean, masterSessionID: string, groupID: string) => {
+    const current = scope ?? idleScope
+    return queryOptions({
+      queryKey: remoteKeys.swarmBoard(current, masterSessionID, groupID),
+      enabled: scope !== undefined && enabled,
+      retry: false,
+      queryFn: async () => {
+        const outcome = await link.request(current, "coordination.board", { input: { groupID }, timeoutMs: 10_000 })
+        if (outcome.status !== "ok") throw new Error(describeOutcome(outcome, "Swarm Board"))
+        const value = outcome.value
+        const board = (typeof value === "object" && value !== null ? Reflect.get(value, "data") : undefined) as CoordinationBoard | undefined
+        if (board?.groupID !== groupID || !board.nodes.some((node) => node.role === "master" && node.sessionID === masterSessionID))
+          throw new Error("The device returned a Board for a different Project or Master Session.")
+        return board
+      },
+    })
+  }
+
   const settleCoordination = async (scope: QueryScope, outcome: RemoteRequestOutcome): Promise<CoordinationChange> => {
     const reread = () => client.refetchQueries({ queryKey: remoteKeys.coordination(scope), type: "all" }).catch(() => undefined)
     if (outcome.status === "ok") {
@@ -484,7 +504,7 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
   }
 
   return {
-    coordination, refreshCoordination, changeCoordination, deleteProjectSession, createProjectSession, projectCandidates, childSnapshot, childTeam,
+    coordination, swarmBoard, refreshCoordination, changeCoordination, deleteProjectSession, createProjectSession, projectCandidates, childSnapshot, childTeam,
     usageProviders, usageSummary, usageForecast, usageReport, usageDashboard, refreshUsage, refreshUsageDashboard, retryUsageReport,
     incidentReport, incidentRecent, incidentGuidance, clearIncidentGuidance, retryIncidentReport, retryIncidentRecent, retryIncidentGuidance,
     keepAwake, keepAwakeMutation, toggleKeepAwake, workspaces,

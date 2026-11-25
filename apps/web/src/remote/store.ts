@@ -2,10 +2,11 @@ import { replaceEqualDeep } from "@tanstack/solid-query"
 import { RemoteLimits, isRemoteLatencySample, isRemoteReviewItemID, noticeSequence, type CreateEnrollmentResponse, type RemoteDeviceInfo, type RemoteFamilyActivity, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, parseNoticePage, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeFrame, type RemoteNoticePage, type RemoteWorkspaceInfo } from "@ycoding-ai/remote"
 import type { OperationName as RemoteOperation } from "./wire-views"
 import { SessionEvent } from "../../../../packages/schema/src/session-event"
+import { Mcp } from "../../../../packages/schema/src/mcp"
 import { catalogKey, readCatalog, readFileFind, type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileFindResult } from "./catalog"
 import type { DeviceAliasResponse } from "@ycoding-ai/remote"
 import { displayDeviceName } from "./device-alias"
-import { externalDelivery, readFilter, writeFilter, normalizeFilter, type ExternalKind, type NotificationFilter } from "./coordination"
+import { boardUpdateGroup, externalDelivery, readFilter, writeFilter, normalizeFilter, type ExternalKind, type NotificationFilter } from "./coordination"
 import { readTaskCosts } from "./usage-read"
 import { isConversationRoot } from "./session-collection"
 import { readTeamTask, type TeamTaskView } from "./team-read"
@@ -342,6 +343,7 @@ export type RemoteStore = {
   readonly loadOlderMessages: () => Promise<void>
   readonly loadOversizedMessage: (messageID: string) => Promise<void>
   readonly loadImageSource: (input: { readonly deviceID: string; readonly sessionID: string; readonly digest: string; readonly mime: string }) => Promise<string>
+  readonly loadMcpApp: (sessionID: string, messageID: string, callID: string) => Promise<Mcp.AppView | undefined>
   readonly loadShellOutputPage: (shellID: string) => Promise<void>
   readonly sendPrompt: (input: { readonly text: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly skills?: readonly string[]; readonly agent?: string; readonly model?: ModelRefView; readonly forceModelSwitch?: boolean }) => Promise<boolean>
   readonly runCommand: (input: { readonly command: string; readonly arguments?: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly agent?: string; readonly model?: ModelRefView; readonly forceModelSwitch?: boolean }) => Promise<boolean>
@@ -3379,6 +3381,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         onEvents: (sessionID, events) => {
           if (!isCurrentConnection(created)) return
           for (const event of events) {
+            if (typeof event === "object" && event !== null && Reflect.get(event, "type") === "coordination.updated") {
+              const scope = currentScope()
+              const groupID = boardUpdateGroup(event, sessionID)
+              if (scope && sessionID === container.state.activeSessionID && groupID !== undefined) {
+                void queryClient.invalidateQueries({ queryKey: remoteKeys.swarmBoard(scope, sessionID, groupID), exact: true })
+              }
+              continue
+            }
             if (typeof event === "object" && event !== null && Reflect.get(event, "type") === "session.interaction.changed") {
               const generation = interactionEventGeneration(event, sessionID)
               if (sessionID === container.state.activeSessionID && generation !== undefined) interaction.change(generation)
@@ -3750,6 +3760,16 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     reloadMessages,
     loadOlderMessages,
     loadOversizedMessage,
+    loadMcpApp: async (sessionID, messageID, callID) => {
+      const owner = transport
+      const token = selectionToken
+      if (!owner || owner.status().kind !== "open" || container.state.activeSessionID !== sessionID) return undefined
+      const outcome = await owner.request("mcp.app.view", { sessionID, input: { messageID, callID }, timeoutMs: 10_000 })
+      if (transport !== owner || owner.status().kind !== "open" || selectionToken !== token || container.state.activeSessionID !== sessionID || outcome.status !== "ok") return undefined
+      const value = outcome.value
+      if (!value || typeof value !== "object" || !("data" in value)) return undefined
+      return Mcp.isAppView(value.data) ? value.data : undefined
+    },
     loadImageSource: (input) => {
       const owner = transport
       if (!owner || owner.status().kind !== "open" || input.deviceID !== container.state.activeDeviceID)

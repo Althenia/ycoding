@@ -1,5 +1,6 @@
 import { MCP } from "@ycoding-ai/core/mcp/index"
-import { McpServerNotFoundError } from "@ycoding-ai/protocol/errors"
+import { Session } from "@ycoding-ai/core/session"
+import { McpServerNotFoundError, SessionNotFoundError } from "@ycoding-ai/protocol/errors"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
@@ -10,6 +11,7 @@ const notFound = <A, R>(effect: Effect.Effect<A, MCP.NotFoundError, R>) =>
 
 export const McpHandler = HttpApiBuilder.group(Api, "server.mcp", (handlers) =>
   Effect.gen(function* () {
+    const sessions = yield* Session.Service
     return handlers
       .handle(
         "mcp.list",
@@ -65,5 +67,20 @@ export const McpHandler = HttpApiBuilder.group(Api, "server.mcp", (handlers) =>
           return yield* response(service.resourceCatalog())
         }),
       )
+      .handle("mcp.app.view", Effect.fn(function* (ctx) {
+        const service = yield* MCP.Service
+        const sessionID = ctx.params.sessionID
+        const session = yield* sessions.get(sessionID).pipe(Effect.mapError(() =>
+          new SessionNotFoundError({ sessionID, message: "Session not found" }),
+        ))
+        if (session.time.archived !== undefined) return {}
+        const message = yield* sessions.message({ sessionID, messageID: ctx.query.messageID })
+        if (message?.type !== "assistant") return {}
+        const calls = message.content.filter((part) => part.type === "tool" && part.id === ctx.query.callID)
+        const call = calls[0]
+        if (calls.length !== 1 || call?.type !== "tool" || call.state.status !== "completed") return {}
+        const data = yield* service.appView({ sessionID, ...ctx.query })
+        return data === undefined ? {} : { data }
+      }))
   }),
 )

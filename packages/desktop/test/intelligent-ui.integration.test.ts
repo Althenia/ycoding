@@ -220,30 +220,31 @@ async function openSession(ready: string) {
 }
 
 test("renders valid Intelligent UI fixture card with metrics, callout, and sortable table without submitting turns", async () => {
+  const response = (spec: typeof fixtureSpec) => ({
+    id: "msg_response",
+    type: "assistant",
+    agent: "build",
+    model: { id: "synthetic", providerID: "synthetic" },
+    content: [
+      {
+        id: "part_ui_release",
+        type: "tool",
+        name: "ui",
+        state: {
+          status: "completed",
+          input: spec,
+          structured: { ui: spec },
+          content: [{ type: "text", text: fixtureFallback }],
+        },
+        time: { created: 200, completed: 250 },
+      },
+      { type: "text", text: "Summary attached above.", time: { created: 260 } },
+    ],
+    time: { created: 200, completed: 270 },
+  })
   currentMessages = [
     { id: "msg_user", type: "user", text: "Summarize the Desktop release readiness checks.", files: [], agents: [], time: { created: 100 } },
-    {
-      id: "msg_response",
-      type: "assistant",
-      agent: "build",
-      model: { id: "synthetic", providerID: "synthetic" },
-      content: [
-        {
-          id: "part_ui_release",
-          type: "tool",
-          name: "ui",
-          state: {
-            status: "completed",
-            input: fixtureSpec,
-            structured: { ui: fixtureSpec },
-            content: [{ type: "text", text: fixtureFallback }],
-          },
-          time: { created: 200, completed: 250 },
-        },
-        { type: "text", text: "Summary attached above.", time: { created: 260 } },
-      ],
-      time: { created: 200, completed: 270 },
-    },
+    response(fixtureSpec),
   ]
 
   const page = await openSession(`document.querySelector('#turn-msg_response')`)
@@ -272,9 +273,22 @@ test("renders valid Intelligent UI fixture card with metrics, callout, and sorta
     expect(summary.callout).toContain("Plain fallback preserved")
     expect(summary.rowsBefore).toEqual(["Schema contract", "Design tokens", "Typecheck"])
 
-    await page.evaluate(`document.querySelector('[data-intelligent-ui="ready"] th button[data-sort-key="duration"]').click()`)
+    await page.evaluate(`(() => { const sort = document.querySelector('[data-intelligent-ui="ready"] th button[data-sort-key="duration"]'); sort.focus(); sort.click() })()`)
     const rowsAfterSort = await page.evaluate(`[...document.querySelectorAll('[data-intelligent-ui="ready"] tbody tr td:first-child')].map(el => el.textContent?.trim())`) as string[]
     expect(rowsAfterSort).toEqual(["Design tokens", "Schema contract", "Typecheck"])
+
+    const blocks = fixtureSpec.blocks.map((block) => block.columns ? {
+      ...block,
+      columns: block.columns.map((column) => column.key === "duration" ? { ...column, label: "Wall time" } : column),
+    } : block)
+    currentMessages = [currentMessages[0], response({ ...fixtureSpec, blocks })]
+    await page.evaluate(`window.__desktopFixture.resync()`)
+    await wait(page, `document.querySelector('[data-intelligent-ui="ready"] [data-sort-key="duration"]')?.textContent.includes('Wall time')`)
+    expect(await page.evaluate(`({
+      rows: [...document.querySelectorAll('[data-intelligent-ui="ready"] tbody tr td:first-child')].map(el => el.textContent.trim()),
+      focusedSort: document.activeElement?.getAttribute('data-sort-key'),
+      sort: document.activeElement?.closest('th')?.getAttribute('aria-sort'),
+    })`)).toEqual({ rows: rowsAfterSort, focusedSort: "duration", sort: "ascending" })
 
     const submissions = owned!.calls.filter((call) => call.method === "POST" && (call.route.endsWith("/prompt") || call.route.endsWith("/decide") || call.route.endsWith("/autonomy")))
     expect(submissions).toEqual([])

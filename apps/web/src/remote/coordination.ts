@@ -80,6 +80,13 @@ const strings = (value: unknown, limit: number, length: number): readonly string
   Array.isArray(value) && value.length <= limit && value.every((item) => text(item, length)) ? value as readonly string[] : undefined
 const payload = (value: unknown) => record(value) ? value.data : undefined
 
+export function boardUpdateGroup(event: unknown, masterSessionID: string): string | undefined {
+  if (!record(event) || event.type !== "coordination.updated") return undefined
+  const data = event.data
+  if (!record(data) || !groupID(data.groupID) || typeof data.groupID !== "string" || !count(data.revision)) return undefined
+  return data.sessionID === undefined || data.sessionID === masterSessionID ? data.groupID : undefined
+}
+
 function readDelegation(value: unknown): DelegationView | undefined {
   if (!record(value) || !Array.isArray(value.categories) || value.categories.length > 3 || !value.categories.every((item) => member(delegatedCategories, item))) return undefined
   const actions = value.actions === undefined ? undefined : strings(value.actions, 32, 512)

@@ -1078,6 +1078,15 @@ export type Endpoint13_5Input = { readonly location?: Endpoint13_5Request["query
 export type Endpoint13_5Output = EffectValue<ReturnType<RawClient["server.mcp"]["mcp.resource.catalog"]>>
 export type McpResourceCatalogOperation<E = never> = (input?: Endpoint13_5Input) => Effect.Effect<Endpoint13_5Output, E>
 
+type Endpoint13_6Request = Parameters<RawClient["server.mcp"]["mcp.app.view"]>[0]
+export type Endpoint13_6Input = {
+  readonly sessionID: Endpoint13_6Request["params"]["sessionID"]
+  readonly messageID: Endpoint13_6Request["query"]["messageID"]
+  readonly callID: Endpoint13_6Request["query"]["callID"]
+}
+export type Endpoint13_6Output = EffectValue<ReturnType<RawClient["server.mcp"]["mcp.app.view"]>>["data"]
+export type McpAppViewOperation<E = never> = (input: Endpoint13_6Input) => Effect.Effect<Endpoint13_6Output, E>
+
 export interface McpApi<E = never> {
   readonly list: McpListOperation<E>
   readonly add: McpAddOperation<E>
@@ -1085,6 +1094,7 @@ export interface McpApi<E = never> {
   readonly connect: McpConnectOperation<E>
   readonly disconnect: McpDisconnectOperation<E>
   readonly resource: { readonly catalog: McpResourceCatalogOperation<E> }
+  readonly app: { readonly view: McpAppViewOperation<E> }
 }
 
 type Endpoint14_0Request = Parameters<RawClient["server.credential"]["credential.update"]>[0]

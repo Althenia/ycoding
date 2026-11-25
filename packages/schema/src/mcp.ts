@@ -133,3 +133,20 @@ export const ResourceContent = Schema.Struct({
   uri: Schema.String,
   contents: Schema.Array(ResourceContentPart),
 }).annotate({ identifier: "Mcp.ResourceContent" })
+
+const appHtmlBytes = 262_144
+const appHtmlEncoder = new TextEncoder()
+const appHtmlLimit = { _tag: "isMaxLength" as const, maxLength: appHtmlBytes, utf8BytesMax: appHtmlBytes }
+export const AppView = Schema.Struct({
+  resourceUri: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2048)),
+  html: Schema.String.check(Schema.makeFilter<string>((html) => appHtmlEncoder.encode(html).byteLength <= appHtmlBytes, {
+    expected: `HTML of at most ${appHtmlBytes} UTF-8 bytes`,
+    meta: appHtmlLimit,
+    arbitrary: { constraint: { maxLength: appHtmlBytes } },
+  })),
+  tool: Schema.String,
+  input: Schema.Json,
+  output: Schema.Json,
+}).annotate({ identifier: "Mcp.AppView" })
+export type AppView = typeof AppView.Type
+export const isAppView = Schema.is(AppView)

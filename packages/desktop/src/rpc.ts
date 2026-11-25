@@ -215,6 +215,8 @@ export function createDesktopRPC(controller: BackendController, preferences: {
     manageSystem: (input: Parameters<DesktopAPI["manageSystem"]>[0]) => controller.manageSystem(input),
     interactionStatus: (input: Parameters<DesktopAPI["interactionStatus"]>[0]) => controller.interactionStatus(input),
     interactionPreview: (input: Parameters<DesktopAPI["interactionPreview"]>[0]) => controller.interactionPreview(input),
+    mcpAppView: (input: Parameters<DesktopAPI["mcpAppView"]>[0]) => controller.mcpAppView(input),
+    swarmBoard: (input: Parameters<DesktopAPI["swarmBoard"]>[0]) => controller.swarmBoard(input),
     interactionStop: (input: Parameters<DesktopAPI["interactionStop"]>[0]) => controller.interactionStop(input),
     interactionResume: (input: Parameters<DesktopAPI["interactionResume"]>[0]) => controller.interactionResume(input),
     interactionRequest: (input: Parameters<DesktopAPI["interactionRequest"]>[0]) => controller.interactionRequest(input),

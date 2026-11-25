@@ -1,6 +1,8 @@
 export * as MCP from "./index"
 
 import { Mcp } from "@ycoding-ai/schema/mcp"
+import { Session } from "@ycoding-ai/schema/session"
+import { SessionMessage } from "@ycoding-ai/schema/session-message"
 import { McpEvent } from "@ycoding-ai/schema/mcp-event"
 import { McpSkill } from "@ycoding-ai/schema/mcp-skill"
 import { Command } from "@ycoding-ai/schema/command"
@@ -51,6 +53,7 @@ export class Tool extends Schema.Class<Tool>("MCP.Tool")({
   description: Schema.String.pipe(Schema.optional),
   inputSchema: Schema.Unknown.pipe(Schema.optional),
   outputSchema: Schema.Unknown.pipe(Schema.optional),
+  appResourceUri: Schema.String.pipe(Schema.optional),
 }) {}
 
 export const ToolResultContent = Schema.Union([
@@ -168,6 +171,9 @@ type ServerEntry = {
 const GLOBAL_ELICITATION_SESSION_ID = "global"
 const URL_ELICITATION_FIELD_KEY = "elicitation"
 
+type AppCall = { readonly sessionID: Session.ID; readonly messageID: SessionMessage.ID; readonly callID: string }
+const appKey = (call: AppCall) => JSON.stringify([call.sessionID, call.messageID, call.callID])
+
 export interface Interface {
   readonly servers: () => Effect.Effect<ServerInfo[]>
   readonly add: (server: ServerName | string, config: typeof ConfigMCP.Server.Type) => Effect.Effect<void>
@@ -180,6 +186,8 @@ export interface Interface {
     readonly name: string
     readonly args?: Record<string, unknown>
   }) => Effect.Effect<ToolResult, NotFoundError | ToolCallError>
+  readonly rememberApp: (call: AppCall, result: ToolResult) => Effect.Effect<void>
+  readonly appView: (call: AppCall) => Effect.Effect<Mcp.AppView | undefined>
   readonly instructions: () => Effect.Effect<ServerInstructions[]>
   readonly prompts: () => Effect.Effect<Prompt[]>
   readonly prompt: (input: {
@@ -244,6 +252,11 @@ export const layer = Layer.effect(
     )
     // Later config files win for duplicate server names; per-server timeout overrides globals.
     const runtime = new Map<ServerName, ServerEntry>()
+    type AppOrigin = { readonly server: ServerName; readonly client: MCPClient.Connection; readonly resourceUri: string; readonly tool: string; readonly input: Schema.Json; readonly output: Schema.Json }
+    const origins = new WeakMap<ToolResult, AppOrigin>()
+    const apps = new Map<string, AppOrigin>()
+    const json = Schema.is(Schema.Json)
+    const encodedSize = (value: Schema.Json) => new TextEncoder().encode(JSON.stringify(value)).length
     // Serializes lifecycle operations per server. Anything taking this lock from a connection
     // callback must stay forked: lifecycle operations close scopes while holding it, firing onClose.
     const locks = KeyedMutex.makeUnsafe<ServerName>()
@@ -476,6 +489,7 @@ export const layer = Layer.effect(
         description: def.description,
         inputSchema: def.inputSchema,
         outputSchema: def.outputSchema,
+        appResourceUri: def.appResourceUri,
       })
 
     const toPrompt = (server: ServerName, def: MCPClient.PromptDefinition) =>
@@ -789,14 +803,16 @@ export const layer = Layer.effect(
       callTool: Effect.fn("MCP.callTool")(function* (input) {
         const target = yield* requireServer(input.server)
         yield* Deferred.await(target.entry.startup)
-        if (!target.entry.client)
+        const client = target.entry.client
+        if (!client)
           return yield* new ToolCallError({
             server: target.name,
             tool: input.name,
             message: target.entry.status.status === "needs_auth"
               ? new MCPClient.NeedsAuthError({ server: target.name }).message : "MCP server is not connected",
           })
-        const result = yield* target.entry.client
+        const resourceUri = target.entry.tools?.find((tool) => tool.name === input.name)?.appResourceUri
+        const result = yield* client
           .callTool({ name: input.name, args: input.args })
           .pipe(
             Effect.mapError(
@@ -808,13 +824,46 @@ export const layer = Layer.effect(
               }),
             ),
           )
-        return new ToolResult({
+        const output = new ToolResult({
           server: target.name,
           tool: input.name,
           isError: result.isError,
           structured: result.structured,
           content: result.content,
         })
+        if (resourceUri && !result.isError && target.entry.client === client) {
+          const args = input.args ?? {}
+          const data = {
+            content: result.content.filter((part) => part.type === "text"),
+            ...(json(result.structured) ? { structuredContent: result.structured } : {}),
+          }
+          if (json(args) && json(data) && encodedSize(args) + encodedSize(data) <= 32_768) {
+            origins.set(output, { server: target.name, client, resourceUri, tool: input.name, input: args, output: data })
+          }
+        }
+        return output
+      }),
+      rememberApp: (call, result) => Effect.sync(() => {
+        const origin = origins.get(result)
+        if (!origin || runtime.get(origin.server)?.client !== origin.client) return
+        const key = appKey(call)
+        const prior = apps.get(key)
+        if (prior) return
+        if (apps.size >= 64) {
+          const oldest = apps.keys().next().value
+          if (oldest !== undefined) apps.delete(oldest)
+        }
+        apps.set(key, origin)
+      }),
+      appView: (call) => Effect.gen(function* () {
+        const key = appKey(call)
+        const origin = apps.get(key)
+        if (!origin || runtime.get(origin.server)?.client !== origin.client) return undefined
+        const resource = yield* origin.client.readResource({ uri: origin.resourceUri }).pipe(Effect.orElseSucceed(() => undefined))
+        const part = resource?.contents.length === 1 ? resource.contents[0] : undefined
+        if (part?.type !== "text" || part.uri !== origin.resourceUri || part.mimeType !== "text/html;profile=mcp-app" ||
+          new TextEncoder().encode(part.text).length > 262_144 || apps.get(key) !== origin || runtime.get(origin.server)?.client !== origin.client) return undefined
+        return { resourceUri: origin.resourceUri, html: part.text, tool: origin.tool, input: origin.input, output: origin.output }
       }),
       instructions: Effect.fn("MCP.instructions")(function* () {
         yield* whenAllReady

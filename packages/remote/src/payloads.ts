@@ -59,6 +59,8 @@ export {
   incident_report_RequestSchema,
   incident_report_ResultSchema,
   keepAwake_get_RequestSchema,
+  mcp_app_view_RequestSchema,
+  mcp_app_view_ResultSchema,
   keepAwake_get_ResultSchema,
   keepAwake_set_RequestSchema,
   keepAwake_set_ResultSchema,

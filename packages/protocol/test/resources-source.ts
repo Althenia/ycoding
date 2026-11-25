@@ -7,7 +7,6 @@ import { DotsGroup } from "../src/groups/dots.js"
 import { CredentialGroup } from "../src/groups/credential.js"
 import { IntegrationGroup } from "../src/groups/integration.js"
 import { LocationGroup } from "../src/groups/location.js"
-import { McpGroup } from "../src/groups/mcp.js"
 import { PluginGroup } from "../src/groups/plugin.js"
 import { ProjectArtifactGroup } from "../src/groups/project-artifact.js"
 import { ProjectGroup } from "../src/groups/project.js"
@@ -27,7 +26,7 @@ export const resourceGroups = [
   CredentialGroup,
   IntegrationGroup,
   LocationGroup,
-  McpGroup,
+  ClientApi.groups["server.mcp"],
   ClientApi.groups["server.model"],
   PluginGroup,
   ProjectArtifactGroup,

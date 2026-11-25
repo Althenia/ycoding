@@ -22,6 +22,32 @@ beforeAll(async () => {
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
+test("the Session companion keeps the conversation and editable draft visible", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(390, 844)
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?ledger=1&view=chat&theme=light`)
+    await wait(page, `document.querySelector('.companion-context-trigger') && document.querySelector('.composer__input')`)
+    await page.evaluate(`(() => { const input = document.querySelector('.composer__input'); input.value = 'Keep this draft'; input.dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('.companion-context-trigger').click(); })()`)
+    await wait(page, `document.querySelector('#companion-context:not([hidden])')`)
+    expect(await page.evaluate(`(() => { const input = document.querySelector('.composer__input'), panel = document.querySelector('#session-companion-panel'), transcript = document.querySelector('.transcript'); const a = input.getBoundingClientRect(), b = panel.getBoundingClientRect(), t = transcript.getBoundingClientRect(); return input.value === 'Keep this draft' && input.checkVisibility() && transcript.checkVisibility() && a.height > 0 && t.height > 0 && b.height > 0 && a.bottom <= b.top && !input.inert && !document.querySelector('dialog[open]'); })()`, decodeBoolean)).toBe(true)
+  } finally { await page.close() }
+})
+
+test("the companion lists pending decisions without duplicating their controls", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(1280, 900)
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=permission-guardrail-hard-review-form-requests-1440`)
+    await wait(page, `document.querySelector('.companion-context-trigger') && document.querySelector('.request')`)
+    await page.evaluate(`document.querySelector('.companion-context-trigger').click()`)
+    await wait(page, `document.querySelector('#session-companion-panel [role="tab"]')`)
+    await page.evaluate(`[...document.querySelectorAll('#session-companion-panel [role="tab"]')].find(tab => tab.textContent.includes('Activity')).click()`)
+    await wait(page, `document.querySelector('#session-companion-panel [aria-label="Pending decisions"]')`)
+    expect(await page.evaluate(`(() => { const summary = document.querySelector('#session-companion-panel [aria-label="Pending decisions"]'); return summary.textContent.includes('permission:') && summary.textContent.includes('guardrail:') && !summary.querySelector('button,input,textarea,select'); })()`, decodeBoolean)).toBe(true)
+  } finally { await page.close() }
+})
+
 test("opening the companion keeps Send on the primary row and moves crowded controls into the disclosure", async () => {
   const page = await browser!.openPage()
   try {

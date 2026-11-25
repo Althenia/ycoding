@@ -213,6 +213,8 @@ import type {
   McpDisconnectOutput,
   McpResourceCatalogInput,
   McpResourceCatalogOutput,
+  McpAppViewInput,
+  McpAppViewOutput,
   CredentialUpdateInput,
   CredentialUpdateOutput,
   CredentialActivateInput,
@@ -2018,6 +2020,20 @@ export function make(options: ClientOptions) {
             },
             requestOptions,
           ),
+      },
+      app: {
+        view: (input: McpAppViewInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: McpAppViewOutput }>(
+            {
+              method: "GET",
+              path: `/api/session/${encodeURIComponent(input.sessionID)}/mcp/app`,
+              query: { messageID: input["messageID"], callID: input["callID"] },
+              successStatus: 200,
+              declaredStatuses: [404, 403, 503, 401, 400],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
       },
     },
     credential: {

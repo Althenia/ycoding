@@ -911,7 +911,7 @@ test("rail rows are icon driven with readable workspace names", async () => {
   expect(source).toContain('aria-label={`${row().session.title}, ${workspaceBase(row().session.location.directory)}, ${railStatusLabels[row().state]}`}')
   expect(source).toContain("· more")
   expect(source).not.toContain(", more available")
-  expect(source).toContain('<SharedSessionGroups label="Sessions by state" idPrefix="rail-group" groups={visibleGroups}')
+  expect(source).toContain('<SharedSessionGroups label="Sessions by state" idPrefix="rail-group" groups={visibleGroups()}')
   expect(source).toContain('<span class="rl-session-row-meta">{workspaceBase(row().session.location.directory)}</span>')
   expect(source).toContain('const railGroupIcons = { needs: "hand", running: "zap", pinned: "pin", recent: "sessions" } as const')
   expect(source).not.toContain("rl-nav-group-label")

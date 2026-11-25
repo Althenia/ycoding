@@ -1325,6 +1325,21 @@ type Endpoint13_5Input = { readonly location?: Endpoint13_5Request["query"]["loc
 const Endpoint13_5 = (raw: RawClient["server.mcp"]) => (input?: Endpoint13_5Input) =>
   raw["mcp.resource.catalog"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError))
 
+type Endpoint13_6Request = Parameters<RawClient["server.mcp"]["mcp.app.view"]>[0]
+type Endpoint13_6Input = {
+  readonly sessionID: Endpoint13_6Request["params"]["sessionID"]
+  readonly messageID: Endpoint13_6Request["query"]["messageID"]
+  readonly callID: Endpoint13_6Request["query"]["callID"]
+}
+const Endpoint13_6 = (raw: RawClient["server.mcp"]) => (input: Endpoint13_6Input) =>
+  raw["mcp.app.view"]({
+    params: { sessionID: input["sessionID"] },
+    query: { messageID: input["messageID"], callID: input["callID"] },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
 const adaptGroup13 = (raw: RawClient["server.mcp"]) => ({
   list: Endpoint13_0(raw),
   add: Endpoint13_1(raw),
@@ -1332,6 +1347,7 @@ const adaptGroup13 = (raw: RawClient["server.mcp"]) => ({
   connect: Endpoint13_3(raw),
   disconnect: Endpoint13_4(raw),
   resource: { catalog: Endpoint13_5(raw) },
+  app: { view: Endpoint13_6(raw) },
 })
 
 type Endpoint14_0Request = Parameters<RawClient["server.credential"]["credential.update"]>[0]

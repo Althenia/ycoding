@@ -704,6 +704,8 @@ export type McpResourceTemplate = {
   mimeType?: string
 }
 
+export type McpAppView = { resourceUri: string; html: string; tool: string; input: JsonValue; output: JsonValue }
+
 export type IntegrationRefreshResult = { status: "refreshed"; expires: number } | { status: "failed"; message: string }
 
 export type ProjectVcs = "git" | "hg"
@@ -8948,6 +8950,14 @@ export type McpResourceCatalogOutput = {
   location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
   data: McpResourceCatalog
 }
+
+export type McpAppViewInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly messageID: { readonly messageID: string; readonly callID: string }["messageID"]
+  readonly callID: { readonly messageID: string; readonly callID: string }["callID"]
+}
+
+export type McpAppViewOutput = { data?: McpAppView | undefined }["data"]
 
 export type CredentialUpdateInput = {
   readonly credentialID: { readonly credentialID: string }["credentialID"]

@@ -1,11 +1,13 @@
 import { Mcp } from "@ycoding-ai/schema/mcp"
 import { Location } from "@ycoding-ai/schema/location"
-import { Schema } from "effect"
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { McpServerNotFoundError } from "../errors.js"
+import { Session } from "@ycoding-ai/schema/session"
+import { SessionMessage } from "@ycoding-ai/schema/session-message"
+import { Context, Schema } from "effect"
+import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
+import { ForbiddenError, McpServerNotFoundError, ServiceUnavailableError, SessionNotFoundError } from "../errors.js"
 import { LocationQuery, locationQueryOpenApi } from "./location.js"
 
-export const McpGroup = HttpApiGroup.make("server.mcp")
+const McpGroup = HttpApiGroup.make("server.mcp")
   .add(
     HttpApiEndpoint.get("mcp.list", "/api/mcp", {
       query: LocationQuery,
@@ -101,3 +103,25 @@ export const McpGroup = HttpApiGroup.make("server.mcp")
       ),
   )
   .annotateMerge(OpenApi.annotations({ title: "mcp", description: "MCP server and resource routes." }))
+
+export const makeMcpGroup = <
+  LocationId extends HttpApiMiddleware.AnyId,
+  LocationService,
+  SessionLocationId extends HttpApiMiddleware.AnyId,
+  SessionLocationService,
+>(
+  locationMiddleware: Context.Key<LocationId, LocationService>,
+  sessionLocationMiddleware: Context.Key<SessionLocationId, SessionLocationService>,
+) => McpGroup.middleware(locationMiddleware)
+  .add(
+    HttpApiEndpoint.get("mcp.app.view", "/api/session/:sessionID/mcp/app", {
+      params: { sessionID: Session.ID },
+      query: Schema.Struct({ messageID: SessionMessage.ID.check(Schema.isMinLength(1), Schema.isMaxLength(128)), callID: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256), Schema.isPattern(/^[^\u0000-\u001f\u007f]+$/u)) }),
+      success: Schema.Struct({ data: Mcp.AppView.pipe(Schema.optional) }),
+      error: [SessionNotFoundError, ForbiddenError, ServiceUnavailableError],
+    }).middleware(sessionLocationMiddleware).annotateMerge(OpenApi.annotations({
+      identifier: "mcp.app.view",
+      summary: "Read the App for a Session tool result",
+      description: "A missing view leaves the original tool result readable. The request cannot select an MCP server or resource URI.",
+    })),
+  )

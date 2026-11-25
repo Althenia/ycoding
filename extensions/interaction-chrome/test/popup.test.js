@@ -141,6 +141,18 @@ async function mountPopup(initial, next) {
 }
 
 describe("interaction-chrome popup states and contracts", () => {
+  test("shows the connection status even when a reply takes longer than the polling interval", async () => {
+    const slow = Promise.withResolvers()
+    const { nodes, calls, tick } = await mountPopup(slow.promise)
+    await tick()
+    await tick()
+    expect(calls.filter((call) => call.type === "status")).toHaveLength(1)
+    slow.resolve({ status: "connected", authorized: true, active: [], pending: [] })
+    await tick()
+    expect(nodes.get("#header-status").textContent).toBe("Connected")
+    expect(nodes.get("#deck-body").hidden).toBe(true)
+  })
+
   test("real connected idle shows Connected pill in header, hides #deck-body, and removes dividers between header and Advanced", async () => {
     const { nodes } = await mountPopup({
       ok: true,

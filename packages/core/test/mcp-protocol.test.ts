@@ -312,3 +312,30 @@ describe("MCP protocol negotiation", () => {
     )
   })
 })
+
+test("projects the MCP App URI only from the standard tool declaration", async () => {
+  const appUri = "ui://fixture/summary.html"
+  const handler = createMcpHandler(() => {
+    const server = new Server({ name: "app-fixture", version: "1.0.0" }, { capabilities: { tools: {} } })
+    const inputSchema = { type: "object" as const }
+    server.setRequestHandler("tools/list", () => ({ tools: [
+      { name: "summary", inputSchema, _meta: { ui: { resourceUri: appUri, visibility: ["model", "app"] }, private: "internal" } },
+      { name: "not_an_app", inputSchema, _meta: { ui: { resourceUri: "https://example.invalid/summary.html" } } },
+      { name: "plain", inputSchema, _meta: { resourceUri: appUri } },
+    ] }))
+    return server
+  }, { legacy: "reject" })
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => handler.fetch(request) })
+  try {
+    const tools = await Effect.runPromise(Effect.scoped(remote(server.url.toString()).pipe(
+      Effect.flatMap((connection) => connection.tools()),
+    )))
+    expect(tools.map((tool) => [tool.name, Reflect.get(tool, "appResourceUri")])).toEqual([
+      ["summary", appUri], ["not_an_app", undefined], ["plain", undefined],
+    ])
+    expect(tools[0]).not.toHaveProperty("_meta")
+  } finally {
+    await handler.close()
+    await server.stop(true)
+  }
+})

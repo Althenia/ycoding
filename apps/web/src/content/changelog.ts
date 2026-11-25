@@ -22,6 +22,15 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.13.3",
+    date: "2026-11-25",
+    title: "Native Dots executor restrictions",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "The native Dots executor admits full-access process starts only for the peer named in trusted global configuration. Requests that need an unsupported sandbox or network restriction fail before launch instead of running with different restrictions." },
+    ],
+  },
+  {
     version: "0.13.2",
     date: "2026-11-25",
     title: "Antigravity and Muse sign-in",

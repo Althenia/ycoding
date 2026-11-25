@@ -69,6 +69,7 @@ function projectSession(value: unknown): SessionItem | undefined {
   const id = own(value, "id")
   const parentID = own(value, "parentID")
   const title = own(value, "title")
+  const scope = own(value, "scope")
   const directory = own(own(value, "location"), "directory")
   const workspaceID = own(own(value, "location"), "workspaceID")
   const times = own(value, "time")
@@ -97,6 +98,7 @@ function projectSession(value: unknown): SessionItem | undefined {
     id,
     ...(parentID === undefined ? {} : { parentID }),
     title,
+    ...(scope === "bound" || scope === "standalone" ? { scope } : {}),
     location: { directory, ...(workspaceID === undefined ? {} : { workspaceID }) },
     time: { updated, ...(active === undefined ? {} : { active }), ...(archived === undefined ? {} : { archived }), ...(pinned === undefined ? {} : { pinned }) },
     ...(agent === undefined ? {} : { agent }),

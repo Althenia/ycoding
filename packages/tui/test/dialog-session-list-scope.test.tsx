@@ -424,7 +424,7 @@ describe("DialogSessionList scope boundaries", () => {
       expect(frame).not.toContain("Plain B deploy leak")
       const searchRequests = plainRun.requests.filter((url) => url.searchParams.get("search") === "deploy")
       expect(searchRequests.some((url) => url.searchParams.get("project") === "global")).toBe(false)
-      expect(searchRequests.some((url) => url.searchParams.get("directory") === plainA)).toBe(true)
+      expect(searchRequests.some((url) => url.searchParams.get("directory") === plainA && url.searchParams.get("pinned") === "false")).toBe(true)
     } finally {
       plainRun.destroy()
     }

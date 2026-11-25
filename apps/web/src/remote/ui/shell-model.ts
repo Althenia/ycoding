@@ -8,7 +8,6 @@ import {
   connectionBanner,
   lostResultLabel,
   sessionActivityGroup,
-  sessionProjectLabel,
   sessionStateChips,
   summarizeConnection,
   type ConnectionTone,
@@ -178,13 +177,20 @@ export function sessionFilterCounts(sessions: readonly SessionInfoView[], view: 
   return { all: sessions.length, waiting, running, idle: sessions.length - waiting - running }
 }
 
-export function groupRailSessions(sessions: readonly SessionInfoView[]): readonly { readonly label: string; readonly sessions: readonly SessionInfoView[] }[] {
-  const groups = new Map<string, SessionInfoView[]>()
+export function groupRailSessions(sessions: readonly SessionInfoView[], view?: SessionView, projectOf?: (id: string) => { readonly id: string; readonly name: string } | undefined, deviceID?: string): readonly { readonly key: string; readonly label: string; readonly sessions: readonly SessionInfoView[] }[] {
+  const groups = new Map<string, { label: string; sessions: SessionInfoView[] }>()
   for (const session of sessions) {
-    const label = sessionProjectLabel(session)
-    groups.set(label, [...groups.get(label) ?? [], session])
+    const project = projectOf?.(session.id)
+    const signal = sessionRowSignal(session, view).kind
+    const status = session.archived ? "Archived" : signal === "idle" && session.running === undefined && view?.id !== session.id ? "Status unreported" : signal[0]!.toUpperCase() + signal.slice(1)
+    const environment = session.scope === "standalone" ? "Standalone" : session.scope === "bound" ? "Bound" : "Environment unreported"
+    const key = JSON.stringify([deviceID ?? null, project?.id ?? null, status, session.scope ?? null, session.workspaceID ?? null, session.directory ?? null])
+    const label = `${project ? `${project.name} (${project.id})` : "Project unreported"} · ${status} · ${environment}${session.directory ? ` · ${session.directory}` : ""}`
+    const group = groups.get(key)
+    if (group) group.sessions.push(session)
+    else groups.set(key, { label, sessions: [session] })
   }
-  return [...groups].map(([label, members]) => ({ label, sessions: members }))
+  return [...groups].map(([key, group]) => ({ key, ...group }))
 }
 
 export function transcriptContextMessages(messages: readonly RemoteMessageView[]): readonly { readonly id: string; readonly role: string; readonly summary: string }[] {

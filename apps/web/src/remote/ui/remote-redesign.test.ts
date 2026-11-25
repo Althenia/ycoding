@@ -688,7 +688,7 @@ describe("Ledger rail, conversation header and companion wiring", () => {
     expect(summary).toContain("<SessionPin session={props.session} disabled={props.readOnly} />")
     const rail = source.slice(source.indexOf("function SessionRailList("), source.indexOf("function SessionTableRows("))
     expect(rail).toContain("estimate: () => 36")
-    expect(rail).toContain("groupRailSessions(props.sessions)")
+    expect(rail).toContain("groupRailSessions(props.sessions, remote.state().view, props.project, remote.state().activeDeviceID)")
     const css = await readStylesheet("remote.css")
     expect(declared(css, ".session-row")).toMatchObject({ "min-block-size": "var(--yc-control-h-dense)", border: "1px solid transparent", "border-radius": "var(--yc-radius-control)" })
     expect(declared(css, ".session-row")["block-size"]).toBeUndefined()

@@ -9,6 +9,13 @@ def send(message):
     sys.stdout.flush()
 
 
+def wait_for_gate(path):
+    if path:
+        deadline = time.monotonic() + 10
+        while not os.path.exists(path) and time.monotonic() < deadline:
+            time.sleep(0.005)
+
+
 configuration = sys.argv[1]
 if os.environ.get("MCP_TABLE_MARKER"):
     with open(os.environ["MCP_TABLE_MARKER"], "w") as marker:
@@ -35,11 +42,14 @@ for line in sys.stdin:
         for notification in table.get("notify", []):
             send({"jsonrpc": "2.0", "method": notification})
         call = table.get("calls", {}).get(params.get("name"), {})
+        wait_for_gate(call.get("gate"))
         time.sleep(call.get("delay", 0))
         send({"jsonrpc": "2.0", "id": identity, "result": call.get("result", {"content": []})})
         continue
     responses = table.get("responses", {}).get(method)
     key = params.get("cursor") or params.get("uri") or ""
+    if method == "resources/read":
+        wait_for_gate(table.get("readGate"))
     if responses is not None and key in responses:
         send({"jsonrpc": "2.0", "id": identity, "result": responses[key]})
     elif responses is not None:

@@ -21,16 +21,16 @@ test("connector contract constraints are closed", () => {
   expect(messages["ycoding.v5.Connector_McpRequest"]!.fields[0]!.constraints).toEqual({ utf16Min: 1, utf16Max: 32768 })
 })
 
-test("live source names resolve to 102 canonical connector and four relay notice operations", () => {
+test("live source names resolve to 103 canonical connector and four relay notice operations", () => {
   const expected = [
     ...new Map(
       [...Object.values(connectorOperations), ...Object.values(noticeOperations)].map((item) => [item[0], item]),
     ).values(),
   ]
-  expect(expected).toHaveLength(106)
-  expect(new Set(expected.map(([id]) => id)).size).toBe(106)
+  expect(expected).toHaveLength(107)
+  expect(new Set(expected.map(([id]) => id)).size).toBe(107)
   const actual = operations.filter((item) => item.roles.includes(PeerRole.REMOTE_CLIENT))
-  expect(actual).toHaveLength(106)
+  expect(actual).toHaveLength(107)
   expect(actual.map((item) => [item.operationId, item.diagnosticName]).sort()).toEqual(
     expected.map(([id, name]) => [id, name]).sort(),
   )
@@ -43,8 +43,8 @@ test("generated per-role allowlists equal descriptor roles including empty agent
     expect(operationIDsByRole[role]).toEqual(
       operations.filter((item) => item.roles.includes(role)).map((item) => item.operationId),
     )
-  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(106)
-  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(102)
+  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(107)
+  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(103)
 })
 
 test("descriptor role-scope and event payload metadata append fresh fields", () => {
@@ -171,7 +171,7 @@ test("spec admission table matches the connector inventory, descriptor roles and
 
 test("relay forwards exactly the current connector set; agents and servers send none", () => {
   const actual = operations.filter((item) => item.roles.includes(PeerRole.RELAY))
-  expect(actual).toHaveLength(102)
+  expect(actual).toHaveLength(103)
   expect(actual.map((item) => item.operationId).sort()).toEqual(
     [...new Set([...Object.values(connectorOperations), ...Object.values(relayOperations)].map(([id]) => id))].sort(),
   )

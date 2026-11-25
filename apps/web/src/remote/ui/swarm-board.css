@@ -1,0 +1,16 @@
+.swarm-board { display: grid; gap: var(--yc-space-6); min-inline-size: 0; color: var(--yc-ink); font: var(--yc-size-sm)/var(--yc-leading-sm) var(--yc-font-sans); }
+.swarm-board section, .swarm-board__node, .swarm-board__item { min-inline-size: 0; }
+.swarm-board h3 { margin: 0 0 var(--yc-space-3); font-size: var(--yc-size-md); }
+.swarm-board p { margin: 0; overflow-wrap: anywhere; }
+.swarm-board__tree, .swarm-board__tree ul, .swarm-board__list { display: grid; gap: var(--yc-space-2); margin: 0; padding: 0; list-style: none; }
+.swarm-board__tree ul { margin-block-start: var(--yc-space-2); margin-inline-start: var(--yc-space-4); padding-inline-start: var(--yc-space-3); border-inline-start: var(--yc-border-width) solid var(--yc-line-subtle); }
+.swarm-board__participant, .swarm-board__item { display: grid; gap: var(--yc-space-1); padding: var(--yc-space-3); border-radius: var(--yc-radius-card); background: var(--yc-plane-hover); overflow-wrap: anywhere; }
+.swarm-board__participant { grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: var(--yc-space-2); }
+.swarm-board__participant h4 { margin: 0; font-size: var(--yc-size-sm); }
+.swarm-board__eyebrow, .swarm-board__meta, .swarm-board__item p, .swarm-board__state { color: var(--yc-ink-secondary); font-size: var(--yc-size-xs); }
+.swarm-board__eyebrow { font-weight: var(--yc-weight-semibold); text-transform: capitalize; }
+.swarm-board__row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--yc-space-2); }
+.swarm-board button { justify-self: start; min-block-size: var(--yc-control-h-dense); padding-inline: var(--yc-space-3); border: var(--yc-border-width) solid var(--yc-line-field); border-radius: var(--yc-radius-control); background: var(--yc-plane-raised); color: var(--yc-ink); font: var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-sans); cursor: pointer; }
+.swarm-board button:focus-visible { outline: 2px solid var(--yc-focus); outline-offset: 2px; }
+@media (hover: hover) { .swarm-board button:hover { background: var(--yc-plane-selected); } }
+@media (max-width: 767px), (pointer: coarse) { .swarm-board button { min-block-size: var(--yc-hit-min); } .swarm-board__participant { grid-template-columns: minmax(0, 1fr); } }

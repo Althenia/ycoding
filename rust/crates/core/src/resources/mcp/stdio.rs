@@ -47,7 +47,7 @@ impl Transport<RoleClient> for Stdio {
         loop {
             if let Some(end) = self.buffer.iter().position(|byte| *byte == b'\n') {
                 let line = self.buffer.drain(..=end).collect::<Vec<_>>();
-                if let Ok(message) = serde_json::from_str(&String::from_utf8_lossy(&line)) {
+                if let Ok(message) = super::transport::server_message(&line) {
                     return Some(message);
                 }
                 continue;

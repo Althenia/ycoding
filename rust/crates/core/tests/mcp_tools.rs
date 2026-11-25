@@ -42,6 +42,260 @@ fn text(value: &str) -> Value {
     json!({"content": [{"type": "text", "text": value}]})
 }
 
+const APP_URI: &str = "ui://example/view.html";
+const APP_MIME: &str = "text/html;profile=mcp-app";
+
+fn app_server() -> (&'static str, Value, Value) {
+    let mut declared = tool("show", "Show a view");
+    declared["_meta"] = json!({"ui": {"resourceUri": APP_URI}});
+    let mut table = server_tools(
+        json!([declared]),
+        json!({"show": {"result": {
+            "content": [{"type": "text", "text": "ordinary result", "_meta": {"private": "omit"}}],
+            "structuredContent": {"label": "result", "nested": {"api_key": "fixture-output-secret", "_meta": {"ui": {"resourceUri": "ui://other/redirect"}}}},
+            "_meta": {"ui": {"resourceUri": "ui://other/redirect", "csp": {"connectDomains": ["https://example.invalid"]}}},
+            "serverConfig": {"private": "omit"}
+        }}}),
+    );
+    table["capabilities"]["resources"] = json!({});
+    table["responses"]["resources/read"][APP_URI] = json!({"contents": [{
+        "uri": APP_URI, "mimeType": APP_MIME, "text": "<p>App view</p>",
+        "_meta": {"ui": {"csp": {"connectDomains": ["https://example.invalid"]}}}
+    }]});
+    ("demo", json!({"codemode": false}), table)
+}
+
+#[tokio::test]
+async fn native_mcp_app_view_uses_the_settled_tool_call() {
+    let world = World::new(ToolFixture::new(), vec![app_server()]);
+    let tools = world.start(None);
+    world.until(true, "demo_show").await;
+    let context = world.fixture.context();
+    assert!(world.app(&context).await.is_none());
+    let settlement = world.invoke("demo_show", json!({
+        "query": "weekly", "password": "fixture-input-secret", "_meta": {"ui": {"resourceUri": "ui://model/forged"}}
+    })).await;
+    assert_eq!(
+        structured(&settlement)["nested"]["api_key"],
+        "fixture-output-secret"
+    );
+    assert!(
+        matches!(settlement.output.unwrap().content.as_slice(), [ToolContent::Text(part)] if part.text.as_str() == Some("ordinary result"))
+    );
+    assert_eq!(world.calls("demo"), 1);
+    let mut wrong = context.clone();
+    wrong.call_id = "different_call".into();
+    assert!(world.app(&wrong).await.is_none());
+    let wrong =
+        ycoding_core::tools::context::Context::new("ses_other", "test", "msg_tool", "call_tool")
+            .unwrap();
+    assert!(world.app(&wrong).await.is_none());
+    let wrong =
+        ycoding_core::tools::context::Context::new("ses_tool", "test", "msg_other", "call_tool")
+            .unwrap();
+    assert!(world.app(&wrong).await.is_none());
+    assert!(world.requests("demo", "resources/read").is_empty());
+    let view = world
+        .app(&context)
+        .await
+        .expect("successful MCP tool call exposes an App view");
+    assert_eq!(view.resource_uri, APP_URI);
+    assert_eq!(view.html, "<p>App view</p>");
+    assert_eq!(view.tool, "show");
+    assert_eq!(view.input, json!({"query": "weekly"}));
+    assert_eq!(
+        view.output,
+        json!({
+            "content": [{"type": "text", "text": "ordinary result"}],
+            "structuredContent": {"label": "result", "nested": {}}
+        })
+    );
+    assert_eq!(
+        world.requests("demo", "resources/read"),
+        vec![json!({"uri":APP_URI})]
+    );
+    assert_eq!(world.calls("demo"), 1);
+    world.finish(tools).await;
+}
+
+#[tokio::test]
+async fn native_mcp_app_requires_a_catalog_declaration_and_successful_result() {
+    let (name, config, mut table) = app_server();
+    let mut invalid = tool("invalid", "Invalid app declaration");
+    invalid["_meta"] = json!({"ui": {"resourceUri": "https://example.invalid/app"}});
+    let mut failed = tool("failed", "A failed app call");
+    failed["_meta"] = table["responses"]["tools/list"][""]["tools"][0]["_meta"].clone();
+    table["responses"]["tools/list"][""]["tools"]
+        .as_array_mut()
+        .unwrap()
+        .extend([tool("plain", "No app declaration"), invalid, failed]);
+    table["calls"]["plain"] = table["calls"]["show"].clone();
+    table["calls"]["invalid"] = table["calls"]["show"].clone();
+    table["calls"]["failed"] = table["calls"]["show"].clone();
+    table["calls"]["failed"]["result"]["isError"] = json!(true);
+    let world = World::new(ToolFixture::new(), vec![(name, config, table)]);
+    let tools = world.start(None);
+    for name in ["plain", "invalid", "failed"] {
+        let tool = format!("demo_{name}");
+        world.until(true, &tool).await;
+        let mut context = world.fixture.context();
+        context.call_id = name.into();
+        let settlement = world
+            .invoke_as(&tool, json!({"resourceUri": APP_URI}), context.clone())
+            .await;
+        if name == "failed" {
+            assert_eq!(error_message(&settlement), "ordinary result");
+        } else {
+            assert_eq!(structured(&settlement)["label"], "result");
+        }
+        assert!(world.app(&context).await.is_none(), "{name}");
+    }
+    assert_eq!(world.calls("demo"), 3);
+    assert!(world.requests("demo", "resources/read").is_empty());
+    world.finish(tools).await;
+}
+
+#[tokio::test]
+async fn native_mcp_app_validates_the_exact_single_html_item_and_payload_bounds() {
+    let world = World::new(ToolFixture::new(), vec![app_server()]);
+    let tools = world.start(None);
+    world.until(true, "demo_show").await;
+    let context = world.fixture.context();
+    world.invoke("demo_show", json!({})).await;
+    let valid = json!({"uri": APP_URI, "mimeType": APP_MIME, "text": "<p>Valid</p>"});
+    let mut wrong_uri = valid.clone();
+    wrong_uri["uri"] = json!("ui://other/not-the-request");
+    let mut wrong_mime = valid.clone();
+    wrong_mime["mimeType"] = json!("text/html");
+    let mut ambiguous = valid.clone();
+    ambiguous["blob"] = json!("PGE+");
+    let mut oversized = valid.clone();
+    oversized["text"] = json!("é".repeat(128 * 1024 + 1));
+    for contents in [
+        json!([]),
+        json!([valid, valid]),
+        json!([wrong_uri]),
+        json!([wrong_mime]),
+        json!([ambiguous]),
+        json!([oversized]),
+        json!([{"uri": APP_URI, "mimeType": APP_MIME, "blob": "/w=="}]),
+    ] {
+        world.edit_table("demo", |table| {
+            table["responses"]["resources/read"][APP_URI] = json!({"contents": contents})
+        });
+        assert!(world.app(&context).await.is_none());
+    }
+    world.edit_table("demo", |table| {
+        table["responses"]["resources/read"][APP_URI] = json!({"contents": [
+            {"uri": APP_URI, "mimeType": APP_MIME, "blob": "PHA+VmFsaWQ8L3A+"}
+        ]})
+    });
+    assert_eq!(world.app(&context).await.unwrap().html, "<p>Valid</p>");
+    let mut oversized_input = context.clone();
+    oversized_input.call_id = "oversized_input".into();
+    let settlement = world
+        .invoke_as(
+            "demo_show",
+            json!({"query": "x".repeat(32 * 1024 + 1)}),
+            oversized_input.clone(),
+        )
+        .await;
+    assert_eq!(structured(&settlement)["label"], "result");
+    assert!(world.app(&oversized_input).await.is_none());
+    assert_eq!(world.requests("demo", "resources/read").len(), 8);
+    world.finish(tools).await;
+}
+
+#[tokio::test]
+async fn native_mcp_app_keeps_the_call_catalog_snapshot_and_rejects_a_replacement() {
+    let world = World::new(ToolFixture::new(), vec![app_server()]);
+    let tools = world.start(None);
+    world.until(true, "demo_show").await;
+    let context = world.fixture.context();
+    world.edit_table("demo", |table| {
+        table["notify"] = json!(["notifications/tools/list_changed"])
+    });
+    let gate = world.fixture.root.join("release_call");
+    world.edit_table("demo", |table| table["calls"]["show"]["gate"] = json!(gate));
+    let (settlement, ()) = tokio::join!(world.invoke("demo_show", json!({})), async {
+        world.until_requests("tools/call", 1).await;
+        world.edit_table("demo", |table| {
+            table["responses"]["tools/list"][""]["tools"][0]["_meta"]["ui"]["resourceUri"] =
+                json!("ui://example/new.html");
+            table["notify"] = json!([]);
+            table["calls"]["show"]
+                .as_object_mut()
+                .unwrap()
+                .remove("gate");
+        });
+        fs::write(&gate, "").unwrap();
+    });
+    assert_eq!(structured(&settlement)["label"], "result");
+    world.until_requests("tools/list", 2).await;
+    assert_eq!(world.app(&context).await.unwrap().resource_uri, APP_URI);
+
+    let gate = world.fixture.root.join("release_read");
+    world.edit_table("demo", |table| table["readGate"] = json!(gate));
+    let (view, ()) = tokio::join!(world.app(&context), async {
+        world.until_requests("resources/read", 2).await;
+        world.service.disconnect("demo").await.unwrap();
+        world.edit_table("demo", |table| {
+            table.as_object_mut().unwrap().remove("readGate");
+        });
+        world.service.connect("demo").await.unwrap();
+    });
+    assert!(view.is_none());
+    assert!(world.app(&context).await.is_none());
+    assert_eq!(world.requests("demo", "resources/read").len(), 2);
+    world.service.remove("demo").await.unwrap();
+    assert!(world.app(&context).await.is_none());
+    world.finish(tools).await;
+}
+
+#[tokio::test]
+async fn native_mcp_app_refuses_duplicate_and_evicted_call_ids() {
+    let world = World::new(ToolFixture::new(), vec![app_server()]);
+    let tools = world.start(None);
+    world.until(true, "demo_show").await;
+    let original = world.fixture.context();
+    world.invoke("demo_show", json!({})).await;
+    assert!(world.app(&original).await.is_some());
+    world
+        .invoke("demo_show", json!({"query": "distinct result"}))
+        .await;
+    assert!(world.app(&original).await.is_none());
+
+    let mut oldest = original.clone();
+    oldest.call_id = "oldest".into();
+    world
+        .invoke_as("demo_show", json!({}), oldest.clone())
+        .await;
+    assert!(world.app(&oldest).await.is_some());
+    let mut newest = original;
+    for index in 0..128 {
+        newest.call_id = format!("call_{index}").into();
+        world
+            .invoke_as("demo_show", json!({}), newest.clone())
+            .await;
+    }
+    assert!(world.app(&oldest).await.is_none());
+    assert!(world.app(&newest).await.is_some());
+    world.finish(tools).await;
+}
+
+#[tokio::test]
+async fn native_mcp_app_does_not_attach_nested_calls_to_the_code_mode_call() {
+    let (name, _, table) = app_server();
+    let world = World::new(ToolFixture::new(), vec![(name, json!({}), table)]);
+    let tools = world.start(None);
+    let settlement = world.code("return await tools.demo.show({})").await;
+    assert!(settlement.error.is_none(), "{:?}", settlement.result);
+    assert_eq!(world.calls("demo"), 1);
+    assert!(world.app(&world.fixture.context()).await.is_none());
+    assert!(world.requests("demo", "resources/read").is_empty());
+    world.finish(tools).await;
+}
+
 impl World {
     fn new(fixture: ToolFixture, servers: Vec<(&str, Value, Value)>) -> Self {
         let mut configured = serde_json::Map::new();
@@ -119,12 +373,21 @@ impl World {
         name: &str,
         input: Value,
     ) -> ycoding_core::tools::materialization::Settlement {
+        self.invoke_as(name, input, self.fixture.context()).await
+    }
+
+    async fn invoke_as(
+        &self,
+        name: &str,
+        input: Value,
+        context: ycoding_core::tools::context::Context,
+    ) -> ycoding_core::tools::materialization::Settlement {
         tokio::time::timeout(
             WAIT,
             self.registry.materialize(&[]).invoke(
                 name,
                 parse_json(&input.to_string()).unwrap(),
-                self.fixture.context(),
+                context,
             ),
         )
         .await
@@ -138,11 +401,50 @@ impl World {
     }
 
     fn calls(&self, server: &str) -> usize {
+        self.requests(server, "tools/call").len()
+    }
+
+    fn requests(&self, server: &str, method: &str) -> Vec<Value> {
         fs::read_to_string(self.fixture.root.join(format!("{server}.log")))
             .unwrap_or_default()
             .lines()
-            .filter(|line| serde_json::from_str::<Value>(line).unwrap()["method"] == "tools/call")
-            .count()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|line| line["method"] == method)
+            .map(|mut line| line["params"].take())
+            .collect()
+    }
+
+    fn edit_table(&self, server: &str, change: impl FnOnce(&mut Value)) {
+        let path = self.fixture.root.join(format!("{server}.json"));
+        let mut table = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        change(&mut table);
+        let next = path.with_extension("next");
+        fs::write(&next, table.to_string()).unwrap();
+        fs::rename(next, path).unwrap();
+    }
+
+    async fn until_requests(&self, method: &str, count: usize) {
+        tokio::time::timeout(WAIT, async {
+            while self.requests("demo", method).len() < count {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn app(
+        &self,
+        context: &ycoding_core::tools::context::Context,
+    ) -> Option<ycoding_core::resources::mcp::AppView> {
+        tokio::time::timeout(
+            WAIT,
+            self.service
+                .app_view(&context.session_id, &context.message_id, &context.call_id),
+        )
+        .await
+        .unwrap()
+        .unwrap()
     }
 
     async fn finish(self, tools: McpTools) {
@@ -628,17 +930,15 @@ fn background() -> (
 }
 
 fn hosted_jobs() -> (&'static str, Value, Value) {
-    (
-        "jobs",
-        json!({"codemode": false}),
-        server_tools(
-            json!([tool("run_job", "Run a job"), tool("fail_job", "Fail a job")]),
-            json!({
-                "run_job": {"delay": 0.6, "result": text("done")},
-                "fail_job": {"result": {"content": [{"type": "text", "text": " bad "}], "isError": true}},
-            }),
-        ),
-    )
+    let (_, config, mut table) = app_server();
+    let mut run = tool("run_job", "Run a job");
+    run["_meta"] = json!({"ui": {"resourceUri": APP_URI}});
+    table["responses"]["tools/list"][""]["tools"] = json!([run, tool("fail_job", "Fail a job")]);
+    table["calls"] = json!({
+        "run_job": {"delay": 0.6, "result": text("done")},
+        "fail_job": {"result": {"content": [{"type": "text", "text": " bad "}], "isError": true}},
+    });
+    ("jobs", config, table)
 }
 
 const MOVED: &str = "The MCP tool was moved to the background.";
@@ -658,6 +958,9 @@ async fn hosted_foreground_calls_run_through_a_job_and_return_the_result() {
     assert_eq!(info.title.as_deref(), Some("run_job (x)"));
     assert_eq!(info.output.as_deref(), Some("done"));
     assert_eq!(info.metadata.unwrap()["sessionID"], json!("ses_tool"));
+    let view = world.app(&world.fixture.context()).await.unwrap();
+    assert_eq!(view.output, text("done"));
+    assert_eq!(view.input, json!({"x": 1}));
     assert!(received.try_recv().is_err());
     world.finish(tools).await;
 }
@@ -690,6 +993,8 @@ async fn a_running_foreground_call_moves_to_the_background_and_delivers_the_comp
         "<mcp id=\"call_tool\" state=\"completed\" tool=\"jobs_run_job\">\ndone\n</mcp>"
     );
     assert_eq!(world.calls("jobs"), 1);
+    assert!(world.app(&world.fixture.context()).await.is_none());
+    assert!(world.requests("jobs", "resources/read").is_empty());
     world.finish(tools).await;
 }
 
@@ -720,6 +1025,8 @@ async fn cancelling_a_foreground_call_cancels_its_job() {
         ))
     ));
     assert_eq!(jobs.get("call_tool").unwrap().status, Status::Cancelled);
+    assert!(world.app(&world.fixture.context()).await.is_none());
+    assert!(world.requests("jobs", "resources/read").is_empty());
     assert!(received.try_recv().is_err());
     world.finish(tools).await;
 }

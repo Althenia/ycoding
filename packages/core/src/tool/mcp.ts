@@ -179,6 +179,9 @@ export const layer = Layer.effectDiscard(
                           .join("\n")
                           .trim() || "MCP tool returned an error",
                     })
+                  if (context.invocationID === undefined || context.invocationID === context.callID) {
+                    yield* mcp.rememberApp(context, result)
+                  }
                   const content = result.content.map((part) =>
                     part.type === "text"
                       ? { type: "text" as const, text: part.text }

@@ -42,6 +42,7 @@ import { FileChangeCard } from "./file-change-card"
 import { MessageDelete } from "./message-delete"
 import { ImagePreview, UserImage } from "./image"
 import { LoadingPlaceholder } from "./loading"
+import { McpAppResult } from "./mcp-app-result"
 import "./transcript.css"
 
 type ToolPartView = Extract<AssistantPart, { kind: "tool" }>
@@ -173,7 +174,9 @@ function ShellOutputSection(props: {
   )
 }
 
-function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
+function ToolPart(props: { readonly part: () => ToolPartView; readonly messageID: string }): JSX.Element {
+  const remote = useRemote()
+  const appScope = () => JSON.stringify([remote.state().activeDeviceID, remote.state().generation, remote.state().activeSessionID])
   const [touched, setTouched] = createSignal(false)
   const [manual, setManual] = createSignal(false)
   const bodyID = createUniqueId()
@@ -227,6 +230,11 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
       </header>
       <Collapsible open={expanded()} id={bodyID} class="transcript-tool__body">
         <div class="transcript-tool__content">
+        <Show when={expanded() && props.part().status === "completed" && remote.state().transport.kind === "open" && remote.state().activeSessionID}>
+          <McpAppResult scope={appScope()} text={output().content.flatMap((block) => block.kind === "text" ? [block.text] : []).join("\n")}
+            load={() => remote.store.loadMcpApp(remote.state().activeSessionID!, props.messageID, props.part().callID)}
+            onOpen={(app) => window.dispatchEvent(new CustomEvent("ycoding:companion-app", { detail: app }))} />
+        </Show>
         <Show when={props.part().input !== undefined || props.part().inputText !== undefined}>
           <pre class="output" tabindex="0">
             <code>{props.part().inputText ?? JSON.stringify(props.part().input, null, 2)}</code>
@@ -271,7 +279,7 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
  * holds, so a part that is replaced keeps its row — and with it an open tool body, an
  * open reasoning block, and the focus of the control that was used to open it.
  */
-function AssistantParts(props: { readonly parts: () => readonly AssistantPart[] }): JSX.Element {
+function AssistantParts(props: { readonly parts: () => readonly AssistantPart[]; readonly messageID: string }): JSX.Element {
   const groups = createMemo(() => props.parts().reduce<{ readonly key: string; readonly parts: readonly AssistantPart[] }[]>((result, part) => {
     if (!transcriptPartVisible(part)) return result
     const previous = result.at(-1)
@@ -287,13 +295,13 @@ function AssistantParts(props: { readonly parts: () => readonly AssistantPart[] 
   return (
     <div class="transcript-message__parts">
       <For each={keys()}>
-        {(key) => <PartView parts={() => group(key).parts} />}
+        {(key) => <PartView parts={() => group(key).parts} messageID={props.messageID} />}
       </For>
     </div>
   )
 }
 
-function PartView(props: { readonly parts: () => readonly AssistantPart[] }): JSX.Element {
+function PartView(props: { readonly parts: () => readonly AssistantPart[]; readonly messageID: string }): JSX.Element {
   const part = () => props.parts()[0]!
   const reasoning = () => props.parts().map((item) => partText(item)).join("\n\n")
   const kind = () => part().kind
@@ -329,7 +337,7 @@ function PartView(props: { readonly parts: () => readonly AssistantPart[] }): JS
             <FormAssessment value={toolOf(part())?.structured?.assessment} source={toolOf(part())?.structured?.source} fieldKey={`q${index}`} grades multiple={multiple()} settled={answered() ? toolOf(part())?.structured?.automatic === true ? "automatic" : "client" : undefined} />
           </section>
         }}</For>
-        <ToolPart part={() => toolOf(part())!} />
+        <ToolPart part={() => toolOf(part())!} messageID={props.messageID} />
       </Show>
     </>
   )
@@ -431,7 +439,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
               return <span class="transcript-file"><Icon name="paperclip" size={16} />{file().name} · {size()}</span>
             }}</For>
           </> : undefined} receiptLabel={receipt()?.label} receiptTitle={receiptTitle()} receipt={receipt() === undefined ? undefined : <SharedDeliveryStatus state={receipt()!.state} label={receipt()!.label} />} sendError={<Show when={promptMutation()}>{(mutation) => <div class="transcript-message__send-error" role={mutation().state === "failed" ? "alert" : "status"}>
-            <span>{mutation().state === "unknown" ? "Outcome unknown" : "Send failed"}: {mutation().detail}</span><button type="button" class="button button--secondary button--small" onClick={() => void remote.store.retryMutation(mutation().id)}>Retry send</button></div>}</Show>} head={<Show when={props.head !== false}><TurnHead><span class="transcript-message__speaker">{agent()}</span><span class="transcript-message__footer">{turnDetail()}</span></TurnHead></Show>} agent={assistantOf(props.message())?.parts.some((part) => part.kind === "text" && part.text.trim() !== "") ? agent() : undefined} body={<AssistantParts parts={() => assistantOf(props.message())?.parts ?? []} />} error={<Show when={!props.continued && assistantOf(props.message())?.error}><p class="transcript-message__error" role="status">{assistantOf(props.message())?.error}</p></Show>} fileChanges={<Show when={!props.continued && showFileChanges()}><FileChangeCard files={fileChanges} /></Show>} shellHeader={<><Icon name="terminal" size={16} /><code>{shellOf(props.message())?.command ?? ""}</code><span class="shell__status">{shellStatus(props.message())}</span></>} shellOutput={<ShellOutputSection shellID={shellOf(props.message())?.shellID ?? ""} output={shellOf(props.message())?.output} fetch={shellOf(props.message())?.outputFetch} status={shellOf(props.message())?.status} />} content={<>
+            <span>{mutation().state === "unknown" ? "Outcome unknown" : "Send failed"}: {mutation().detail}</span><button type="button" class="button button--secondary button--small" onClick={() => void remote.store.retryMutation(mutation().id)}>Retry send</button></div>}</Show>} head={<Show when={props.head !== false}><TurnHead><span class="transcript-message__speaker">{agent()}</span><span class="transcript-message__footer">{turnDetail()}</span></TurnHead></Show>} agent={assistantOf(props.message())?.parts.some((part) => part.kind === "text" && part.text.trim() !== "") ? agent() : undefined} body={<AssistantParts messageID={props.message().id} parts={() => assistantOf(props.message())?.parts ?? []} />} error={<Show when={!props.continued && assistantOf(props.message())?.error}><p class="transcript-message__error" role="status">{assistantOf(props.message())?.error}</p></Show>} fileChanges={<Show when={!props.continued && showFileChanges()}><FileChangeCard files={fileChanges} /></Show>} shellHeader={<><Icon name="terminal" size={16} /><code>{shellOf(props.message())?.command ?? ""}</code><span class="shell__status">{shellStatus(props.message())}</span></>} shellOutput={<ShellOutputSection shellID={shellOf(props.message())?.shellID ?? ""} output={shellOf(props.message())?.output} fetch={shellOf(props.message())?.outputFetch} status={shellStatus(props.message())} />} content={<>
         <Show when={(kind() === "system" || kind() === "synthetic") && !peer()}>
           <Show when={guardrail()} fallback={
           <Show when={parentAnswer(props.message())} fallback={<Show when={syntheticNotice()} fallback={<Show when={observation()} fallback={<div class="transcript-message__system"><Markdown text={fallbackText()} /></div>}>{(summary) => <details class="transcript-message__observation"><summary>{summary()}</summary><pre tabindex="0">{systemText(props.message())}</pre></details>}</Show>}>

@@ -248,10 +248,15 @@ export function SharedSessionGroupHeading(props: { readonly id: string; readonly
 
 export function SharedSessionGroups<T>(props: { readonly label: string; readonly groups: readonly SharedSessionGroup<T>[]; readonly row: (item: T) => JSX.Element; readonly idPrefix?: string }): JSX.Element {
   const prefix = () => props.idPrefix ?? "session-group"
-  return <div class="session-groups" role="group" aria-label={props.label}><For each={props.groups.filter((group) => group.items.length > 0)}>{(group) => <section class="session-group" aria-labelledby={`${prefix()}-${group.id}`}>
-    <SharedSessionGroupHeading id={`${prefix()}-${group.id}`} label={group.label} count={group.items.length} icon={group.icon} hue={group.hue} />
-    <ul class="session-group__rows"><For each={group.items}>{(entry) => <li>{props.row(entry)}</li>}</For></ul>
-  </section>}</For></div>
+  const groups = createMemo(() => new Map(props.groups.filter((group) => group.items.length > 0).map((group) => [group.id, group] as const)))
+  return <div class="session-groups" role="group" aria-label={props.label}><For each={[...groups().keys()]}>{(key) => {
+    const group = () => groups().get(key)
+    const id = () => `${prefix()}-${encodeURIComponent(key)}`
+    return <section class="session-group" aria-labelledby={id()}>
+      <SharedSessionGroupHeading id={id()} label={group()?.label ?? ""} count={group()?.items.length ?? 0} icon={group()?.icon} hue={group()?.hue} />
+      <ul class="session-group__rows"><For each={group()?.items}>{(entry) => <li>{props.row(entry)}</li>}</For></ul>
+    </section>
+  }}</For></div>
 }
 
 export function SharedCompanionSurface(props: { readonly active: CompanionTab; readonly onSelect: (tab: CompanionTab) => void; readonly headerActions?: JSX.Element; readonly policyActions?: JSX.Element; readonly onCloseTab?: (id: CompanionTab) => void; readonly onAddTab?: () => void; readonly beforeTabs?: JSX.Element; readonly activitySubtitle?: JSX.Element; readonly onRefresh?: () => void; readonly activityContent: JSX.Element; readonly runningContent?: JSX.Element; readonly changesContent: JSX.Element; readonly contextContent?: JSX.Element; readonly contextActions?: JSX.Element }): JSX.Element {

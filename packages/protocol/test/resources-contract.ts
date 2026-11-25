@@ -86,6 +86,7 @@ export const resourceIDs = {
   "dots.resume": 2081,
   "dots.thread.requests": 2082,
   "dots.thread.respond": 2083,
+  "mcp.app.view": 2084,
 } as const
 
 export type ResourceField = {
@@ -180,6 +181,7 @@ export function resourceSourceIdentity(ast: SchemaAST.AST, hint: string) {
     )
     ?.group.slice(7)
   if (!group) throw new Error(`no source owner: ${hint}`)
+  if (hint.startsWith("mcp_app_view_")) return "packages/protocol/src/groups/mcp.ts#makeMcpGroup"
   return `packages/protocol/src/groups/${group.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}.ts#${group[0].toUpperCase() + group.slice(1)}Group`
 }
 
@@ -268,9 +270,11 @@ export function resourceFieldConstraints(field: ResourceField): Constraints {
     }
   }
   for (const constraint of field.constraints) {
-    if (constraint["~structural"] !== true) continue
     const meta = constraint.meta
     if (typeof meta !== "object" || meta === null) continue
+    if (field.type === "LosslessString" && "utf8BytesMax" in meta && typeof meta.utf8BytesMax === "number")
+      bounds.utf8BytesMax = meta.utf8BytesMax
+    if (constraint["~structural"] !== true) continue
     const min = "minLength" in meta && typeof meta.minLength === "number" ? meta.minLength : undefined
     const max = "maxLength" in meta && typeof meta.maxLength === "number" ? meta.maxLength : undefined
     const item = field.itemChecks?.includes(constraint)
@@ -298,6 +302,10 @@ export function fieldOption(field: ResourceField) {
   return entries.length ? ` [(ycoding.v5.constraints) = { ${entries.join(" ")} }]` : ""
 }
 
+const resourceScope = (name: string) => name === "mcp.app.view" ? "SESSION"
+  : ["dots.get", "dots.set", "dots.attach", "dots.detach", "dots.remove", "usage.dashboard", "usage.get", "usage.report", "incident.report", "incident.recent", "project.list", "project.inventory", "project.forget"].includes(name) ? "MACHINE"
+  : "LOCATION"
+
 export function resourceProto(sharedFile = false, allocation: WireAllocation = wireAllocation) {
   const contract = resourceContract(allocation)
   const shared = resourceSharedSet()
@@ -305,7 +313,7 @@ export function resourceProto(sharedFile = false, allocation: WireAllocation = w
     (
       'syntax = "proto2";\npackage ycoding.v5;\nimport "ycoding/v5/foundation.proto";\nimport "ycoding/v5/operations.proto";\n' +
       (sharedFile ? "" : 'import "ycoding/v5/shared.proto";\n') +
-      (sharedFile ? "\n" : "\noption (ycoding.v5.operation_range) = { first: 2000 last: 2083 };\n\n") +
+      (sharedFile ? "\n" : "\noption (ycoding.v5.operation_range) = { first: 2000 last: 2084 };\n\n") +
       Array.from(contract.enums)
         .filter(([name]) => shared.has(name) === sharedFile)
         .map(
@@ -331,7 +339,7 @@ export function resourceProto(sharedFile = false, allocation: WireAllocation = w
                 .filter((operation) => operation.group === group)
                 .map(
                   (operation) =>
-                    `  rpc ${operation.rpc}(${operation.request}) returns (${operation.result}) {\n    option (ycoding.v5.operation) = {\n      operation_id: ${operation.id}\n      diagnostic_name: ${JSON.stringify(operation.name)}\n${operation.errors.map((error) => `      error_types: "ycoding.v5.${error}"`).join("\n")}\n      roles: LOCAL_CLIENT\n${connectorRoles(operation.name)}      scope: ${["dots.get", "dots.set", "dots.attach", "dots.detach", "dots.remove", "usage.dashboard", "usage.get", "usage.report", "incident.report", "incident.recent", "project.list", "project.inventory", "project.forget"].includes(operation.name) ? "MACHINE" : "LOCATION"}\n      mutation: ${operation.method === "GET" || operation.name === "usage.dashboard" ? "READ" : "MUTATION"}\n      settlement: COMPLETED\n      paging: ${operation.name === "usage.report" || operation.name === "incident.report" ? "OFFSET" : operation.name === "project.inventory" ? "CURSOR" : "UNPAGED"}\n      streaming: TYPED_BULK\n      sensitivity: ${["agent.list", "model.list", "model.default", "provider.list", "provider.get", "integration.connect.key", "integration.oauth.connect", "integration.oauth.complete"].includes(operation.name) ? "SECRET" : "PRIVATE"}\n    };\n  }`,
+                    `  rpc ${operation.rpc}(${operation.request}) returns (${operation.result}) {\n    option (ycoding.v5.operation) = {\n      operation_id: ${operation.id}\n      diagnostic_name: ${JSON.stringify(operation.name)}\n${operation.errors.map((error) => `      error_types: "ycoding.v5.${error}"`).join("\n")}\n      roles: LOCAL_CLIENT\n${connectorRoles(operation.name)}      scope: ${resourceScope(operation.name)}\n      mutation: ${operation.method === "GET" || operation.name === "usage.dashboard" ? "READ" : "MUTATION"}\n      settlement: COMPLETED\n      paging: ${operation.name === "usage.report" || operation.name === "incident.report" ? "OFFSET" : operation.name === "project.inventory" ? "CURSOR" : "UNPAGED"}\n      streaming: TYPED_BULK\n      sensitivity: ${["agent.list", "model.list", "model.default", "provider.list", "provider.get", "integration.connect.key", "integration.oauth.connect", "integration.oauth.complete"].includes(operation.name) ? "SECRET" : "PRIVATE"}\n    };\n  }`,
                 )
                 .join("\n")}\n}`,
           ).join("\n\n")) +

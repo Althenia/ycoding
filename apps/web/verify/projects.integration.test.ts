@@ -71,6 +71,34 @@ async function disclosure(page: Page, name: string, open: boolean) {
 }
 
 describe("Projects", () => {
+  test("Swarm Board rereads for both versions of the authorized Master Session event", async () => {
+    const page = await open()
+    try {
+      await openProject(page)
+      await click(page, "Expand project coordination")
+      await page.evaluate(`document.querySelector('[aria-label="Swarm Board"] summary').click()`)
+      const board = `document.querySelector('[aria-label="Swarm Board"] .swarm-board')`
+      await until(page, `${board}?.textContent.includes('Release task 0')`)
+      expect(await page.evaluate(`window.remoteBoardUpdate('ses_tests')`)).toBe(false)
+      expect(await page.evaluate(`window.remoteBoardUpdate('ses_lead')`)).toBe(true)
+      await until(page, `${board}?.textContent.includes('Release task 1')`)
+      expect(await page.evaluate(`window.remoteBoardUpdate('ses_lead', 'ses_lead')`)).toBe(true)
+      await until(page, `${board}?.textContent.includes('Release task 2')`)
+      expect(await page.evaluate(`window.remoteOperationReport().operations['coordination.board']`)).toBe(3)
+    } finally { await page.close() }
+  })
+
+  test("the rail uses Project identity and retains the selected Master through refresh", async () => {
+    const page = await open()
+    try {
+      await openProject(page)
+      await until(page, `document.querySelector('.session-list__group')?.textContent.includes('Release train (cgrp_release)') && document.querySelector('[data-session-id="ses_lead"][aria-pressed="true"]')`)
+      await page.evaluate(`document.querySelector('.project-heading__refresh').click()`)
+      await until(page, `document.querySelector('[data-session-id="ses_lead"][aria-pressed="true"]') && document.querySelector('.project-context')?.textContent.includes('Master of Release train')`)
+      expect(await page.evaluate(`!!document.querySelector('[data-session-id="ses_lead"][aria-pressed="true"]') && [...document.querySelectorAll('.session-list__group')].some(group => group.textContent.includes('Release train (cgrp_release)'))`, decodeBoolean)).toBe(true)
+    } finally { await page.close() }
+  })
+
   test("Project identity collapse grows the existing transcript", async () => {
     const page = await open()
     try {

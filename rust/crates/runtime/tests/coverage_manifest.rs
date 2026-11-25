@@ -64,7 +64,7 @@ fn allocations() -> Vec<(String, String)> {
 
 #[test]
 fn test_057_every_descriptor_member_has_exactly_one_coverage_class() {
-    assert_eq!(OPERATIONS.len(), 269);
+    assert_eq!(OPERATIONS.len(), 271);
     let mut ids = HashSet::new();
     let mut names = HashSet::new();
     let mut classes: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
@@ -103,7 +103,7 @@ fn test_057_every_descriptor_member_has_exactly_one_coverage_class() {
             .push(&operation.diagnostic_name);
     }
     assert_eq!(classes["local"].len(), 164);
-    assert_eq!(classes["connector"].len(), 101);
+    assert_eq!(classes["connector"].len(), 103);
     assert!(!classes.contains_key("relay-only"));
     let mut notices = classes["notice"].clone();
     notices.sort();
@@ -129,12 +129,12 @@ fn test_057_every_descriptor_member_has_exactly_one_coverage_class() {
 #[test]
 fn test_057_wire_connector_allocations_cover_the_remote_descriptor_set() {
     let allocations = allocations();
-    assert_eq!(allocations.len(), 109);
+    assert_eq!(allocations.len(), 111);
     let sources: BTreeSet<&str> = allocations
         .iter()
         .map(|(source, _)| source.as_str())
         .collect();
-    assert_eq!(sources.len(), 109, "every source name is allocated once");
+    assert_eq!(sources.len(), 111, "every source name is allocated once");
     let diagnostics: BTreeSet<&str> = allocations.iter().map(|(_, name)| name.as_str()).collect();
     let remote: BTreeSet<&str> = OPERATIONS
         .iter()
@@ -188,7 +188,7 @@ fn test_057_wire_connector_allocations_cover_the_remote_descriptor_set() {
         sources,
         "no baseline source operation may be dropped from the allocation table"
     );
-    assert_eq!(inventory_sources.len(), 109);
+    assert_eq!(inventory_sources.len(), 111);
 }
 
 #[test]

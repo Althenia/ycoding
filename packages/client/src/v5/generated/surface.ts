@@ -79,6 +79,7 @@ import type {
   KeepAwakeSetInput,
   LocationGetInput,
   McpAddInput,
+  McpAppViewInput,
   McpConnectInput,
   McpDisconnectInput,
   McpListInput,
@@ -831,6 +832,11 @@ export const methodCoverage = [
     method: "mcp.resource.catalog",
     operation: "mcp.resource.catalog",
     operationID: 2041,
+  },
+  {
+    method: "mcp.app.view",
+    operation: "mcp.app.view",
+    operationID: 2084,
   },
   {
     method: "credential.update",
@@ -2535,6 +2541,18 @@ export function bind(transport: LocalTransport) {
           transport.call<Awaited<ReturnType<Client["mcp"]["resource"]["catalog"]>>>(
             { method: "mcp.resource.catalog", operationID: 2041, resultPath: [], empty: false },
             { query: { location: input?.["location"] } },
+            input,
+            requestOptions,
+          ),
+      },
+      app: {
+        view: (input: McpAppViewInput, requestOptions?: RequestOptions) =>
+          transport.call<Awaited<ReturnType<Client["mcp"]["app"]["view"]>>>(
+            { method: "mcp.app.view", operationID: 2084, resultPath: ["data"], empty: false },
+            {
+              params: { sessionID: input["sessionID"] },
+              query: { messageID: input["messageID"], callID: input["callID"] },
+            },
             input,
             requestOptions,
           ),

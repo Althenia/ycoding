@@ -19,6 +19,7 @@ import {
 import type { CoordinationChange, CoordinationOperation } from "../queries"
 import { moveRadio } from "./settings"
 import { DotTrail } from "./dot-trail"
+import { SwarmBoard, swarmBoardView } from "./swarm-board"
 import "./projects.css"
 
 type Notice = { readonly tone: "danger" | "attention" | "success"; readonly text: string }
@@ -247,6 +248,8 @@ export function ProjectPanel(props: { readonly data: ProjectsData; readonly proj
   const counts = createMemo(() => liveCounts(props.project))
   const participants = createMemo(() => new Map([props.project.master, ...props.project.members].map((entry) => [entry.sessionID, entry])))
   const [expanded, setExpanded] = createSignal<HTMLButtonElement>()
+  const [boardOpen, setBoardOpen] = createSignal(false)
+  const board = createRemoteQuery(data.remote.store.queryClient, () => data.remote.queries.swarmBoard(data.remote.scope(), data.connected() && !!expanded() && boardOpen(), props.project.master.sessionID, props.project.id))
   const [selected, setSelected] = createSignal<string>()
   const inspected = () => participants().get(selected() ?? "")
   let memberTrigger: HTMLButtonElement | undefined
@@ -283,6 +286,11 @@ export function ProjectPanel(props: { readonly data: ProjectsData; readonly proj
     <ProjectFreshness data={data} /></div>
   </section>
     <Show when={expanded()}>{(trigger) => <Modal class="overlay--team-overview overlay--project-coordination" label="Project coordination" returnFocus={trigger()} onClose={() => setExpanded(undefined)} header={<div class="project-heading"><h2>{props.project.name}</h2><ProjectStatus project={props.project} /><ProjectFreshness data={data} /></div>}>
+      <details aria-label="Swarm Board" onToggle={(event) => setBoardOpen(event.currentTarget.open)}><summary>Swarm Board</summary><Show when={boardOpen()}>
+        <Show when={board().isPending}><p role="status">Reading Swarm Board…</p></Show>
+        <Show when={board().isError}><p role="alert">{board().error?.message ?? "Swarm Board could not be read."}</p><button type="button" class="button button--secondary button--small" onClick={() => void board().refetch()}>Refresh Board</button></Show>
+        <Show when={!board().isError ? board().data : undefined}>{(value) => <SwarmBoard view={() => swarmBoardView(value())} onOpenSession={(id) => { setExpanded(undefined); props.onManage?.(); data.open(id) }} />}</Show>
+      </Show></details>
       <div class="project-coordination" classList={{ "project-coordination--inspecting": inspected() !== undefined }}>
         <section class="project-coordination__master" aria-label="Project master"><span class="project-badge project-badge--master">Master</span><h3>{props.project.master.title}</h3><LiveState participant={props.project.master} /><p class="project-meta">{props.project.master.directory}</p><Meter project={props.project} /><p class="field__hint">The master owns this Project. Members retain their own Sessions and histories.</p></section>
         <section class="project-coordination__members" aria-label="Project member sessions"><div class="project-pagehead"><h3>Member sessions</h3><span class="project-meta">{sessionsLabel(props.project)}</span></div>

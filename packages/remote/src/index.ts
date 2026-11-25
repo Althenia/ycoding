@@ -37,6 +37,7 @@ export const remoteOperations = [
   "session.interaction.preview",
   "session.interaction.stop",
   "session.interaction.resume",
+  "mcp.app.view",
   "session.message.stream",
   "session.todo.list",
   "session.subagent.list",
@@ -138,6 +139,7 @@ export const remoteSessionOperations = [
   "session.interaction.preview",
   "session.interaction.stop",
   "session.interaction.resume",
+  "mcp.app.view",
   "session.message.stream",
   "session.todo.list",
   "session.subagent.list",
@@ -321,6 +323,7 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "session.interaction.preview": "read",
   "session.interaction.stop": "mutation",
   "session.interaction.resume": "mutation",
+  "mcp.app.view": "read",
   "session.message.stream": "read",
   "session.todo.list": "read",
   "session.subagent.list": "read",
@@ -404,7 +407,7 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
 }
 
 export type RemoteLatencySample =
-  | { readonly kind: "request"; readonly at: string; readonly operation: Exclude<RemoteOperation, "machine.latency.append" | "machine.latency.list" | "machine.telemetry.consent.get" | "machine.telemetry.consent.set">; readonly outcome: "ok" | "failed" | "unknown" | "unavailable";
+  | { readonly kind: "request"; readonly at: string; readonly operation: Exclude<RemoteOperation, "machine.latency.append" | "machine.latency.list" | "machine.telemetry.consent.get" | "machine.telemetry.consent.set" | "mcp.app.view">; readonly outcome: "ok" | "failed" | "unknown" | "unavailable";
     readonly reason?: "not-connected" | "in-flight-limit" | "request-limit" | "cancelled"; readonly queueMs: number; readonly settlementMs?: number; readonly totalMs: number }
   | { readonly kind: "long-task"; readonly at: string; readonly durationMs: number }
   | { readonly kind: "client"; readonly at: string; readonly surface: "web"; readonly metric: "prompt.admit" | "stream.delay" | "transcript.load"; readonly durationMs: number }
@@ -992,6 +995,9 @@ function validUsageReportInput(input: unknown): boolean {
 }
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation === "mcp.app.view") return isRecord(input) && Object.keys(input).length === 2 &&
+    typeof input.messageID === "string" && input.messageID.length <= 128 && /^msg_[A-Za-z0-9_-]+$/.test(input.messageID) &&
+    typeof input.callID === "string" && input.callID.length >= 1 && input.callID.length <= 256 && !/[\u0000-\u001f\u007f]/.test(input.callID)
   if (operation === "session.interaction.status") return input === undefined
   if (operation === "session.interaction.preview" || operation === "session.interaction.stop" || operation === "session.interaction.resume")
     return isRecord(input) && Object.keys(input).length === 1 && isInteractionGeneration(input.generation)
@@ -1219,6 +1225,7 @@ export function isRemoteLatencySample(value: unknown): value is RemoteLatencySam
   if (value.kind === "client") return Object.keys(value).every((key) => key === "kind" || key === "at" || key === "surface" || key === "metric" || key === "durationMs") &&
     value.surface === "web" && ["prompt.admit", "stream.delay", "transcript.load"].includes(value.metric as string) && duration(value.durationMs)
   if (value.kind !== "request" || typeof value.operation !== "string" || !isOperation(value.operation) ||
+    value.operation === "mcp.app.view" ||
     value.operation === "machine.latency.append" || value.operation === "machine.latency.list" ||
     value.operation === "machine.telemetry.consent.get" || value.operation === "machine.telemetry.consent.set" ||
     (typeof value.outcome !== "string" || !["ok", "failed", "unknown", "unavailable"].includes(value.outcome)) ||

@@ -31,7 +31,7 @@ import { ReferenceGroup } from "./groups/reference.js"
 import { Authorization } from "./middleware/authorization.js"
 import { LocationGroup } from "./groups/location.js"
 import { IntegrationGroup } from "./groups/integration.js"
-import { McpGroup } from "./groups/mcp.js"
+import { makeMcpGroup } from "./groups/mcp.js"
 import { ConfigGroup } from "./groups/config.js"
 import { CredentialGroup } from "./groups/credential.js"
 import { makeProjectGroup } from "./groups/project.js"
@@ -52,7 +52,6 @@ type LocationGroups<LocationId extends HttpApiMiddleware.AnyId> =
   | HttpApiGroup.AddMiddleware<typeof GenerateGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof ProviderUsageGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof IntegrationGroup, LocationId>
-  | HttpApiGroup.AddMiddleware<typeof McpGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof CredentialGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof FileSystemGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof CommandGroup, LocationId>
@@ -98,6 +97,7 @@ type MixedMiddlewareGroups<
   PermissionLocationService,
 > =
   | ReturnType<typeof makePermissionGroup<LocationId, LocationService, PermissionLocationId, PermissionLocationService>>
+  | ReturnType<typeof makeMcpGroup<LocationId, LocationService, SessionLocationId, SessionLocationService>>
   | ReturnType<typeof makeQuestionGroup<LocationId, LocationService, SessionLocationId, SessionLocationService>>
   | ReturnType<typeof makeIncidentGroup<LocationId, LocationService>>
   | ReturnType<typeof makeProjectGroup<LocationId, LocationService>>
@@ -217,7 +217,7 @@ const makeApiFromGroup = <
     .add(makeProviderGroup(locationMiddleware, catalogLocationMiddleware))
     .add(ProviderUsageGroup.middleware(locationMiddleware))
     .add(IntegrationGroup.middleware(locationMiddleware))
-    .add(McpGroup.middleware(locationMiddleware))
+    .add(makeMcpGroup(locationMiddleware, sessionLocationMiddleware))
     .add(CredentialGroup.middleware(locationMiddleware))
     .add(makeProjectGroup(locationMiddleware))
     .add(makeFormGroup(locationMiddleware, formLocationMiddleware))

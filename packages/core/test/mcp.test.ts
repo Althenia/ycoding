@@ -288,6 +288,7 @@ test("offline MCP reconnects release replaced, failed and interrupted clients wi
             inputSchema: { type: "object" as const },
             outputSchema: undefined,
             metadata: undefined,
+            appResourceUri: undefined,
           }))),
         rawTools: unused,
         skillEntries: unused,

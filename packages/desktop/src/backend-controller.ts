@@ -801,6 +801,26 @@ export class BackendController {
     return this.use("Interaction preview could not be read.", (api, signal) => api.sessionInteraction.preview(query, { signal }), { revision })
   }
 
+  async mcpAppView(input: unknown) {
+    checkedObject(input, { sessionID, revision: isRevision, messageID: (value) => typeof value === "string" && /^msg_[A-Za-z0-9_-]{1,124}$/.test(value), callID: (value) => typeof value === "string" && value.length <= 256 && /^[^\u0000-\u001f\u007f]+$/u.test(value) })
+    const { revision, messageID, callID } = input
+    if (!isRevision(revision) || typeof messageID !== "string" || typeof callID !== "string") throw new DesktopError("Choose a current tool result.")
+    const request = { sessionID: session(input.sessionID), messageID, callID }
+    return this.use("The MCP App could not be read.", (api, signal) => api.mcp.app.view(request, { signal }), { revision })
+  }
+
+  async swarmBoard(input: unknown) {
+    checkedObject(input, { groupID, masterSessionID: sessionID, revision: isRevision })
+    const revision = input.revision
+    if (!isRevision(revision)) throw new DesktopError("Choose the current Project.")
+    return this.use("The Swarm Board could not be read.", async (api, signal) => {
+      const board = await api.coordination.board({ groupID: String(input.groupID) }, { signal })
+      if (board.groupID !== input.groupID || !board.nodes.some((node) => node.role === "master" && node.sessionID === input.masterSessionID))
+        throw new DesktopError("The backend returned a Board for a different Project or Master Session.")
+      return board
+    }, { revision })
+  }
+
   async interactionStop(input: unknown) {
     checkedObject(input, { sessionID, revision: isRevision, generation: interactionGeneration })
     const { revision, generation } = input

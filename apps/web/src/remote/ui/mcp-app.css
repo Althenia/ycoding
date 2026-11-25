@@ -1,0 +1,11 @@
+.mcp-app-frame {
+  display: block;
+  inline-size: 100%;
+  block-size: 16rem;
+  border: 0;
+  background: var(--yc-plane-canvas);
+}
+
+.mcp-app-frame[hidden] {
+  display: none;
+}

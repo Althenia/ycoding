@@ -215,6 +215,22 @@ export function railGroups(rows: readonly SessionItem[], state: Activity, snapsh
   return { groups: railGroupOrder.flatMap((key) => groups[key].length ? [{ key, label: railGroupLabels[key], rows: groups[key].sort(newest) }] : []), archived }
 }
 
+export function railGroupPartitions(groups: ReturnType<typeof railGroups>["groups"], backend: readonly [number, number], projectOf: (id: string) => { readonly id: string; readonly name: string } | undefined) {
+  const partitions = new Map<string, { id: string; key: GroupKey; label: string; rows: SessionItem[] }>()
+  for (const group of groups) for (const row of group.rows) {
+    const project = projectOf(row.id)
+    const id = JSON.stringify([backend, group.key, project?.id, row.scope, row.location.workspaceID, row.location.directory])
+    const partition = partitions.get(id)
+    if (partition) partition.rows.push(row)
+    else {
+      const environment = row.scope === "bound" ? "Bound" : row.scope === "standalone" ? "Standalone" : "Environment unreported"
+      const label = `${group.label} · ${project ? `${project.name} (${project.id})` : "Project unreported"} · ${environment} · ${row.location.directory}`
+      partitions.set(id, { id, key: group.key, label, rows: [row] })
+    }
+  }
+  return [...partitions.values()]
+}
+
 export function visibleModels(models: readonly ModelOption[], current: ModelSelection | null | undefined): ModelOption[] {
   return models.filter((model) => model.status !== "deprecated" || (!!current && model.id === current.id && model.providerID === current.providerID))
 }

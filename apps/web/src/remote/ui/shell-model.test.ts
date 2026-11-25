@@ -56,14 +56,16 @@ describe("rail Session filters and workspace groups", () => {
     expect(sessionFilterCounts([], undefined, "waiting")).toEqual({ waiting: 0 })
   })
 
-  test("groups Sessions under their workspace folder in first-seen order and keeps row order", () => {
+  test("groups by reported Project identity, live state and environment rather than folder labels", () => {
     const groups = groupRailSessions([
-      session({ id: "a", directory: "/work/ycoding" }),
-      session({ id: "b", directory: "/work/relay/" }),
-      session({ id: "c", directory: "/work/ycoding" }),
-      session({ id: "d", projectID: "prj_only" }),
-    ])
-    expect(groups.map((group) => [group.label, group.sessions.map((item) => item.id)])).toEqual([["ycoding", ["a", "c"]], ["relay", ["b"]], ["prj_only", ["d"]]])
+      session({ id: "a", directory: "/one/same", running: true, scope: "bound" }),
+      session({ id: "b", directory: "/two/same", running: true, scope: "bound" }),
+      session({ id: "c", directory: "/one/same", attention: true, scope: "bound" }),
+      session({ id: "d", directory: "/one/same", running: true, scope: "standalone" }),
+    ], undefined, (id) => id === "a" || id === "c" || id === "d" ? { id: "project-1", name: "Same" } : { id: "project-2", name: "Same" }, "device-1")
+    expect(groups.map((group) => group.sessions.map((item) => item.id))).toEqual([["a"], ["b"], ["c"], ["d"]])
+    expect(new Set(groups.map((group) => group.key)).size).toBe(4)
+    expect(groups.map((group) => group.label)).toEqual(["Same (project-1) · Running · Bound · /one/same", "Same (project-2) · Running · Bound · /two/same", "Same (project-1) · Waiting · Bound · /one/same", "Same (project-1) · Running · Standalone · /one/same"])
     expect(groupRailSessions([])).toEqual([])
   })
 })

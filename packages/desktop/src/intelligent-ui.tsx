@@ -1,5 +1,6 @@
 import { createMemo, createSignal, For, Show, type JSX } from "solid-js"
 import { IntelligentUi } from "../../schema/src/intelligent-ui"
+import { Keyed } from "./keyed"
 
 export type TableSortState = { readonly key: string; readonly direction: "asc" | "desc" } | undefined
 
@@ -111,29 +112,29 @@ function TableSection(props: { readonly block: IntelligentUi.TableBlock }): JSX.
         <table class="iui-table">
           <thead>
             <tr>
-              <For each={props.block.columns}>
+              <Keyed each={props.block.columns} by={(column) => column.key}>
                 {(column) => {
-                  const direction = () => (sort()?.key === column.key ? sort()!.direction : undefined)
+                  const direction = () => (sort()?.key === column().key ? sort()!.direction : undefined)
                   const ariaSort = () =>
                     direction() === "asc" ? "ascending" : direction() === "desc" ? "descending" : "none"
                   return (
                     <th
                       scope="col"
                       class="iui-table__th"
-                      data-align={column.align ?? "left"}
-                      aria-sort={column.sortable ? ariaSort() : undefined}
+                      data-align={column().align ?? "left"}
+                      aria-sort={column().sortable ? ariaSort() : undefined}
                     >
                       <Show
-                        when={column.sortable}
-                        fallback={<span class="iui-table__label">{IntelligentUi.escapeDisplayText(column.label)}</span>}
+                        when={column().sortable}
+                        fallback={<span class="iui-table__label">{IntelligentUi.escapeDisplayText(column().label)}</span>}
                       >
                         <button
                           type="button"
                           class="iui-table__sort"
-                          data-sort-key={column.key}
-                          onClick={() => setSort((current) => nextTableSort(current, column.key))}
+                          data-sort-key={column().key}
+                          onClick={() => setSort((current) => nextTableSort(current, column().key))}
                         >
-                          <span>{IntelligentUi.escapeDisplayText(column.label)}</span>
+                          <span>{IntelligentUi.escapeDisplayText(column().label)}</span>
                           <span class="iui-table__sort-indicator" aria-hidden="true">
                             {direction() === "asc" ? "↑" : direction() === "desc" ? "↓" : "↕"}
                           </span>
@@ -142,7 +143,7 @@ function TableSection(props: { readonly block: IntelligentUi.TableBlock }): JSX.
                     </th>
                   )
                 }}
-              </For>
+              </Keyed>
             </tr>
           </thead>
           <tbody>
@@ -186,19 +187,28 @@ function ReadyCard(props: { readonly entry: Extract<IntelligentUi.UiCardEntry, {
         </header>
       </Show>
       <div class="iui-card__blocks">
-        <For each={resolved().blocks}>
-          {(block) => (
-            <>
-              <Show when={block.kind === "metrics" ? block : undefined}>
+        <Keyed each={resolved().blocks} by={(block) => block.id}>
+          {(block) => {
+            const view = createMemo(() => {
+              const value = block()
+              return {
+                metrics: value.kind === "metrics" ? value : undefined,
+                callout: value.kind === "callout" ? value : undefined,
+                table: value.kind === "table" ? value : undefined,
+                chart: value.kind === "chart" ? value : undefined,
+              }
+            })
+            return <>
+              <Show when={view().metrics}>
                 {(metrics) => <MetricsSection block={metrics()} />}
               </Show>
-              <Show when={block.kind === "callout" ? block : undefined}>
+              <Show when={view().callout}>
                 {(callout) => <CalloutSection block={callout()} />}
               </Show>
-              <Show when={block.kind === "table" ? block : undefined}>
+              <Show when={view().table}>
                 {(table) => <TableSection block={table()} />}
               </Show>
-              <Show when={block.kind === "chart" ? block : undefined}>
+              <Show when={view().chart}>
                 {(chart) => (
                   <section class="iui-block iui-callout" data-ui-block="chart-fallback" data-tone="default">
                     <div class="iui-callout__head">
@@ -210,8 +220,8 @@ function ReadyCard(props: { readonly entry: Extract<IntelligentUi.UiCardEntry, {
                 )}
               </Show>
             </>
-          )}
-        </For>
+          }}
+        </Keyed>
       </div>
     </article>
   )
@@ -268,21 +278,29 @@ export function IntelligentUiTurnCards(props: { readonly parts: readonly unknown
   return (
     <Show when={cards().length > 0}>
       <div class="iui-stack">
-        <For each={cards()}>
-          {(entry) => (
-            <>
-              <Show when={entry.status === "ready" ? entry : undefined}>
+        <Keyed each={cards()} by={(entry) => entry.id}>
+          {(entry) => {
+            const view = createMemo(() => {
+              const value = entry()
+              return {
+                ready: value.status === "ready" ? value : undefined,
+                streaming: value.status === "streaming" ? value : undefined,
+                fallback: value.status === "fallback" ? value : undefined,
+              }
+            })
+            return <>
+              <Show when={view().ready}>
                 {(ready) => <ReadyCard entry={ready()} />}
               </Show>
-              <Show when={entry.status === "streaming" ? entry : undefined}>
+              <Show when={view().streaming}>
                 {(streaming) => <StreamingCard entry={streaming()} />}
               </Show>
-              <Show when={entry.status === "fallback" ? entry : undefined}>
+              <Show when={view().fallback}>
                 {(fallback) => <FallbackCard entry={fallback()} />}
               </Show>
             </>
-          )}
-        </For>
+          }}
+        </Keyed>
       </div>
     </Show>
   )

@@ -41,8 +41,8 @@ async function openTeam(width: 390 | 768, theme: "light" | "dark", focusTrigger 
   await page.navigate(`${origin}/verify/remote.html?view=chat&team=two&theme=${theme}`)
   for (let attempt = 0; attempt < 80 && !await page.evaluate(`document.querySelector('[aria-label="Open Team"]')?.getBoundingClientRect().width > 0`); attempt += 1) await Bun.sleep(50)
   await page.evaluate(`(() => { const trigger = document.querySelector('[aria-label="Open Team"]'); if (${focusTrigger}) trigger.focus(); trigger.click() })()`)
-  for (let attempt = 0; attempt < 80 && !await page.evaluate(`document.querySelector('dialog.team-view__sheet[open]') !== null`); attempt += 1) await Bun.sleep(25)
-  expect(await page.evaluate(`document.querySelector('dialog.team-view__sheet[open]') !== null`)).toBe(true)
+  for (let attempt = 0; attempt < 80 && !await page.evaluate(`document.querySelector('#session-companion-panel:not([aria-hidden="true"])') !== null`); attempt += 1) await Bun.sleep(25)
+  expect(await page.evaluate(`document.querySelector('#session-companion-panel:not([aria-hidden="true"])') !== null`)).toBe(true)
   return page
 }
 
@@ -134,23 +134,20 @@ describe("one close control per modal", () => {
     test(`Team ${method} at ${width} in ${theme}`, async () => {
       const page = await openTeam(width, theme)
       try {
-        const report = await closeReport(page, "dialog.team-view__sheet[open]")
-        expect(report.count).toBe(1)
-        expect(report.names).toEqual(["Close Team"])
-        expect(report.inHeader).toBe(true)
-        expect(report.extraTeamClose).toBe(false)
-        expect(report.focused).toBe(true)
-        expect(report.sizes.every((size) => size.width >= report.minimum && size.height >= report.minimum)).toBe(true)
+        expect(await page.evaluate(`document.querySelectorAll('#session-companion-panel .companion__back').length`)).toBe(1)
+        expect(await page.evaluate(`(() => { const button = document.querySelector('.companion__back'), box = button.getBoundingClientRect(), min = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-hit-min')); return box.width >= min && box.height >= min; })()`)).toBe(true)
+        expect(await page.evaluate(`document.querySelector('#session-companion-panel')?.contains(document.activeElement) === true`)).toBe(true)
         await page.pressKey("Tab", "Tab", 9)
-        expect(await page.evaluate(`document.querySelector('dialog.team-view__sheet[open]')?.contains(document.activeElement) === true`)).toBe(true)
-        if (method === "button") await page.evaluate(`document.querySelector('dialog.team-view__sheet .overlay__close').click()`)
+        if (method === "button") await page.evaluate(`document.querySelector('.companion__back').click()`)
         else {
-          await page.evaluate(`document.querySelector('dialog.team-view__sheet .overlay__close').focus()`)
+          await page.evaluate(`document.querySelector('.companion__back').focus()`)
           expect(await page.evaluate(`document.querySelector('[role="tooltip"]')===null`)).toBe(true)
           await page.pressEscape()
         }
-        expect(await page.evaluate(`document.activeElement?.getAttribute('aria-label') === 'Open Team' && document.querySelector('dialog.team-view__sheet[open]') === null`)).toBe(true)
-        expect(await page.evaluate(`getComputedStyle(document.activeElement).getPropertyValue('--yc-focus').trim() === getComputedStyle(document.documentElement).getPropertyValue('--yc-green-graphic').trim()`)).toBe(true)
+        expect(await page.evaluate(`document.activeElement?.getAttribute('aria-label') === 'Open Team' && !document.querySelector('#session-companion-panel:not([aria-hidden="true"])')`)).toBe(true)
+        await page.pressKey("Tab", "Tab", 9)
+        await page.evaluate(`document.querySelector('[aria-label="Open Team"]').focus()`)
+        expect(await page.evaluate(`(() => { const button = document.activeElement, style = getComputedStyle(button), probe = document.createElement('span'); probe.style.color = 'var(--yc-focus)'; button.append(probe); const color = getComputedStyle(probe).color; probe.remove(); return button.matches(':focus-visible') && parseFloat(style.outlineWidth) >= 2 && style.outlineColor === color; })()`)).toBe(true)
       } finally { await page.close() }
     }, 30_000)
   }
@@ -167,7 +164,7 @@ describe("one close control per modal", () => {
       expect(report.sizes.every((size) => size.width >= report.minimum && size.height >= report.minimum)).toBe(true)
       await page.pressEscape()
       expect(await page.evaluate(`document.activeElement?.getAttribute('data-action') === 'cancel' && document.querySelector('dialog[aria-label="Cancel subagent"][open]') === null`)).toBe(true)
-      await page.evaluate(`document.querySelector('dialog.team-view__sheet .overlay__close').focus()`)
+      await page.evaluate(`document.querySelector('.companion__back').focus()`)
       expect(await page.evaluate(`document.querySelector('[role="tooltip"]')===null`)).toBe(true)
       await page.pressEscape()
       expect(await page.evaluate(`document.activeElement?.getAttribute('aria-label') === 'Open Team'`)).toBe(true)
@@ -180,11 +177,11 @@ describe("one close control per modal", () => {
       await page.evaluate(`document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="cancel"]').click()`)
       for (let attempt = 0; attempt < 40 && !await page.evaluate(`document.querySelector('dialog[aria-label="Cancel subagent"][open]') !== null`); attempt += 1) await Bun.sleep(25)
       await page.pressEscape()
-      expect(await page.evaluate(`document.querySelector('dialog.team-view__sheet[open]') !== null && document.querySelector('dialog[aria-label="Cancel subagent"][open]') === null && document.activeElement?.getAttribute('data-action') === 'cancel'`)).toBe(true)
-      await page.evaluate(`document.querySelector('dialog.team-view__sheet .overlay__close').focus()`)
+      expect(await page.evaluate(`document.querySelector('#session-companion-panel:not([aria-hidden="true"])') !== null && document.querySelector('dialog[aria-label="Cancel subagent"][open]') === null && document.activeElement?.getAttribute('data-action') === 'cancel'`)).toBe(true)
+      await page.evaluate(`document.querySelector('.companion__back').focus()`)
       expect(await page.evaluate(`document.querySelector('[role="tooltip"]')===null`)).toBe(true)
       await page.pressEscape()
-      expect(await page.evaluate(`document.querySelector('dialog.team-view__sheet[open]') === null && document.activeElement?.getAttribute('aria-label') === 'Open Team'`)).toBe(true)
+      expect(await page.evaluate(`!document.querySelector('#session-companion-panel:not([aria-hidden="true"])') && document.activeElement?.getAttribute('aria-label') === 'Open Team'`)).toBe(true)
     } finally { await page.close() }
   }, 30_000)
 

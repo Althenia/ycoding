@@ -10,7 +10,9 @@ const era = process.env.MCP_HTTP_ERA === "modern" ? "modern" : "legacy"
 const received: unknown[] = []
 const servers = new Set<Server>()
 const sessions = new Map<string, WebStandardStreamableHTTPServerTransport>()
-const renewal = { refuse: false, held: undefined as PromiseWithResolvers<void> | undefined }
+const appUri = "ui://protocol/view.html"
+let appResponse: "ambiguous" | "sse" | undefined
+const renewal = { refuse: false, expireAppRead: false, held: undefined as PromiseWithResolvers<void> | undefined }
 const elicitations = {
   "empty-elicitation": {
     legacy: { mode: "form" as const, message: "Confirm", requestedSchema: { type: "object" as const, properties: {} } },
@@ -36,6 +38,7 @@ const build = (version: () => string | undefined) => {
     tools: ["protocol", ...Object.keys(elicitations)].map((name) => ({
       name,
       inputSchema: { type: "object" as const, properties: {} },
+      ...(name === "protocol" ? { _meta: { ui: { resourceUri: appUri } } } : {}),
     })),
   }))
   server.setRequestHandler("tools/call", async (request, ctx) => {
@@ -92,6 +95,8 @@ const build = (version: () => string | undefined) => {
       : { resourceTemplates: [{ name: "File", uriTemplate: "docs://{path}" }], nextCursor: "templates-2" },
   )
   server.setRequestHandler("resources/read", (request, ctx) => {
+    if (request.params.uri === appUri)
+      return { contents: [{ uri: appUri, text: "<p>Protocol app</p>", mimeType: "text/html;profile=mcp-app" }] }
     if (era === "modern" && request.params.uri === "docs://ask" && ctx.mcpReq.inputResponses?.elicitation === undefined)
       return inputRequired({ inputRequests: { elicitation: elicitations["empty-elicitation"].modern } })
     return {
@@ -136,10 +141,16 @@ const http = Bun.serve({
   hostname: "127.0.0.1",
   fetch: async (request) => {
     const url = new URL(request.url)
+    if (url.pathname === "/app-response") {
+      const options = (await request.json()) as { kind: "ambiguous" | "sse" }
+      appResponse = options.kind
+      return Response.json({})
+    }
     if (url.pathname === "/received") return Response.json(received)
     if (url.pathname === "/expire") {
-      const options = (await request.json()) as { refuse?: boolean; holdUntilCancelled?: boolean }
-      sessions.clear()
+      const options = (await request.json()) as { refuse?: boolean; holdUntilCancelled?: boolean; expireAppRead?: boolean }
+      renewal.expireAppRead = options.expireAppRead === true
+      if (!renewal.expireAppRead) sessions.clear()
       renewal.refuse = options.refuse === true
       renewal.held = options.holdUntilCancelled ? Promise.withResolvers<void>() : undefined
       return Response.json({})
@@ -153,7 +164,7 @@ const http = Bun.serve({
     const body = (await request
       .clone()
       .json()
-      .catch(() => undefined)) as { method?: string; params?: Record<string, unknown> } | undefined
+      .catch(() => undefined)) as { id?: unknown; method?: string; params?: Record<string, unknown> } | undefined
     if (typeof body?.method === "string") {
       const meta = body.params?._meta as Record<string, unknown> | undefined
       received.push({
@@ -164,6 +175,16 @@ const http = Bun.serve({
         envelope: meta?.[PROTOCOL_VERSION_META_KEY] ?? null,
         params: body.params ?? null,
       })
+    }
+    if (renewal.expireAppRead && body?.method === "resources/read" && body.params?.uri === appUri) {
+      renewal.expireAppRead = false
+      sessions.clear()
+    }
+    if (appResponse && body?.method === "resources/read" && body.params?.uri === appUri) {
+      const kind = appResponse
+      appResponse = undefined
+      const reply = { jsonrpc: "2.0", id: body.id, result: { contents: [{ uri: appUri, text: "<p>Protocol app</p>", mimeType: "text/html;profile=mcp-app", ...(kind === "ambiguous" ? { blob: "PGE+" } : {}) }] } }
+      return kind === "sse" ? new Response(`data: ${JSON.stringify(reply)}\n\n`, { headers: { "Content-Type": "text/event-stream" } }) : Response.json(reply)
     }
     if (body?.method === "notifications/cancelled") renewal.held?.resolve()
     if (process.env.MCP_HTTP_ERA === "unsupported")

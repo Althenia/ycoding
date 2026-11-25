@@ -2,7 +2,7 @@ use crate::{
     job::{BlockInput, BlockResult, Jobs, StartInput, Status},
     process::guardrails::Reservation,
     resources::mcp::{
-        self, Event, Service,
+        self, AppCall, AppTicket, Event, Service,
         client::{Content, Error as ClientError, ToolResult},
     },
     tools::{
@@ -210,8 +210,11 @@ struct Call {
     backgroundable: bool,
 }
 
+type CallResult = Result<(ToolResult, Option<AppCall>), ClientError>;
+
 impl Call {
     async fn run(&self, input: JsonValue, context: Context) -> Result<ToolOutput, Failure> {
+        let ticket = self.service.begin_app_call(&context);
         self.policy
             .assert(
                 &context,
@@ -246,7 +249,7 @@ impl Call {
         };
         if let Some(hosted) = &self.background {
             return self
-                .hosted(hosted, args, background, reservation, &context)
+                .hosted(hosted, args, background, reservation, &context, ticket)
                 .await;
         }
         let release = || {
@@ -255,15 +258,16 @@ impl Call {
             }
         };
         let result = tokio::select! {
-            result = self.service.call_tool(&self.server, &self.tool, Value::Object(args), None) => result,
+            biased;
             () = context.cancellation.cancelled() => {
                 release();
                 return Err(Failure::Cancelled);
-            }
+            },
+            result = self.service.call_tool_for_app(&self.server, &self.tool, Value::Object(args), ticket.is_some()) => result,
         };
         release();
         match result {
-            Ok(result) => output(result),
+            Ok(result) => self.inline(result, &context, ticket).await,
             Err(ClientError::Cancelled) => Err(Failure::Cancelled),
             Err(error) => Err(Failure::message(failure_text(&error))),
         }
@@ -276,9 +280,10 @@ impl Call {
         requested: bool,
         reservation: Option<Reservation>,
         context: &Context,
+        ticket: Option<AppTicket>,
     ) -> Result<ToolOutput, Failure> {
         let id = context.invocation_id().to_utf8().unwrap_or_default();
-        let slot = Arc::new(Mutex::new(None::<Result<ToolResult, ClientError>>));
+        let slot = Arc::new(Mutex::new(None::<CallResult>));
         let title = if args.is_empty() {
             self.tool.clone()
         } else {
@@ -303,6 +308,7 @@ impl Call {
             ),
         );
         let run = {
+            let observe_app = !requested && ticket.is_some();
             let (service, server, tool, slot) = (
                 self.service.clone(),
                 self.server.clone(),
@@ -312,10 +318,10 @@ impl Call {
             Box::pin(async move {
                 let _held = reservation;
                 let result = service
-                    .call_tool(&server, &tool, Value::Object(args), None)
+                    .call_tool_for_app(&server, &tool, Value::Object(args), observe_app)
                     .await;
                 let outcome = match &result {
-                    Ok(result) => Ok(texts(result)),
+                    Ok((result, _)) => Ok(texts(result)),
                     Err(error) => Err(failure_text(error)),
                 };
                 *slot
@@ -339,15 +345,16 @@ impl Call {
             return Ok(self.moved(hosted, context, id));
         }
         let blocked = tokio::select! {
+            biased;
+            () = context.cancellation.cancelled() => {
+                hosted.jobs.cancel(&id).await;
+                return Err(Failure::Cancelled);
+            },
             blocked = hosted.jobs.block(BlockInput {
                 id: id.clone(),
                 session_id: context.session_id.clone(),
                 background_after: None,
             }) => blocked,
-            () = context.cancellation.cancelled() => {
-                hosted.jobs.cancel(&id).await;
-                return Err(Failure::Cancelled);
-            }
         };
         let taken = slot
             .lock()
@@ -361,11 +368,27 @@ impl Call {
                     info.error.unwrap_or_else(|| "MCP tool failed".into()),
                 )),
                 (Status::Cancelled, _) => Err(Failure::message("MCP tool cancelled")),
-                (_, Some(Ok(result))) => output(result),
+                (Status::Completed, Some(Ok(result))) => self.inline(result, context, ticket).await,
                 _ => Err(Failure::message("MCP tool completed without a result")),
             },
             None => Err(Failure::message("MCP tool completed without a result")),
         }
+    }
+
+    async fn inline(
+        &self,
+        (result, app): (ToolResult, Option<AppCall>),
+        context: &Context,
+        ticket: Option<AppTicket>,
+    ) -> Result<ToolOutput, Failure> {
+        let output = output(result)?;
+        if context.cancellation.is_cancelled() {
+            return Err(Failure::Cancelled);
+        }
+        if let (Some(ticket), Some(app)) = (ticket, app) {
+            self.service.publish_app_call(context, ticket, app).await;
+        }
+        Ok(output)
     }
 
     fn moved(&self, hosted: &Background, context: &Context, id: String) -> ToolOutput {

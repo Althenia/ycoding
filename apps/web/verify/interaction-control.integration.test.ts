@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { createServer, type ViteDevServer } from "vite"
-import { launchBrowser, type Page } from "./cdp"
+import { decodeString, launchBrowser, type Page } from "./cdp"
 
 const chrome = process.env.YCODING_WEB_CHROME
 if (!chrome) throw new Error("Set YCODING_WEB_CHROME to the repository-provisioned Chrome for Testing executable.")
@@ -15,6 +15,8 @@ const preview = `[aria-label="Interaction preview"]`
 const stop = `button[aria-label="Stop interaction"]`
 const resume = `button[aria-label="Resume interaction"]`
 const reveal = `button[aria-label="Show interaction preview"]`
+const detach = `button[aria-label="Open picture-in-picture"]`
+const interactionCalls = `(window.requestLog ?? []).filter(call => call.operation.startsWith('session.interaction.'))`
 
 beforeAll(async () => {
   server = await createServer({ root: new URL("..", import.meta.url).pathname, server: { host: "127.0.0.1", port: 0 } })
@@ -96,7 +98,7 @@ test("Interaction status distinguishes pending and stops pending consent once", 
 test("Interaction preview is revealed in Activity, discards the prior generation, and Stop settles once", async () => {
   const page = await open(1440)
   try {
-    await wait(page, `requestLog.some(call => call.operation === 'session.interaction.status')`)
+    await wait(page, `${interactionCalls}.some(call => call.operation === 'session.interaction.status')`)
     await page.evaluate(`interactionFixture.change({ state: 'active', platform: 'chrome', label: 'Synthetic tab one', generation: ${JSON.stringify(first)} })`)
     await wait(page, text(status, "Synthetic tab one"))
     expect(await page.evaluate(`requestLog.filter(call => call.operation === 'session.interaction.preview')`)).toEqual([])
@@ -168,5 +170,139 @@ test("Interaction paused shows plain-word reason with Resume next to Stop", asyn
     await click(page, stop)
     await wait(page, text(status, "Cleanup pending"))
     expect(await page.evaluate(`requestLog.filter(call => call.operation === 'session.interaction.stop').map(call => call.input)`)).toEqual([{ generation: first }])
+  } finally { await page.close() }
+}, 30_000)
+
+async function revealPiPFrame(page: Page, ready = true) {
+  await wait(page, `${interactionCalls}.some(call => call.operation === 'session.interaction.status')`)
+  await page.evaluate(`interactionFixture.change({ state: 'active', platform: 'chrome', label: 'Private target label', generation: ${JSON.stringify(first)} }); interactionFixture.holdPreview()`)
+  await wait(page, text(status, "Private target label"))
+  await click(page, reveal)
+  await wait(page, `${interactionCalls}.some(call => call.operation === 'session.interaction.preview')`)
+  const beforeWidth = await page.evaluate(`document.querySelector(${JSON.stringify(detach)})?.offsetWidth`)
+  await page.evaluate(`interactionFixture.releasePreview(${JSON.stringify(ready
+    ? { state: "ready", generation: first, frame: { mimeType: "image/png", base64: pixels, width: 1, height: 1 } }
+    : { state: "unavailable", generation: first })})`)
+  await wait(page, ready ? `document.querySelector(${JSON.stringify(`${preview} img`)})?.naturalWidth === 1` : text(preview, "Preview withheld"))
+  return beforeWidth
+}
+
+async function pressDetach(page: Page) {
+  const button = `document.querySelector(${JSON.stringify(detach)})`
+  expect(await page.evaluate(`!!${button} && !${button}.disabled`)).toBe(true)
+  await page.evaluate(`${button}.focus()`)
+  await page.pressKey("Enter", "Enter", 13, "\r")
+}
+
+const pipWindow = "window.documentPictureInPicture.window"
+const pipImage = `${pipWindow}?.document.querySelector('img')`
+
+async function openPiP(page: Page) {
+  await pressDetach(page)
+  await wait(page, `${pipImage}?.naturalWidth === 1`)
+}
+
+test("Interaction PiP denies opening when the active grant has no frame", async () => {
+  const page = await open(1440)
+  try {
+    await revealPiPFrame(page, false)
+    const before = await page.evaluate(interactionCalls)
+    expect(await page.evaluate(`document.querySelector(${JSON.stringify(detach)})?.disabled`)).toBe(true)
+    await click(page, detach)
+    expect(await page.evaluate(`!!${pipWindow}`)).toBe(false)
+    expect(await page.evaluate(interactionCalls)).toEqual(before)
+  } finally { await page.close() }
+}, 30_000)
+
+test("Interaction PiP opens the authorized image without another request and revokes it on browser close", async () => {
+  const page = await open(1440)
+  try {
+    const buttonWidth = await revealPiPFrame(page)
+    expect(await page.evaluate(`document.querySelector(${JSON.stringify(detach)})?.offsetWidth`)).toBe(buttonWidth)
+    const before = await page.evaluate(interactionCalls)
+    await openPiP(page)
+    const source = await page.evaluate(`${pipImage}.src`, decodeString)
+    expect(source).toStartWith("blob:")
+    expect(await page.evaluate(`(() => {
+      const doc = ${pipWindow}.document;
+      return { location: doc.URL, elements: Array.from(doc.body.children, element => element.localName), scripts: doc.scripts.length,
+        targetLabel: doc.documentElement.textContent.includes('Private target label'),
+        inlineImage: document.querySelector(${JSON.stringify(`${preview} img`)})?.naturalWidth };
+    })()`)).toEqual({ location: "about:blank", elements: ["img"], scripts: 0, targetLabel: false, inlineImage: 1 })
+    expect(await page.evaluate(interactionCalls)).toEqual(before)
+    await page.evaluate(`${pipWindow}.close()`)
+    await wait(page, `!${pipWindow} && !document.querySelector(${JSON.stringify(detach)}).disabled`)
+    expect(await page.evaluate(`fetch(${JSON.stringify(source)}).then(() => true, () => false)`)).toBe(false)
+    await openPiP(page)
+    expect(await page.evaluate(interactionCalls)).toEqual(before)
+  } finally { await page.close() }
+}, 30_000)
+
+test.each([
+  ["hide", `document.querySelector('button[aria-label="Hide interaction preview"]').click()`],
+  ["pause", `interactionFixture.change({ state: 'paused', platform: 'chrome', reason: 'dialog', label: 'Private target label', generation: ${JSON.stringify(first)} })`],
+  ["revocation", `interactionFixture.change({ state: 'stopped', platform: 'chrome', reason: 'permission', cleanup: 'complete', generation: ${JSON.stringify(first)} })`],
+  ["generation switch", `interactionFixture.change({ state: 'active', platform: 'chrome', label: 'Next target', generation: ${JSON.stringify(second)} })`],
+  ["connection switch", `Array.from(document.querySelectorAll('button')).find(button => button.textContent.includes('Simulate disconnect and reconnect')).click()`],
+])("Interaction PiP clears and revokes the image on %s", async (_name, invalidate) => {
+  const page = await open(1440)
+  try {
+    await revealPiPFrame(page)
+    await openPiP(page)
+    const source = await page.evaluate(`${pipImage}.src`, decodeString)
+    await page.evaluate(invalidate)
+    await wait(page, `!${pipWindow}`)
+    expect(await page.evaluate(`fetch(${JSON.stringify(source)}).then(() => true, () => false)`)).toBe(false)
+  } finally { await page.close() }
+}, 30_000)
+
+test("Interaction PiP never paints a late native open after the grant changes", async () => {
+  const page = await open(1440)
+  try {
+    await revealPiPFrame(page)
+    const before = await page.evaluate(interactionCalls)
+    await page.evaluate(`(() => {
+      const api = documentPictureInPicture;
+      const request = api.requestWindow.bind(api);
+      api.requestWindow = (...args) => request(...args).then(pip => new Promise(resolve => {
+        window.latePiP = { pip, painted: false, release: () => resolve(pip) };
+        new MutationObserver(records => {
+          if (records.some(record => Array.from(record.addedNodes).some(node => node.nodeName === 'IMG')))
+            latePiP.painted = true;
+        }).observe(pip.document.body, { childList: true, subtree: true });
+      }));
+    })()`)
+    await pressDetach(page)
+    await wait(page, "!!window.latePiP")
+    expect(await page.evaluate(interactionCalls)).toEqual(before)
+    await page.evaluate(`interactionFixture.change({ state: 'active', platform: 'chrome', label: 'Next target', generation: ${JSON.stringify(second)} })`)
+    await wait(page, text(status, "Next target"))
+    await page.evaluate("latePiP.release()")
+    await wait(page, "latePiP.pip.closed")
+    expect(await page.evaluate("latePiP.painted")).toBe(false)
+  } finally { await page.close() }
+}, 30_000)
+
+test("Interaction PiP leaves the normal preview in place when the browser denies opening", async () => {
+  const page = await open(1440)
+  try {
+    await revealPiPFrame(page)
+    await page.evaluate(`documentPictureInPicture.requestWindow = () => Promise.reject(new DOMException('Not allowed', 'NotAllowedError'))`)
+    const before = await page.evaluate(interactionCalls)
+    await pressDetach(page)
+    await wait(page, `document.querySelector(${JSON.stringify(status)})?.textContent.includes('Picture-in-picture unavailable')`)
+    expect(await page.evaluate(`({ opened: !!${pipWindow}, inlineImage: document.querySelector(${JSON.stringify(`${preview} img`)})?.naturalWidth })`)).toEqual({ opened: false, inlineImage: 1 })
+    expect(await page.evaluate(interactionCalls)).toEqual(before)
+  } finally { await page.close() }
+}, 30_000)
+
+test("Interaction PiP has no fallback when the browser API is unsupported", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.injectOnNewDocument(`Object.defineProperty(window, 'documentPictureInPicture', { value: undefined })`)
+    await page.navigate(`${origin}/verify/remote.html?interaction=1`)
+    await revealPiPFrame(page)
+    expect(await page.evaluate(`document.querySelector(${JSON.stringify(detach)})`)).toBeNull()
+    expect(await page.evaluate(`${interactionCalls}.map(call => call.operation).filter(operation => operation !== 'session.interaction.status')`)).toEqual(["session.interaction.preview"])
   } finally { await page.close() }
 }, 30_000)

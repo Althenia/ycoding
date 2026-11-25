@@ -31,6 +31,7 @@ const statusInfo = {
 }
 const popupWindow = chrome.windows.getCurrent().then((window) => window.id)
 let version = 0
+let reading
 let busy = false
 let rendered = ""
 let addressShown = false
@@ -76,7 +77,9 @@ function syncVisibility() {
 
 async function statusRead() {
   const current = ++version
-  const result = await chrome.runtime.sendMessage({ type: "status", windowId: await popupWindow }).catch(() => undefined)
+  reading = current
+  const result = await popupWindow.then((windowId) => chrome.runtime.sendMessage({ type: "status", windowId })).catch(() => undefined)
+  if (reading === current) reading = undefined
   if (current !== version) return
   const signature = JSON.stringify(result)
   if (rendered === signature) return
@@ -168,4 +171,4 @@ openPanel.addEventListener("click", (event) => {
 })
 
 void statusRead()
-setInterval(() => { if (!busy) void statusRead() }, 350)
+setInterval(() => { if (!busy && reading === undefined) void statusRead() }, 350)

@@ -44,6 +44,7 @@ import { McpSkill } from "@ycoding-ai/schema/mcp-skill"
 import { Cause, Effect, Exit, Schema } from "effect"
 import { ConfigMCP } from "../config/mcp"
 import { InstallationVersion } from "../installation/version"
+import { appResourceUri } from "./app"
 import { MCPSkills } from "./skills"
 
 const DEFAULT_STARTUP_TIMEOUT = 30_000
@@ -168,6 +169,7 @@ export class EntryRejectedError extends Schema.TaggedErrorClass<EntryRejectedErr
 }
 
 export interface ToolDefinition {
+  readonly appResourceUri?: string
   readonly name: string
   readonly description: string | undefined
   readonly inputSchema: unknown
@@ -550,6 +552,7 @@ export const connect = Effect.fnUntraced(function* (
             inputSchema: tool.inputSchema,
             outputSchema: tool.outputSchema,
             metadata: tool._meta,
+            appResourceUri: appResourceUri(tool._meta),
           }))
         }),
       rawTools: () =>
@@ -576,6 +579,7 @@ export const connect = Effect.fnUntraced(function* (
             inputSchema: tool.inputSchema,
             outputSchema: tool.outputSchema,
             metadata: tool._meta,
+            appResourceUri: appResourceUri(tool._meta),
           }))
         }),
       prompts: () =>

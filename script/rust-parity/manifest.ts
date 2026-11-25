@@ -47,6 +47,7 @@ const connectorRules = [
   { prefix: "dots.", owner: "WP-008" },
   { prefix: "incident.", owner: "WP-004" },
   { prefix: "keepAwake.", owner: "WP-010" },
+  { prefix: "mcp.app.view", owner: "WP-010" },
   { prefix: "telemetry.", owner: "WP-004" },
   { prefix: "shell.output", owner: "WP-009" },
   { prefix: "session.attachment.", owner: "WP-013" },

@@ -314,7 +314,7 @@ test("machine latency writes and reads only validated anonymous samples at the a
 test("local telemetry operation names cover the relay's current forwarded operations without self-upload", () => {
   const decode = Schema.decodeUnknownSync(Telemetry.Operation)
   for (const operation of remoteOperations) {
-    if (operation === "machine.latency.append" || operation === "machine.latency.list" || operation === "machine.telemetry.consent.get" || operation === "machine.telemetry.consent.set") continue
+    if (operation === "machine.latency.append" || operation === "machine.latency.list" || operation === "machine.telemetry.consent.get" || operation === "machine.telemetry.consent.set" || operation === "mcp.app.view") continue
     expect(decode(operation)).toBe(operation)
   }
   expect(() => decode("machine.latency.append")).toThrow()
@@ -424,6 +424,17 @@ test("window snapshots forward the opaque cursor and managed reads retain scoped
   expect(errorOf(await run("session.attachment.read", { digest: "../wrong" })).code).toBe("invalid_message")
   expect(errorOf(await run("session.attachment.read", { digest: "b".repeat(64) })).code).toBe("not_found")
   expect(errorOf(await run("session.attachment.read", { digest: "c".repeat(64) })).code).toBe("message_too_large")
+})
+
+test("MCP App views use the verified Session and pass only the message and call identifiers", async () => {
+  const app = { resourceUri: "ui://test/card", html: "<p>Card</p>", tool: "lookup", input: {}, output: {} }
+  const test = await harness({ results: { mcpAppView: async () => app } })
+  const run = (input: Record<string, unknown>) => executeRemoteOperation({ request: request("mcp.app.view", input), local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
+  expect(valueOf(await run({ messageID: "msg_card", callID: "call_card" }))).toEqual({ data: app })
+  expect(errorOf(await run({ messageID: "msg_card", callID: "call_card", resourceUri: "ui://test/other" })).code).toBe("invalid_message")
+  expect(test.calls.filter((call) => call.method === "mcpAppView")).toEqual([
+    { method: "mcpAppView", args: ["ses_1", "msg_card", "call_card"] },
+  ])
 })
 
 test("windowed snapshots shrink under the relay chunk cap and fail a single oversized message", async () => {

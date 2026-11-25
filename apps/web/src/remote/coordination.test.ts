@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import * as coordination from "./coordination"
 import {
   activityBuckets,
   addMemberInput,
@@ -47,6 +48,15 @@ import {
   type NotificationFilter,
   type ProjectDetail,
 } from "./coordination"
+
+test("Board refresh accepts repeated Master events with or without resolved Session identity", () => {
+  const frame = { type: "coordination.updated", data: { groupID: "cgrp_board", revision: 3 } }
+  const resolved = { ...frame, data: { ...frame.data, sessionID: "ses_master" } }
+  expect([frame, resolved, frame].map((event) => coordination.boardUpdateGroup(event, "ses_master"))).toEqual(["cgrp_board", "cgrp_board", "cgrp_board"])
+  expect(coordination.boardUpdateGroup(resolved, "ses_other")).toBeUndefined()
+  expect(coordination.boardUpdateGroup({ ...frame, data: { ...frame.data, revision: "3" } }, "ses_master")).toBeUndefined()
+  expect(coordination.boardUpdateGroup({ ...frame, type: "coordination.deleted" }, "ses_master")).toBeUndefined()
+})
 
 const ses = (suffix: string) => `ses_${suffix}`
 const now = 1_000_000_000

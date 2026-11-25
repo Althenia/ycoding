@@ -25,6 +25,7 @@ export type SessionItem = {
   readonly id: string
   readonly parentID?: string
   readonly title: string
+  readonly scope?: Session["scope"]
   readonly location: { readonly directory: string; readonly workspaceID?: string }
   readonly time: { readonly updated: number; readonly active?: number; readonly archived?: number; readonly pinned?: number }
   readonly agent?: string
@@ -321,6 +322,7 @@ export type AttentionNotification = { readonly kind: "request" | "complete" | "f
 
 type InteractionOwner = { readonly sessionID: string; readonly revision: number }
 type InteractionFence = InteractionOwner & { readonly generation: string }
+export type AppViewRequest = InteractionOwner & { readonly messageID: string; readonly callID: string }
 
 export type DesktopAPI = {
   readonly notify: (input: AttentionNotification) => Promise<void>
@@ -345,6 +347,8 @@ export type DesktopAPI = {
   readonly manageSystem: (input: SystemManageInput) => Promise<SystemSnapshot>
   readonly interactionStatus: (input: InteractionOwner) => Promise<InteractionStatus>
   readonly interactionPreview: (input: InteractionFence) => Promise<InteractionPreview>
+  readonly mcpAppView: (input: AppViewRequest) => ReturnType<YCodingClient["mcp"]["app"]["view"]>
+  readonly swarmBoard: (input: { readonly groupID: string; readonly masterSessionID: string; readonly revision: number }) => ReturnType<YCodingClient["coordination"]["board"]>
   readonly interactionStop: (input: InteractionFence) => Promise<void>
   readonly interactionResume: (input: InteractionFence) => Promise<void>
   readonly interactionRequest: (input: InteractionOwner & { readonly payload: SessionInteractionRequestInput["payload"] }) => Promise<void>

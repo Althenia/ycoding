@@ -239,6 +239,7 @@ pub struct Connection {
     notifications: broadcast::Sender<Notification>,
     handler: Handler,
     renewal: Arc<AtomicBool>,
+    app_session_expired: Arc<AtomicBool>,
     pub instructions: Option<String>,
     pub skills: Option<mcp_skill::Capability>,
     capabilities: Value,
@@ -331,6 +332,7 @@ impl Connection {
         };
         let mut process_id = None;
         let renewal = Arc::new(AtomicBool::new(false));
+        let app_session_expired = Arc::new(AtomicBool::new(false));
         let running = match config {
             ServerConfig::Local(config) => {
                 let cwd = configuration::working_directory(
@@ -468,6 +470,7 @@ impl Connection {
                     super::http::Http::new(server, config, handler.hooks.credentials.as_ref())
                         .map_err(|_| Error::Storage)?,
                     renewal.clone(),
+                    app_session_expired.clone(),
                 );
                 let transport = || {
                     Pinned::new(
@@ -543,6 +546,7 @@ impl Connection {
             notifications,
             handler,
             renewal,
+            app_session_expired,
             instructions: info
                 .instructions
                 .as_deref()
@@ -575,6 +579,12 @@ impl Connection {
     }
     pub fn is_closed(&self) -> bool {
         self.peer.is_transport_closed()
+    }
+    pub(super) fn app_available(&self) -> bool {
+        self.capabilities["resources"].is_object()
+            && !self.is_closed()
+            && !self.renewal.load(Ordering::SeqCst)
+            && !self.app_session_expired.load(Ordering::Acquire)
     }
     pub(crate) fn list_changed(&self, kind: &str) -> bool {
         self.capabilities[kind]["listChanged"] == true
@@ -679,13 +689,23 @@ impl Connection {
         timeout: Duration,
         signal: Option<watch::Receiver<bool>>,
     ) -> Result<Value, Error> {
+        self.send_request(CustomRequest::new(method, Some(params)), timeout, signal)
+            .await
+    }
+
+    async fn send_request(
+        &self,
+        request: CustomRequest,
+        timeout: Duration,
+        signal: Option<watch::Receiver<bool>>,
+    ) -> Result<Value, Error> {
         if signal.as_ref().is_some_and(|signal| *signal.borrow()) {
             return Err(Error::Cancelled);
         }
         let handle = self
             .peer
             .send_cancellable_request(
-                ClientRequest::CustomRequest(CustomRequest::new(method, Some(params))),
+                ClientRequest::CustomRequest(request),
                 PeerRequestOptions::with_timeout(timeout),
             )
             .await
@@ -896,6 +916,27 @@ impl Connection {
         }
         Ok(Some(result))
     }
+    pub(super) async fn read_app_resource(&self, uri: &str) -> Option<String> {
+        let mut request = CustomRequest::new("resources/read", Some(json!({"uri":uri})));
+        request.extensions.insert(super::transport::AppRead);
+        let result = self
+            .send_request(
+                request,
+                self.catalog_timeout.min(Duration::from_secs(10)),
+                None,
+            )
+            .await
+            .ok()?;
+        self.complete_app_response(&result)
+            .then(|| super::app::html(&result, uri))?
+    }
+
+    pub(super) fn complete_app_response(&self, result: &Value) -> bool {
+        match result.get("resultType") {
+            Some(value) => value == "complete",
+            None => self.protocol_version != MODERN_VERSION,
+        }
+    }
     pub async fn prompt(
         &self,
         name: &str,
@@ -927,6 +968,14 @@ impl Connection {
         args: Value,
         signal: Option<watch::Receiver<bool>>,
     ) -> Result<ToolResult, Error> {
+        tool_result(&self.call_tool_response(name, args, signal).await?)
+    }
+    pub(super) async fn call_tool_response(
+        &self,
+        name: &str,
+        args: Value,
+        signal: Option<watch::Receiver<bool>>,
+    ) -> Result<Value, Error> {
         let schema = self
             .output_schemas
             .lock()
@@ -957,7 +1006,7 @@ impl Connection {
                 });
             }
         }
-        tool_result(&result)
+        Ok(result)
     }
     pub async fn skill_entries(&self) -> Result<Vec<mcp_skill::Entry>, Error> {
         if self.skills.is_none() {

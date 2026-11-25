@@ -14,6 +14,10 @@ use std::{
 use ycoding_core::resources::mcp::client::{Connection, Content, Error, Hooks};
 use ycoding_schema::{DomainDecode, mcp::ServerConfig, parse_json};
 
+pub mod tool_fixture {
+    include!("tool_fixture.rs");
+}
+
 const MODERN: &str = "2026-07-28";
 const LEGACY: &str = "2025-11-25";
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -386,6 +390,100 @@ async fn expired_legacy_http_session_is_reinitialized_and_the_request_retried() 
             .count(),
         2
     );
+}
+
+#[tokio::test]
+async fn native_mcp_app_reads_are_not_replayed_into_a_renewed_legacy_session() {
+    use ycoding_core::{resources::mcp::Service, tools::builtin::mcp::McpTools};
+
+    let server = Http::new("legacy");
+    let fixture = tool_fixture::ToolFixture::new();
+    let service = Arc::new(
+        Service::new(
+            &[],
+            fixture.root.clone(),
+            "1".into(),
+            BTreeMap::new(),
+            Hooks::default(),
+        )
+        .unwrap(),
+    );
+    let mut config = server.config(None);
+    let ServerConfig::Remote(remote) = &mut config else {
+        unreachable!()
+    };
+    remote.codemode = Some(false);
+    service.add("protocol", config).await.unwrap();
+    let registry = Arc::new(fixture.registry());
+    let tools = McpTools::start(
+        service.clone(),
+        registry.clone(),
+        fixture.policy.clone(),
+        None,
+    );
+    let materialized = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let materialized = registry.materialize(&[]);
+            if materialized
+                .definitions
+                .iter()
+                .any(|tool| tool.name.as_str() == Some("protocol_protocol"))
+            {
+                break materialized;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let context = fixture.context();
+    assert!(
+        materialized
+            .invoke(
+                "protocol_protocol",
+                parse_json("{}").unwrap(),
+                context.clone()
+            )
+            .await
+            .unwrap()
+            .error
+            .is_none()
+    );
+    let app = || service.app_view(&context.session_id, &context.message_id, &context.call_id);
+    assert_eq!(app().await.unwrap().unwrap().html, "<p>Protocol app</p>");
+    server
+        .post("/app-response", json!({"kind":"ambiguous"}))
+        .await;
+    assert!(app().await.unwrap().is_none());
+    server.post("/app-response", json!({"kind":"sse"})).await;
+    assert_eq!(app().await.unwrap().unwrap().html, "<p>Protocol app</p>");
+    server.post("/expire", json!({"expireAppRead":true})).await;
+    assert!(app().await.unwrap().is_none());
+    assert!(
+        service
+            .call_tool("protocol", "protocol", json!({}), None)
+            .await
+            .is_ok()
+    );
+    assert!(app().await.unwrap().is_none());
+    let received = server.received().await;
+    assert_eq!(
+        received
+            .iter()
+            .filter(|entry| entry["method"] == "initialize")
+            .count(),
+        2
+    );
+    assert_eq!(
+        received
+            .iter()
+            .filter(|entry| entry["method"] == "resources/read")
+            .count(),
+        4
+    );
+    tools.stop().await.unwrap();
+    service.shutdown().await.unwrap();
+    fixture.cleanup();
 }
 
 #[tokio::test]
