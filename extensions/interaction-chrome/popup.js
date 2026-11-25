@@ -1,3 +1,5 @@
+const deckBody = document.querySelector("#deck-body")
+const connection = document.querySelector("#connection")
 const status = document.querySelector("#status")
 const matchCode = document.querySelector("#match-code")
 const connect = document.querySelector("#connect")
@@ -15,16 +17,16 @@ const pauseReasons = {
   sensitive: "Enter the sensitive details yourself.",
   user_takeover: "You took over this tab.",
 }
-const statusText = {
-  idle: "Not connected",
-  connecting: "Connecting…",
-  reconnecting: "Reconnecting…",
-  enrolling: "Confirm on your Mac",
-  offline: "YCoding is not reachable. Retrying…",
-  denied: "This Mac did not allow the connection",
-  rejected: "This Chrome profile is no longer allowed. Connect to ask again.",
-  busy: "Another Chrome profile is connected",
-  forgetting: "Forgetting this profile…",
+const statusInfo = {
+  idle: { text: "Not connected", state: "disconnected" },
+  connecting: { text: "Connecting…", state: "waiting" },
+  reconnecting: { text: "Reconnecting…", state: "waiting" },
+  enrolling: { text: "Confirm on your Mac", state: "waiting" },
+  offline: { text: "YCoding is not reachable. Retrying…", state: "error" },
+  denied: { text: "This Mac did not allow the connection", state: "error" },
+  rejected: { text: "This Chrome profile is no longer allowed. Connect to ask again.", state: "error" },
+  busy: { text: "Another Chrome profile is connected", state: "error" },
+  forgetting: { text: "Forgetting this profile…", state: "waiting" },
 }
 const popupWindow = chrome.windows.getCurrent().then((window) => window.id)
 let version = 0
@@ -56,9 +58,19 @@ function row(label, controls) {
 }
 
 function describe(result) {
-  if (result?.status !== "connected") return statusText[result?.status] ?? "Not connected"
-  if (result.active.some((item) => item.paused)) return "Paused"
-  return result.active.length ? "Control active" : "Connected"
+  if (result?.status === "") return { text: "", state: "" }
+  if (result?.status !== "connected") return statusInfo[result?.status] ?? statusInfo.idle
+  if (result.active?.some((item) => item.paused)) return { text: "Paused", state: "paused" }
+  return result.active?.length ? { text: "Control active", state: "active" } : { text: "Connected", state: "connected" }
+}
+
+function syncVisibility() {
+  status.hidden = !status.textContent.trim()
+  feedback.hidden = !feedback.textContent.trim()
+  requests.hidden = requests.children.length === 0
+  active.hidden = active.children.length === 0
+  connection.hidden = status.hidden && matchCode.hidden && connect.hidden
+  deckBody.hidden = connection.hidden && requests.hidden && active.hidden && feedback.hidden
 }
 
 async function statusRead() {
@@ -68,7 +80,10 @@ async function statusRead() {
   const signature = JSON.stringify(result)
   if (rendered === signature) return
   rendered = signature
-  status.textContent = describe(result)
+  const info = describe(result)
+  status.textContent = info.text
+  if (info.state) status.dataset.state = info.state
+  else delete status.dataset.state
   if (!addressShown && result?.address) {
     address.value = result.address
     addressShown = true
@@ -102,6 +117,7 @@ async function statusRead() {
       button("Stop control", "stop", { type: "stop", ...lease }),
     ])
   }))
+  syncVisibility()
 }
 
 function failure(result) {
@@ -117,6 +133,7 @@ async function send(message, control) {
   version++
   control.disabled = true
   feedback.textContent = ""
+  syncVisibility()
   try {
     const result = await chrome.runtime.sendMessage({ ...message, windowId: await popupWindow })
     if (!result?.ok) feedback.textContent = failure(result)
@@ -126,6 +143,7 @@ async function send(message, control) {
     control.disabled = false
     busy = false
     rendered = ""
+    syncVisibility()
     await statusRead()
   }
 }

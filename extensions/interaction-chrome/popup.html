@@ -13,14 +13,16 @@
         <img class="brand-mark" src="icons/idle-32.png" width="20" height="20" alt="">
         <h1>YCoding Interaction</h1>
       </div>
-      <span id="status" class="status-pill" role="status">Checking…</span>
     </header>
-    <main class="deck-body">
-      <div id="match-code" class="match-code" hidden></div>
-      <button id="connect" type="button" class="btn btn--primary" hidden>Connect</button>
-      <section id="requests" class="deck-list" aria-label="Pending decisions"></section>
-      <section id="active" class="deck-list" aria-label="Active control"></section>
-      <p id="feedback" class="feedback" role="alert"></p>
+    <main id="deck-body" class="deck-body">
+      <section id="connection" class="status-panel" aria-label="Connection status">
+        <p id="status" class="status-value" role="status" aria-live="polite" data-state="waiting">Checking…</p>
+        <div id="match-code" class="match-code" hidden></div>
+        <button id="connect" type="button" class="btn btn--primary" hidden>Connect</button>
+      </section>
+      <section id="requests" class="deck-list" aria-label="Pending decisions" hidden></section>
+      <section id="active" class="deck-list" aria-label="Active control" hidden></section>
+      <p id="feedback" class="feedback" role="alert" hidden></p>
     </main>
     <footer class="deck-foot">
       <details id="advanced">
@@ -30,10 +32,10 @@
             <span>Local service address</span>
             <input name="address" type="url" value="http://127.0.0.1:42188" placeholder="http://127.0.0.1:42188" autocomplete="off" spellcheck="false">
           </label>
-          <button id="forget" type="button" class="btn btn--secondary">Forget this profile</button>
+          <button id="forget" type="button" class="btn btn--secondary" hidden>Forget this profile</button>
         </div>
       </details>
-      <button id="open-panel" type="button" class="btn btn--ghost">Mini panel</button>
+      <button id="open-panel" type="button" class="btn btn--ghost" hidden>Mini panel</button>
     </footer>
     <script type="module" src="popup.js"></script>
   </body>
