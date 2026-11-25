@@ -41,9 +41,13 @@ export async function connectNative(endpoint: Endpoint, options: Options) {
       try {
         let next = api
         if (established) {
-          if (options.reconnect) {
-            target = await options.reconnect(request.signal)
+          const moved = await options.reconnect?.(request.signal).catch((error: unknown) => {
+            if (!lifetime.signal.aborted) options.log?.(`Native backend re-resolution failed; retrying the current endpoint: ${describeError(error)}`)
+            return undefined
+          })
+          if (moved) {
             api.transport.close()
+            target = moved
             next = client(target)
             api = next
           } else await api.transport.reconnect()

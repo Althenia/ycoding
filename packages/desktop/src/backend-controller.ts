@@ -52,6 +52,8 @@ const unsent = "The backend connection changed before the answer was sent. Refre
 const unswitched = "The backend connection changed before the model was switched. Refresh models and choose again."
 const stopFirst = "Stop the running chat before switching models."
 const unpaged = "The backend connection changed before more Sessions were read. Refresh Sessions."
+const TELEMETRY_READ_MS = 5_000
+const TELEMETRY_WRITE_MS = 20_000
 const object = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value)
 const count = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0
 const finite = (value: unknown) => typeof value === "number" && Number.isFinite(value)
@@ -615,11 +617,15 @@ export class BackendController {
             this.publish({ generation: attempt.generation, mode: selection.mode, status: "connected", revision: attempt.revision, version: status.health.version, backendPID: status.health.pid })
           },
           reconnect: selection.mode === "shared" && (!selection.server || isLoopbackSelection(selection.server)) ? async (signal) => {
-            await attempt.control?.close()
-            signal.throwIfAborted()
-            attempt.control = openControl(binary, selection, this.options.env, signal, launch, this.options.cwd, this.options.log)
-            const moved = await attempt.control.ready
+            const control = openControl(binary, selection, this.options.env, signal, launch, this.options.cwd, this.options.log)
+            const moved = await control.ready.catch(async (error: unknown) => {
+              await control.close().catch(() => undefined)
+              throw error
+            })
+            const previous = attempt.control
+            attempt.control = control
             attempt.endpoint = moved
+            void previous?.close().catch((error: unknown) => { this.options.log?.(`Replaced backend control: ${error instanceof Error ? error.message : "unknown error"}`) })
             return moved
           } : undefined,
         })
@@ -1277,7 +1283,7 @@ export class BackendController {
       let telemetrySamples: ReturnType<typeof decodeSamples>["data"] = []
       let telemetryNotice: string | undefined
       if (telemetryConsent.consent?.enabled) {
-        const page = await api.server.telemetry.list({ limit: 10 }, { signal }).catch(() => undefined)
+        const page = await api.server.telemetry.list({ limit: 10 }, { signal: AbortSignal.any([signal, AbortSignal.timeout(TELEMETRY_READ_MS)]) }).catch(() => undefined)
         ensureCurrent("The backend connection changed before settings were read.")
         if (page === undefined) telemetryNotice = "Telemetry samples could not be read."
         else telemetrySamples = decodeSamples(page).data
@@ -1526,7 +1532,7 @@ export class BackendController {
     let batch: Telemetry.Batch
     try { batch = decodeBatch(input) } catch { throw new DesktopError("Invalid telemetry samples.") }
     return this.use("Telemetry samples were not confirmed.", async (api, signal) => {
-      const result = await api.server.telemetry.append(batch, { signal })
+      const result = await api.server.telemetry.append(batch, { signal: AbortSignal.any([signal, AbortSignal.timeout(TELEMETRY_WRITE_MS)]) })
       if (!object(result) || !count(result.accepted)) throw new DesktopError("The backend returned an invalid telemetry receipt.")
       return { accepted: result.accepted }
     })
