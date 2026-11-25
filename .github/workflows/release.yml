@@ -196,10 +196,6 @@ jobs:
           bun test --cwd packages/remote ./test/interaction.test.ts
           bun test --cwd extensions/interaction-chrome ./test/interaction-chrome-controller.test.js
 
-      - name: Verify standalone TUI build boundary
-        if: matrix.suite == 'cli'
-        run: bun test --cwd packages/cli ./test/import-boundaries.test.ts
-
       - name: Verify transcript and approval suites
         if: matrix.suite == 'tui-project'
         working-directory: packages/tui
@@ -547,6 +543,9 @@ jobs:
         run: |
           set -euo pipefail
           node -e 'const metadata = require("./dist/tui/tui-darwin-arm64/package.json"); if (metadata.version !== process.env.YCODING_VERSION) process.exit(1)'
+
+      - name: Verify standalone TUI build boundary
+        run: bun test --cwd packages/cli ./test/import-boundaries.test.ts
 
       - name: Stage native executables
         run: |

@@ -839,7 +839,7 @@ test("release source gates include ownership, chronology and compact-footer regr
     "./test/form-contract.test.ts",
     "./test/cli/tui/session-rows-chronology.test.tsx",
   ]) expect(verify).toContain(file)
-  expect(verify).toContain("bun test --cwd packages/cli ./test/import-boundaries.test.ts")
+  expect(darwinBuild).toContain("bun test --cwd packages/cli ./test/import-boundaries.test.ts")
 })
 
 test("test workflow verifies the web application and relay before the Cloudflare build", () => {
@@ -985,7 +985,7 @@ test("source verification legs start in parallel with the native builds", () => 
   expect(verify).not.toContain("puppeteer")
   expect(verify).toContain('"$GITHUB_WORKSPACE/script/chrome-for-testing.test.ts"')
   expect(verify).toContain('-t "pins one exact version whose root metadata document is the default source"')
-  expect(verify).toContain("bun test --cwd packages/cli ./test/import-boundaries.test.ts")
+  expect(build).toContain("bun test --cwd packages/cli ./test/import-boundaries.test.ts")
   expect(build).not.toMatch(/smoke:|service-smoke|isolated-browser-smoke|test:integration:/)
 })
 
