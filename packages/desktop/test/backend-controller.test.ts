@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import { BackendController } from "../src/backend-controller"
+import { DESKTOP_RPC_MAX_REQUEST_TIME } from "../src/rpc"
 import { Coordination, KeepAwake, PermissionSaved, ProjectCopy, Schema, Telemetry } from "@ycoding-ai/client/effect"
 import type { ConnectionState } from "../src/contract"
 import { env, launch, peer, revision, syntheticBundle } from "./synthetic-backend"
@@ -1084,6 +1085,66 @@ test("a loopback shared endpoint reconnects through desktop-host to a restarted 
     firstStreamEnds.resolve()
     expect((await recovered.promise).backendPID).toBe(202)
     expect(hosts).toEqual([original.url.href, original.url.href])
+  } finally {
+    firstStreamEnds.resolve()
+    await controller.disconnect()
+    await fs.rm(resources, { recursive: true, force: true })
+  }
+}, 30_000)
+
+test("settings and latency writes settle before the renderer deadline while the backend telemetry store is stalled", async () => {
+  const stalled = Promise.withResolvers<Response>()
+  await connected(async (route) => {
+    if (route === "/api/keep-awake") return Response.json({ data: { state: "on", manual: true } })
+    if (route === "/api/server/telemetry/consent") return Response.json({ noticeVersion: 1, consent: { enabled: true, noticeVersion: 1, decidedAt: 1 } })
+    if (route === "/api/permission/saved") return Response.json({ data: [] })
+    if (route === "/api/server/web-latency") return stalled.promise
+    return undefined
+  }, async (controller, rev) => {
+    const started = performance.now()
+    expect(await controller.settings() as unknown).toEqual({ revision: rev, keepAwake: { state: "on", manual: true }, telemetryConsent: { noticeVersion: 1, consent: { enabled: true, noticeVersion: 1, decidedAt: 1 } }, telemetrySamples: [], savedPermissions: [], telemetryNotice: "Telemetry samples could not be read." })
+    const append = await controller.appendTelemetry({ samples: [{ kind: "long-task", at: "2026-01-01T00:00:00.000Z", durationMs: 50 }] }).then(() => "accepted", (error: Error) => error.message)
+    expect(append).toBe("Telemetry samples were not confirmed.")
+    expect(performance.now() - started).toBeLessThan(DESKTOP_RPC_MAX_REQUEST_TIME)
+    expect(controller.state().status).toBe("connected")
+  })
+  stalled.resolve(new Response(null, { status: 503 }))
+}, 60_000)
+
+test("a loopback shared connection returns to its runtime when desktop-host re-resolution fails", async () => {
+  const resources = await syntheticBundle()
+  const firstStreamEnds = Promise.withResolvers<void>()
+  const recovered = Promise.withResolvers<ConnectionState>()
+  const settings = async (route: string) => route === "/api/keep-awake" ? Response.json({ data: { state: "off" } })
+    : route === "/api/server/telemetry/consent" ? Response.json({ noticeVersion: 1 })
+      : route === "/api/permission/saved" ? Response.json({ data: [] }) : undefined
+  using runtime = peer([], () => 101, settings, firstStreamEnds.promise)
+  const logs: string[] = []
+  let hosts = 0
+  let failing = false
+  let initialRevision = 0
+  const controller = new BackendController(resources, {
+    env,
+    log: (line) => { logs.push(line) },
+    launch: (command) => {
+      if (command[1] === "--version") return launch(command)
+      hosts++
+      if (failing) return ["/bin/sh", "-c", "echo 'Error: Native runtime exited (1)' >&2; exit 1"]
+      return ["/bin/echo", JSON.stringify({ type: "desktop.endpoint", version: "synthetic", endpoint: { url: runtime.url.href } })]
+    },
+    onState: (state) => { if (initialRevision && state.status === "connected" && state.revision !== initialRevision) recovered.resolve(state) },
+  })
+  try {
+    initialRevision = revision(await controller.connect({ mode: "shared", server: runtime.url.href }))
+    failing = true
+    firstStreamEnds.resolve()
+    expect((await recovered.promise).backendPID).toBe(101)
+    failing = false
+    expect(hosts).toBeGreaterThan(1)
+    expect(logs.join("\n")).toContain("Native runtime exited (1)")
+    expect((await controller.settings()).keepAwake.state).toBe("off")
+    const applied = await controller.connect({ mode: "shared", server: runtime.url.href })
+    expect([applied.status, applied.backendPID]).toEqual(["connected", 101])
   } finally {
     firstStreamEnds.resolve()
     await controller.disconnect()

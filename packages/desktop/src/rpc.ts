@@ -229,8 +229,9 @@ export function createDesktopRPC(controller: BackendController, preferences: {
         notice = undefined
         try { await preferences.save(preferences.path, selection) } catch { notice = "Backend choice was not saved. This connection is for this launch only." }
         if (attempt !== generation) throw new DesktopError("Backend connection was cancelled.")
-        return { ...await controller.connect(selection), ...(notice ? { notice } : {}) }
-      } finally { starting = false }
+      } catch (error) { starting = false; throw error }
+      void controller.connect(selection).catch(() => undefined).finally(() => { starting = false })
+      return { ...controller.state(), ...(notice ? { notice } : {}) }
     },
     disconnect: () => { generation++; return controller.disconnect() },
     restartBackend: (input: Parameters<DesktopAPI["restartBackend"]>[0]) => controller.restartBackend(input),

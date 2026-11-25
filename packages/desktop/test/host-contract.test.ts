@@ -6,9 +6,9 @@ import * as preferences from "../src/preferences"
 import * as rpcModule from "../src/rpc"
 import type { DesktopRPCSchema } from "../src/rpc"
 import { runDesktopWorker } from "../src/worker"
-import { DESKTOP_NAVIGATION_RULES, shouldAllowDesktopNavigation, forwardDesktopEvent, startDesktopConnection, createDesktopRPC } from "../src/rpc"
+import { DESKTOP_NAVIGATION_RULES, DESKTOP_RPC_MAX_REQUEST_TIME, shouldAllowDesktopNavigation, forwardDesktopEvent, startDesktopConnection, createDesktopRPC } from "../src/rpc"
 import { BackendController } from "../src/backend-controller"
-import type { DesktopAPI, Preferences, Selection } from "../src/contract"
+import { DesktopError, type ConnectionState, type DesktopAPI, type Preferences, type Selection } from "../src/contract"
 
 test("the native window rule plan denies remote and foreign views", () => {
   expect(DESKTOP_NAVIGATION_RULES).toEqual(["^*", "views://mainview/*"])
@@ -100,7 +100,7 @@ test("RPC handlers forward every operation and persist explicit backend choices"
   await handlers.reply({ kind: "form-cancel", sessionID: "ses_test", revision: 1, formID: "form_test" })
   await handlers.models("ses_test")
   await handlers.switchModel({ sessionID: "ses_test", revision: 1, model: { id: "model", providerID: "provider" } })
-  expect(calls.map(([name]) => name)).toEqual(["state", "connect", "disconnect", "sessions", "session", "fileChanges", "activity", "projects", "usage", "pin", "workspaces", "messages", "createSession", "prompt", "interrupt", "requests", "reply", "models", "switchModel"])
+  expect(calls.map(([name]) => name)).toEqual(["state", "connect", "state", "disconnect", "sessions", "session", "fileChanges", "activity", "projects", "usage", "pin", "workspaces", "messages", "createSession", "prompt", "interrupt", "requests", "reply", "models", "switchModel"])
   expect(saved).toEqual([{ mode: "own" }])
   expect(calls.filter(([name]) => ["fileChanges", "activity", "projects", "usage"].includes(String(name)))).toEqual([
     ["fileChanges", "ses_test"], ["activity", "ses_test"], ["projects"], ["usage"],
@@ -240,6 +240,25 @@ test("disconnect cancels a pending preference write before it can start a backen
   saved.resolve()
   await expect(pending).rejects.toThrow("cancelled")
   expect(connects).toBe(0)
+})
+
+test("Apply & Reconnect settles before the renderer RPC deadline and reports the backend outcome through connection state", async () => {
+  const outcome = Promise.withResolvers<ConnectionState>()
+  let state: ConnectionState = { generation: 1, mode: "shared", status: "connecting" }
+  const controller = {
+    state: () => state,
+    connect: () => outcome.promise,
+  } as unknown as BackendController
+  const handlers = createDesktopRPC(controller, { path: "/synthetic/preferences", read: async () => ({}), save: async () => {}, validate: () => ({ mode: "shared" }) })
+  const accepted = await Promise.race([handlers.connect({ mode: "shared" }), Bun.sleep(DESKTOP_RPC_MAX_REQUEST_TIME / 1_000).then(() => "renderer request still open")])
+  expect(accepted).toEqual({ generation: 1, mode: "shared", status: "connecting" })
+  await expect(handlers.connect({ mode: "shared" })).rejects.toThrow("A backend connection is pending. Cancel it before changing backend.")
+  const failure = "The shared backend is unavailable or incompatible. Start it manually or check the endpoint and retry."
+  state = { generation: 1, mode: "shared", status: "error", error: failure }
+  outcome.reject(new DesktopError(failure))
+  await Bun.sleep(0)
+  expect(await handlers.state()).toEqual({ generation: 1, mode: "shared", status: "error", error: failure })
+  expect(await handlers.connect({ mode: "shared" })).toEqual(state)
 })
 
 test("unexpected host failures do not expose their details to the renderer", async () => {
