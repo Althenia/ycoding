@@ -32,9 +32,8 @@ let router: ((request: Request) => Promise<Response>) | undefined
 
 export default {
   fetch(request: Request, env: WorkerEnv): Promise<Response> {
-    const service = createAuthService(createD1AuthStore(env.DB))
     router ??= createRouter({
-      service,
+      service: createAuthService(createD1AuthStore(env.DB)),
       relay: env.DEVICE_RELAY,
       endpoints: googleEndpoints(env),
       allowedEmails: parseAllowedEmails(env),
