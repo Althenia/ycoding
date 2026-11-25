@@ -7,13 +7,13 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("publishes v0.13.5 first with the same user-facing changes as its release notes", async () => {
+  test("lists v0.13.1 first and matches its release notes", async () => {
     const entry = RELEASES[0]
     expect(entry).toMatchObject({
-      version: "0.13.5", date: "2026-11-24", title: "One Rust workspace and native plugins", tags: ["Changed", "Fixed"],
+      version: "0.13.1", date: "2026-11-25", title: "One Rust workspace and native plugins", tags: ["Changed", "Fixed"],
     })
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.13.5.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.13.5\n")
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.13.1.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.13.1\n")
     const changes = notes.split(/^## /m).flatMap((section) => {
       const tag = TAGS.find((tag) => section.startsWith(`${tag}\n`))
       if (!tag) return []
@@ -25,11 +25,11 @@ describe("release entries", () => {
       expect.objectContaining({ tag: "Changed", text: expect.stringMatching(/built-in plugins run natively.*Bun 0\.12\.x/i) }),
       expect.objectContaining({ tag: "Fixed", text: expect.stringMatching(/OpenAI.*Chat Completions.*Responses/) }),
     ]))
-    expect(after("0.13.5")?.version).toBe("0.13.0")
+    expect(after("0.13.1")?.version).toBe("0.13.0")
   })
 
   test("retains v0.13.0 with the Apple Silicon release, recovery fixes and Bun instructions", async () => {
-    const entry = RELEASES[1]
+    const entry = byVersion("0.13.0")
     expect(entry).toMatchObject({ version: "0.13.0", title: "Rust for new installations", tags: ["Changed", "Fixed"] })
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.13.0.md", import.meta.url)).text()
     expect(notes).toStartWith("# YCoding v0.13.0\n")
@@ -58,7 +58,7 @@ describe("release entries", () => {
     expect(after("0.13.0")?.version).toBe("0.12.2")
   })
 
-  test.each(["0.13.1", "0.13.2", "0.13.3", "0.13.4"])("omits the retired v%s release and its note file", async (version) => {
+  test.each(["0.13.2", "0.13.3", "0.13.4", "0.13.5"])("omits v%s and its note file", async (version) => {
     expect(byVersion(version)).toBeUndefined()
     expect(await Bun.file(new URL(`../../../../docs/releases/v${version}.md`, import.meta.url)).exists()).toBe(false)
   })
@@ -1904,7 +1904,7 @@ describe("release entries", () => {
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
     expect(versions.slice(0, 64)).toEqual([
-      "0.13.5",
+      "0.13.1",
       "0.13.0",
       "0.12.2",
       "0.12.1",

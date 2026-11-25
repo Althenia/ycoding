@@ -78,8 +78,9 @@ export async function buildRuntime(target: { os: string; arch: string; abi?: str
   const staged = process.env.YCODING_RELEASE_RUNTIME_DIR
   const name = platformBinary("ycoding-runtime", process.platform)
   const appleSilicon = target.os === "darwin" && target.arch === "arm64"
+  const event = process.env.GITHUB_EVENT_NAME
   if (appleSilicon && staged === undefined && process.env.GITHUB_ACTIONS === "true" &&
-    process.env.GITHUB_EVENT_NAME === "workflow_dispatch" &&
+    (event === "workflow_dispatch" || event === "push") &&
     process.env.GITHUB_WORKFLOW_REF?.startsWith(`${process.env.GITHUB_REPOSITORY}/.github/workflows/release.yml@`))
     throw new Error("Apple Silicon release packaging requires the staged runtime")
   if (staged !== undefined) {

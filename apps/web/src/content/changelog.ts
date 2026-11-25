@@ -22,8 +22,8 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
-    version: "0.13.5",
-    date: "2026-11-24",
+    version: "0.13.1",
+    date: "2026-11-25",
     title: "One Rust workspace and native plugins",
     tags: ["Changed", "Fixed"],
     changes: [

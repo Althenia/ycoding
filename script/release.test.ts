@@ -439,6 +439,15 @@ test("release source checks cover Interaction and stored OpenAI Responses withou
   }
 })
 
+function resolveReleaseVersion(directory: string, envFile: string, input: Record<string, string>) {
+  return Bun.spawnSync(["bash", path.join(import.meta.dir, "release-version.sh")], {
+    cwd: directory,
+    env: { PATH: process.env.PATH, GITHUB_ENV: envFile, ...input },
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+}
+
 test.each([
   ["0.12.0-rc.1+build.2", "preview", "branch", "0.12.0-rc.1+build.2"],
   ["", "v0.12.0", "tag", "0.12.0"],
@@ -459,10 +468,8 @@ test.each([
     for (const version of ["0.12.0", "0.12.0-rc.1+build.2", "0.12.2", "0.13.1", "0.13.0"]) {
       fs.writeFileSync(path.join(directory, `docs/releases/v${version}.md`), "Release notes\n")
     }
-    const result = Bun.spawnSync(["bash", path.join(import.meta.dir, "release-version.sh")], {
-      cwd: directory,
-      env: { ...process.env, REQUESTED_RELEASE_VERSION: requested, RELEASE_REF_NAME: ref, RELEASE_REF_TYPE: type, GITHUB_ENV: envFile },
-      stdout: "pipe", stderr: "pipe",
+    const result = resolveReleaseVersion(directory, envFile, {
+      REQUESTED_RELEASE_VERSION: requested, RELEASE_REF_NAME: ref, RELEASE_REF_TYPE: type,
     })
     expect(result.exitCode, result.stderr.toString()).toBe(expected === null ? 1 : 0)
     expect(result.stdout.toString()).toBe("")
@@ -484,11 +491,30 @@ test.each(["missing", "empty"])("a release with %s notes fails before exporting 
       fs.mkdirSync(path.join(directory, "docs/releases"), { recursive: true })
       fs.writeFileSync(path.join(directory, "docs/releases/v0.13.0.md"), "")
     }
-    const result = Bun.spawnSync(["bash", path.join(import.meta.dir, "release-version.sh")], {
-      cwd: directory, env: { ...process.env, REQUESTED_RELEASE_VERSION: "0.13.0", GITHUB_ENV: envFile },
-    })
+    const result = resolveReleaseVersion(directory, envFile, { REQUESTED_RELEASE_VERSION: "0.13.0" })
     expect(result.exitCode, result.stderr.toString()).toBe(1)
     expect(fs.readFileSync(envFile, "utf8")).toBe("")
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test.each([
+  ["refs/tags/v0.13.0", 0, ""],
+  ["refs/tags/v0.12.2", 1, "Release version does not match the pushed tag\n"],
+])("release version binds exports to a synthetic tag push for %s", (ref, exitCode, diagnostic) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ycoding-release-tag-version-"))
+  try {
+    const envFile = path.join(directory, "github-env")
+    fs.writeFileSync(envFile, "")
+    fs.mkdirSync(path.join(directory, "docs/releases"), { recursive: true })
+    fs.writeFileSync(path.join(directory, "docs/releases/v0.13.0.md"), "Release notes\n")
+    const result = resolveReleaseVersion(directory, envFile, {
+      GITHUB_EVENT_NAME: "push", GITHUB_REF: ref, RELEASE_REF_TYPE: "tag", RELEASE_REF_NAME: "v0.13.0",
+    })
+    expect(result.exitCode, result.stderr.toString()).toBe(exitCode)
+    expect(result.stderr.toString()).toBe(diagnostic)
+    expect(fs.readFileSync(envFile, "utf8")).toBe(exitCode === 0 ? "RELEASE_VERSION=0.13.0\nYCODING_VERSION=0.13.0\n" : "")
   } finally {
     fs.rmSync(directory, { recursive: true, force: true })
   }

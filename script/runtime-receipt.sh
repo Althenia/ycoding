@@ -108,8 +108,8 @@ catalog() {
 }
 
 require_run() {
-  local number
-  printf '%s\n' "${GITHUB_SHA:-}" | grep -Eqx '[0-9a-f]{40}' || fail "GITHUB_SHA must be a full commit SHA"
+  local number ref=${GITHUB_REF:-}
+  [[ ${GITHUB_SHA:-} =~ ^[0-9a-f]{40}$ ]] || fail "GITHUB_SHA must be a full commit SHA"
   test -n "${RELEASE_VERSION:-}" || fail "RELEASE_VERSION is required"
   case "${YCODING_CHANNEL:-}" in beta | latest) ;; *) fail "YCODING_CHANNEL must be beta or latest" ;; esac
   case "${RECEIPT_TARGET:-}" in
@@ -119,16 +119,28 @@ require_run() {
   esac
   test "$RECEIPT_TARGET" = "$(host_target)" || fail "RECEIPT_TARGET $RECEIPT_TARGET does not match host $(host_target)"
   if [ "$profile:$RECEIPT_TARGET" = release:darwin-arm64 ]; then
-    test "${GITHUB_ACTIONS:-}:${GITHUB_EVENT_NAME:-}" = true:workflow_dispatch || fail "Apple Silicon release reuse requires a manual GitHub Actions run"
-    printf '%s\n' "${GITHUB_REPOSITORY:-}" | grep -Eqx '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' || fail "GITHUB_REPOSITORY is required"
-    case "${GITHUB_WORKFLOW_REF:-}" in
-      "$GITHUB_REPOSITORY"/.github/workflows/release.yml@refs/*) ;;
-      *) fail "the release workflow is required" ;;
+    test "${GITHUB_ACTIONS:-}" = true || fail "Apple Silicon release reuse requires GitHub Actions"
+    case "${GITHUB_EVENT_NAME:-}" in
+      push | workflow_dispatch) ;;
+      *) fail "Apple Silicon release reuse requires a version tag push or manual dispatch" ;;
     esac
+    [[ ${GITHUB_REPOSITORY:-} =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "GITHUB_REPOSITORY is required"
+    case "$ref" in
+      refs/heads/* | refs/tags/*) ;;
+      *) fail "a branch or tag ref is required" ;;
+    esac
+    git check-ref-format "$ref" || fail "invalid release ref"
+    test "${GITHUB_WORKFLOW_REF:-}" = "$GITHUB_REPOSITORY/.github/workflows/release.yml@$ref" || fail "the release workflow is required for this repository and ref"
+    test "${GITHUB_WORKFLOW_SHA:-}" = "$GITHUB_SHA" || fail "the workflow does not match the release commit"
     for number in "${GITHUB_RUN_ID:-}" "${GITHUB_RUN_ATTEMPT:-}"; do
-      printf '%s\n' "$number" | grep -Eqx '[1-9][0-9]*' || fail "a run ID and attempt are required"
+      [[ $number =~ ^[1-9][0-9]*$ ]] || fail "a run ID and attempt are required"
     done
     test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || fail "the checkout does not match the release commit"
+    if [ "$GITHUB_EVENT_NAME" = push ]; then
+      REQUESTED_RELEASE_VERSION="$RELEASE_VERSION" GITHUB_ENV=/dev/null bash "$(dirname "$0")/release-version.sh"
+      test "$(git rev-parse --verify "$ref^{commit}" 2>/dev/null)" = "$GITHUB_SHA" || fail "the tag does not point to the release commit"
+      git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main || fail "Release commit is not reachable from origin/main"
+    fi
   fi
 }
 

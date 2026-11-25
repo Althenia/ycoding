@@ -174,12 +174,21 @@ test("a Windows release receipt binds the MSVC host and exact exe bytes", async 
   }
 })
 
-test("both Apple Silicon release packagers verify the local producer receipt and inputs without Cargo", async () => {
+test.each(["workflow_dispatch", "push"] as const)("both Apple Silicon release packagers verify the local producer receipt and inputs without Cargo on %s", async (event) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-darwin-release-receipt-"))
   try {
     await fixture(root)
     for (const [name, source] of Object.entries({
-      git: `#!/bin/sh\nprintf '%s\\n' "\${SHIM_CHECKOUT_SHA:-${commit}}"\n`,
+      git: [
+        "#!/bin/sh",
+        'case "$*" in',
+        `  'rev-parse HEAD') printf '%s\\n' "\${SHIM_CHECKOUT_SHA:-${commit}}" ;;`,
+        `  "rev-parse --verify $GITHUB_REF^{commit}") printf '%s\\n' "\${SHIM_TAG_SHA:-${commit}}" ;;`,
+        '  "merge-base --is-ancestor $GITHUB_SHA refs/remotes/origin/main") test "${SHIM_ON_MAIN:-true}" = true ;;',
+        '  "check-ref-format $GITHUB_REF") exec /usr/bin/git "$@" ;;',
+        '  *) exit 64 ;;',
+        'esac',
+      ].join("\n"),
       bun: `#!/bin/sh\nprintf '%s\\n80\\n' "\${SHIM_RECIPE}"\n`,
     })) {
       const file = path.join(root, "shims", name)
@@ -189,14 +198,24 @@ test("both Apple Silicon release packagers verify the local producer receipt and
     const staged = path.join(root, "runner-temp/release-runtime")
     const destination = path.join(root, "tui/ycoding-runtime")
     const binary = path.join(root, "built/ycoding-runtime")
+    const version = event === "push" ? "0.13.5" : "0.11.0-beta.2"
+    const channel = event === "push" ? "latest" : "beta"
+    const ref = event === "push" ? `refs/tags/v${version}` : "refs/heads/main"
+    const workflow = `example/ycoding/.github/workflows/release.yml@${ref}`
+    await Bun.write(path.join(root, `docs/releases/v${version}.md`), "Synthetic release notes\n")
     const env = environment(root, "darwin", {
       RECEIPT_PROFILE: "release",
       GITHUB_ACTIONS: "true",
-      GITHUB_EVENT_NAME: "workflow_dispatch",
+      GITHUB_EVENT_NAME: event,
+      GITHUB_REF: ref,
+      GITHUB_SHA: commit,
       GITHUB_REPOSITORY: "example/ycoding",
-      GITHUB_WORKFLOW_REF: "example/ycoding/.github/workflows/release.yml@refs/heads/main",
+      GITHUB_WORKFLOW_REF: workflow,
+      GITHUB_WORKFLOW_SHA: commit,
       GITHUB_RUN_ID: "90212",
       GITHUB_RUN_ATTEMPT: "1",
+      RELEASE_VERSION: version,
+      YCODING_CHANNEL: channel,
       SHIM_RECIPE: "1".repeat(64),
       YCODING_BUNDLED_MODELS_PATH: path.join(root, "packages/cli/script/models-dev.snapshot.json"),
     })
@@ -206,8 +225,8 @@ test("both Apple Silicon release packagers verify the local producer receipt and
     const receiptBytes = await Bun.file(receiptFile).bytes()
     const pin = new Bun.CryptoHasher("sha256").update(receiptBytes).digest("hex")
     expect(JSON.parse(new TextDecoder().decode(receiptBytes))).toMatchObject({
-      schema: "ycoding.release-runtime.receipt/1", target: "darwin-arm64", source: { commit },
-      run: { workflow: "example/ycoding/.github/workflows/release.yml@refs/heads/main", id: "90212", attempt: "1" },
+      schema: "ycoding.release-runtime.receipt/1", target: "darwin-arm64", source: { commit }, version,
+      run: { workflow, id: "90212", attempt: "1" },
     })
     for (const tool of ["cargo", "rustc"]) {
       await Bun.write(path.join(root, "shims", tool), '#!/bin/sh\necho "Unexpected compiler invocation" >&2\nexit 99\n')
@@ -227,12 +246,15 @@ test("both Apple Silicon release packagers verify the local producer receipt and
       [{ RECEIPT_SHA256: "f".repeat(64) }, "the receipt digest does not match the producer"],
       [{ GITHUB_RUN_ID: "90213" }, "receipt run does not match this run"],
       [{ GITHUB_RUN_ATTEMPT: "2" }, "receipt run does not match this run"],
+      [{ GITHUB_RUN_ID: "90212\nunexpected" }, "a run ID and attempt are required"],
       [{ GITHUB_REPOSITORY: "another/ycoding" }, "the release workflow is required"],
-      [{ GITHUB_WORKFLOW_REF: "example/ycoding/.github/workflows/release.yml@refs/heads/another" }, "receipt run does not match this run"],
-      [{ GITHUB_SHA: otherCommit }, "the checkout does not match the release commit"],
-      [{ GITHUB_SHA: otherCommit, SHIM_CHECKOUT_SHA: otherCommit }, "receipt source does not match this run"],
-      [{ YCODING_CHANNEL: "latest" }, "receipt channel does not match this run"],
-      [{ RELEASE_VERSION: "0.11.0" }, "receipt version does not match this run"],
+      [{ GITHUB_WORKFLOW_REF: "example/ycoding/.github/workflows/release.yml@refs/heads/another" }, "the release workflow is required"],
+      [{ GITHUB_WORKFLOW_REF: `example/ycoding/.github/workflows/other.yml@${ref}` }, "the release workflow is required"],
+      [{ GITHUB_WORKFLOW_SHA: otherCommit }, "the workflow does not match the release commit"],
+      [{ GITHUB_SHA: otherCommit, GITHUB_WORKFLOW_SHA: otherCommit }, "the checkout does not match the release commit"],
+      [{ GITHUB_SHA: otherCommit, GITHUB_WORKFLOW_SHA: otherCommit, SHIM_CHECKOUT_SHA: otherCommit, SHIM_TAG_SHA: otherCommit }, "receipt source does not match this run"],
+      [{ YCODING_CHANNEL: channel === "latest" ? "beta" : "latest" }, "receipt channel does not match this run"],
+      [{ RELEASE_VERSION: "0.11.0" }, event === "push" ? "Release version does not match the pushed tag" : "receipt version does not match this run"],
       [{ SHIM_RECIPE: "2".repeat(64) }, "receipt regex_recipe does not match this run"],
     ] as const) {
       const result = run(root, ["verify", staged, destination], { ...consumer, ...change })
@@ -240,6 +262,28 @@ test("both Apple Silicon release packagers verify the local producer receipt and
       expect(result.stderr).toContain(diagnostic)
       expect(result.stderr).not.toContain("Unexpected compiler invocation")
       expect(await Bun.file(destination).bytes()).toEqual(original)
+    }
+    if (event === "push") {
+      const branch = "refs/heads/main"
+      const invalid = "refs/tags/v0.013.5"
+      for (const [change, diagnostic] of [
+        [{ GITHUB_ACTIONS: "false" }, "requires GitHub Actions"],
+        [{ GITHUB_EVENT_NAME: "pull_request" }, "requires a version tag push or manual dispatch"],
+        [{ GITHUB_REF: branch, GITHUB_WORKFLOW_REF: `example/ycoding/.github/workflows/release.yml@${branch}` }, "Release version does not match the pushed tag"],
+        [{ GITHUB_REF: invalid, GITHUB_WORKFLOW_REF: `example/ycoding/.github/workflows/release.yml@${invalid}`, RELEASE_VERSION: "0.013.5" }, "Invalid release version"],
+        [{ SHIM_TAG_SHA: otherCommit }, "tag does not point to the release commit"],
+        [{ SHIM_ON_MAIN: "false" }, "Release commit is not reachable from origin/main"],
+      ] as const) {
+        const rejected = path.join(root, "rejected")
+        const reject = run(root, ["write", binary, rejected], { ...env, ...change })
+        expect(reject.stderr).toContain(diagnostic)
+        expect(reject.code).toBe(1)
+        expect(await fs.stat(rejected).then(() => true, () => false)).toBe(false)
+        const verify = run(root, ["verify", staged, destination], { ...consumer, ...change })
+        expect(verify.stderr).toContain(diagnostic)
+        expect(verify.code).toBe(1)
+        expect(await Bun.file(destination).bytes()).toEqual(original)
+      }
     }
     await Bun.write(receiptFile, `${await Bun.file(receiptFile).text()}\n`)
     const fresh = path.join(root, "unverified/ycoding-runtime")

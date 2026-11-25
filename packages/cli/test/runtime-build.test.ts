@@ -13,9 +13,10 @@ const harness = `
     Object.defineProperty(process, "platform", { value: "darwin" })
     Object.defineProperty(process, "arch", { value: "arm64" })
     process.env.GITHUB_ACTIONS = "true"
-    process.env.GITHUB_EVENT_NAME = "workflow_dispatch"
+    process.env.GITHUB_EVENT_NAME = process.env.RELEASE_EVENT
     process.env.GITHUB_REPOSITORY = "example/ycoding"
-    process.env.GITHUB_WORKFLOW_REF = "example/ycoding/.github/workflows/release.yml@refs/heads/main"
+    process.env.GITHUB_REF = process.env.RELEASE_EVENT === "push" ? "refs/tags/v0.13.5" : "refs/heads/main"
+    process.env.GITHUB_WORKFLOW_REF = "example/ycoding/.github/workflows/release.yml@" + process.env.GITHUB_REF
     if (process.env.STAGED_RUNTIME !== undefined) process.env.YCODING_RELEASE_RUNTIME_DIR = process.env.STAGED_RUNTIME
   }
   const file = Bun.file
@@ -34,6 +35,7 @@ const harness = `
     ...childProcess,
     spawnSync(command, args, options) {
       calls.push({ command, args, cwd: options.cwd, env: { CARGO_TARGET_DIR: options.env.CARGO_TARGET_DIR, YCODING_BUNDLED_MODELS_PATH: options.env.YCODING_BUNDLED_MODELS_PATH }, stdio: options.stdio })
+      if (process.env.SCENARIO === "missing-artifact") throw new Error("Attempted to build without a staged runtime")
       if (process.env.STAGED_RUNTIME !== undefined) {
         if (command !== "bash" || args[0] !== "script/runtime-receipt.sh" || args[1] !== "verify" || args[2] !== process.env.STAGED_RUNTIME || options.env.RECEIPT_TARGET !== "darwin-arm64" || options.env.RECEIPT_PROFILE !== "release")
           throw new Error("The staged runtime consumer attempted an unverified build")
@@ -74,7 +76,7 @@ const harness = `
   }
 `
 
-async function run(input: { targetDirectory?: string; cargoTargetDir?: string; scenario?: string; target?: object; stagedRuntime?: string }) {
+async function run(input: { targetDirectory?: string; cargoTargetDir?: string; scenario?: string; target?: object; stagedRuntime?: string; releaseEvent?: "workflow_dispatch" | "push" }) {
   const environment = {
     ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !["CARGO_TARGET_DIR", "YCODING_RELEASE_RUNTIME_DIR", "STAGED_RUNTIME"].includes(name))),
     RUNTIME_MODULE: path.join(root, "packages/cli/script/runtime.ts"),
@@ -83,6 +85,7 @@ async function run(input: { targetDirectory?: string; cargoTargetDir?: string; s
     ...(input.cargoTargetDir === undefined ? {} : { CARGO_TARGET_DIR: input.cargoTargetDir }),
     ...(input.stagedRuntime === undefined ? {} : { STAGED_RUNTIME: input.stagedRuntime }),
     SCENARIO: input.scenario ?? "success",
+    RELEASE_EVENT: input.releaseEvent ?? "workflow_dispatch",
   }
   const child = Bun.spawnSync([process.execPath, "-e", harness], {
     cwd: root,
@@ -115,21 +118,21 @@ async function run(input: { targetDirectory?: string; cargoTargetDir?: string; s
   }
 }
 
-test("buildRuntime embeds verified Apple Silicon bytes without compiling or falling back", async () => {
+test.each(["workflow_dispatch", "push"] as const)("buildRuntime embeds verified Apple Silicon bytes without compiling or falling back on %s", async (releaseEvent) => {
   const target = { os: "darwin", arch: "arm64" }
   const stagedRuntime = path.join(os.tmpdir(), "release-runtime")
-  const accepted = await run({ target, stagedRuntime })
+  const accepted = await run({ target, stagedRuntime, releaseEvent })
   expect(accepted.contents).toBe("verified staged runtime")
   expect(accepted.result?.sha256).toBe(createHash("sha256").update("verified staged runtime").digest("hex"))
   expect(accepted.verifiedRuntimeCleaned).toBe(true)
   expect(accepted.calls.map(({ command }) => command)).toEqual(["bash"])
 
-  const rejected = await run({ target, stagedRuntime, scenario: "receipt-failure" })
+  const rejected = await run({ target, stagedRuntime, releaseEvent, scenario: "receipt-failure" })
   expect(rejected.error).toContain("Verifying the Apple Silicon release runtime failed")
   expect(rejected.result).toBeUndefined()
   expect(rejected.calls.map(({ command }) => command)).toEqual(["bash"])
 
-  expect(await run({ target, scenario: "missing-artifact" })).toMatchObject({
+  expect(await run({ target, releaseEvent, scenario: "missing-artifact" })).toMatchObject({
     error: "Apple Silicon release packaging requires the staged runtime", calls: [],
   })
 })
