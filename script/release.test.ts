@@ -1110,6 +1110,9 @@ test("test workflow saves generic Rust dependency caches only after workspace ar
     expect(step).toContain(`cache-key: \${{ ${id}.outputs.cargo-cache-key }}`)
     expect(step).toContain(`cache-hit: \${{ ${id}.outputs.cargo-cache-hit }}`)
   }
+  const build = workflowJob(testWorkflow, "build")
+  expect(build.indexOf("- name: Build native executable")).toBeLessThan(build.indexOf("- name: Verify Node build"))
+  expect(build.indexOf("- name: Verify Node build")).toBeLessThan(build.indexOf("- name: Save Rust dependencies"))
   const verify = workflowJob(workflow, "verify-source")
   const save = verify.split("      - name: Save native contract dependencies\n")[1]?.split("\n      - name: ")[0] ?? ""
   expect(save).toContain("if: always() && matrix.suite == 'tui-runtime' && steps.native-rust.outcome == 'success'")

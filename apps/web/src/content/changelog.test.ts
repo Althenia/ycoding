@@ -7,8 +7,24 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.13.1 first and matches its release notes", async () => {
+  test("lists v0.13.2 first and matches its release notes", async () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.13.2", date: "2026-11-25", title: "Antigravity and Muse sign-in", tags: ["Fixed"] })
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.13.2.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.13.2\n")
+    const changes = [...notes.matchAll(/^- (.+)$/gm)].map((match) => ({ tag: "Fixed" as const, text: match[1]! }))
+    expect(entry?.changes).toEqual(changes)
+    expect(changes).toEqual([
+      expect.objectContaining({ text: expect.stringMatching(/Antigravity sign-in works.*macOS app and CLI.*v0\.13\.1 native runtime.*without a Google OAuth client/) }),
+      expect.objectContaining({ text: expect.stringMatching(/Muse \(Meta\) account sign-in.*only its client ID.*client secret is optional/) }),
+    ])
+    expect(notes).toContain("## Known limitations\n\nA YCoding event starting a turn on an idle Dot directly over the ChatGPT app executor channel was not verified live for this release.")
+    expect(notes).toContain("`ycoding decision watch --deliver dot` sends events only while a watch runs with `--family --follow` on an existing root Session.")
+    expect(after("0.13.2")?.version).toBe("0.13.1")
+  })
+
+  test("retains v0.13.1 and matches its release notes", async () => {
+    const entry = byVersion("0.13.1")
     expect(entry).toMatchObject({
       version: "0.13.1", date: "2026-11-25", title: "One Rust workspace and native plugins", tags: ["Changed", "Fixed"],
     })
@@ -58,7 +74,7 @@ describe("release entries", () => {
     expect(after("0.13.0")?.version).toBe("0.12.2")
   })
 
-  test.each(["0.13.2", "0.13.3", "0.13.4", "0.13.5"])("omits v%s and its note file", async (version) => {
+  test.each(["0.13.3", "0.13.4", "0.13.5"])("omits v%s and its note file", async (version) => {
     expect(byVersion(version)).toBeUndefined()
     expect(await Bun.file(new URL(`../../../../docs/releases/v${version}.md`, import.meta.url)).exists()).toBe(false)
   })
@@ -1903,7 +1919,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 64)).toEqual([
+    expect(versions.slice(0, 65)).toEqual([
+      "0.13.2",
       "0.13.1",
       "0.13.0",
       "0.12.2",

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
-import { readFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import os from "node:os"
 import path from "node:path"
 
 const root = path.resolve(import.meta.dir, "..")
@@ -90,6 +91,44 @@ test("generic Rust dependency cache keys on lockfile and vendor and saves only t
     restore.match(/path: \|\n([\s\S]+?)\s+key:/)?.[1]?.trim().split(/\n\s*/),
   )
 })
+
+test("workspace artifact purge keeps third-party artifacts whose names match workspace target names", () => {
+  const save = Bun.YAML.parse(readFileSync(path.join(root, ".github/actions/setup-rust/save/action.yml"), "utf8")) as {
+    runs: { steps: Array<{ name: string; run?: string }> }
+  }
+  const script = save.runs.steps.find((step) => step.name === "Remove workspace build artifacts")?.run ?? ""
+  const work = mkdtempSync(path.join(os.tmpdir(), "ycoding-purge-"))
+  try {
+    mkdirSync(path.join(work, "rust"))
+    for (const entry of ["Cargo.toml", "Cargo.lock", "crates", "vendor"])
+      if (existsSync(path.join(root, "rust", entry))) symlinkSync(path.join(root, "rust", entry), path.join(work, "rust", entry))
+    const release = path.join(work, "rust/target/release")
+    const hash = "0123456789abcdef"
+    const thirdParty = [
+      `deps/liblog-${hash}.rlib`,
+      `deps/liblog-${hash}.rmeta`,
+      `deps/log-${hash}.d`,
+      `.fingerprint/log-${hash}/lib-log`,
+    ]
+    const workspace = [
+      `deps/libycoding_core-${hash}.rlib`,
+      `.fingerprint/ycoding-core-${hash}/lib-ycoding_core`,
+      "ycoding-runtime",
+    ]
+    for (const file of [...thirdParty, ...workspace]) {
+      mkdirSync(path.dirname(path.join(release, file)), { recursive: true })
+      writeFileSync(path.join(release, file), "")
+    }
+    mkdirSync(path.join(release, "build"), { recursive: true })
+    const result = Bun.spawnSync(["bash", "-c", script], { cwd: work, stdout: "pipe", stderr: "pipe" })
+    expect(result.stderr.toString()).toBe("")
+    expect(result.exitCode).toBe(0)
+    expect(thirdParty.filter((file) => !existsSync(path.join(release, file)))).toEqual([])
+    expect(workspace.filter((file) => existsSync(path.join(release, file)))).toEqual([])
+  } finally {
+    rmSync(work, { recursive: true, force: true })
+  }
+}, 120_000)
 
 test("vendored timestamps normalize only after an exact dependency cache hit", () => {
   const action = readFileSync(path.join(root, ".github/actions/setup-rust/action.yml"), "utf8")

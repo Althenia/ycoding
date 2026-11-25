@@ -22,6 +22,16 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.13.2",
+    date: "2026-11-25",
+    title: "Antigravity and Muse sign-in",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Antigravity sign-in works in the released macOS app and CLI. The v0.13.1 native runtime shipped without a Google OAuth client, so connecting an Antigravity account was rejected." },
+      { tag: "Fixed", text: "Muse (Meta) account sign-in uses the client embedded in the same builds. Muse needs only its client ID; the client secret is optional." },
+    ],
+  },
+  {
     version: "0.13.1",
     date: "2026-11-25",
     title: "One Rust workspace and native plugins",
