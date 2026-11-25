@@ -3,7 +3,6 @@ use std::{
     fmt, fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
 };
 use ycoding_schema::{
     prompt::{AttachmentDigest, ManagedAttachmentContent},
@@ -131,21 +130,13 @@ impl Store {
             Err(error) => return Err(error.into()),
         };
         self.ensure_directory(target.parent().ok_or(Error::InvalidReference)?)?;
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let temporary = target.with_file_name(format!(
-            "{hash}.{}-{}.tmp",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
+        let mut stage = super::staging::Stage::create(
+            target.parent().ok_or(Error::InvalidReference)?,
+            super::staging::IMPORTS,
+        )?;
+        let temporary = &stage.path;
         let result = (|| {
-            let mut options = fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            let mut file = options.open(&temporary)?;
+            let file = &mut stage.file;
             file.write_all(bytes)?;
             #[cfg(unix)]
             {
@@ -153,10 +144,10 @@ impl Store {
                 file.set_permissions(fs::Permissions::from_mode(0o400))?;
             }
             if modified {
-                fs::rename(&temporary, &target)?;
+                fs::rename(temporary, &target)?;
             }
             if !modified {
-                match fs::hard_link(&temporary, &target) {
+                match fs::hard_link(temporary, &target) {
                     Ok(()) => {}
                     Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                     Err(error) => return Err(Error::Io(error)),
@@ -165,7 +156,7 @@ impl Store {
             self.read(&content)?;
             Ok(content)
         })();
-        let cleanup = fs::remove_file(&temporary);
+        let cleanup = fs::remove_file(temporary);
         match (result, cleanup) {
             (Err(error), _) => Err(error),
             (Ok(content), Ok(())) => Ok(content),

@@ -1,5 +1,95 @@
 use super::*;
 
+#[cfg(unix)]
+#[tokio::test]
+async fn housekeeping_retries_abandoned_stages_and_preserves_live_paths() {
+    use std::fs::{self, File, OpenOptions};
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::time::{Duration, UNIX_EPOCH};
+    let f = fixture("{}", "{}");
+    let now = crate::ids::now_millis();
+    let cutoff = UNIX_EPOCH + Duration::from_millis(now as u64 - 7 * 86_400_000);
+    let old = cutoff - Duration::from_secs(1);
+    let store = attachment_store::Store::new(f.roots.data.clone()).unwrap();
+    let reference = store.import(b"retained during admission").unwrap();
+    let blob = store.absolute_path(&reference).unwrap();
+    File::open(&blob).unwrap().set_modified(old).unwrap();
+    let imports = blob.parent().unwrap().join(".imports");
+    let cache = f.roots.cache.join(".catalog-writes");
+    for dir in [&imports, &cache] {
+        fs::create_dir_all(dir).unwrap();
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let stage = |dir: &std::path::Path, name, time| {
+        let path = dir.join(name);
+        let file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .unwrap();
+        file.set_modified(time).unwrap();
+        path
+    };
+    let abandoned = stage(&cache, "stage-42-1", old);
+    let interrupted = stage(&imports, "stage-42-2", old);
+    let boundary = stage(&cache, "stage-42-3", cutoff);
+    let held = stage(&imports, "stage-42-4", old);
+    let writer = File::open(&held).unwrap();
+    writer.lock().unwrap();
+    let user = stage(&cache, "notes", old);
+    let outside = stage(&f.directory(), "stage-42-5", old);
+    symlink(&outside, cache.join("stage-42-5")).unwrap();
+    let unexpected = stage(&imports, "stage-42-6", old);
+    fs::set_permissions(&unexpected, fs::Permissions::from_mode(0o666)).unwrap();
+    let (sleeps, mut receiver) = mpsc::unbounded_channel();
+    let clock = Arc::new(Clock {
+        now: AtomicI64::new(now),
+        sleeps,
+    });
+    let maintenance = Maintenance::new(&f.factory);
+    maintenance.spawn(
+        f.sessions(),
+        f.locations(),
+        f.factory.clone(),
+        clock.clone(),
+        Arc::new(Vec::new),
+    );
+    let mut timers = vec![];
+    let tick = hourly(&mut receiver, &mut timers).await;
+    assert!(
+        !abandoned.exists() && !interrupted.exists(),
+        "startup retained abandoned stages"
+    );
+    assert!(
+        boundary.exists()
+            && held.exists()
+            && user.exists()
+            && outside.exists()
+            && unexpected.exists()
+    );
+    assert!(cache.join("stage-42-5").is_symlink());
+    assert_eq!(
+        store.read(&reference).unwrap(),
+        b"retained during admission"
+    );
+    drop(writer);
+    fs::set_permissions(&unexpected, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::rename(&cache, f.directory().join("saved-cache")).unwrap();
+    symlink(f.directory(), &cache).unwrap();
+    clock.now.store(now + 3_600_000, Ordering::SeqCst);
+    tick.release.send(()).unwrap();
+    let _next = hourly(&mut receiver, &mut timers).await;
+    assert!(!held.exists() && !unexpected.exists());
+    assert!(outside.exists() && f.directory().join("saved-cache/stage-42-3").exists());
+    assert_eq!(
+        store.read(&reference).unwrap(),
+        b"retained during admission"
+    );
+    maintenance.stop().await.unwrap();
+}
+
 #[test]
 fn empty_retention_preserves_analytics_but_deletions_and_pending_purges_require_it() {
     let store = Store::disposable(

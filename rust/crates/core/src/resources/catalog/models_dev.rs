@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::{
     fmt,
     path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, SystemTime},
 };
 use ycoding_schema::{
@@ -653,29 +652,25 @@ impl Service {
             .map_err(|_| Error::Request)??;
         let snapshots =
             normalize(&ycoding_schema::parse_json(&text).map_err(|_| Error::InvalidSource)?)?;
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let temporary = self.options.cache.with_extension(format!(
-            "{}.{}.tmp",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        if let Some(parent) = temporary.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|_| Error::Storage)?;
-        }
-        tokio::fs::write(&temporary, text)
-            .await
-            .map_err(|_| Error::Storage)?;
-        if tokio::fs::rename(&temporary, &self.options.cache)
-            .await
-            .is_err()
-        {
-            tokio::fs::remove_file(&temporary)
-                .await
-                .map_err(|_| Error::Storage)?;
-            return Err(Error::Storage);
-        }
+        let cache = self.options.cache.clone();
+        tokio::task::spawn_blocking(move || {
+            use crate::resources::staging;
+            use std::io::Write;
+            let parent = cache.parent().ok_or(Error::Storage)?;
+            std::fs::create_dir_all(parent).map_err(|_| Error::Storage)?;
+            let mut stage =
+                staging::Stage::create(parent, staging::CATALOG).map_err(|_| Error::Storage)?;
+            let result = stage
+                .file
+                .write_all(text.as_bytes())
+                .and_then(|()| std::fs::rename(&stage.path, cache));
+            if result.is_err() {
+                let _ = std::fs::remove_file(&stage.path);
+            }
+            result.map_err(|_| Error::Storage)
+        })
+        .await
+        .map_err(|_| Error::Closed)??;
         Ok(snapshots)
     }
     async fn fetch_text(&self) -> Result<String, Error> {

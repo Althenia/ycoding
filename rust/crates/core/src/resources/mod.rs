@@ -22,4 +22,5 @@ pub mod muse;
 pub mod project_artifact;
 pub mod reference;
 pub mod skill;
+pub mod staging;
 pub mod tool_output_store;
