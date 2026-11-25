@@ -18,7 +18,7 @@ const darwinStep = (name: string) => darwinBuild.split(`      - name: ${name}\n`
 test("native archive finalization preserves both TUI shards and every accepted command exactly once", () => {
   const verify = workflowJob(workflow, "verify-source")
   expect([...verify.matchAll(/- suite: (\S+)/g)].map((match) => match[1])).toEqual([
-    "types", "web", "cli", "tui-project", "tui-runtime",
+    "types", "web", "cli", "cli-antigravity", "cli-muse", "tui-project", "tui-runtime",
   ])
   for (const [name, shard, hash] of [
     ["Verify transcript and approval suites", "tui-project", "f131e4462bff135d8cfd8a8a55acd1415019649c260364bf590f923992b446b2"],
@@ -28,7 +28,7 @@ test("native archive finalization preserves both TUI shards and every accepted c
     ["Verify ownership upgrade and native decision boundaries", "tui-project", "10cb8dcc5dbb20e82da03b82faeaccf2b3f31da1f68841ac9f2c066093bc12ee"],
     ["Verify footer state and short-terminal controls", "tui-runtime", "01be3653bc1191ba5f3db6120255da2f8f04379edaa62add22258ccad823fb67"],
     ["Verify compact Project and transcript layouts", "tui-runtime", "7b817f020dc3bbccb9d2e63e342377564c8395f551a9453b967c4be65a363528"],
-    ["Verify native Dots access and retirement boundaries", "tui-runtime", "938f5cd2eabcaa6c31134de20750085823a44b06f93467e1e2041ddac65a83e9"],
+    ["Verify native Dots access and retirement boundaries", "tui-project", "938f5cd2eabcaa6c31134de20750085823a44b06f93467e1e2041ddac65a83e9"],
     ["Verify question grading and native Form views", "tui-runtime", "ddaed34f767789cff87f5d822d5b2d5b1df5df47ac88e081b37f250969825d98"],
     ["Verify subagent model selection boundaries", "tui-runtime", "a08d919abbe6505424fab1af1ecc2626e53f917794d330ace37dbf537ddd1749"],
   ] as const) {
@@ -669,9 +669,9 @@ test("global Dots release gates select current mocks once and leave listener acc
   const verify = workflowJob(workflow, "verify-source")
   const steps = verify.split("\n      - name: ").slice(1)
   for (const [file, suite] of [
-    ["./test/dots-connection.test.ts", "tui-runtime"],
-    ["./test/dots-connection-dialog.test.tsx", "tui-runtime"],
-    ["./test/dots-native.test.ts", "tui-runtime"],
+    ["./test/dots-connection.test.ts", "tui-project"],
+    ["./test/dots-connection-dialog.test.tsx", "tui-project"],
+    ["./test/dots-native.test.ts", "tui-project"],
     ["./test/remote-control-native.test.ts", "cli"],
     ["./test/remote-control-sequence.test.ts", "cli"],
   ] as const) {
@@ -929,6 +929,8 @@ test("source verification legs start in parallel with the native builds", () => 
     "types",
     "web",
     "cli",
+    "cli-antigravity",
+    "cli-muse",
     "tui-project",
     "tui-runtime",
   ])
@@ -1408,4 +1410,40 @@ test("release source verification runs the typed decision suites and the guardra
   expect(transcript).toContain("test/cli/tui/permission.test.ts test/cli/tui/guardrail.test.tsx")
   expect(verify).not.toContain("continue-on-error")
   expect(workflow).not.toContain("continue-on-error:")
+})
+
+test("OAuth source checks run in separate Linux legs before release finalization", () => {
+  const parsed = Bun.YAML.parse(workflow) as {
+    jobs: {
+      "verify-source": {
+        needs?: unknown
+        strategy: { "fail-fast": boolean; matrix: { include: { suite: string; runner: string }[] } }
+        steps: { name?: string; if?: string; run?: string; "working-directory"?: string }[]
+      }
+      "finalize-release": { needs: string[] }
+    }
+  }
+  const verifyConfig = parsed.jobs["verify-source"]
+  expect(verifyConfig.needs).toBeUndefined()
+  expect(verifyConfig.strategy["fail-fast"]).toBe(false)
+  expect(verifyConfig.strategy.matrix.include).toContainEqual({ suite: "cli-antigravity", runner: "ubuntu-24.04" })
+  expect(verifyConfig.strategy.matrix.include).toContainEqual({ suite: "cli-muse", runner: "ubuntu-24.04" })
+
+  for (const [suite, commands] of Object.entries({
+    "cli-antigravity": [
+      "bun test --cwd packages/core ./test/plugin/provider-antigravity.test.ts ./test/plugin/provider-antigravity-signature-replay.test.ts",
+      "bun test --cwd packages/cli/script ./antigravity-build-env.test.ts ./antigravity-build.test.ts",
+    ],
+    "cli-muse": [
+      "bun test --cwd packages/core ./test/plugin/provider-muse.test.ts ./test/plugin/provider-muse-tools.test.ts ./test/provider-usage-muse.test.ts",
+      "bun test --cwd packages/cli/script ./muse-build-env.test.ts ./muse-build.test.ts",
+    ],
+  })) {
+    const checks = verifyConfig.steps.filter((step) => commands.some((command) => step.run?.includes(command)))
+    expect(checks, suite).toHaveLength(1)
+    expect(checks[0], suite).toMatchObject({ if: `matrix.suite == '${suite}'`, run: `${commands.join("\n")}\n` })
+    expect(checks[0]?.["working-directory"], suite).toBeUndefined()
+  }
+
+  expect(parsed.jobs["finalize-release"].needs).toEqual(["verify-source", darwinJob])
 })
