@@ -134,7 +134,7 @@ test("keeps branch pushes out of CI while retaining pull requests and manual run
   }
   expect(yamlFields(workflowEvents("nix-hashes").push).branches).toEqual(["beta"])
   expect(workflowEvents("nix-hashes")).toHaveProperty("workflow_dispatch")
-  expect(workflowEvents("release").push).toEqual({ tags: ["v*"] })
+  expect(workflowEvents("release").push).toEqual({ tags: ["v*", "desktop-v*", "web-v*"] })
   expect(workflowEvents("release")).toHaveProperty("workflow_dispatch")
   const selector = workflowJobs("test")["build-inputs"]?.steps.find((step) => step.id === "select")
   expect(selector?.shell).toBe("bash")
@@ -194,18 +194,33 @@ test("keeps the normal source and Desktop checks successful on a skip and expose
 test("retains the entire release workflow, including full builds, publication and deployment", () => {
   const release = readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8")
   const jobs = workflowJobs("release")
-  const tagPush = "github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/tags/v')"
-  const prepare = `\${{ github.event_name == 'workflow_dispatch' || (${tagPush}) }}`
-  const publish = `\${{ ${tagPush} }}`
-  for (const job of ["verify-source", "build-desktop-runtime", "finalize-release"]) expect(jobs[job]?.if).toBe(prepare)
-  for (const job of ["release-tui", "deploy-web"]) expect(jobs[job]?.if).toBe(publish)
-  expect(jobs["finalize-release"]?.needs).toEqual(["verify-source", "build-desktop-runtime"])
-  expect(jobs["release-tui"]?.needs).toBe("finalize-release")
-  expect(jobs["deploy-web"]?.needs).toBe("release-tui")
+  const releaseTag = "startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/desktop-v') || startsWith(github.ref, 'refs/tags/web-v')"
+  const target = (name: string) => `needs.release-target.outputs.target == '${name}'`
+  const tagPush = "github.event_name == 'push' && !github.event.deleted"
+  expect(jobs["release-target"]?.if).toBe(`\${{ github.event_name == 'workflow_dispatch' || (${tagPush} && (${releaseTag})) }}`)
+  expect(jobs["verify-source"]?.if).toBeUndefined()
+  for (const job of ["build-desktop-runtime", "finalize-release"]) expect(jobs[job]?.if).toBe(`\${{ ${target("full")} || ${target("desktop")} }}`)
+  expect(jobs["release-tui"]?.if).toBe(`\${{ ${tagPush} && startsWith(github.ref, 'refs/tags/v') && ${target("full")} }}`)
+  expect(jobs["release-desktop"]?.if).toBe(`\${{ ${tagPush} && startsWith(github.ref, 'refs/tags/desktop-v') && ${target("desktop")} }}`)
+  expect(jobs["deploy-web"]?.if).toBe(`\${{ !cancelled() && ${tagPush} && needs.release-target.result == 'success' && needs.verify-source.result == 'success' && ((startsWith(github.ref, 'refs/tags/v') && ${target("full")} && needs.release-tui.result == 'success') || (startsWith(github.ref, 'refs/tags/web-v') && ${target("web")} && needs.release-tui.result == 'skipped')) }}`)
+  for (const job of ["verify-source", "build-desktop-runtime"]) expect(jobs[job]?.needs).toBe("release-target")
+  expect(jobs["finalize-release"]?.needs).toEqual(["release-target", "verify-source", "build-desktop-runtime"])
+  for (const job of ["release-tui", "release-desktop"]) expect(jobs[job]?.needs).toEqual(["release-target", "finalize-release"])
+  expect(jobs["deploy-web"]?.needs).toEqual(["release-target", "verify-source", "release-tui"])
   expect(jobs["verify-source"]?.steps.find((step) => step.run === "bun run build:web")?.if).toBe("matrix.suite == 'web'")
   const desktop = jobs["build-desktop-runtime"]?.steps.find((step) => typeof step.run === "string" && step.run.includes("packages/desktop/script/build.sh"))
   expect(desktop).toBeDefined()
   expect(desktop?.if).toBeUndefined()
-  expect([...release.matchAll(/- suite: (\S+)/g)].map((match) => match[1])).toEqual(["types", "web", "cli", "cli-antigravity", "cli-muse", "tui-project", "tui-runtime"])
+  const directory = mkdtempSync(path.join(tmpdir(), "ycoding-release-suites-"))
+  try {
+    const output = path.join(directory, "github-output")
+    const result = Bun.spawnSync(["bash", path.join(root, "script/release-version.sh"), "--target"], {
+      cwd: directory, env: { PATH: process.env.PATH, GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/tags/v0.13.2", GITHUB_OUTPUT: output }, stdout: "pipe", stderr: "pipe",
+    })
+    expect(result.exitCode, result.stderr.toString()).toBe(0)
+    expect(readFileSync(output, "utf8")).toBe('target=full\nsuites=["types","web","cli","cli-antigravity","cli-muse","tui-project","tui-runtime"]\n')
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
   expect(release).not.toContain("build-inputs")
 })

@@ -14,12 +14,44 @@ const workflowJob = (content: string, name: string) =>
 const darwinJob = "build-desktop-runtime"
 const darwinBuild = workflowJob(workflow, darwinJob)
 const darwinStep = (name: string) => darwinBuild.split(`      - name: ${name}\n`)[1]?.split("\n      - name: ")[0] ?? ""
+type WorkflowStep = { name?: string; id?: string; if?: string; run?: string; uses?: string; with?: Record<string, unknown>; env?: Record<string, string> }
+type WorkflowJob = { name?: string; needs?: string | string[]; if?: string; "runs-on"?: string; permissions?: Record<string, string>; outputs?: Record<string, string>; environment?: unknown; strategy?: { "fail-fast"?: boolean; matrix?: Record<string, unknown> }; steps: WorkflowStep[] }
+const parsedWorkflow = Bun.YAML.parse(workflow) as { jobs: Record<string, WorkflowJob> }
+const jobStep = (job: string, name: string) => {
+  const steps = parsedWorkflow.jobs[job]?.steps.filter((step) => step.name === name) ?? []
+  expect(steps, `${job}: ${name}`).toHaveLength(1)
+  return steps[0]!
+}
+const fullSuites = ["types", "web", "cli", "cli-antigravity", "cli-muse", "tui-project", "tui-runtime"]
+const targetIs = (target: string) => `needs.release-target.outputs.target == '${target}'`
+const buildsDesktop = `\${{ ${targetIs("full")} || ${targetIs("desktop")} }}`
+const tuiPublication = `\${{ github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/tags/v') && ${targetIs("full")} }}`
+const desktopPublication = `\${{ github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/tags/desktop-v') && ${targetIs("desktop")} }}`
+const webDeployment = `\${{ !cancelled() && github.event_name == 'push' && !github.event.deleted && needs.release-target.result == 'success' && needs.verify-source.result == 'success' && ((startsWith(github.ref, 'refs/tags/v') && ${targetIs("full")} && needs.release-tui.result == 'success') || (startsWith(github.ref, 'refs/tags/web-v') && ${targetIs("web")} && needs.release-tui.result == 'skipped')) }}`
+
+function releaseTarget(input: Record<string, string>) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ycoding-release-target-"))
+  try {
+    const output = path.join(directory, "github-output")
+    fs.writeFileSync(output, "")
+    const result = Bun.spawnSync(["bash", path.join(import.meta.dir, "release-version.sh"), "--target"], {
+      cwd: directory, env: { PATH: process.env.PATH, GITHUB_OUTPUT: output, ...input }, stdout: "pipe", stderr: "pipe",
+    })
+    return { exitCode: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString(), output: fs.readFileSync(output, "utf8") }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+}
+
+function targetSuites(target: string) {
+  const result = releaseTarget({ GITHUB_EVENT_NAME: "workflow_dispatch", REQUESTED_RELEASE_TARGET: target })
+  expect(result.exitCode, result.stderr).toBe(0)
+  return JSON.parse(/^suites=(.*)$/m.exec(result.output)?.[1] ?? "null") as string[]
+}
 
 test("native archive finalization preserves both TUI shards and every accepted command exactly once", () => {
   const verify = workflowJob(workflow, "verify-source")
-  expect([...verify.matchAll(/- suite: (\S+)/g)].map((match) => match[1])).toEqual([
-    "types", "web", "cli", "cli-antigravity", "cli-muse", "tui-project", "tui-runtime",
-  ])
+  expect(targetSuites("full")).toEqual(fullSuites)
   for (const [name, shard, hash] of [
     ["Verify transcript and approval suites", "tui-project", "f131e4462bff135d8cfd8a8a55acd1415019649c260364bf590f923992b446b2"],
     ["Verify goal continuation", "tui-project", "eba471157159a351c38806fed91e1b202a1614b594b5f2c5942eb40e1ee07129"],
@@ -43,7 +75,8 @@ test("native archive finalization preserves both TUI shards and every accepted c
 
 test("the Linux runtime shard runs the three exact native recovery cases after the existing contracts", () => {
   const verify = workflowJob(workflow, "verify-source")
-  expect(verify).toContain("- suite: tui-runtime\n            runner: ubuntu-24.04")
+  expect(targetSuites("full")).toContain("tui-runtime")
+  expect(verify).toContain("\n    runs-on: ubuntu-24.04\n")
   const steps = verify.split("\n      - name: ").slice(1).filter((step) => step.startsWith("Verify native contract boundaries\n"))
   expect(steps).toHaveLength(1)
   const cargo = "cargo test --locked --manifest-path rust/Cargo.toml -p"
@@ -122,7 +155,7 @@ test("the Darwin job uploads each archive once and the finalizer checks the comp
   expect([...darwinBuild.matchAll(/^          name: (release-archive-\S+)$/gm)].map((match) => match[1])).toEqual([
     "release-archive-darwin-arm64", "release-archive-desktop-darwin-arm64",
   ])
-  expect(release).toContain(`needs: [verify-source, ${darwinJob}]`)
+  expect(release).toContain(`needs: [release-target, verify-source, ${darwinJob}]`)
   expect(release).toContain("pattern: release-archive-*")
   expect(release).toContain("merge-multiple: true")
   expect(release).toContain('bun script/release-archive.ts finalize "$RELEASE_VERSION" downloaded release')
@@ -139,7 +172,7 @@ test("native archive finalization deploys the verified web artifact without rebu
   expect(verify).toContain("name: verified-web")
   expect(verify).toContain("path: apps/web/dist/")
   expect(verify.indexOf("run: bun run build:web")).toBeLessThan(verify.indexOf("name: verified-web"))
-  expect(deploy).toContain("needs: release-tui")
+  expect(deploy).toContain("needs: [release-target, verify-source, release-tui]")
   expect(deploy).toContain("name: verified-web")
   expect(deploy).toContain("path: apps/web/dist")
   expect(deploy).not.toContain("bun run build:web")
@@ -259,24 +292,25 @@ test("release archives keep the layout installed updaters accept and ship the li
 
 test("one v tag verifies a shared note and publishes only the TUI GitHub release", () => {
   const verify = workflowJob(workflow, "verify-source")
-  const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0]
+  const tui = workflowJob(workflow, "release-tui")
   expect(workflow).toContain("      - v*")
-  expect(Bun.YAML.parse(workflow)).toHaveProperty("on.push.tags", ["v*"])
+  expect(Bun.YAML.parse(workflow)).toHaveProperty("on.push.tags", ["v*", "desktop-v*", "web-v*"])
   expect(workflow).not.toContain("      - tui-v*")
-  expect(workflow).not.toContain("      - web-v*")
   expect(verify).toContain("run: bash script/release-version.sh")
   expect(verify).toContain("bun test --cwd apps/web ./src/content/changelog.test.ts")
   expect(verify).toContain("bun test --cwd packages/remote ./test/contract.test.ts")
   expect(verify).toContain("bun test --cwd apps/web ./test/remote-store-container.test.ts")
   expect(verify).not.toContain("bun run test:integration:remote")
   expect(verify).toContain("bun run build:cloudflare")
-  expect(tui).toContain("if: ${{ github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/tags/v') }}")
+  expect(tui).toContain(`if: ${tuiPublication}`)
   expect(tui).toContain('gh release create "$tag"')
   expect(tui?.match(/--title "[^"]+"/g)).toEqual(['--title "YCoding $version"', '--title "YCoding $version"'])
   expect(tui).toContain('notes="docs/releases/$tag.md"')
   expect(tui).toContain('test("^v[0-9]")')
   expect(tui).toContain("contents: write")
-  expect((workflow.match(/gh release create /g) ?? []).length).toBe(1)
+  expect((workflow.match(/gh release create /g) ?? []).length).toBe(2)
+  expect(tui.match(/gh release create /g)).toHaveLength(1)
+  expect(workflowJob(workflow, "release-desktop").match(/gh release create /g)).toHaveLength(1)
 })
 
 test("the first unified release has nonempty shared notes", async () => {
@@ -287,8 +321,8 @@ test("the first unified release has nonempty shared notes", async () => {
 
 test("same v tag deploys web after the GitHub release is published, without GitHub write access", () => {
   const deploy = workflowJob(workflow, "deploy-web")
-  expect(deploy).toContain("needs: release-tui")
-  expect(deploy).toContain("github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/tags/v')")
+  expect(deploy).toContain("needs: [release-target, verify-source, release-tui]")
+  expect(deploy).toContain(`    if: ${webDeployment}\n`)
   expect(deploy).toContain("name: verified-web")
   expect(deploy).toContain("bun run deploy:cloudflare")
   expect(deploy?.indexOf("name: verified-web")).toBeLessThan(deploy?.indexOf("bun run deploy:cloudflare") ?? -1)
@@ -312,7 +346,8 @@ test("publish and deploy consume only digest-checked artifacts from the current 
   const finalizer = workflowJob(workflow, "finalize-release")
   const release = workflowJob(workflow, "release-tui")
   const deploy = workflowJob(workflow, "deploy-web")
-  for (const [job, downloads] of [[finalizer, 1], [release, 2], [deploy, 1]] as const) {
+  const desktop = workflowJob(workflow, "release-desktop")
+  for (const [job, downloads] of [[finalizer, 1], [release, 2], [desktop, 2], [deploy, 1]] as const) {
     expect(job).not.toMatch(/run-id:|github-token:|artifact-ids:/)
     expect(job.match(/digest-mismatch: error/g)).toHaveLength(downloads)
   }
@@ -416,7 +451,8 @@ test("Cloudflare deployment requires a scoped Actions token before Wrangler runs
 test("release contexts stay out of the version resolver's shell source", () => {
   expect(workflow).toContain("REQUESTED_RELEASE_VERSION: ${{ inputs.version }}")
   expect(workflow).toContain("RELEASE_REF_NAME: ${{ github.ref_name }}")
-  expect(workflow).not.toMatch(/"\$\{\{ (?:inputs.version|github.ref_name) \}\}"/)
+  expect(workflow).toContain("REQUESTED_RELEASE_TARGET: ${{ inputs.target }}")
+  expect(workflow).not.toMatch(/"\$\{\{ (?:inputs.version|inputs.target|github.ref_name) \}\}"/)
 })
 
 test("release source checks cover Interaction and stored OpenAI Responses without live services", () => {
@@ -837,7 +873,7 @@ test("release and test workflows keep both relay versions in source verification
   }
   expect(releaseSource).toContain("ac_wire_002_handshake_invalid_input_matrix_dispatches_nothing")
   const deploy = workflowJob(workflow, "deploy-web")
-  expect(deploy).toContain("needs: release-tui")
+  expect(deploy).toContain("needs: [release-target, verify-source, release-tui]")
   expect(workflow).toContain("\npermissions:\n  contents: read\n")
   expect(deploy).toContain("    permissions:\n      contents: read\n    steps:")
   expect(deploy).toContain("name: verified-web\n          path: apps/web/dist")
@@ -922,19 +958,12 @@ test("Chrome pin selector names an existing source case", async () => {
 test("source verification legs start in parallel with the native builds", () => {
   const verify = workflowJob(workflow, "verify-source")
   const build = darwinBuild
-  expect(workflowJob(workflow, "verify-source")).not.toContain("needs:")
-  expect(workflowJob(workflow, "build-desktop-runtime")).not.toContain("needs:")
+  expect(parsedWorkflow.jobs["verify-source"]!.needs).toBe("release-target")
+  expect(parsedWorkflow.jobs["build-desktop-runtime"]!.needs).toBe("release-target")
+  expect(workflowJob(workflow, "release-target")).not.toContain("needs:")
   expect(verify).toContain("fail-fast: false")
-  expect(verify).toContain("runs-on: ${{ matrix.runner }}")
-  expect([...verify.matchAll(/- suite: (\S+)/g)].map((match) => match[1])).toEqual([
-    "types",
-    "web",
-    "cli",
-    "cli-antigravity",
-    "cli-muse",
-    "tui-project",
-    "tui-runtime",
-  ])
+  expect(verify).toContain("runs-on: ubuntu-24.04")
+  expect(targetSuites("full")).toEqual(fullSuites)
   for (const [step, condition] of [
     ["Check workspace and types", "matrix.suite == 'types'"],
     ["Verify web application and relay", "matrix.suite == 'web'"],
@@ -964,28 +993,35 @@ test("one release run gates publication and deployment on its own verification a
   const parsed: unknown = Bun.YAML.parse(workflow)
   expect(parsed).toHaveProperty("on.workflow_dispatch.inputs", {
     version: { description: expect.any(String), required: false, default: "" },
+    target: { description: expect.any(String), required: false, type: "choice", options: ["full", "desktop", "web"], default: "full" },
   })
-  expect(parsed).toHaveProperty("on.push.tags", ["v*"])
+  expect(parsed).toHaveProperty("on.push.tags", ["v*", "desktop-v*", "web-v*"])
   expect(parsed).toHaveProperty("concurrency", { group: "release", "cancel-in-progress": false })
   expect(parsed).toHaveProperty("permissions", { contents: "read" })
   const jobs = workflow.split("\njobs:\n")[1]!.split(/(?:^|\n)  ([\w-]+):\n/).slice(1)
+  const releaseTag = "startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/desktop-v') || startsWith(github.ref, 'refs/tags/web-v')"
   const dependencies = [
-    ["verify-source", undefined],
-    [darwinJob, undefined],
-    ["finalize-release", `[verify-source, ${darwinJob}]`],
-    ["release-tui", "finalize-release"],
-    ["deploy-web", "release-tui"],
+    ["release-target", "resolve release target", undefined, `\${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !github.event.deleted && (${releaseTag})) }}`],
+    ["verify-source", "verify release source (${{ matrix.suite }})", "release-target", undefined],
+    [darwinJob, "build Apple Silicon release packages", "release-target", buildsDesktop],
+    ["finalize-release", "finalize release archives and checksums", `[release-target, verify-source, ${darwinJob}]`, buildsDesktop],
+    ["release-tui", "publish TUI release", "[release-target, finalize-release]", tuiPublication],
+    ["release-desktop", "publish Desktop release", "[release-target, finalize-release]", desktopPublication],
+    ["deploy-web", "deploy web (cloudflare)", "[release-target, verify-source, release-tui]", webDeployment],
   ] as const
-  expect(jobs.filter((_, index) => index % 2 === 0).sort()).toEqual(dependencies.map(([name]) => name).sort())
-  const tagPush = "github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/tags/v')"
-  for (const [name, needs] of dependencies) {
+  expect(jobs.filter((_, index) => index % 2 === 0)).toEqual(dependencies.map(([name]) => name))
+  for (const [name, title, needs, condition] of dependencies) {
     const job = jobs[jobs.indexOf(name) + 1] ?? ""
+    expect(parsedWorkflow.jobs[name]!.name).toBe(title)
     expect(/^    needs: (.+)$/m.exec(job)?.[1]).toBe(needs)
-    expect(/^    if: (.+)$/m.exec(job)?.[1]).toBe(name === "release-tui" || name === "deploy-web"
-      ? `\${{ ${tagPush} }}` : `\${{ github.event_name == 'workflow_dispatch' || (${tagPush}) }}`)
+    expect(/^    if: (.+)$/m.exec(job)?.[1]).toBe(condition)
     expect(job).not.toMatch(/^    environment:/m)
-    if (name !== "release-tui") expect(job).not.toContain("contents: write")
+    if (name !== "release-tui" && name !== "release-desktop") expect(job).not.toContain("contents: write")
   }
+  expect(parsedWorkflow.jobs["release-tui"]!.permissions).toEqual({ contents: "write" })
+  expect(parsedWorkflow.jobs["release-desktop"]!.permissions).toEqual({ contents: "write" })
+  expect(parsedWorkflow.jobs["deploy-web"]!.permissions).toEqual({ contents: "read" })
+  expect(parsedWorkflow.jobs["finalize-release"]!.permissions).toEqual({ contents: "read" })
   expect(workflow).not.toContain("continue-on-error:")
   expect(workflow).toContain("permissions:\n  contents: read\n")
   const verify = workflowJob(workflow, "verify-source")
@@ -1239,7 +1275,7 @@ test.each([
   expect(result.exitCode === 0, result.stderr.toString()).toBe(accepted)
 })
 
-test.each(["lightweight", "annotated", "moved", "deleted", "off main", "wrong checkout"])("release provenance reads main and the exact incoming tag: %s", (scenario) => {
+test.each(["lightweight", "annotated", "moved", "deleted", "off main", "wrong checkout"].flatMap((scenario) => ["v", "desktop-v", "web-v"].map((prefix) => [scenario, prefix])))("release provenance reads main and the exact incoming tag: %s (%s)", (scenario, prefix) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ycoding-release-ancestry-"))
   try {
     const git = (cwd: string, args: string[], stdin = "") => {
@@ -1257,13 +1293,13 @@ test.each(["lightweight", "annotated", "moved", "deleted", "off main", "wrong ch
     const main = commit("main", released)
     const outside = commit("other branch", released)
     const sha = scenario === "off main" ? outside : released
-    const ref = "refs/tags/v0.13.2"
+    const ref = `refs/tags/${prefix}0.13.2`
     git(remote, ["update-ref", "refs/heads/main", main])
     git(remote, ["update-ref", "refs/heads/other", outside])
     git(remote, ["update-ref", "refs/tags/v0.13.1", main])
     if (scenario !== "deleted") {
       const tag = scenario === "annotated"
-        ? git(remote, ["mktag"], `object ${sha}\ntype commit\ntag v0.13.2\ntagger ${author}\n\nRelease\n`)
+        ? git(remote, ["mktag"], `object ${sha}\ntype commit\ntag ${prefix}0.13.2\ntagger ${author}\n\nRelease\n`)
         : scenario === "moved" ? main : sha
       git(remote, ["update-ref", ref, tag])
     }
@@ -1536,17 +1572,19 @@ test("OAuth source checks run in separate Linux legs before release finalization
     jobs: {
       "verify-source": {
         needs?: unknown
-        strategy: { "fail-fast": boolean; matrix: { include: { suite: string; runner: string }[] } }
+        "runs-on": string
+        strategy: { "fail-fast": boolean; matrix: { suite: string } }
         steps: { name?: string; if?: string; run?: string; "working-directory"?: string }[]
       }
       "finalize-release": { needs: string[] }
     }
   }
   const verifyConfig = parsed.jobs["verify-source"]
-  expect(verifyConfig.needs).toBeUndefined()
+  expect(verifyConfig.needs).toBe("release-target")
   expect(verifyConfig.strategy["fail-fast"]).toBe(false)
-  expect(verifyConfig.strategy.matrix.include).toContainEqual({ suite: "cli-antigravity", runner: "ubuntu-24.04" })
-  expect(verifyConfig.strategy.matrix.include).toContainEqual({ suite: "cli-muse", runner: "ubuntu-24.04" })
+  expect(verifyConfig.strategy.matrix).toEqual({ suite: "${{ fromJSON(needs.release-target.outputs.suites) }}" })
+  expect(verifyConfig["runs-on"]).toBe("ubuntu-24.04")
+  for (const target of ["full", "desktop"]) expect(targetSuites(target)).toEqual(expect.arrayContaining(["cli-antigravity", "cli-muse"]))
 
   for (const [suite, commands] of Object.entries({
     "cli-antigravity": [
@@ -1564,5 +1602,268 @@ test("OAuth source checks run in separate Linux legs before release finalization
     expect(checks[0]?.["working-directory"], suite).toBeUndefined()
   }
 
-  expect(parsed.jobs["finalize-release"].needs).toEqual(["verify-source", darwinJob])
+  expect(parsed.jobs["finalize-release"].needs).toEqual(["release-target", "verify-source", darwinJob])
+})
+
+test.each([
+  ["a v tag push", { GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/tags/v0.13.2" }, "full", fullSuites],
+  ["a desktop-v tag push", { GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/tags/desktop-v0.14.0" }, "desktop", fullSuites.filter((suite) => suite !== "web")],
+  ["a web-v tag push", { GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/tags/web-v0.2.0" }, "web", ["types", "web"]],
+  ["a tag push that ignores a stray target input", { GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/tags/web-v0.2.0", REQUESTED_RELEASE_TARGET: "desktop" }, "web", ["types", "web"]],
+  ["a manual run without a target", { GITHUB_EVENT_NAME: "workflow_dispatch" }, "full", fullSuites],
+  ["a manual full run", { GITHUB_EVENT_NAME: "workflow_dispatch", REQUESTED_RELEASE_TARGET: "full" }, "full", fullSuites],
+  ["a manual Desktop run", { GITHUB_EVENT_NAME: "workflow_dispatch", REQUESTED_RELEASE_TARGET: "desktop" }, "desktop", fullSuites.filter((suite) => suite !== "web")],
+  ["a manual Web run", { GITHUB_EVENT_NAME: "workflow_dispatch", REQUESTED_RELEASE_TARGET: "web" }, "web", ["types", "web"]],
+  ["a tui-v tag push", { GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/tags/tui-v0.2.0" }, null, null],
+  ["a branch push", { GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/heads/main" }, null, null],
+  ["a manual run with an unknown target", { GITHUB_EVENT_NAME: "workflow_dispatch", REQUESTED_RELEASE_TARGET: "tui" }, null, null],
+] as const)("release target resolution for %s selects its target and source suites", (_, input, target, suites) => {
+  const result = releaseTarget(input)
+  expect(result.exitCode, result.stderr).toBe(target === null ? 1 : 0)
+  expect(result.stdout).toBe("")
+  expect(result.stderr).toBe(target === null ? "Invalid release target\n" : "")
+  expect(result.output).toBe(target === null ? "" : `target=${target}\nsuites=${JSON.stringify(suites)}\n`)
+})
+
+test.each([
+  ["a Desktop tag push", { GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/tags/desktop-v0.14.0", RELEASE_REF_TYPE: "tag", RELEASE_REF_NAME: "desktop-v0.14.0" }, "0.14.0", ""],
+  ["a Web tag push", { GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/tags/web-v0.2.0", RELEASE_REF_TYPE: "tag", RELEASE_REF_NAME: "web-v0.2.0" }, "0.2.0", ""],
+  ["a full tag push with only Desktop notes", { GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/tags/v0.14.0", RELEASE_REF_TYPE: "tag", RELEASE_REF_NAME: "v0.14.0" }, null, "Missing or empty release notes: docs/releases/v0.14.0.md\n"],
+  ["a Desktop tag push with only shared notes", { GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/tags/desktop-v0.13.2", RELEASE_REF_TYPE: "tag", RELEASE_REF_NAME: "desktop-v0.13.2" }, null, "Missing or empty release notes: docs/releases/desktop/v0.13.2.md\n"],
+  ["a Desktop tag push with an unprefixed ref name", { GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/tags/desktop-v0.14.0", RELEASE_REF_TYPE: "tag", RELEASE_REF_NAME: "v0.14.0" }, null, "Invalid release version\n"],
+  ["a Web tag push with another requested version", { GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/tags/web-v0.2.0", REQUESTED_RELEASE_VERSION: "0.1.1" }, null, "Release version does not match the pushed tag\n"],
+  ["a manual full run", { GITHUB_EVENT_NAME: "workflow_dispatch", REQUESTED_RELEASE_TARGET: "full" }, "0.13.2", ""],
+  ["a manual Desktop run", { GITHUB_EVENT_NAME: "workflow_dispatch", REQUESTED_RELEASE_TARGET: "desktop" }, "0.13.2", ""],
+  ["a manual Web run", { GITHUB_EVENT_NAME: "workflow_dispatch", REQUESTED_RELEASE_TARGET: "web" }, "0.13.2", ""],
+  ["a manual Desktop run for an older shared note", { GITHUB_EVENT_NAME: "workflow_dispatch", REQUESTED_RELEASE_TARGET: "desktop", REQUESTED_RELEASE_VERSION: "0.13.1" }, "0.13.1", ""],
+  ["a manual Web run for an older shared note", { GITHUB_EVENT_NAME: "workflow_dispatch", REQUESTED_RELEASE_TARGET: "web", REQUESTED_RELEASE_VERSION: "0.13.1" }, "0.13.1", ""],
+  ["a manual Desktop run for a Desktop-only note", { GITHUB_EVENT_NAME: "workflow_dispatch", REQUESTED_RELEASE_TARGET: "desktop", REQUESTED_RELEASE_VERSION: "0.14.1" }, null, "Missing or empty release notes: docs/releases/v0.14.1.md\n"],
+  ["a manual Web run for a Web-only note", { GITHUB_EVENT_NAME: "workflow_dispatch", REQUESTED_RELEASE_TARGET: "web", REQUESTED_RELEASE_VERSION: "0.2.0" }, null, "Missing or empty release notes: docs/releases/v0.2.0.md\n"],
+  ["a manual Desktop run from a v tag", { GITHUB_EVENT_NAME: "workflow_dispatch", REQUESTED_RELEASE_TARGET: "desktop", RELEASE_REF_TYPE: "tag", RELEASE_REF_NAME: "v0.13.1" }, "0.13.1", ""],
+  ["a manual Desktop run from a Desktop tag", { GITHUB_EVENT_NAME: "workflow_dispatch", REQUESTED_RELEASE_TARGET: "desktop", RELEASE_REF_TYPE: "tag", RELEASE_REF_NAME: "desktop-v0.14.0" }, null, "Invalid release version\n"],
+  ["a manual run with an unknown target", { GITHUB_EVENT_NAME: "workflow_dispatch", REQUESTED_RELEASE_TARGET: "tui" }, null, "Invalid release target\n"],
+] as const)("release version for %s reads the tag's notes on a push and the shared notes on a manual run", (_, input, expected, diagnostic) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ycoding-release-target-version-"))
+  try {
+    const envFile = path.join(directory, "github-env")
+    fs.writeFileSync(envFile, "")
+    for (const [folder, versions] of [["", ["0.13.1", "0.13.2"]], ["desktop/", ["0.14.0", "0.14.1"]], ["web/", ["0.1.1", "0.2.0"]]] as const) {
+      fs.mkdirSync(path.join(directory, "docs/releases", folder), { recursive: true })
+      for (const version of versions) fs.writeFileSync(path.join(directory, `docs/releases/${folder}v${version}.md`), "Release notes\n")
+    }
+    const result = resolveReleaseVersion(directory, envFile, input)
+    expect(result.exitCode, result.stderr.toString()).toBe(expected === null ? 1 : 0)
+    expect(result.stdout.toString()).toBe("")
+    expect(result.stderr.toString()).toBe(diagnostic)
+    expect(fs.readFileSync(envFile, "utf8")).toBe(expected === null ? "" : `RELEASE_VERSION=${expected}\nYCODING_VERSION=${expected}\n`)
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test.each([
+  ["push", "refs/tags/tui-v0.13.2", "Expected a version tag push with a commit SHA\n"],
+  ["push", "refs/tags/desktop-0.13.2", "Expected a version tag push with a commit SHA\n"],
+  ["push", "refs/heads/main", "Expected a version tag push with a commit SHA\n"],
+  ["push", "refs/tags/web-v0.13", "Expected a version tag push with a commit SHA\n"],
+  ["push", "refs/tags/desktop-v0.13.2/x", "Expected a version tag push with a commit SHA\n"],
+  ["workflow_dispatch", "refs/tags/desktop-v0.13.2", "Expected a version tag push with a commit SHA\n"],
+])("tag provenance for a %s of %s fails before reading Git", (event, ref, diagnostic) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ycoding-release-prefix-"))
+  try {
+    const result = Bun.spawnSync(["bash", path.join(import.meta.dir, "release-version.sh"), "--verify-tag"], {
+      cwd: directory, env: { PATH: process.env.PATH, GITHUB_EVENT_NAME: event, GITHUB_REF: ref, GITHUB_SHA: "a".repeat(40) }, stdout: "pipe", stderr: "pipe",
+    })
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr.toString()).toBe(diagnostic)
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test("one release target job resolves the target before every other job", () => {
+  const target = parsedWorkflow.jobs["release-target"]!
+  expect(target["runs-on"]).toBe("ubuntu-24.04")
+  expect(target.permissions).toBeUndefined()
+  expect(target.outputs).toEqual({ target: "${{ steps.target.outputs.target }}", suites: "${{ steps.target.outputs.suites }}" })
+  expect(target.steps.map((step) => step.name)).toEqual(["Checkout release source", "Resolve release target"])
+  expect(target.steps[0]!.uses).toMatch(/^actions\/checkout@[0-9a-f]{40}$/)
+  expect(target.steps[0]!.with).toEqual({ ref: "${{ github.sha }}", "fetch-depth": 1, "persist-credentials": false })
+  expect(target.steps[1]).toEqual({ name: "Resolve release target", id: "target", run: "bash script/release-version.sh --target" })
+  expect(workflowJob(workflow, "release-target")).not.toContain("secrets.")
+  for (const [name, job] of Object.entries(parsedWorkflow.jobs))
+    if (name !== "release-target") expect([job.needs].flat(), name).toContain("release-target")
+  const verify = parsedWorkflow.jobs["verify-source"]!
+  expect(verify.name).toBe("verify release source (${{ matrix.suite }})")
+  expect(verify.strategy).toEqual({ "fail-fast": false, matrix: { suite: "${{ fromJSON(needs.release-target.outputs.suites) }}" } })
+})
+
+test("a Desktop-only release runs no Web build, upload or deployment", () => {
+  expect(targetSuites("desktop")).toEqual(fullSuites.filter((suite) => suite !== "web"))
+  const web = /build:web|build:cloudflare|verified-web|deploy:cloudflare/
+  const steps = parsedWorkflow.jobs["verify-source"]!.steps.filter((step) => web.test(JSON.stringify(step)))
+  expect(steps.map((step) => step.name)).toEqual(["Build web application", "Verify Cloudflare Worker", "Upload verified web build"])
+  for (const step of steps) expect(step.if, step.name).toBe("matrix.suite == 'web'")
+  for (const name of Object.keys(parsedWorkflow.jobs).filter((name) => name !== "verify-source" && name !== "deploy-web"))
+    expect(JSON.stringify(parsedWorkflow.jobs[name]), name).not.toMatch(web)
+  const deploy = parsedWorkflow.jobs["deploy-web"]!
+  expect(deploy.if).toBe(webDeployment)
+  expect(deploy.if).not.toContain("desktop")
+})
+
+test("a Web-only release builds no Desktop runtime or archive and publishes no GitHub release", () => {
+  expect(targetSuites("web")).toEqual(["types", "web"])
+  expect(parsedWorkflow.jobs[darwinJob]!.if).toBe(buildsDesktop)
+  expect(parsedWorkflow.jobs["finalize-release"]!.if).toBe(buildsDesktop)
+  expect(parsedWorkflow.jobs["finalize-release"]!.needs).toContain(darwinJob)
+  for (const name of ["release-tui", "release-desktop"]) expect(parsedWorkflow.jobs[name]!.needs).toContain("finalize-release")
+  expect(parsedWorkflow.jobs["release-tui"]!.if).toBe(tuiPublication)
+  expect(parsedWorkflow.jobs["release-desktop"]!.if).toBe(desktopPublication)
+  for (const condition of [buildsDesktop, tuiPublication, desktopPublication]) expect(condition).not.toContain("'web'")
+  const shared = parsedWorkflow.jobs["verify-source"]!.steps.filter((step) =>
+    step.if === undefined || step.if === "github.event_name == 'push'" || step.if === "matrix.suite == 'types'" || step.if === "matrix.suite == 'web'")
+  expect(shared.length).toBeGreaterThan(5)
+  for (const step of shared) expect(JSON.stringify(step), step.name).not.toMatch(/release-runtime|packages\/desktop|release-archive\.ts|codesign|secrets\./)
+})
+
+test("a Desktop-only build skips only the CLI archive steps and keeps every Desktop check", () => {
+  const conditional = Object.fromEntries(parsedWorkflow.jobs[darwinJob]!.steps.filter((step) => step.if !== undefined).map((step) => [step.name, step.if]))
+  expect(conditional).toEqual({
+    "Verify release tag provenance": "github.event_name == 'push'",
+    "Create and validate native archive": targetIs("full"),
+    "Verify packaged macOS signatures": targetIs("full"),
+    "Upload native archive": targetIs("full"),
+    "Save Apple Silicon release dependencies": "github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && steps.desktop-rust.outputs.release-cache-hit != 'true'",
+    "Save release compiler cache": "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)",
+    "Remove macOS signing keychain": "always()",
+  })
+  for (const name of ["Stage Apple Silicon release runtime", "Import macOS signing identity", "Build TUI artifact", "Build desktop app", "Verify desktop backend version",
+    "Verify desktop signature", "Verify and archive the Desktop CLI distribution", "Upload Desktop CLI distribution for verification",
+    "Create and validate desktop archive", "Verify archived Desktop signatures", "Upload desktop archive"])
+    expect(jobStep(darwinJob, name).if, name).toBeUndefined()
+})
+
+test.each([
+  ["full", "finalize", "ycoding-0.14.0-checksums.txt"],
+  ["desktop", "finalize-desktop", "ycoding-desktop-0.14.0-checksums.txt"],
+])("finalization for the %s target validates its archive set and exposes its own checksum digest", (target, mode, manifest) => {
+  const step = jobStep("finalize-release", "Validate release archives and checksums")
+  expect(step.id).toBe("finalize")
+  expect(step.env).toEqual({ RELEASE_TARGET: "${{ needs.release-target.outputs.target }}" })
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ycoding-release-finalize-step-"))
+  try {
+    fs.writeFileSync(path.join(directory, "bun"), [
+      "#!/bin/sh",
+      'printf "%s\\n" "$*" >> calls',
+      'case "$2" in',
+      '  finalize) name="ycoding-$3-checksums.txt" ;;',
+      '  finalize-desktop) name="ycoding-desktop-$3-checksums.txt" ;;',
+      "  *) exit 2 ;;",
+      "esac",
+      'mkdir -p "$5" && printf "checksums for %s\\n" "$2" > "$5/$name"',
+    ].join("\n"), { mode: 0o755 })
+    fs.writeFileSync(path.join(directory, "github-output"), "")
+    const result = Bun.spawnSync(["bash", "-e", "-c", step.run!], {
+      cwd: directory, stdout: "pipe", stderr: "pipe",
+      env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, RELEASE_TARGET: target, RELEASE_VERSION: "0.14.0", GITHUB_OUTPUT: path.join(directory, "github-output") },
+    })
+    expect(result.exitCode, result.stderr.toString()).toBe(0)
+    expect(fs.readFileSync(path.join(directory, "calls"), "utf8")).toBe(`script/release-archive.ts ${mode} 0.14.0 downloaded release\n`)
+    expect(fs.readdirSync(path.join(directory, "release"))).toEqual([manifest])
+    const digest = new Bun.CryptoHasher("sha256").update(`checksums for ${mode}\n`).digest("hex")
+    expect(fs.readFileSync(path.join(directory, "github-output"), "utf8")).toBe(`checksums-sha256=${digest}\n`)
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test("every published archive set is checksum-verified against the finalizer before publication", () => {
+  for (const [job, download, archives, checksums] of [
+    ["release-tui", "Download prepared target archives", { pattern: "release-archive-*", "merge-multiple": true }, "ycoding-$RELEASE_VERSION-checksums.txt"],
+    ["release-desktop", "Download prepared Desktop archive", { name: "release-archive-desktop-darwin-arm64" }, "ycoding-desktop-$RELEASE_VERSION-checksums.txt"],
+  ] as const) {
+    const names = parsedWorkflow.jobs[job]!.steps.map((step) => step.name)
+    expect(jobStep(job, download).with).toEqual({ path: "release", ...archives, "digest-mismatch": "error" })
+    expect(jobStep(job, "Download validated checksums").with).toEqual({ name: "release-checksums-${{ env.RELEASE_VERSION }}", path: "release", "digest-mismatch": "error" })
+    const verify = jobStep(job, "Verify publication inputs")
+    expect(verify.env).toEqual({ EXPECTED_CHECKSUMS: "${{ needs.finalize-release.outputs.checksums-sha256 }}" })
+    expect(verify.run).toBe([
+      "set -euo pipefail",
+      "cp LICENSE NOTICE release/",
+      `printf '%s  %s\\n' "$EXPECTED_CHECKSUMS" "release/${checksums}" | sha256sum --check --strict`,
+      `(cd release && sha256sum --check --strict "${checksums}")`,
+    ].join("\n") + "\n")
+    const order = [download, "Download validated checksums", "Verify publication inputs", "Publish GitHub release"].map((name) => names.indexOf(name))
+    expect(order.every((index) => index >= 0)).toBe(true)
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+  }
+  expect(parsedWorkflow.jobs["finalize-release"]!.outputs).toEqual({ "checksums-sha256": "${{ steps.finalize.outputs.checksums-sha256 }}" })
+  expect(jobStep("finalize-release", "Upload release checksums").with).toEqual({
+    name: "release-checksums-${{ env.RELEASE_VERSION }}", path: "release/*-checksums.txt", "if-no-files-found": "error", "retention-days": 7,
+  })
+})
+
+test("publication and deployment run only for their own tag push and never for a manual run", () => {
+  for (const [job, tag, target] of [["release-tui", "v", "full"], ["release-desktop", "desktop-v", "desktop"], ["deploy-web", "web-v", "web"]] as const) {
+    const condition = parsedWorkflow.jobs[job]!.if ?? ""
+    expect(condition).toContain("github.event_name == 'push' && !github.event.deleted")
+    expect(condition).toContain(`startsWith(github.ref, 'refs/tags/${tag}') && ${targetIs(target)}`)
+    expect(condition).not.toContain("workflow_dispatch")
+  }
+  const desktop = parsedWorkflow.jobs["release-desktop"]!
+  expect(desktop.permissions).toEqual({ contents: "write" })
+  expect(desktop.steps.map((step) => step.name)).toEqual([
+    "Checkout repository", "Resolve release version", "Download prepared Desktop archive", "Download validated checksums", "Verify publication inputs", "Publish GitHub release",
+  ])
+  expect(desktop.steps[0]!.with).toEqual({ ref: "${{ github.sha }}", "fetch-depth": 1, "persist-credentials": false })
+  expect(jobStep("release-desktop", "Publish GitHub release").env).toEqual({ GH_TOKEN: "${{ github.token }}", GH_REPO: "${{ github.repository }}" })
+  const deploy = parsedWorkflow.jobs["deploy-web"]!.steps.map((step) => step.name)
+  expect(jobStep("deploy-web", "Verify web release tag provenance")).toEqual({ name: "Verify web release tag provenance", if: targetIs("web"), run: "bash script/release-version.sh --verify-tag" })
+  expect(deploy.indexOf("Checkout repository")).toBeLessThan(deploy.indexOf("Verify web release tag provenance"))
+  expect(deploy.indexOf("Verify web release tag provenance")).toBeLessThan(deploy.indexOf("Deploy to Cloudflare"))
+})
+
+test.each([
+  ["new stable", "0.14.0", [[{ tag_name: "v0.13.2", draft: false }]], "v0.13.2", true],
+  ["new prerelease", "0.14.1-rc.1", [[{ tag_name: "v0.13.2", draft: false }]], "v0.13.2", true],
+  ["existing release", "0.14.0", [[{ tag_name: "v0.13.2", draft: false }], [{ tag_name: "desktop-v0.14.0", draft: true }]], "v0.13.2", false],
+  ["changed Latest", "0.14.0", [[{ tag_name: "v0.13.2", draft: false }]], "desktop-v0.14.0", false],
+  ["invalid API records", "0.14.0", [[{ message: "Bad credentials" }]], "v0.13.2", false],
+  ["failed API request", "0.14.0", null, "v0.13.2", false],
+] as const)("Desktop publication handles %s without replacing a release or moving Latest", (scenario, version, pages, latestAfter, success) => {
+  const command = jobStep("release-desktop", "Publish GitHub release").run
+  expect(command).toBeDefined()
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ycoding-desktop-release-step-"))
+  try {
+    const notes = `docs/releases/desktop/v${version}.md`
+    fs.mkdirSync(path.join(directory, "docs/releases/desktop"), { recursive: true })
+    fs.mkdirSync(path.join(directory, "script"))
+    fs.mkdirSync(path.join(directory, "release"))
+    fs.writeFileSync(path.join(directory, "release/asset"), "archive")
+    fs.writeFileSync(path.join(directory, notes), "Desktop notes\n")
+    fs.writeFileSync(path.join(directory, "script/release-version.sh"), '[ "$1" = --verify-tag ] || exit 2\nprintf "checked tag\\n" >> calls\n')
+    fs.writeFileSync(path.join(directory, "calls"), "")
+    fs.writeFileSync(path.join(directory, "gh"), [
+      "#!/bin/sh",
+      'case "$1 $2" in',
+      '  "api --paginate") [ "$3" = --slurp ] && [ -n "$RELEASE_PAGES" ] || exit 1; printf "%s\\n" "$RELEASE_PAGES" ;;',
+      '  "api repos/example/ycoding/releases/latest") if [ -e created ]; then printf "%s\\n" "$LATEST_AFTER"; else echo v0.13.2; fi ;;',
+      '  "release create") printf "create %s\\n" "$*" >> calls; touch created ;;',
+      "  *) exit 2 ;;",
+      "esac",
+    ].join("\n"), { mode: 0o755 })
+    const result = Bun.spawnSync(["bash", "-c", command!], {
+      cwd: directory,
+      env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, GH_TOKEN: "fixture", GH_REPO: "example/ycoding",
+        RELEASE_VERSION: version, LATEST_AFTER: latestAfter, RELEASE_PAGES: pages === null ? "" : JSON.stringify(pages) },
+    })
+    expect(result.success, result.stderr.toString()).toBe(success)
+    const calls = fs.readFileSync(path.join(directory, "calls"), "utf8")
+    const create = `checked tag\ncreate release create desktop-v${version} release/asset ${notes} --verify-tag --latest=false ${scenario === "new prerelease" ? "--prerelease " : ""}--title YCoding Desktop ${version} --notes-file ${notes}\n`
+    expect(calls).toBe(scenario.startsWith("new") || scenario === "changed Latest" ? create : "")
+    if (scenario === "changed Latest") expect(result.stderr.toString()).toContain("GitHub Latest changed")
+    if (scenario === "existing release") expect(result.stderr.toString()).toContain("A release for desktop-v0.14.0 already exists")
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
 })

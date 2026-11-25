@@ -470,3 +470,57 @@ for (const invalid of ["wrong version", "extra file", "corrupt archive", "nonexe
       await fs.rm(root, { recursive: true, force: true })
     }
   })
+
+async function desktopRelease(root: string, release = version) {
+  const input = path.join(root, "downloaded")
+  await fs.mkdir(input)
+  await desktopFixture(root)
+  expect(Bun.spawnSync(["zip", "-qr", path.join(input, `YCoding-Desktop-v${release}-darwin-arm64.zip`), desktop], { cwd: path.join(root, "desktop") }).exitCode).toBe(0)
+  return input
+}
+
+test("Desktop finalize checksums only the Desktop archive and the license texts", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-desktop-finalize-"))
+  try {
+    const input = await desktopRelease(root)
+    const result = execute(root, ["finalize-desktop", version, input, "release"])
+    expect(result.exitCode, result.stderr.toString()).toBe(0)
+    expect(result.stdout.toString()).toBe("Validated the Desktop release archive and all 3 asset checksums\n")
+    expect((await fs.readdir(path.join(root, "release"))).sort()).toEqual(["LICENSE", "NOTICE", desktopArchive, `ycoding-desktop-${version}-checksums.txt`].sort())
+    const lines = (await Bun.file(path.join(root, "release", `ycoding-desktop-${version}-checksums.txt`)).text()).trim().split("\n")
+    expect(lines.map((line) => line.slice(66))).toEqual([desktopArchive, "LICENSE", "NOTICE"])
+    for (const line of lines) {
+      expect(line).toMatch(/^[a-f0-9]{64}  /)
+      expect(new Bun.CryptoHasher("sha256").update(await Bun.file(path.join(root, "release", line.slice(66))).arrayBuffer()).digest("hex")).toBe(line.slice(0, 64))
+    }
+    expect(await Bun.file(path.join(root, "release", "NOTICE")).text()).toBe(await Bun.file(path.join(import.meta.dir, "../NOTICE")).text())
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+for (const invalid of ["CLI archive present", "missing Desktop archive", "wrong version", "extra desktop entry", "nonexecutable desktop launcher", "nonempty output"])
+  test(`Desktop finalize rejects ${invalid} without a checksum manifest`, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-desktop-finalize-invalid-"))
+    try {
+      const input = await desktopRelease(root)
+      const archive = path.join(input, desktopArchive)
+      if (invalid === "CLI archive present") await Bun.write(path.join(input, `ycoding-${version}-darwin-arm64.tar.gz`), "unexpected archive")
+      if (invalid === "missing Desktop archive") await fs.unlink(archive)
+      if (invalid === "wrong version") await fs.rename(archive, path.join(input, "YCoding-Desktop-v9.9.8-darwin-arm64.zip"))
+      if (invalid === "extra desktop entry" || invalid === "nonexecutable desktop launcher") {
+        const source = path.join(root, "desktop", desktop)
+        if (invalid === "extra desktop entry") await Bun.write(path.join(source, "Contents/Resources/update.json"), "{}")
+        else await fs.chmod(path.join(source, "Contents/MacOS/launcher"), 0o644)
+        await fs.unlink(archive)
+        expect(Bun.spawnSync(["zip", "-qr", archive, desktop], { cwd: path.join(root, "desktop") }).exitCode).toBe(0)
+      }
+      if (invalid === "nonempty output") await Bun.write(path.join(root, "release/private.json"), "{}")
+      const result = execute(root, ["finalize-desktop", version, input, "release"])
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stderr.toString()).toMatch(/Desktop release archive|desktop release archive|Release output/)
+      expect(await Bun.file(path.join(root, "release", `ycoding-desktop-${version}-checksums.txt`)).exists()).toBe(false)
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
