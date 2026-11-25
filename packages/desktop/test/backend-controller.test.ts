@@ -8,11 +8,16 @@ import { env, launch, peer, revision, syntheticBundle } from "./synthetic-backen
 
 const id = "ses_synthetic"
 const task = { sessionID: "ses_child", parentID: id, description: "Synthetic", agent: "build", model: { id: "model", providerID: "provider" }, background: true, state: "running", revision: 1, time: { created: 1, updated: 2 } }
+const taskSummary = (running: number) => ({ total: running, active: running, running, waiting: 0 })
 const shell = (id: string, metadata: Record<string, unknown>) => ({ id, status: "running", command: "echo", cwd: "/synthetic/repo", shell: "sh", file: "output", time: { started: 1 }, metadata })
 const metrics = { logical: 1, physical: 1, helpers: 0, continued: 0, fallback: 0, tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } } }
 const repository = { projectID: "prj_test", projectWorktree: "/synthetic/repo", directory: "/synthetic/repo", sessions: 1, timeActive: 1, available: true }
 const participant = { sessionID: id, title: "Synthetic", location: { directory: "/synthetic/repo" }, state: "idle", lastActivity: 1, pending: [] }
 const group = { id: "cgrp_synthetic", name: "Synthetic", revision: 1, active: true, master: participant, members: [], settings: { concurrency: null }, time: { created: 1, updated: 2 } }
+const location = { directory: "/synthetic/repo", project: { id: "prj_test", directory: "/synthetic/repo" } }
+const groupSummary = (groupID: string) => ({ id: groupID, name: group.name, revision: group.revision, active: group.active, masterSessionID: id, memberCount: 0, settings: group.settings, time: group.time })
+const quota = { providerID: "p", label: "Provider", status: "available" as const, source: "provider_api" as const, stability: "stable" as const, updatedAt: 1, windows: [{ id: "daily", label: "Daily", unit: "requests" as const, used: 1, limit: 2 }] }
+const pendingUser = (id: string | undefined, sessionID: string, text: string) => ({ data: { id, sessionID, type: "user", timeCreated: 1, admittedSeq: 1, delivery: "steer", data: { text } } })
 
 test("settings project canonical data and report unavailable telemetry", async () => {
   const keep = { state: "on", manual: true, extra: "hidden" }
@@ -141,7 +146,7 @@ test("project and workspace mutations validate canonical inputs and preserve del
       if (route.endsWith("/copy")) return Response.json({ directory: "/synthetic/copy" })
       return new Response(null, { status: 204 })
     }
-    if (route === "/api/coordination") return Response.json({ data: [{ id: group.id }] })
+    if (route === "/api/coordination") return Response.json({ data: [groupSummary(group.id)] })
     if (route === `/api/coordination/${group.id}`) return Response.json({ data: extended })
     if (route === "/api/coordination/settings") return Response.json({ data: { enabled: true, categories: [] } })
     if (route === "/api/project/inventory") return Response.json({ data: [repository], cursor: {} })
@@ -167,7 +172,7 @@ test("project and workspace mutations validate canonical inputs and preserve del
 test.each(["consent", "permissions", "samples"] as const)("settings reject malformed canonical %s replies", async (invalid) => {
   const consent = invalid === "consent" ? { noticeVersion: 2 } : { noticeVersion: 1, consent: { enabled: true, noticeVersion: 1, decidedAt: 1 } }
   const saved = invalid === "permissions" ? [{ id: "psv_test", projectID: "p", action: 2, resource: "r" }] : []
-  const samples = invalid === "samples" ? { data: [{ receivedAt: -1, sample: {} }], cursor: {} } : { data: [], cursor: {} }
+  const samples = invalid === "samples" ? { data: [{ receivedAt: 1, sample: { kind: "long-task", at: "not-a-timestamp", durationMs: 50 } }], cursor: {} } : { data: [], cursor: {} }
   if (invalid === "consent") expect(() => Schema.decodeUnknownSync(Schema.toCodecJson(Telemetry.ConsentState))(consent)).toThrow()
   if (invalid === "permissions") expect(() => Schema.decodeUnknownSync(Schema.toCodecJson(Schema.Array(PermissionSaved.Info)))(saved)).toThrow()
   if (invalid === "samples") expect(() => Schema.decodeUnknownSync(Schema.toCodecJson(Telemetry.Page))(samples)).toThrow()
@@ -243,7 +248,7 @@ test.each(["settings", "project", "workspace"] as const)("%s mutation interrupte
     expect(writes).toBe(1)
   })
 })
-const autonomy = { mode: "normal", permissions: "manual", guardrails: "auto", answers: "yolo", goal: { text: "Synthetic goal", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3, lastProgressDigest: null }, defer: null, effective: { permissions: "auto", guardrails: "manual", answers: "yolo", inherited: { permissions: "ses_parent" }, deferred: false, guardrailsEnabled: true } } as const
+const autonomy = { mode: "normal", permissions: "manual", guardrails: "auto", answers: "yolo", goal: { text: "Synthetic goal", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 }, effective: { permissions: "auto", guardrails: "manual", answers: "yolo", inherited: { permissions: "ses_parent" }, deferred: false, guardrailsEnabled: true } } as const
 
 test("autonomy reads and fenced updates project valid views without replay", async () => {
   const calls: { method: string; payload?: unknown }[] = []
@@ -303,8 +308,6 @@ test.each([
 
 test("standalone catalog and dated usage expose validated provider quotas", async () => {
   const urls: URL[] = []
-  const location = { directory: "/synthetic/repo", project: { id: "prj_test", directory: "/synthetic/repo" } }
-  const quota = { providerID: "p", label: "Provider", status: "available" as const, source: "provider_api" as const, stability: "stable" as const, updatedAt: 1, windows: [{ id: "daily", label: "Daily", unit: "requests" as const, used: 1, limit: 2 }] }
   await connected(async (route, request) => {
     urls.push(new URL(request.url))
     if (route === "/api/model") return Response.json({ location, data: [] })
@@ -345,7 +348,7 @@ test("unavailable quota reads are explicit and malformed snapshots are rejected"
   await connected(async (route) => {
     if (route === "/api/usage") return Response.json({ data: metrics })
     if (route === "/api/usage/report") return Response.json({ data: { group: "model", rows: [], total: metrics, rowCount: 0 } })
-    if (route === "/api/provider/usage" && invalid) return Response.json({ data: [{ providerID: "p", windows: "wrong" }] })
+    if (route === "/api/provider/usage" && invalid) return Response.json({ location, data: [{ ...quota, windows: [{ ...quota.windows[0], used: -1 }] }] })
     return undefined
   }, async (controller) => {
     expect(await controller.usage()).toMatchObject({ range: "all", quotas: [], quotasNotice: "Provider quotas could not be read." })
@@ -360,9 +363,9 @@ test("activity pages and attributed shell output use exact scoped requests", asy
   await connected(async (route, request) => {
     urls.push(new URL(request.url))
     if (route === `/api/session/${id}`) return Response.json({ data: { id, scope: "bound", location: { directory: "/synthetic/repo" } } })
-    if (route.endsWith("/subagent")) return Response.json({ data: [], summary: { total: 0, active: 0 }, cursor: {} })
-    if (route === "/api/shell") return Response.json({ location: { directory: "/synthetic/repo" }, data: [shell("sh_test", { sessionID: owner })] })
-    if (route === "/api/shell/sh_test/output") return Response.json({ location: { directory: "/synthetic/repo" }, data: { output: "hello", cursor: 5, size: 5, truncated: false } })
+    if (route.endsWith("/subagent")) return Response.json({ data: [], summary: taskSummary(0), cursor: {} })
+    if (route === "/api/shell") return Response.json({ location, data: [shell("sh_test", { sessionID: owner })] })
+    if (route === "/api/shell/sh_test/output") return Response.json({ location, data: { output: "hello", cursor: 5, size: 5, truncated: false } })
     return undefined
   }, async (controller, rev) => {
     expect((await controller.activity({ sessionID: id, cursor: "next", revision: rev })).revision).toBe(rev)
@@ -469,9 +472,9 @@ test.each(invalidDTOs)("retained DTO rejects malformed %s", async (_name, target
   const groupID = target === "group" ? String(changed.id) : group.id
   await connected(async (route) => {
     if (route === `/api/session/${id}`) return Response.json({ data: { id, scope: "bound", location: { directory: "/synthetic/repo" } } })
-    if (route.endsWith("/subagent")) return Response.json({ data: [{ ...task, ...(target === "task" ? changed : {}) }], summary: { total: 1, active: 1 }, cursor: {} })
-    if (route === "/api/shell") return Response.json({ location: { directory: "/synthetic/repo" }, data: [{ ...shell("sh_ok", { sessionID: id }), ...(target === "shell" ? changed : {}) }] })
-    if (route === "/api/coordination") return Response.json({ data: [{ id: groupID }] })
+    if (route.endsWith("/subagent")) return Response.json({ data: [{ ...task, ...(target === "task" ? changed : {}) }], summary: taskSummary(1), cursor: {} })
+    if (route === "/api/shell") return Response.json({ location, data: [{ ...shell("sh_ok", { sessionID: id }), ...(target === "shell" ? changed : {}) }] })
+    if (route === "/api/coordination") return Response.json({ data: [groupSummary(groupID)] })
     if (route === "/api/coordination/settings") return Response.json({ data: { enabled: true, categories: [], ...(target === "settings" ? changed : {}) } })
     if (route === `/api/coordination/${groupID}`) return Response.json({ data: { ...group, ...(target === "group" ? changed : {}), master: { ...participant, ...(target === "participant" ? changed : {}) } } })
     if (route === "/api/project/inventory") return Response.json({ data: [repository], cursor: {} })
@@ -510,9 +513,9 @@ test.each(compatibleDTOs)("retained DTO accepts %s", async (_name, target, chang
   const groupID = target === "group" ? String(changed.id) : group.id
   await connected(async (route) => {
     if (route === `/api/session/${id}`) return Response.json({ data: { id, scope: "bound", location: { directory: "/synthetic/repo" } } })
-    if (route.endsWith("/subagent")) return Response.json({ data: [{ ...task, ...(target === "task" ? changed : {}) }], summary: { total: 1, active: 1 }, cursor: {} })
-    if (route === "/api/shell") return Response.json({ location: { directory: "/synthetic/repo" }, data: [{ ...shell("sh_ok", { sessionID: id }), ...(target === "shell" ? changed : {}) }] })
-    if (route === "/api/coordination") return Response.json({ data: [{ id: groupID }] })
+    if (route.endsWith("/subagent")) return Response.json({ data: [{ ...task, ...(target === "task" ? changed : {}) }], summary: taskSummary(1), cursor: {} })
+    if (route === "/api/shell") return Response.json({ location, data: [{ ...shell("sh_ok", { sessionID: id }), ...(target === "shell" ? changed : {}) }] })
+    if (route === "/api/coordination") return Response.json({ data: [groupSummary(groupID)] })
     if (route === "/api/coordination/settings") return Response.json({ data: { enabled: true, categories: [], ...(target === "settings" ? changed : {}) } })
     if (route === `/api/coordination/${encodeURIComponent(groupID)}`) return Response.json({ data: { ...group, ...(target === "group" ? changed : {}), master: { ...participant, ...(target === "participant" ? changed : {}) } } })
     if (route === "/api/project/inventory") return Response.json({ data: [repository], cursor: {} })
@@ -540,9 +543,9 @@ test("retained DTO accepts bounded canonical identifiers and fractional finite v
   const speed = { generationSamples: 1, providerTimedSamples: 1, observedSamples: 1, samples: 1, firstOutputP50Ms: 1, totalP99Ms: 2, meanTokensPerSecond: 0.5 }
   await connected(async (route) => {
     if (route === `/api/session/${id}`) return Response.json({ data: { id, scope: "bound", location: { directory: "/synthetic/repo" } } })
-    if (route.endsWith("/subagent")) return Response.json({ data: [acceptedTask], summary: { total: 1, active: 1 }, cursor: {} })
-    if (route === "/api/shell") return Response.json({ location: { directory: "/synthetic/repo" }, data: [acceptedShell] })
-    if (route === "/api/coordination") return Response.json({ data: [{ id: group.id }] })
+    if (route.endsWith("/subagent")) return Response.json({ data: [acceptedTask], summary: taskSummary(1), cursor: {} })
+    if (route === "/api/shell") return Response.json({ location, data: [acceptedShell] })
+    if (route === "/api/coordination") return Response.json({ data: [groupSummary(group.id)] })
     if (route === "/api/coordination/settings") return Response.json({ data: acceptedSettings })
     if (route === `/api/coordination/${group.id}`) return Response.json({ data: { ...group, master: acceptedParticipant } })
     if (route === "/api/project/inventory") return Response.json({ data: [repository], cursor: {} })
@@ -565,9 +568,9 @@ test("surface adapters reject malformed retained fields and cursor envelopes", a
   let target = ""
   await connected(async (route) => {
     if (route === `/api/session/${id}`) return Response.json({ data: { id, scope: "bound", location: { directory: "/synthetic/repo" } } })
-    if (route.endsWith("/subagent")) return Response.json({ data: [target === "task" ? { ...task, state: invalid } : task], summary: { total: 1, active: 1 }, cursor: target === "activityCursor" ? invalid : {} })
-    if (route === "/api/shell") return Response.json({ location: { directory: "/synthetic/repo" }, data: [target === "shell" ? { ...shell("sh_test", { sessionID: id }), status: invalid } : shell("sh_test", { sessionID: id })] })
-    if (route === "/api/coordination") return Response.json({ data: [{ id: group.id }] })
+    if (route.endsWith("/subagent")) return Response.json({ data: [target === "task" ? { ...task, state: invalid } : task], summary: taskSummary(1), cursor: target === "activityCursor" ? invalid : {} })
+    if (route === "/api/shell") return Response.json({ location, data: [target === "shell" ? { ...shell("sh_test", { sessionID: id }), status: invalid } : shell("sh_test", { sessionID: id })] })
+    if (route === "/api/coordination") return Response.json({ data: [groupSummary(group.id)] })
     if (route === "/api/coordination/settings") return Response.json({ data: { enabled: true, categories: target === "categories" ? [invalid] : [] } })
     if (route === "/api/coordination/cgrp_synthetic") return Response.json({ data: { ...group, master: { ...participant, ...(target === "state" ? { state: invalid } : {}), ...(target === "pending" ? { pending: invalid } : {}) }, settings: { concurrency: target === "concurrency" ? invalid : null } } })
     if (route === "/api/project/inventory") return Response.json({ data: [target === "projectName" ? { ...repository, projectName: invalid } : repository], cursor: target === "projectCursor" ? invalid : {} })
@@ -589,7 +592,7 @@ test("surface adapters reject malformed retained fields and cursor envelopes", a
       target = name; invalid = value
       expect(await call().then(() => "accepted", () => "rejected")).toBe("rejected")
     }
-    invalid = { next: null }
+    invalid = {}
     target = "activityCursor"
     expect(await controller.activity(id)).not.toHaveProperty("subagentNext")
     target = "projectCursor"
@@ -614,7 +617,7 @@ test.each([
   ["question text", { question: { id: "qst_synthetic", text: "é".repeat(4097), time: 1 } }],
   ["progress text", { progress: { text: "é".repeat(2049), time: 1 } }],
 ])("activity rejects oversized %s", async (_name, invalid) => {
-  await connected(async (route) => route.endsWith("/subagent") ? Response.json({ data: [{ ...task, ...invalid }], summary: { total: 1, active: 1 }, cursor: {} }) : Response.json({ data: { id, scope: "standalone", location: { directory: "" } } }), async (controller) => {
+  await connected(async (route) => route.endsWith("/subagent") ? Response.json({ data: [{ ...task, ...invalid }], summary: taskSummary(1), cursor: {} }) : Response.json({ data: { id, scope: "standalone", location: { directory: "" } } }), async (controller) => {
     await expect(controller.activity(id)).rejects.toThrow("Session activity could not be read")
   })
 })
@@ -646,7 +649,7 @@ test("valid retained fields accept their boundaries and every dimensions variant
   const latestTiming = { generatedTokens: 1, estimatedTokens: 1, observedGenerationDurationNs: 1, estimatedGenerationDurationNs: 1 }
   await connected(async (route) => {
     if (route === "/api/provider/usage") return undefined
-    if (route.endsWith("/subagent")) return Response.json({ data: [{ ...task, question, progress }], summary: { total: 1, active: 1 }, cursor: {} })
+    if (route.endsWith("/subagent")) return Response.json({ data: [{ ...task, question, progress }], summary: taskSummary(1), cursor: {} })
     if (route === `/api/session/${id}`) return Response.json({ data: { id, scope: "standalone", location: { directory: "" } } })
     if (route === "/api/usage") return Response.json({ data: { ...metrics, latestTiming, latestNamespace: "12345678" } })
     return Response.json({ data: { group: "model", rows: variants.map((dimensions) => ({ ...metrics, key: "key", label: "label", dimensions })), total: metrics, rowCount: variants.length } })
@@ -679,9 +682,9 @@ test("surface adapters project known fields and preserve opaque metadata", async
   await connected(async (route) => {
     if (route.endsWith("/file-change")) return Response.json({ data: [{ path: "file", patch: "", additions: 1, deletions: 0, ...extra }] })
     if (route === `/api/session/${id}`) return Response.json({ data: { id, scope: "bound", location: { directory: "/synthetic/repo" } } })
-    if (route.endsWith("/subagent")) return Response.json({ data: [{ ...task, ...extra, model: { ...task.model, ...extra }, time: { ...task.time, ...extra } }], summary: { total: 1, active: 1 }, cursor: {} })
-    if (route === "/api/shell") return Response.json({ location: { directory: "/synthetic/repo" }, data: [{ ...shell("sh_test", { sessionID: id, opaque: "preserved" }), ...extra }] })
-    if (route === "/api/coordination") return Response.json({ data: [{ id: group.id }] })
+    if (route.endsWith("/subagent")) return Response.json({ data: [{ ...task, ...extra, model: { ...task.model, ...extra }, time: { ...task.time, ...extra } }], summary: taskSummary(1), cursor: {} })
+    if (route === "/api/shell") return Response.json({ location, data: [{ ...shell("sh_test", { sessionID: id, opaque: "preserved" }), ...extra }] })
+    if (route === "/api/coordination") return Response.json({ data: [groupSummary(group.id)] })
     if (route === "/api/coordination/settings") return Response.json({ data: { enabled: true, categories: [], ...extra } })
     if (route === "/api/coordination/cgrp_synthetic") return Response.json({ data: { ...group, ...extra, master: { ...participant, ...extra, location: { ...participant.location, ...extra } }, settings: { concurrency: null, ...extra } } })
     if (route === "/api/project/inventory") return Response.json({ data: [{ ...repository, ...extra }], cursor: {} })
@@ -739,11 +742,11 @@ test("surface reads use session and project endpoints with their current revisio
     if (route === `/api/session/${id}/file-change`) return Response.json({ data: [{ path: "a.txt", patch: "diff", additions: 1, deletions: 0 }] })
     if (route === `/api/session/${id}`) return Response.json({ data: { id, scope: standalone ? "standalone" : "bound", location: { directory: "/synthetic/repo" } } })
     if (route === `/api/session/${id}/subagent`) return Response.json({ data: [task], summary: { total: 12, active: 1, running: 1, waiting: 0 }, cursor: { next: "next-child" } })
-    if (route === "/api/shell") return Response.json({ location: { directory: "/synthetic/repo" }, data: [
+    if (route === "/api/shell") return Response.json({ location, data: [
       shell("sh_parent", { sessionID: id }), shell("sh_child", { sessionID: "ses_child" }),
       shell("sh_other", { sessionID: "ses_other" }), shell("sh_unknown", {}),
     ] })
-    if (route === "/api/coordination") return Response.json({ data: [{ id: "cgrp_synthetic" }] })
+    if (route === "/api/coordination") return Response.json({ data: [groupSummary(group.id)] })
     if (route === "/api/coordination/settings") return Response.json({ data: { enabled: true, categories: [] } })
     if (route === "/api/coordination/cgrp_synthetic") return Response.json({ data: group })
     if (route === "/api/project/inventory") return Response.json({ data: [repository], cursor: { next: "next-project" } })
@@ -796,8 +799,8 @@ test("activity refuses unrelated child and repository results", async () => {
   let unrelatedChild = true
   await connected(async (route) => {
     if (route === `/api/session/${id}`) return Response.json({ data: { id, scope: "bound", location: { directory: "/synthetic/repo" } } })
-    if (route.endsWith("/subagent")) return Response.json({ data: unrelatedChild ? [{ sessionID: "ses_child", parentID: "ses_other" }] : [], summary: { total: 0, active: 0 }, cursor: {} })
-    if (route === "/api/shell") return Response.json({ location: { directory: "/synthetic/other" }, data: [] })
+    if (route.endsWith("/subagent")) return Response.json({ data: unrelatedChild ? [{ ...task, parentID: "ses_other" }] : [], summary: taskSummary(unrelatedChild ? 1 : 0), cursor: {} })
+    if (route === "/api/shell") return Response.json({ location: { ...location, directory: "/synthetic/other" }, data: [] })
     return undefined
   }, async (controller) => {
     await expect(controller.activity(id)).rejects.toThrow("Session activity could not be read")
@@ -821,11 +824,11 @@ test("all four reads reject results from a previous stream revision", async () =
   let requests = 0
   let initialRevision = 0
   using server = peer([], () => 101, async (route) => {
-    if (++requests === 8) ready.resolve()
+    if (++requests === 10) ready.resolve()
     await release.promise
     if (route.endsWith("/file-change")) return Response.json({ data: [] })
     if (route === `/api/session/${id}`) return Response.json({ data: { id, scope: "standalone", location: { directory: "" } } })
-    if (route.endsWith("/subagent")) return Response.json({ data: [], summary: { total: 0, active: 0 }, cursor: {} })
+    if (route.endsWith("/subagent")) return Response.json({ data: [], summary: taskSummary(0), cursor: {} })
     if (route === "/api/coordination") return Response.json({ data: [] })
     if (route === "/api/coordination/settings") return Response.json({ data: { enabled: true, categories: [] } })
     if (route === "/api/project/inventory") return Response.json({ data: [], cursor: {} })
@@ -862,31 +865,24 @@ test("reads and mutations cannot settle while the event stream is reconnecting",
   const release = Promise.withResolvers<void>()
   let requests = 0
   let streams = 0
-  using server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-    const route = new URL(request.url).pathname
-    if (route === "/api/health") return Response.json({ healthy: true, version: "synthetic-shared", pid: 101, sourceEpoch: "epoch-101" })
-    if (route === "/api/event") {
-      const first = ++streams === 1
-      if (!first) reconnectRequested.resolve()
-      return new Response(new ReadableStream<Uint8Array>({ async start(stream) {
-        if (!first) await reconnectRelease.promise
-        stream.enqueue(new TextEncoder().encode('data: {"type":"server.connected","properties":{}}\n\n'))
-        if (first) { await streamEnd.promise; stream.close() }
-      } }), { headers: { "content-type": "text/event-stream" } })
-    }
-    if (++requests === 9) ready.resolve()
+  using server = peer([], () => 101, async (route, request) => {
+    if (++requests === 11) ready.resolve()
     await release.promise
     if (request.method === "POST") return new Response(null, { status: 204 })
     if (route.endsWith("/file-change")) return Response.json({ data: [] })
     if (route === `/api/session/${id}`) return Response.json({ data: { id, scope: "standalone", location: { directory: "" } } })
-    if (route.endsWith("/subagent")) return Response.json({ data: [], summary: { total: 0, active: 0 }, cursor: {} })
+    if (route.endsWith("/subagent")) return Response.json({ data: [], summary: taskSummary(0), cursor: {} })
     if (route === "/api/coordination") return Response.json({ data: [] })
     if (route === "/api/coordination/settings") return Response.json({ data: { enabled: true, categories: [] } })
     if (route === "/api/project/inventory") return Response.json({ data: [], cursor: {} })
     if (route === "/api/usage") return Response.json({ data: metrics })
     if (route === "/api/usage/report") return Response.json({ data: { group: "model", rows: [], total: metrics, rowCount: 0 } })
-    return new Response(null, { status: 404 })
-  } })
+    return undefined
+  }, streamEnd.promise, () => {
+    if (++streams === 1) return undefined
+    reconnectRequested.resolve()
+    return reconnectRelease.promise
+  })
   const controller = new BackendController(resources, { env, launch, onState: (state) => { if (state.status === "reconnecting") reconnecting.resolve() } })
   try {
     const rev = revision(await controller.connect({ mode: "shared", server: server.url.href }))
@@ -912,13 +908,12 @@ test("expired preflights never dispatch create or model-switch mutations", async
     let original = 0
     let active = 0
     const mutations: string[] = []
-    const location = { directory: "/synthetic/repo", project: { id: "prj_test", directory: "/synthetic/repo" } }
     using server = peer([], () => 101, async (route, request) => {
       if (request.method === "POST") { mutations.push(route); return new Response(null, { status: 204 }) }
       if (route === "/api/project/inventory") { if (mode === "create") { held.resolve(); await release.promise }; return Response.json({ data: [repository], cursor: {} }) }
       if (route === `/api/session/${id}`) return Response.json({ data: { id, location: { directory: "/synthetic/repo" }, model: { id: "model", providerID: "provider" } } })
       if (route === "/api/session/active") { if (++active === 2) { held.resolve(); await release.promise }; return Response.json({ data: {} }) }
-      if (route === "/api/model") return Response.json({ location, data: [{ id: "model", providerID: "provider", name: "Model", status: "active", enabled: true, variants: [], profiles: [], limit: { context: 100, output: 10 } }] })
+      if (route === "/api/model") return Response.json({ location, data: [{ id: "model", modelID: "model", providerID: "provider", name: "Model", status: "active", enabled: true, capabilities: { tools: true, input: ["text"], output: ["text"] }, time: { released: 0 }, cost: [], variants: [], profiles: [], limit: { context: 100, output: 10 } }] })
       if (route === "/api/model/default") return Response.json({ location, data: { selection: { id: "model", providerID: "provider" } } })
       return undefined
     }, streamEnd.promise)
@@ -947,7 +942,7 @@ test("late create and prompt acknowledgements report uncertainty with stable cli
       if (route === "/api/project/inventory") return Response.json({ data: [repository], cursor: {} })
       if (request.method === "POST") {
         bodies.push(await request.json()); held.resolve(); await release.promise
-        return Response.json({ data: mode === "prompt" ? { id: "msg_synthetic", sessionID: id } : { id, scope: "bound", location: { directory: "/synthetic/repo" } } })
+        return Response.json(mode === "prompt" ? pendingUser("msg_synthetic", id, "hello") : { data: { id, scope: "bound", location: { directory: "/synthetic/repo" } } })
       }
       return undefined
     }, streamEnd.promise)
@@ -958,7 +953,7 @@ test("late create and prompt acknowledgements report uncertainty with stable cli
       const result = pending.then(() => "accepted", (error: unknown) => error instanceof Error ? error.message : String(error))
       await held.promise; streamEnd.resolve(); await reconnected.promise; release.resolve()
       expect(await result).toBe(mode === "prompt" ? "The message was not confirmed before the connection changed. Retry sends the same message once; check the Session first." : "The chat creation was not confirmed before the connection changed. Check Sessions before retrying.")
-      expect(bodies).toEqual([mode === "prompt" ? { id: "msg_synthetic", text: "hello" } : mode === "repository" ? { id, location: { directory: "/synthetic/repo" } } : { id }])
+      expect(bodies).toEqual([mode === "prompt" ? { id: "msg_synthetic", text: "hello" } : { id, location: { directory: mode === "repository" ? "/synthetic/repo" : process.cwd() } }])
     } finally { release.resolve(); await controller.disconnect(); await fs.rm(resources, { recursive: true, force: true }) }
   }
 }, 30_000)
@@ -968,9 +963,12 @@ test("composer catalog aggregates commands, skills and agents and keeps partial 
   const locations: (string | null)[] = []
   await connected(async (route, request) => {
     if (route === `/api/session/${id}`) return Response.json({ data: { id, scope: "bound", location: { directory: "/synthetic/repo" } } })
-    if (route === "/api/command") { locations.push(new URL(request.url).searchParams.get("location[directory]")); return Response.json({ location: { directory: "/synthetic/repo" }, data: [{ name: "review", template: "Review $ARGUMENTS", description: "Review code" }] }) }
-    if (route === "/api/skill") return skillBroken ? new Response(null, { status: 503 }) : Response.json({ location: { directory: "/synthetic/repo" }, data: [{ id: "garm", name: "garm", description: "Acceptance tests", location: "/skills/garm", content: "hidden" }] })
-    if (route === "/api/agent") return Response.json({ location: { directory: "/synthetic/repo" }, data: [{ id: "scout", name: "scout", mode: "subagent", hidden: false, request: {}, description: "Explore" }, { id: "ghost", name: "ghost", mode: "subagent", hidden: true, request: {} }] })
+    if (route === "/api/command") { locations.push(new URL(request.url).searchParams.get("location[directory]")); return Response.json({ location, data: [{ name: "review", template: "Review $ARGUMENTS", description: "Review code" }] }) }
+    if (route === "/api/skill") return skillBroken ? new Response(null, { status: 503 }) : Response.json({ location, data: [{ id: "garm", name: "garm", description: "Acceptance tests", location: "/skills/garm", content: "hidden" }] })
+    if (route === "/api/agent") {
+      const entry = { mode: "subagent", request: { settings: {}, headers: {}, body: {} }, permissions: [] }
+      return Response.json({ location, data: [{ ...entry, id: "scout", name: "scout", hidden: false, description: "Explore" }, { ...entry, id: "ghost", name: "ghost", hidden: true }] })
+    }
     return undefined
   }, async (controller, rev) => {
     expect(await controller.composerCatalog(id)).toEqual({
@@ -994,8 +992,8 @@ test("find files lists the root for an empty query and searches with a limit oth
   const urls: URL[] = []
   await connected(async (route, request) => {
     if (route === `/api/session/${id}`) return Response.json({ data: { id, scope: "bound", location: { directory: "/synthetic/repo" } } })
-    if (route === "/api/fs/list") { urls.push(new URL(request.url)); return Response.json({ location: { directory: "/synthetic/repo" }, data: [{ path: "src", type: "directory" }, { path: "README.md", type: "file" }] }) }
-    if (route === "/api/fs/find") { urls.push(new URL(request.url)); return Response.json({ location: { directory: "/synthetic/repo" }, data: [{ path: "src/app.ts", type: "file" }] }) }
+    if (route === "/api/fs/list") { urls.push(new URL(request.url)); return Response.json({ location, data: [{ path: "src", type: "directory" }, { path: "README.md", type: "file" }] }) }
+    if (route === "/api/fs/find") { urls.push(new URL(request.url)); return Response.json({ location, data: [{ path: "src/app.ts", type: "file" }] }) }
     return undefined
   }, async (controller, rev) => {
     expect(await controller.findFiles({ source: id, query: "" })).toEqual({ revision: rev, source: { sessionID: id }, entries: [{ path: "src", type: "directory" }, { path: "README.md", type: "file" }] })
@@ -1011,9 +1009,9 @@ test("prompt forwards validated file and agent mentions and command dispatches b
   const bodies: { route: string; body: unknown }[] = []
   await connected(async (route, request) => {
     if (route === `/api/session/${id}/prompt` || route === `/api/session/${id}/command`) {
-      const body = await request.json() as { id?: string }
+      const body = await request.json() as { id?: string; text?: string; command?: string }
       bodies.push({ route, body })
-      return Response.json({ data: { id: body.id, sessionID: id } })
+      return Response.json(pendingUser(body.id, id, body.text ?? body.command!))
     }
     return undefined
   }, async (controller) => {
@@ -1159,6 +1157,7 @@ test("a remote shared endpoint reconnects directly to its configured origin with
   const recovered = Promise.withResolvers<void>()
   const routes: string[] = []
   const origins: string[] = []
+  const socketOrigins: string[] = []
   using target = peer(routes, () => 303, undefined, firstStreamEnds.promise)
   let hosts = 0
   let initialRevision = 0
@@ -1174,6 +1173,16 @@ test("a remote shared endpoint reconnects directly to its configured origin with
       origins.push(url.origin)
       return globalThis.fetch(new Request(new URL(url.pathname + url.search, target.url), request))
     }, { preconnect: () => {} }),
+    socket: (input, headers) => {
+      const url = new URL(input)
+      socketOrigins.push(url.origin)
+      const local = new URL(url.pathname + url.search, target.url)
+      local.protocol = "ws:"
+      const NativeSocket = WebSocket as typeof WebSocket & { new (url: string, options: { headers: typeof headers }): WebSocket }
+      const socket = new NativeSocket(local.href, { headers })
+      const send = socket.send.bind(socket)
+      return Object.assign(socket, { send: (bytes: Uint8Array) => send(Uint8Array.from(bytes)) })
+    },
     onState: (state) => { if (initialRevision && state.status === "connected" && state.revision !== initialRevision) recovered.resolve() },
   })
   try {
@@ -1183,6 +1192,7 @@ test("a remote shared endpoint reconnects directly to its configured origin with
     expect(hosts).toBe(1)
     expect(routes.filter((route) => route === "GET /api/event")).toHaveLength(2)
     expect(new Set(origins)).toEqual(new Set(["http://remote.example.test"]))
+    expect(socketOrigins).toEqual(["ws://remote.example.test", "ws://remote.example.test"])
     expect(controller.state().backendPID).toBe(303)
   } finally {
     firstStreamEnds.resolve()

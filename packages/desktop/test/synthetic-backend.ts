@@ -38,13 +38,17 @@ export function peer(
   pid: () => number,
   handle: (route: string, request: Request) => Promise<Response | undefined> | undefined = () => undefined,
   firstStreamEnds?: Promise<void>,
+  onSubscribe?: () => Promise<void> | undefined,
 ) {
   const events = createEventStream()
   const fixture = createFetch(async (url, request) => {
     const route = url.pathname
     routes.push(`${request.method} ${route}`)
     if (route === "/api/health") return Response.json({ healthy: true, version: "synthetic-shared", pid: pid(), sourceEpoch: `epoch-${pid()}` })
-    if (route === "/api/event") return events.connect()
+    if (route === "/api/event") {
+      await onSubscribe?.()
+      return events.connect()
+    }
     return (await handle(route, request)) ?? new Response(null, { status: 404 })
   }, events)
   if (firstStreamEnds) void firstStreamEnds.then(() => events.disconnect())

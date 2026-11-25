@@ -255,7 +255,7 @@ async function catalog(api: Native["api"], signal: AbortSignal, location?: Model
   const expected = location ?? { directory: list.location?.directory, workspace: list.location?.workspaceID }
   if (typeof expected.directory !== "string" || !sameModelLocation(list, expected) || !sameModelLocation(fallback, expected))
     throw new DesktopError("The backend returned models for a different location. Refresh to retry.")
-  return { models: projectModels(list.data), default: projectDefault(fallback.data) }
+  return { models: projectModels(list.data), default: projectDefault(fallback.data ?? null) }
 }
 
 async function composerLocation(api: Native["api"], signal: AbortSignal, source: ReturnType<typeof modelSource>): Promise<ModelLocation | undefined> {
@@ -711,13 +711,21 @@ export class BackendController {
     if (!current?.native || this.snapshot.status !== "connected") throw new DesktopError("Connect to a backend before using Sessions.")
     const revision = current.revision
     if (fence.revision !== undefined && fence.revision !== revision) throw new DesktopError(fence.unsent ?? unsent)
+    const api = current.native.api
+    const epoch = api.transport.connectionEpoch
+    const changed = fence.changed ?? "The backend connection changed."
     let value: T
     const ensureCurrent = (message: string) => {
-      if (this.current !== current || this.snapshot.status !== "connected" || current.revision !== revision) throw new DesktopError(message)
+      if (this.current !== current || this.snapshot.status !== "connected" || current.revision !== revision ||
+        current.native?.api !== api || api.transport.connectionEpoch !== epoch || api.transport.state === "closed") throw new DesktopError(message)
     }
-    try { value = await run(current.native.api, current.abort.signal, revision, ensureCurrent) }
-    catch (error) { throw error instanceof DesktopError ? error : new DesktopError(failure) }
-    ensureCurrent(fence.changed ?? "The backend connection changed.")
+    try { value = await run(api, current.abort.signal, revision, ensureCurrent) }
+    catch (error) {
+      if (error instanceof DesktopError) throw error
+      ensureCurrent(changed)
+      throw new DesktopError(failure)
+    }
+    ensureCurrent(changed)
     return value
   }
 

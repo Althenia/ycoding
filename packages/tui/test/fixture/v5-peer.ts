@@ -1,4 +1,6 @@
 import { decodeDomain, encodeDomain, type V5Options } from "@ycoding-ai/client/v5"
+import * as ProviderRequest from "@ycoding-ai/schema/provider-request"
+import { Schema } from "effect"
 import { Buffer } from "node:buffer"
 import { Connection, type Decision } from "../../../protocol/src/v5/connection"
 import {
@@ -312,6 +314,8 @@ const locationPaths: Record<string, string> = {
   "usage.report": "usage/report",
   "provider.refresh": "provider/refresh",
   "integration.wellknown.add": "experimental/integration/wellknown",
+  "fs.list": "fs/list",
+  "fs.find": "fs/find",
 }
 
 function sessionInfo(value: unknown, id: string) {
@@ -336,6 +340,7 @@ function scenario(dispatch: Dispatch) {
   const path = (() => {
     if (name === "event.subscribe") return "/api/event"
     if (name === "session.log") return `/api/experimental/session/${params.sessionID}/log`
+    if (name === "permission.saved.remove") return `/api/permission/saved/${encodeURIComponent(params.id!)}`
     if (name.startsWith("session.")) {
       const action = name.slice("session.".length)
       if (["list", "create", "active", "outstanding", "completions"].includes(action))
@@ -389,7 +394,7 @@ function scenario(dispatch: Dispatch) {
       const action = name.slice("coordination.".length)
       if (action === "settings") return "/api/coordination/settings"
       if (["list", "create"].includes(action)) return "/api/coordination"
-      return `/api/coordination/${params.groupID}`
+      return `/api/coordination/${encodeURIComponent(params.groupID!)}`
     }
     if (name.startsWith("projectCopy."))
       return `/experimental/project/${params.projectID}/copy${name.endsWith("refresh") ? "/refresh" : ""}`
@@ -419,7 +424,9 @@ function scenario(dispatch: Dispatch) {
   })()
   const method = ["session.capturedChanges.list", "session.team.economics", "session.family.activity"].includes(name)
     ? "GET"
-    : name === "session.daybreak.set"
+    : name === "coordination.update"
+      ? "PATCH"
+      : name === "session.daybreak.set" || name === "session.revert.clear"
       ? "POST"
       : ["event.subscribe", "session.log"].includes(name)
         ? "GET"
@@ -571,6 +578,9 @@ export function scriptedTransport(run: Scenario, events: EventSource) {
           }
           const body = (() => {
             if (name === "health.get") return { data: value }
+            if (name === "usage.report") {
+              return { data: Schema.decodeUnknownSync(Schema.toCodecJson(ProviderRequest.Report))((value as { data: unknown }).data) }
+            }
             if (name === "session.snapshot") {
               const projection = value as { session: Record<string, unknown> }
               return { data: { ...projection, session: sessionInfo(projection.session, String(projection.session.id)) } }
@@ -666,6 +676,10 @@ export function scriptedTransport(run: Scenario, events: EventSource) {
               "session.promptGenerate",
               "generate.text",
               "project.inventory",
+              "telemetry.list",
+              "session.capturedInputs",
+              "project.directories",
+              "projectCopy.create",
               "telemetry.consent.get",
               "telemetry.consent.set",
               "session.subagent.cancel",
