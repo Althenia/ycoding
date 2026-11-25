@@ -14,6 +14,7 @@ import { createClientTelemetry } from "./client-telemetry"
 import { createDesktopAttention, createDesktopAudio } from "./attention"
 import { ActiveQuestionCard } from "./active-questions"
 import { DesktopDiffView } from "./diff-view"
+import { IntelligentUiTurnCards } from "./intelligent-ui"
 import { Keyed } from "./keyed"
 import { KEYBOARD_ACTIONS, desktopShortcut, keyboardBindings, parseKeyboardOverrides, shortcutLabel, type KeyboardOverrides } from "./keyboard"
 import { KeyboardSettings } from "./keyboard-settings"
@@ -47,6 +48,7 @@ import "../../../apps/web/src/styles/tokens.css"
 import "../../../apps/web/src/styles/workspace-shell.css"
 import "./tokens.css"
 import "./style.css"
+import "./intelligent-ui.css"
 import "./compact.css"
 import { containDialogFocus, ResponsiveLayer, swipeDismiss, watchDesktopViewport } from "./responsive-layer"
 
@@ -2538,7 +2540,7 @@ function TurnView(props: { sessionID: string; message: Messages[number]; continu
           return <>
             <Show when={reasoning()}>{(value) => <For each={[thinkingExpanded()]}>{() => <DesktopReasoningDisclosure defaultOpen={thinkingExpanded()} text={value().text} streaming={!message().time.completed} durationLabel={value().created !== undefined ? duration(value().created!, value().completed) : undefined} />}</For>}</Show>
             <Show when={text()}>{(value) => <div class="transcript-message__text rl-bubble"><Markdown text={value().text} /></div>}</Show>
-            <Keyed each={tools()} by={(parts) => parts[0]!.id}>{(parts) => <DesktopToolDisclosure tools={toolSteps(parts())} lastSummary={parts().at(-1) ? toolDisplaySummary(parts().at(-1)!.name, parts().at(-1)!.state.input) : undefined} streaming={parts().some((part) => part.state.status === "running" || part.state.status === "streaming")} durationLabel={presentation().grouping === "auto" ? duration(message().time.created, message().time.completed) : undefined} />}</Keyed>
+            <Keyed each={tools()} by={(parts) => parts[0]!.id}>{(parts) => <><DesktopToolDisclosure tools={toolSteps(parts())} lastSummary={parts().at(-1) ? toolDisplaySummary(parts().at(-1)!.name, parts().at(-1)!.state.input) : undefined} streaming={parts().some((part) => part.state.status === "running" || part.state.status === "streaming")} durationLabel={presentation().grouping === "auto" ? duration(message().time.created, message().time.completed) : undefined} /><IntelligentUiTurnCards parts={parts()} /></>}</Keyed>
           </>
         }}</Keyed>
         <Show when={message().time.completed !== undefined ? assistantReplyText(message().content) : undefined}>{(reply) => <div class="transcript-message__meta"><CopyMessageButton text={reply()} /></div>}</Show>
