@@ -22,12 +22,13 @@ const jobStep = (job: string, name: string) => {
   expect(steps, `${job}: ${name}`).toHaveLength(1)
   return steps[0]!
 }
-const fullSuites = ["types", "web", "cli", "cli-antigravity", "cli-muse", "tui-project", "tui-runtime"]
+const fullSuites = ["types", "web", "cli", "tui-project", "tui-runtime"]
+const webOptIn = "needs.release-tui.outputs.web-deploy == 'true'"
 const targetIs = (target: string) => `needs.release-target.outputs.target == '${target}'`
 const buildsDesktop = `\${{ ${targetIs("full")} || ${targetIs("desktop")} }}`
 const tuiPublication = `\${{ github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/tags/v') && ${targetIs("full")} }}`
 const desktopPublication = `\${{ github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/tags/desktop-v') && ${targetIs("desktop")} }}`
-const webDeployment = `\${{ !cancelled() && github.event_name == 'push' && !github.event.deleted && needs.release-target.result == 'success' && needs.verify-source.result == 'success' && ((startsWith(github.ref, 'refs/tags/v') && ${targetIs("full")} && needs.release-tui.result == 'success') || (startsWith(github.ref, 'refs/tags/web-v') && ${targetIs("web")} && needs.release-tui.result == 'skipped')) }}`
+const webDeployment = `\${{ !cancelled() && github.event_name == 'push' && !github.event.deleted && needs.release-target.result == 'success' && needs.verify-source.result == 'success' && startsWith(github.ref, 'refs/tags/v') && ${targetIs("full")} && needs.release-tui.result == 'success' && ${webOptIn} }}`
 
 function releaseTarget(input: Record<string, string>) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ycoding-release-target-"))
@@ -342,6 +343,61 @@ test("app preview Worker deploys only after the relay and only when the reposito
   expect(workflow.split("\n  deploy-web:")[0]).not.toContain("deploy:cloudflare-preview")
 })
 
+test.each([
+  ["unset Web, preview on", undefined, true, []],
+  ["empty Web, preview on", "", true, []],
+  ["false Web, preview on", "false", true, []],
+  ["nontrue Web, preview on", "1", true, []],
+  ["mixed-case Web, preview on", "True", true, []],
+  ["padded Web, preview on", "true ", true, []],
+  ["true Web, preview off", "true", false, ["Deploy to Cloudflare"]],
+  ["true Web, preview on", "true", true, ["Deploy to Cloudflare", "Deploy app preview Worker"]],
+] as const)("release Web opt-in: %s", (_, value, preview, expected) => {
+  const publish = parsedWorkflow.jobs["release-tui"]!
+  const deploy = parsedWorkflow.jobs["deploy-web"]!
+  const gate = publish.steps.find((step) => step.id === "web-deploy")
+  const output = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", gate?.run ?? ":"], {
+    env: { WEB_DEPLOY: value ?? "", GITHUB_OUTPUT: "/dev/stdout" }, stdout: "pipe", stderr: "pipe",
+  })
+  expect(output.exitCode, output.stderr.toString()).toBe(0)
+  const enabled = !deploy.if?.includes(webOptIn) || output.stdout.toString() === "enabled=true\n"
+  const steps = enabled ? deploy.steps.flatMap((step) => {
+    if (step.name === "Deploy to Cloudflare") return [step.name]
+    return step.name === "Deploy app preview Worker" && preview && step.if === "vars.YCODING_APP_PREVIEW_DEPLOY == 'true'" ? [step.name] : []
+  }) : []
+  expect(steps).toEqual([...expected])
+  expect(gate?.env).toEqual({ WEB_DEPLOY: "${{ vars.YCODING_WEB_DEPLOY }}" })
+  expect(publish.outputs?.["web-deploy"]).toBe("${{ steps.web-deploy.outputs.enabled }}")
+  expect(gate?.if).toBeUndefined()
+  expect(publish.steps.indexOf(gate!)).toBeGreaterThan(publish.steps.findIndex((step) => step.name === "Publish GitHub release"))
+})
+
+test.each([
+  ["published version tag", "push", false, "refs/tags/v0.13.3", "full", "success", true],
+  ["dispatch", "workflow_dispatch", false, "refs/heads/main", "full", "success", false],
+  ["deleted version tag", "push", true, "refs/tags/v0.13.3", "full", "success", false],
+  ["branch push", "push", false, "refs/heads/main", "full", "success", false],
+  ["non-version tag", "push", false, "refs/tags/other", "full", "success", false],
+  ["Web-only tag", "push", false, "refs/tags/web-v0.2.0", "web", "skipped", false],
+  ["failed publisher", "push", false, "refs/tags/v0.13.3", "full", "failure", false],
+  ["blocked publisher", "push", false, "refs/tags/v0.13.3", "full", "skipped", false],
+] as const)("release Web deployment with opt-in on after %s", (_, event, deleted, ref, target, publisher, expected) => {
+  const terms: Record<string, boolean> = {
+    "!cancelled()": true,
+    "github.event_name == 'push'": event === "push",
+    "!github.event.deleted": !deleted,
+    "startsWith(github.ref, 'refs/tags/v')": ref.startsWith("refs/tags/v"),
+    [targetIs("full")]: target === "full",
+    "needs.release-target.result == 'success'": true,
+    "needs.verify-source.result == 'success'": true,
+    "needs.release-tui.result == 'success'": publisher === "success",
+    [webOptIn]: true,
+  }
+  const condition = parsedWorkflow.jobs["deploy-web"]!.if!.slice(3, -2).trim().split(" && ")
+  expect(condition.every((term) => Object.hasOwn(terms, term))).toBe(true)
+  expect(condition.every((term) => terms[term])).toBe(expected)
+})
+
 test("publish and deploy consume only digest-checked artifacts from the current run", () => {
   const finalizer = workflowJob(workflow, "finalize-release")
   const release = workflowJob(workflow, "release-tui")
@@ -635,31 +691,12 @@ for (const [name, file, retained, excluded] of [
     expect(commands[0]?.match(/\.test\.[jt]sx?/g)).toHaveLength(1)
   })
 
-test("release verification covers Antigravity provider and build fixtures", () => {
-  const verify = workflowJob(workflow, "verify-source")
-  expect(verify).toContain("Verify Antigravity provider and build fixture boundaries")
-  expect(verify).toContain("./test/plugin/provider-antigravity.test.ts")
-  expect(verify).toContain("./test/plugin/provider-antigravity-signature-replay.test.ts")
-  expect(verify).toContain("./antigravity-build-env.test.ts")
-  expect(verify).toContain("./antigravity-build.test.ts")
-})
-
 test("release verification covers incomplete provider streams and disabled tool declarations", () => {
   const verify = workflowJob(workflow, "verify-source")
   const step = verify.split("      - name: Check workspace and types\n")[1]?.split("\n      - name: ")[0] ?? ""
   expect(step).toContain("if: matrix.suite == 'types'")
   expect(step).toContain('bun test --cwd packages/core ./test/aisdk.test.ts -t "AI SDK incomplete completion|AI SDK disabled-tool declarations"')
   expect(step).toContain('bun test --cwd packages/core --timeout 40000 ./test/session-runner.test.ts -t "disabled-tool declarations|rejects a declared (Google|Codex|OpenAI SDK) tool during terminal recovery|fails provider-executed tool-only terminal response recovery without a third request|fails repeated (empty|reasoning-only) responses without a third response step"')
-})
-
-test("release verification covers Muse provider and build fixtures", () => {
-  const verify = workflowJob(workflow, "verify-source")
-  expect(verify).toContain("Verify Muse provider and build fixture boundaries")
-  expect(verify).toContain("./test/plugin/provider-muse.test.ts")
-  expect(verify).toContain("./test/plugin/provider-muse-tools.test.ts")
-  expect(verify).toContain("./test/provider-usage-muse.test.ts")
-  expect(verify).toContain("./muse-build-env.test.ts")
-  expect(verify).toContain("./muse-build.test.ts")
 })
 
 test("release source gates retain native access, retirement and web unit contracts", () => {
@@ -1049,24 +1086,11 @@ test("both Darwin packagers use the local runtime and receipt digest from their 
   const order = ["Stage Apple Silicon release runtime", "Upload Apple Silicon release runtime", "Import macOS signing identity", "Build TUI artifact", "Build desktop app", "Remove macOS signing keychain"].map((name) => darwinBuild.indexOf(`- name: ${name}\n`))
   expect(order).toEqual([...order].sort((a, b) => a - b))
   const producer = darwinBuild.slice(0, order[2])
-  const oauth = ["YCODING_ANTIGRAVITY_CLIENT_ID", "YCODING_ANTIGRAVITY_CLIENT_SECRET", "YCODING_MUSE_CLIENT_ID", "YCODING_MUSE_CLIENT_SECRET"]
-  expect([...producer.matchAll(/secrets\.([A-Z_]+)/g)].map((match) => match[1])).toEqual(oauth)
-  for (const name of oauth) expect(stage).toContain(`${name}: \${{ secrets.${name} }}`)
+  expect(producer).not.toContain("secrets.")
   for (const name of ["YCODING_MACOS_SIGNING_P12", "YCODING_MACOS_SIGNING_PASSWORD"]) {
     expect([...darwinBuild.matchAll(new RegExp(`secrets\\.${name}`, "g"))]).toHaveLength(1)
     expect(darwinStep("Import macOS signing identity")).toContain(`secrets.${name}`)
   }
-  const required = "YCODING_ANTIGRAVITY_CLIENT_ID YCODING_ANTIGRAVITY_CLIENT_SECRET YCODING_MUSE_CLIENT_ID"
-  const check = `for name in ${required}; do`
-  expect(stage.split(check)).toHaveLength(3)
-  expect(stage).toContain('test -n "${!name}" || { echo "Missing $name Actions secret" >&2; exit 1; }')
-  expect(stage).toContain('LC_ALL=C grep -qaF -- "${!name}" "$RUNNER_TEMP/release-runtime/ycoding-runtime" || { echo "The release runtime does not embed $name" >&2; exit 1; }')
-  expect(stage.match(/test -n "\$\{!name\}"/g)).toHaveLength(1)
-  expect(stage.match(/grep -qaF -- "\$\{!name\}"/g)).toHaveLength(1)
-  expect(stage).not.toMatch(/echo[^\n]*\$\{!name\}"[^\n]*>&2|printf[^\n]*\$\{!name\}"[^\n]*>>/)
-  const buildIndex = stage.indexOf('bun packages/cli/script/runtime.ts stage-release')
-  expect(stage.indexOf(check)).toBeLessThan(buildIndex)
-  expect(stage.lastIndexOf(check)).toBeGreaterThan(buildIndex)
   for (const name of ["Build TUI artifact", "Build desktop app"]) {
     const packaging = darwinStep(name)
     expect(packaging).toContain("YCODING_RELEASE_RUNTIME_DIR: ${{ runner.temp }}/release-runtime\n")
@@ -1106,18 +1130,15 @@ test("release runtime uses a versioned compiler cache and uploads build timings"
   for (const cache of [restore, save]) expect(cache).toContain('path: ${{ runner.temp }}/sccache-store')
   const stage = darwinStep("Stage Apple Silicon release runtime")
   expect(stage).toContain("SAVES_RELEASE_CACHES: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}")
-  const embed = stage.lastIndexOf('LC_ALL=C grep -qaF -- "${!name}"')
+  const build = stage.indexOf("bun packages/cli/script/runtime.ts stage-release")
   const stats = stage.indexOf("sccache --show-stats")
   const guarded = stage.indexOf('if [ "$SAVES_RELEASE_CACHES" = true ]; then')
   const stop = stage.indexOf("sccache --stop-server")
   const purge = ['rm -f "$release/ycoding-runtime" "$release/ycoding-runtime.d"', 'find "$release/deps" -maxdepth 1 -name \'ycoding_runtime-*\' -exec rm -rf {} +', "bin-ycoding-runtime*"].map((text) => stage.indexOf(text))
-  const scan = stage.indexOf('for cached in "$HOME/.cargo/registry/index" "$HOME/.cargo/registry/cache" "$HOME/.cargo/git/db" "$release" "$SCCACHE_DIR"; do')
-  const refusal = stage.indexOf('A provider client value is present in the release cache path $leaked" >&2; exit 1')
   const digest = stage.indexOf("digest=$(shasum")
-  expect([embed, stats, guarded, stop, ...purge, scan, refusal, digest].every((index) => index >= 0)).toBe(true)
-  expect([embed, stats, guarded, stop, ...purge, scan, refusal, digest]).toEqual([embed, stats, guarded, stop, ...purge, scan, refusal, digest].sort((a, b) => a - b))
-  expect(stage).toContain("if [ -n \"${!name}\" ]; then values+=(\"${!name}\"); fi")
-  expect(stage).toContain('LC_ALL=C grep -rlaF -f /dev/stdin "$cached"')
+  const stages = [build, stats, guarded, stop, ...purge, digest]
+  expect(stages.every((index) => index >= 0)).toBe(true)
+  expect(stages).toEqual([...stages].sort((a, b) => a - b))
   const timings = darwinStep("Upload release build timings")
   expect(timings).toContain("uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a")
   expect(timings).toContain('name: release-runtime-timings-${{ github.run_attempt }}')
@@ -1567,42 +1588,9 @@ test("release source verification runs the typed decision suites and the guardra
   expect(workflow).not.toContain("continue-on-error:")
 })
 
-test("OAuth source checks run in separate Linux legs before release finalization", () => {
-  const parsed = Bun.YAML.parse(workflow) as {
-    jobs: {
-      "verify-source": {
-        needs?: unknown
-        "runs-on": string
-        strategy: { "fail-fast": boolean; matrix: { suite: string } }
-        steps: { name?: string; if?: string; run?: string; "working-directory"?: string }[]
-      }
-      "finalize-release": { needs: string[] }
-    }
-  }
-  const verifyConfig = parsed.jobs["verify-source"]
-  expect(verifyConfig.needs).toBe("release-target")
-  expect(verifyConfig.strategy["fail-fast"]).toBe(false)
-  expect(verifyConfig.strategy.matrix).toEqual({ suite: "${{ fromJSON(needs.release-target.outputs.suites) }}" })
-  expect(verifyConfig["runs-on"]).toBe("ubuntu-24.04")
-  for (const target of ["full", "desktop"]) expect(targetSuites(target)).toEqual(expect.arrayContaining(["cli-antigravity", "cli-muse"]))
-
-  for (const [suite, commands] of Object.entries({
-    "cli-antigravity": [
-      "bun test --cwd packages/core ./test/plugin/provider-antigravity.test.ts ./test/plugin/provider-antigravity-signature-replay.test.ts",
-      "bun test --cwd packages/cli/script ./antigravity-build-env.test.ts ./antigravity-build.test.ts",
-    ],
-    "cli-muse": [
-      "bun test --cwd packages/core ./test/plugin/provider-muse.test.ts ./test/plugin/provider-muse-tools.test.ts ./test/provider-usage-muse.test.ts",
-      "bun test --cwd packages/cli/script ./muse-build-env.test.ts ./muse-build.test.ts",
-    ],
-  })) {
-    const checks = verifyConfig.steps.filter((step) => commands.some((command) => step.run?.includes(command)))
-    expect(checks, suite).toHaveLength(1)
-    expect(checks[0], suite).toMatchObject({ if: `matrix.suite == '${suite}'`, run: `${commands.join("\n")}\n` })
-    expect(checks[0]?.["working-directory"], suite).toBeUndefined()
-  }
-
-  expect(parsed.jobs["finalize-release"].needs).toEqual(["release-target", "verify-source", darwinJob])
+test("release excludes retired provider checks and their build credentials", () => {
+  expect(JSON.stringify(parsedWorkflow.jobs["verify-source"]!.steps)).not.toMatch(/antigravity|muse/i)
+  expect(workflow).not.toMatch(/YCODING_(?:ANTIGRAVITY|MUSE)_/)
 })
 
 test.each([
@@ -1804,7 +1792,7 @@ test("every published archive set is checksum-verified against the finalizer bef
 })
 
 test("publication and deployment run only for their own tag push and never for a manual run", () => {
-  for (const [job, tag, target] of [["release-tui", "v", "full"], ["release-desktop", "desktop-v", "desktop"], ["deploy-web", "web-v", "web"]] as const) {
+  for (const [job, tag, target] of [["release-tui", "v", "full"], ["release-desktop", "desktop-v", "desktop"], ["deploy-web", "v", "full"]] as const) {
     const condition = parsedWorkflow.jobs[job]!.if ?? ""
     expect(condition).toContain("github.event_name == 'push' && !github.event.deleted")
     expect(condition).toContain(`startsWith(github.ref, 'refs/tags/${tag}') && ${targetIs(target)}`)
@@ -1817,10 +1805,8 @@ test("publication and deployment run only for their own tag push and never for a
   ])
   expect(desktop.steps[0]!.with).toEqual({ ref: "${{ github.sha }}", "fetch-depth": 1, "persist-credentials": false })
   expect(jobStep("release-desktop", "Publish GitHub release").env).toEqual({ GH_TOKEN: "${{ github.token }}", GH_REPO: "${{ github.repository }}" })
-  const deploy = parsedWorkflow.jobs["deploy-web"]!.steps.map((step) => step.name)
-  expect(jobStep("deploy-web", "Verify web release tag provenance")).toEqual({ name: "Verify web release tag provenance", if: targetIs("web"), run: "bash script/release-version.sh --verify-tag" })
-  expect(deploy.indexOf("Checkout repository")).toBeLessThan(deploy.indexOf("Verify web release tag provenance"))
-  expect(deploy.indexOf("Verify web release tag provenance")).toBeLessThan(deploy.indexOf("Deploy to Cloudflare"))
+  expect(jobStep("verify-source", "Verify release tag provenance").run).toBe("bash script/release-version.sh --verify-tag")
+  expect(jobStep("release-tui", "Publish GitHub release").run).toContain("bash script/release-version.sh --verify-tag")
 })
 
 test.each([

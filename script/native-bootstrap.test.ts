@@ -166,7 +166,7 @@ test("only the default-branch Apple Silicon runtime producer writes the release 
   const save = workflow.split("- name: Save Apple Silicon release dependencies\n")[1]?.split("\n      - name: ")[0] ?? ""
   const build = workflow.split("\n  build-desktop-runtime:\n")[1]?.split("\n  finalize-release:\n")[0] ?? ""
   const [producer, packagers] = build.split("\n      - name: Import macOS signing identity\n")
-  expect(packagers).toBeDefined()
+  if (producer === undefined || packagers === undefined) throw new Error("Missing Apple Silicon runtime or signing steps")
   expect(restore).toContain("uses: actions/cache/restore@")
   expect(restore).toContain("rust/Cargo.lock")
   expect(restore).not.toContain("**/*.rs")
@@ -179,20 +179,18 @@ test("only the default-branch Apple Silicon runtime producer writes the release 
   expect(producer).toContain("- name: Save Apple Silicon release dependencies")
   expect(producer).toContain("release-cache: writer")
   const stage = producer.split("- name: Stage Apple Silicon release runtime\n")[1]?.split("\n      - name: ")[0] ?? ""
-  const oauth = ["YCODING_ANTIGRAVITY_CLIENT_ID", "YCODING_ANTIGRAVITY_CLIENT_SECRET", "YCODING_MUSE_CLIENT_ID", "YCODING_MUSE_CLIENT_SECRET"]
-  expect([...producer.matchAll(/secrets\.([A-Z_]+)/g)].map((match) => match[1])).toEqual(oauth)
-  for (const name of oauth) expect(stage).toContain(`${name}: \${{ secrets.${name} }}`)
+  expect(build).not.toMatch(/YCODING_(?:ANTIGRAVITY|MUSE)_(?:CLIENT_ID|CLIENT_SECRET)/)
+  expect(producer).not.toContain("secrets.")
   for (const name of ["YCODING_MACOS_SIGNING_P12", "YCODING_MACOS_SIGNING_PASSWORD"]) {
     expect([...build.matchAll(new RegExp(`secrets\\.${name}`, "g"))]).toHaveLength(1)
     expect(packagers.split("\n      - name: ")[0]).toContain(`secrets.${name}`)
   }
-  const check = "for name in YCODING_ANTIGRAVITY_CLIENT_ID YCODING_ANTIGRAVITY_CLIENT_SECRET YCODING_MUSE_CLIENT_ID; do"
-  expect(stage.split(check)).toHaveLength(3)
-  expect(stage).toContain('test -n "${!name}" || { echo "Missing $name Actions secret" >&2; exit 1; }')
-  expect(stage).toContain('LC_ALL=C grep -qaF -- "${!name}" "$RUNNER_TEMP/release-runtime/ycoding-runtime" || { echo "The release runtime does not embed $name" >&2; exit 1; }')
-  const buildIndex = stage.indexOf('bun packages/cli/script/runtime.ts stage-release')
-  expect(buildIndex).toBeGreaterThan(stage.indexOf(check))
-  expect(buildIndex).toBeLessThan(stage.lastIndexOf(check))
+  expect(stage).not.toContain("Missing $name Actions secret")
+  expect(stage).not.toContain("The release runtime does not embed")
+  expect(stage).not.toContain("A provider client value is present in the release cache path")
+  expect(stage).toContain('bun packages/cli/script/runtime.ts stage-release "$RUNNER_TEMP/release-runtime"')
+  expect(stage).toContain('if [ "$SAVES_RELEASE_CACHES" = true ]; then')
+  expect(stage).toContain('rm -f "$release/ycoding-runtime" "$release/ycoding-runtime.d"')
   expect(packagers).not.toContain("release-cache:")
   expect(packagers).not.toContain("actions/cache/save@")
 })

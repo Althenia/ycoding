@@ -18,8 +18,8 @@ else
   target=${REQUESTED_RELEASE_TARGET:-full}
 fi
 case $target in
-  full) tag_prefix=v tag_notes=docs/releases suites='["types","web","cli","cli-antigravity","cli-muse","tui-project","tui-runtime"]' ;;
-  desktop) tag_prefix=desktop-v tag_notes=docs/releases/desktop suites='["types","cli","cli-antigravity","cli-muse","tui-project","tui-runtime"]' ;;
+  full) tag_prefix=v tag_notes=docs/releases suites='["types","web","cli","tui-project","tui-runtime"]' ;;
+  desktop) tag_prefix=desktop-v tag_notes=docs/releases/desktop suites='["types","cli","tui-project","tui-runtime"]' ;;
   web) tag_prefix=web-v tag_notes=docs/releases/web suites='["types","web"]' ;;
   *) echo 'Invalid release target' >&2; exit 1 ;;
 esac

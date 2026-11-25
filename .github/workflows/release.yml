@@ -173,18 +173,6 @@ jobs:
           bun test --timeout 30000 ./test/decision-follow-state.test.ts ./test/decision-follow.test.ts ./test/decision-follow-command.test.ts
           bun test --timeout 30000 ./test/decision-watch.test.ts -t "both entrypoints advertise|already pending decision|every decision kind|completion is reported only|failed, interrupted, and rejected|timeout reports progress|resume command keeps|root accepted receipt|a family checkpoint|checkpoint boundary: rejects invalid|explicit conflicting root cursor is rejected|zero cursor against absent watermark rejects|assessment cut off by the deadline|read cut off by the deadline outside the assessment|resumed after an unavailable assessment|cancelling or killing a watch during a stalled assessment|queued work in outstanding data blocks completion only inside the watched scope"
 
-      - name: Verify Antigravity provider and build fixture boundaries
-        if: matrix.suite == 'cli-antigravity'
-        run: |
-          bun test --cwd packages/core ./test/plugin/provider-antigravity.test.ts ./test/plugin/provider-antigravity-signature-replay.test.ts
-          bun test --cwd packages/cli/script ./antigravity-build-env.test.ts ./antigravity-build.test.ts
-
-      - name: Verify Muse provider and build fixture boundaries
-        if: matrix.suite == 'cli-muse'
-        run: |
-          bun test --cwd packages/core ./test/plugin/provider-muse.test.ts ./test/plugin/provider-muse-tools.test.ts ./test/provider-usage-muse.test.ts
-          bun test --cwd packages/cli/script ./muse-build-env.test.ts ./muse-build.test.ts
-
       - name: Verify Chrome extension suites
         if: matrix.suite == 'cli'
         run: bun test --cwd extensions/chrome ./test/protocol.test.js ./test/service-worker.test.js ./test/design-md.test.js
@@ -400,20 +388,10 @@ jobs:
         id: runtime
         shell: bash
         env:
-          YCODING_ANTIGRAVITY_CLIENT_ID: ${{ secrets.YCODING_ANTIGRAVITY_CLIENT_ID }}
-          YCODING_ANTIGRAVITY_CLIENT_SECRET: ${{ secrets.YCODING_ANTIGRAVITY_CLIENT_SECRET }}
-          YCODING_MUSE_CLIENT_ID: ${{ secrets.YCODING_MUSE_CLIENT_ID }}
-          YCODING_MUSE_CLIENT_SECRET: ${{ secrets.YCODING_MUSE_CLIENT_SECRET }}
           SAVES_RELEASE_CACHES: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
         run: |
           set -euo pipefail
-          for name in YCODING_ANTIGRAVITY_CLIENT_ID YCODING_ANTIGRAVITY_CLIENT_SECRET YCODING_MUSE_CLIENT_ID; do
-            test -n "${!name}" || { echo "Missing $name Actions secret" >&2; exit 1; }
-          done
           bun packages/cli/script/runtime.ts stage-release "$RUNNER_TEMP/release-runtime"
-          for name in YCODING_ANTIGRAVITY_CLIENT_ID YCODING_ANTIGRAVITY_CLIENT_SECRET YCODING_MUSE_CLIENT_ID; do
-            LC_ALL=C grep -qaF -- "${!name}" "$RUNNER_TEMP/release-runtime/ycoding-runtime" || { echo "The release runtime does not embed $name" >&2; exit 1; }
-          done
           sccache --show-stats
           if [ "$SAVES_RELEASE_CACHES" = true ]; then
             sccache --stop-server >/dev/null
@@ -421,15 +399,6 @@ jobs:
             rm -f "$release/ycoding-runtime" "$release/ycoding-runtime.d"
             find "$release/deps" -maxdepth 1 -name 'ycoding_runtime-*' -exec rm -rf {} +
             find "$release/.fingerprint" -mindepth 2 -maxdepth 2 -name 'bin-ycoding-runtime*' -exec dirname {} \; | sort -u | while IFS= read -r unit; do rm -rf "$unit"; done
-            values=()
-            for name in YCODING_ANTIGRAVITY_CLIENT_ID YCODING_ANTIGRAVITY_CLIENT_SECRET YCODING_MUSE_CLIENT_ID YCODING_MUSE_CLIENT_SECRET; do
-              if [ -n "${!name}" ]; then values+=("${!name}"); fi
-            done
-            for cached in "$HOME/.cargo/registry/index" "$HOME/.cargo/registry/cache" "$HOME/.cargo/git/db" "$release" "$SCCACHE_DIR"; do
-              test -e "$cached" || continue
-              leaked="$(printf '%s\n' "${values[@]}" | LC_ALL=C grep -rlaF -f /dev/stdin "$cached" | head -n 1 || true)"
-              test -z "$leaked" || { echo "A provider client value is present in the release cache path $leaked" >&2; exit 1; }
-            done
           fi
           digest=$(shasum -a 256 < "$RUNNER_TEMP/release-runtime/receipt.json" | cut -d' ' -f1)
           printf 'receipt-sha256=%s\n' "$digest" >> "$GITHUB_OUTPUT"
@@ -533,10 +502,6 @@ jobs:
           YCODING_MACOS_SIGNING_SHA1: 9dd524184b0db949ffac7f0ada0ae860ac7f5f85
           YCODING_RELEASE_RUNTIME_DIR: ${{ runner.temp }}/release-runtime
           RECEIPT_SHA256: ${{ steps.runtime.outputs.receipt-sha256 }}
-          YCODING_ANTIGRAVITY_CLIENT_ID: ${{ secrets.YCODING_ANTIGRAVITY_CLIENT_ID }}
-          YCODING_ANTIGRAVITY_CLIENT_SECRET: ${{ secrets.YCODING_ANTIGRAVITY_CLIENT_SECRET }}
-          YCODING_MUSE_CLIENT_ID: ${{ secrets.YCODING_MUSE_CLIENT_ID }}
-          YCODING_MUSE_CLIENT_SECRET: ${{ secrets.YCODING_MUSE_CLIENT_SECRET }}
         run: bun run build:tui
 
       - name: Verify build metadata
@@ -727,6 +692,8 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+    outputs:
+      web-deploy: ${{ steps.web-deploy.outputs.enabled }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -817,6 +784,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
+      - name: Resolve Web deployment opt-in
+        id: web-deploy
+        env:
+          WEB_DEPLOY: ${{ vars.YCODING_WEB_DEPLOY }}
+        run: |
+          if [ "$WEB_DEPLOY" = true ]; then
+            printf 'enabled=true\n' >> "$GITHUB_OUTPUT"
+          fi
+
   release-desktop:
     name: publish Desktop release
     needs: [release-target, finalize-release]
@@ -891,7 +867,7 @@ jobs:
   deploy-web:
     name: deploy web (cloudflare)
     needs: [release-target, verify-source, release-tui]
-    if: ${{ !cancelled() && github.event_name == 'push' && !github.event.deleted && needs.release-target.result == 'success' && needs.verify-source.result == 'success' && ((startsWith(github.ref, 'refs/tags/v') && needs.release-target.outputs.target == 'full' && needs.release-tui.result == 'success') || (startsWith(github.ref, 'refs/tags/web-v') && needs.release-target.outputs.target == 'web' && needs.release-tui.result == 'skipped')) }}
+    if: ${{ !cancelled() && github.event_name == 'push' && !github.event.deleted && needs.release-target.result == 'success' && needs.verify-source.result == 'success' && startsWith(github.ref, 'refs/tags/v') && needs.release-target.outputs.target == 'full' && needs.release-tui.result == 'success' && needs.release-tui.outputs.web-deploy == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -901,10 +877,6 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Verify web release tag provenance
-        if: needs.release-target.outputs.target == 'web'
-        run: bash script/release-version.sh --verify-tag
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun

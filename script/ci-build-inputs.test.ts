@@ -151,7 +151,7 @@ function workflowJobs(name: string) {
   return Object.fromEntries(Object.entries(yamlFields(workflow.jobs)).map(([id, value]) => {
     const job = yamlFields(value)
     if (!Array.isArray(job.steps)) throw new Error(`Missing workflow steps for ${id}`)
-    return [id, { name: job.name, if: job.if, needs: job.needs, steps: job.steps.map(yamlFields) }]
+    return [id, { name: job.name, if: job.if, needs: job.needs, outputs: job.outputs, steps: job.steps.map(yamlFields) }]
   }))
 }
 
@@ -191,7 +191,7 @@ test("keeps the normal source and Desktop checks successful on a skip and expose
   for (const step of source.filter((step) => typeof step.run === "string" && /bun test|check:generated/.test(step.run))) expect(step.if).toBeUndefined()
 })
 
-test("retains the entire release workflow, including full builds, publication and deployment", () => {
+test("standalone Web tags verify an artifact and only opted-in full releases can deploy", () => {
   const release = readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8")
   const jobs = workflowJobs("release")
   const releaseTag = "startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/desktop-v') || startsWith(github.ref, 'refs/tags/web-v')"
@@ -202,23 +202,46 @@ test("retains the entire release workflow, including full builds, publication an
   for (const job of ["build-desktop-runtime", "finalize-release"]) expect(jobs[job]?.if).toBe(`\${{ ${target("full")} || ${target("desktop")} }}`)
   expect(jobs["release-tui"]?.if).toBe(`\${{ ${tagPush} && startsWith(github.ref, 'refs/tags/v') && ${target("full")} }}`)
   expect(jobs["release-desktop"]?.if).toBe(`\${{ ${tagPush} && startsWith(github.ref, 'refs/tags/desktop-v') && ${target("desktop")} }}`)
-  expect(jobs["deploy-web"]?.if).toBe(`\${{ !cancelled() && ${tagPush} && needs.release-target.result == 'success' && needs.verify-source.result == 'success' && ((startsWith(github.ref, 'refs/tags/v') && ${target("full")} && needs.release-tui.result == 'success') || (startsWith(github.ref, 'refs/tags/web-v') && ${target("web")} && needs.release-tui.result == 'skipped')) }}`)
+  expect(jobs["deploy-web"]?.if).toBe(`\${{ !cancelled() && ${tagPush} && needs.release-target.result == 'success' && needs.verify-source.result == 'success' && startsWith(github.ref, 'refs/tags/v') && ${target("full")} && needs.release-tui.result == 'success' && needs.release-tui.outputs.web-deploy == 'true' }}`)
+  const publish = jobs["release-tui"]!
+  expect(publish.outputs).toHaveProperty("web-deploy", "${{ steps.web-deploy.outputs.enabled }}")
+  const optIn = publish.steps.findIndex((step) => step.id === "web-deploy")
+  expect(optIn).toBeGreaterThan(publish.steps.findIndex((step) => step.name === "Publish GitHub release"))
+  expect(publish.steps[optIn]).toMatchObject({
+    env: { WEB_DEPLOY: "${{ vars.YCODING_WEB_DEPLOY }}" },
+    run: `if [ "$WEB_DEPLOY" = true ]; then\n  printf 'enabled=true\\n' >> "$GITHUB_OUTPUT"\nfi\n`,
+  })
+  expect(publish.steps[optIn]?.if).toBeUndefined()
   for (const job of ["verify-source", "build-desktop-runtime"]) expect(jobs[job]?.needs).toBe("release-target")
   expect(jobs["finalize-release"]?.needs).toEqual(["release-target", "verify-source", "build-desktop-runtime"])
   for (const job of ["release-tui", "release-desktop"]) expect(jobs[job]?.needs).toEqual(["release-target", "finalize-release"])
   expect(jobs["deploy-web"]?.needs).toEqual(["release-target", "verify-source", "release-tui"])
-  expect(jobs["verify-source"]?.steps.find((step) => step.run === "bun run build:web")?.if).toBe("matrix.suite == 'web'")
+  const verify = jobs["verify-source"]!.steps
+  const provenance = verify.findIndex((step) => step.run === "bash script/release-version.sh --verify-tag")
+  const buildWeb = verify.findIndex((step) => step.run === "bun run build:web")
+  const uploadWeb = verify.findIndex((step) => step.name === "Upload verified web build")
+  expect(verify[provenance]?.if).toBe("github.event_name == 'push'")
+  expect(buildWeb).toBeGreaterThan(provenance)
+  expect(uploadWeb).toBeGreaterThan(buildWeb)
+  expect(verify[buildWeb]?.if).toBe("matrix.suite == 'web'")
+  expect(verify[uploadWeb]).toMatchObject({ if: "matrix.suite == 'web'", with: { name: "verified-web" } })
   const desktop = jobs["build-desktop-runtime"]?.steps.find((step) => typeof step.run === "string" && step.run.includes("packages/desktop/script/build.sh"))
   expect(desktop).toBeDefined()
   expect(desktop?.if).toBeUndefined()
   const directory = mkdtempSync(path.join(tmpdir(), "ycoding-release-suites-"))
   try {
-    const output = path.join(directory, "github-output")
-    const result = Bun.spawnSync(["bash", path.join(root, "script/release-version.sh"), "--target"], {
-      cwd: directory, env: { PATH: process.env.PATH, GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/tags/v0.13.2", GITHUB_OUTPUT: output }, stdout: "pipe", stderr: "pipe",
-    })
-    expect(result.exitCode, result.stderr.toString()).toBe(0)
-    expect(readFileSync(output, "utf8")).toBe('target=full\nsuites=["types","web","cli","cli-antigravity","cli-muse","tui-project","tui-runtime"]\n')
+    for (const [prefix, name, suites] of [
+      ["v", "full", ["types", "web", "cli", "tui-project", "tui-runtime"]],
+      ["desktop-v", "desktop", ["types", "cli", "tui-project", "tui-runtime"]],
+      ["web-v", "web", ["types", "web"]],
+    ] as const) {
+      const output = path.join(directory, name)
+      const result = Bun.spawnSync(["bash", path.join(root, "script/release-version.sh"), "--target"], {
+        cwd: directory, env: { PATH: process.env.PATH, GITHUB_EVENT_NAME: "push", GITHUB_REF: `refs/tags/${prefix}0.13.3`, GITHUB_OUTPUT: output }, stdout: "pipe", stderr: "pipe",
+      })
+      expect(result.exitCode, result.stderr.toString()).toBe(0)
+      expect(readFileSync(output, "utf8")).toBe(`target=${name}\nsuites=${JSON.stringify(suites)}\n`)
+    }
   } finally {
     rmSync(directory, { recursive: true, force: true })
   }
