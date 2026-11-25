@@ -6,6 +6,18 @@ use crate::{
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Id(pub LosslessString);
+pub const RETIRED_DIAGNOSTIC: &str = "Provider no longer supported";
+
+pub fn is_retired(id: &str) -> bool {
+    id.eq_ignore_ascii_case("antigravity") || id.eq_ignore_ascii_case("muse")
+}
+
+impl Id {
+    pub fn is_retired(&self) -> bool {
+        self.0.as_str().is_some_and(is_retired)
+    }
+}
+
 impl DomainDecode for Id {
     fn decode_at(value: &JsonValue, path: &JsonPath) -> Result<Self, DecodeError> {
         LosslessString::decode_at(value, path).map(Self)

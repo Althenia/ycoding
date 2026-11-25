@@ -1,8 +1,10 @@
 import { describe, expect } from "bun:test"
 import { Money } from "@ycoding-ai/schema/money"
-import { Effect, Fiber, Layer, Stream } from "effect"
+import { DateTime, Effect, Fiber, Layer, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { Catalog } from "@ycoding-ai/core/catalog"
+import { Config } from "@ycoding-ai/core/config"
+import { ConfigProviderPlugin } from "@ycoding-ai/core/config/plugin/provider"
 import { Integration } from "@ycoding-ai/core/integration"
 import { Credential } from "@ycoding-ai/core/credential"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -11,6 +13,9 @@ import { EventRuntime } from "@ycoding-ai/core/event"
 import { Location } from "@ycoding-ai/core/location"
 import { CatalogModel } from "@ycoding-ai/core/model"
 import { Provider } from "@ycoding-ai/core/provider"
+import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
+import { Session } from "@ycoding-ai/core/session"
+import { Project } from "@ycoding-ai/core/project"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
@@ -31,6 +36,78 @@ const catalogLayer = AppNodeBuilder.build(
 const it = testEffect(catalogLayer)
 
 describe("Catalog", () => {
+  it.effect("keeps retired catalog and integration registrations out without deleting saved credentials", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      const integrations = yield* Integration.Service
+      const credentials = yield* Credential.Service
+      const retired = Provider.ID.make("AntiGravity")
+      const integrationID = Integration.ID.make(retired)
+      const allowed = Provider.ID.make("fixture-compatible")
+      const modelID = CatalogModel.ID.make("fixture")
+      const credential = yield* credentials.create({
+        integrationID,
+        label: "saved",
+        value: Credential.Key.make({ type: "key", key: "fixture-key" }),
+      })
+      yield* integrations.transform((draft) => draft.method.update({ integrationID, method: { type: "key" } }))
+      yield* catalog.transform((draft) => {
+        draft.provider.update(retired, (provider) => { provider.name = "Retired" })
+        draft.model.update(retired, modelID, (model) => { model.enabled = true })
+        draft.model.update(allowed, modelID, (model) => { model.enabled = true })
+        draft.model.account.update(credential, allowed, [CatalogModel.Info.empty(allowed, CatalogModel.ID.make("retired-account"))])
+      })
+
+      expect((yield* catalog.provider.all()).map((provider) => provider.id)).toEqual([allowed])
+      expect(yield* catalog.model.get(retired, modelID)).toBeUndefined()
+      expect(yield* integrations.get(integrationID)).toBeUndefined()
+      expect(yield* integrations.connection.active(integrationID)).toBeUndefined()
+      expect(yield* catalog.model.get(allowed, CatalogModel.ID.make("retired-account"))).toBeUndefined()
+      expect((yield* credentials.list(integrationID)).map((item) => item.id)).toEqual([credential.id])
+    }),
+  )
+
+  for (const profile of [undefined, "saved"] as const) {
+    it.effect(`rejects a configured retired default ${profile === undefined ? "without" : "with"} a profile`, () =>
+      Effect.gen(function* () {
+        const catalog = yield* Catalog.Service
+        const integrations = yield* Integration.Service
+        const retired = "MuSe"
+        const allowed = Provider.ID.make("fixture-compatible")
+        const definition = {
+          package: "aisdk:@ai-sdk/openai-compatible",
+          settings: { apiKey: "fixture-key", baseURL: "https://fixture.invalid/v1" },
+          models: { fixture: {} },
+        }
+        const parsed = yield* Config.parseDocument(JSON.stringify({
+          model: { providerID: retired, model: "fixture", profile },
+          providers: { [retired]: definition, [allowed]: definition },
+        }), "fixture.json")
+        const entries = [new Config.Document({ type: "document", info: required(parsed.info) })]
+        yield* integrations.transform((draft) => ConfigProviderPlugin.applyIntegrations(draft, entries))
+        yield* catalog.transform((draft) => ConfigProviderPlugin.applyConfigured(draft, entries))
+        const session = Session.Info.make({
+          id: Session.ID.make("ses_retired_default"),
+          projectID: Project.ID.global,
+          scope: "bound",
+          title: "Fixture",
+          cost: Money.USD.zero,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
+          location: { directory: AbsolutePath.make("/fixture") },
+        })
+        const message = yield* SessionRunnerModel.selection(session, catalog.model).pipe(
+          Effect.match({ onFailure: (error) => error.message, onSuccess: () => undefined }),
+        )
+
+        expect(message).toBe("Provider no longer supported: MuSe")
+        expect(yield* catalog.model.default()).toBeUndefined()
+        expect((yield* catalog.model.available()).map((model) => model.providerID)).toEqual([allowed])
+        expect(yield* integrations.get(Integration.ID.make(retired))).toBeUndefined()
+      }),
+    )
+  }
+
   it.effect("publishes an updated event after catalog changes", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service

@@ -44,7 +44,7 @@ const resolve = (policy: CachePolicy | undefined): CachePolicyObject => {
 }
 
 // Protocols whose wire format ignores inline cache markers. Older OpenAI
-// models and Gemini, including Antigravity's Gemini envelope, keep the prefix
+// models and Gemini keep the prefix
 // breakpoint implicit on the server. Do not send a client breakpoint or a
 // CachedContent resource for those routes. AI SDK routes
 // retain their generic protocol ID, so cache-capable adapters must also opt in

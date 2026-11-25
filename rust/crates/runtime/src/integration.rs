@@ -243,6 +243,10 @@ pub(crate) fn resolve(
 fn authorization(error: Error) -> Failure {
     match error {
         Error::CodeRequired => Failure::IntegrationCodeRequired,
+        Error::ProviderRetired => Failure::InvalidRequest {
+            message: error.to_string(),
+            kind: "integration_authorization",
+        },
         _ => Failure::IntegrationAuthorization,
     }
 }

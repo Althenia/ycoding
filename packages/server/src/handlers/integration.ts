@@ -1,5 +1,6 @@
 import { AccountConnectors } from "@ycoding-ai/core/account-connectors"
 import { Integration } from "@ycoding-ai/core/integration"
+import { Provider } from "@ycoding-ai/core/provider"
 import { AccountSkillsRead } from "@ycoding-ai/core/account-connectors/skills-read"
 import { Location } from "@ycoding-ai/core/location"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
@@ -14,9 +15,9 @@ import { WellKnown } from "@ycoding-ai/core/wellknown"
 const authorize = <A, R>(effect: Effect.Effect<A, Integration.AuthorizationError, R>) =>
   effect.pipe(
     Effect.mapError(
-      () =>
+      (error) =>
         new InvalidRequestError({
-          message: "Authentication failed",
+          message: error.cause instanceof Provider.RetiredError ? error.cause.message : "Authentication failed",
           kind: "integration_authorization",
         }),
     ),

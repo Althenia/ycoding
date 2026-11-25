@@ -88,7 +88,6 @@ impl Endpoint {
 pub enum Transport {
     Native,
     Http(Framing),
-    Muse(Arc<crate::muse::Connection>),
     RunPodJobs,
     WebSocket(Arc<websocket::JsonTransport>),
     Process(Arc<dyn ProcessAttempt>),
@@ -210,6 +209,9 @@ impl Route {
         }
     }
     pub fn prepare(&self, request: &Request) -> Result<Prepared, Error> {
+        if self.provider.is_retired() || request.model.provider.is_retired() {
+            return Err(Error::invalid(provider::RETIRED_DIAGNOSTIC));
+        }
         let mut request = request.resolved();
         crate::cache::apply(&mut request);
         let format = match &request.response_format {
@@ -712,14 +714,10 @@ impl Executor {
                     redaction: prepared,
                 })
             }
-            Transport::Http(_) | Transport::Muse(_) => {
+            Transport::Http(_) => {
                 let mut tracker = Tracker::new(&prepared, "http-json", self.observer.clone());
                 let protocol = prepared.request.model.route.protocol.clone();
-                let result = match &prepared.request.model.route.transport {
-                    Transport::Muse(connection) => connection.execute(self, &prepared).await,
-                    _ => protocol.dispatch(self, &mut prepared).await,
-                };
-                let response = match result {
+                let response = match protocol.dispatch(self, &mut prepared).await {
                     Ok(response) => response,
                     Err(error)
                         if prepared.protocol == "snowflake-cortex"
@@ -947,12 +945,8 @@ impl EventStream {
             }
             if let Some(frame) = self.frames.pop_front() {
                 let frame = match frame {
-                    Frame::Sse(frame) => {
-                        let Some(frame) = decode_frame(&frame, &self.redaction)? else {
-                            continue;
-                        };
-                        frame
-                    }
+                    Frame::Sse(frame) => parse_json(&frame)
+                        .map_err(|_| Error::output("Invalid provider stream event"))?,
                     Frame::Json(frame) => frame,
                 };
                 let terminal = self.redaction.request.model.route.protocol.terminal(&frame);
@@ -1009,17 +1003,6 @@ impl EventStream {
                         continue;
                     }
                     tracker.settle(true, true, Some(*status));
-                    if matches!(
-                        self.redaction.request.model.route.transport,
-                        Transport::Muse(_)
-                    ) {
-                        if let Decoder::Sse(parser) = decoder {
-                            self.frames
-                                .extend(parser.finish_muse().into_iter().map(Frame::Sse));
-                        }
-                        self.transport = StreamTransport::Buffered;
-                        continue;
-                    }
                 }
                 StreamTransport::Language(parts) => {
                     if let Some(part) = parts.recv().await {
@@ -1046,26 +1029,6 @@ impl EventStream {
                 return Err(Error::missing_terminal());
             }
         }
-    }
-}
-fn decode_frame(frame: &str, prepared: &Prepared) -> Result<Option<JsonValue>, Error> {
-    let quota = frame
-        .trim_start()
-        .strip_prefix('{')
-        .and_then(|v| v.trim_start().strip_prefix("\"type\""))
-        .and_then(|v| v.trim_start().strip_prefix(':'))
-        .and_then(|v| {
-            v.trim_start()
-                .strip_prefix("\"response.subscription_usage\"")
-        })
-        .is_some_and(|v| v.trim_start().starts_with([',', '}']));
-    match parse_json(frame) {
-        Ok(frame) => Ok(Some(frame)),
-        Err(_) if matches!(prepared.request.model.route.transport, Transport::Muse(_)) && quota => {
-            tracing::warn!("invalid Muse subscription usage event");
-            Ok(None)
-        }
-        Err(_) => Err(Error::output("Invalid provider stream event")),
     }
 }
 

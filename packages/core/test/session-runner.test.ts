@@ -10649,7 +10649,6 @@ describe("SessionRunnerLLM", () => {
 
   for (const route of [
     { provider: "google", id: "ai-sdk:@ai-sdk/google", retain: true, base: Gemini.route },
-    { provider: "antigravity", id: "ai-sdk:@ai-sdk/google", retain: false, base: Gemini.route },
     { provider: "google", id: "gemini", retain: false, base: Gemini.route },
     { provider: "google-vertex", id: "google-vertex-gemini", retain: false, base: Gemini.route },
     { provider: "google-vertex", id: "ai-sdk:@ai-sdk/google-vertex", retain: true, base: Gemini.route },
@@ -10714,11 +10713,6 @@ describe("SessionRunnerLLM", () => {
             expect(disabledWire.body.tools?.some((tool) => "name" in tool && tool.name === "echo")).toBeTrue()
             expect(disabledWire.body.tool_choice).toBe("none")
           }
-          if (route.provider === "antigravity") {
-            const disabledWire = yield* LLMClient.prepare<Gemini.GeminiBody>(disabled.request)
-            expect(disabledWire.body.tools).toBeUndefined()
-            expect(disabledWire.body.toolConfig).toEqual({ functionCallingConfig: { mode: "NONE" } })
-          }
           expect(disabled.resolveToolCall("echo")).toMatchObject({
             type: "reject",
             error: {
@@ -10737,7 +10731,7 @@ describe("SessionRunnerLLM", () => {
 
   for (const item of [
     { name: "Google", provider: "google", route: Gemini.route.with({ id: "ai-sdk:@ai-sdk/google" }), declared: true },
-    { name: "Antigravity Gemini", provider: "antigravity", route: Gemini.route.with({ id: "ai-sdk:@ai-sdk/google" }), declared: false },
+    { name: "Native Gemini", provider: "google", route: Gemini.route, declared: false },
     { name: "Codex", provider: "openai", route: OpenAIResponses.route.with({ id: "openai-codex-responses" }), declared: true },
     { name: "OpenAI SDK", provider: "openai", route: OpenAIResponses.route.with({ id: "ai-sdk:@ai-sdk/openai" }), declared: true },
   ]) {

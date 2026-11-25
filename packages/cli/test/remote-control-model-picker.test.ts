@@ -184,20 +184,26 @@ async function openServer(server: ReturnType<typeof createRemoteControlAppServer
   await server.handle(JSON.stringify({ jsonrpc: "2.0", method: "initialized" }))
 }
 
+const profileProvider = "anthropic"
+const profileModelID = "claude-opus-5"
+const profileModel = `${profileProvider}/${profileModelID}`
+const alphaModel = `alpha#${profileModel}`
+const betaModel = `beta#${profileModel}`
+
 function createPersistentPickerFixture(initialDefault?: Model.Ref) {
   const catalogModels: RemoteControlModel[] = [
     {
-      id: "gemini-4-hydrogen",
-      providerID: "antigravity",
-      name: "Gemini 4 Hydrogen",
+      id: profileModelID,
+      providerID: profileProvider,
+      name: "Claude Opus 5",
       profile: "alpha",
       active: true,
       variants: ["low", "medium", "high"],
     },
     {
-      id: "gemini-4-hydrogen",
-      providerID: "antigravity",
-      name: "Gemini 4 Hydrogen",
+      id: profileModelID,
+      providerID: profileProvider,
+      name: "Claude Opus 5",
       profile: "beta",
       active: false,
       variants: ["low", "medium", "high"],
@@ -283,7 +289,7 @@ function createPersistentPickerFixture(initialDefault?: Model.Ref) {
 
 describe("remote-control ChatGPT model picker contract", () => {
   test("ChatGPT.app Xvtr.a + OeLR.cc + OeLR.pd keeps both alpha and beta non-OpenAI profiles visible with distinct identity and single default", async () => {
-    const f = createPersistentPickerFixture(Model.Ref.parse("alpha#antigravity/gemini-4-hydrogen#medium"))
+    const f = createPersistentPickerFixture(Model.Ref.parse(`${alphaModel}#medium`))
     const server = f.startServer()
     await openServer(server)
 
@@ -295,7 +301,7 @@ describe("remote-control ChatGPT model picker contract", () => {
     expect(effectiveConfig).toEqual({
       model_provider: "ycoding",
       model_providers: { ycoding: { name: "YCoding" } },
-      model: "alpha#antigravity/gemini-4-hydrogen",
+      model: alphaModel,
       model_reasoning_effort: "medium",
     })
 
@@ -319,23 +325,23 @@ describe("remote-control ChatGPT model picker contract", () => {
 
     expect(xvtrResult.models).toHaveLength(2)
     expect(new Set(xvtrResult.models.map((m) => m.id))).toEqual(
-      new Set(["alpha#antigravity/gemini-4-hydrogen", "beta#antigravity/gemini-4-hydrogen"]),
+      new Set([alphaModel, betaModel]),
     )
     expect(new Set(xvtrResult.models.map((m) => m.model))).toEqual(
-      new Set(["alpha#antigravity/gemini-4-hydrogen", "beta#antigravity/gemini-4-hydrogen"]),
+      new Set([alphaModel, betaModel]),
     )
     expect(new Set(xvtrResult.models.map((m) => m.displayName))).toEqual(
-      new Set(["Gemini 4 Hydrogen (antigravity · alpha)", "Gemini 4 Hydrogen (antigravity · beta)"]),
+      new Set(["Claude Opus 5 (anthropic · alpha)", "Claude Opus 5 (anthropic · beta)"]),
     )
     for (const model of xvtrResult.models) {
       expect(model.hidden).toBe(false)
       expect(Array.isArray(model.supportedReasoningEfforts)).toBe(true)
       expect(model.supportedReasoningEfforts.map((item) => item.reasoningEffort)).toEqual(["low", "medium", "high"])
       expect(model.defaultReasoningEffort).toBe("medium")
-      expect(model.providerId).toBe("antigravity")
+      expect(model.providerId).toBe(profileProvider)
     }
-    expect(xvtrResult.models.filter((m) => m.isDefault).map((m) => m.model)).toEqual(["alpha#antigravity/gemini-4-hydrogen"])
-    expect(xvtrResult.defaultModel?.model).toBe("alpha#antigravity/gemini-4-hydrogen")
+    expect(xvtrResult.models.filter((m) => m.isDefault).map((m) => m.model)).toEqual([alphaModel])
+    expect(xvtrResult.defaultModel?.model).toBe(alphaModel)
 
     const withoutCustomProvider = xvtrA({
       additionalAvailableModels: new Set(),
@@ -354,34 +360,34 @@ describe("remote-control ChatGPT model picker contract", () => {
   })
 
   test("config/batchWrite updates default model and effort across config/read, model/list, and thread/start, and rejects invalid profiles", async () => {
-    const f = createPersistentPickerFixture(Model.Ref.parse("alpha#antigravity/gemini-4-hydrogen#low"))
+    const f = createPersistentPickerFixture(Model.Ref.parse(`${alphaModel}#low`))
     const server = f.startServer()
     await openServer(server)
 
-    const writeOk = await rpc(server, "config/batchWrite", oelrPd("beta#antigravity/gemini-4-hydrogen", "high"), 2)
+    const writeOk = await rpc(server, "config/batchWrite", oelrPd(betaModel, "high"), 2)
     expect(writeOk.error).toBeUndefined()
 
     const configAfter = await rpc(server, "config/read", {}, 3)
     expect(configAfter.result.config).toEqual({
       model_provider: "ycoding",
       model_providers: { ycoding: { name: "YCoding" } },
-      model: "beta#antigravity/gemini-4-hydrogen",
+      model: betaModel,
       model_reasoning_effort: "high",
     })
 
     const listAfter = (await rpc(server, "model/list", {}, 4)).result.data as WireModel[]
-    expect(listAfter.filter((m) => m.isDefault).map((m) => m.model)).toEqual(["beta#antigravity/gemini-4-hydrogen"])
+    expect(listAfter.filter((m) => m.isDefault).map((m) => m.model)).toEqual([betaModel])
     expect(listAfter.find((m) => m.profile === "alpha")?.isDefault).toBe(false)
 
     const startedDefault = await rpc(server, "thread/start", { cwd: "/work/repo" }, 5)
     expect(startedDefault.error).toBeUndefined()
-    expect(startedDefault.result.model).toBe("beta#antigravity/gemini-4-hydrogen")
-    expect(startedDefault.result.modelProvider).toBe("antigravity")
+    expect(startedDefault.result.model).toBe(betaModel)
+    expect(startedDefault.result.modelProvider).toBe(profileProvider)
     expect(startedDefault.result.reasoningEffort).toBe("high")
 
     for (const badParams of [
-      oelrPd("missing#antigravity/gemini-4-hydrogen", "high"),
-      oelrPd("antigravity/gemini-4-hydrogen", "high", "missing"),
+      oelrPd(`missing#${profileModel}`, "high"),
+      oelrPd(profileModel, "high", "missing"),
       { edits: [{ keyPath: "approval_policy", value: "never", mergeStrategy: "upsert" }] },
     ]) {
       const bad = await rpc(server, "config/batchWrite", badParams, 6)
@@ -391,33 +397,33 @@ describe("remote-control ChatGPT model picker contract", () => {
     expect((await rpc(server, "config/read", {}, 7)).result.config).toEqual({
       model_provider: "ycoding",
       model_providers: { ycoding: { name: "YCoding" } },
-      model: "beta#antigravity/gemini-4-hydrogen",
+      model: betaModel,
       model_reasoning_effort: "high",
     })
     expect(((await rpc(server, "model/list", {}, 8)).result.data as WireModel[]).filter((m) => m.isDefault).map((m) => m.model)).toEqual([
-      "beta#antigravity/gemini-4-hydrogen",
+      betaModel,
     ])
     server.retire()
   })
 
   test("thread/start, thread/settings/update, thread/resume, turn/start, and turn/steer preserve exact profile identity across reload and reject conflicts", async () => {
-    const f = createPersistentPickerFixture(Model.Ref.parse("alpha#antigravity/gemini-4-hydrogen#low"))
+    const f = createPersistentPickerFixture(Model.Ref.parse(`${alphaModel}#low`))
     const server1 = f.startServer()
     await openServer(server1)
 
     const started = await rpc(server1, "thread/start", {
       cwd: "/work/repo",
-      model: "alpha#antigravity/gemini-4-hydrogen",
+      model: alphaModel,
       effort: "low",
     }, 2)
     expect(started.error).toBeUndefined()
     const threadId = started.result.thread.id as string
-    expect(started.result.model).toBe("alpha#antigravity/gemini-4-hydrogen")
+    expect(started.result.model).toBe(alphaModel)
     expect(started.result.reasoningEffort).toBe("low")
 
     const updated = await rpc(server1, "thread/settings/update", {
       threadId,
-      model: "beta#antigravity/gemini-4-hydrogen",
+      model: betaModel,
       effort: "high",
     }, 3)
     expect(updated.error).toBeUndefined()
@@ -427,49 +433,49 @@ describe("remote-control ChatGPT model picker contract", () => {
     await openServer(server2)
     const resumedBeta = await rpc(server2, "thread/resume", { threadId, excludeTurns: true }, 4)
     expect(resumedBeta.error).toBeUndefined()
-    expect(resumedBeta.result.model).toBe("beta#antigravity/gemini-4-hydrogen")
-    expect(resumedBeta.result.modelProvider).toBe("antigravity")
+    expect(resumedBeta.result.model).toBe(betaModel)
+    expect(resumedBeta.result.modelProvider).toBe(profileProvider)
     expect(resumedBeta.result.reasoningEffort).toBe("high")
-    expect(resumedBeta.result.thread.model).toBe("beta#antigravity/gemini-4-hydrogen")
+    expect(resumedBeta.result.thread.model).toBe(betaModel)
 
     const turnNoProvider = await rpc(server2, "turn/start", {
       threadId,
-      model: "beta#antigravity/gemini-4-hydrogen",
+      model: betaModel,
       input: [{ type: "text", text: "run on beta" }],
     }, 5)
     expect(turnNoProvider.error).toBeUndefined()
-    expect(f.prompts.at(-1)?.model).toEqual(Model.Ref.parse("beta#antigravity/gemini-4-hydrogen"))
+    expect(f.prompts.at(-1)?.model).toEqual(Model.Ref.parse(betaModel))
 
     const steeredAlpha = await rpc(server2, "turn/steer", {
       threadId,
-      model: "alpha#antigravity/gemini-4-hydrogen",
+      model: alphaModel,
       effort: "medium",
       input: [{ type: "text", text: "steer to alpha" }],
     }, 6)
     expect(steeredAlpha.error).toBeUndefined()
-    expect(f.prompts.at(-1)?.model).toEqual(Model.Ref.parse("alpha#antigravity/gemini-4-hydrogen#medium"))
+    expect(f.prompts.at(-1)?.model).toEqual(Model.Ref.parse(`${alphaModel}#medium`))
     server2.retire()
 
     const server3 = f.startServer()
     await openServer(server3)
     const resumedAlpha = await rpc(server3, "thread/resume", { threadId, excludeTurns: true }, 7)
     expect(resumedAlpha.error).toBeUndefined()
-    expect(resumedAlpha.result.model).toBe("alpha#antigravity/gemini-4-hydrogen")
+    expect(resumedAlpha.result.model).toBe(alphaModel)
     expect(resumedAlpha.result.reasoningEffort).toBe("medium")
 
     for (const [method, params] of [
-      ["thread/start", { cwd: "/work/repo", model: "beta#antigravity/gemini-4-hydrogen", modelProvider: "openai" }],
-      ["thread/resume", { threadId, excludeTurns: true, model: "beta#antigravity/gemini-4-hydrogen", modelProvider: "openai" }],
-      ["thread/settings/update", { threadId, model: "beta#antigravity/gemini-4-hydrogen", modelProvider: "openai" }],
-      ["turn/start", { threadId, model: "beta#antigravity/gemini-4-hydrogen", modelProvider: "openai", input: [{ type: "text", text: "conflict" }] }],
-      ["turn/steer", { threadId, model: "beta#antigravity/gemini-4-hydrogen", modelProvider: "openai", input: [{ type: "text", text: "conflict" }] }],
-      ["turn/start", { threadId, modelProvider: "antigravity", input: [{ type: "text", text: "missing model" }] }],
-      ["turn/start", { threadId, model: "missing#antigravity/gemini-4-hydrogen", input: [{ type: "text", text: "unknown profile" }] }],
+      ["thread/start", { cwd: "/work/repo", model: betaModel, modelProvider: "openai" }],
+      ["thread/resume", { threadId, excludeTurns: true, model: betaModel, modelProvider: "openai" }],
+      ["thread/settings/update", { threadId, model: betaModel, modelProvider: "openai" }],
+      ["turn/start", { threadId, model: betaModel, modelProvider: "openai", input: [{ type: "text", text: "conflict" }] }],
+      ["turn/steer", { threadId, model: betaModel, modelProvider: "openai", input: [{ type: "text", text: "conflict" }] }],
+      ["turn/start", { threadId, modelProvider: profileProvider, input: [{ type: "text", text: "missing model" }] }],
+      ["turn/start", { threadId, model: `missing#${profileModel}`, input: [{ type: "text", text: "unknown profile" }] }],
     ] as const) {
       const rejected = await rpc(server3, method, params, 8)
       expect(rejected.error?.code).toBe(-32602)
     }
-    expect((await rpc(server3, "thread/read", { threadId }, 9)).result.thread.model).toBe("alpha#antigravity/gemini-4-hydrogen")
+    expect((await rpc(server3, "thread/read", { threadId }, 9)).result.thread.model).toBe(alphaModel)
     server3.retire()
   })
 })
@@ -539,7 +545,9 @@ loopbackTest.live("NativeDots.live + real SQLite + KV + WebSocket loopback route
   yield* Effect.addFinalizer(() => Effect.promise(() => inferenceServer.stop(true)))
 
   const providerID = Provider.ID.make("synthetic-compat")
-  const modelID = CatalogModel.ID.make("gemini-4-hydrogen")
+  const modelID = CatalogModel.ID.make("gpt-5.5")
+  const alphaEndpointModel = `alpha#${providerID}/${modelID}`
+  const betaEndpointModel = `beta#${providerID}/${modelID}`
   const repoLocation = Location.Ref.make({ directory: AbsolutePath.make(repoDir) })
   const runtimeLayer = AppNodeBuilder.build(
     LayerNode.group([
@@ -644,7 +652,7 @@ loopbackTest.live("NativeDots.live + real SQLite + KV + WebSocket loopback route
           item.settings = { baseURL: `http://127.0.0.1:${inferenceServer.port}/v1` }
         })
         draft.model.update(providerID, modelID, (item) => {
-          item.name = "Gemini 4 Hydrogen"
+          item.name = "GPT-5.5"
           item.enabled = true
           item.limit = { context: 128_000, output: 4_096 }
           item.variants = [
@@ -751,22 +759,22 @@ loopbackTest.live("NativeDots.live + real SQLite + KV + WebSocket loopback route
       expect(listed.error).toBeUndefined()
       const wireModels = listed.result!.data as WireModel[]
       expect(wireModels.map((m) => m.model).toSorted()).toEqual([
-        "alpha#synthetic-compat/gemini-4-hydrogen",
-        "beta#synthetic-compat/gemini-4-hydrogen",
+        alphaEndpointModel,
+        betaEndpointModel,
       ])
 
-      const batchWrite = await call("config/batchWrite", oelrPd("alpha#synthetic-compat/gemini-4-hydrogen", "low"))
+      const batchWrite = await call("config/batchWrite", oelrPd(alphaEndpointModel, "low"))
       expect(batchWrite.error).toBeUndefined()
       expect((await call("config/read")).result!.config).toEqual({
         model_provider: "ycoding",
         model_providers: { ycoding: { name: "YCoding" } },
-        model: "alpha#synthetic-compat/gemini-4-hydrogen",
+        model: alphaEndpointModel,
         model_reasoning_effort: "low",
       })
 
       const started = await call("thread/start", { cwd: repoDir })
       expect(started.error).toBeUndefined()
-      expect(started.result!.model).toBe("alpha#synthetic-compat/gemini-4-hydrogen")
+      expect(started.result!.model).toBe(alphaEndpointModel)
       expect(started.result!.reasoningEffort).toBe("low")
       const threadId = started.result!.thread.id as string
 
@@ -778,16 +786,16 @@ loopbackTest.live("NativeDots.live + real SQLite + KV + WebSocket loopback route
         "alpha turn/completed",
       )
       expect((done1.message.params as { turn: { status: string } }).turn.status).toBe("completed")
-      expect(inferenceCalls).toEqual([{ authorization: "Bearer secret-token-alpha", model: "gemini-4-hydrogen" }])
+      expect(inferenceCalls).toEqual([{ authorization: "Bearer secret-token-alpha", model: modelID }])
 
       const switched = await call("thread/settings/update", {
         threadId,
-        model: "beta#synthetic-compat/gemini-4-hydrogen",
+        model: betaEndpointModel,
         effort: "high",
       })
       expect(switched.error).toBeUndefined()
       const readAfterSwitch = await call("thread/read", { threadId })
-      expect(readAfterSwitch.result!.thread.model).toBe("beta#synthetic-compat/gemini-4-hydrogen")
+      expect(readAfterSwitch.result!.thread.model).toBe(betaEndpointModel)
       expect(readAfterSwitch.result!.thread.reasoningEffort).toBe("high")
 
       const turn2Mark = frames.length
@@ -799,8 +807,8 @@ loopbackTest.live("NativeDots.live + real SQLite + KV + WebSocket loopback route
       )
       expect((done2.message.params as { turn: { status: string } }).turn.status).toBe("completed")
       expect(inferenceCalls).toEqual([
-        { authorization: "Bearer secret-token-alpha", model: "gemini-4-hydrogen" },
-        { authorization: "Bearer secret-token-beta", model: "gemini-4-hydrogen" },
+        { authorization: "Bearer secret-token-alpha", model: modelID },
+        { authorization: "Bearer secret-token-beta", model: modelID },
       ])
     })
   }).pipe(Effect.provide(runtimeLayer))

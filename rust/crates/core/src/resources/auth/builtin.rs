@@ -1,7 +1,7 @@
 use super::{
-    Client, DeviceFlow, Error, Preparation, antigravity, claude, cursor,
+    Client, DeviceFlow, Error, Preparation, claude, cursor,
     integration::{Authorization, Draft, OAuthImplementation},
-    muse, now,
+    now,
 };
 use std::{collections::BTreeMap, sync::Arc};
 use ycoding_schema::{DomainDecode, JsonValue, integration, integration_id::IntegrationMethodId};
@@ -140,22 +140,6 @@ impl Preparation {
                 .map(Ok)
                 .unwrap_or_else(|| Client::provider("cursor", env!("CARGO_PKG_VERSION")))?,
             "https://cursor.com".into(),
-        );
-        muse::register(
-            draft,
-            self.clients
-                .get("muse")
-                .cloned()
-                .map(Ok)
-                .unwrap_or_else(|| Client::provider("muse", env!("CARGO_PKG_VERSION")))?,
-        );
-        antigravity::register(
-            draft,
-            self.clients
-                .get("antigravity")
-                .cloned()
-                .map(Ok)
-                .unwrap_or_else(|| Client::provider("antigravity", env!("CARGO_PKG_VERSION")))?,
         );
         draft.oauth(
             super::opencode::Console::new(

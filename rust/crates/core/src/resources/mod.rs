@@ -1,6 +1,5 @@
 pub mod account_connectors;
 pub mod agent;
-pub mod antigravity;
 pub mod attachment_store;
 pub mod auth;
 pub mod catalog;
@@ -18,7 +17,6 @@ pub mod instruction_discovery;
 pub mod mcp;
 pub mod memory;
 pub mod model;
-pub mod muse;
 pub mod project_artifact;
 pub mod reference;
 pub mod skill;

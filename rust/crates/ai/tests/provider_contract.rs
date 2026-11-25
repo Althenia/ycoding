@@ -5,15 +5,38 @@ mod replay;
 #[path = "provider_contract_support/structured.rs"]
 mod structured;
 
+fn structured_frames(family: &str) -> &'static str {
+    match family {
+        "messages" => concat!(
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"structured-call\",\"name\":\"generate_object\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"value\\\":\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"result\\\"}\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        ),
+        "chat" => concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"structured-call\",\"type\":\"function\",\"function\":{\"name\":\"generate_object\",\"arguments\":\"{\\\"value\\\":\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"result\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ),
+        "responses" => concat!(
+            "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"id\":\"fc_fixture\",\"call_id\":\"structured-call\",\"name\":\"generate_object\"}}\n\n",
+            "data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_fixture\",\"delta\":\"{\\\"value\\\":\"}\n\n",
+            "data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_fixture\",\"delta\":\"\\\"result\\\"}\"}\n\n",
+            "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"id\":\"fc_fixture\",\"call_id\":\"structured-call\",\"name\":\"generate_object\"}}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r_structured\",\"status\":\"completed\"}}\n\n",
+        ),
+        _ => panic!("structured-output route lacks a replay oracle"),
+    }
+}
+
 use replay::{Replay, Reply};
 use std::sync::{Arc, Mutex};
 use ycoding_ai::{
-    antigravity,
     auth::{Auth, Credential, ProviderAuth},
     cache::{Hint, MessageStrategy, Policy},
-    llm::{
-        Event, FinishReason, Media, MediaData, Message, Model, Part, Request, Role, ToolDefinition,
-    },
+    llm::{Event, Media, MediaData, Message, Model, Part, Request, Role, ToolDefinition},
     providers::{self, Api, Config, OpenAIConfig, OpenRouterConfig, Transport},
     route::{Attempt, AttemptPhase, Executor, Route},
 };
@@ -27,82 +50,12 @@ const ROUTES: &[(&str, &str, &str)] = &[
     ("anthropic-messages", "messages", "/v1/messages"),
     ("anthropic-compatible", "messages", "/v1/messages"),
     ("openai-codex-responses", "responses", "/v1/responses"),
-    ("muse-responses", "responses", "/v1/responses"),
     (
         "anthropic-claude-code",
         "messages",
         "/v1/messages?beta=true",
     ),
 ];
-
-#[tokio::test]
-async fn antigravity_http_finishes_with_trailing_usage_and_keeps_reasoning_signatures_local() {
-    let body = [
-        r#"{"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"First thought","thought":true,"thoughtSignature":"sig-first"}]}}]}}"#,
-        r#"{"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"Answer"}]}}]}}"#,
-        r#"{"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"Unsigned thought","thought":true}]}}]}}"#,
-        r#"{"response":{"candidates":[{"finishReason":"STOP"}]}}"#,
-        r#"{"response":{"usageMetadata":{"promptTokenCount":5,"cachedContentTokenCount":0,"candidatesTokenCount":2,"thoughtsTokenCount":1,"totalTokenCount":8}}}"#,
-    ]
-    .iter()
-    .map(|frame| format!("data: {frame}\n\n"))
-    .collect::<String>();
-    let gateway = Replay::start(vec![Reply::stream(
-        "/v1internal:streamGenerateContent?alt=sse",
-        body,
-    )])
-    .await;
-    let route = antigravity::route(antigravity::Config {
-        access: Some(Credential::value("synthetic-key")),
-        base_url: Some(gateway.base.clone()),
-        ..Default::default()
-    });
-    let mut request = Request::new(route.model("claude-sonnet-5-5"));
-    request.messages.push(Message::user("Hi"));
-    let response = Executor::new(gateway.client()).generate(&request).await;
-    let requests = gateway.finish().await;
-    assert_eq!(requests.len(), 1);
-    assert!(
-        requests[0]
-            .headers
-            .contains("authorization: Bearer synthetic-key\r\n")
-    );
-    assert!(requests[0].body.contains(r#""model":"claude-sonnet-5-5""#));
-
-    let response = response.unwrap();
-    assert_eq!(response.finish_reason, FinishReason::Stop);
-    assert_eq!(response.text().as_str(), Some("Answer"));
-    let usage = response.usage.as_ref().unwrap();
-    assert_eq!(usage.cache_read_input_tokens, Some(0.0));
-    assert_eq!(usage.reasoning_tokens, Some(1.0));
-    assert_eq!(usage.visible_output_tokens(), 2.0);
-    assert_eq!(usage.total_tokens, Some(8.0));
-    let thinking: Vec<_> = response
-        .message
-        .content
-        .iter()
-        .filter_map(|part| match part {
-            Part::Reasoning(part) => Some((part.text.as_str(), part.provider_metadata.as_ref())),
-            _ => None,
-        })
-        .collect();
-    let signature = parse_json(r#"{"google":{"thoughtSignature":"sig-first"}}"#).unwrap();
-    assert_eq!(
-        thinking,
-        [
-            (Some("First thought"), Some(&signature)),
-            (Some("Unsigned thought"), None)
-        ]
-    );
-
-    request.messages.push(response.message);
-    request.messages.push(Message::user("Continue"));
-    let replay = request.model.route.prepare(&request).unwrap().encoded_body;
-    assert!(
-        replay.contains(r#""text":"First thought","thought":true,"thoughtSignature":"sig-first""#)
-    );
-    assert!(!replay.contains("Unsigned thought"));
-}
 
 struct SyntheticClaudeAccount;
 impl ycoding_ai::claude_code::Account for SyntheticClaudeAccount {
@@ -178,18 +131,6 @@ fn model(route: &str, base: &str, id: &str) -> Model {
             Arc::make_mut(&mut native.route).endpoint.base_url = format!("{base}/v1");
             native
         }
-        "muse-responses" => {
-            let runtime = ycoding_ai::muse::Runtime::new(format!("{base}/mint")).unwrap();
-            let mut native = ycoding_ai::muse::route(ycoding_ai::muse::Connection::key(
-                runtime,
-                "synthetic-key".into(),
-                format!("{base}/v1"),
-                None,
-            ))
-            .model(id);
-            Arc::make_mut(&mut native.route).endpoint.base_url = format!("{base}/v1");
-            native
-        }
         "anthropic-claude-code" => {
             let mut route = ycoding_ai::claude_code::route(
                 Arc::new(SyntheticClaudeAccount),
@@ -262,6 +203,37 @@ fn observed_executor(replay: &Replay) -> (Executor, Arc<Mutex<Vec<Attempt>>>) {
     (executor, attempts)
 }
 
+#[test]
+fn route_admission_rejects_retired_providers_but_keeps_forwarded_models() {
+    let base = "http://127.0.0.1:1";
+    for provider in ["antigravity", "muse"] {
+        for route_id in ["openai-compatible-responses", "anthropic-compatible"] {
+            let mut model = model(route_id, base, "fixture-model");
+            let retired = ycoding_schema::provider::Id(provider.into());
+            if route_id == "openai-compatible-responses" {
+                Arc::make_mut(&mut model.route).provider = retired;
+            } else {
+                model.provider = retired;
+            }
+            let request = Request::new(model);
+            let error = request.model.route.prepare(&request).unwrap_err();
+            assert_eq!(
+                error.reason,
+                ycoding_ai::provider_error::Reason::InvalidRequest,
+                "{route_id}/{provider}"
+            );
+            assert_eq!(error.message, "Provider no longer supported");
+        }
+    }
+
+    for id in ["muse-spark-1.3", "google/gemini-4-hydrogen"] {
+        let request = Request::new(model("openrouter-responses", base, id));
+        let prepared = request.model.route.prepare(&request).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&prepared.encoded_body).unwrap();
+        assert_eq!(body["model"], id);
+    }
+}
+
 #[tokio::test]
 async fn test_039_route_entrypoints_encode_native_requests_at_the_socket() {
     for (route, family, path) in ROUTES {
@@ -271,7 +243,7 @@ async fn test_039_route_entrypoints_encode_native_requests_at_the_socket() {
                     Reply::stream(
                         path,
                         if index == 3 {
-                            structured::frames(family).into()
+                            structured_frames(family).into()
                         } else {
                             frames(family, false)
                         },
@@ -365,10 +337,7 @@ async fn test_039_route_entrypoints_encode_native_requests_at_the_socket() {
         }
         if !matches!(
             *route,
-            "openai-codex-responses"
-                | "openrouter-responses"
-                | "muse-responses"
-                | "anthropic-claude-code"
+            "openai-codex-responses" | "openrouter-responses" | "anthropic-claude-code"
         ) {
             assert_eq!(
                 captured[0].body, expected_text,
@@ -657,7 +626,7 @@ async fn test_039_040_websocket_entrypoint_matrix_native_body_and_terminal_accou
                     assert!(request.contains("data:image/png;base64,AQID"));
                     assert!(request.contains("additionalProperties"));
                     if outcome == "complete" {
-                        for frame in structured::frames("responses").lines().filter_map(|line| line.strip_prefix("data: ")) {
+                        for frame in structured_frames("responses").lines().filter_map(|line| line.strip_prefix("data: ")) {
                             let mut event: serde_json::Value = serde_json::from_str(frame).unwrap();
                             if event["type"] == "response.completed" {
                                 event["response"]["usage"] = serde_json::json!({"input_tokens":0,"output_tokens":0,"input_tokens_details":{"cached_tokens":0}});

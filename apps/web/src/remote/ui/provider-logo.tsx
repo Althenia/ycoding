@@ -1,15 +1,13 @@
 import { Show } from "solid-js"
 import "./provider-logo.css"
 
-const meta = { src: new URL("../../assets/providers/meta.svg", import.meta.url).href }
 const zai = { src: new URL("../../assets/providers/zai.svg", import.meta.url).href, monochrome: true }
 
 const logos = new Map<string, { readonly src: string; readonly dark?: string; readonly monochrome?: boolean }>([
   ["anthropic", { src: new URL("../../assets/providers/claude.svg", import.meta.url).href }],
   ["openrouter", { src: new URL("../../assets/providers/openrouter.svg", import.meta.url).href }],
   ["openai", { src: new URL("../../assets/providers/openai.svg", import.meta.url).href, monochrome: true }],
-  ["meta", meta],
-  ["muse", meta],
+  ["meta", { src: new URL("../../assets/providers/meta.svg", import.meta.url).href }],
   ["github-copilot", { src: new URL("../../assets/providers/github-copilot.svg", import.meta.url).href, monochrome: true }],
   ["xai", { src: new URL("../../assets/providers/grok.svg", import.meta.url).href, monochrome: true }],
   ["zai", zai],
@@ -19,7 +17,6 @@ const logos = new Map<string, { readonly src: string; readonly dark?: string; re
     dark: new URL("../../assets/providers/cursor-dark.svg", import.meta.url).href,
   }],
   ["opencode-go", { src: new URL("../../assets/providers/opencode.svg", import.meta.url).href, monochrome: true }],
-  ["antigravity", { src: new URL("../../assets/providers/antigravity.svg", import.meta.url).href }],
 ])
 
 export function providerLogo(providerID: string) {

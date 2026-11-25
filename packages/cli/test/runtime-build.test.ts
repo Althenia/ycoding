@@ -34,7 +34,7 @@ const harness = `
   mock.module("node:child_process", () => ({
     ...childProcess,
     spawnSync(command, args, options) {
-      calls.push({ command, args, cwd: options.cwd, env: { CARGO_TARGET_DIR: options.env.CARGO_TARGET_DIR, YCODING_BUNDLED_MODELS_PATH: options.env.YCODING_BUNDLED_MODELS_PATH, YCODING_ANTIGRAVITY_CLIENT_ID: options.env.YCODING_ANTIGRAVITY_CLIENT_ID, YCODING_MUSE_CLIENT_SECRET: options.env.YCODING_MUSE_CLIENT_SECRET }, stdio: options.stdio })
+      calls.push({ command, args, cwd: options.cwd, env: { CARGO_TARGET_DIR: options.env.CARGO_TARGET_DIR, YCODING_BUNDLED_MODELS_PATH: options.env.YCODING_BUNDLED_MODELS_PATH }, stdio: options.stdio })
       if (process.env.SCENARIO === "missing-artifact") throw new Error("Attempted to build without a staged runtime")
       if (process.env.STAGED_RUNTIME !== undefined) {
         if (command !== "bash" || args[0] !== "script/runtime-receipt.sh" || args[1] !== "verify" || args[2] !== process.env.STAGED_RUNTIME || options.env.RECEIPT_TARGET !== "darwin-arm64" || options.env.RECEIPT_PROFILE !== "release")
@@ -84,8 +84,6 @@ async function run(input: { targetDirectory?: string; cargoTargetDir?: string; s
     METADATA_TARGET: input.targetDirectory ?? "",
     ...(input.cargoTargetDir === undefined ? {} : { CARGO_TARGET_DIR: input.cargoTargetDir }),
     ...(input.stagedRuntime === undefined ? {} : { STAGED_RUNTIME: input.stagedRuntime }),
-    YCODING_ANTIGRAVITY_CLIENT_ID: "synthetic-antigravity-client-id",
-    YCODING_MUSE_CLIENT_SECRET: "synthetic-muse-client-secret",
     SCENARIO: input.scenario ?? "success",
     RELEASE_EVENT: input.releaseEvent ?? "workflow_dispatch",
   }
@@ -155,7 +153,7 @@ test("buildRuntime uses Cargo metadata's configured target directory and preserv
       expect(result.result?.payloadSha256).not.toBe(result.result?.sha256)
       expect(result.disposed).toBe(true)
       expect(result.sourceRetained).toBe("synthetic authoritative runtime")
-      expect(result.calls).toHaveLength(3)
+      expect(result.calls).toHaveLength(2)
       expect(result.calls[0]).toMatchObject({
         command: "cargo",
         args: [
@@ -173,22 +171,6 @@ test("buildRuntime uses Cargo metadata's configured target directory and preserv
         command: "cargo",
         args: [
           "build",
-          "--timings",
-          "--locked",
-          "--manifest-path",
-          path.join(root, "rust/Cargo.toml"),
-          "--release",
-          "-p",
-          "ycoding-runtime",
-          "--lib",
-        ],
-        cwd: root,
-        stdio: ["ignore", "inherit", "inherit"],
-      })
-      expect(result.calls[2]).toMatchObject({
-        command: "cargo",
-        args: [
-          "build",
           "--message-format=json-render-diagnostics",
           "--timings",
           "--locked",
@@ -203,10 +185,6 @@ test("buildRuntime uses Cargo metadata's configured target directory and preserv
         cwd: root,
         stdio: ["ignore", "pipe", "inherit"],
       })
-      expect(result.calls[1].env.YCODING_ANTIGRAVITY_CLIENT_ID).toBeUndefined()
-      expect(result.calls[1].env.YCODING_MUSE_CLIENT_SECRET).toBeUndefined()
-      expect(result.calls[2].env.YCODING_ANTIGRAVITY_CLIENT_ID).toBe("synthetic-antigravity-client-id")
-      expect(result.calls[2].env.YCODING_MUSE_CLIENT_SECRET).toBe("synthetic-muse-client-secret")
       expect(result.calls[0].env.YCODING_BUNDLED_MODELS_PATH).toContain("models")
       for (const call of result.calls.slice(1)) {
         expect(call.env.YCODING_BUNDLED_MODELS_PATH).toBe(result.calls[0].env.YCODING_BUNDLED_MODELS_PATH)

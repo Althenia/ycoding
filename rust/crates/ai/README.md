@@ -12,7 +12,6 @@ Provider-native request lowering and incremental response settlement. This AGPL-
 | Claude Code subscription                              | `claude_code`, with upstream account resolution                   |
 | OpenRouter                                            | `providers::openrouter`, stateless Responses                      |
 | Cursor                                                | `cursor::provider`, native Connect/h2                             |
-| Meta Muse subscription                                | `muse::route`, account-bound Responses                            |
 | Meta Llama API and custom OpenAI-compatible endpoints | `providers::compatible`, Chat/Responses with an explicit base URL |
 | Baseten, Cerebras, DeepInfra, DeepSeek, Fireworks, Groq and Together AI | `providers::compatible_profile` |
 | Google Gemini                                         | `google::route`, `gemini` streamGenerateContent                   |
@@ -39,7 +38,7 @@ Resolution applies route defaults, model defaults, then request overrides. `Rout
 
 Inject a configured `reqwest::Client` into `Executor`. `Executor::http_client` disables ambient proxies and redirects, gives connections 30 seconds to open, and limits each read wait to 10 minutes without imposing a total request deadline. HTTP/2 sends keepalive pings during active streams. `Executor::stream` returns an owned `EventStream`; `generate` assembles ordered output. Dropping the stream interrupts transport. `generate_object` forces a named tool; the caller validates its dynamic output schema.
 
-The executor reports physical attempt `1`. Muse can remint a rejected inference key once on HTTP 401. SSE retry directives and failed HTTP body reads do not reconnect. A rejected WebSocket continuation does not become an HTTP request. Core owns bounded retries, interruption, and durable Step settlement. HTTP diagnostics distinguish connection, header, and body failures. They retain the sanitized status, request ID, retry hint and rate-limit scopes when the provider sends them.
+The executor reports physical attempt `1`. SSE retry directives and failed HTTP body reads do not reconnect. A rejected WebSocket continuation does not become an HTTP request. Core owns bounded retries, interruption, and durable Step settlement. HTTP diagnostics distinguish connection, header, and body failures. They retain the sanitized status, request ID, retry hint and rate-limit scopes when the provider sends them.
 
 ## OpenAI, compatible routes and OpenRouter
 
@@ -56,10 +55,6 @@ OpenRouter Responses rejects `store:true` and `previous_response_id`, preserves 
 ## Subscription routes
 
 Codex binds resolved subscription credentials and optional account identity to its Responses endpoint. Claude Code takes an upstream `Account` owner for account resolution and normalized quota observations; Core owns credential generation, source fencing, managed login and refresh. Credentials and account metadata are not HTTP body overlays.
-
-Muse uses OpenAI Responses lowering and `openai` metadata. Direct keys bypass minting. OAuth binds lazy inference-key minting to credential identity/generation, coalesces mints, and remints once after inference 401. Expired/rejected account tokens require login; no refresh grant is sent. Mint/discovery requests have ten-second deadlines and no redirects or automatic retries. The Runtime owns its process-session UUID and redacted key cache.
-
-Muse sends `/responses`, `x-client-id: tbh:exec`, and equal `x-tbh-session-id`/`x-meta-ai-gateway-session-id`. Defaults use `store:false` and encrypted reasoning inclusion; complete input replays encrypted state rather than `previous_response_id`. Trailing subscription-usage events drain after completion, including an unterminated final line. Invalid quota events produce payload-free warnings. Only normalized Schema observations survive; absent metrics and reported zero stay distinct. Quota reads never mint or fetch.
 
 ## Cursor wire and host boundaries
 
@@ -91,4 +86,4 @@ Cache policy is independent of quota reads and diagnostics. Tool schemas are nor
 
 ## Checks
 
-Run checks from `rust` through the Cargo gate. `tests/openai_providers.rs` covers native/compatible defaults and OpenRouter stateless/cache/reasoning contracts. `tests/images.rs`, `image_options.rs` and `media_transport.rs` cover image rules and actual loopback HTTP/recorded request bytes. `provider_lifecycle.rs` covers Muse account-generation key pruning and Bedrock/Mantle SigV4 service names. Dedicated OpenAI, Claude Code, Muse, Cursor, Gemini, Vertex, Bedrock, Copilot, hosted-provider and Runpod suites cover streaming, cache, quota, native wire, tool continuation and cancellation against loopback stand-ins. Fixtures are offline; these tests do not certify live subscription access.
+Run checks from `rust` through the Cargo gate. `tests/openai_providers.rs` covers native/compatible defaults and OpenRouter stateless/cache/reasoning contracts. `tests/images.rs`, `image_options.rs` and `media_transport.rs` cover image rules and actual loopback HTTP/recorded request bytes. `provider_lifecycle.rs` covers Bedrock and Mantle SigV4 service names. Dedicated OpenAI, Claude Code, Cursor, Gemini, Vertex, Bedrock, Copilot, hosted-provider and Runpod suites cover streaming, cache, quota, native wire, tool continuation and cancellation against loopback stand-ins. Fixtures are offline; these tests do not certify live subscription access.

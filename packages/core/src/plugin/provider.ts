@@ -1,7 +1,6 @@
 import { AlibabaPlugin } from "./provider/alibaba"
 import { AmazonBedrockPlugin } from "./provider/amazon-bedrock"
 import { AnthropicPlugin } from "./provider/anthropic"
-import { AntigravityPlugin } from "./provider/antigravity"
 import { AzureCognitiveServicesPlugin, AzurePlugin } from "./provider/azure"
 import { CerebrasPlugin } from "./provider/cerebras"
 import { CloudflareAIGatewayPlugin } from "./provider/cloudflare-ai-gateway"
@@ -19,7 +18,6 @@ import { GroqPlugin } from "./provider/groq"
 import { KiloPlugin } from "./provider/kilo"
 import { LLMGatewayPlugin } from "./provider/llmgateway"
 import { MistralPlugin } from "./provider/mistral"
-import { MusePlugin } from "./provider/muse"
 import { NvidiaPlugin } from "./provider/nvidia"
 import { OpenAIPlugin } from "./provider/openai"
 import { SnowflakeCortexPlugin } from "./provider/snowflake-cortex"
@@ -39,7 +37,6 @@ export const ProviderPlugins: PluginCatalogHost.Contribution[] = [
   AlibabaPlugin,
   AmazonBedrockPlugin,
   AnthropicPlugin,
-  AntigravityPlugin,
   AzureCognitiveServicesPlugin,
   AzurePlugin,
   CerebrasPlugin,
@@ -58,7 +55,6 @@ export const ProviderPlugins: PluginCatalogHost.Contribution[] = [
   KiloPlugin,
   LLMGatewayPlugin,
   MistralPlugin,
-  MusePlugin,
   NvidiaPlugin,
   OpencodePlugin,
   SnowflakeCortexPlugin,

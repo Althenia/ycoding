@@ -1,4 +1,4 @@
-use super::{Error, credential_id, now};
+use super::{Error, credential_id, ensure_supported, now};
 use crate::resources::credential::{Info, Service};
 use std::{
     collections::BTreeMap,
@@ -94,7 +94,9 @@ pub struct Draft {
 impl Draft {
     pub fn register_endpoints(&mut self, catalog: &crate::resources::catalog::Catalog) {
         for record in &catalog.providers {
-            if !catalog.provider_permitted(&record.provider.id) {
+            if ensure_supported(record.provider.id.0.as_str().unwrap_or_default()).is_err()
+                || !catalog.provider_permitted(&record.provider.id)
+            {
                 continue;
             }
             if crate::resources::model::family(&record.provider.package).is_err()
@@ -162,6 +164,9 @@ impl Draft {
         self.order.iter().filter_map(|id| self.get(id)).collect()
     }
     pub fn update(&mut self, id: LosslessString, update: impl FnOnce(&mut integration::Ref)) {
+        if ensure_supported(id.as_str().unwrap_or_default()).is_err() {
+            return;
+        }
         let entry = self.entry(id.clone());
         update(&mut entry.reference);
         entry.reference.id =
@@ -177,6 +182,9 @@ impl Draft {
             .map_or(&[], |entry| entry.methods.as_slice())
     }
     pub fn method(&mut self, integration: LosslessString, method: integration::Method) {
+        if ensure_supported(integration.as_str().unwrap_or_default()).is_err() {
+            return;
+        }
         let entry = self.entry(integration);
         if let Some(index) = entry
             .methods
@@ -189,6 +197,9 @@ impl Draft {
         entry.methods.push(method);
     }
     pub fn oauth(&mut self, implementation: OAuthImplementation) {
+        if ensure_supported(implementation.integration.as_str().unwrap_or_default()).is_err() {
+            return;
+        }
         self.method(
             implementation.integration.clone(),
             integration::Method::OAuth(implementation.method.clone()),
@@ -703,6 +714,7 @@ impl Registry {
                 value: None,
             });
         };
+        ensure_supported(stored.integration_id().as_str().unwrap_or_default())?;
         if let ycoding_schema::credential::Value::OAuth(value) = stored
             .secret()
             .domain()
@@ -791,6 +803,7 @@ impl Registry {
         key: LosslessString,
         time: i64,
     ) -> Result<(), Error> {
+        ensure_supported(integration.as_str().unwrap_or_default())?;
         if !self
             .0
             .state
@@ -844,6 +857,9 @@ impl Registry {
             )));
         };
         let integration = credential.integration_id().clone();
+        if let Err(error) = ensure_supported(integration.as_str().unwrap_or_default()) {
+            return Ok(failed(error.to_string()));
+        }
         let name = self
             .0
             .state
@@ -960,6 +976,7 @@ impl Registry {
             .await
     }
     fn target(&self, integration: &LosslessString, id: &LosslessString) -> Result<Info, Error> {
+        ensure_supported(integration.as_str().unwrap_or_default())?;
         self.0
             .credentials
             .get(id)?
@@ -975,6 +992,7 @@ impl Registry {
         credential_id: Option<LosslessString>,
         time: i64,
     ) -> Result<integration::Attempt, Error> {
+        ensure_supported(integration.as_str().unwrap_or_default())?;
         let method = IntegrationMethodId::new(method).map_err(|_| Error::Rejected)?;
         let implementation = self
             .0
@@ -1417,6 +1435,7 @@ impl Registry {
         label: Option<LosslessString>,
         time: i64,
     ) -> Result<integration::CommandAttempt, Error> {
+        ensure_supported(integration.as_str().unwrap_or_default())?;
         let method = IntegrationMethodId::new(method).map_err(|_| Error::Rejected)?;
         let command = self
             .0

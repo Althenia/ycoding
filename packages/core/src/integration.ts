@@ -18,6 +18,7 @@ import {
   Types,
 } from "effect"
 import { Integration } from "@ycoding-ai/schema/integration"
+import { Provider } from "./provider"
 import { Credential } from "./credential"
 import { State } from "./state"
 import { EventRuntime } from "./event"
@@ -306,6 +307,7 @@ const makeState = (events: EventRuntime.Interface, announcements: LocationAnnoun
       list: () => Array.from(draft.integrations.values(), (entry) => entry.ref) as Ref[],
       get: (id) => draft.integrations.get(id)?.ref as Ref | undefined,
       update: (id, update) => {
+        if (Provider.isRetiredID(id)) return
         const current = draft.integrations.get(id) ?? { ref: { id, name: id }, methods: [], implementations: new Map() }
         if (!draft.integrations.has(id)) draft.integrations.set(id, current)
         update(current.ref)
@@ -315,6 +317,7 @@ const makeState = (events: EventRuntime.Interface, announcements: LocationAnnoun
       method: {
         list: (integrationID) => (draft.integrations.get(integrationID)?.methods as Method[] | undefined) ?? [],
         update: (implementation) => {
+          if (Provider.isRetiredID(implementation.integrationID)) return
           const current = draft.integrations.get(implementation.integrationID) ?? {
             ref: { id: implementation.integrationID, name: implementation.integrationID },
             methods: [],
@@ -387,6 +390,8 @@ const standaloneLayer = Layer.effect(StandaloneService, Effect.gen(function* () 
         const credential = yield* credentials.get(connection.id)
         if (!credential)
           return yield* new AuthorizationError({ cause: new Error("Selected credential is unavailable") })
+        if (Provider.isRetiredID(credential.integrationID))
+          return yield* new AuthorizationError({ cause: new Provider.RetiredError({ providerID: credential.integrationID }) })
         return { connection: { ...connection, kind: credential.value.type }, credential, value: credential.value }
       }),
     },
@@ -649,6 +654,8 @@ const layer = Layer.effect(
       readonly label?: string
       readonly credentialID?: Credential.ID
     }) {
+      if (Provider.isRetiredID(input.integrationID))
+        return yield* new AuthorizationError({ cause: new Provider.RetiredError({ providerID: input.integrationID }) })
       const method = state.get().integrations.get(input.integrationID)?.implementations.get(input.methodID)
       if (!method) {
         return yield* Effect.die(new Error(`OAuth method not found: ${input.integrationID}/${input.methodID}`))
@@ -698,6 +705,8 @@ const layer = Layer.effect(
       readonly methodID: MethodID
       readonly label?: string
     }) {
+      if (Provider.isRetiredID(input.integrationID))
+        return yield* new AuthorizationError({ cause: new Provider.RetiredError({ providerID: input.integrationID }) })
       const method = state
         .get()
         .integrations.get(input.integrationID)
@@ -770,6 +779,8 @@ const layer = Layer.effect(
       const credential = yield* credentials.get(input.id)
       if (!credential)
         return { connection: { type: input.type, id: input.id, label: input.label, active: input.active } }
+      if (Provider.isRetiredID(credential.integrationID))
+        return yield* new AuthorizationError({ cause: new Provider.RetiredError({ providerID: credential.integrationID }) })
       const connection = { ...input, kind: credential.value.type }
       if (credential.value.type === "key") return { connection, credential, value: credential.value }
       const implementation = state
@@ -809,6 +820,7 @@ const layer = Layer.effect(
       connection: {
         snapshot,
         active: Effect.fn("Integration.connection.active")(function* (id) {
+          if (Provider.isRetiredID(id)) return undefined
           const entry = state.get().integrations.get(id)
           return (yield* resolveConnections(entry, yield* credentials.list(id)))[0]
         }),
@@ -816,6 +828,8 @@ const layer = Layer.effect(
           return (yield* snapshot(connection)).value
         }),
         key: Effect.fn("Integration.connection.key")(function* (input) {
+          if (Provider.isRetiredID(input.integrationID))
+            return yield* new AuthorizationError({ cause: new Provider.RetiredError({ providerID: input.integrationID }) })
           const method = state
             .get()
             .integrations.get(input.integrationID)
@@ -833,6 +847,8 @@ const layer = Layer.effect(
         refresh: Effect.fn("Integration.connection.refresh")(function* (credentialID) {
           const credential = yield* credentials.get(credentialID)
           if (!credential) return { status: "failed" as const, message: `Credential not found: ${credentialID}` }
+          if (Provider.isRetiredID(credential.integrationID))
+            return { status: "failed" as const, message: new Provider.RetiredError({ providerID: credential.integrationID }).message }
           const name = state.get().integrations.get(credential.integrationID)?.ref.name ?? credential.integrationID
           if (credential.value.type === "key")
             return { status: "failed" as const, message: "API keys do not refresh; replace the key instead" }

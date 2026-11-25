@@ -53,10 +53,10 @@ fn typescript_provider_request_corpus_preserves_required_empty_maps() {
 }
 
 #[test]
-fn muse_response_stream_snapshot_round_trips_through_strict_wire_validation() {
+fn response_stream_snapshot_round_trips_through_strict_wire_validation() {
     let value = v5::ProviderUsageSnapshot {
-        provider_id: encode_lossless(&"muse".encode_utf16().collect::<Vec<_>>()),
-        label: encode_lossless(&"Muse (Meta)".encode_utf16().collect::<Vec<_>>()),
+        provider_id: encode_lossless(&"fixture".encode_utf16().collect::<Vec<_>>()),
+        label: encode_lossless(&"Fixture".encode_utf16().collect::<Vec<_>>()),
         profile: None,
         status: 1,
         source: 6,

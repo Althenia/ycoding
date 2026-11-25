@@ -1,9 +1,6 @@
-#[path = "support/muse.rs"]
+#[path = "support/catalog.rs"]
 mod fixture;
-#[path = "support/muse_model.rs"]
-mod model_fixture;
 use fixture::{Fixture, header, secret, store};
-use model_fixture::row;
 use std::{
     collections::BTreeMap,
     io::Write,
@@ -164,60 +161,6 @@ fn external_records_retain_normalized_variants_and_small_model_policy() {
         }
         assert!(catalog.small(&provider::Id("azure".into()), 0.0).is_none());
     }
-}
-
-#[tokio::test]
-async fn muse_retained_owner_seeds_rebuilt_catalog_and_reconciles_on_timer() {
-    let body = serde_json::json!({"data":[row("muse-fixture")]}).to_string();
-    let fixture = Fixture::new(vec![(200, body.clone()), (200, body)]).await;
-    let (store, credentials) = store();
-    credentials
-        .create(
-            "muse-profile".into(),
-            "muse".into(),
-            Some("Muse".into()),
-            secret(r#"{"type":"key","key":"muse-key"}"#),
-            0,
-        )
-        .await
-        .unwrap();
-    let mut accounts = AccountCatalog::new(Preparation::default(), BTreeMap::new()).unwrap();
-    accounts
-        .endpoints
-        .insert("muse".into(), fixture.base.clone());
-    for now in [100, 101, 60101] {
-        let composition = Catalog::compose_with_accounts(
-            Vec::new(),
-            &[],
-            &credentials,
-            &mut accounts,
-            now,
-            false,
-        )
-        .await
-        .unwrap();
-        assert!(composition.diagnostics.is_empty());
-        let saved = credentials.all().unwrap();
-        let selection = reference("muse", "muse-fixture", "Muse");
-        assert!(
-            composition
-                .catalog
-                .get(
-                    &selection.provider_id,
-                    &selection.id,
-                    selection.profile.as_ref(),
-                    &saved
-                )
-                .is_some()
-        );
-        assert!(matches!(
-            Resolver::new(composition.catalog).resolve(&selection, &saved, saved.first()),
-            Err(ycoding_core::resources::model::Error::UnsupportedPackage)
-        ));
-    }
-    assert_eq!(fixture.finish().await.len(), 2);
-    credentials.shutdown().await.unwrap();
-    store.shutdown().unwrap();
 }
 
 #[tokio::test]

@@ -297,6 +297,14 @@ impl ModelSwitch {
         target: &ycoding_schema::model::Ref,
         saved_binding: Option<&ProfileBinding>,
     ) -> Result<ResolvedSwitch, Error> {
+        if target.provider_id.is_retired() {
+            return Err(Error::ModelResolution(format!(
+                "{}: {}/{}",
+                ycoding_schema::provider::RETIRED_DIAGNOSTIC,
+                text(&target.provider_id.0),
+                text(&target.id),
+            )));
+        }
         let saved = self
             .credentials
             .all()
@@ -444,9 +452,9 @@ fn switch_credential_error(error: credential::Error, target: &ycoding_schema::mo
                 .as_ref()
                 .map_or_else(LosslessString::default, |profile| profile.0.clone()),
         },
-        credential::Error::Rejected | credential::Error::CodeRequired => {
-            Error::Authorization(error.to_string())
-        }
+        credential::Error::Rejected
+        | credential::Error::CodeRequired
+        | credential::Error::ProviderRetired => Error::Authorization(error.to_string()),
         other => Error::ModelResolution(other.to_string()),
     }
 }

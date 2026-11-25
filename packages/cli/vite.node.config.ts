@@ -5,8 +5,6 @@ import { defineConfig, type Plugin, type UserConfig } from "vite"
 import solid from "vite-plugin-solid"
 import { nodeExecArgv, nodeTarget, type NodeTarget, photonWasmAsset } from "./src/node/target"
 import { NODE_BINARY } from "./src/binary"
-import { antigravityBuildDefinitions } from "./script/antigravity-build-env"
-import { museBuildDefinitions } from "./script/muse-build-env"
 import { runtimeAssetConfig, pluginSDKAssetConfig, type RuntimeAsset } from "./script/runtime-asset"
 import { checkBundleGraph } from "../../script/ycoding-workspace"
 
@@ -254,8 +252,6 @@ export function mainConfig(input: NodeBuildInput): UserConfig {
     resolve,
     esbuild: { jsx: "automatic" },
     define: {
-      ...antigravityBuildDefinitions(),
-      ...museBuildDefinitions(),
       ...runtimeAsset.define,
       "process.env.WS_NO_BUFFER_UTIL": JSON.stringify("1"),
       "process.env.WS_NO_UTF_8_VALIDATE": JSON.stringify("1"),

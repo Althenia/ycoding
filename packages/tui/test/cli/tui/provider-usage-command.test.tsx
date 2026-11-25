@@ -58,15 +58,15 @@ test("invalidates stale asynchronous generations", () => {
   expect(guard.current(second)).toBeFalse()
 })
 
-test.each(["dark", "light"] as const)("renders Muse before a quota sample and updates to reported zero in %s mode", async (mode) => {
+test.each(["dark", "light"] as const)("displays a quota warm-up message before a reported zero in %s mode", async (mode) => {
   const [{ ConfigProvider }, { ThemeProvider }, { Keymap }, { DialogProvider }, { ToastProvider }] = await Promise.all([
     import("../../../src/config"), import("../../../src/context/theme"), import("../../../src/context/keymap"),
     import("../../../src/ui/dialog"), import("../../../src/ui/toast"),
   ])
   const pending: Snapshot = {
-    providerID: "muse", label: "Muse (Meta)", profile: "Personal", status: "unsupported",
+    providerID: "opencode-go", label: "OpenCode Go", profile: "Personal", status: "unsupported",
     source: "response_stream", stability: "observed", updatedAt: 1_000, windows: [],
-    message: "Quota is reported after the next Muse response",
+    message: "Quota is reported after the next response",
   }
   expect(visibleProviderSnapshots([pending, snapshot("hidden", "unsupported"), snapshot("unauthorized", "unauthorized")]))
     .toEqual([pending, snapshot("unauthorized", "unauthorized")])
@@ -82,7 +82,7 @@ test.each(["dark", "light"] as const)("renders Muse before a quota sample and up
   app.renderer.start()
   try {
     const frame = await app.waitForFrame((value) => value.includes(pending.message!))
-    expect(frame).toContain("Muse (Meta) · Personal")
+    expect(frame).toContain("OpenCode Go · Personal")
     expect(frame).not.toContain("0%")
     expect(frame).not.toContain("░")
     setSnapshots([{ ...pending, status: "available", message: undefined, windows: [

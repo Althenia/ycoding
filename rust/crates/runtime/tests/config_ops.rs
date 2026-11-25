@@ -276,7 +276,6 @@ async fn flow(host: &production_owner::Host) {
             "ycoding.provider.kilo",
             "ycoding.provider.llmgateway",
             "ycoding.provider.mistral",
-            "ycoding.provider.muse",
             "ycoding.provider.nvidia",
             "ycoding.provider.snowflake-cortex",
             "ycoding.provider.openai-compatible",

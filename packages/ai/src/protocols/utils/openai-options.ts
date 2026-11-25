@@ -277,7 +277,7 @@ export const resolvedContextManagement = (request: LLMRequest) => {
 
 export const supportsExtendedPromptCacheRetention = (modelID: string): boolean => {
   const normalized = modelID.toLowerCase().split("/").at(-1)?.replace(MODEL_SNAPSHOT_SUFFIX, "")
-  return normalized !== undefined && (EXTENDED_PROMPT_CACHE_MODELS.has(normalized) || normalized.startsWith("muse-spark-"))
+  return normalized !== undefined && EXTENDED_PROMPT_CACHE_MODELS.has(normalized)
 }
 
 export type PublicOpenAIPromptCacheCapability = "key-only" | "legacy" | "gpt-5.6"

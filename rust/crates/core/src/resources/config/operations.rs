@@ -132,6 +132,13 @@ impl ProviderConfiguration {
     pub fn validate(&self) -> Result<(), WriteError> {
         self.family()?;
         identifier(&self.provider_id, 128)?;
+        if self
+            .provider_id
+            .as_str()
+            .is_some_and(ycoding_schema::provider::is_retired)
+        {
+            return Err(WriteError::InvalidConfig);
+        }
         let base = match &self.endpoint {
             Endpoint::OpenAi { base_url, .. } | Endpoint::Runpod { base_url, .. } => base_url,
         };

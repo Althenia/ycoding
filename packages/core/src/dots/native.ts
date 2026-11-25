@@ -215,6 +215,7 @@ const toNativeError = (error: unknown): Error => {
     if (error._tag === "SessionRunnerModel.VariantUnavailableError")
       return new Error({ code: "invalid_input", message: error instanceof globalThis.Error ? error.message : "The selected model variant is unavailable" })
     if (
+      error._tag === "Provider.RetiredError" ||
       error._tag === "SessionRunnerModel.ProfileUnavailableError" ||
       error._tag === "SessionRunnerModel.ModelUnavailableError" ||
       error._tag === "SessionRunnerModel.ModelNotSelectedError" ||
@@ -1244,7 +1245,9 @@ export const live = Effect.gen(function* () {
       Effect.provide(locations.get(session.location, [AccountConnectors.node]))),
     home: global.home, data: global.data, projectRoot: (directory) => Project.root(fsutil, directory),
     selectedModel: (session) => Catalog.Service.use((catalog) => SessionRunnerModel.selection(session, catalog.model)).pipe(
-      Effect.map((selection) => selection?.ref), Effect.provide(locations.get(session.location, [LocationServiceMap.full]))),
+      Effect.map((selection) => selection?.ref),
+      Effect.catchTag("Provider.RetiredError", () => Effect.succeed(session.model)),
+      Effect.provide(locations.get(session.location, [LocationServiceMap.full]))),
     validateModel,
     switchModel: ({ sessionID, model }) => Effect.gen(function* () {
       const session = yield* sessions.get(sessionID).pipe(Effect.mapError(toNativeError))

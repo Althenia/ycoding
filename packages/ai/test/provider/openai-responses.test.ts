@@ -1018,31 +1018,6 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("supports 24h prompt-cache retention for Meta Muse Spark", () =>
-    Effect.gen(function* () {
-      const route = OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).responses(
-        "muse-spark-1.3",
-      ).route
-      const supported = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({
-          model: Model.make({ id: "muse-spark-1.3", provider: "meta", route }),
-          prompt: "Think.",
-          providerOptions: { openai: { promptCacheRetention: "24h" } },
-        }),
-      )
-      const unsupported = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({
-          model: Model.make({ id: "meta/unsupported-model", provider: "meta", route }),
-          prompt: "Think.",
-          providerOptions: { openai: { promptCacheRetention: "24h" } },
-        }),
-      )
-
-      expect(supported.body.prompt_cache_retention).toBe("24h")
-      expect(unsupported.body.prompt_cache_retention).toBeUndefined()
-    }),
-  )
-
   describe("prompt_cache_retention / prompt_cache_options family gating", () => {
     // GPT-5.6+ uses cache_options. Earlier models only receive retention when
     // OpenAI lists that exact family as supporting it; unsupported fields return
@@ -1052,6 +1027,7 @@ describe("OpenAI Responses route", () => {
       { id: "gpt-5", retentionSent: true, optionsSent: false },
       { id: "gpt-4.1", retentionSent: true, optionsSent: false },
       { id: "gpt-4o-mini", retentionSent: false, optionsSent: false },
+      { id: "muse-spark-1.3", retentionSent: false, optionsSent: false },
       { id: "gpt-5.6", retentionSent: false, optionsSent: true },
       { id: "gpt-5.6-mini", retentionSent: false, optionsSent: true },
       { id: "gpt-6", retentionSent: false, optionsSent: true },

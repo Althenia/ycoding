@@ -87,7 +87,7 @@ impl Flow {
                     &self.views,
                     &reference,
                     QUOTA_GENERATION,
-                    &[provider::Id("muse".into())],
+                    &[provider::Id("fixture-quota".into())],
                     NonNegativeInt::new(1_791_875_000_000).unwrap(),
                 )
                 .await
@@ -553,7 +553,7 @@ async fn quota_state(client: &mut Client) -> (i32, i32, i32) {
                 },
                 v5::ProviderUsageGetRequest {
                     params: v5::ProviderUsageGetRequestParams {
-                        provider_id: text("muse"),
+                        provider_id: text("fixture-quota"),
                     },
                     query: v5::ProviderUsageQuery {
                         location: None,
@@ -727,8 +727,8 @@ fn observe_quota() {
         .quota
         .observe(
             provider_usage::Observation {
-                provider_id: provider::Id("muse".into()),
-                label: "Muse (Meta)".into(),
+                provider_id: provider::Id("fixture-quota".into()),
+                label: "Fixture quota".into(),
                 source: "response_stream".into(),
                 stability: "observed".into(),
                 observed_at: NonNegativeInt::new(100).unwrap(),

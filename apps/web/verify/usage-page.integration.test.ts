@@ -297,18 +297,18 @@ test("quota and recorded-consumption Details open bounded dialogs without moving
     try {
       await page.setViewport(width, width === 390 ? 844 : 900)
       await page.setReducedMotion(reduced)
-      await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?provider=muse`)
-      await wait(page, `document.querySelector('.usage-provider h3')?.textContent === 'Muse (Meta)' && document.querySelector('.usage-consumption__row') !== null`)
+      await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?quota=observed`)
+      await wait(page, `document.querySelector('.usage-provider h3')?.textContent === 'OpenCode Go' && document.querySelector('.usage-consumption__row') !== null`)
       await page.evaluate(`document.fonts.ready`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
-      for (const selector of ['.usage-provider button[aria-label="Muse (Meta) details"]', '.usage-consumption__row button']) {
+      for (const selector of ['.usage-provider button[aria-label="OpenCode Go details"]', '.usage-consumption__row button']) {
         await page.evaluate(`document.querySelector(${JSON.stringify(selector)})?.scrollIntoView({ block: 'center' })`)
         const baseline = await page.evaluate(`(() => ({
           cards: [...document.querySelectorAll('.usage-provider')].map(card => { const rect=card.getBoundingClientRect(); return { label:card.querySelector('h3')?.textContent ?? '', x:rect.x, y:rect.y, width:rect.width, height:rect.height } }),
           scrollHeight: document.scrollingElement.scrollHeight, scrollTop: document.scrollingElement.scrollTop,
         }))()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, cards: (decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, label: (decodeString)(record["label"]), x: (decodeNumber)(record["x"]), y: (decodeNumber)(record["y"]), width: (decodeNumber)(record["width"]), height: (decodeNumber)(record["height"]) } }))(record["cards"]), scrollHeight: (decodeNumber)(record["scrollHeight"]), scrollTop: (decodeNumber)(record["scrollTop"]) } })
         expect(baseline.cards.length).toBeGreaterThanOrEqual(4)
-        expect(baseline.cards[0]?.label).toBe("Muse (Meta)")
+        expect(baseline.cards[0]?.label).toBe("OpenCode Go")
         if (width === 1440) expect(new Set(baseline.cards.map((card) => Math.round(card.y))).size).toBeGreaterThanOrEqual(2)
         if (width === 390) expect(baseline.cards.slice(1).filter((card) => card.y > baseline.cards[0]!.y).length).toBeGreaterThanOrEqual(2)
         await page.evaluate(`(() => { const button=document.querySelector(${JSON.stringify(selector)}); button.focus(); button.dispatchEvent(new MouseEvent('click', { bubbles:true, detail:${selector.includes("usage-consumption") ? 1 : 0} })); })()`)
@@ -323,7 +323,7 @@ test("quota and recorded-consumption Details open bounded dialogs without moving
             cards:[...document.querySelectorAll('.usage-provider')].map(card=>{const cardRect=card.getBoundingClientRect();return{label:card.querySelector('h3')?.textContent??'',x:cardRect.x,y:cardRect.y,width:cardRect.width,height:cardRect.height}}),
             scrollHeight:document.scrollingElement.scrollHeight,scrollTop:document.scrollingElement.scrollTop };
         })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, label: (decodeString)(record["label"]), title: (decodeString)(record["title"]), closeCount: (decodeNumber)(record["closeCount"]), closeName: (decodeString)(record["closeName"]), closeInHeader: (decodeBoolean)(record["closeInHeader"]), focused: (decodeBoolean)(record["focused"]), modal: (decodeBoolean)(record["modal"]), visible: (decodeBoolean)(record["visible"]), contained: (decodeBoolean)(record["contained"]), pointerFocus: (decodeBoolean)(record["pointerFocus"]), triggerHasPopup: (decodeNullable(decodeString))(record["triggerHasPopup"]), surface: ((value: unknown) => { const record = decodeRecord(value); return { ...record, left: (decodeNumber)(record["left"]), top: (decodeNumber)(record["top"]), right: (decodeNumber)(record["right"]), bottom: (decodeNumber)(record["bottom"]) } })(record["surface"]), cards: (decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, label: (decodeString)(record["label"]), x: (decodeNumber)(record["x"]), y: (decodeNumber)(record["y"]), width: (decodeNumber)(record["width"]), height: (decodeNumber)(record["height"]) } }))(record["cards"]), scrollHeight: (decodeNumber)(record["scrollHeight"]), scrollTop: (decodeNumber)(record["scrollTop"]) } })
-        expect(dialog.label).toBe(selector.includes("usage-provider") ? "Muse (Meta) details" : "muse · muse-model · profile Muse details")
+        expect(dialog.label).toBe(selector.includes("usage-provider") ? "OpenCode Go details" : "opencode-go · minimax-m3 · profile Work details")
         expect(dialog.title).toBe(dialog.label)
         expect(dialog.closeCount).toBe(1)
         expect(dialog.closeName).toBe(`Close ${dialog.label}`)
@@ -339,7 +339,7 @@ test("quota and recorded-consumption Details open bounded dialogs without moving
         expect(dialog.scrollTop).toBe(baseline.scrollTop)
         const body = await page.evaluate(`document.querySelector('dialog.overlay--usage-details .overlay__body')?.innerText ?? ''`)
         if (selector.includes("usage-provider")) {
-          for (const line of ["Source response stream · stability observed", "Updated ", "5-hour window", "Weekly", "No supported method · insufficient evidence", "Muse quota observations are warming up"]) expect(body).toContain(line)
+          for (const line of ["Source response stream · stability observed", "Updated ", "5-hour window", "Weekly", "No supported method · insufficient evidence", "Quota observations are warming up"]) expect(body).toContain(line)
         } else {
           for (const line of ["Rate 120 tokens/min", "5m 180 tokens/min · 60m 120 tokens/min", "0 priced · 3 unpriced", "Observed ", "not account quota or generation speed"]) expect(body).toContain(line)
         }
@@ -357,13 +357,13 @@ test("quota and recorded-consumption Details open bounded dialogs without moving
   }
 }, 90_000)
 
-test("unsupported Muse stays hidden until refresh reports available quota windows, including zero", async () => {
+test("an unsupported quota stays hidden until refresh reports available windows, including zero", async () => {
   const page = await browser!.openPage()
   try {
-    await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?provider=muse-pending`)
+    await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?quota=pending`)
     await wait(page, `document.querySelectorAll('.usage-provider').length === 7`)
     const pending = await page.evaluate(`(() => {
-      const card = document.querySelector('[data-provider-id="muse"]')
+      const card = document.querySelector('[data-provider-id="opencode-go"]')
       return { visible: card !== null, heading: card?.querySelector('h3')?.textContent ?? '', plan: card?.querySelector('.usage-provider__plan')?.textContent ?? '', text: card?.innerText ?? '',
         windows: card?.querySelectorAll('.usage-window').length ?? 0, meters: card?.querySelectorAll('.usage-meter').length ?? 0,
         headings: [...document.querySelectorAll('.usage-provider h3')].map((item) => item.textContent.trim()) }
@@ -371,16 +371,16 @@ test("unsupported Muse stays hidden until refresh reports available quota window
     expect(pending.visible).toBe(false)
     expect(pending.heading).toBe("")
     expect(pending.plan).toBe("")
-    expect(pending.headings).not.toContain("Muse (Meta)")
+    expect(pending.headings).not.toContain("OpenCode Go")
     expect(pending.windows).toBe(0)
     expect(pending.meters).toBe(0)
     expect(pending.text).not.toContain("%")
     expect(pending.headings).not.toContain("Other provider")
     expect(pending.headings).toContain("Disconnected provider")
     await page.evaluate(`document.querySelector('.usage-refresh')?.click()`)
-    await wait(page, `document.querySelector('[data-provider-id="muse"]')?.textContent?.includes('0% used') === true && document.querySelector('[data-provider-id="muse"]')?.textContent?.includes('64% used') === true`)
-    expect(await page.evaluate(`document.querySelector('[data-provider-id="muse"]')?.querySelectorAll('.usage-meter').length ?? 0`)).toBe(2)
-    expect(await page.evaluate(`document.querySelector('[data-provider-id="muse"]')?.querySelectorAll('.usage-provider__empty').length ?? 0`)).toBe(0)
+    await wait(page, `document.querySelector('[data-provider-id="opencode-go"]')?.textContent?.includes('0% used') === true && document.querySelector('[data-provider-id="opencode-go"]')?.textContent?.includes('64% used') === true`)
+    expect(await page.evaluate(`document.querySelector('[data-provider-id="opencode-go"]')?.querySelectorAll('.usage-meter').length ?? 0`)).toBe(2)
+    expect(await page.evaluate(`document.querySelector('[data-provider-id="opencode-go"]')?.querySelectorAll('.usage-provider__empty').length ?? 0`)).toBe(0)
   } finally { await page.close() }
 })
 

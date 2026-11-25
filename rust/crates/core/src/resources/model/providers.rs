@@ -74,13 +74,8 @@ impl ProviderContext {
         cursor: Option<&cursor::route::Host>,
         cursor_auth: Option<&auth::cursor::Store>,
     ) -> Result<Model, Error> {
-        if info.provider_id.0 == "muse".into() {
-            return crate::resources::muse::from_catalog_model(
-                info,
-                value,
-                selected,
-                ycoding_ai::muse::Runtime::shared().map_err(|_| Error::InvalidSettings)?,
-            );
+        if info.provider_id.is_retired() {
+            return Err(Error::ProviderRetired);
         }
         if family(info.package.as_ref().ok_or(Error::UnsupportedPackage)?)?
             == ProviderFamily::Cursor
@@ -143,6 +138,9 @@ impl ProviderContext {
         info: &model::Info,
         value: Option<&credential::Value>,
     ) -> Result<Model, Error> {
+        if info.provider_id.is_retired() {
+            return Err(Error::ProviderRetired);
+        }
         let mut configured = info.clone();
         let mut settings = info
             .settings

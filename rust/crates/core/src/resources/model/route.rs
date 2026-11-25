@@ -97,6 +97,9 @@ pub fn from_catalog_model_with_claude(
     selected: Option<&super::super::credential::Info>,
     host: Option<&ClaudeHost>,
 ) -> Result<Model, Error> {
+    if info.provider_id.is_retired() {
+        return Err(Error::ProviderRetired);
+    }
     let managed = family(info.package.as_ref().ok_or(Error::UnsupportedPackage)?)?
         == ProviderFamily::Anthropic
         && (matches!(value, Some(credential::Value::OAuth(value)) if value.method_id.as_lossless().as_str() == Some("claude-code"))
@@ -161,7 +164,7 @@ pub fn from_catalog_model_with_claude(
         }
         settings.0 = fields;
     }
-    let mut model = from_catalog_model_base(&configured, None)?;
+    let mut model = from_catalog_model(&configured, None)?;
     let mut route = ycoding_ai::claude_code::route(
         Arc::new(ClaudeAccount {
             host: host.clone(),
@@ -176,79 +179,7 @@ pub fn from_catalog_model_with_claude(
     Ok(model)
 }
 
-fn antigravity_model(
-    info: &model::Info,
-    credential: Option<&credential::Value>,
-    environment: &BTreeMap<String, String>,
-    version: &str,
-) -> Result<Model, Error> {
-    if info.package.as_ref().and_then(|package| package.as_str()) != Some("aisdk:@ai-sdk/google") {
-        return Err(Error::UnsupportedPackage);
-    }
-    let Some(credential::Value::OAuth(value)) = credential else {
-        return Err(Error::ProfileUnavailable);
-    };
-    let access = value.access.to_utf8().map_err(|_| Error::InvalidSettings)?;
-    let project = value
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get(&"projectID".into()))
-        .and_then(text)
-        .filter(|project| !project.is_empty())
-        .map(str::to_owned);
-    let settings = info
-        .settings
-        .as_ref()
-        .map(|settings| settings.encode())
-        .unwrap_or_else(|| object(&[]));
-    let gateway_model = field(&settings, "antigravityModelID")
-        .and_then(text)
-        .filter(|model| !model.is_empty())
-        .map(str::to_owned);
-    let mut cleaned = info.clone();
-    if let Some(settings) = &mut cleaned.settings {
-        let mut fields = JsonObject::new();
-        for (name, value) in settings
-            .0
-            .iter()
-            .filter(|(name, _)| name.as_str() != Some("antigravityModelID"))
-        {
-            fields.insert(name.clone(), value.clone());
-        }
-        settings.0 = fields;
-    }
-    let base = from_catalog_package(&cleaned, credential, environment, version)?;
-    let mut result = ycoding_ai::antigravity::route(ycoding_ai::antigravity::Config {
-        access: Some(Credential::value(access)),
-        base_url: field(&settings, "baseURL")
-            .and_then(text)
-            .map(str::to_owned),
-        project,
-        gateway_model,
-        defaults: base.route.defaults.clone(),
-        ..Default::default()
-    })
-    .model(info.model_id.clone());
-    result.defaults = base.defaults;
-    Ok(result)
-}
-
 pub fn from_catalog_model(
-    info: &model::Info,
-    credential: Option<&credential::Value>,
-) -> Result<Model, Error> {
-    if info.provider_id.0 == "muse".into() {
-        return super::super::muse::from_catalog_model(
-            info,
-            credential,
-            None,
-            ycoding_ai::muse::Runtime::shared().map_err(|_| Error::InvalidSettings)?,
-        );
-    }
-    from_catalog_model_base(info, credential)
-}
-
-pub(crate) fn from_catalog_model_base(
     info: &model::Info,
     credential: Option<&credential::Value>,
 ) -> Result<Model, Error> {
@@ -266,18 +197,9 @@ pub(super) fn from_catalog_model_environment(
     environment: &BTreeMap<String, String>,
     version: &str,
 ) -> Result<Model, Error> {
-    if info.provider_id.0 == "antigravity".into() {
-        return antigravity_model(info, credential, environment, version);
+    if info.provider_id.is_retired() {
+        return Err(Error::ProviderRetired);
     }
-    from_catalog_package(info, credential, environment, version)
-}
-
-fn from_catalog_package(
-    info: &model::Info,
-    credential: Option<&credential::Value>,
-    environment: &BTreeMap<String, String>,
-    version: &str,
-) -> Result<Model, Error> {
     let package = info.package.as_ref().ok_or(Error::UnsupportedPackage)?;
     let family = family(package)?;
     let family =

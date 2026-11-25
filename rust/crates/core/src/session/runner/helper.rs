@@ -79,7 +79,6 @@ impl Local {
                     .map(|id| id.as_lossless().clone()),
                 provider_id: provider.clone(),
                 model_id: helper.selection.id.clone(),
-                variant: helper.selection.variant.clone(),
                 account_identity_digest: helper.account_identity.as_deref(),
                 permissions: input.permissions,
                 system: &request.system,
@@ -216,14 +215,9 @@ impl Local {
             ) {
                 cost = Some(cost.unwrap_or(0.0) + priced);
             }
-            cache_read_reported |= cache_diagnostics::reported_for_model(
+            cache_read_reported |= cache_diagnostics::reported(
                 &request.model.route.id,
-                &ycoding_schema::model::Ref {
-                    id: request.model.id.clone(),
-                    provider_id: request.model.provider.clone(),
-                    variant: None,
-                    profile: None,
-                },
+                request.model.provider.0.as_str().unwrap_or_default(),
                 reported,
             )
             .read;

@@ -25,6 +25,9 @@ export type DefaultModel = {
   profile?: string
 }
 
+const retiredProvider = (provider: Provider.Info) =>
+  Provider.isRetiredID(provider.id) || (provider.integrationID !== undefined && Provider.isRetiredID(provider.integrationID))
+
 export const Event = Catalog.Event
 
 type Data = {
@@ -126,6 +129,7 @@ const make = (
             list: () => Array.fromIterable(draft.providers.values()) as ProviderRecord[],
             get: (providerID) => draft.providers.get(providerID),
             update: (providerID, fn) => {
+              if (Provider.isRetiredID(providerID)) return
               let current = draft.providers.get(providerID)
               if (!current) {
                 current = {
@@ -135,6 +139,7 @@ const make = (
                 draft.providers.set(providerID, current)
               }
               fn(thawing(current.provider))
+              current.provider.id = providerID
             },
             remove: (providerID) => {
               draft.providers.delete(providerID)
@@ -154,13 +159,16 @@ const make = (
                 }
               },
               update: (credential, providerID, models) => {
+                if (Provider.isRetiredID(providerID) || Provider.isRetiredID(credential.integrationID)) return
                 draft.contextualProviders.add(providerID)
                 const existing = draft.accounts.get(credential.id)
                 const entry =
                   existing?.generation === credential.accountGeneration
                     ? existing
                     : { generation: credential.accountGeneration, providers: new Map() }
-                entry.providers.set(providerID, new Map(models.map((model) => [model.id, structuredClone(model)])))
+                entry.providers.set(providerID, new Map(models
+                  .filter((model) => !Provider.isRetiredID(model.providerID))
+                  .map((model) => [model.id, structuredClone(model)])))
                 draft.accounts.set(credential.id, entry)
               },
               clear: (providerID) => {
@@ -170,6 +178,7 @@ const make = (
             },
             get: (providerID, modelID) => draft.providers.get(providerID)?.models.get(modelID),
             update: (providerID, modelID, fn) => {
+              if (Provider.isRetiredID(providerID)) return
               let record = draft.providers.get(providerID)
               if (!record) {
                 record = {
@@ -253,11 +262,13 @@ const make = (
 
       provider: {
         get: Effect.fn("Catalog.provider.get")(function* (providerID) {
-          return state.get().providers.get(providerID)?.provider
+          const provider = state.get().providers.get(providerID)?.provider
+          return provider && !retiredProvider(provider) ? provider : undefined
         }),
 
         all: Effect.fn("Catalog.provider.all")(function* () {
           return Array.fromIterable(state.get().providers.values()).map((record) => record.provider)
+            .filter((provider) => !retiredProvider(provider))
         }),
 
         available: Effect.fn("Catalog.provider.available")(function* () {
@@ -278,7 +289,7 @@ const make = (
       model: {
         defaultSelection: Effect.fn("Catalog.model.defaultSelection")(function* () {
           const configured = state.get().defaultModel
-          if (configured?.profile !== undefined)
+          if (configured && (configured.profile !== undefined || Provider.isRetiredID(configured.providerID)))
             return CatalogModel.Ref.make({
               providerID: configured.providerID,
               id: configured.modelID,
@@ -298,7 +309,9 @@ const make = (
             : undefined
         }),
         forConnection: Effect.fn("Catalog.model.forConnection")(function* (model, snapshot) {
-          const provider = yield* result.provider.get(model.providerID)
+          if (Provider.isRetiredID(model.providerID)) return undefined
+          const provider = state.get().providers.get(model.providerID)?.provider
+          if (provider && retiredProvider(provider)) return undefined
           if (provider?.disabled || (yield* policy.evaluate("provider.use", model.providerID, "allow")) === "deny")
             return undefined
           const credential = snapshot?.credential
@@ -311,7 +324,7 @@ const make = (
         }),
         get: Effect.fn("Catalog.model.get")(function* (providerID, modelID, profile) {
           const record = state.get().providers.get(providerID)
-          if (!record) return
+          if (!record || retiredProvider(record.provider)) return
           const saved = yield* credentials.all()
           const model =
             record.models.get(modelID) ??
@@ -340,6 +353,7 @@ const make = (
           const saved = yield* credentials.all()
           return pipe(
             Array.fromIterable(state.get().providers.values()),
+            Array.filter((record) => !retiredProvider(record.provider)),
             Array.flatMap((record) => {
               const models = new Map(record.models)
               for (const credential of saved)
@@ -367,6 +381,7 @@ const make = (
         default: Effect.fn("Catalog.model.default")(function* () {
           const defaultModel = state.get().defaultModel
           if (defaultModel) {
+            if (Provider.isRetiredID(defaultModel.providerID)) return undefined
             const provider = yield* result.provider.get(defaultModel.providerID)
             if (provider && (yield* result.provider.available()).some((item) => item.id === provider.id)) {
               const model = yield* result.model.get(defaultModel.providerID, defaultModel.modelID, defaultModel.profile)
@@ -386,7 +401,7 @@ const make = (
 
         small: Effect.fn("Catalog.model.small")(function* (providerID) {
           const record = state.get().providers.get(providerID)
-          if (!record) return
+          if (!record || retiredProvider(record.provider)) return
           const provider = record.provider
 
           // TODO: Remove these provider-specific assumptions once model syncing reliably reports available deployments.

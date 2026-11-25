@@ -103,6 +103,7 @@ export class ReconnectRequiredError extends Schema.TaggedErrorClass<ReconnectReq
 }
 
 export type Error =
+  | Provider.RetiredError
   | ProfileUnavailableError
   | ModelNotSelectedError
   | ModelUnavailableError
@@ -244,7 +245,9 @@ export const fromCatalogModel = (
   dependencies: Dependencies = {},
   _connection?: IntegrationConnection.Info,
   snapshot?: Integration.Snapshot,
-): Effect.Effect<Model, UnsupportedPackageError | ReconnectRequiredError> => {
+): Effect.Effect<Model, UnsupportedPackageError | ReconnectRequiredError | Provider.RetiredError> => {
+  const retiredID = [model.providerID, snapshot?.credential?.integrationID].find((id) => id !== undefined && Provider.isRetiredID(id))
+  if (retiredID !== undefined) return Effect.fail(new Provider.RetiredError({ providerID: retiredID }))
   const packageName = Provider.packageName(model.package)
   const source = packageName === "@ai-sdk/anthropic" ? claudeCodeCredentialSource(credential) : undefined
   if (
@@ -283,7 +286,7 @@ export const fromCatalogModel = (
     return Effect.succeed(codexModel(resolved, credential, key))
   }
 
-  if (Provider.isAISDK(resolved.package) && packageName === "@ai-sdk/openai" && resolved.providerID !== "muse") {
+  if (Provider.isAISDK(resolved.package) && packageName === "@ai-sdk/openai") {
     if (OpenAICodex.isChatGPT(credential)) return Effect.succeed(codexModel(resolved, credential, key))
     return Effect.succeed(
       withDefaults(resolved, OpenAIResponses.route)
@@ -509,7 +512,7 @@ export const resolve = (
     ),
   )
 
-export const supported = (model: CatalogModel.Info) => Boolean(model.package)
+export const supported = (model: CatalogModel.Info) => !Provider.isRetiredID(model.providerID) && Boolean(model.package)
 
 export const selection = Effect.fn("SessionRunnerModel.selection")(function* (
   session: SessionSchema.Info,
@@ -517,6 +520,8 @@ export const selection = Effect.fn("SessionRunnerModel.selection")(function* (
 ) {
   const defaultSelection = session.model ? undefined : yield* catalog.defaultSelection()
   const configured = session.model ?? defaultSelection
+  if (configured && Provider.isRetiredID(configured.providerID))
+    return yield* new Provider.RetiredError({ providerID: configured.providerID })
   const defaultModel = configured ? undefined : yield* catalog.default()
   const model = configured
     ? (yield* catalog.available()).find((model) => model.providerID === configured.providerID && model.id === configured.id)
@@ -550,6 +555,8 @@ export const make = (
       resolve: Effect.fn("SessionRunnerModel.resolve")(function* (session, options) {
         if (standalone) {
           if (!session.model) return yield* new ModelNotSelectedError({ sessionID: session.id })
+          if (Provider.isRetiredID(session.model.providerID))
+            return yield* new Provider.RetiredError({ providerID: session.model.providerID })
           if (session.model.profile === undefined)
             return yield* new ProfileUnavailableError({ providerID: session.model.providerID, profile: "" })
         }

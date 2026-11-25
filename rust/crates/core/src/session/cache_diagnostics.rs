@@ -1,4 +1,4 @@
-use ycoding_ai::{cache, llm};
+use ycoding_ai::llm;
 use ycoding_schema::{
     JsonValue, ObjectEncoder, model, provider_request, schema::PositiveInt,
     session_cache_diagnostics,
@@ -16,28 +16,7 @@ pub fn reported(route_id: &str, provider_id: &str, usage: Option<&llm::Usage>) -
     let cached =
         read.is_some_and(|tokens| tokens > 0.0) || write.is_some_and(|tokens| tokens > 0.0);
     Reported {
-        mechanism: mechanism(route_id, provider_id, "", cached),
-        read: read.is_some(),
-        write: write.is_some(),
-    }
-}
-
-pub fn reported_for_model(
-    route_id: &str,
-    model: &model::Ref,
-    usage: Option<&llm::Usage>,
-) -> Reported {
-    let read = usage.and_then(|usage| usage.cache_read_input_tokens);
-    let write = usage.and_then(|usage| usage.cache_write_input_tokens);
-    let cached =
-        read.is_some_and(|tokens| tokens > 0.0) || write.is_some_and(|tokens| tokens > 0.0);
-    Reported {
-        mechanism: mechanism(
-            route_id,
-            model.provider_id.0.as_str().unwrap_or_default(),
-            model.id.as_str().unwrap_or_default(),
-            cached,
-        ),
+        mechanism: mechanism(route_id, provider_id, cached),
         read: read.is_some(),
         write: write.is_some(),
     }
@@ -52,26 +31,7 @@ pub fn provider_cache(route_id: &str, provider_id: &str, usage: Option<&llm::Usa
         .finish()
 }
 
-pub fn provider_cache_for_model(
-    route_id: &str,
-    model: &model::Ref,
-    usage: Option<&llm::Usage>,
-) -> JsonValue {
-    let reported = reported_for_model(route_id, model, usage);
-    ObjectEncoder::new()
-        .field("mechanism", reported.mechanism)
-        .field("readReported", &reported.read)
-        .field("writeReported", &reported.write)
-        .finish()
-}
-
-fn mechanism(route_id: &str, provider_id: &str, model_id: &str, cached: bool) -> &'static str {
-    if provider_id == "antigravity"
-        && matches!(route_id, "ai-sdk:@ai-sdk/google" | "unknown")
-        && cache::normalize_model_id(model_id).starts_with("claude-")
-    {
-        return "anthropic-cache-control";
-    }
+fn mechanism(route_id: &str, provider_id: &str, cached: bool) -> &'static str {
     match route_id {
         "anthropic-messages"
         | "google-vertex-messages"
@@ -82,7 +42,6 @@ fn mechanism(route_id: &str, provider_id: &str, model_id: &str, cached: bool) ->
         }
         "bedrock-converse" | "ai-sdk:@ai-sdk/amazon-bedrock" => "bedrock-cache-point",
         "openai-chat"
-        | "muse-responses"
         | "openai-responses"
         | "openai-responses-websocket"
         | "github-copilot-chat"
@@ -110,7 +69,7 @@ fn mechanism(route_id: &str, provider_id: &str, model_id: &str, cached: bool) ->
             "openrouter" => "openrouter-cache-control",
             "anthropic" => "anthropic-cache-control",
             "amazon-bedrock" => "bedrock-cache-point",
-            "google" | "google-vertex" | "antigravity" => "gemini-prefix-cache",
+            "google" | "google-vertex" => "gemini-prefix-cache",
             "cursor" => "provider-reported",
             _ => observed(cached),
         },

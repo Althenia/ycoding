@@ -63,9 +63,9 @@ describe("public docs allowlist", () => {
   test("documents selectable providers without advertising retired providers for new work", () => {
     const section = findDocPage("configuration/providers")?.sections.find((section) => section.heading === "Provider choices")
     const text = section?.blocks.flatMap((block) => block.kind === "paragraph" ? [block.text] : []).join(" ") ?? ""
-    expect(text).toContain("OpenAI, Claude, Antigravity, OpenRouter, and Custom OpenAI-compatible Endpoint in that order")
-    expect(text).toContain("remain in stored credentials and Session history but cannot be selected for new work")
-    expect(findDocPage("configuration/providers")?.sections.some((section) => section.heading === "Muse (Meta)")).toBe(false)
+    expect(text).toContain("OpenAI, Claude, OpenRouter, and Custom OpenAI-compatible Endpoint in that order")
+    expect(text).toContain("can no longer be selected for new work remain in stored credentials and Session history")
+    expect(JSON.stringify(findDocPage("configuration/providers"))).not.toMatch(/antigravity|\bmuse\b/i)
   })
 
   test("publishes exactly the approved routes", () => {

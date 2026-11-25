@@ -33,7 +33,6 @@ pub const PRE: &[&str] = &[
     "ycoding.provider.kilo",
     "ycoding.provider.llmgateway",
     "ycoding.provider.mistral",
-    "ycoding.provider.muse",
     "ycoding.provider.nvidia",
     "opencode.provider.opencode",
     "ycoding.provider.snowflake-cortex",

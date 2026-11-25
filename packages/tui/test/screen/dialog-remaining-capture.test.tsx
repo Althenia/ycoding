@@ -118,7 +118,7 @@ const states = [
   { name: "retry-action", settle: "429 rate limited", evidence: "Cancel the turn", view: () => <DialogRetryAction title="Provider connection" message="Could not connect to the provider. Check your network and credentials." label="Open provider settings" link="https://opencode.ai/go" request={{ provider: "Anthropic", error: "429 rate limited", retryAfter: "retry after 30s" }} /> },
   { name: "help", settle: "Keyboard shortcuts", evidence: "Cycle variant", view: () => <DialogHelp shortcuts={helpShortcuts} /> },
   { name: "stash", settle: "cache-accounting-wip", evidence: "⌃x k drop", view: () => <DialogStash onSelect={() => {}} /> },
-  { name: "run-skill", settle: "Scoped Go implementation", evidence: "Penpot UX/UI work", view: () => <DialogSkill onSelect={() => {}} /> },
+  { name: "run-skill", settle: "Scoped Go implementation", evidence: "Penpot UX/UI work", view: () => <DialogSkill location={location} onSelect={() => {}} /> },
   { name: "debug", settle: "Renderer stats", evidence: "Console", view: () => <DialogDebug /> },
 ] as const
 
@@ -419,7 +419,7 @@ const designChecks: Partial<Record<(typeof states)[number]["name"], { title: str
   "mcp-servers": { title: "MCP servers", row: 7, column: 6, text: "agentmemory" },
   "select-agent": { title: "Select agent", row: 7, column: 6, text: "build" },
   settings: { title: "Settings", row: 8, column: 3, text: "Appearance" },
-  "connect-service": { title: "Connect a service", row: 8, column: 3, text: "Popular" },
+  "connect-service": { title: "Connect a service", row: 8, column: 3, text: "✓  Claude" },
   "connect-github-copilot": { title: "Connect GitHub Copilot", row: 7, column: 6, text: "Login with GitHub Copilot" },
   "select-model": { title: "Select model", row: 8, column: 3, text: "Anthropic" },
   "select-variant": { title: "Select variant", row: 7, column: 6, text: "max" },
@@ -569,6 +569,10 @@ async function capture(dialogState: (typeof states)[number], viewport: (typeof v
       expect(frame).toContain("GSD")
       expect(frame).not.toContain("TLDR")
     }
+    if (dialogState.name === "connect-service") {
+      const positions = ["OpenAI", "Claude", "OpenRouter", "Custom OpenAI-compatible Endpoint"].map((name) => frame.indexOf(name))
+      expect(positions.every((position, index) => position > (positions[index - 1] ?? -1))).toBe(true)
+    }
     if ("evidence" in dialogState) expect(frame).toContain(dialogState.evidence)
     const design = designChecks[dialogState.name]
     if (design) {
@@ -643,7 +647,7 @@ async function route(url: URL, request: Request) {
   if (url.pathname === "/api/model") return json({ location, data: models })
   if (url.pathname === "/api/model/default") return json({ location, data: undefined })
   if (url.pathname === "/api/provider") return json({ location, data: providers })
-  if (url.pathname === "/api/provider/integrations") return json({ location, data: ["openai", "anthropic", "antigravity", "openrouter"].map((id) => ({ providerID: id, integrationID: id })) })
+  if (url.pathname === "/api/provider/integrations") return json({ location, data: ["openai", "anthropic", "openrouter"].map((id) => ({ providerID: id, integrationID: id })) })
   if (url.pathname === "/api/agent") return json({ location, data: agents })
   if (url.pathname === "/api/integration") return json({ location, data: integrations })
   if (url.pathname === "/api/skill") return json({ location, data: skills })
@@ -713,7 +717,6 @@ const integrations = [
   { id: "google", name: "Google", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
   { id: "302ai", name: "302.AI", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
   { id: "amazon-bedrock", name: "Amazon Bedrock", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
-  { id: "antigravity", name: "Antigravity", methods: [{ id: "google", type: "oauth" as const, label: "Google account" }], connections: [] },
   { id: "openrouter", name: "OpenRouter", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
 ]
 const skills = [

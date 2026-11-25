@@ -1,7 +1,6 @@
 use ycoding_ai::{
     auth::{Auth, Credential, ProviderAuth},
     llm::{Event, Part, Request, Response, ToolResultValue},
-    muse::{Connection, Runtime},
     openai_codex,
     providers::{self, Api, Config, OpenAIConfig, OpenRouterConfig, Transport},
     route::Route,
@@ -12,7 +11,6 @@ use ycoding_schema::{parse_json, provider};
 fn responses_provider_routes_map_builtin_errors_to_provider_executed_results() {
     let mut compatible = Config::new(Auth::None);
     compatible.base_url = Some("http://127.0.0.1:1/v1".into());
-    let runtime = Runtime::new("http://127.0.0.1:1/key".into()).unwrap();
     let models = [
         providers::openai(
             "fixture",
@@ -40,13 +38,6 @@ fn responses_provider_routes_map_builtin_errors_to_provider_executed_results() {
                 reasoning: None,
             },
         ),
-        ycoding_ai::muse::route(Connection::key(
-            runtime,
-            "fixture".into(),
-            ycoding_ai::muse::BASE_URL.into(),
-            None,
-        ))
-        .model("fixture"),
         providers::compatible(
             "fixture",
             provider::Id("fixture".into()),

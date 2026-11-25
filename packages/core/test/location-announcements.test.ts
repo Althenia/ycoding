@@ -2,15 +2,13 @@ import fs from "fs"
 import os from "os"
 import path from "path"
 import { afterAll, describe, expect } from "bun:test"
-import { Deferred, Effect, Layer, Logger } from "effect"
-import { HttpClient, HttpClientResponse } from "effect/unstable/http"
+import { Deferred, Effect, Logger } from "effect"
 import { Catalog } from "../src/catalog"
 import { Command } from "../src/command"
 import { Config } from "../src/config"
 import { Database } from "../src/database/database"
 import { AppNodeBuilder } from "../src/effect/app-node-builder"
 import { LayerNode } from "../src/effect/layer-node"
-import { httpClient } from "../src/effect/app-node-platform"
 import { EventRuntime } from "../src/event"
 import { LocationAnnouncements } from "../src/location-announcements"
 import { Location } from "../src/location"
@@ -33,59 +31,6 @@ const it = testEffect(
     pricedModels,
   ]),
 )
-
-const museRow = {
-  id: "muse-wonder-1.0",
-  object: "model",
-  created: 1_788_307_200,
-  owned_by: "meta",
-  metadata: {
-    "muse-code": {
-      name: "Muse Wonder",
-      is_hidden: false,
-      tool_call: true,
-      modalities: { input: ["text"], output: ["text"] },
-      limit: { context: 1_000_000, output: 128_000 },
-    },
-  },
-}
-let museArrival: Promise<void> = Promise.resolve()
-const accountHttp = HttpClient.make((request) =>
-  Effect.promise(async () => {
-    if (!new URL(request.url).pathname.endsWith("/muse-code/models"))
-      return HttpClientResponse.fromWeb(request, new Response("not found", { status: 404 }))
-    await museArrival
-    return HttpClientResponse.fromWeb(request, Response.json({ data: [museRow] }))
-  }),
-)
-const withAccounts = testEffect(
-  AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, ModelsDev.node, LocationServiceMap.node]), [
-    pricedModels,
-    [httpClient, Layer.succeed(HttpClient.HttpClient, accountHttp)],
-  ]),
-)
-const museModel = (catalog: Catalog.Interface) =>
-  catalog.model.get(Provider.ID.make("muse"), CatalogModel.ID.make(museRow.id))
-const awaitMuseModel = (catalog: Catalog.Interface) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 100; attempt++) {
-      if (yield* museModel(catalog)) return
-      yield* Effect.sleep("100 millis")
-    }
-    yield* Effect.die(new Error("Muse account models never arrived"))
-  })
-const withMuseKey = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  Effect.acquireUseRelease(
-    Effect.sync(() => {
-      process.env.META_API_KEY = "synthetic-meta-key"
-    }),
-    () => effect,
-    () =>
-      Effect.sync(() => {
-        delete process.env.META_API_KEY
-        museArrival = Promise.resolve()
-      }),
-  )
 
 const promptServer = (gate: string) => ({
   mcp: {
@@ -283,50 +228,31 @@ describe("Location announcements", () => {
     ),
   )
 
-  withAccounts.live("publishes nothing when account models arrive after the first build of an unread Location", () =>
-    withMuseKey(
+  for (const read of [false, true])
+    it.effect(`publishes ${read ? "one" : "no"} catalog update when a model arrives after Location startup ${read ? "with" : "without"} a reader`, () =>
       Effect.gen(function* () {
         const directory = fresh()
-        const seen = yield* announcements(directory)
+        const providerID = Provider.ID.make("late-provider")
+        const modelID = CatalogModel.ID.make("fixture")
         const locations = yield* LocationServiceMap.Service
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const context = yield* locations.contextEffect(refOf(directory), CatalogContributions.nodes)
+            const context = yield* locations.contextEffect(refOf(directory), [Location.node, ...CatalogContributions.nodes])
             const catalog = yield* Catalog.Service.pipe(Effect.provide(context))
-            yield* awaitMuseModel(catalog)
+            const seen = yield* announcements(directory)
+            if (read) yield* LocationAnnouncements.read("catalog").pipe(Effect.provide(context))
+            expect(yield* catalog.model.get(providerID, modelID)).toBeUndefined()
+            yield* catalog.transform((draft) => draft.model.update(providerID, modelID, (model) => { model.enabled = true })).pipe(
+              LocationAnnouncements.initial,
+              Effect.provide(context),
+            )
+            expect(yield* catalog.model.get(providerID, modelID)).toBeDefined()
+            expect(seen).toEqual(read ? [Catalog.Event.Updated.type] : [])
           }),
         )
-        yield* settle
-        expect(seen).toEqual([])
         yield* locations.invalidate(refOf(directory))
       }),
-    ),
-  )
-
-  withAccounts.live("publishes one catalog update when account models arrive after a client read the catalog", () =>
-    withMuseKey(
-      Effect.gen(function* () {
-        let arrive!: () => void
-        museArrival = new Promise((resolve) => (arrive = resolve))
-        const directory = fresh()
-        const seen = yield* announcements(directory)
-        const locations = yield* LocationServiceMap.Service
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const context = yield* locations.contextEffect(refOf(directory), CatalogContributions.nodes)
-            const catalog = yield* Catalog.Service.pipe(Effect.provide(context))
-            yield* LocationAnnouncements.read("catalog").pipe(Effect.provide(context))
-            expect(yield* museModel(catalog)).toBeUndefined()
-            arrive()
-            yield* awaitMuseModel(catalog)
-          }),
-        )
-        yield* settle
-        expect(seen).toEqual([Catalog.Event.Updated.type])
-        yield* locations.invalidate(refOf(directory))
-      }),
-    ),
-  )
+    )
 
   it.live("publishes nothing when MCP prompts arrive after the first build of an unread Location", () =>
     Effect.gen(function* () {

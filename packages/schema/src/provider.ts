@@ -22,6 +22,11 @@ export const ID = Schema.String.pipe(
 )
 export type ID = typeof ID.Type
 
+export function isRetiredID(id: string) {
+  const normalized = id.toLowerCase()
+  return normalized === "antigravity" || normalized === "muse"
+}
+
 export interface IntegrationRef extends Schema.Schema.Type<typeof IntegrationRef> {}
 export const IntegrationRef = Schema.Struct({ providerID: ID, integrationID: Integration.ID }).annotate({ identifier: "Provider.IntegrationRef" })
 

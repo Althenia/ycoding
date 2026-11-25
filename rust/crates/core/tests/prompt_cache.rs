@@ -268,20 +268,12 @@ fn namespace_matches_typescript_goldens_and_isolates_all_sharing_dimensions() {
         workspace_id: Some("workspace".into()),
         provider_id: "openai".into(),
         model_id: "gpt-5.6".into(),
-        variant: None,
         account_identity_digest: None,
         permissions: &permissions,
         system: &system,
         tools: &tools,
     };
     let baseline = prompt_cache::namespace(&input);
-    input.variant = Some("high".into());
-    assert_eq!(
-        prompt_cache::namespace(&input),
-        baseline,
-        "effort does not rotate the namespace"
-    );
-    input.variant = None;
     assert_eq!(
         baseline,
         "87f7196969720e74e3d2ad02a0926e06bff1037aeb1d47dc516638a7fed3a6e0"
@@ -313,7 +305,6 @@ fn namespace_matches_typescript_goldens_and_isolates_all_sharing_dimensions() {
             workspace_id: input.workspace_id.clone(),
             provider_id: input.provider_id.clone(),
             model_id: input.model_id.clone(),
-            variant: None,
             account_identity_digest: None,
             permissions: &permissions,
             system: &system,
@@ -427,7 +418,6 @@ fn compaction_scope_isolates_the_namespace_and_matches_typescript_golden() {
         workspace_id: Some("workspace".into()),
         provider_id: "openai".into(),
         model_id: "gpt-5.6".into(),
-        variant: None,
         account_identity_digest: None,
         permissions: &permissions,
         system: &system,
@@ -505,41 +495,4 @@ fn public_openai_responses_endpoint_lifts_the_message_tail_bound_only_for_openai
         tail("openai", "openrouter-responses", "gpt-5.6", public),
         Some(50)
     );
-}
-
-#[test]
-fn namespace_includes_variant_only_for_antigravity() {
-    let permissions = ycoding_schema::permission::Ruleset::decode(
-        &parse_json(r#"[{"action":"read","resource":"**","effect":"allow"}]"#).unwrap(),
-    )
-    .unwrap();
-    let system = vec!["System".into()];
-    let namespace = |provider: &str, variant: Option<&str>| {
-        prompt_cache::namespace(&Namespace {
-            scope: None,
-            project_id: "project".into(),
-            directory: "/repo".into(),
-            workspace_id: None,
-            provider_id: provider.into(),
-            model_id: "model".into(),
-            variant: variant.map(Into::into),
-            account_identity_digest: None,
-            permissions: &permissions,
-            system: &system,
-            tools: &[],
-        })
-    };
-    assert_ne!(
-        namespace("antigravity", Some("high")),
-        namespace("antigravity", Some("low"))
-    );
-    assert_ne!(
-        namespace("antigravity", Some("high")),
-        namespace("antigravity", None)
-    );
-    assert_eq!(
-        namespace("google", Some("high")),
-        namespace("google", Some("low"))
-    );
-    assert_eq!(namespace("google", Some("high")), namespace("google", None));
 }

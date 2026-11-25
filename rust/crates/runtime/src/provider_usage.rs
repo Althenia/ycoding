@@ -120,8 +120,13 @@ pub async fn get(
     invocation: Invocation,
     request: v5::ProviderUsageGetRequest,
 ) -> Result<v5::ProviderUsageGetResult, Failure> {
-    let (location, usage) = resolve(&invocation, &request.query)?.ok_or_else(unavailable)?;
     let provider = provider::Id(convert::domain(&request.params.provider_id)?);
+    if provider.0.as_str().is_some_and(provider::is_retired)
+        && !(invocation.remote && request.query.location.is_some())
+    {
+        return Err(Failure::Invalid(provider::RETIRED_DIAGNOSTIC.into()));
+    }
+    let (location, usage) = resolve(&invocation, &request.query)?.ok_or_else(unavailable)?;
     let usage = usage.ok_or_else(unavailable)?;
     let snapshot = usage
         .primary

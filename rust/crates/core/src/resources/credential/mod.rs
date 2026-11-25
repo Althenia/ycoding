@@ -22,6 +22,7 @@ pub enum Error {
     ProfileUnavailable,
     InvalidCredential,
     Rejected,
+    ProviderRetired,
     CodeRequired,
     Closed,
 }
@@ -33,6 +34,7 @@ impl fmt::Display for Error {
             Self::ProfileUnavailable => "Selected profile is unavailable; select the profile again",
             Self::InvalidCredential => "Invalid credential",
             Self::Rejected => "Authorization failed",
+            Self::ProviderRetired => ycoding_schema::provider::RETIRED_DIAGNOSTIC,
             Self::CodeRequired => "Authorization code is required",
             Self::Closed => "Credential service is closed",
         })

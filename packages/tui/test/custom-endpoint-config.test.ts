@@ -51,6 +51,13 @@ test("rejects malformed existing config without silently replacing it", async ()
   expect(await readFile(path.join(dir, "ycoding.jsonc"), "utf8")).toBe(original)
 })
 
+test.each(["antigravity", "Muse"])("rejects the retired provider ID %s before creating an endpoint", async (provider) => {
+  const dir = await directory()
+  const result = await writeCustomEndpoint(dir, { baseURL: "https://example.test", api: "chat", provider }).catch((error: unknown) => error)
+  expect(result).toMatchObject({ message: "Provider no longer supported" })
+  expect(await Bun.file(path.join(dir, "ycoding.json")).exists()).toBe(false)
+})
+
 test("rejects malformed provider merge paths without changing config bytes", async () => {
   const cases = [
     { providers: [] },

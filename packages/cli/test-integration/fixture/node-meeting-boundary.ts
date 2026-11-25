@@ -8,7 +8,6 @@ import { nodeTarget } from "../../src/node/target"
 
 const mode = process.argv[2]
 let calls = 0
-await mock.module("../../script/antigravity-build-env", () => ({ antigravityBuildDefinitions: () => ({}) }))
 await mock.module("../../src/native-process", () => ({
   NativeProcess: {
     run: () =>

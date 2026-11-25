@@ -10,6 +10,7 @@ import { Project } from "../project"
 import { CoordinationService } from "../coordination/index"
 import { Workspace } from "../workspace"
 import { CatalogModel } from "../model"
+import { Provider } from "../provider"
 import { Location } from "../location"
 import { SessionMessage } from "./message"
 import { InstructionState } from "./instruction-state"
@@ -1586,6 +1587,9 @@ const layer = Layer.effect(
         const recorded = yield* store.get(sessionID)
         if (recorded) return (yield* matches(recorded)) ? recorded : yield* new SessionPlacementConflictError({ sessionID })
         if (input.agent && decisionAgents.has(input.agent)) return yield* new AgentNotSelectableError({ agent: input.agent })
+        const chosen = input.model ?? parent?.model
+        if (chosen && Provider.isRetiredID(chosen.providerID))
+          return yield* new Provider.RetiredError({ providerID: chosen.providerID })
         const project = scope === "standalone"
           ? { id: Location.standaloneProjectID, directory: AbsolutePath.make(root), vcs: undefined }
           : yield* projects.resolve(location.directory)
@@ -1609,13 +1613,14 @@ const layer = Layer.effect(
         const now = Date.now()
         const permissionCeiling = SessionPermissionCeiling.inherit(parent?.permissionCeiling, input.permissionCeiling)
         const relative = path.relative(project.directory, location.directory).replaceAll("\\", "/")
-        const chosen = input.model ?? parent?.model
         const selection =
           chosen ?? (scope === "standalone" ? undefined :
           (yield* Catalog.Service.pipe(
             Effect.provide(locations.get(location, [LocationServiceMap.full])),
             Effect.flatMap((catalog) => catalog.model.defaultSelection()),
           )))
+        if (selection && Provider.isRetiredID(selection.providerID))
+          return yield* new Provider.RetiredError({ providerID: selection.providerID })
         const inheritedBinding =
           input.profileBinding ??
           (parent &&

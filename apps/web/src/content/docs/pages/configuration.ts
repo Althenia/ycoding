@@ -692,7 +692,7 @@ Report concrete defects with file and symbol evidence.`,
         blocks: [
           {
             kind: "paragraph",
-            text: "Connect providers lists OpenAI, Claude, Antigravity, OpenRouter, and Custom OpenAI-compatible Endpoint in that order. Add a custom endpoint in the connected machine’s configuration or terminal /connect before connecting its profile here. Other providers remain in stored credentials and Session history but cannot be selected for new work.",
+            text: "Connect providers lists OpenAI, Claude, OpenRouter, and Custom OpenAI-compatible Endpoint in that order. Add a custom endpoint in the connected machine’s configuration or terminal /connect before connecting its profile here. Providers that can no longer be selected for new work remain in stored credentials and Session history.",
           },
         ],
       },

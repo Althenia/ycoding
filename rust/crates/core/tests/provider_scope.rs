@@ -550,7 +550,7 @@ fn provider_integration_choices_keep_canonical_ids_order_and_custom_profiles() {
             .iter()
             .map(|entry| entry.provider_id.0.as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["openai", "anthropic", "antigravity", "openrouter", "local"]
+        ["openai", "anthropic", "openrouter", "local"]
     );
     assert_eq!(
         catalog
@@ -581,6 +581,42 @@ fn provider_integration_choices_keep_canonical_ids_order_and_custom_profiles() {
         );
     }
     assert!(draft.get(&"deepseek".into()).is_some());
+}
+
+#[test]
+fn retired_provider_ids_do_not_register_from_snapshots_or_custom_configuration() {
+    for name in ["antigravity", "muse", "AntiGravity", "MuSe"] {
+        let id = provider::Id(name.into());
+        let mut catalog = Catalog::new(vec![snapshot(name, "@ai-sdk/openai-compatible")]);
+        catalog.configure(&[parse_json(&serde_json::json!({
+            "providers": {
+                name: {"package":"aisdk:@ai-sdk/openai-compatible","settings":{"baseURL":"http://localhost:1234/v1"},"models":{"code":{}}},
+                "local": {"package":"aisdk:@ai-sdk/openai-compatible","settings":{"baseURL":"http://localhost:1234/v1"},"models":{"code":{}}}
+            }
+        }).to_string()).unwrap()]).unwrap();
+        assert!(catalog.provider(&id).is_none());
+        assert!(catalog.all(&[]).iter().all(|model| model.provider_id != id));
+        assert!(
+            catalog
+                .integrations()
+                .iter()
+                .all(|entry| entry.provider_id != id)
+        );
+        assert_eq!(
+            catalog.available(&[])[0].provider_id,
+            provider::Id("local".into())
+        );
+        let selection = ycoding_schema::model::Ref {
+            provider_id: id,
+            id: "code".into(),
+            variant: None,
+            profile: None,
+        };
+        assert!(matches!(
+            model::Resolver::new(catalog).resolve(&selection, &[], None),
+            Err(model::Error::ProviderRetired)
+        ));
+    }
 }
 
 #[test]

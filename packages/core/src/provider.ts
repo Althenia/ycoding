@@ -12,6 +12,15 @@ import { OpenAICodex } from "./plugin/provider/openai-codex"
 
 export const ID = Provider.ID
 export type ID = typeof ID.Type
+export { isRetiredID } from "@ycoding-ai/schema/provider"
+
+export class RetiredError extends Schema.TaggedErrorClass<RetiredError>()("Provider.RetiredError", {
+  providerID: Schema.String,
+}) {
+  override get message() {
+    return `Provider no longer supported: ${this.providerID}`
+  }
+}
 
 export const AISDK_PREFIX = "aisdk:"
 export const isAISDK = (value: string | undefined): value is string => value?.startsWith(AISDK_PREFIX) ?? false

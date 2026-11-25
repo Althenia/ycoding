@@ -465,7 +465,7 @@ fn outside_writes_and_execution_stay_reviewed_and_hard_reviews_stay_hard() {
 fn api_routes_client_strings_and_in_memory_code_are_not_outside_targets() {
     for command in [
         "ycoding api GET /api/session/outstanding",
-        "ycoding api GET /api/provider/muse",
+        "ycoding api GET /api/provider/openrouter",
         "ycoding api GET '/api/session?limit=25'",
         "ycoding api session.list --param search=inventory --param limit=50",
         "ycoding api session.prompt -d '{\"text\":\"See /outside/file\"}'",

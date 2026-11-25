@@ -12,11 +12,9 @@ pub mod quota;
 pub(crate) mod standalone;
 pub use providers::ProviderContext;
 mod route;
-pub(crate) use route::from_catalog_model_base;
 pub use route::{ClaudeHost, from_catalog_model, from_catalog_model_with_claude};
 pub const UPSTREAM_PROVIDER_ID: &str = "opencode"; // YCODING_EXTERNAL_OPENCODE
-pub(crate) const BUILTIN_PROVIDER_IDS: [&str; 4] =
-    ["openai", "anthropic", "antigravity", "openrouter"];
+pub(crate) const BUILTIN_PROVIDER_IDS: [&str; 3] = ["openai", "anthropic", "openrouter"];
 pub fn account_identity(credential: &credential::Info) -> LosslessString {
     let material = super::catalog::object(&[
         ("integrationID", credential.integration_id().encode()),
@@ -39,6 +37,7 @@ pub fn account_identity(credential: &credential::Info) -> LosslessString {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
+    ProviderRetired,
     ModelUnavailable,
     VariantUnavailable,
     ProfileUnavailable,
@@ -48,6 +47,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            Self::ProviderRetired => provider::RETIRED_DIAGNOSTIC,
             Self::ModelUnavailable => "Model unavailable",
             Self::VariantUnavailable => "Variant unavailable",
             Self::ProfileUnavailable => "Selected profile is unavailable; select the profile again",
@@ -104,6 +104,9 @@ pub(crate) fn resolve_catalog(
     saved: &[credential::Info],
     connection: Option<&credential::Info>,
 ) -> Result<Resolved, Error> {
+    if selection.provider_id.is_retired() {
+        return Err(Error::ProviderRetired);
+    }
     let provider = catalog
         .provider(&selection.provider_id)
         .ok_or(Error::ModelUnavailable)?;

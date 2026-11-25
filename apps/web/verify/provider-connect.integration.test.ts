@@ -31,9 +31,10 @@ async function palette(page: Page) {
   await page.evaluate(`[...document.querySelectorAll('dialog.overlay--command-palette [role=option]')].find(item=>item.textContent.includes('Connect provider')).click()`)
   await wait(page, `document.querySelector('dialog[aria-label="Connect provider"][open] button[aria-label="Provider"]') !== null`)
 }
-async function choose(page: Page, label: string, option: string) {
+async function choose(page: Page, label: string, option: string, expectedOptions?: readonly string[]) {
   await page.evaluate(`document.querySelector('dialog[aria-label="Connect provider"] button[aria-label=${JSON.stringify(label)}]').click()`)
   await wait(page, `[...document.querySelectorAll('[role=option]')].some(item=>item.textContent.includes(${JSON.stringify(option)}))`)
+  if (expectedOptions) expect(await page.evaluate(`[...document.querySelectorAll('[role=listbox][aria-label="${label}"] [role=option]')].map(item=>item.textContent.trim())`)).toEqual(expectedOptions)
   await page.evaluate(`[...document.querySelectorAll('[role=option]')].find(item=>item.textContent.includes(${JSON.stringify(option)})).click()`)
   await page.evaluate(`document.querySelector('dialog[aria-label="${label}"] .custom-select__confirm')?.click()`)
   await page.evaluate(`[...document.querySelectorAll('dialog button')].find(item=>item.textContent.trim()==='Confirm Selection')?.click()`)
@@ -42,6 +43,34 @@ async function choose(page: Page, label: string, option: string) {
 async function input(page: Page, id: string, value: string) {
   await page.evaluate(`(() => { const field=document.getElementById(${JSON.stringify(id)});field.value=${JSON.stringify(value)};field.dispatchEvent(new InputEvent('input',{bubbles:true})) })()`)
 }
+
+test("provider picker keeps supported routes and their profile details when an older machine advertises retired providers", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
+    await wait(page, `!!window.providerAuthFixture && !!document.querySelector('.app-header__palette')`)
+    await page.evaluate(`window.providerAuthFixture.staleProviderList()`)
+    await palette(page)
+    const providerOptions = ["OpenAI", "Claude", "OpenRouter", "Custom OpenAI-compatible Endpoint"]
+    for (const [name, profile, kind, status] of [
+      ["OpenAI", "Work (provider default)", "OAuth", "Connected"],
+      ["Claude", "Claude account", "OAuth", "Expired"],
+      ["OpenRouter", "Shared gateway (provider default)", "API key", "Connected"],
+      ["Custom OpenAI-compatible Endpoint", "Local endpoint (provider default)", "API key", "Connected"],
+    ] as const) {
+      await choose(page, "Provider", name, name === "OpenAI" ? providerOptions : undefined)
+      if (name === "Custom OpenAI-compatible Endpoint") {
+        await choose(page, "Configured endpoint", "Environment provider", ["Environment provider"])
+      }
+      const card = await page.evaluate(`(() => {
+        const profile = document.querySelector('.provider-profile');
+        return ['name', 'kind', 'state'].map(field => profile.querySelector('.provider-profile__' + field).textContent.trim());
+      })()`)
+      expect(card).toEqual([profile, kind, status])
+    }
+    expect(await page.evaluate(`window.requestLog.filter(item => item.operation.startsWith('provider.auth.')).map(item => item.operation)`)).toEqual(["provider.auth.list"])
+  } finally { await page.close() }
+}, 30_000)
 
 test("connected profiles fit more whole cards on wide screens and keep complete status on phones", async () => {
   for (const [width, height] of [[1440, 900], [390, 844]] as const) {

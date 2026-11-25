@@ -4,7 +4,6 @@ import { Credential } from "@ycoding-ai/core/credential"
 import { Database } from "@ycoding-ai/core/database/database"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
-import { observeMuseUsage } from "@ycoding-ai/core/plugin/provider/muse"
 import { CopilotUsage } from "@ycoding-ai/core/provider-usage/copilot"
 import { Integration } from "@ycoding-ai/schema/integration"
 import { Model } from "@ycoding-ai/schema/model"
@@ -43,6 +42,31 @@ const create = (credentials: Credential.Interface, label: string) =>
     label,
     value: { type: "key", key: `fixture-${label}` },
   })
+
+it.effect("retired provider usage cannot be restored by an adapter or stream observation", () =>
+  Effect.gen(function* () {
+    const credentials = yield* Credential.Service
+    const retired = Provider.ID.make("MuSe")
+    yield* credentials.create({ integrationID: Integration.ID.make(retired), value: { type: "key", key: "fixture" } })
+    const service = ProviderUsageRuntime.make({
+      credentials,
+      providers: { available: () => Effect.succeed([{ id: retired }]) },
+      adapters: { [retired]: () => Effect.die("retired quota adapter ran") },
+    })
+    yield* service.observe(new ProviderUsage.Observation({
+      providerID: retired,
+      label: "Fixture",
+      source: "response_stream",
+      stability: "observed",
+      observedAt: origin,
+      windows: quota(10, origin).windows,
+    }))
+    expect(yield* service.list({ refresh: true })).toEqual([])
+    expect(yield* service.get({ providerID: retired, refresh: true })).toMatchObject({
+      status: "unsupported", message: "Provider no longer supported: MuSe", windows: [],
+    })
+  }),
+)
 
 it.effect("a prior list warms the quota cache once per observation, forecasts never refresh, and profiles stay isolated without exposing account identity", () =>
   Effect.gen(function* () {
@@ -250,28 +274,36 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const credentials = yield* Credential.Service
-      const original = yield* credentials.create({
-        integrationID: Integration.ID.make("muse"),
+      const createAccount = (account: string) => credentials.create({
+        integrationID: Integration.ID.make(providerID),
         label: "Work",
-        value: { type: "key", key: "fixture-original" },
+        value: Credential.OAuth.make({
+          type: "oauth",
+          methodID: Integration.MethodID.make("claude-code"),
+          access: `fixture-${account}`,
+          refresh: `fixture-refresh-${account}`,
+          expires: Number.MAX_SAFE_INTEGER,
+          metadata: { managed: true, source: account },
+        }),
       })
+      const original = yield* createAccount("original")
       let now = origin
       const service = ProviderUsageRuntime.make({
         credentials,
-        providers: { available: () => Effect.succeed([{ id: Provider.ID.make("muse") }]) },
+        providers: { available: () => Effect.succeed([{ id: providerID }]) },
         now: () => now,
-        adapters: { muse: ProviderUsageRuntime.muse },
+        adapters: {},
       })
       for (const elapsed of [0, 5, 10]) {
         now = origin + elapsed * minute
         yield* service.observe(
           new ProviderUsage.Observation({
-            providerID: Provider.ID.make("muse"),
-            label: "Muse",
+            providerID,
+            label: "Claude",
             source: "response_stream",
             stability: "observed",
             observedAt: now,
-            windows: [new ProviderUsage.Window({ ...quota(10 + elapsed, now).windows[0], id: "window" })],
+            windows: quota(10 + elapsed, now).windows,
           }),
           SessionRunnerModel.accountIdentityDigest(original),
         )
@@ -282,32 +314,28 @@ it.effect(
         observedTo: now,
         ratePerHour: 60,
       })
-      const replaced = yield* credentials.create({
-        integrationID: original.integrationID,
-        label: "Work",
-        value: { type: "key", key: "fixture-replaced" },
-      })
+      const replaced = yield* createAccount("replaced")
       now += 5 * minute
       yield* service.observe(
         new ProviderUsage.Observation({
-          providerID: Provider.ID.make("muse"),
-          label: "Muse",
+          providerID,
+          label: "Claude",
           source: "response_stream",
           stability: "observed",
           observedAt: now,
-          windows: [new ProviderUsage.Window({ ...quota(80, now).windows[0], id: "window" })],
+          windows: quota(80, now).windows,
         }),
         SessionRunnerModel.accountIdentityDigest(replaced),
       )
       expect((yield* service.forecast({ localScope: "backend" })).quotas![0].state).toBe("insufficient")
       yield* service.observe(
         new ProviderUsage.Observation({
-          providerID: Provider.ID.make("muse"),
-          label: "Muse",
+          providerID,
+          label: "Claude",
           source: "response_stream",
           stability: "observed",
           observedAt: now,
-          windows: [new ProviderUsage.Window({ ...quota(25, now).windows[0], id: "window" })],
+          windows: quota(25, now).windows,
         }),
       )
       const result = yield* service.forecast({ localScope: "backend" })
@@ -439,65 +467,23 @@ it.effect("does not project unsupported rolling windows or observations with no 
     expect(result.quotas!.every((value) => value.state === "insufficient" && value.ratePerHour === undefined)).toBe(true)
     const unbound = ProviderUsageRuntime.make({
       credentials,
-      providers: { available: () => Effect.succeed([{ id: Provider.ID.make("muse") }]) },
-      adapters: { muse: ProviderUsageRuntime.muse },
+      providers: { available: () => Effect.succeed([{ id: providerID }]) },
+      adapters: {},
       now: () => now,
     })
     yield* unbound.observe(
       new ProviderUsage.Observation({
-        providerID: Provider.ID.make("muse"),
-        label: "Muse",
+        providerID,
+        label: "Claude",
         source: "response_stream",
         stability: "observed",
         observedAt: now,
-        windows: [
-          new ProviderUsage.Window({
-            id: "window",
-            label: "Window",
-            unit: "percent",
-            used: 20,
-            resetAt: origin + 300 * minute,
-          }),
-        ],
+        windows: quota(20, now).windows,
       }),
     )
     expect((yield* unbound.forecast({ localScope: "backend" })).quotas![0]).toMatchObject({
       state: "insufficient",
       reason: "Quota account is unbound",
-    })
-  }),
-)
-
-it.effect("keeps model stream observations synchronous and preserves the response body", () =>
-  Effect.gen(function* () {
-    const credentials = yield* Credential.Service
-    const credential = yield* credentials.create({
-      integrationID: Integration.ID.make("muse"),
-      label: "Muse",
-      value: { type: "key", key: "fixture-muse" },
-    })
-    const now = Date.now()
-    const service = ProviderUsageRuntime.make({
-      credentials,
-      providers: { available: () => Effect.succeed([{ id: Provider.ID.make("muse") }]) },
-      adapters: { muse: ProviderUsageRuntime.muse },
-    })
-    const data = `data: ${JSON.stringify({
-      type: "response.subscription_usage",
-      subscription: {
-        window: { used_percent: 10, resets_at: Math.floor((now + 300 * minute) / 1000), window_duration_mins: 300 },
-      },
-    })}\n\n`
-    const response = observeMuseUsage(
-      new Response(data, { headers: { "content-type": "text/event-stream" } }),
-      service,
-      SessionRunnerModel.accountIdentityDigest(credential),
-    )
-    expect(yield* Effect.promise(() => response.text())).toBe(data)
-    expect((yield* service.forecast({ localScope: "backend" })).quotas![0]).toMatchObject({
-      state: "insufficient",
-      reason: "Collecting observations",
-      windowID: "window",
     })
   }),
 )

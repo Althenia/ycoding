@@ -1,7 +1,8 @@
+import { isRetiredID } from "@ycoding-ai/schema/provider"
+
 const builtInProviders = [
   ["openai", "OpenAI"],
   ["anthropic", "Claude"],
-  ["antigravity", "Antigravity"],
   ["openrouter", "OpenRouter"],
 ] as const
 
@@ -15,7 +16,7 @@ export function providerChoices<T extends { readonly id: string; readonly name: 
   items: readonly T[],
   integrationIDs?: ReadonlySet<string>,
 ) {
-  const offered = integrationIDs === undefined ? items : items.filter((item) => integrationIDs.has(item.id))
+  const offered = items.filter((item) => !isRetiredID(item.id) && (integrationIDs === undefined || integrationIDs.has(item.id)))
   return {
     builtIn: builtInProviders.flatMap(([id, name]) => {
       const item = offered.find((entry) => entry.id === id)

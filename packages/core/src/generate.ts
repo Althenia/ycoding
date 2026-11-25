@@ -47,6 +47,8 @@ export const layer = Layer.effect(
     const credentials = yield* Credential.Service
 
     const selectModel = Effect.fn("Generate.selectModel")(function* (requested?: CatalogModel.Ref) {
+      if (requested && Provider.isRetiredID(requested.providerID))
+        return yield* new ModelSelectionError({ message: new Provider.RetiredError({ providerID: requested.providerID }).message })
       const selected = requested
         ? yield* catalog.model.get(requested.providerID, requested.id)
         : yield* catalog.model

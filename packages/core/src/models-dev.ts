@@ -131,6 +131,7 @@ export type Snapshot = {
 function normalize(input: Record<string, SourceProvider>): readonly Snapshot[] {
   const providers: Snapshot[] = []
   for (const item of Object.values(input)) {
+    if (Provider.isRetiredID(item.id)) continue
     const providerID = Provider.ID.make(item.id)
     const info = {
       id: providerID,

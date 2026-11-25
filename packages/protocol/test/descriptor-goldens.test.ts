@@ -38,7 +38,7 @@ test("digest-bearing negative goldens retain their specific rejection reasons", 
   }
 })
 
-test("Muse response-stream source appends ordinal six and preserves existing source ordinals", () => {
+test("response-stream usage retains ordinal six without changing existing source ordinals", () => {
   expect(ProviderUsage_SourceSchema.values.map((value) => [value.name, value.number])).toEqual([
     ["PROVIDERUSAGE_SOURCE_PROVIDER_API", 1],
     ["PROVIDERUSAGE_SOURCE_LOCAL_CLIENT_RPC", 2],
@@ -49,8 +49,8 @@ test("Muse response-stream source appends ordinal six and preserves existing sou
   ])
   expect(Schema.decodeUnknownSync(ProviderUsage.Source)("response_stream")).toBe("response_stream")
   const snapshot = create(ProviderUsage_SnapshotSchema, {
-    providerID: encodeLossless("muse"),
-    label: encodeLossless("Muse (Meta)"),
+    providerID: encodeLossless("fixture-compatible"),
+    label: encodeLossless("Fixture"),
     status: ProviderUsage_Status.PROVIDERUSAGE_STATUS_AVAILABLE,
     source: ProviderUsage_Source.PROVIDERUSAGE_SOURCE_RESPONSE_STREAM,
     stability: ProviderUsage_Stability.PROVIDERUSAGE_STABILITY_OBSERVED,

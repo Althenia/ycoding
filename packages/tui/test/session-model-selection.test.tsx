@@ -787,32 +787,32 @@ test("selecting a model restores its valid stored variant without another varian
   }
 }, 30_000)
 
-test("selecting an Antigravity model offers its effort variants in the variant dialog", async () => {
+test("selecting a Claude model opens its advertised efforts instead of listing each effort as a model", async () => {
   switches.length = 0
   const screen = await renderPicker({
-    stateDir: "antigravity-effort-variants",
+    stateDir: "claude-effort-variants",
     catalog: [
       model({
-        id: "gemini-3.8-flash",
-        providerID: "antigravity",
-        name: "Gemini 3.8 Flash",
-        context: 1_048_576,
+        id: "claude-sonnet-5-5",
+        providerID: "anthropic",
+        name: "Claude Sonnet 5.5",
+        context: 200_000,
         variants: ["low", "medium", "high"],
       }),
     ],
   })
   try {
     const frame = screen.app.captureCharFrame()
-    expect(frame.split("\n").filter((row) => row.includes("Gemini 3.8 Flash"))).toHaveLength(1)
-    expect(frame).not.toContain("Gemini 3.8 Flash (Low)")
-    expect(frame).not.toContain("Gemini 3.8 Flash (Medium)")
-    expect(frame).not.toContain("Gemini 3.8 Flash (High)")
+    expect(frame.split("\n").filter((row) => row.includes("Claude Sonnet 5.5"))).toHaveLength(1)
+    expect(frame).not.toContain("Claude Sonnet 5.5 (Low)")
+    expect(frame).not.toContain("Claude Sonnet 5.5 (Medium)")
+    expect(frame).not.toContain("Claude Sonnet 5.5 (High)")
     screen.app.mockInput.pressEnter()
     await screen.app.waitForFrame((next) => next.includes("Select variant"))
     await screen.app.mockInput.typeText("high")
     screen.app.mockInput.pressEnter()
     await waitFor(() => screen.pendingTarget()?.variant === "high", "the high effort variant")
-    expect(screen.pendingTarget()).toEqual({ providerID: "antigravity", modelID: "gemini-3.8-flash", variant: "high" })
+    expect(screen.pendingTarget()).toEqual({ providerID: "anthropic", modelID: "claude-sonnet-5-5", variant: "high" })
     expect(screen.variant()).toBe("high")
     expect(switches).toEqual([])
   } finally {

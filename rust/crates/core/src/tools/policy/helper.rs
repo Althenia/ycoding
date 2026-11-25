@@ -303,6 +303,9 @@ impl Models {
         session: Option<&ycoding_schema::session::Info>,
         selected: &model::Ref,
     ) -> Result<Located, String> {
+        if selected.provider_id.is_retired() {
+            return Err(ycoding_schema::provider::RETIRED_DIAGNOSTIC.into());
+        }
         if let Some(state) = &self.standalone {
             let session =
                 session.ok_or_else(|| "Standalone helper requires a Session".to_owned())?;
@@ -484,32 +487,23 @@ impl Models {
             ),
             None => None,
         };
-        let model = if resolved.info.provider_id.0.as_str() == Some("muse") {
-            crate::resources::muse::from_catalog_model(
+        let model = match (
+            &self.cursor,
+            resolved
+                .info
+                .package
+                .as_ref()
+                .and_then(|package| package.as_str()),
+        ) {
+            (Some(host), Some("aisdk:cursor-opencode-provider")) => {
+                crate::resources::cursor::route::model(&resolved.info, secret.as_ref(), host)
+            }
+            _ => crate::resources::model::from_catalog_model_with_claude(
                 &resolved.info,
                 secret.as_ref(),
                 connection.as_ref(),
-                ycoding_ai::muse::Runtime::shared().map_err(|error| error.to_string())?,
-            )
-        } else {
-            match (
-                &self.cursor,
-                resolved
-                    .info
-                    .package
-                    .as_ref()
-                    .and_then(|package| package.as_str()),
-            ) {
-                (Some(host), Some("aisdk:cursor-opencode-provider")) => {
-                    crate::resources::cursor::route::model(&resolved.info, secret.as_ref(), host)
-                }
-                _ => crate::resources::model::from_catalog_model_with_claude(
-                    &resolved.info,
-                    secret.as_ref(),
-                    connection.as_ref(),
-                    self.claude.as_ref(),
-                ),
-            }
+                self.claude.as_ref(),
+            ),
         }
         .map_err(|error| error.to_string())?;
         Ok(Resolved {
@@ -571,7 +565,6 @@ pub fn request(
                 .map(|id| id.as_lossless().clone()),
             provider_id: resolved.selection.provider_id.0.clone(),
             model_id: resolved.selection.id.clone(),
-            variant: resolved.selection.variant.clone(),
             account_identity_digest: resolved.account_identity.as_deref(),
             permissions,
             system: &request.system,
@@ -649,7 +642,6 @@ pub async fn stream(
                 .map(|id| id.as_lossless().clone()),
             provider_id: input.resolved.selection.provider_id.0.clone(),
             model_id: input.resolved.selection.id.clone(),
-            variant: input.resolved.selection.variant.clone(),
             account_identity_digest: input.resolved.account_identity.as_deref(),
             permissions: &input.agent.permissions,
             system: &input.request.system,
@@ -816,9 +808,15 @@ async fn consume<S: Events>(
                         {
                             settlement.cost = Some(settlement.cost.unwrap_or(0.0) + priced);
                         }
-                        settlement.cache_read_reported |= cache_diagnostics::reported_for_model(
+                        settlement.cache_read_reported |= cache_diagnostics::reported(
                             &input.request.model.route.id,
-                            &input.resolved.selection,
+                            input
+                                .resolved
+                                .selection
+                                .provider_id
+                                .0
+                                .as_str()
+                                .unwrap_or_default(),
                             reported,
                         )
                         .read;

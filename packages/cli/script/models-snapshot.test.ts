@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { fetchModelsSnapshot, readModelsSnapshot } from "./models-snapshot"
+import { fetchModelsSnapshot, readModelsSnapshot, writeModelsSnapshot } from "./models-snapshot"
 
 test("reads and validates a models.dev object snapshot", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-models-snapshot-"))
@@ -133,38 +133,21 @@ test("committed snapshot contains current OpenAI and Anthropic catalog pricing",
   })
 })
 
-test("committed snapshot contains Muse Spark normal and contributor catalog entries", async () => {
-  const snapshot = JSON.parse(
-    await Bun.file(path.join(import.meta.dir, "models-dev.snapshot.json")).text(),
-  ) as {
-    meta?: {
-      models?: Record<
-        string,
-        {
-          id?: string
-          family?: string
-          reasoning_options?: Array<{ type?: string; values?: Array<string | null> }>
-          limit?: { context?: number; output?: number }
-          cost?: { input?: number; output?: number; cache_read?: number }
-        }
-      >
-    }
+test("snapshot refresh omits retired direct providers and preserves gateway listings", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-models-snapshot-"))
+  const file = path.join(root, "api.json")
+  const gateway = { models: { "meta/muse-example": { id: "meta/muse-example" } } }
+  try {
+    await writeModelsSnapshot(file, JSON.stringify({ antigravity: {}, Muse: {}, meta: {}, gateway }))
+    expect(JSON.parse(await readModelsSnapshot(file))).toEqual({ gateway })
+  } finally {
+    await rm(root, { recursive: true, force: true })
   }
-  const normal = snapshot.meta?.models?.["muse-spark-1.3"]
-  const contributor = snapshot.meta?.models?.["muse-spark-1.3-contributor"]
+})
 
-  expect(normal).toMatchObject({
-    id: "muse-spark-1.3",
-    family: "muse",
-    limit: { context: 1_048_576, output: 131_072 },
-    cost: { input: 1.25, output: 4.25, cache_read: 0.15 },
-  })
-  expect(contributor).toMatchObject({
-    id: "muse-spark-1.3-contributor",
-    family: "muse",
-    limit: { context: 1_048_576, output: 131_072 },
-    cost: { input: 0.1, output: 0.2, cache_read: 0.002 },
-  })
+test("committed snapshot omits retired direct providers", async () => {
+  const snapshot = JSON.parse(await readModelsSnapshot(path.join(import.meta.dir, "models-dev.snapshot.json")))
+  for (const id of ["antigravity", "muse", "meta"]) expect(snapshot).not.toHaveProperty(id)
 })
 
 test("normal build generation reads the committed snapshot without fetching", async () => {

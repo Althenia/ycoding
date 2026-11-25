@@ -374,6 +374,13 @@ impl Local {
         saved: &[credential::Info],
         saved_binding: Option<&ycoding_schema::session_event::ProfileBinding>,
     ) -> Result<SelectedModel, Unresolved> {
+        if selection.provider_id.is_retired() {
+            return Err(Unresolved::model(
+                selection,
+                model::Error::ProviderRetired,
+                None,
+            ));
+        }
         let services = &self.0.services;
         if let Some(state) = &self.0.standalone {
             let selected = state
@@ -1494,7 +1501,6 @@ impl Local {
                     workspace_id: session.location.workspace_id.as_ref().map(text),
                     provider_id: text(&selection.provider_id),
                     model_id: text(&selection.id),
-                    variant: selection.variant.as_ref().map(text),
                     account_identity_digest: account_identity.as_deref(),
                     permissions: &permissions,
                     system: &prepared.system,
@@ -2639,8 +2645,19 @@ impl Local {
         let services = &self.0.services;
         let usage = settlement.and_then(|settlement| settlement.usage.as_ref());
         let tokens = usage::tokens(settlement.and_then(|settlement| settlement.usage.as_ref()));
-        let reported = settlement
-            .map(|_| cache_diagnostics::reported_for_model(route_id, &tracked.begin.model, usage));
+        let reported = settlement.map(|_| {
+            cache_diagnostics::reported(
+                route_id,
+                tracked
+                    .begin
+                    .model
+                    .provider_id
+                    .0
+                    .as_str()
+                    .unwrap_or_default(),
+                usage,
+            )
+        });
         let cache_read = usage
             .and_then(|usage| usage.cache_read_input_tokens)
             .unwrap_or(0.0);
@@ -3203,6 +3220,16 @@ fn model_resolution_error(
         "/",
     );
     let (kind, message) = match cause {
+        model::Error::ProviderRetired => (
+            "model.unsupported",
+            crate::instructions::join(
+                &[
+                    ycoding_schema::provider::RETIRED_DIAGNOSTIC.into(),
+                    identity,
+                ],
+                ": ",
+            ),
+        ),
         model::Error::ModelUnavailable => (
             "model.unavailable",
             crate::instructions::join(&["Model unavailable: ".into(), identity], ""),
@@ -3365,14 +3392,9 @@ fn with_usage(
         .optional("contextLimit", &request.model.defaults.context_limit)
         .field(
             "providerCache",
-            &cache_diagnostics::provider_cache_for_model(
+            &cache_diagnostics::provider_cache(
                 &request.model.route.id,
-                &ycoding_schema::model::Ref {
-                    id: request.model.id.clone(),
-                    provider_id: ycoding_schema::provider::Id(provider.into()),
-                    variant: None,
-                    profile: None,
-                },
+                provider,
                 settlement.usage.as_ref(),
             ),
         )
@@ -3439,10 +3461,12 @@ fn retains_disabled_tool_definitions(model: &llm::Model) -> bool {
     matches!(
         model.route.protocol.id(),
         "openai-responses" | "openrouter-responses"
-    ) || (model.route.id == "ai-sdk:@ai-sdk/google"
-        && model.provider.0.as_str() != Some("antigravity"))
-        || ["ai-sdk:@ai-sdk/google-vertex", "ai-sdk:@ai-sdk/openai"]
-            .contains(&model.route.id.as_str())
+    ) || [
+        "ai-sdk:@ai-sdk/google",
+        "ai-sdk:@ai-sdk/google-vertex",
+        "ai-sdk:@ai-sdk/openai",
+    ]
+    .contains(&model.route.id.as_str())
 }
 
 fn unfinished_assistant(message: Option<&session_message::Info>) -> bool {
@@ -3682,7 +3706,7 @@ mod tests {
     use ycoding_ai::provider_error::{Error, Reason};
 
     #[test]
-    fn disabled_tool_definitions_are_retained_only_on_listed_routes_without_antigravity() {
+    fn disabled_tool_definitions_are_retained_only_on_listed_routes() {
         let model = |route: ycoding_ai::route::Route| route.model("model");
         assert!(retains_disabled_tool_definitions(&model(
             ycoding_ai::route::Route::openai_responses()
@@ -3700,16 +3724,12 @@ mod tests {
             "google",
             "ai-sdk:@ai-sdk/google"
         )));
-        assert!(!retains_disabled_tool_definitions(&google(
-            "antigravity",
-            "ai-sdk:@ai-sdk/google"
-        )));
         assert!(retains_disabled_tool_definitions(&google(
-            "antigravity",
+            "google-vertex",
             "ai-sdk:@ai-sdk/google-vertex"
         )));
         assert!(retains_disabled_tool_definitions(&google(
-            "antigravity",
+            "openai",
             "ai-sdk:@ai-sdk/openai"
         )));
         let mut route = ycoding_ai::route::Route::openai_responses();

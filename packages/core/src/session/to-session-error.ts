@@ -5,6 +5,7 @@ import { Permission } from "../permission"
 import { Question } from "../question"
 import { SessionGuardrail } from "./guardrail"
 import { Integration } from "../integration"
+import { Provider } from "../provider"
 import { ToolOutputStore } from "../tool-output-store"
 import { AgentNotFoundError, StepFailedError, UserInterruptedError } from "./error"
 import { SessionRunnerModel } from "./runner/model"
@@ -54,6 +55,7 @@ export function toSessionError(cause: unknown): SessionError.Error {
   if (cause instanceof AgentNotFoundError) return { type: "unknown", message: cause.message }
   if (cause instanceof UserInterruptedError) return { type: "aborted", message: cause.message }
   if (
+    cause instanceof Provider.RetiredError ||
     cause instanceof SessionRunnerModel.ModelNotSelectedError ||
     cause instanceof SessionRunnerModel.ModelUnavailableError ||
     cause instanceof SessionRunnerModel.VariantUnavailableError ||

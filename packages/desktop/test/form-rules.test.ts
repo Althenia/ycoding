@@ -911,17 +911,17 @@ test("quota providers with no distinguishing data are numbered and tones follow 
 })
 
 test("quota windows repeating a label are disambiguated by group then id then position", () => {
-  const [provider] = formatQuotaProviders([{ label: "Antigravity", status: "available", windows: [
-    { id: "a", label: "Weekly limit", group: "Claude", used: 10, limit: 100, unit: "requests" },
-    { id: "b", label: "Weekly limit", group: "Gemini Pro", used: 90, limit: 100, unit: "requests" },
-    { id: "claude_weekly", label: "Daily limit", used: 1, limit: 100, unit: "requests" },
-    { id: "gemini_weekly", label: "Daily limit", used: 1, limit: 100, unit: "requests" },
+  const [provider] = formatQuotaProviders([{ label: "Claude", status: "available", windows: [
+    { id: "a", label: "Weekly limit", group: "Opus", used: 10, limit: 100, unit: "requests" },
+    { id: "b", label: "Weekly limit", group: "Sonnet", used: 90, limit: 100, unit: "requests" },
+    { id: "opus_weekly", label: "Daily limit", used: 1, limit: 100, unit: "requests" },
+    { id: "sonnet_weekly", label: "Daily limit", used: 1, limit: 100, unit: "requests" },
     { id: "x", label: "Hourly", used: 1, limit: 100, unit: "requests" },
     { id: "x", label: "Hourly", used: 1, limit: 100, unit: "requests" },
   ] }])
-  expect(provider?.windows.map((window) => window.label)).toEqual(["Claude · Weekly limit", "Gemini Pro · Weekly limit", "Daily limit · claude weekly", "Daily limit · gemini weekly", "Hourly · x #1", "Hourly · x #2"])
-  expect(provider?.windows[0]).toMatchObject({ group: "Claude", level: "ok" })
-  expect(provider?.windows[1]).toMatchObject({ group: "Gemini Pro", level: "danger" })
+  expect(provider?.windows.map((window) => window.label)).toEqual(["Opus · Weekly limit", "Sonnet · Weekly limit", "Daily limit · opus weekly", "Daily limit · sonnet weekly", "Hourly · x #1", "Hourly · x #2"])
+  expect(provider?.windows[0]).toMatchObject({ group: "Opus", level: "ok" })
+  expect(provider?.windows[1]).toMatchObject({ group: "Sonnet", level: "danger" })
 })
 
 test("USD amounts group thousands and always show two decimals", () => {

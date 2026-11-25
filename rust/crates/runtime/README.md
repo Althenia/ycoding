@@ -2,7 +2,7 @@
 
 ## Provider configuration boundary
 
-`provider.configure` registers an OpenAI-compatible custom endpoint with explicit Chat/Responses selection, configured models or an optional OpenAI model-list source. Localhost endpoints use the same boundary. Credential connection follows successful configuration reload and integration registration; secrets stay out of the configuration RPC. `plugin.list` reports active capabilities from the Location generation, including only the six native provider plugins: Anthropic, Cursor, Muse, OpenAI-compatible, OpenAI and OpenRouter.
+`provider.configure` registers an OpenAI-compatible custom endpoint with explicit Chat/Responses selection, configured models or an optional OpenAI model-list source. Localhost endpoints use the same boundary. Credential connection follows successful configuration reload and integration registration; secrets stay out of the configuration RPC. `plugin.list` reports active capabilities from the Location generation, including native provider plugins for Anthropic, Cursor, OpenAI-compatible endpoints, OpenAI, and OpenRouter.
 
 Dropped built-in provider declarations produce nonfatal config diagnostics and are excluded from the effective catalog while other document settings load. A dropped package on one model excludes that model without dropping kept siblings. Saved credentials remain stored; excluded accounts do not trigger model discovery. Unknown executable packages and unsafe configuration remain subject to the existing rejection rules.
 
@@ -71,7 +71,7 @@ Supply `ready` from Location initialization and `refresh` from its configuration
 
 `skill.list` projects `Skill_Info.scope` with `skill::scope` from each skill's `location`: `PROJECT` when the Location's project directory contains it, otherwise `GLOBAL` when `<home>/.agents/skills`, `<home>/.claude/skills` or `<config>/skills` from `CatalogServices.roots` contains it, otherwise absent. Containment is lexical and component-wise, and a project directory that is not valid Unicode contains no skill. The shared `Location_Info` conversion omits `backendPaths`.
 
-`CatalogServices.models` and `CatalogServices.generate.models` must be the same Arc; requests reject divergent services. Generation uses the runner's credential service, integration registry, provider Executor, and optional Cursor host. Its selection retains provider, catalog model, profile, and variant, while provider requests use the API model identity. It makes one stateless provider generation and stores no Session messages. Named-profile or variant failures do not switch models or accounts. Muse receives its credential snapshot; Cursor uses the supplied native route host.
+`CatalogServices.models` and `CatalogServices.generate.models` must be the same Arc; requests reject divergent services. Generation uses the runner's credential service, integration registry, provider Executor, and optional Cursor host. Its selection retains provider, catalog model, profile, and variant, while provider requests use the API model identity. It makes one stateless provider generation and stores no Session messages. Named-profile or variant failures do not switch models or accounts. Cursor uses the supplied native route host.
 
 Wire conversion preserves complete model/default selection metadata, optional values, ordered permissions, and lossless strings. Secret-bearing configuration keys are excluded recursively from provider/model/agent request overlays; provider execution errors expose a fixed message and provider identity, not raw payloads or headers.
 

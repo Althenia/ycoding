@@ -443,7 +443,7 @@ describe("OpenRouter", () => {
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenRouter.OpenRouterBody>(
         LLM.request({
-          model: OpenRouter.configure({ apiKey: "test-key" }).model("meta/muse-spark-1.3-contributor"),
+          model: OpenRouter.configure({ apiKey: "test-key" }).model("fixture/stateless-reasoning"),
           system: "Stable instructions.",
           messages: [
             Message.user("What changed?"),

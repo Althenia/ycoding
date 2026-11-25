@@ -96,6 +96,16 @@ impl Local {
             ycoding_schema::ObjectDecoder::new(&event.data, &ycoding_schema::JsonPath::default())
                 .and_then(|object| object.optional("model"))
                 .map_err(|_| error("session.create", "Session model is invalid"))?;
+        if let Some(selection) = selection
+            .as_ref()
+            .filter(|selection| selection.provider_id.is_retired())
+        {
+            return Err(super::model_resolution_error(
+                selection,
+                model::Error::ProviderRetired,
+                None,
+            ));
+        }
         let binding =
             match selection.filter(|selection| selection.profile.is_some()) {
                 Some(selection) => {
@@ -397,6 +407,14 @@ impl Local {
                     admission.validate(&self.0.services.store, Some(id))?;
                 }
                 let current = self.require_session(id)?;
+                if target.provider_id.is_retired() {
+                    return Err(super::model_resolution_error(
+                        target,
+                        model::Error::ProviderRetired,
+                        None,
+                    )
+                    .into());
+                }
                 if current.model.as_ref() == Some(target) && target.profile.is_none() {
                     return Ok(model_switch::Outcome::Switched);
                 }

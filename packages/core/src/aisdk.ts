@@ -423,6 +423,9 @@ export const locationLayer = Layer.effect(
       runSDK: (event) => run(sdkHooks, event),
       runLanguage: (event) => run(languageHooks, event),
       language: Effect.fn("AISDK.language")(function* (model, snapshot) {
+        const retiredID = [model.providerID, snapshot?.credential?.integrationID].find((id) => id !== undefined && Provider.isRetiredID(id))
+        if (retiredID !== undefined)
+          return yield* new InitError({ providerID: model.providerID, cause: new Provider.RetiredError({ providerID: retiredID }) })
         const connection = snapshot?.credential
           ? {
               integrationID: snapshot.credential.integrationID,

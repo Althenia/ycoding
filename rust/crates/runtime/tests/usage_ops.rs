@@ -355,8 +355,8 @@ fn observe(service: &quota::Service, used: Option<f64>) {
     service
         .observe(
             provider_usage::Observation {
-                provider_id: provider::Id("muse".into()),
-                label: "Muse (Meta)".into(),
+                provider_id: provider::Id("fixture-stream".into()),
+                label: "Synthetic stream".into(),
                 source: "response_stream".into(),
                 stability: "observed".into(),
                 observed_at: NonNegativeInt::new(100).unwrap(),
@@ -438,8 +438,8 @@ async fn quotas_are_location_owned_normalized_and_best_effort_with_stale_and_par
         quota.get(provider::Id("openrouter".into()), None, false, 100).await;
         let views = usage_view::Service::new(world().core.sessions.clone(), None);
         prepared_support::publish(&world().store, &views);
-        publish(&quota, &views, &["muse", "openrouter", "cursor"], "/project", 100).await;
-        publish(&other, &views, &["muse", "openrouter", "cursor"], "/project/team", 100).await;
+        publish(&quota, &views, &["fixture-stream", "openrouter", "cursor"], "/project", 100).await;
+        publish(&other, &views, &["fixture-stream", "openrouter", "cursor"], "/project/team", 100).await;
         let first = get(&mut client, "/project", "openrouter", None).await;
         assert_eq!(units(&first.location.directory), "/project");
         assert_eq!((first.data.status, first.data.source, first.data.stability), (1, 1, 1));
@@ -450,27 +450,27 @@ async fn quotas_are_location_owned_normalized_and_best_effort_with_stale_and_par
         openrouter_failed.store(true, std::sync::atomic::Ordering::SeqCst);
         quota.get(provider::Id("openrouter".into()), None, true, 101).await;
         quota.get(provider::Id("cursor".into()), None, false, 101).await;
-        publish(&quota, &views, &["muse", "openrouter", "cursor"], "/project", 101).await;
+        publish(&quota, &views, &["fixture-stream", "openrouter", "cursor"], "/project", 101).await;
         let stale = get(&mut client, "/project", "openrouter", Some(false)).await;
         assert_eq!((stale.data.status, stale.data.source, stale.data.stability), (2, 1, 1));
         assert_eq!(stale.data.windows.items[0].used, Some(0.0));
         assert_eq!(stale.data.message.as_ref().map(units).as_deref(), Some("Provider usage refresh failed"));
-        let muse = get(&mut client, "/project", "muse", Some(false)).await;
-        assert_eq!((muse.data.source, muse.data.stability), (6, 3));
-        assert_eq!(muse.data.windows.items[0].used, Some(0.0));
-        assert_eq!(units(&muse.data.windows.items[0].label), "5-hour window");
-        assert_eq!(muse.data.windows.items[0].reset_at, Some(1791876076000));
-        let absent = get(&mut client, "/project/team", "muse", Some(false)).await;
+        let stream = get(&mut client, "/project", "fixture-stream", Some(false)).await;
+        assert_eq!((stream.data.source, stream.data.stability), (6, 3));
+        assert_eq!(stream.data.windows.items[0].used, Some(0.0));
+        assert_eq!(units(&stream.data.windows.items[0].label), "5-hour window");
+        assert_eq!(stream.data.windows.items[0].reset_at, Some(1791876076000));
+        let absent = get(&mut client, "/project/team", "fixture-stream", Some(false)).await;
         assert_eq!(units(&absent.location.directory), "/project/team");
         assert_eq!(absent.data.windows.items[0].used, None);
         let list: v5::ProviderUsageListResult = success(client.call("providerUsage.list", location("/project"), v5::ProviderUsageListRequest { query: query(Some(false)) }.encode_to_vec()).await);
         assert_eq!(list.data.items.len(), 3);
-        assert_eq!(list.data.items.iter().map(|snapshot| units(&snapshot.provider_id)).collect::<Vec<_>>(), ["cursor", "muse", "openrouter"]);
+        assert_eq!(list.data.items.iter().map(|snapshot| units(&snapshot.provider_id)).collect::<Vec<_>>(), ["cursor", "fixture-stream", "openrouter"]);
         assert_eq!(list.data.items.iter().find(|snapshot| units(&snapshot.provider_id) == "cursor").unwrap().status, 5);
-        assert_eq!(list.data.items.iter().find(|snapshot| units(&snapshot.provider_id) == "muse").unwrap().status, 1);
+        assert_eq!(list.data.items.iter().find(|snapshot| units(&snapshot.provider_id) == "fixture-stream").unwrap().status, 1);
         cursor_unauthorized.store(true, std::sync::atomic::Ordering::SeqCst);
         other.get(provider::Id("cursor".into()), None, true, 102).await;
-        publish(&other, &views, &["muse", "openrouter", "cursor"], "/project/team", 102).await;
+        publish(&other, &views, &["fixture-stream", "openrouter", "cursor"], "/project/team", 102).await;
         let unauthorized = get(&mut client, "/project/team", "cursor", Some(false)).await;
         assert_eq!(units(&unauthorized.location.directory), "/project/team");
         assert_eq!(unauthorized.data.status, 4);
@@ -490,92 +490,59 @@ async fn quotas_are_location_owned_normalized_and_best_effort_with_stale_and_par
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn quota_resolver_absence_is_typed_unavailable_and_muse_without_observation_is_unreported() {
+async fn quota_resolver_absence_is_unavailable_but_retired_ids_are_rejected() {
     let _serial = SERIAL.lock().await;
-    timeout(Duration::from_secs(30), async {
-        let config = services(LocalAuth::disabled(), true);
-        let _location = config
-            .core
-            .as_ref()
-            .unwrap()
-            .locations
-            .location(&"/project".into(), None)
-            .unwrap();
-        let server = start(config, standard().unwrap()).await;
-        let mut client = Client::open(server.address(), &[]).await.unwrap();
+    let config = services(LocalAuth::disabled(), true);
+    let _location = config
+        .core
+        .as_ref()
+        .unwrap()
+        .locations
+        .location(&"/project".into(), None)
+        .unwrap();
+    let server = start(config, standard().unwrap()).await;
+    let mut client = Client::open(server.address(), &[]).await.unwrap();
+    let error = rejected(
+        client
+            .call(
+                "providerUsage.list",
+                location("/project"),
+                v5::ProviderUsageListRequest { query: query(None) }.encode_to_vec(),
+            )
+            .await,
+    );
+    assert_eq!(error.type_name, v5::ServiceUnavailableError::full_name());
+    for provider in ["antigravity", "muse"] {
         let error = rejected(
             client
                 .call(
-                    "providerUsage.list",
+                    "providerUsage.get",
                     location("/project"),
-                    v5::ProviderUsageListRequest { query: query(None) }.encode_to_vec(),
+                    v5::ProviderUsageGetRequest {
+                        params: v5::ProviderUsageGetRequestParams {
+                            provider_id: text(provider),
+                        },
+                        query: query(Some(true)),
+                    }
+                    .encode_to_vec(),
                 )
                 .await,
         );
-        assert_eq!(error.type_name, v5::ServiceUnavailableError::full_name());
-        let unavailable_server = server;
-        let quota = Arc::new(
-            quota::Service::new(
-                credential::Service::new(world().store.clone()),
-                quota::Endpoints::default(),
-            )
-            .unwrap()
-            .with_store(world().store.clone()),
-        );
-        let mut config = services(LocalAuth::disabled(), true);
-        config.core.as_mut().unwrap().provider_usage = Some(Arc::new({
-            let quota = quota.clone();
-            move |_| {
-                Ok(ProviderUsageServices {
-                    quota: quota.clone(),
-                    generation: GENERATION,
-                })
-            }
-        }));
-        let _location = config
-            .core
-            .as_ref()
-            .unwrap()
-            .locations
-            .location(&"/project".into(), None)
-            .unwrap();
-        let server = start(config, standard().unwrap()).await;
-        let mut client = Client::open(server.address(), &[]).await.unwrap();
-        quota
-            .get(provider::Id("muse".into()), None, true, 100)
-            .await;
-        let views = usage_view::Service::new(world().core.sessions.clone(), None);
-        prepared_support::publish(&world().store, &views);
-        publish(&quota, &views, &["muse"], "/project", 100).await;
-        let unreported = get(&mut client, "/project", "muse", Some(false)).await;
-        assert_eq!(
-            (
-                unreported.data.status,
-                unreported.data.source,
-                unreported.data.stability
-            ),
-            (3, 6, 3)
-        );
-        assert!(unreported.data.windows.items.is_empty());
-        assert_eq!(
-            unreported.data.message.as_ref().map(units).as_deref(),
-            Some("Quota is reported after the next Muse response")
-        );
-        server.shutdown().await.unwrap();
-        unavailable_server.shutdown().await.unwrap();
-        quota.shutdown().await.unwrap();
-    })
-    .await
-    .unwrap();
+        assert_eq!(error.type_name, v5::InvalidRequestError::full_name());
+        let invalid = v5::InvalidRequestError::decode(error.payload.as_slice()).unwrap();
+        assert_eq!(units(&invalid.message), "Provider no longer supported");
+    }
+    server.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn muse_list_keeps_each_profile_and_the_unbound_observation_separate() {
+async fn response_stream_list_keeps_each_profile_and_the_unbound_observation_separate() {
     let _serial = SERIAL.lock().await;
     timeout(Duration::from_secs(30), async {
         let credentials = credential::Service::new(world().store.clone());
         let secret =
-            Secret::new(parse_json(r#"{"type":"key","key":"fixture-muse-key"}"#).unwrap()).unwrap();
+            Secret::new(parse_json(r#"{"type":"key","key":"fixture-stream-key"}"#).unwrap())
+                .unwrap();
         let quota = Arc::new(
             quota::Service::new(credentials.clone(), quota::Endpoints::default())
                 .unwrap()
@@ -586,7 +553,7 @@ async fn muse_list_keeps_each_profile_and_the_unbound_observation_separate() {
             let saved = credentials
                 .create(
                     format!("private-profile-{index}").as_str().into(),
-                    "muse".into(),
+                    "fixture-stream".into(),
                     Some((*label).into()),
                     secret.clone(),
                     1,
@@ -597,8 +564,8 @@ async fn muse_list_keeps_each_profile_and_the_unbound_observation_separate() {
             quota
                 .observe(
                     provider_usage::Observation {
-                        provider_id: provider::Id("muse".into()),
-                        label: "Muse (Meta)".into(),
+                        provider_id: provider::Id("fixture-stream".into()),
+                        label: "Synthetic stream".into(),
                         source: "response_stream".into(),
                         stability: "observed".into(),
                         observed_at: NonNegativeInt::new(100).unwrap(),
@@ -641,7 +608,14 @@ async fn muse_list_keeps_each_profile_and_the_unbound_observation_separate() {
         let mut client = Client::open(server.address(), &[]).await.unwrap();
         let views = usage_view::Service::new(world().core.sessions.clone(), None);
         prepared_support::publish(&world().store, &views);
-        publish(&quota, &views, &["muse", "muse"], "/project", 100).await;
+        publish(
+            &quota,
+            &views,
+            &["fixture-stream", "fixture-stream"],
+            "/project",
+            100,
+        )
+        .await;
         let list: v5::ProviderUsageListResult = success(
             client
                 .call(

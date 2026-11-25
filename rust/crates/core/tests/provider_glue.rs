@@ -22,7 +22,6 @@ const RESPONSES: &str = "data: {\"type\":\"response.output_text.delta\",\"item_i
 const COHERE: &str = "data: {\"type\":\"message-start\",\"id\":\"msg\"}\n\ndata: {\"type\":\"content-delta\",\"index\":0,\"delta\":{\"message\":{\"content\":{\"text\":\"answer\"}}}}\n\ndata: {\"type\":\"message-end\",\"delta\":{\"finish_reason\":\"COMPLETE\",\"usage\":{\"tokens\":{\"input_tokens\":2,\"output_tokens\":1}}}}\n\n";
 const GATEWAY: &str = "data: {\"type\":\"text-delta\",\"id\":\"text\",\"delta\":\"answer\"}\n\ndata: {\"type\":\"finish\",\"finishReason\":{\"unified\":\"stop\"},\"usage\":{\"inputTokens\":{\"total\":2},\"outputTokens\":{\"total\":1}}}\n\n";
 const MESSAGES: &str = "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg\",\"usage\":{\"input_tokens\":2}}}\n\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"answer\"}}\n\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\ndata: {\"type\":\"message_stop\"}\n\n";
-const GEMINI: &str = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"answer\"}],\"role\":\"model\"},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":2,\"candidatesTokenCount\":1,\"totalTokenCount\":3}}\n\n";
 
 #[path = "session_support/guardrails.rs"]
 mod guardrails;
@@ -431,150 +430,101 @@ fn runner_services(
     }
 }
 #[tokio::test]
-async fn runner_bundled_packages_publish_real_assistant_messages_without_a_bridge() {
+async fn runner_admitted_routes_publish_real_assistant_messages_without_a_bridge() {
     use ycoding_core::session::{pending, run_coordinator::Coordinator, store::Service};
-    for (package, stream) in [
-        ("@ai-sdk/alibaba", CHAT),
-        ("@ai-sdk/mistral", CHAT),
-        ("@ai-sdk/perplexity", CHAT),
-        ("venice-ai-sdk-provider", CHAT),
-        ("@ai-sdk/vercel", CHAT),
-        ("@ai-sdk/cohere", COHERE),
-        ("@ai-sdk/gateway", GATEWAY),
-        ("@ai-sdk/azure", RESPONSES),
-        ("@ai-sdk/github-copilot", CHAT),
-        ("@ai-sdk/cerebras", CHAT),
-        ("@ai-sdk/deepinfra", CHAT),
-        ("@ai-sdk/groq", CHAT),
-        ("@ai-sdk/togetherai", CHAT),
-        ("@ai-sdk/openai", RESPONSES),
-        ("@ai-sdk/anthropic", MESSAGES),
-        ("@ai-sdk/google", GEMINI),
-        ("@ai-sdk/google-vertex", GEMINI),
-        ("@ai-sdk/google-vertex/anthropic", MESSAGES),
-        ("@ai-sdk/openai-compatible", CHAT),
-        ("@openrouter/ai-sdk-provider", RESPONSES),
-        ("@ai-sdk/xai", RESPONSES),
-        ("@ai-sdk/amazon-bedrock/mantle", RESPONSES),
-        ("@ai-sdk/amazon-bedrock", "bedrock"),
+    for (provider, package, stream, codex) in [
+        ("openai", "aisdk:@ai-sdk/openai", RESPONSES, false),
+        ("anthropic", "aisdk:@ai-sdk/anthropic", MESSAGES, false),
+        ("local", "aisdk:@ai-sdk/openai-compatible", CHAT, false),
         (
-            "@ycoding-ai/ai/providers/runpod",
-            r#"{"status":"COMPLETED","output":[{"message":{"role":"assistant","content":"answer"},"done":true,"prompt_eval_count":2,"eval_count":1}]}"#,
+            "cloudflare-workers-ai",
+            "aisdk:@ai-sdk/openai-compatible",
+            CHAT,
+            false,
         ),
-        ("ai-gateway-provider", CHAT),
-        ("gitlab-ai-provider", CHAT),
         (
-            "@jerome-benoit/sap-ai-provider-v2",
-            "data: {\"final_result\":{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1}}}\n\ndata: [DONE]\n\n",
+            "snowflake-cortex",
+            "aisdk:@ai-sdk/openai-compatible",
+            CHAT,
+            false,
         ),
-        ("workers", CHAT),
-        ("cortex", CHAT),
-        ("cognitive", CHAT),
-        ("muse", RESPONSES),
-        ("codex", RESPONSES),
-        ("unified", CHAT),
+        (
+            "azure-cognitive-services",
+            "aisdk:@ai-sdk/openai-compatible",
+            CHAT,
+            false,
+        ),
+        (
+            "openrouter",
+            "aisdk:@openrouter/ai-sdk-provider",
+            RESPONSES,
+            false,
+        ),
+        ("openai", "aisdk:@ai-sdk/openai", RESPONSES, true),
     ] {
-        let fixture = if stream == "bedrock" {
-            let recorded: serde_json::Value = serde_json::from_str(include_str!("../../../../packages/ai/test/fixtures/recordings/bedrock-converse/streams-text.json")).unwrap();
-            Fixture::bytes(decode_base64(
-                recorded["interactions"][0]["response"]["body"]
-                    .as_str()
-                    .unwrap(),
-            ))
-            .await
-        } else {
-            Fixture::new(stream).await
-        };
+        let fixture = Fixture::new(stream).await;
         let store = support::store();
         let service = Service::new(store.client());
         let mut catalog = Catalog::new(Vec::new());
-        let (provider, package) = match package {
-            "workers" => ("cloudflare-workers-ai", "@ai-sdk/openai-compatible"),
-            "cortex" => ("snowflake-cortex", "@ai-sdk/openai-compatible"),
-            "cognitive" => ("azure-cognitive-services", "@ai-sdk/openai-compatible"),
-            "muse" => ("muse", "@ai-sdk/openai"),
-            "codex" => ("openai", "@ai-sdk/openai"),
-            "unified" => ("unified", "ai-gateway-provider"),
-            package => ("fixture", package),
-        };
-        let model_id = if package == "gitlab-ai-provider" {
-            "duo-chat-gpt-5-4"
-        } else {
-            "fixture-model"
-        };
-        let package = if package.starts_with("@ycoding-ai/") {
-            package.into()
-        } else {
-            format!("aisdk:{package}")
-        };
-        let mut settings = serde_json::json!({"baseURL":fixture.base,"apiKey":"fixture-key","accessToken":"fixture-key","worker":"ollama","region":"us-east-1","instanceUrl":fixture.base,"aiGatewayUrl":fixture.base,"deploymentId":"deployment","serviceKey":serde_json::json!({"clientid":"selected","clientsecret":"secret","url":fixture.base,"serviceurls":{"AI_API_URL":fixture.base}}).to_string()});
-        if provider == "unified" {
-            settings.as_object_mut().unwrap().remove("baseURL");
-            settings["accountId"] = "account".into();
-            settings["gateway"] = "gateway".into();
+        let mut settings = serde_json::json!({"baseURL": fixture.base, "apiKey": "fixture-key"});
+        match provider {
+            "snowflake-cortex" => settings["token"] = "fixture-cortex".into(),
+            "azure-cognitive-services" => {
+                settings["baseURL"] = format!("{}/openai", fixture.base).into();
+            }
+            _ => {}
         }
-        if provider == "openai" {
+        if codex {
             settings.as_object_mut().unwrap().remove("apiKey");
             let credentials = ycoding_core::resources::credential::Service::new(store.client());
             credentials.create("codex-profile".into(), "openai".into(), Some("Work".into()), ycoding_store::resources::Secret::new(parse_json(r#"{"type":"oauth","methodID":"chatgpt-headless","access":"fixture-codex","refresh":"refresh","expires":9007199254740991,"metadata":{"accountID":"fixture-account"}}"#).unwrap()).unwrap(), 1).await.unwrap();
         }
-        catalog.configure(&[parse_json(&serde_json::json!({"model":{"providerID":provider,"model":"selected"},"providers":{provider:{"package":package,"settings":settings,"models":{"selected":{"modelID":model_id,"capabilities":{"tools":false,"input":["text"],"output":["text"]},"limit":{"context":10000,"output":1000}}}}}}).to_string()).unwrap()]).unwrap();
-        service.admit(pending::Request {id:ycoding_schema::session_message::Id::new("msg_fixture").unwrap(),session_id:ycoding_schema::session::Id::new("ses_one").unwrap(),input:ycoding_schema::session_pending::Message::decode(&parse_json(r#"{"type":"user","data":{"text":"Answer this prompt"},"delivery":"steer"}"#).unwrap()).unwrap(),event_id:ycoding_schema::event::Id::new("evt_fixture").unwrap(),created:1}).await.unwrap();
+        catalog.configure(&[parse_json(&serde_json::json!({"model":{"providerID":provider,"model":"selected"},"providers":{provider:{"package":package,"settings":settings,"models":{"selected":{"modelID":"fixture-model","capabilities":{"tools":false,"input":["text"],"output":["text"]},"limit":{"context":10000,"output":1000}}}}}}).to_string()).unwrap()]).unwrap();
+        let session = service.create(ycoding_store::session::NewEvent {
+            id: "evt_create".into(),
+            aggregate_id: "ses_provider".into(),
+            created: 1,
+            type_: "session.created.2".into(),
+            data: parse_json(r#"{"sessionID":"ses_provider","projectID":"prj_one","location":{"directory":"/project"},"title":"Provider test","created":1}"#).unwrap(),
+        }).await.unwrap();
+        service.admit(pending::Request {id:ycoding_schema::session_message::Id::new("msg_fixture").unwrap(),session_id:session.id.clone(),input:ycoding_schema::session_pending::Message::decode(&parse_json(r#"{"type":"user","data":{"text":"Answer this prompt"},"delivery":"steer"}"#).unwrap()).unwrap(),event_id:ycoding_schema::event::Id::new("evt_fixture").unwrap(),created:2}).await.unwrap();
         let mut context = ProviderContext::new(BTreeMap::new(), "fixture").unwrap();
         context
             .endpoints
             .insert("openai-codex-responses".into(), fixture.base.clone());
-        context
-            .endpoints
-            .insert("cloudflare-unified-gateway".into(), fixture.base.clone());
         let coordinator = Coordinator::new(Arc::new(runner(&store, catalog, context)));
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            coordinator.run(&ycoding_schema::session::Id::new("ses_one").unwrap()),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), coordinator.run(&session.id))
+            .await
+            .unwrap_or_else(|error| panic!("{provider}: {error}"))
+            .unwrap_or_else(|error| panic!("{provider}: {error:?}"));
         let snapshot = store.client().snapshot().unwrap();
-        let message = ycoding_core::session::history::latest(
-            &snapshot,
-            &ycoding_schema::session::Id::new("ses_one").unwrap(),
-            "assistant",
-        )
-        .unwrap()
-        .unwrap();
+        let message = ycoding_core::session::history::latest(&snapshot, &session.id, "assistant")
+            .unwrap()
+            .unwrap();
         assert!(
-            stringify_json(&ycoding_schema::DomainEncode::encode(&message)).contains(
-                if stream == "bedrock" {
-                    "Hello"
-                } else {
-                    "answer"
-                }
-            ),
-            "{package}"
+            stringify_json(&ycoding_schema::DomainEncode::encode(&message)).contains("answer"),
+            "{provider}/{package}"
         );
         let requests = fixture.finish().await;
-        assert_eq!(
-            requests.len(),
-            if package.contains("gitlab") || package.contains("sap-ai") {
-                2
-            } else {
-                1
-            },
-            "{package}"
-        );
-        if provider == "unified" {
-            assert_eq!(
-                requests[0].2[0]["headers"]["Authorization"],
-                "Bearer fixture-key"
-            );
-            assert_eq!(requests[0].1["cf-aig-authorization"], "Bearer fixture-key");
-        } else {
-            assert!(!requests[0].2.to_string().contains("fixture-key"));
+        assert_eq!(requests.len(), 1, "{provider}/{package}");
+        let (path, headers, body) = &requests[0];
+        assert!(!body.to_string().contains("fixture-key"));
+        match provider {
+            "cloudflare-workers-ai" => {
+                assert_eq!(path, "/chat/completions");
+                assert!(headers["user-agent"].to_str().unwrap().contains(provider));
+            }
+            "snowflake-cortex" => {
+                assert_eq!(path, "/chat/completions");
+                assert_eq!(headers["authorization"], "Bearer fixture-cortex");
+                assert!(!body.to_string().contains("fixture-cortex"));
+            }
+            "azure-cognitive-services" => assert_eq!(path, "/openai/chat/completions"),
+            _ => {}
         }
-        if provider == "openai" {
-            assert_eq!(requests[0].1["chatgpt-account-id"], "fixture-account");
-            assert_eq!(requests[0].1["authorization"], "Bearer fixture-codex");
+        if codex {
+            assert_eq!(headers["chatgpt-account-id"], "fixture-account");
+            assert_eq!(headers["authorization"], "Bearer fixture-codex");
         }
         coordinator.shutdown().await.unwrap();
         store.shutdown().unwrap();
@@ -763,7 +713,6 @@ fn builtin_account_methods_register_browser_device_remote_and_env_contracts() {
         ("xai", vec!["browser", "device"]),
         ("github-copilot", vec!["device"]),
         ("cursor", vec!["browser"]),
-        ("muse", vec!["device"]),
         (
             ycoding_core::resources::model::UPSTREAM_PROVIDER_ID,
             vec!["device"],
@@ -1241,32 +1190,6 @@ async fn gitlab_and_sap_reconstruct_exchanged_credentials_for_each_request() {
         let sent = fixture.finish().await;
         assert_eq!(sent.len(), 2);
     }
-}
-
-fn decode_base64(value: &str) -> Vec<u8> {
-    let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    value
-        .as_bytes()
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .flat_map(|chunk| {
-            let values = chunk.map(|byte| {
-                if byte == b'=' {
-                    0
-                } else {
-                    alphabet
-                        .iter()
-                        .position(|candidate| *candidate == byte)
-                        .unwrap() as u32
-                }
-            });
-            let bits = (values[0] << 18) | (values[1] << 12) | (values[2] << 6) | values[3];
-            [(bits >> 16) as u8, (bits >> 8) as u8, bits as u8]
-                .into_iter()
-                .take(3 - usize::from(chunk[3] == b'=') - usize::from(chunk[2] == b'='))
-        })
-        .collect()
 }
 
 #[tokio::test]

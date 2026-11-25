@@ -570,7 +570,7 @@ fn public_openai_responses_endpoint_marks_every_candidate_without_prefix_reserve
 
 #[test]
 fn volatile_system_text_stays_after_the_encoded_cache_prefix_on_kept_routes() {
-    use ycoding_ai::{antigravity, providers};
+    use ycoding_ai::providers;
 
     let config = providers::Config::new(Auth::bearer(Credential::value("fixture")));
     let routes = [
@@ -600,16 +600,6 @@ fn volatile_system_text_stays_after_the_encoded_cache_prefix_on_kept_routes() {
             .unwrap(),
             "messages",
         ),
-        (
-            antigravity::route(antigravity::Config {
-                access: Some(Credential::value("fixture")),
-                project: Some("fixture-project".into()),
-                session_id: Some("fixture-affinity".into()),
-                ..Default::default()
-            })
-            .model("gemini-4-hydrogen"),
-            "contents",
-        ),
     ];
     for (model, field) in routes {
         let mut request = Request::new(model);
@@ -619,17 +609,7 @@ fn volatile_system_text_stays_after_the_encoded_cache_prefix_on_kept_routes() {
         let prepare = |request: &Request| {
             let prepared = route.prepare(request).unwrap();
             let body = serde_json::from_str::<serde_json::Value>(&prepared.encoded_body).unwrap();
-            let inner = if field == "contents" {
-                assert_eq!(body["project"], "fixture-project");
-                assert_eq!(
-                    body["request"]["sessionId"],
-                    antigravity::session_id("fixture-affinity", "gemini-4-hydrogen")
-                );
-                &body["request"]
-            } else {
-                &body
-            };
-            inner[field].as_array().unwrap().clone()
+            body[field].as_array().unwrap().clone()
         };
         let prefix = prepare(&request);
         for suffix in ["Current state: first", "Current state: changed"] {

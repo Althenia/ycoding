@@ -2,6 +2,7 @@ export * as ProviderModelDiscovery from "./provider-discovery"
 
 import { Cache, Context, Effect, Layer, Schema } from "effect"
 import { makeGlobalNode } from "../../effect/app-node"
+import { Provider } from "../../provider"
 
 export const Request = Schema.Struct({
   providerID: Schema.String,
@@ -29,6 +30,7 @@ const layer = Layer.effect(
     })
     return Service.of({
       models: (request, options) => {
+        if (Provider.isRetiredID(request.providerID)) return Effect.succeed([])
         const key = JSON.stringify(request)
         return options?.refresh ? Cache.refresh(cache, key) : Cache.get(cache, key)
       },

@@ -1,6 +1,5 @@
 pub mod ai_sdk;
 pub mod anthropic;
-pub mod antigravity;
 pub mod auth;
 pub mod bedrock;
 pub mod bedrock_auth;
@@ -32,7 +31,6 @@ pub mod image_providers;
 mod json;
 pub mod llm;
 mod media;
-pub mod muse;
 pub mod openai_chat;
 pub mod openai_codex;
 pub mod openai_images;

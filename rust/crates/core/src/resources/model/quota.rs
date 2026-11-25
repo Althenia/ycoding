@@ -17,11 +17,10 @@ pub mod pace;
 pub mod pace_alerts;
 mod service;
 pub use service::{Endpoints, Service};
-pub use ycoding_ai::muse::{normalize_usage, unreported};
 mod normalize;
 pub use normalize::{
-    normalize_antigravity, normalize_claude, normalize_codex, normalize_copilot, normalize_grok,
-    normalize_organization, normalize_zai,
+    normalize_claude, normalize_codex, normalize_copilot, normalize_grok, normalize_organization,
+    normalize_zai,
 };
 mod copilot;
 pub use copilot::{BillingResult, CopilotResult, load_copilot, normalize_copilot_billing};
@@ -29,35 +28,6 @@ mod app_server;
 pub use app_server::{AppServerCommand, load_app_server};
 mod spend;
 pub use spend::{LocalSpendRow, local_spend_from_store, local_spend_snapshots};
-
-const ANTIGRAVITY_BASE_URL: &str = ycoding_ai::antigravity::BASE_URL;
-
-fn antigravity_user_agent_for(os: &str, arch: &str) -> String {
-    ycoding_ai::antigravity::user_agent_for(os, arch)
-}
-
-fn antigravity_user_agent() -> String {
-    antigravity_user_agent_for(std::env::consts::OS, std::env::consts::ARCH)
-}
-
-#[cfg(test)]
-mod identity_tests {
-    #[test]
-    fn antigravity_identity_uses_node_platform_and_architecture_names() {
-        for (os, arch, expected) in [
-            ("macos", "aarch64", "darwin; arch=arm64"),
-            ("macos", "x86_64", "darwin; arch=x64"),
-            ("linux", "aarch64", "linux; arch=arm64"),
-            ("linux", "x86_64", "linux; arch=x64"),
-            ("windows", "x86_64", "windows; arch=x64"),
-        ] {
-            assert_eq!(
-                super::antigravity_user_agent_for(os, arch),
-                format!("antigravity/hub/2.28.2 (aidev_client; os_type={expected})")
-            );
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -70,6 +40,7 @@ pub enum Error {
     Timeout,
     BufferLimit,
     Storage,
+    ProviderRetired,
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -82,6 +53,7 @@ impl fmt::Display for Error {
             Self::Timeout => "Codex app-server request timed out",
             Self::BufferLimit => "Codex app-server response exceeded 1 MiB",
             Self::Storage => "Provider usage storage failed",
+            Self::ProviderRetired => provider::RETIRED_DIAGNOSTIC,
         })
     }
 }

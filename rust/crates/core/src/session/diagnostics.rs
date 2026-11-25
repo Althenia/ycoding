@@ -390,13 +390,7 @@ fn unknown_route_mechanism(model: &model::Ref, cache_read: f64, cache_write: f64
         Some("openrouter") => "openrouter-cache-control",
         Some("anthropic") => "anthropic-cache-control",
         Some("amazon-bedrock") => "bedrock-cache-point",
-        Some("antigravity")
-            if cache::normalize_model_id(model.id.as_str().unwrap_or_default())
-                .starts_with("claude-") =>
-        {
-            "anthropic-cache-control"
-        }
-        Some("google" | "google-vertex" | "antigravity") => "gemini-prefix-cache",
+        Some("google" | "google-vertex") => "gemini-prefix-cache",
         Some("cursor") => "provider-reported",
         _ if cache_read > 0.0 || cache_write > 0.0 => "provider-reported",
         _ => "none",

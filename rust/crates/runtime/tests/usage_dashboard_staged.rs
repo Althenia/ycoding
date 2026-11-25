@@ -155,7 +155,7 @@ async fn dashboard_waits_for_matching_accounting_while_quota_only_reads_remain_a
                 &unprepared_views,
                 &reference,
                 1,
-                &[provider::Id("muse".into())],
+                &[provider::Id("fixture-quota".into())],
                 NonNegativeInt::new(1000).unwrap()
             )
             .await
@@ -231,7 +231,7 @@ async fn dashboard_waits_for_matching_accounting_while_quota_only_reads_remain_a
                     &views,
                     &reference,
                     1,
-                    &[provider::Id("muse".into())],
+                    &[provider::Id("fixture-quota".into())],
                     NonNegativeInt::new(1000).unwrap()
                 )
                 .await
@@ -268,7 +268,7 @@ async fn dashboard_waits_for_matching_accounting_while_quota_only_reads_remain_a
                         &views,
                         &reference,
                         1,
-                        &[provider::Id("muse".into())],
+                        &[provider::Id("fixture-quota".into())],
                         NonNegativeInt::new(1000).unwrap()
                     )
                     .await
@@ -360,7 +360,7 @@ async fn dashboard_waits_for_matching_accounting_while_quota_only_reads_remain_a
                     scope: machine(),
                     payload: v5::ProviderUsageGetRequest {
                         params: v5::ProviderUsageGetRequestParams {
-                            provider_id: support::text("muse"),
+                            provider_id: support::text("fixture-quota"),
                         },
                         query: v5::ProviderUsageQuery {
                             location: None,

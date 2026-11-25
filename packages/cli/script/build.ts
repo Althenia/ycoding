@@ -10,8 +10,6 @@ import { BUN_BINARY, platformBinary } from "../src/binary"
 import { computerHelperBuildAvailable } from "./computer-use"
 import { packageMacOSInteraction } from "./package-macos-interaction"
 import { copyChromeExtension } from "./chrome-extension"
-import { antigravityBuildDefinitions } from "./antigravity-build-env"
-import { museBuildDefinitions } from "./muse-build-env"
 import { buildRuntime } from "./runtime"
 import { nativeBuildTarget } from "./native-target"
 import { buildUserAppPackage, userAppPackageMetadata } from "./user-app-package"
@@ -90,8 +88,6 @@ try {
         windows: {},
       },
       define: {
-        ...antigravityBuildDefinitions(),
-        ...museBuildDefinitions(),
         YCODING_RUNTIME_ASSET: JSON.stringify(runtimeAsset.path),
         YCODING_RUNTIME_SHA256: JSON.stringify(runtimeAsset.sha256),
         YCODING_RUNTIME_PAYLOAD_SHA256: JSON.stringify(runtimeAsset.payloadSha256),

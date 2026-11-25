@@ -51,8 +51,7 @@ import { SessionAutonomy } from "./autonomy"
 const retainsDisabledToolDefinitions = (model: LLMRequest["model"]) =>
   model.route.protocol === "openai-responses" ||
   model.route.protocol === "openrouter-responses" ||
-  (model.route.id === "ai-sdk:@ai-sdk/google" && model.provider !== "antigravity") ||
-  ["ai-sdk:@ai-sdk/google-vertex", "ai-sdk:@ai-sdk/openai"].includes(model.route.id)
+  ["ai-sdk:@ai-sdk/google", "ai-sdk:@ai-sdk/google-vertex", "ai-sdk:@ai-sdk/openai"].includes(model.route.id)
 
 const fingerprintValue = (value: unknown, ancestors: ReadonlySet<object> = new Set()): unknown => {
   if (value === undefined || value === null || typeof value === "string" || typeof value === "boolean") return value

@@ -1728,6 +1728,15 @@ fn provider_record(value: &JsonValue) -> Result<catalog::ProviderRecord, Error> 
     let decoder = ObjectDecoder::new(value, &PATH).map_err(|_| Error::Schema)?;
     let provider: ycoding_schema::provider::Info =
         decoder.field("provider").map_err(|_| Error::Schema)?;
+    if provider.id.is_retired()
+        || provider
+            .integration_id
+            .as_ref()
+            .and_then(|id| id.as_lossless().as_str())
+            .is_some_and(ycoding_schema::provider::is_retired)
+    {
+        return Err(Error::Unauthorized);
+    }
     let models: Vec<ycoding_schema::model::Info> =
         decoder.field("models").map_err(|_| Error::Schema)?;
     if models.iter().any(|model| model.provider_id != provider.id) {

@@ -331,7 +331,7 @@ async fn integrations_include_unconnected_but_exclude_disabled_and_denied_and_re
         let server = start(settings(fixture(catalog, refresh), None), standard().unwrap()).await;
         let mut client = Client::open(server.address(), &[]).await.unwrap();
         let mappings: v5::ProviderIntegrationsResult = ask(&mut client, "provider.integrations", location_scope("/project"), v5::ProviderIntegrationsRequest { query: query("/project", None) }).await;
-        assert_eq!(mappings.data.items.iter().map(|mapping| units(&mapping.provider_id)).collect::<Vec<_>>(), ["openai", "anthropic", "antigravity", "openrouter", "fixture", "unconnected"]);
+        assert_eq!(mappings.data.items.iter().map(|mapping| units(&mapping.provider_id)).collect::<Vec<_>>(), ["openai", "anthropic", "openrouter", "fixture", "unconnected"]);
         let _: v5::ProviderRefreshResult = ask(&mut client, "provider.refresh", location_scope("/project"), v5::ProviderRefreshRequest { query: query("/project", None) }).await;
         assert_eq!(refreshed.load(Ordering::SeqCst), 1);
         drop(client); server.shutdown().await.unwrap();

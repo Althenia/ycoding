@@ -14,7 +14,7 @@ const integration = (value: Partial<IntegrationInfo> & Pick<IntegrationInfo, "id
 })
 
 describe("providerChoices", () => {
-  test("shows the four built-ins in order and groups verified endpoints under the fifth choice", () => {
+  test("offers the supported providers in order and excludes retired providers from configured endpoints", () => {
     const choices = providerChoices([
       integration({ id: "mistral", name: "Mistral" }),
       integration({ id: "openrouter", name: "OpenRouter" }),
@@ -22,9 +22,10 @@ describe("providerChoices", () => {
       integration({ id: "custom-z", name: "Zebra" }),
       integration({ id: "anthropic", name: "Anthropic" }),
       integration({ id: "antigravity", name: "Antigravity" }),
-    ], new Set(["openai", "anthropic", "antigravity", "openrouter", "custom-z"]))
+      integration({ id: "muse", name: "Muse" }),
+    ], new Set(["openai", "anthropic", "antigravity", "muse", "openrouter", "custom-z"]))
     expect([...choices.builtIn, customEndpointChoice].map(({ name }) => name)).toEqual([
-      "OpenAI", "Claude", "Antigravity", "OpenRouter", "Custom OpenAI-compatible Endpoint",
+      "OpenAI", "Claude", "OpenRouter", "Custom OpenAI-compatible Endpoint",
     ])
     expect(choices.custom.map(({ id }) => id)).toEqual(["custom-z"])
   })

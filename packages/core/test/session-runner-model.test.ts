@@ -129,6 +129,29 @@ describe("metadata selection", () => {
     expect(yield* SessionRunnerModel.selection(sessionInfo("ses_metadata_empty"), catalog([]))).toBeUndefined()
     expect(yield* SessionRunnerModel.selection(sessionInfo("ses_metadata_bad_default"), catalog([], ref)).pipe(Effect.flip)).toBeInstanceOf(SessionRunnerModel.ModelNotSelectedError)
   }))
+
+  for (const [providerID, profile] of [["AntiGravity", undefined], ["MuSe", "stored-profile"]] as const) {
+    it.effect(`rejects a stored ${providerID} selection without choosing an available model`, () => Effect.gen(function* () {
+      const available = model("aisdk:@ai-sdk/openai-compatible")
+      const ref = CatalogModel.Ref.make({ providerID: Provider.ID.make(providerID), id: CatalogModel.ID.make("fixture"), profile })
+      const session = { ...sessionInfo("ses_retired_provider"), model: ref }
+      const message = yield* SessionRunnerModel.selection(session, catalog([available])).pipe(
+        Effect.match({ onFailure: (error) => error.message, onSuccess: () => undefined }),
+      )
+      expect(message).toBe(`Provider no longer supported: ${providerID}`)
+    }))
+  }
+
+  it.effect("rejects a retired provider behind an OpenAI-compatible route", () => Effect.gen(function* () {
+    const retired = model("aisdk:@ai-sdk/openai-compatible", {
+      providerID: "muse",
+      settings: { baseURL: "https://fixture.invalid/v1" },
+    })
+    const message = yield* SessionRunnerModel.fromCatalogModel(retired).pipe(
+      Effect.match({ onFailure: (error) => error.message, onSuccess: () => undefined }),
+    )
+    expect(message).toBe("Provider no longer supported: muse")
+  }))
 })
 
 const captureRequestBody = (model: Model) => Effect.gen(function* () {

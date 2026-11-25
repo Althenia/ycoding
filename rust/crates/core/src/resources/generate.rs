@@ -41,6 +41,14 @@ impl Service {
             .model
             .clone()
             .or_else(|| catalog.default_selection(&saved));
+        if selection
+            .as_ref()
+            .is_some_and(|selection| selection.provider_id.is_retired())
+        {
+            return Err(Error::Selection(
+                ycoding_schema::provider::RETIRED_DIAGNOSTIC.into(),
+            ));
+        }
         let selected = match &selection {
             Some(selection) => catalog.get(&selection.provider_id, &selection.id, None, &saved),
             None => catalog

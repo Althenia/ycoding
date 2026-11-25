@@ -69,9 +69,16 @@ impl Local {
                 other: count(breakdown.other)?,
             }),
             provider_cache: Some(
-                ProviderCache::decode(&cache_diagnostics::provider_cache_for_model(
+                ProviderCache::decode(&cache_diagnostics::provider_cache(
                     &request.model.route.id,
-                    &recording.tracked.begin.model,
+                    recording
+                        .tracked
+                        .begin
+                        .model
+                        .provider_id
+                        .0
+                        .as_str()
+                        .unwrap_or_default(),
                     settlement.usage.as_ref(),
                 ))
                 .map_err(projector::record_error)?,

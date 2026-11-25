@@ -24,8 +24,8 @@ const largeValues = new URLSearchParams(location.search).has("large-values")
 const unknownUsage = new URLSearchParams(location.search).has("unknown-usage")
 const forecastMode = new URLSearchParams(location.search).get("forecast")
 const longDistribution = new URLSearchParams(location.search).has("distribution-long-values")
-const musePendingMode = new URLSearchParams(location.search).get("provider") === "muse-pending"
-const museMode = new URLSearchParams(location.search).get("provider") === "muse" || musePendingMode
+const quotaScenario = new URLSearchParams(location.search).get("quota")
+const observedQuota = quotaScenario === "observed" || quotaScenario === "pending"
 const states = forecastMode === "states"
 const providers: UsageProvider[] = [
   { providerID: "openai", label: longDistribution ? "Provider with a long descriptive name and a shared workspace plan" : "Codex", profile: "Personal", status: "available", source: "provider_api", stability: "stable", updatedAt: Date.now(), windows: [
@@ -58,16 +58,12 @@ const providers: UsageProvider[] = [
   { providerID: "empty", label: "Empty provider", status: "available", source: "provider_api", stability: "stable", updatedAt: Date.now(), windows: [] },
   { providerID: "failed", label: "Provider with an error", status: "error", source: "provider_api", stability: "best_effort", updatedAt: Date.now(), windows: [], message: "Quota refresh failed." },
 ]
-const museProvider: UsageProvider = { providerID: "muse", label: "Muse (Meta)", profile: "Muse", status: "available", source: "response_stream", stability: "observed", updatedAt: Date.now(), windows: [
+const observedProvider: UsageProvider = { providerID: "opencode-go", label: "OpenCode Go", profile: "Work", status: "available", source: "response_stream", stability: "observed", updatedAt: Date.now(), windows: [
   { id: "window", label: "5-hour window", unit: "percent", used: 35, resetAt: Date.now() + 2 * 3600_000, periodSeconds: 18_000 },
   { id: "weekly", label: "Weekly", unit: "percent", used: 64, resetAt: Date.now() + 4 * 86_400_000, periodSeconds: 604_800 },
 ] }
-const musePendingProvider: UsageProvider = { providerID: "muse", label: "Muse (Meta)", profile: "Muse", status: "unsupported", source: "response_stream", stability: "observed", updatedAt: Date.now(), windows: [], message: "Quota is reported after the next Muse response" }
-const museObservedProvider: UsageProvider = { ...museProvider, updatedAt: Date.now(), windows: [
-  { id: "window", label: "5-hour window", unit: "percent", used: 0, resetAt: Date.now() + 2 * 3600_000, periodSeconds: 18_000 },
-  { id: "weekly", label: "Weekly", unit: "percent", used: 64, resetAt: Date.now() + 4 * 86_400_000, periodSeconds: 604_800 },
-] }
-let museRefreshed = false
+const pendingProvider: UsageProvider = { ...observedProvider, status: "unsupported", windows: [], message: "Quota is reported after the next response" }
+let quotaRefreshed = false
 const tokens = longDistribution
   ? { input: 1_000_000_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
   : { input: 12_400, output: 3_200, reasoning: 1_440, cache: { read: 5_600, write: 320 } }
@@ -128,7 +124,7 @@ const localRates = [
   { providerID: "provider-with-an-extremely-long-identifier-that-must-wrap-inside-its-row", modelID: "model-with-an-extremely-long-identifier-v2-20260101-preview-extra-long-suffix", observedFrom: 1_700_000_000_000, observedTo: 1_700_003_600_000, tokensPerMinute: 0.4, coverage: { pricedRequests: 0, unpricedRequests: 7 } },
   { providerID: "anthropic", profile: "Max · Personal", modelID: "claude-opus", observedFrom: 1_700_000_000_000, observedTo: 1_700_003_600_000, tokensPerMinute: 0, tokensPerMinute5: 0, estimatedUSDPerHour: 0.0042, coverage: { pricedRequests: 3, unpricedRequests: 2 } },
 ]
-const museRate = [{ providerID: "muse", profile: "Muse", modelID: "muse-model", observedFrom: 1_700_000_000_000, observedTo: 1_700_003_600_000, tokensPerMinute: 120, tokensPerMinute5: 180, tokensPerMinute60: 120, coverage: { pricedRequests: 0, unpricedRequests: 3 } }]
+const observedRate = { providerID: "opencode-go", profile: "Work", modelID: "minimax-m3", observedFrom: 1_700_000_000_000, observedTo: 1_700_003_600_000, tokensPerMinute: 120, tokensPerMinute5: 180, tokensPerMinute60: 120, coverage: { pricedRequests: 0, unpricedRequests: 3 } }
 const requests: { operation: string; input?: unknown }[] = []
 let releasePage: (() => void) | undefined
 let releaseReload: (() => void) | undefined
@@ -192,8 +188,11 @@ const report = (input: UsageReportInput) => {
 type DashboardRequest = { readonly daily?: UsageReportInput; readonly monthly?: UsageReportInput; readonly breakdown?: UsageReportInput; readonly refresh?: boolean }
 
 const providerSnapshot = (refresh: boolean) => {
-  if (musePendingMode && refresh) museRefreshed = true
-  quotaSnapshots = musePendingMode ? [museRefreshed ? museObservedProvider : musePendingProvider, ...providers] : museMode ? [museProvider, ...providers] : none ? providers.filter((provider) => provider.status === "unsupported") : refreshCycle ? refreshedProviders() : providers
+  if (quotaScenario === "pending" && refresh) quotaRefreshed = true
+  const provider = quotaScenario === "pending"
+    ? quotaRefreshed ? { ...observedProvider, windows: observedProvider.windows.map((window) => window.id === "window" ? { ...window, used: 0 } : window) } : pendingProvider
+    : observedProvider
+  quotaSnapshots = observedQuota ? [provider, ...providers] : none ? providers.filter((provider) => provider.status === "unsupported") : refreshCycle ? refreshedProviders() : providers
   return quotaSnapshots
 }
 
@@ -202,12 +201,12 @@ const forecastSnapshot = () => {
   const quotas = quotaSnapshots.flatMap((provider) => provider.windows.map((window) => ({
     providerID: provider.providerID, ...(provider.profile === undefined ? {} : { profile: provider.profile }), windowID: window.id, unit: window.unit,
     source: provider.source, stability: provider.stability, updatedAt: provider.updatedAt,
-    ...(museMode && provider.providerID === "muse" ? { state: "insufficient" as const, evidence: "insufficient" as const, reason: "Muse quota observations are warming up" }
+    ...(observedQuota && provider.providerID === observedProvider.providerID ? { state: "insufficient" as const, evidence: "insufficient" as const, reason: "Quota observations are warming up" }
       : forecastMode === "past" ? { state: "estimated" as const, evidence: "medium" as const, method: "quota-delta-ema" as const, ratePerHour: 10, exhaustionAt: asOf - 60_000 }
       : states ? stateFor(provider.providerID, window.id, asOf)
       : { state: "insufficient" as const, evidence: "insufficient" as const, reason: "Warming up after restart" }),
   })))
-  return { asOf, localScope: "backend", ...(forecastMode === "rates-absent" ? {} : { localRates: museMode ? [...museRate, ...localRates] : states ? localRates : [] }), ...(forecastMode === "quotas-absent" ? {} : { quotas }) }
+  return { asOf, localScope: "backend", ...(forecastMode === "rates-absent" ? {} : { localRates: observedQuota ? [observedRate, ...localRates] : states ? localRates : [] }), ...(forecastMode === "quotas-absent" ? {} : { quotas }) }
 }
 
 const answer = async (operation: string, request?: RemoteTransportRequest): Promise<RemoteRequestOutcome> => {

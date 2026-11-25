@@ -70,7 +70,7 @@ test("overview leads with spend, separates account quotas and Backend rates, and
 test("provider marks follow reported identities and retain labels without invented marks or backgrounds", async () => {
   const page = await browser!.openPage()
   try {
-    await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?provider=muse&forecast=states`)
+    await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?quota=observed&forecast=states`)
     await wait(page, `document.querySelectorAll('.usage-provider').length === 8`)
     await wait(page, `[...document.querySelectorAll('.usage-provider .provider-logo img')].every(image => image.complete && image.naturalWidth > 0)`)
     const providers = await page.evaluate(`[...document.querySelectorAll('.usage-provider')].map(node => {
@@ -81,7 +81,7 @@ test("provider marks follow reported identities and retain labels without invent
         sources: marks.every(mark => [...mark.querySelectorAll('img')].every(image => image.complete && image.naturalWidth > 0)) };
     })`, decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, id: (decodeString)(record["id"]), label: (decodeString)(record["label"]), marks: (decodeNumber)(record["marks"]), transparent: (decodeBoolean)(record["transparent"]), size: (decodeBoolean)(record["size"]), sources: (decodeBoolean)(record["sources"]) } }))
     expect(providers.map(provider => [provider.id, provider.label, provider.marks])).toEqual([
-      ["muse", "Muse (Meta)", 1], ["openai", "Codex", 1], ["anthropic", "Claude", 1], ["github-copilot", "Copilot", 1], ["openrouter", "OpenRouter", 1], ["disconnected", "Disconnected provider", 0], ["empty", "Empty provider", 0], ["failed", "Provider with an error", 0],
+      ["opencode-go", "OpenCode Go", 1], ["openai", "Codex", 1], ["anthropic", "Claude", 1], ["github-copilot", "Copilot", 1], ["openrouter", "OpenRouter", 1], ["disconnected", "Disconnected provider", 0], ["empty", "Empty provider", 0], ["failed", "Provider with an error", 0],
     ])
     expect(providers.every(provider => provider.transparent && provider.size && provider.sources)).toBe(true)
     expect(await page.evaluate(`window.usageRequests().length`)).toBe(1)

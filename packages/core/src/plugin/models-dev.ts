@@ -4,6 +4,7 @@ import { EventRuntime } from "../event"
 import { ModelsDev } from "../models-dev"
 import { Catalog } from "../catalog"
 import { Integration } from "../integration"
+import { Provider } from "../provider"
 
 export const registerModelsDev = (catalog: Catalog.Interface, integrations: Pick<Integration.Interface, "transform" | "reload">, modelsDev: Pick<ModelsDev.Interface, "get">) =>
   Effect.gen(function* () {
@@ -11,7 +12,7 @@ export const registerModelsDev = (catalog: Catalog.Interface, integrations: Pick
     const loaded = { data: yield* modelsDev.get() }
     yield* integrations.transform((integrations) => {
       for (const provider of loaded.data) {
-        if (provider.environment.length === 0) continue
+        if (Provider.isRetiredID(provider.info.id) || provider.environment.length === 0) continue
         const integrationID = Integration.ID.make(provider.info.id)
         integrations.update(integrationID, (integration) => (integration.name = provider.info.name))
         integrations.method.update({
@@ -26,6 +27,7 @@ export const registerModelsDev = (catalog: Catalog.Interface, integrations: Pick
     })
     yield* catalog.transform((catalog) => {
       for (const provider of loaded.data) {
+        if (Provider.isRetiredID(provider.info.id)) continue
         catalog.provider.update(provider.info.id, (draft) => {
           Object.assign(draft, provider.info)
           draft.integrationID = Integration.ID.make(provider.info.id)

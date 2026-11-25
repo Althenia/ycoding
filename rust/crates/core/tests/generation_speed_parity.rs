@@ -12,47 +12,15 @@ fn timing(value: &str) -> provider_request::Timing {
     provider_request::Timing::decode(&parse_json(value).unwrap()).unwrap()
 }
 
-fn mechanism(route: &str, provider: &str, id: &str) -> String {
-    let value = cache_diagnostics::provider_cache_for_model(route, &model(provider, id), None);
+#[test]
+fn google_sdk_route_reports_gemini_prefix_caching() {
+    let value = cache_diagnostics::provider_cache("ai-sdk:@ai-sdk/google", "google", None);
     let JsonValue::Object(fields) = value else {
         panic!("provider cache must be an object")
     };
-    fields
-        .iter()
-        .find_map(|(key, value)| {
-            (key.as_str() == Some("mechanism")).then(|| match value {
-                JsonValue::String(text) => text.as_str().unwrap().to_owned(),
-                _ => panic!("mechanism must be text"),
-            })
-        })
-        .unwrap()
-}
-
-#[test]
-fn antigravity_claude_on_google_route_reports_anthropic_cache_control() {
-    for route in ["ai-sdk:@ai-sdk/google", "unknown"] {
-        for id in ["claude-sonnet-5-5", "claude-opus-5-5", "Claude-Sonnet-5-5"] {
-            assert_eq!(
-                mechanism(route, "antigravity", id),
-                "anthropic-cache-control",
-                "{route} {id}"
-            );
-        }
-        for id in ["gemini-3.8-flash", "gemini-4-argon"] {
-            assert_eq!(
-                mechanism(route, "antigravity", id),
-                "gemini-prefix-cache",
-                "{route} {id}"
-            );
-        }
-    }
     assert_eq!(
-        mechanism("openai-chat", "antigravity", "claude-sonnet-5-5"),
-        "openai-prefix-cache"
-    );
-    assert_eq!(
-        mechanism("ai-sdk:@ai-sdk/google", "google", "claude-sonnet-5-5"),
-        "gemini-prefix-cache"
+        fields.get(&"mechanism".into()),
+        Some(&JsonValue::String("gemini-prefix-cache".into()))
     );
 }
 

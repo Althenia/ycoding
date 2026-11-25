@@ -3,7 +3,7 @@ import { renderToString } from "solid-js/web"
 import { ProviderLogo, providerLogo } from "./provider-logo"
 import { declarationsWhere, parseStylesheet } from "../../styles/css-rules"
 
-const providers = ["anthropic", "openrouter", "openai", "meta", "muse", "github-copilot", "xai", "zai", "zai-coding-plan", "cursor", "opencode-go", "antigravity"]
+const providers = ["anthropic", "openrouter", "openai", "meta", "github-copilot", "xai", "zai", "zai-coding-plan", "cursor", "opencode-go"]
 
 test("provider marks cover exactly the built-in account usage adapters", async () => {
   const source = await Bun.file(new URL("../../../../../packages/core/src/provider-usage.ts", import.meta.url)).text()
@@ -16,6 +16,11 @@ test("provider marks cover exactly the built-in account usage adapters", async (
   for (const id of providers) expect(providerLogo(id)).toBeDefined()
   const providerID = "opencode"
   for (const id of ["", providerID, "google", "runpod", "OpenAI", "custom", "constructor", "__proto__"]) expect(providerLogo(id)).toBeUndefined()
+})
+
+test("retired providers have no account logo even in historical data", () => {
+  expect(providerLogo("antigravity")).toBeUndefined()
+  expect(providerLogo("muse")).toBeUndefined()
 })
 
 test("unknown providers add no markup or whitespace around their existing label", () => {
@@ -53,8 +58,7 @@ test("supplied Claude, OpenRouter and Meta colors remain inside their transparen
   expect(await Bun.file(new URL(providerLogo("anthropic")!.src)).text()).toContain('#D97757')
   expect(await Bun.file(new URL(providerLogo("openrouter")!.src)).text()).toContain('#C8FF00')
   expect(await Bun.file(new URL(providerLogo("meta")!.src)).text()).toContain('#0082FB')
-  for (const id of ["anthropic", "openrouter", "meta", "muse"]) expect(providerLogo(id)!.monochrome).not.toBe(true)
-  expect(providerLogo("meta")).toBe(providerLogo("muse"))
+  for (const id of ["anthropic", "openrouter", "meta"]) expect(providerLogo(id)!.monochrome).not.toBe(true)
   expect(providerLogo("zai")).toBe(providerLogo("zai-coding-plan"))
 })
 

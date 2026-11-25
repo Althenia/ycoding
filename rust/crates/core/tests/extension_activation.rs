@@ -652,7 +652,6 @@ async fn plugin_list_places_native_pre_capabilities_then_extensions_then_native_
             "ycoding.provider.kilo",
             "ycoding.provider.llmgateway",
             "ycoding.provider.mistral",
-            "ycoding.provider.muse",
             "ycoding.provider.nvidia",
             "opencode.provider.opencode",
             "ycoding.provider.snowflake-cortex",

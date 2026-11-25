@@ -90,8 +90,8 @@ test("quota cards include snapshots with windows, an error message, or any unaut
 
 test("typed unsupported snapshots stay hidden even when response-observed, while reported windows remain visible", () => {
   const pending: UsageProvider = {
-    providerID: "muse", label: "Muse (Meta)", status: "unsupported", source: "response_stream", stability: "observed",
-    updatedAt: 1, windows: [], message: "Quota is reported after the next Muse response",
+    providerID: "opencode-go", label: "OpenCode Go", status: "unsupported", source: "response_stream", stability: "observed",
+    updatedAt: 1, windows: [], message: "Quota is reported after the next response",
   }
   expect(visibleProviders([pending])).toEqual([])
   expect(visibleProviders([{ ...pending, source: "provider_api" }])).toEqual([])
@@ -100,7 +100,7 @@ test("typed unsupported snapshots stay hidden even when response-observed, while
   expect(visibleProviders([{ ...pending, message: "   " }])).toEqual([])
   expect(visibleProviders([{ ...pending, providerID: "disconnected", status: "unauthorized", windows: [{ id: "window", label: "Window", unit: "percent", used: 10 }] }]).map((item) => item.providerID)).toEqual(["disconnected"])
   const observed: UsageProvider = { ...pending, status: "available", message: undefined, windows: [{ id: "window", label: "5-hour window", unit: "percent", used: 0 }] }
-  expect(visibleProviders([observed]).map((item) => item.providerID)).toEqual(["muse"])
+  expect(visibleProviders([observed]).map((item) => item.providerID)).toEqual(["opencode-go"])
   expect(quotaWindow(observed.windows[0]!, 1_000).used).toBe("0%")
 })
 

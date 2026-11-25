@@ -18,7 +18,6 @@ pub struct Namespace<'a> {
     pub workspace_id: Option<LosslessString>,
     pub provider_id: LosslessString,
     pub model_id: LosslessString,
-    pub variant: Option<LosslessString>,
     pub account_identity_digest: Option<&'a str>,
     pub permissions: &'a [permission::Rule],
     pub system: &'a [llm::TextPart],
@@ -100,11 +99,6 @@ pub fn tool_digest(tools: &[llm::ToolDefinition]) -> String {
 }
 
 pub fn namespace(input: &Namespace) -> String {
-    let variant = if input.provider_id.as_str() == Some("antigravity") {
-        input.variant.clone()
-    } else {
-        None
-    };
     sha256(&canonical_json(
         &ObjectEncoder::new()
             .field("namespace", "session-prompt-cache/v2")
@@ -121,7 +115,6 @@ pub fn namespace(input: &Namespace) -> String {
             .optional("workspaceID", &input.workspace_id)
             .field("providerID", &input.provider_id)
             .field("modelID", &input.model_id)
-            .optional("variant", &variant)
             .optional(
                 "accountIdentityDigest",
                 &input.account_identity_digest.map(LosslessString::from),
@@ -543,7 +536,6 @@ fn supports_prompt_cache_key(route: &str) -> bool {
     matches!(
         route,
         "openai-chat"
-            | "muse-responses"
             | "openai-responses"
             | "openai-responses-websocket"
             | "openai-codex-responses"

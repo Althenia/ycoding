@@ -38,12 +38,6 @@ test("detects configured names by property presence without reading any value", 
   expect(signingConfiguration(env, config)).toEqual(["YCODING_MACOS_SIGNING_IDENTITY", "MODELS_DEV_API_JSON", "APPLE_ID"])
 })
 
-test("reports build-time client secret environment names without values", () => {
-  const names = signingConfiguration({ YCODING_ANTIGRAVITY_CLIENT_SECRET: "synthetic-secret", YCODING_MUSE_CLIENT_SECRET: "synthetic-secret" }, config)
-  expect(names).toEqual(["YCODING_ANTIGRAVITY_CLIENT_SECRET", "YCODING_MUSE_CLIENT_SECRET"])
-  expect(JSON.stringify(names)).not.toContain("synthetic-secret")
-})
-
 test("the Electrobun config enables codesign only when the signing identity is present in the environment", () => {
   const evaluate = (env: Record<string, string>) => {
     const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "ELECTROBUN_DEVELOPER_ID"))

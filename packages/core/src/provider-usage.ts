@@ -8,8 +8,8 @@ import { makeLocationNode } from "./effect/app-node"
 import { httpClient } from "./effect/app-node-platform"
 import { Integration } from "./integration"
 import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
-import { Provider } from "@ycoding-ai/schema/provider"
-import { Effect, Layer, Schema, Semaphore } from "effect"
+import { Provider } from "./provider"
+import { Effect, Layer, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { Global } from "./global"
 import { InstallationVersion } from "./installation/version"
@@ -17,12 +17,10 @@ import { createClaudeCodeCredentialStore } from "./plugin/provider/anthropic-cla
 import { createManagedClaudeCodeCredentialSource } from "./plugin/provider/anthropic-claude-code-login"
 import { OpenAICodex } from "./plugin/provider/openai-codex"
 import { join } from "node:path"
-import { AntigravityUsage } from "./provider-usage/antigravity"
 import { CopilotUsage } from "./provider-usage/copilot"
 import { ClaudeUsage } from "./provider-usage/claude"
 import { CodexUsage } from "./provider-usage/codex"
 import { MetaUsage } from "./provider-usage/meta"
-import { MuseUsage } from "./provider-usage/muse"
 import { OpenAIUsage } from "./provider-usage/openai"
 import { OpenRouterUsage } from "./provider-usage/openrouter"
 import { GrokUsage } from "./provider-usage/grok"
@@ -186,10 +184,9 @@ export function make(input: MakeInput): Interface {
     const selected = credentialID ? candidates.find((item) => item.id === credentialID) : primary
     const profileSource =
       selected &&
-      (providerID === "muse" ||
-        (selected.value.type === "oauth" &&
-          selected.value.metadata?.managed === true &&
-          typeof selected.value.metadata.source === "string"))
+      selected.value.type === "oauth" &&
+      selected.value.metadata?.managed === true &&
+      typeof selected.value.metadata.source === "string"
         ? accountIdentityDigest(selected)
         : undefined
     const observed = () => currentObservation(
@@ -251,9 +248,7 @@ export function make(input: MakeInput): Interface {
     if (!adapter) return unavailable(providerID, "unsupported", "Provider usage is unsupported")
     if (!selected) {
       if (current) return current
-      return providerID === "muse" && credentialID === undefined
-        ? MuseUsage.unreported(now())
-        : unavailable(providerID, "unsupported", "No supported credential is configured")
+      return unavailable(providerID, "unsupported", "No supported credential is configured")
     }
 
     const selectedCacheKey = `${providerID}:${selected.id}:${selected.accountGeneration}`
@@ -314,14 +309,11 @@ export function make(input: MakeInput): Interface {
         status: latest.status, source: latest.source, stability: latest.stability, updatedAt: latest.updatedAt,
         windows: latest.windows, ...(latest.profile === undefined ? {} : { profile: latest.profile }),
         ...(snapshot.message === undefined ? {} : { message: snapshot.message }) }))
-    // A no-data unsupported snapshot (for example the Muse placeholder, whose timestamp is
-    // only its generation time) carries no quota, so it cannot supersede a stored observation.
+    // A no-data unsupported snapshot carries no quota, so it cannot supersede a stored observation.
     if (
       latest &&
       (latest.updatedAt >= snapshot.updatedAt ||
-        (snapshot.status === "unsupported" &&
-          snapshot.windows.length === 0 &&
-          (providerID !== "muse" || snapshot.message === "Quota is reported after the next Muse response")))
+        (snapshot.status === "unsupported" && snapshot.windows.length === 0))
     )
       return yield* profiled(
         providerID === "anthropic" && profileSource && latest.source === "response_headers" &&
@@ -336,7 +328,7 @@ export function make(input: MakeInput): Interface {
     request?: { readonly refresh?: boolean; readonly cachedOnly?: boolean },
     includeLocal = true,
   ) {
-    const providers = yield* input.providers.available()
+    const providers = (yield* input.providers.available()).filter((provider) => !Provider.isRetiredID(provider.id))
     const credentials = yield* input.credentials.all()
     const targets = [...new Set(providers.map((provider) => provider.id))].toSorted().flatMap((providerID) => {
       const candidates = credentialsFor(credentials, providerID)
@@ -377,6 +369,8 @@ export function make(input: MakeInput): Interface {
 
   return {
     get: Effect.fn("ProviderUsage.get")(function* (request: GetInput) {
+      if (Provider.isRetiredID(request.providerID))
+        return unavailable(request.providerID, "unsupported", new Provider.RetiredError({ providerID: request.providerID }).message)
       const credentials = yield* input.credentials.all()
       return yield* load(
         request.providerID,
@@ -433,6 +427,7 @@ export function make(input: MakeInput): Interface {
       })).pipe(Effect.catchCause(() => Effect.succeed({ asOf, localScope: request.localScope })))
     }),
     observe: Effect.fn("ProviderUsage.observe")(function* (observation, profileSource) {
+      if (Provider.isRetiredID(observation.providerID)) return
       yield* Effect.gen(function* () {
         const credential = profileSource === undefined ? undefined :
           (yield* input.credentials.all()).find((item) =>
@@ -492,12 +487,10 @@ function quotaSemantics(
     (window.unit === "percent" &&
       ((snapshot.providerID === "anthropic" && (window.id === "five-hour" || /^seven-day(?:-|$)/.test(window.id))) ||
         (snapshot.providerID === "openai" && /-(?:primary|secondary)$/.test(window.id)) ||
-        (snapshot.providerID === "muse" && ["window", "weekly"].includes(window.id)) ||
         (snapshot.providerID === "github-copilot" && ["credits", "chat", "completions"].includes(window.id)) ||
         (snapshot.providerID === "xai" && window.id === "weekly") ||
         (["zai", "zai-coding-plan"].includes(snapshot.providerID) && ["session", "weekly"].includes(window.id)) ||
         (snapshot.providerID === "cursor" && window.id === "included") ||
-        snapshot.providerID === "antigravity" ||
         (snapshot.providerID === "opencode-go" && ["weekly", "monthly"].includes(window.id)))) ||
     (["zai", "zai-coding-plan"].includes(snapshot.providerID) &&
       window.id === "web-searches" &&
@@ -589,13 +582,11 @@ const layer = Layer.effect(
           openrouter: (input) => openRouter(http, input),
           openai: (input) => openAI(http, input, integrations.connection),
           meta: (input) => meta(http, input),
-          muse: createMuseUsageAdapter(http),
           "github-copilot": (input) => githubCopilot(http, input),
           xai: (input) => grok(http, input),
           zai: (input) => zai(http, input),
           "zai-coding-plan": (input) => zai(http, input),
           cursor: (input) => cursor(http, input),
-          antigravity: (input) => antigravity(http, input, integrations.connection),
           "opencode-go": (input) => goUsage(http, input),
         },
         ttlMs: { anthropic: 5 * minute },
@@ -652,59 +643,6 @@ export const node = makeLocationNode({
     httpClient,
   ],
 })
-
-export const muse: Adapter = (input) => Effect.succeed(MuseUsage.unreported(input.updatedAt))
-
-const MuseMint = Schema.Struct({
-  require_payment: Schema.optional(Schema.Boolean),
-  is_subs_active: Schema.optional(Schema.Boolean),
-  subs_tier_name: Schema.optional(Schema.NullOr(Schema.String)),
-  subs_usage: Schema.optional(Schema.Unknown),
-})
-const decodeMuseMint = Schema.decodeUnknownOption(MuseMint)
-
-export function createMuseUsageAdapter(http: HttpClient.HttpClient): Adapter {
-  const cache = new Map<string, { readonly at: number; readonly snapshot: ProviderUsage.Snapshot }>()
-  const locks = new Map<string, Semaphore.Semaphore>()
-  return (input) => {
-    const oauth = input.credential.value
-    if (input.refresh !== true || oauth.type !== "oauth") return Effect.succeed(MuseUsage.unreported(input.updatedAt))
-    const id = accountIdentityDigest(input.credential)
-    const lock = locks.get(id) ?? Semaphore.makeUnsafe(1)
-    locks.set(id, lock)
-    return lock.withPermit(
-      Effect.gen(function* () {
-        const existing = cache.get(id)
-        if (existing && input.updatedAt - existing.at < 60_000) return existing.snapshot
-        if (oauth.expires !== 0 && oauth.expires <= input.updatedAt) return yield* new RequestError({ status: 401 })
-        const response = yield* http
-          .execute(
-            HttpClientRequest.post("https://api.meta.ai/muse-code/key").pipe(
-              HttpClientRequest.acceptJson,
-              HttpClientRequest.bearerToken(oauth.access),
-              HttpClientRequest.setHeader("x-api-version", "1.0.0"),
-              HttpClientRequest.bodyText(JSON.stringify({ onboard: false }), "application/json"),
-            ),
-          )
-          .pipe(Effect.mapError(() => new RequestError({})))
-        if (response.status < 200 || response.status >= 300) return yield* new RequestError({ status: response.status })
-        const body = yield* response.json.pipe(Effect.mapError(() => new RequestError({ status: response.status })))
-        const decoded = decodeMuseMint(body)
-        if (decoded._tag === "None") return yield* new RequestError({ status: response.status })
-        const minted = decoded.value
-        const quota = MuseUsage.normalizeSubscription(minted.subs_usage, input.updatedAt, minted.subs_tier_name)
-        const snapshot =
-          minted.require_payment === true || minted.is_subs_active === false
-            ? MuseUsage.inactive(input.updatedAt)
-            : quota && quota.windows.length > 0
-              ? quota
-              : MuseUsage.unreported(input.updatedAt, minted.subs_tier_name)
-        cache.set(id, { at: input.updatedAt, snapshot })
-        return snapshot
-      }),
-    )
-  }
-}
 
 export const claudeOAuth = (
   http: HttpClient.HttpClient,
@@ -889,54 +827,6 @@ export const cursor = (http: HttpClient.HttpClient, input: AdapterInput) =>
       usage,
       ...(plan._tag === "Some" ? { plan: plan.value } : {}),
     })
-  })
-
-export const antigravity = (
-  http: HttpClient.HttpClient,
-  input: AdapterInput,
-  connection: Pick<Integration.Interface["connection"], "snapshot">,
-) =>
-  Effect.gen(function* () {
-    if (input.credential.value.type !== "oauth")
-      return yield* Effect.fail(new Error("Antigravity usage requires an OAuth credential"))
-    const current = yield* connection
-      .snapshot({
-        type: "credential",
-        id: input.credential.id,
-        label: input.credential.label,
-        active: input.credential.active,
-      })
-      .pipe(Effect.catch(() => Effect.succeed(undefined)))
-    const credential =
-      current?.credential?.accountGeneration === input.credential.accountGeneration && current.value?.type === "oauth"
-        ? current.value
-        : input.credential.value
-    const { antigravityBaseURL, antigravityUserAgent } = yield* Effect.promise(
-      () => import("./plugin/provider/antigravity"),
-    )
-    const project = credential.metadata?.projectID
-    const response = yield* http
-      .execute(
-        HttpClientRequest.post(`${antigravityBaseURL}/v1internal:retrieveUserQuotaSummary`).pipe(
-          HttpClientRequest.acceptJson,
-          HttpClientRequest.bearerToken(credential.access),
-          HttpClientRequest.setHeader("User-Agent", antigravityUserAgent()),
-          HttpClientRequest.bodyText(
-            JSON.stringify(typeof project === "string" && project ? { project } : {}),
-            "application/json",
-          ),
-        ),
-      )
-      .pipe(Effect.mapError(() => new RequestError({})))
-    if (response.status < 200 || response.status >= 300)
-      return yield* new RequestError({
-        status: response.status,
-        retryAfter: retryAfter(response.headers["retry-after"]),
-      })
-    const payload = yield* response.json.pipe(Effect.mapError(() => new RequestError({ status: response.status })))
-    const snapshot = AntigravityUsage.normalize(payload, input.updatedAt)
-    if (!snapshot) return yield* new RequestError({ status: response.status })
-    return snapshot
   })
 
 const cursorRpc = Effect.fnUntraced(function* (http: HttpClient.HttpClient, method: string, token: string) {

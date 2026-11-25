@@ -226,26 +226,20 @@ test("derives provider cache mechanisms from the executed route", () => {
   )
   expect(SessionCacheDiagnostics.mechanism("unknown", model("cursor"), tokens)).toBe("provider-reported")
   expect(SessionCacheDiagnostics.mechanism("gemini", model("google"), tokens)).toBe("gemini-prefix-cache")
-  expect(SessionCacheDiagnostics.mechanism("unknown", model("antigravity"), tokens)).toBe("gemini-prefix-cache")
-  expect(SessionCacheDiagnostics.mechanism("ai-sdk:@ai-sdk/google", model("antigravity"), tokens)).toBe(
-    "gemini-prefix-cache",
-  )
 })
 
-test("reports Antigravity Claude cache control and Gemini implicit cache thresholds", () => {
-  for (const routeID of ["ai-sdk:@ai-sdk/google", "unknown"]) {
+test("renders cache mechanisms for historical Antigravity messages without route metadata", () => {
+  for (const provider of ["antigravity", "AntiGravity"]) {
     for (const id of ["claude-sonnet-5-5", "claude-opus-5-5"]) {
-      const selected = namedModel("antigravity", id)
-      expect(SessionCacheDiagnostics.mechanism(routeID, selected, tokens)).toBe("anthropic-cache-control")
-      expect(SessionCacheDiagnostics.calculate({ model: selected, tokens, routeID, estimatedCost: Money.USD.zero }).cache)
+      const selected = namedModel(provider, id)
+      expect(SessionCacheDiagnostics.calculate({ model: selected, tokens, estimatedCost: Money.USD.zero }).cache)
         .toMatchObject({ mechanism: "anthropic-cache-control", minimumTokens: 512 })
     }
     for (const id of ["gemini-3.8-flash", "gemini-4-argon"]) {
-      const selected = namedModel("antigravity", id)
+      const selected = namedModel(provider, id)
       for (const eligible of [2000, 5000]) {
         const usage = { ...tokens, input: eligible, cache: { read: 0, write: 0 } }
-        expect(SessionCacheDiagnostics.mechanism(routeID, selected, usage)).toBe("gemini-prefix-cache")
-        expect(SessionCacheDiagnostics.calculate({ model: selected, tokens: usage, routeID, estimatedCost: Money.USD.zero }).cache)
+        expect(SessionCacheDiagnostics.calculate({ model: selected, tokens: usage, estimatedCost: Money.USD.zero }).cache)
           .toMatchObject({ mechanism: "gemini-prefix-cache", minimumTokens: 4096, belowMinimum: eligible < 4096 })
       }
     }

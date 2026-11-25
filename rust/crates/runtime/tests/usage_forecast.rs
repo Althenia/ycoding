@@ -127,7 +127,13 @@ fn rated(result: &v5::ProviderUsageForecastResult, prefix: &str) -> BTreeSet<Str
         .collect()
 }
 
-fn fact(id: &str, directory: &str, model: &str, time: i64) -> resources::UsageAnalyticsRequest {
+fn fact(
+    id: &str,
+    directory: &str,
+    provider: &str,
+    model: &str,
+    time: i64,
+) -> resources::UsageAnalyticsRequest {
     resources::UsageAnalyticsRequest {
         id: id.into(),
         session_id: "ses_forecast_private".into(),
@@ -138,7 +144,7 @@ fn fact(id: &str, directory: &str, model: &str, time: i64) -> resources::UsageAn
         agent: "build".into(),
         source: "step".into(),
         model: Document::new(
-            parse_json(&format!(r#"{{"providerID":"anthropic","id":"{model}"}}"#)).unwrap(),
+            parse_json(&format!(r#"{{"providerID":"{provider}","id":"{model}"}}"#)).unwrap(),
         )
         .unwrap(),
         usage_anchor: None,
@@ -173,12 +179,14 @@ async fn seed(prefix: &str, here: &str, label: &str) -> Seeded {
         fact(
             &format!("fact_{prefix}here"),
             here,
+            "muse",
             &format!("{prefix}here"),
             time - 10 * MINUTE,
         ),
         fact(
             &format!("fact_{prefix}elsewhere"),
             "/forecast/elsewhere",
+            "antigravity",
             &format!("{prefix}elsewhere"),
             time - 2 * MINUTE,
         ),
@@ -200,8 +208,8 @@ async fn seed(prefix: &str, here: &str, label: &str) -> Seeded {
     .unwrap();
     let saved = credentials
         .create(
-            format!("private-forecast-muse-{prefix}").as_str().into(),
-            "muse".into(),
+            format!("private-forecast-stream-{prefix}").as_str().into(),
+            "fixture-stream".into(),
             Some(label.into()),
             secret.clone(),
             1,
@@ -210,10 +218,10 @@ async fn seed(prefix: &str, here: &str, label: &str) -> Seeded {
         .unwrap();
     credentials
         .create(
-            format!("private-forecast-muse-other-{prefix}")
+            format!("private-forecast-stream-other-{prefix}")
                 .as_str()
                 .into(),
-            "muse".into(),
+            "fixture-stream".into(),
             Some(format!("{label}Other").as_str().into()),
             resources::Secret::new(
                 parse_json(r#"{"type":"key","key":"synthetic-forecast-other-key"}"#).unwrap(),
@@ -248,8 +256,8 @@ async fn seed(prefix: &str, here: &str, label: &str) -> Seeded {
     quota
         .observe(
             provider_usage::Observation {
-                provider_id: provider::Id("muse".into()),
-                label: "Muse (Meta)".into(),
+                provider_id: provider::Id("fixture-stream".into()),
+                label: "Synthetic stream".into(),
                 source: "response_stream".into(),
                 stability: "observed".into(),
                 observed_at: NonNegativeInt::new(time).unwrap(),
@@ -314,8 +322,11 @@ async fn served(fixture: &Fixture, quota: Option<Arc<quota::Service>>) -> Arc<En
                         reference,
                         GENERATION,
                         &[
+                            provider::Id("fixture-stream".into()),
+                            provider::Id("openrouter".into()),
+                            provider::Id("anthropic".into()),
                             provider::Id("muse".into()),
-                            provider::Id("openrouter".into())
+                            provider::Id("antigravity".into()),
                         ],
                         NonNegativeInt::new(as_of).unwrap()
                     )
@@ -356,25 +367,24 @@ fn assert_private(result: &v5::ProviderUsageForecastResult, seeded: &Seeded) {
 
 fn assert_quotas(result: &v5::ProviderUsageForecastResult, label: &str) {
     let quotas = &result.data.quotas.as_ref().unwrap().items;
-    let muse = quotas
+    let stream = quotas
         .iter()
         .find(|quota| {
-            units(&quota.provider_id) == "muse"
+            units(&quota.provider_id) == "fixture-stream"
                 && quota.profile.as_ref().map(units).as_deref() == Some(label)
         })
         .unwrap();
-    assert_eq!(units(&muse.window_id), "five-hour");
-    assert_eq!((muse.unit, muse.source, muse.stability), (1, 6, 3));
-    assert_eq!((muse.state, muse.evidence), (2, 3));
+    assert_eq!(units(&stream.window_id), "five-hour");
+    assert_eq!((stream.unit, stream.source, stream.stability), (1, 6, 3));
+    assert_eq!((stream.state, stream.evidence), (2, 3));
     assert_eq!(
-        (muse.rate_per_hour, muse.exhaustion_at, muse.method),
+        (stream.rate_per_hour, stream.exhaustion_at, stream.method),
         (None, None, None)
     );
-    assert!(
-        quotas
-            .iter()
-            .all(|quota| units(&quota.provider_id) != "openrouter")
-    );
+    assert!(quotas.iter().all(|quota| !matches!(
+        units(&quota.provider_id).as_str(),
+        "openrouter" | "muse" | "antigravity"
+    )));
 }
 
 #[test]
@@ -431,13 +441,13 @@ async fn native_forecast_preserves_whole_window_pace_and_its_bounded_exhaustion_
         .quota
         .observe(
             provider_usage::Observation {
-                provider_id: provider::Id("muse".into()),
-                label: "Muse (Meta)".into(),
+                provider_id: provider::Id("anthropic".into()),
+                label: "Claude".into(),
                 source: "response_stream".into(),
                 stability: "observed".into(),
                 observed_at: NonNegativeInt::new(time).unwrap(),
                 windows: vec![provider_usage::Window {
-                    id: "window".into(),
+                    id: "five-hour".into(),
                     label: "Window".into(),
                     group: None,
                     unit: "percent".into(),
@@ -449,7 +459,7 @@ async fn native_forecast_preserves_whole_window_pace_and_its_bounded_exhaustion_
                     period_seconds: Some(NonNegativeInt::new(18000).unwrap()),
                 }],
             },
-            Some(seeded.account.as_str().into()),
+            None,
         )
         .unwrap();
     let result = success(
@@ -468,7 +478,9 @@ async fn native_forecast_preserves_whole_window_pace_and_its_bounded_exhaustion_
         .unwrap()
         .items
         .iter()
-        .find(|quota| units(&quota.provider_id) == "muse" && units(&quota.window_id) == "window")
+        .find(|quota| {
+            units(&quota.provider_id) == "anthropic" && units(&quota.window_id) == "five-hour"
+        })
         .unwrap();
     let pace = quota.pace.as_ref().unwrap();
     assert_eq!(
@@ -518,7 +530,20 @@ async fn local_forecast_reads_backend_or_location_rates_and_bound_quotas_without
         .iter()
         .find(|rate| rate.model_id.as_ref().map(units).as_deref() == Some("forecast-local-here"))
         .unwrap();
-    assert_eq!(units(&here.provider_id), "anthropic");
+    assert_eq!(units(&here.provider_id), "muse");
+    assert!(
+        backend
+            .data
+            .local_rates
+            .as_ref()
+            .unwrap()
+            .items
+            .iter()
+            .any(|rate| {
+                rate.model_id.as_ref().map(units).as_deref() == Some("forecast-local-elsewhere")
+                    && units(&rate.provider_id) == "antigravity"
+            })
+    );
     assert_eq!(
         (
             here.coverage.priced_requests,

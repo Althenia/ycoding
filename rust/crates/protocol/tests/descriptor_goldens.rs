@@ -1,7 +1,7 @@
 use ycoding_protocol::{WireConnection, WireError, v5};
 
 #[test]
-fn muse_response_stream_appends_source_ordinal_without_renumbering() {
+fn response_stream_source_ordinal_preserves_existing_wire_numbers() {
     for (name, ordinal) in [
         ("PROVIDERUSAGE_SOURCE_PROVIDER_API", 1),
         ("PROVIDERUSAGE_SOURCE_LOCAL_CLIENT_RPC", 2),

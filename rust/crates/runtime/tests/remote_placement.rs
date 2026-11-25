@@ -205,13 +205,27 @@ async fn remote_quota_resolves_ts_default_machine_placement_and_keeps_location()
         .location(reference.directory.as_lossless(), None)
         .unwrap();
     prepared_support::publish(&world().store, &views);
+    quota
+        .observe(
+            ycoding_core::ycoding_schema::provider_usage::Observation {
+                provider_id: provider::Id("fixture-quota".into()),
+                label: "Fixture quota".into(),
+                source: "response_stream".into(),
+                stability: "observed".into(),
+                observed_at: ycoding_core::ycoding_schema::schema::NonNegativeInt::new(now())
+                    .unwrap(),
+                windows: vec![],
+            },
+            None,
+        )
+        .unwrap();
     assert!(
         quota
             .publish(
                 &views,
                 &reference,
                 generation,
-                &[provider::Id("muse".into())],
+                &[provider::Id("fixture-quota".into())],
                 ycoding_core::ycoding_schema::schema::NonNegativeInt::new(now()).unwrap(),
             )
             .await
@@ -250,7 +264,7 @@ async fn remote_quota_resolves_ts_default_machine_placement_and_keeps_location()
         expected.to_str().unwrap()
     );
     assert!(result.location.workspace_id.is_none());
-    assert_eq!(units(&result.data.items[0].provider_id), "muse");
+    assert_eq!(units(&result.data.items[0].provider_id), "fixture-quota");
     assert!(result.data.items[0].windows.items.is_empty());
     for location in [
         v5::ProviderUsageQueryLocation::default(),

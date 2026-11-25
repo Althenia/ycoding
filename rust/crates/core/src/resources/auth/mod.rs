@@ -7,26 +7,31 @@ use serde_json::{Value, json};
 use std::{
     fmt,
     future::Future,
-    sync::{LazyLock, Mutex, OnceLock},
+    sync::{LazyLock, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use url::Url;
 use ycoding_schema::{
     DomainDecode, DomainEncode, JsonObject, JsonValue, LosslessString, credential,
-    integration_id::IntegrationMethodId, schema::NonNegativeInt,
+    integration_id::IntegrationMethodId, provider, schema::NonNegativeInt,
 };
 use ycoding_store::resources::Secret;
 
-pub mod antigravity;
 pub mod bedrock;
 mod builtin;
 pub mod claude;
 pub mod cursor;
 pub mod google;
 pub mod integration;
-pub mod muse;
 pub mod opencode;
 pub mod page;
+
+fn ensure_supported(id: &str) -> Result<(), Error> {
+    if provider::is_retired(id) {
+        return Err(Error::ProviderRetired);
+    }
+    Ok(())
+}
 
 #[derive(Clone, Default)]
 pub struct Preparation {
@@ -47,6 +52,7 @@ impl Preparation {
             .integration_id()
             .as_str()
             .ok_or(Error::InvalidCredential)?;
+        ensure_supported(integration)?;
         if integration == crate::resources::model::UPSTREAM_PROVIDER_ID
             && stored.needs_refresh(time)?
         {
@@ -133,6 +139,11 @@ impl Preparation {
         claude: Option<&claude::Store>,
     ) -> Result<(), Error> {
         let stored = credentials.current_account(&stored)?;
+        let integration = stored
+            .integration_id()
+            .as_str()
+            .ok_or(Error::InvalidCredential)?;
+        ensure_supported(integration)?;
         let value = stored
             .secret()
             .domain()
@@ -140,10 +151,6 @@ impl Preparation {
         if !matches!(value, credential::Value::OAuth(_)) {
             return Err(Error::Rejected);
         }
-        let integration = stored
-            .integration_id()
-            .as_str()
-            .ok_or(Error::InvalidCredential)?;
         if integration == crate::resources::model::UPSTREAM_PROVIDER_ID {
             return self
                 .refresh_upstream(credentials, stored, time)
@@ -213,7 +220,6 @@ pub enum DeviceFlow {
     Copilot { enterprise: Option<String> },
     Openai,
     Xai,
-    Muse,
 }
 impl fmt::Debug for DeviceFlow {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -221,35 +227,11 @@ impl fmt::Debug for DeviceFlow {
     }
 }
 
-struct EmbeddedClients {
-    muse: Option<muse::OAuthClient>,
-    antigravity: Option<antigravity::OAuthClient>,
-}
-static EMBEDDED_CLIENTS: OnceLock<EmbeddedClients> = OnceLock::new();
-
-pub fn install_embedded_clients(
-    antigravity: Option<(&str, Option<&str>)>,
-    muse: Option<(&str, Option<&str>)>,
-) -> bool {
-    let mut installed = false;
-    EMBEDDED_CLIENTS.get_or_init(|| {
-        installed = true;
-        EmbeddedClients {
-            antigravity: antigravity
-                .and_then(|(id, secret)| antigravity::OAuthClient::new(id, secret)),
-            muse: muse.and_then(|(id, secret)| muse::OAuthClient::new(id, secret)),
-        }
-    });
-    installed
-}
-
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
     endpoint: String,
     user_agent: String,
-    muse: Option<muse::OAuthClient>,
-    antigravity: Option<antigravity::OAuthClient>,
 }
 impl fmt::Debug for Client {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -267,7 +249,6 @@ impl Client {
         }
         url.set_query(None);
         url.set_fragment(None);
-        let embedded = EMBEDDED_CLIENTS.get();
         Ok(Self {
             http: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
@@ -276,19 +257,10 @@ impl Client {
                 .map_err(|_| Error::Rejected)?,
             endpoint: url.as_str().trim_end_matches('/').into(),
             user_agent: format!("ycoding/{version}"),
-            muse: embedded.and_then(|clients| clients.muse.clone()),
-            antigravity: embedded.and_then(|clients| clients.antigravity.clone()),
         })
     }
-    pub fn with_muse_client(mut self, client: Option<muse::OAuthClient>) -> Self {
-        self.muse = client;
-        self
-    }
-    pub fn with_antigravity_client(mut self, client: Option<antigravity::OAuthClient>) -> Self {
-        self.antigravity = client;
-        self
-    }
     pub fn provider(provider: &str, version: &str) -> Result<Self, Error> {
+        ensure_supported(provider)?;
         Self::new(
             match provider {
                 "openai" => "https://auth.openai.com",
@@ -296,8 +268,6 @@ impl Client {
                 "github-copilot" => "https://github.com",
                 "cursor" => "https://api2.cursor.sh",
                 "anthropic" => "https://claude.ai",
-                "muse" => "https://auth.meta.com",
-                "antigravity" => "https://oauth2.googleapis.com",
                 _ => return Err(Error::Rejected),
             },
             version,
@@ -311,6 +281,7 @@ impl Client {
         label: Option<LosslessString>,
         key: LosslessString,
     ) -> Result<Info, Error> {
+        ensure_supported(integration.as_str().unwrap_or_default())?;
         let secret = Secret::new(
             credential::Value::Key(credential::Key {
                 key,
@@ -334,7 +305,6 @@ impl Client {
             DeviceFlow::Copilot { .. } => "github-copilot",
             DeviceFlow::Openai => "openai",
             DeviceFlow::Xai => "xai",
-            DeviceFlow::Muse => "muse",
         }
         .into();
         let attempt = self.start_device(flow, now()?).await?;
@@ -391,15 +361,12 @@ impl Client {
         method: &str,
         port: Option<u16>,
     ) -> Result<BrowserAttempt, Error> {
+        ensure_supported(provider)?;
         let (host, default_port, path) = match (provider, method) {
             ("openai", "chatgpt-browser") => ("localhost", 1455, "/auth/callback"),
             ("xai", "browser") => ("127.0.0.1", 56121, "/callback"),
-            ("antigravity", "google") => ("localhost", 51121, "/oauth-callback"),
             _ => return Err(Error::Rejected),
         };
-        if provider == "antigravity" && self.antigravity.is_none() {
-            return Err(Error::Rejected);
-        }
         let listener = tokio::net::TcpListener::bind((host, port.unwrap_or(default_port)))
             .await
             .map_err(|_| Error::Rejected)?;
@@ -483,40 +450,12 @@ impl Client {
                 "/device/code",
                 &[("client_id", XAI_CLIENT), ("scope", XAI_SCOPE)],
             ),
-            DeviceFlow::Muse => {
-                let client = self.muse.as_ref().ok_or(Error::Rejected)?;
-                self.form_as(
-                    "/oidc/device/authorization/",
-                    &client.form(&[]),
-                    muse::USER_AGENT,
-                )
-            }
         };
         let (status, value) = self.send(request).await?;
         if !status.is_success() {
             return Err(Error::Rejected);
         }
         let (url, instructions, code, user_code, interval, expires) = match &flow {
-            DeviceFlow::Muse => {
-                let uri = string(&value, "verification_uri")?;
-                let user = string(&value, "user_code")?;
-                let expires = number(&value, "expires_in").ok_or(Error::Rejected)?;
-                (
-                    value
-                        .get("verification_uri_complete")
-                        .and_then(Value::as_str)
-                        .unwrap_or(uri)
-                        .into(),
-                    format!("Enter code: {user}"),
-                    string(&value, "device_code")?.into(),
-                    user.into(),
-                    number(&value, "interval")
-                        .filter(|n| n.is_finite() && *n > 0.0)
-                        .unwrap_or(5.0)
-                        * 1000.0,
-                    now.saturating_add((expires * 1000.0) as i64),
-                )
-            }
             DeviceFlow::Copilot { .. } => {
                 let uri = string(&value, "verification_uri")?;
                 let user = string(&value, "user_code")?;
@@ -585,17 +524,13 @@ impl Client {
         method: &str,
         redirect: &str,
     ) -> Result<CodeAttempt, Error> {
+        ensure_supported(provider)?;
         if !matches!(
             (provider, method),
-            ("openai", "chatgpt-browser") | ("xai", "browser") | ("antigravity", "google")
+            ("openai", "chatgpt-browser") | ("xai", "browser")
         ) {
             return Err(Error::Rejected);
         }
-        let antigravity_client = if provider == "antigravity" {
-            Some(self.antigravity.clone().ok_or(Error::Rejected)?)
-        } else {
-            None
-        };
         let redirect_url = Url::parse(redirect).map_err(|_| Error::Rejected)?;
         if redirect_url.scheme() != "http"
             || !matches!(redirect_url.host_str(), Some("localhost" | "127.0.0.1"))
@@ -613,7 +548,6 @@ impl Client {
         let challenge = base64(digest::digest(&digest::SHA256, verifier.as_bytes()).as_ref());
         let authorize_url = match provider {
             "openai" => format!("{}/oauth/authorize", self.endpoint),
-            "antigravity" => "https://accounts.google.com/o/oauth2/v2/auth".to_owned(),
             _ => format!("{}/authorize", self.endpoint),
         };
         let mut url = Url::parse(&authorize_url).map_err(|_| Error::Rejected)?;
@@ -621,10 +555,10 @@ impl Client {
             ("response_type", "code"),
             (
                 "client_id",
-                match (provider, &antigravity_client) {
-                    ("openai", _) => OPENAI_CLIENT,
-                    ("antigravity", Some(client)) => client.id(),
-                    _ => XAI_CLIENT,
+                if provider == "openai" {
+                    OPENAI_CLIENT
+                } else {
+                    XAI_CLIENT
                 },
             ),
             ("redirect_uri", redirect),
@@ -632,7 +566,6 @@ impl Client {
                 "scope",
                 match provider {
                     "openai" => "openid profile email offline_access",
-                    "antigravity" => antigravity::SCOPES,
                     _ => XAI_SCOPE,
                 },
             ),
@@ -640,10 +573,6 @@ impl Client {
             ("code_challenge_method", "S256"),
             ("state", &state),
         ]);
-        if provider == "antigravity" {
-            url.query_pairs_mut()
-                .extend_pairs([("access_type", "offline"), ("prompt", "consent")]);
-        }
         if provider == "openai" {
             url.query_pairs_mut().extend_pairs([
                 ("id_token_add_organizations", "true"),
@@ -672,6 +601,11 @@ impl Client {
 
     pub async fn prepare(&self, service: &Service, stored: Info, now: i64) -> Result<Info, Error> {
         let stored = service.current_account(&stored)?;
+        let integration = stored
+            .integration_id()
+            .as_str()
+            .ok_or(Error::InvalidCredential)?;
+        ensure_supported(integration)?;
         let credential::Value::OAuth(value) = stored
             .secret()
             .domain()
@@ -682,19 +616,8 @@ impl Client {
         if !stored.needs_refresh(now)? {
             return Ok(stored);
         }
-        let integration = stored
-            .integration_id()
-            .as_str()
-            .ok_or(Error::InvalidCredential)?;
         if integration == "github-copilot" {
             return Ok(stored);
-        }
-        if integration == "muse" {
-            return if value.expires.get() == 0 || value.expires.get() > now {
-                Ok(stored)
-            } else {
-                Err(Error::ProfileUnavailable)
-            };
         }
         self.renew(service, stored, value, now).await
     }
@@ -705,6 +628,7 @@ impl Client {
         stored: Info,
         now: i64,
     ) -> Result<Info, Error> {
+        ensure_supported(stored.integration_id().as_str().unwrap_or_default())?;
         let credential::Value::OAuth(value) = stored
             .secret()
             .domain()
@@ -727,10 +651,7 @@ impl Client {
             .as_str()
             .ok_or(Error::InvalidCredential)?
             .to_owned();
-        if !matches!(
-            integration.as_str(),
-            "openai" | "xai" | "cursor" | "antigravity"
-        ) {
+        if !matches!(integration.as_str(), "openai" | "xai" | "cursor") {
             return Err(Error::Rejected);
         }
         let client = self.clone();
@@ -809,14 +730,6 @@ impl Client {
         Ok(stored.secret().clone())
     }
 
-    pub(super) async fn refresh_antigravity(
-        &self,
-        value: credential::OAuth,
-        now: i64,
-    ) -> Result<Secret, Error> {
-        self.refresh("antigravity", value, now).await
-    }
-
     async fn refresh(
         &self,
         provider: &str,
@@ -824,33 +737,6 @@ impl Client {
         now: i64,
     ) -> Result<Secret, Error> {
         let refresh = value.refresh.as_str().ok_or(Error::InvalidCredential)?;
-        if provider == "antigravity" {
-            if refresh.is_empty() {
-                return Err(Error::Rejected);
-            }
-            let client = self.antigravity.as_ref().ok_or(Error::Rejected)?;
-            let (status, tokens) = self
-                .send(self.form_as(
-                    "/token",
-                    &client.form(&[("grant_type", "refresh_token"), ("refresh_token", refresh)]),
-                    &ycoding_ai::antigravity::user_agent(),
-                ))
-                .await?;
-            if !status.is_success() {
-                return Err(Error::Rejected);
-            }
-            return token_secret(
-                provider,
-                value
-                    .method_id
-                    .as_lossless()
-                    .as_str()
-                    .ok_or(Error::InvalidCredential)?,
-                &tokens,
-                now,
-                Some(&value),
-            );
-        }
         if provider == "cursor" {
             let (status, tokens) = self
                 .send(
@@ -909,19 +795,11 @@ impl Client {
             .body(value.to_string())
     }
     fn form(&self, path: &str, pairs: &[(&str, &str)]) -> reqwest::RequestBuilder {
-        self.form_as(path, pairs, &self.user_agent)
-    }
-    fn form_as(
-        &self,
-        path: &str,
-        pairs: &[(&str, &str)],
-        user_agent: &str,
-    ) -> reqwest::RequestBuilder {
         self.http
             .post(format!("{}{path}", self.endpoint))
             .header("Content-Type", "application/x-www-form-urlencoded")
             .header("Accept", "application/json")
-            .header("User-Agent", user_agent)
+            .header("User-Agent", &self.user_agent)
             .body(
                 url::form_urlencoded::Serializer::new(String::new())
                     .extend_pairs(pairs.iter().copied())
@@ -1154,7 +1032,6 @@ impl BrowserAttempt {
             let response = if valid { "200 OK" } else { "400 Bad Request" };
             let provider = match self.code.provider.as_str() {
                 "openai" => "ChatGPT",
-                "antigravity" => "Antigravity",
                 _ => "xAI",
             };
             let html = if valid {
@@ -1236,47 +1113,8 @@ impl DeviceAttempt {
             DeviceFlow::Copilot { .. } => self.client.json("/login/oauth/access_token", json!({"client_id":COPILOT_CLIENT,"device_code":self.code,"grant_type":DEVICE_GRANT})),
             DeviceFlow::Openai => self.client.json("/api/accounts/deviceauth/token", json!({"device_auth_id":self.code,"user_code":self.user_code})),
             DeviceFlow::Xai => self.client.form("/token", &[("client_id", XAI_CLIENT), ("device_code", &self.code), ("grant_type", DEVICE_GRANT)]),
-            DeviceFlow::Muse => {
-                let client = self.client.muse.as_ref().ok_or(Error::Rejected)?;
-                self.client.form_as(
-                    "/oidc/device/token/",
-                    &client.form(&[("grant_type", DEVICE_GRANT), ("device_code", &self.code)]),
-                    muse::USER_AGENT,
-                )
-            }
         };
         let (status, tokens) = self.client.send(request).await?;
-        if matches!(self.flow, DeviceFlow::Muse)
-            && status.is_success()
-            && tokens
-                .get("access_token")
-                .and_then(Value::as_str)
-                .is_some_and(|v| !v.is_empty())
-        {
-            let refresh = match tokens.get("refresh_token") {
-                None => "",
-                Some(value) => value.as_str().ok_or(Error::Rejected)?,
-            };
-            let expires = match tokens.get("expires_in") {
-                None => 0,
-                Some(value) => {
-                    let seconds = value
-                        .as_f64()
-                        .filter(|v| v.is_finite())
-                        .ok_or(Error::Rejected)?;
-                    NonNegativeInt::decode(&JsonValue::Number(now as f64 + seconds * 1000.0))
-                        .map_err(|_| Error::Rejected)?
-                        .get()
-                }
-            };
-            return Ok(Poll::Complete(oauth_secret(
-                "device",
-                string(&tokens, "access_token")?,
-                refresh,
-                expires,
-                None,
-            )?));
-        }
         if matches!(self.flow, DeviceFlow::Openai) {
             if status.is_success() {
                 let (status, tokens) = self
@@ -1363,11 +1201,7 @@ impl DeviceAttempt {
         }
     }
     fn wait(&mut self, now: i64) -> Poll {
-        self.next_poll = if matches!(self.flow, DeviceFlow::Muse) {
-            now.saturating_add(self.interval).min(self.expires)
-        } else {
-            now.saturating_add(self.interval).saturating_add(3000)
-        };
+        self.next_poll = now.saturating_add(self.interval).saturating_add(3000);
         Poll::WaitUntil(self.next_poll)
     }
 }
@@ -1649,26 +1483,6 @@ impl CodeAttempt {
         result
     }
     async fn exchange(&self, code: &str, now: i64) -> Result<Secret, Error> {
-        if self.provider == "antigravity" {
-            let client = self.client.antigravity.as_ref().ok_or(Error::Rejected)?;
-            let (status, tokens) = self
-                .client
-                .send(self.client.form_as(
-                    "/token",
-                    &client.form(&[
-                        ("grant_type", "authorization_code"),
-                        ("code", code),
-                        ("redirect_uri", &self.redirect),
-                        ("code_verifier", &self.verifier),
-                    ]),
-                    &ycoding_ai::antigravity::user_agent(),
-                ))
-                .await?;
-            if !status.is_success() {
-                return Err(Error::Rejected);
-            }
-            return token_secret(&self.provider, &self.method, &tokens, now, None);
-        }
         let (status, tokens) = self
             .client
             .send(self.client.form(
@@ -1712,13 +1526,12 @@ fn token_secret(
         .get("refresh_token")
         .and_then(Value::as_str)
         .or_else(|| {
-            if matches!(provider, "xai" | "antigravity") {
+            if provider == "xai" {
                 current.and_then(|v| v.refresh.as_str())
             } else {
                 None
             }
         })
-        .or_else(|| (provider == "antigravity").then_some(""))
         .ok_or(Error::UnknownOutcome)?;
     let seconds = match tokens.get("expires_in") {
         None => None,
@@ -1751,7 +1564,7 @@ fn token_secret(
         }
         _ => return Err(Error::UnknownOutcome),
     };
-    let expires = if matches!(provider, "openai" | "antigravity") {
+    let expires = if provider == "openai" {
         now as f64 + seconds.unwrap_or(3600.0) * 1000.0
     } else if seconds.is_some_and(|value| value != 0.0) {
         now as f64

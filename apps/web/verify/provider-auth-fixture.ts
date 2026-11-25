@@ -6,15 +6,22 @@ export function createProviderAuthFixture() {
   let status: "pending" | "complete" = "pending"
   let readFailed = false
   let keyUnknown = false
+  let includeRetired = false
   const profiles: { name: string; active: boolean; kind: "oauth" | "key"; status: "connected" | "expired" | "refresh_failed"; message?: string }[] = [{ name: "Work", active: true, kind: "oauth", status: "connected" }]
   const time = { created: Date.now(), expires: Date.now() + 600000 }
   return {
     report: () => ({ acceptedKey, acceptedCode, profiles }),
     failRead: () => { readFailed = true },
     unknownKey: () => { keyUnknown = true },
+    staleProviderList: () => { includeRetired = true },
     request(operation: string, input: Readonly<Record<string, unknown>> = {}): RemoteRequestOutcome {
       if (operation === "provider.auth.list") return { status: "ok", value: { data: [{ id: "openai", name: "OpenAI", providers: ["openai"], profiles,
-        methods: [{ type: "key", label: "API key", available: true }, { type: "oauth", id: "device", label: "Device authorization", available: true }, { type: "oauth", id: "manual", label: "CLI account", available: true }, { type: "oauth", id: "local", label: "Local browser", available: false, reason: "Sign in on the backend machine using /connect." }] }, { id: "openrouter", name: "OpenRouter", providers: ["openrouter"], profiles: [], methods: [] }, { id: "anthropic", name: "Claude", providers: ["anthropic"], profiles: [], methods: [] }, { id: "antigravity", name: "Antigravity", providers: ["antigravity"], profiles: [], methods: [] }, { id: "environment", name: "Environment provider", providers: ["environment"], profiles: [], methods: [] }] } }
+        methods: [{ type: "key", label: "API key", available: true }, { type: "oauth", id: "device", label: "Device authorization", available: true }, { type: "oauth", id: "manual", label: "CLI account", available: true }, { type: "oauth", id: "local", label: "Local browser", available: false, reason: "Sign in on the backend machine using /connect." }] },
+        { id: "openrouter", name: "OpenRouter", providers: ["openrouter"], profiles: [{ name: "Shared gateway", active: true, kind: "key", status: "connected" }], methods: [{ type: "key", label: "API key", available: true }] },
+        { id: "anthropic", name: "Claude", providers: ["anthropic"], profiles: [{ name: "Claude account", active: false, kind: "oauth", status: "expired" }], methods: [{ type: "oauth", id: "claude-code", label: "Claude Code account", available: true }] },
+        { id: "custom-openai", name: "Environment provider", providers: ["custom-openai"], profiles: [{ name: "Local endpoint", active: true, kind: "key", status: "connected" }], methods: [] },
+        ...(includeRetired ? ["antigravity", "muse"].map((id) => ({ id, name: id, providers: [id], profiles: [], methods: [] })) : []),
+      ] } }
       if (operation === "provider.auth.key") {
         acceptedKey = input.key === "synthetic-test-key"
         if (keyUnknown) { keyUnknown = false; return { status: "unknown", error: { code: "outcome_unknown", message: "Unconfirmed" } } }

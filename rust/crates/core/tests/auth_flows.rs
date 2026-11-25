@@ -3,7 +3,7 @@ use std::{
     net::TcpListener,
     sync::{Arc, Mutex},
 };
-use ycoding_core::resources::auth::{Client, DeviceFlow, Poll, Status, muse};
+use ycoding_core::resources::auth::{Client, DeviceFlow, Poll, Status};
 use ycoding_core::resources::credential::{Error, Service};
 use ycoding_schema::{DomainEncode, credential, schema::NonNegativeInt};
 use ycoding_store::{Catalog, Metadata, Options, Store, resources};
@@ -70,10 +70,6 @@ impl Fixture {
 
 fn client(endpoint: &str) -> Client {
     Client::new(endpoint, "fixture-version").unwrap()
-}
-
-fn muse_client(endpoint: &str) -> Client {
-    client(endpoint).with_muse_client(muse::OAuthClient::new("fixture-muse-client-id", None))
 }
 
 #[tokio::test]
@@ -717,37 +713,6 @@ async fn account_claim_decoder_rejects_malformed_declared_fields_before_account_
 }
 
 #[tokio::test]
-async fn muse_device_denied_expired_and_slow_down_are_distinct_and_redacted() {
-    for (error, expected) in [
-        ("access_denied", Status::Denied),
-        ("expired_token", Status::Expired),
-    ] {
-        let body = if error == "access_denied" {
-            r#"{"error":"access_denied","error_description":"fixture-secret fixture@example.invalid"}"#
-        } else {
-            r#"{"error":"expired_token"}"#
-        };
-        let mut fixture = Fixture::new(vec![
-            Some((
-                200,
-                r#"{"verification_uri":"https://example.invalid/device","user_code":"CODE","device_code":"secret","interval":2,"expires_in":20}"#,
-            )),
-            Some((400, r#"{"error":"slow_down"}"#)),
-            Some((400, body)),
-        ]);
-        let mut attempt = muse_client(&fixture.endpoint)
-            .start_device(DeviceFlow::Muse, 0)
-            .await
-            .unwrap();
-        assert_eq!(attempt.poll(0).await.unwrap(), Poll::WaitUntil(7000));
-        let error = attempt.poll(7000).await.unwrap_err();
-        assert_eq!(attempt.status(), expected);
-        assert!(!format!("{error:?} {error}").contains("fixture"));
-        fixture.finish();
-    }
-}
-
-#[tokio::test]
 async fn api_key_login_and_openai_device_enrollment_persist_selected_profile() {
     let store = Store::disposable(
         Options::core(),
@@ -797,26 +762,4 @@ async fn api_key_login_and_openai_device_enrollment_persist_selected_profile() {
     assert!(!format!("{enrollment:?}").contains("auto-access"));
     fixture.finish();
     service.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn muse_device_local_expiry_cancel_and_transport_unknown_outcome_never_send_again() {
-    let response = Some((
-        200,
-        r#"{"verification_uri":"https://example.invalid/device","user_code":"CODE","device_code":"secret","expires_in":1,"interval":1}"#,
-    ));
-    let mut fixture = Fixture::new(vec![response, response, response, None]);
-    let client = muse_client(&fixture.endpoint);
-    let mut expired = client.start_device(DeviceFlow::Muse, 0).await.unwrap();
-    assert_eq!(expired.poll(1000).await.unwrap_err(), Error::Rejected);
-    assert_eq!(expired.status(), Status::Expired);
-    let mut cancelled = client.start_device(DeviceFlow::Muse, 0).await.unwrap();
-    cancelled.cancel();
-    assert_eq!(cancelled.poll(0).await.unwrap_err(), Error::Rejected);
-    assert_eq!(cancelled.status(), Status::Cancelled);
-    let mut unknown = client.start_device(DeviceFlow::Muse, 0).await.unwrap();
-    assert_eq!(unknown.poll(0).await.unwrap_err(), Error::UnknownOutcome);
-    assert_eq!(unknown.poll(0).await.unwrap_err(), Error::UnknownOutcome);
-    fixture.finish();
-    assert_eq!(fixture.requests.lock().unwrap().len(), 4);
 }

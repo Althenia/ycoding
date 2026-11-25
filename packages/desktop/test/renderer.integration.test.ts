@@ -44,6 +44,7 @@ let presentationParts = false
 let populatedKind: PopulatedTranscriptKind | undefined
 let referenceScene = false
 let providerScene = false
+let retiredPickerIDs: readonly string[] = []
 let captureScene = false
 let sceneRead: ((call: SyntheticCall) => unknown) | undefined
 let exportFailure = false
@@ -164,11 +165,14 @@ beforeAll(async () => {
     if (call.route === "/api/model") return { location, data: [model] }
     if (call.route === "/api/model/default") return { location, data: { selection: selection() } }
     if (providerScene && call.route === "/api/integration") return { location, data: [
-      ...["openrouter", "anthropic", "antigravity"].map(id => ({ id, name: id, methods: [{ type: "key", label: "API key" }], connections: [] })),
+      { id: "anthropic", name: "Claude", methods: [{ type: "oauth", id: "claude-code", label: "Claude Code account" }], connections: [{ type: "credential", id: "cred_claude", label: "Claude account", active: false, kind: "oauth" }] },
+      { id: "openrouter", name: "OpenRouter", methods: [{ type: "key", label: "API key" }], connections: [{ type: "credential", id: "cred_gateway", label: "Shared gateway", active: true, kind: "key" }] },
       { id: "openai", name: "OpenAI", methods: [{ type: "key", label: "Synthetic API key" }, { type: "oauth", id: "browser", label: "Synthetic browser sign-in" }], connections: [{ type: "credential", id: "cred_synthetic", label: "Synthetic account", active: true, kind: "key" }] },
+      { id: "custom-openai", name: "Lab endpoint", methods: [{ type: "key", label: "API key" }], connections: [{ type: "credential", id: "cred_local", label: "Local key", active: true, kind: "key" }] },
       { id: "excluded", name: "Excluded integration", methods: [{ type: "key", label: "API key" }], connections: [] },
+      ...retiredPickerIDs.map(id => ({ id, name: id, methods: [], connections: [] })),
     ] }
-    if (call.route === "/api/provider/integrations") return { location, data: ["openai", "anthropic", "antigravity", "openrouter"].map(id => ({ providerID: id, integrationID: id })) }
+    if (call.route === "/api/provider/integrations") return { location, data: ["openai", "anthropic", "openrouter", "custom-openai", ...retiredPickerIDs].map(id => ({ providerID: id, integrationID: id })) }
     if (call.route === "/api/shell") return { location, data: referenceScene ? [{ id: "sh_synthetic", status: "running", command: "bun test test/session-page.test.ts", cwd: "/synthetic/repo", shell: "sh", file: "output", time: { started: 1 }, metadata: { sessionID: "ses_test" } }] : [] }
     if (call.route === "/api/vcs/branch") return { location, data: { current: "synthetic", default: "main" } }
     if (call.route === "/api/vcs/status") return { location, data: [] }
@@ -246,7 +250,7 @@ beforeAll(async () => {
 afterAll(async () => { await browser?.close(); await server?.close(); await owned?.close() })
 beforeEach(() => { ideEnabled = false; externalEdit = undefined; deferred = false; autonomyModes = { permissions: "manual", guardrails: "manual", answers: "manual" } })
 beforeEach(() => { ideEnabled = false; ideFailure = false; externalEdit = undefined; populatedKind = undefined })
-beforeEach(() => { referenceScene = false; providerScene = false; captureScene = false; sceneRead = undefined; exportFailure = false; sessionCost = 0 })
+beforeEach(() => { referenceScene = false; providerScene = false; retiredPickerIDs = []; captureScene = false; sceneRead = undefined; exportFailure = false; sessionCost = 0 })
 beforeEach(() => { browseListing = undefined })
 beforeEach(() => { clipboardFailure = false; pastedClipboard = undefined })
 beforeEach(() => { presentationParts = false; questionPending = false; pending = true; pinned = false; replyText = "Initial synthetic response"; running = false; currentVariant = undefined; stagedMessage = undefined; archived = false; familyEnabled = false; failInterrupt = false; directoryStatus = false; telemetryConsent = false; globalFormPending = false; formReview = false; processControls = false; waitingTask = true; stoppedTask = true; decideGate = undefined; fileGate = undefined; clipboard.length = 0; saved.length = 0; notifications.length = 0; if (owned) owned.calls.length = 0 })
@@ -432,17 +436,33 @@ test("Stitch starter commands stage an editable draft without creating a Session
   } finally { await page.close() }
 }, 30_000)
 
-test("Stitch provider inspection keeps the list beside its connection details", async () => {
+test("provider picker keeps supported routes and their profiles beside the list", async () => {
   pending = false
   providerScene = true
+  retiredPickerIDs = ["antigravity", "muse"]
   const page = await openReference()
   try {
     await command(page, "Connect providers")
     await wait(page, `document.querySelector('dialog[open] [aria-label="Providers"]')`)
     await wait(page, `document.querySelector('dialog[open] .provider-picker button')?.textContent.includes('OpenAI')`)
-    expect(await page.evaluate(`[...document.querySelectorAll('.provider-picker button strong')].map(node => node.textContent)`, decodeArray(decodeString))).toEqual(["OpenAI", "Claude", "Antigravity", "OpenRouter", "Custom OpenAI-compatible Endpoint"])
-    await page.evaluate(`document.querySelector('dialog[open] .provider-picker button').click()`)
-    await wait(page, `document.querySelector('dialog[open] [aria-label="Provider connection"]')?.textContent.includes('Synthetic browser sign-in')`)
+    expect(await page.evaluate(`[...document.querySelectorAll('.provider-picker button strong')].map(node => node.textContent)`, decodeArray(decodeString))).toEqual(["OpenAI", "Claude", "OpenRouter", "Custom OpenAI-compatible Endpoint"])
+    for (const [provider, method, profile, status] of [
+      ["OpenAI", "Synthetic browser sign-in", "Synthetic account", "Default"],
+      ["Claude", "Claude Code account", "Claude account", "Not default"],
+      ["OpenRouter", "Connect API key", "Shared gateway", "Default"],
+      ["Custom OpenAI-compatible Endpoint", "Connect API key", "Local key", "Default"],
+    ] as const) {
+      await clickText(page, ".provider-picker button strong", provider)
+      if (provider === "Custom OpenAI-compatible Endpoint") {
+        expect(await page.evaluate(`[...document.querySelectorAll('.desktop-provider-detail > button')].map(button => button.textContent.trim())`, decodeArray(decodeString))).toEqual(["Lab endpoint"])
+        await clickText(page, ".desktop-provider-detail > button", "Lab endpoint")
+      }
+      await wait(page, `document.querySelector('.desktop-provider-detail')?.textContent.includes(${JSON.stringify(method)})`)
+      expect(await page.evaluate(`(() => {
+        const card = document.querySelector('.desktop-credential-card');
+        return ['header strong', '.desktop-state-badge'].map(selector => card.querySelector(selector).textContent.trim());
+      })()`, decodeArray(decodeString))).toEqual([profile, status])
+    }
     expect(await page.evaluate(`(() => { const list = document.querySelector('dialog[open] [aria-label="Providers"]'); const detail = document.querySelector('dialog[open] [aria-label="Provider connection"]'); return !!detail && list.getBoundingClientRect().right <= detail.getBoundingClientRect().left; })()`, decodeBoolean)).toBe(true)
     expect(owned!.calls.filter(call => call.method !== "GET" && !call.route.endsWith("/web-latency"))).toEqual([])
     expect(await page.evaluate(`window.__desktopFixture.errors`, decodeArray((value: unknown) => value))).toEqual([])

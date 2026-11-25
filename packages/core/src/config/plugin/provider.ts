@@ -24,6 +24,7 @@ export const applyConfigured = (catalog: Catalog.Draft, entries: readonly Config
     })
   for (const file of files) {
     for (const [id, item] of Object.entries(file.info.providers ?? {})) {
+      if (Provider.isRetiredID(id)) continue
       const providerID = Provider.ID.make(id)
       catalog.provider.update(providerID, (provider) => {
         if (item.name !== undefined) provider.name = item.name
@@ -68,6 +69,7 @@ export const applyIntegrations = (integrations: Integration.Draft, entries: read
   ])
   for (const file of files) {
     for (const [id, item] of Object.entries(file.info.providers ?? {})) {
+      if (Provider.isRetiredID(id)) continue
       const integrationID = Integration.ID.make(id)
       if (!configured.has(id) && !integrations.get(integrationID)) continue
       integrations.update(integrationID, (integration) => { integration.name = item.name ?? integration.name })
@@ -94,6 +96,7 @@ const discover = Effect.fn("ConfigProviderPlugin.discover")(function* (
   for (const entry of entries) {
     if (entry.type !== "document") continue
     for (const [id, provider] of Object.entries(entry.info.providers ?? {})) {
+      if (Provider.isRetiredID(id)) continue
       const previous = configured.get(id) ?? { settings: {}, headers: {} }
       configured.set(id, {
         settings: { ...previous.settings, ...(provider.settings ?? {}) },

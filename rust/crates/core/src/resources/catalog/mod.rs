@@ -13,7 +13,6 @@ pub use accounts::{AccountCatalog, eligible as codex_eligible};
 pub mod models_dev;
 mod variants;
 pub use discovery::{Composition, DiscoveryDiagnostic};
-pub(crate) use variants::for_effort;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProviderRecord {
@@ -107,6 +106,10 @@ impl Catalog {
         }
     }
     pub fn new(snapshots: Vec<models_dev::Snapshot>) -> Self {
+        let snapshots = snapshots
+            .into_iter()
+            .filter(|snapshot| !snapshot.info.id.is_retired())
+            .collect::<Vec<_>>();
         let unsupported_temperature = snapshots
             .iter()
             .flat_map(|snapshot| {
@@ -201,6 +204,9 @@ impl Catalog {
         Ok(catalog)
     }
     pub fn provider(&self, id: &provider::Id) -> Option<&provider::Info> {
+        if id.is_retired() {
+            return None;
+        }
         self.providers
             .iter()
             .find(|p| &p.provider.id == id)
@@ -236,6 +242,9 @@ impl Catalog {
         provider: provider::Id,
         models: Vec<model::Info>,
     ) {
+        if provider.is_retired() {
+            return;
+        }
         self.contextual.insert(provider.clone());
         self.accounts.retain(|account| {
             account.credential != *credential.id()
@@ -319,12 +328,11 @@ impl Catalog {
                 .is_some_and(|package| self.package_runnable(&model.provider_id, package))
     }
     fn package_runnable(&self, id: &provider::Id, package: &provider::Package) -> bool {
-        use routing::ProviderFamily::{Anthropic, Compatible, Google, OpenAI, OpenRouter};
+        use routing::ProviderFamily::{Anthropic, Compatible, OpenAI, OpenRouter};
         match (id.0.as_str(), routing::family(package)) {
             (Some("openai"), Ok(OpenAI))
             | (Some("anthropic"), Ok(Anthropic))
             | (Some("openrouter"), Ok(OpenRouter)) => true,
-            (Some("antigravity"), Ok(Google)) => package.as_str() == Some("aisdk:@ai-sdk/google"),
             (_, Ok(Compatible)) => self.compatible_endpoints.contains(id),
             _ => false,
         }
@@ -362,9 +370,10 @@ impl Catalog {
         provider.integration_id.is_none()
     }
     pub fn provider_permitted(&self, id: &provider::Id) -> bool {
-        !self
-            .provider(id)
-            .is_some_and(|provider| provider.disabled == Some(true))
+        !id.is_retired()
+            && !self
+                .provider(id)
+                .is_some_and(|provider| provider.disabled == Some(true))
             && !self.denied.contains(id)
             && self
                 .policy
@@ -378,6 +387,9 @@ impl Catalog {
         profile: Option<&model::ProfileName>,
         saved: &[credential::Info],
     ) -> Option<model::Info> {
+        if provider.is_retired() {
+            return None;
+        }
         let record = self.providers.iter().find(|p| &p.provider.id == provider)?;
         let model = record.models.iter().find(|m| &m.id == id).or_else(|| {
             saved
@@ -530,6 +542,7 @@ impl Catalog {
         let mut models = self
             .providers
             .iter()
+            .filter(|record| !record.provider.id.is_retired())
             .flat_map(|record| {
                 let mut models = record.models.clone();
                 for credential in saved {
@@ -541,6 +554,7 @@ impl Catalog {
                 }
                 models
                     .into_iter()
+                    .filter(|model| !model.provider_id.is_retired())
                     .map(|m| {
                         self.profiled(project(&m, &record.provider), &record.provider, saved, None)
                     })
@@ -713,6 +727,9 @@ impl Catalog {
             };
             for (id, item) in providers.iter() {
                 let provider_id = provider::Id(id.clone());
+                if provider_id.is_retired() {
+                    continue;
+                }
                 if !configured
                     .providers
                     .iter()
@@ -748,7 +765,7 @@ impl Catalog {
                             .is_some_and(|id| !routing::BUILTIN_PROVIDER_IDS.contains(&id)))
                     && !matches!(
                         provider_id.0.as_str(),
-                        Some("cursor" | "muse" | "runpod" | "opencode" | "opencode-go" | "ycoding")
+                        Some("cursor" | "runpod" | "opencode" | "opencode-go" | "ycoding")
                     )
                     && routing::family(&record.provider.package)
                         == Ok(routing::ProviderFamily::Compatible)

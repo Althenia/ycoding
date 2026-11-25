@@ -840,8 +840,6 @@ fn classifies_window_semantics_for_the_kept_providers() {
         ("anthropic", "seven-day-opus", "percent"),
         ("openai", "codex-primary", "percent"),
         ("openai", "codex-secondary", "percent"),
-        ("muse", "window", "percent"),
-        ("muse", "weekly", "percent"),
         ("zai", "session", "percent"),
         ("zai-coding-plan", "weekly", "percent"),
         ("zai", "web-searches", "count"),

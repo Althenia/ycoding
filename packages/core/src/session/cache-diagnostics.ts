@@ -81,8 +81,8 @@ export function mechanism(
   tokens: TokenUsage.Info,
 ): Session.CacheMechanism {
   if (
-    model.providerID === "antigravity" &&
-    (routeID === "ai-sdk:@ai-sdk/google" || routeID === "unknown") &&
+    model.providerID.toLowerCase() === "antigravity" &&
+    routeID === "unknown" &&
     normalizeCacheModelID(model.id).startsWith("claude-")
   ) return "anthropic-cache-control"
   const known = ROUTE_MECHANISMS[routeID]
@@ -103,11 +103,11 @@ export function mechanism(
         return "bedrock-cache-point"
       case "google":
       case "google-vertex":
-      case "antigravity":
         return "gemini-prefix-cache"
       case "cursor":
         return "provider-reported"
     }
+    if (model.providerID.toLowerCase() === "antigravity") return "gemini-prefix-cache"
   }
   return tokens.cache.read > 0 || tokens.cache.write > 0 ? "provider-reported" : "none"
 }

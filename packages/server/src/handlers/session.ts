@@ -177,6 +177,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                   return new InvalidRequestError({ message: "Session scope is unavailable" })
                 if (error._tag === "Session.NotFoundError") return mapSessionNotFound(error)
                 if (error._tag === "SessionRunnerModel.ProfileUnavailableError") return profileSelectionFailure()
+                if (error._tag === "Provider.RetiredError") return new InvalidRequestError({ message: error.message, field: "model" })
                 return new InvalidRequestError({
                   message: "Selected model credentials or configuration are unavailable. Reconnect the provider or select an available model.",
                   field: error._tag === "SessionRunnerModel.VariantUnavailableError" ? "model.variant" : "model",
@@ -526,6 +527,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             }).pipe(Effect.mapError((error) => {
               if (error._tag === "SessionOrchestration.ModelBlockedError") return new ModelSwitchBlockedError(error.blocked)
               if (error._tag === "SessionRunnerModel.ProfileUnavailableError") return profileSelectionFailure()
+              if (error._tag === "Provider.RetiredError") return new InvalidRequestError({ message: error.message, field: "model" })
               if (error._tag === "SessionOrchestration.InvalidRequestError" || error._tag === "Session.CompactionConflictError")
                 return new InvalidRequestError({ field: "model", message: "The selected model cannot be used without changing the child's context or profile." })
               if (error._tag === "Session.NotFoundError" || error._tag === "SessionOrchestration.NotFoundError" || error._tag === "SessionOrchestration.ForbiddenError" || error._tag === "SessionOrchestration.ConflictError")
@@ -603,6 +605,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             .switchModel({ sessionID: ctx.params.sessionID, model: ctx.payload.model })
             .pipe(
               Effect.catchTags({
+                "Provider.RetiredError": (error) => new InvalidRequestError({ message: error.message, field: "model" }),
                 "SessionRunnerModel.ProfileUnavailableError": () => profileSelectionFailure(),
                 "SessionRunnerModel.ModelNotSelectedError": () => modelSwitchFailure(ctx.params.sessionID, "model-not-selected", "Select an available model before switching."),
                 "SessionRunnerModel.ModelUnavailableError": () => modelSwitchFailure(ctx.params.sessionID, "model-unavailable", "Target model is unavailable. Refresh the model catalog and select an available model."),

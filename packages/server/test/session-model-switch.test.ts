@@ -38,6 +38,24 @@ test("profile selection failures are sanitized invalid-request responses for cre
   }
 })
 
+test("creation and switches return the same retired provider diagnostic", async () => {
+  const retired = CatalogModel.Ref.make({ ...model, providerID: Provider.ID.make("AntiGravity"), profile: "fixture" })
+  const retiredError = new Provider.RetiredError({ providerID: retired.providerID })
+  await using http = sessionHttp({
+    create: () => Effect.fail(retiredError),
+    switchModel: () => Effect.fail(retiredError),
+  }, { orchestration: { switchModel: () => Effect.fail(retiredError) } })
+  for (const path of ["/api/session", `/api/session/${sessionID}/model`, "/api/session/ses_parent/subagent/ses_child/model"]) {
+    const response = await http.json(path, "POST", path.endsWith("ses_child/model")
+      ? { expectedModel: model, model: retired }
+      : { model: retired })
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({
+      _tag: "InvalidRequestError", field: "model", message: "Provider no longer supported: AntiGravity",
+    })
+  }
+})
+
 test("creation maps newly reachable model resolution failures without exposing provider details", async () => {
   const errors = [
     { error: new SessionRunnerModel.ModelUnavailableError({ providerID: model.providerID, modelID: CatalogModel.ID.make("private-model") }), field: "model" },

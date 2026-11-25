@@ -2,6 +2,7 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { applyEdits, modify, parse, type ParseError } from "jsonc-parser"
 import { isBuiltInProvider } from "@ycoding-ai/client"
+import { isRetiredID } from "@ycoding-ai/schema/provider"
 
 export async function writeCustomEndpoint(configDir: string, result: {
   baseURL: string
@@ -12,6 +13,9 @@ export async function writeCustomEndpoint(configDir: string, result: {
   catalog?: "openai-models"
   models?: { id: string; modelID?: string; name?: string; family?: string; api?: "chat" | "responses"; disabled?: boolean; tools?: boolean }[]
 }) {
+  const providerID = result.provider?.trim() || (result.worker ? "runpod" : "custom-openai")
+  if (isRetiredID(providerID)) throw new Error("Provider no longer supported")
+  if (isBuiltInProvider(providerID)) throw new Error("Choose a name other than a built-in provider ID")
   const configFiles = ["ycoding.json", "ycoding.jsonc"]
   const configPath = await configFiles.reduce<Promise<string | undefined>>(async (previous, filename) => {
     const found = await previous
@@ -30,8 +34,6 @@ export async function writeCustomEndpoint(configDir: string, result: {
   const current = parse(text, errors, { allowTrailingComma: true }) as Record<string, unknown> | undefined
   if (errors.length || !current || typeof current !== "object" || Array.isArray(current)) throw new Error("Unable to parse YCoding config")
 
-  const providerID = result.provider?.trim() || (result.worker ? "runpod" : "custom-openai")
-  if (isBuiltInProvider(providerID)) throw new Error("Choose a name other than a built-in provider ID")
   if (result.worker && !/^https:\/\/api\.runpod\.ai\/v2\/[a-zA-Z0-9_-]+$/.test(result.baseURL))
     throw new Error("Runpod Jobs endpoint must be https://api.runpod.ai/v2/<ENDPOINT_ID>")
   const providers = recordAt(current, "providers")

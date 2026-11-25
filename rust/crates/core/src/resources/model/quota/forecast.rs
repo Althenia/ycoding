@@ -55,7 +55,6 @@ pub fn semantics(provider: &provider::Id, window: &Window) -> Semantics {
                         .is_some_and(|rest| rest.is_empty() || rest.starts_with('-'))
             }
             "openai" => id.ends_with("-primary") || id.ends_with("-secondary"),
-            "muse" => matches!(id, "window" | "weekly"),
             "zai" | "zai-coding-plan" => matches!(id, "session" | "weekly"),
             "cursor" => id == "included",
             _ => false,

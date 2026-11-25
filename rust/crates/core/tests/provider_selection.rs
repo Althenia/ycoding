@@ -30,6 +30,199 @@ use ycoding_schema::{
     session,
 };
 
+async fn check_retired_selector(provider: &str, boundary: &str) {
+    let root = Root::new("retired-provider");
+    let store = support::store();
+    let service = Service::new(store.client());
+    let credentials = credential::Service::new(store.client());
+    credentials
+        .create(
+            "fixture-openai".into(),
+            "openai".into(),
+            Some("Work".into()),
+            support::key("fixture-key"),
+            1,
+        )
+        .await
+        .unwrap();
+    let replay = Replay::start(Vec::new()).await;
+    let mut catalog = support::catalog(&replay.base, "model");
+    let provider_model = |profile: Option<&str>| model_schema::Ref {
+        provider_id: ycoding_schema::provider::Id(provider.into()),
+        id: "selected".into(),
+        variant: None,
+        profile: profile.map(|name| model_schema::ProfileName(name.into())),
+    };
+    if boundary == "configured" {
+        catalog
+            .configure(&[parse_json(&format!(
+                r#"{{"model":{{"providerID":"{provider}","model":"selected"}}}}"#
+            ))
+            .unwrap()])
+            .unwrap();
+    }
+    let local = Arc::new(support::local(
+        &store,
+        Arc::new(model::Resolver::new(catalog)),
+        "/project",
+        &root,
+        Arc::new(Executor::new(replay.client())),
+        Arc::new(ClockControl::default()),
+    ));
+    let coordinator = Coordinator::new(local.clone());
+    let id = session::Id::new("ses_one").unwrap();
+    let diagnostic = if boundary == "profile" {
+        support::select(&service, "ses_one", None, None, 1).await;
+        let before = service.get(&id).unwrap().unwrap().model;
+        let diagnostic = local
+            .switch_model(&coordinator, &id, &provider_model(Some("Work")), None)
+            .await
+            .err()
+            .map(|error| error.to_string());
+        assert_eq!(service.get(&id).unwrap().unwrap().model, before);
+        diagnostic
+    } else {
+        if boundary == "persisted" {
+            service
+                .publish(ycoding_store::session::NewEvent {
+                    id: "evt_retired".into(),
+                    aggregate_id: "ses_one".into(),
+                    created: 2,
+                    type_: "session.model.selected.1".into(),
+                    data: ycoding_schema::ObjectEncoder::new()
+                        .field("sessionID", &id)
+                        .field("model", &provider_model(None))
+                        .finish(),
+                })
+                .await
+                .unwrap();
+        }
+        support::admit(&service, "ses_one", 1, "Keep this draft").await;
+        let diagnostic = coordinator
+            .run(&id)
+            .await
+            .err()
+            .map(|error| error.to_string());
+        assert_eq!(service.pending_list(&id).unwrap().len(), 1);
+        diagnostic
+    };
+    assert!(support::requests(&store, "ses_one").is_empty());
+    assert!(replay.finish().await.is_empty());
+    coordinator.shutdown().await.unwrap();
+    credentials.shutdown().await.unwrap();
+    store.shutdown().unwrap();
+    assert!(
+        diagnostic.as_ref().is_some_and(|message| message
+            .to_ascii_lowercase()
+            .contains("provider no longer supported")),
+        "{boundary} {provider}: {diagnostic:?}"
+    );
+}
+
+#[tokio::test]
+async fn retired_antigravity_persisted_model() {
+    check_retired_selector("antigravity", "persisted").await;
+}
+
+#[tokio::test]
+async fn retired_antigravity_profile_selector() {
+    check_retired_selector("antigravity", "profile").await;
+}
+
+#[tokio::test]
+async fn retired_antigravity_configured_model() {
+    check_retired_selector("antigravity", "configured").await;
+}
+
+#[tokio::test]
+async fn retired_muse_persisted_model() {
+    check_retired_selector("muse", "persisted").await;
+}
+
+#[tokio::test]
+async fn retired_muse_profile_selector() {
+    check_retired_selector("muse", "profile").await;
+}
+
+#[tokio::test]
+async fn retired_muse_configured_model() {
+    check_retired_selector("muse", "configured").await;
+}
+
+#[tokio::test]
+async fn retired_selectors_do_not_change_supported_configured_profile_and_persisted_selection() {
+    let root = Root::new("supported-provider");
+    let store = support::store();
+    let service = Service::new(store.client());
+    let credentials = credential::Service::new(store.client());
+    credentials
+        .create(
+            "fixture-openai".into(),
+            "openai".into(),
+            Some("Work".into()),
+            support::key("fixture-key"),
+            1,
+        )
+        .await
+        .unwrap();
+    let replay = Replay::start(vec![
+        Reply::stream("/v1/chat/completions", support::chat("")),
+        Reply::stream("/v1/chat/completions", support::chat("")),
+    ])
+    .await;
+    let mut services = support::services(
+        &store,
+        Arc::new(model::Resolver::new(support::catalog(
+            &replay.base,
+            "model",
+        ))),
+        "/project",
+        &root,
+        Arc::new(Executor::new(replay.client())),
+        Arc::new(ClockControl::default()),
+    );
+    services.compaction.context_safety_margin_tokens = 0;
+    let mut catalog = (*services.models.catalog()).clone();
+    catalog
+        .configure(&[parse_json(
+            r#"{"providers":{"openai":{"models":{"selected":{"limit":{"context":128000,"output":8192}}}}}}"#,
+        )
+        .unwrap()])
+        .unwrap();
+    services.models.replace(catalog).unwrap();
+    let local = Arc::new(ycoding_core::session::runner::Local::new(services));
+    let coordinator = Coordinator::new(local.clone());
+    let id = session::Id::new("ses_one").unwrap();
+    support::admit(&service, "ses_one", 1, "Use the configured model").await;
+    coordinator.run(&id).await.unwrap();
+    let target = model_schema::Ref {
+        provider_id: ycoding_schema::provider::Id("openai".into()),
+        id: "selected".into(),
+        profile: Some(model_schema::ProfileName("Work".into())),
+        variant: None,
+    };
+    local
+        .switch_model(&coordinator, &id, &target, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        service.get(&id).unwrap().unwrap().model.as_ref(),
+        Some(&target)
+    );
+    support::admit(&service, "ses_one", 2, "Use the saved model and profile").await;
+    coordinator.run(&id).await.unwrap();
+    let requests = support::requests(&store, "ses_one");
+    assert_eq!(requests.len(), 2);
+    let first = requests[0].model.domain().unwrap();
+    assert_eq!(first.provider_id, target.provider_id);
+    assert_eq!(first.id, target.id);
+    assert_eq!(requests[1].model.domain().unwrap(), target);
+    assert_eq!(replay.finish().await.len(), 2);
+    coordinator.shutdown().await.unwrap();
+    credentials.shutdown().await.unwrap();
+    store.shutdown().unwrap();
+}
+
 const ENTRYPOINTS: &[(&str, &str)] = &[
     ("@ai-sdk/openai", "openai-responses"),
     ("@ycoding-ai/ai/providers/openai", "openai-responses"),
@@ -792,43 +985,23 @@ fn test_039_aisdk_openrouter_entrypoints() {
 }
 
 #[tokio::test]
-async fn test_039_dynamic_cursor_and_muse_variant_profile_manifest() {
-    use ycoding_core::resources::{cursor, muse};
+async fn cursor_route_preserves_supported_profile_variants_and_rejects_images() {
+    use ycoding_core::resources::cursor;
     let store = support::store();
     let credentials = credential::Service::new(store.client());
-    for provider in ["cursor", "muse"] {
-        for (serial, profile) in ["Work", "Personal"].into_iter().enumerate() {
-            credentials
-                .create(
-                    format!("synthetic-{provider}-{profile}").into(),
-                    provider.into(),
-                    Some(profile.into()),
-                    support::key(&format!("synthetic-{profile}-key")),
-                    serial as i64,
-                )
-                .await
-                .unwrap();
-        }
-    }
-    let source = r#"{"data":[{"id":"muse-contract","metadata":{"muse-code":{"name":"Muse Contract","family":"muse","release_date":"2026-01-01","tool_call":true,"modalities":{"input":["text","image"],"output":["text"]},"limit":{"context":128000,"output":8192},"variants":{"low":{"reasoningEffort":"low"},"high":{"reasoningEffort":"high"}}}}}]}"#;
-    let replay = Replay::start(
-        vec![
-            Reply::json("GET", "/muse-code/models", 200, source),
-            Reply::json("GET", "/muse-code/models", 200, source),
-        ]
-        .into_iter()
-        .chain((0..6).map(|_| Reply::stream("/v1/responses", structured::frames("responses"))))
-        .collect(),
-    )
-    .await;
-    let runtime = ycoding_ai::muse::Runtime::new(format!("{}/mint", replay.base)).unwrap();
-    let mut muse = muse::Service::new(runtime.clone()).with_base_url(format!("{}/v1", replay.base));
-    let mut catalog = Catalog::default();
-    assert!(
-        muse.refresh(&mut catalog, &credentials, &Default::default(), 100)
+    for (serial, profile) in ["Work", "Personal"].into_iter().enumerate() {
+        credentials
+            .create(
+                format!("synthetic-cursor-{profile}").into(),
+                "cursor".into(),
+                Some(profile.into()),
+                support::key(&format!("synthetic-{profile}-key")),
+                serial as i64,
+            )
             .await
-            .unwrap()
-    );
+            .unwrap();
+    }
+    let mut catalog = Catalog::default();
     let cursor_models = ycoding_ai::cursor::models::available_models(&parse_json(r#"{"models":[{"name":"composer-contract","clientDisplayName":"Composer Contract","supportsAgent":true,"supportsImages":false,"supportsThinking":true,"variants":[{"parameterValues":[{"id":"effort","value":"low"}],"isDefaultNonMaxConfig":true},{"parameterValues":[{"id":"effort","value":"high"}]}]}]}"#).unwrap()).unwrap();
     cursor::catalog::sync(&mut catalog, cursor::models::from_cursor(&cursor_models));
     let context = model::ProviderContext::new(Default::default(), "contract").unwrap();
@@ -853,135 +1026,60 @@ async fn test_039_dynamic_cursor_and_muse_variant_profile_manifest() {
         },
     };
     let saved = credentials.all().unwrap();
-    let mut members = BTreeSet::new();
-    for provider in ["cursor", "muse"] {
-        let provider_id = ycoding_schema::provider::Id(provider.into());
-        for profile in ["Work", "Personal"] {
-            let selected = saved
+    let provider_id = ycoding_schema::provider::Id("cursor".into());
+    let catalog_model = catalog
+        .all(&saved)
+        .into_iter()
+        .find(|info| info.provider_id == provider_id)
+        .unwrap();
+    assert!(
+        !catalog
+            .available(&saved)
+            .iter()
+            .any(|info| info.provider_id == provider_id)
+    );
+    assert!(!catalog_model.variants.is_empty());
+    for profile in ["Work", "Personal"] {
+        let selected = saved
+            .iter()
+            .find(|credential| credential.label().as_str() == Some(profile))
+            .unwrap();
+        context
+            .cursor
+            .set_models(selected, cursor_models.clone())
+            .await
+            .unwrap();
+        let value = selected.secret().domain().unwrap();
+        for variant in std::iter::once(None).chain(
+            catalog_model
+                .variants
                 .iter()
-                .find(|credential| {
-                    credential.integration_id().as_str() == Some(provider)
-                        && credential.label().as_str() == Some(profile)
-                })
+                .map(|variant| Some(&variant.id)),
+        ) {
+            let info = model::with_variant(catalog_model.clone(), variant).unwrap();
+            let native = context
+                .selected_model(&info, Some(&value), Some(selected), None, Some(&host), None)
+                .await
                 .unwrap();
-            if provider == "cursor" {
-                context
-                    .cursor
-                    .set_models(selected, cursor_models.clone())
-                    .await
-                    .unwrap();
-            }
-            for info in catalog
-                .all(&saved)
-                .into_iter()
-                .filter(|info| info.provider_id == provider_id)
-            {
-                for variant in std::iter::once(None)
-                    .chain(info.variants.iter().map(|variant| Some(variant.id.clone())))
-                {
-                    let selection = model_schema::Ref {
-                        provider_id: provider_id.clone(),
-                        id: info.id.clone(),
-                        profile: Some(model_schema::ProfileName(profile.into())),
-                        variant: variant.clone(),
-                    };
-                    let resolved = model::Resolver::new(catalog.clone())
-                        .resolve(&selection, &saved, Some(selected))
-                        .unwrap();
-                    let value = selected.secret().domain().unwrap();
-                    let native = if provider == "muse" {
-                        ycoding_core::resources::muse::from_catalog_model(
-                            &resolved.info,
-                            Some(&value),
-                            Some(selected),
-                            runtime.clone(),
-                        )
-                        .unwrap()
-                    } else {
-                        context
-                            .selected_model(
-                                &resolved.info,
-                                Some(&value),
-                                Some(selected),
-                                None,
-                                Some(&host),
-                                None,
-                            )
-                            .await
-                            .unwrap()
-                    };
-                    let route = if provider == "muse" {
-                        "muse-responses"
-                    } else {
-                        "cursor-connect"
-                    };
-                    assert_eq!(native.route.id, route);
-                    members.insert(Member {
-                        provider: provider.into(),
-                        model: info.id.to_utf8().unwrap(),
-                        entrypoint: resolved.info.package.as_ref().unwrap().to_utf8().unwrap(),
-                        variant: variant.as_ref().map(|variant| variant.to_utf8().unwrap()),
-                        profile: Some(profile.into()),
-                        route: route.into(),
-                    });
-                    let mut input = Request::new(native.clone());
-                    input.system.push("Initial".into());
-                    input.messages = vec![
-                        Message::user("Native request"),
-                        Message::system("Chronological update"),
-                    ];
-                    input.tools.push(tool());
-                    let prepared = native.route.prepare(&input).unwrap();
-                    assert_eq!(
-                        prepared.protocol,
-                        if provider == "muse" {
-                            "openai-responses"
-                        } else {
-                            "cursor-connect"
-                        }
-                    );
-                    assert!(prepared.encoded_body.contains("Native request"));
-                    if provider == "muse" {
-                        assert!(prepared.encoded_body.contains("lookup"));
-                        input.messages[0].content.push(Part::Media(Media {
-                            mime: "image/png".into(),
-                            data: MediaData::Bytes(vec![1, 2, 3]),
-                            filename: None,
-                        }));
-                        input.tools = vec![structured::definition()];
-                        input.tool_choice =
-                            Some(ycoding_ai::llm::ToolChoice::Tool("generate_object".into()));
-                        let body = native.route.prepare(&input).unwrap().encoded_body;
-                        assert!(body.contains("AQID"));
-                        assert!(body.contains("additionalProperties"));
-                        let (object, _) = Executor::new(replay.client())
-                            .generate_object(&input, structured::schema())
-                            .await
-                            .unwrap();
-                        assert_eq!(object, parse_json(r#"{"value":"result"}"#).unwrap());
-                    } else {
-                        input.messages[0].content.push(Part::Media(Media {
-                            mime: "image/png".into(),
-                            data: MediaData::Bytes(vec![1, 2, 3]),
-                            filename: None,
-                        }));
-                        assert!(
-                            native.route.prepare(&input).is_err(),
-                            "unsupported Cursor image must fail before IO"
-                        );
-                    }
-                }
-            }
+            assert_eq!(native.route.id, "cursor-connect");
+            let mut input = Request::new(native.clone());
+            input.system.push("Initial".into());
+            input.messages = vec![
+                Message::user("Native request"),
+                Message::system("Chronological update"),
+            ];
+            input.tools.push(tool());
+            let prepared = native.route.prepare(&input).unwrap();
+            assert_eq!(prepared.protocol, "cursor-connect");
+            assert!(prepared.encoded_body.contains("Native request"));
+            input.messages[0].content.push(Part::Media(Media {
+                mime: "image/png".into(),
+                data: MediaData::Bytes(vec![1, 2, 3]),
+                filename: None,
+            }));
+            assert!(native.route.prepare(&input).is_err());
         }
     }
-    for provider in ["cursor", "muse"] {
-        for profile in ["Work", "Personal"] {
-            assert!(members.iter().any(|member| member.provider == provider
-                && member.profile.as_deref() == Some(profile)
-                && member.variant.is_some()));
-        }
-    }
-    assert_eq!(replay.finish().await.len(), 8);
     context.shutdown().await;
     cursor_runtime.shutdown().await;
     credentials.shutdown().await.unwrap();
@@ -1646,7 +1744,6 @@ fn test_041_namespace_partition_round_trips_preserve_canonical_prefix_and_wire_k
         workspace_id: None,
         provider_id: "openai".into(),
         model_id: "gpt-5.6".into(),
-        variant: None,
         account_identity_digest: Some("account-a"),
         permissions: &permissions,
         system: &system,
@@ -1661,14 +1758,6 @@ fn test_041_namespace_partition_round_trips_preserve_canonical_prefix_and_wire_k
     );
     let mut distinct = BTreeSet::new();
     distinct.insert(baseline.clone());
-    input.variant = Some("high".into());
-    assert_eq!(
-        prompt_cache::namespace(&input),
-        baseline,
-        "variant is not a namespace input"
-    );
-    input.variant = None;
-    assert_eq!(prompt_cache::namespace(&input), baseline);
     input.account_identity_digest = Some("account-b");
     assert!(distinct.insert(prompt_cache::namespace(&input)));
     input.account_identity_digest = Some("account-a");

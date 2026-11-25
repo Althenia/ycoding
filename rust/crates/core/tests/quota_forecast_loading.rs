@@ -247,7 +247,7 @@ async fn unreported_profiles_keep_both_location_publications_current() {
             .credentials
             .create(
                 format!("unreported-{label}").as_str().into(),
-                "muse".into(),
+                "fixture-unreported".into(),
                 Some(label.into()),
                 secret("synthetic-unreported-key"),
                 0,
@@ -271,7 +271,7 @@ async fn unreported_profiles_keep_both_location_publications_current() {
                     &harness.views,
                     reference,
                     0,
-                    &[provider::Id("muse".into())],
+                    &[provider::Id("fixture-unreported".into())],
                     NonNegativeInt::new(ORIGIN).unwrap(),
                 )
                 .await
@@ -289,7 +289,7 @@ async fn unreported_profiles_keep_both_location_publications_current() {
             vec![Some("Alpha"), Some("Beta")]
         );
         assert!(publication.providers.iter().all(|snapshot| {
-            snapshot.provider_id == provider::Id("muse".into())
+            snapshot.provider_id == provider::Id("fixture-unreported".into())
                 && snapshot.status == "unsupported".into()
                 && snapshot.windows.is_empty()
         }));

@@ -24,7 +24,6 @@ pub struct Endpoints(pub BTreeMap<String, String>);
 impl Endpoints {
     pub fn provider() -> Self {
         Self(BTreeMap::from([
-            ("antigravity".into(), super::ANTIGRAVITY_BASE_URL.into()),
             ("openrouter".into(), "https://openrouter.ai/api/v1".into()),
             ("anthropic".into(), "https://api.anthropic.com".into()),
             ("opencode-go".into(), "https://opencode.ai/zen/go/v1".into()),
@@ -529,6 +528,12 @@ impl Service {
         providers: &[provider::Id],
         now: NonNegativeInt,
     ) -> Result<bool, Error> {
+        let active = providers
+            .iter()
+            .filter(|id| !retired(id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let providers = active.as_slice();
         let started = Instant::now();
         let credentials = self.credentials.versions().map_err(|_| Error::Storage)?;
         let (refresh, requests, poll) = {
@@ -798,6 +803,16 @@ impl Service {
         refresh: bool,
         now: i64,
     ) -> Snapshot {
+        if retired(&provider) {
+            let label = label(&provider);
+            return unavailable(
+                provider,
+                &label,
+                now,
+                "unsupported",
+                provider::RETIRED_DIAGNOSTIC,
+            );
+        }
         self.bound(provider, credential_id, refresh, now).await.0
     }
     async fn bound(
@@ -855,9 +870,6 @@ impl Service {
                 }
             });
         let profile_source = selected.and_then(|selected| {
-            if provider.0 == "muse".into() {
-                return Some(super::super::account_identity(selected));
-            }
             let value = selected.secret().domain().ok()?;
             match value {
                 credential::Value::OAuth(oauth)
@@ -872,38 +884,11 @@ impl Service {
                 _ => None,
             }
         });
-        if provider.0 == "muse".into() {
-            if credential_id.is_some() && selected.is_none() {
-                return (
-                    unavailable(
-                        provider,
-                        &label,
-                        now,
-                        "unsupported",
-                        "No supported credential is configured",
-                    ),
-                    None,
-                );
-            }
-            let observation = ycoding_ai::muse::Runtime::shared().ok().and_then(|r| {
-                r.observation(profile_source.as_ref().and_then(LosslessString::as_str))
-            });
-            if let Some(observation) = observation {
-                let _ = self.observe(observation, profile_source.clone());
-            }
-            if let Ok(observations) = self.observations.lock()
-                && let Some(observed) =
-                    observations.get(&(provider.clone(), profile_source.clone()))
-            {
-                let mut observed = observed.clone();
-                observed.profile = selected.and_then(safe_profile);
-                return (observed, profile_source);
-            }
-            let mut snapshot = ycoding_ai::muse::unreported(now);
-            snapshot.profile = selected.and_then(safe_profile);
-            return (snapshot, None);
-        }
-        if !refresh
+        let has_endpoint = self
+            .endpoints
+            .0
+            .contains_key(provider.0.as_str().unwrap_or_default());
+        if (!refresh || !has_endpoint)
             && (profile_source.is_some() || credential_id.is_none())
             && let Ok(observations) = self.observations.lock()
             && let Some(observed) = observations
@@ -943,11 +928,7 @@ impl Service {
                 return (observed, None);
             }
         }
-        if !self
-            .endpoints
-            .0
-            .contains_key(provider.0.as_str().unwrap_or(""))
-        {
+        if !has_endpoint {
             return (
                 unavailable(
                     provider,
@@ -1135,12 +1116,13 @@ impl Service {
         refresh: bool,
         now: i64,
     ) -> Vec<(Snapshot, Option<LosslessString>)> {
-        let available = providers.iter().cloned().collect::<BTreeSet<_>>();
+        let available = providers
+            .iter()
+            .filter(|id| !retired(id))
+            .cloned()
+            .collect::<BTreeSet<_>>();
         let mut targets = Vec::new();
-        let mut providers = providers.to_vec();
-        providers.sort();
-        providers.dedup();
-        for provider in providers {
+        for provider in available.iter().cloned() {
             let saved = match self.credentials.list(&provider.0) {
                 Ok(saved) => saved,
                 Err(_) => {
@@ -1148,11 +1130,10 @@ impl Service {
                     continue;
                 }
             };
-            if (provider.0.as_str() == Some("muse")
-                || self
-                    .endpoints
-                    .0
-                    .contains_key(provider.0.as_str().unwrap_or("")))
+            if self
+                .endpoints
+                .0
+                .contains_key(provider.0.as_str().unwrap_or(""))
                 && saved.len() > 1
             {
                 let mut saved = saved;
@@ -1297,6 +1278,9 @@ impl Service {
         observation: Observation,
         profile_source: Option<LosslessString>,
     ) -> Result<(), Error> {
+        if retired(&observation.provider_id) {
+            return Err(Error::ProviderRetired);
+        }
         let key = (observation.provider_id.clone(), profile_source.clone());
         let profile = if let Some(source) = &profile_source {
             self.credentials
@@ -1504,31 +1488,6 @@ impl Service {
             .get(provider.0.as_str().ok_or(Error::InvalidResponse)?)
             .ok_or(Error::InvalidResponse)?;
         match provider.0.as_str() {
-            Some("antigravity") => {
-                let credential::Value::OAuth(oauth) = &value else {
-                    return Err(Error::InvalidResponse);
-                };
-                let project = oauth
-                    .metadata
-                    .as_ref()
-                    .and_then(|metadata| metadata.get(&"projectID".into()))
-                    .and_then(text)
-                    .filter(|value| !value.is_empty());
-                let body = ycoding_schema::ObjectEncoder::new()
-                    .optional("project", &project.map(LosslessString::from))
-                    .finish();
-                let response = self
-                    .response(
-                        self.client
-                            .post(format!("{base}/v1internal:retrieveUserQuotaSummary"))
-                            .bearer_auth(&key)
-                            .header("User-Agent", super::antigravity_user_agent())
-                            .header("Content-Type", "application/json")
-                            .body(ycoding_schema::stringify_json(&body)),
-                    )
-                    .await?;
-                super::normalize_antigravity(&response, now)
-            }
             Some("anthropic") => {
                 let stored = credential
                     .secret()
@@ -2162,10 +2121,11 @@ fn unavailable(
     snapshot.message = Some(message.into());
     snapshot
 }
+fn retired(id: &provider::Id) -> bool {
+    id.0.as_str().is_some_and(provider::is_retired)
+}
+
 fn label(provider: &provider::Id) -> String {
-    if provider.0 == "muse".into() {
-        return "Muse (Meta)".into();
-    }
     if provider.0 == "anthropic".into() {
         return "Claude".into();
     }

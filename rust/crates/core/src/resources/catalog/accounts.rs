@@ -3,7 +3,7 @@ use super::{
     models_dev::{self, text},
     object, project, set,
 };
-use crate::resources::{antigravity, auth, credential, cursor, model::UPSTREAM_PROVIDER_ID, muse};
+use crate::resources::{auth, credential, cursor, model::UPSTREAM_PROVIDER_ID};
 use std::collections::BTreeMap;
 use ycoding_schema::{DomainDecode, DomainEncode, JsonValue, provider};
 
@@ -18,8 +18,6 @@ pub struct AccountCatalog {
     pub endpoints: BTreeMap<String, String>,
     http: reqwest::Client,
     accounts: Vec<Inventory>,
-    muse: muse::Service,
-    antigravity: antigravity::Service,
     source: Option<String>,
     next_reconcile: i64,
     configured: Option<(String, Catalog, Vec<DiscoveryDiagnostic>, i64)>,
@@ -43,10 +41,6 @@ impl AccountCatalog {
                 .build()
                 .map_err(|_| models_dev::Error::Request)?,
             accounts: Vec::new(),
-            muse: muse::Service::new(
-                ycoding_ai::muse::Runtime::shared().map_err(|_| models_dev::Error::Request)?,
-            ),
-            antigravity: antigravity::Service::new()?,
             source: None,
             next_reconcile: 0,
             configured: None,
@@ -117,27 +111,6 @@ impl AccountCatalog {
             && self.environment.get("CURSOR_API_KEY") == Some(key)
         {
             cursor::catalog::sync(catalog, models.clone());
-        }
-        if saved
-            .iter()
-            .any(|selected| selected.integration_id().as_str() == Some("muse"))
-            || self.environment.contains_key("META_API_KEY")
-            || catalog
-                .providers
-                .iter()
-                .any(|record| record.provider.id.0 == "muse".into())
-        {
-            self.muse.seed(catalog, credentials, &self.environment)?;
-        }
-        if saved
-            .iter()
-            .any(|selected| selected.integration_id().as_str() == Some("antigravity"))
-            || catalog
-                .providers
-                .iter()
-                .any(|record| record.provider.id.0 == "antigravity".into())
-        {
-            self.antigravity.seed(catalog, credentials)?;
         }
         let openai = provider::Id("openai".into());
         catalog.accounts.retain(|account| {
@@ -354,20 +327,6 @@ impl AccountCatalog {
         .then_some(source);
         self.next_reconcile = now.saturating_add(60_000);
         self.seed(catalog, credentials)?;
-        let identities = saved
-            .iter()
-            .filter(|selected| selected.integration_id().as_str() == Some("muse"))
-            .map(|selected| {
-                Ok(format!(
-                    "{}:{}",
-                    selected
-                        .id()
-                        .to_utf8()
-                        .map_err(|_| models_dev::Error::InvalidSource)?,
-                    selected.generation()
-                ))
-            })
-            .collect::<Result<Vec<_>, models_dev::Error>>()?;
         if let Some(context) = &self.preparation.providers {
             let cursor_identities = saved
                 .iter()
@@ -379,55 +338,6 @@ impl AccountCatalog {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             context.cursor.retain_accounts(&cursor_identities).await;
-        }
-        ycoding_ai::muse::Runtime::shared()
-            .map_err(|_| models_dev::Error::Request)?
-            .retain_accounts(&identities)
-            .map_err(|_| models_dev::Error::Request)?;
-        if catalog.provider_permitted(&provider::Id("muse".into()))
-            && (saved
-                .iter()
-                .any(|selected| selected.integration_id().as_str() == Some("muse"))
-                || self.environment.contains_key("META_API_KEY")
-                || catalog
-                    .providers
-                    .iter()
-                    .any(|record| record.provider.id.0 == "muse".into()))
-        {
-            if let Some(base) = self.endpoints.get("muse") {
-                self.muse.base_url = base.clone();
-            }
-            if force {
-                self.muse
-                    .refresh(catalog, credentials, &self.environment, now)
-                    .await?;
-            } else {
-                self.muse
-                    .reconcile(catalog, credentials, &self.environment, now)
-                    .await?;
-            }
-        }
-        if catalog.provider_permitted(&provider::Id("antigravity".into()))
-            && (saved
-                .iter()
-                .any(|selected| selected.integration_id().as_str() == Some("antigravity"))
-                || catalog
-                    .providers
-                    .iter()
-                    .any(|record| record.provider.id.0 == "antigravity".into()))
-        {
-            if let Some(base) = self.endpoints.get("antigravity") {
-                self.antigravity.base_url = base.clone();
-            }
-            if force {
-                self.antigravity
-                    .refresh(catalog, credentials, &self.preparation, now)
-                    .await?;
-            } else {
-                self.antigravity
-                    .reconcile(catalog, credentials, &self.preparation, now)
-                    .await?;
-            }
         }
         if catalog.provider_permitted(&provider::Id("cursor".into()))
             && !saved
