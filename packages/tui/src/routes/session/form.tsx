@@ -390,7 +390,7 @@ export function FormPrompt(props: {
       props.onCancel()
       return
     }
-    void client.api.form.cancel({ sessionID: props.form.sessionID, formID: props.form.id }, requestOptions(props.form))
+    void client.api.form.cancel({ sessionID: props.form.sessionID, formID: props.form.id }, requestOptions(props.form)).catch(toast.error)
   }
 
   function openExternal() {

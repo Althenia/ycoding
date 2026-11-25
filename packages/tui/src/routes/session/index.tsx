@@ -440,44 +440,17 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     skillReadRevision++
     setCurrentSkillIDs(new Set<string>())
   }))
-  const [sessionMessagesSynced, setSessionMessagesSynced] = createSignal(false)
-  const [sessionMessagesRefreshing, setSessionMessagesRefreshing] = createSignal(true)
   const sessionScope = createMemo(() =>
     JSON.stringify([route.sessionID, location()?.directory, location()?.workspaceID]),
   )
-  createEffect(
-    on([sessionScope, () => client.connection.status()], ([scope, status], previous) => {
-      const sid = route.sessionID
-      if (scope !== previous?.[0]) setSessionMessagesSynced(false)
-      setSessionMessagesRefreshing(true)
-      if (status !== "connected") return
-      let active = true
-      onCleanup(() => {
-        active = false
-      })
-      void data.session.message
-        .sync(sid)
-        .then(() => {
-          if (!active || sessionScope() !== scope || client.connection.status() !== "connected") return
-          setSessionMessagesSynced(true)
-          setSessionMessagesRefreshing(false)
-        })
-        .catch(() => undefined)
-    }),
-  )
+  createEffect(on([sessionScope, () => client.connection.status()], ([, status]) => {
+    if (status === "connected") void data.session.message.sync(route.sessionID).catch(() => undefined)
+  }))
   const sessionReady = createMemo(() => {
-    const s = data.session.get(route.sessionID)
-    if (!s) return false
-    const msgs = data.session.message.list(route.sessionID)
-    if (msgs === undefined) return false
-    if (!sessionMessagesSynced()) return false
-    if (sessionMessagesRefreshing()) return false
+    const current = session()
     const history = data.session.message.history(route.sessionID)
-    if (history?.status === "error" && history.sourceEpoch === undefined) return false
-    const locReady = !!data.location.info(s.location)
-    if (!locReady) return false
-    if (client.connection.status() !== "connected") return false
-    return true
+    return !!current && !!data.location.info(current.location) && client.connection.status() === "connected" &&
+      !!history?.sourceEpoch && history.status !== "loading" && history.failedRead !== "latest"
   })
   const contextReady = createMemo(() => {
     const current = session()
@@ -489,7 +462,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     if (status === "connecting") return "Connecting…"
     const history = data.session.message.history(route.sessionID)
     if (history?.status === "error" && history.failedRead !== "older") return "History unavailable"
-    return sessionMessagesSynced() ? undefined : "Loading session…"
+    return history?.sourceEpoch ? undefined : "Loading session…"
   })
   const [branch, setBranch] = createSignal<string>()
   createEffect(

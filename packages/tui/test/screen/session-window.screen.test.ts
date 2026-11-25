@@ -40,7 +40,7 @@ test("first and last navigation reveal both ends of loaded history beyond the 40
   } finally { await screen.dispose() }
 }, 30000)
 
-test("an initial history failure keeps the editor and offers a keyboard retry without admitting the draft", async () => {
+test("an initial history failure preserves the draft and a successful retry enables Enter", async () => {
   const fixture = sessionHistoryFixture(200)
   fixture.release()
   let failed = true
@@ -69,6 +69,9 @@ test("an initial history failure keeps the editor and offers a keyboard retry wi
     await wait(() => screen.frame().includes("Synthetic response 199"))
     expect(screen.frame()).toContain("Keep this draft")
     expect(fixture.snapshotQueries).toEqual(["?limit=100"])
+    await wait(() => screen.renderer.currentFocusedEditor === editor)
+    screen.input.pressKey("RETURN")
+    await wait(() => fixture.requests.includes(`POST /api/session/${fixture.sessionID}/prompt`))
   } finally { await screen.dispose() }
 }, 30000)
 

@@ -917,3 +917,68 @@ test("successful delayed clipboard admission reconciles recalled history to its 
     await rm(state, { recursive: true, force: true })
   }
 }, 30_000)
+
+for (const state of ["thinking", "tool running", "question"] as const) {
+  test(`Escape handles ${state} without losing the next prompt after telemetry fails`, async () => {
+    resetFixture()
+    failFirstPrompt = false
+    const effects: string[] = []
+    const formID = "frm_pick_target"
+    let running = true
+    let asked = state === "question"
+    const form = { id: formID, sessionID, title: "Pick target", fields: [{ key: "target", type: "string", title: "Pick target", options: [{ value: "local", label: "Local target" }] }] }
+    const flush = Promise.withResolvers<void>()
+    const screen = await renderScreen({ width: 110, height: 40, args: { sessionID }, sessionReady: true,
+      settle: state === "question" ? "Local target" : state === "thinking" ? "Thinking" : state,
+      route: (url, request) => {
+        if (url.pathname === "/api/server/telemetry/consent") return json({ consent: { enabled: true, noticeVersion: 1, decidedAt: 1 }, noticeVersion: 1 })
+        if (url.pathname === "/api/server/web-latency") {
+          flush.resolve()
+          return json({ _tag: "InvalidRequestError", field: "unavailable", message: "Telemetry store unavailable" }, { status: 400 })
+        }
+        if (url.pathname === "/api/session/active") return json({ data: running ? { [sessionID]: {} } : {} })
+        if (url.pathname.endsWith(`/${sessionID}/form`)) return json({ data: asked ? [form] : [] })
+        if (url.pathname.endsWith(`/${formID}/cancel`)) {
+          effects.push("cancel")
+          if (effects.length === 1) return json({ _tag: "InvalidRequestError", message: "Cancellation rejected", field: "formID" }, { status: 400 })
+          asked = false
+          return new Response(null, { status: 204 })
+        }
+        if (url.pathname.endsWith("/interrupt")) { running = false; effects.push("interrupt"); return json({ data: {} }) }
+        if (url.pathname.endsWith("/snapshot")) return sessionSnapshot(sessionID, [{ id: "msg_work", type: "assistant", agent: "build", model: session.model, time: { created: 1 }, content: [state === "tool running"
+          ? { type: "tool", id: "call_read", name: "read", state: { status: "running", input: { path: "sample.txt" }, content: [], structured: {} }, time: { created: 1, ran: 2 } }
+          : { type: "reasoning", text: "Checking the sample", time: { created: 1 } }] }], { session })
+        return route(url, request)
+      },
+    })
+    try {
+      await screen.waitForEventStream()
+      screen.events.emit({ id: "evt_delay", created: Date.now(), type: "session.text.delta", data: { sessionID, assistantMessageID: "msg_work", ordinal: 1, delta: "input" } })
+      await flush.promise
+      if (state === "question") {
+        screen.input.pressEscape()
+        await waitFor(() => screen.frame().includes("Cancellation rejected"), "form cancellation error")
+        expect(screen.frame()).toContain("Local target")
+        expect(effects).toEqual(["cancel"])
+        screen.input.pressEscape()
+        await waitFor(() => effects.length === 2, "explicit cancellation after rejection")
+        expect(effects).toEqual(["cancel", "cancel"])
+        screen.events.emit({ id: "evt_cancel", created: 4, location: { directory }, type: "form.cancelled", data: { sessionID, id: formID } })
+      } else {
+        screen.input.pressEscape()
+        await waitFor(() => screen.frame().includes("again to interrupt"), "interrupt confirmation hint")
+        expect(effects).toEqual([])
+        screen.input.pressEscape()
+        await waitFor(() => effects.length > 0, "session interrupt")
+        expect(effects).toEqual(["interrupt"])
+      }
+      screen.events.emit({ id: "evt_stop", created: 5, durable: { aggregateID: sessionID, seq: 1, version: 1 }, location: { directory }, type: "session.execution.interrupted", data: { sessionID, reason: "user" } })
+      await waitFor(() => screen.renderer.currentFocusedEditor instanceof TextareaRenderable, "composer focus")
+      await screen.input.typeText("Continue locally")
+      screen.input.pressEnter()
+      await waitFor(() => promptRequests.length === 2, "admission and wake")
+      expect(promptRequests.map(({ text, resume }) => [text, resume])).toEqual([["Continue locally", false], ["Continue locally", true]])
+      expect(screen.frame()).not.toContain("Telemetry store unavailable")
+    } finally { await screen.dispose() }
+  }, 40_000)
+}

@@ -675,7 +675,7 @@ export function Prompt(props: PromptProps) {
             const now = performance.now()
             if (interruptDeadline <= now) {
               interruptDeadline = now + 5000
-              dialog.clear()
+              toast.show({ variant: "info", message: "Press again to interrupt the Session", duration: 5000 })
               return
             }
           }
@@ -684,7 +684,7 @@ export function Prompt(props: PromptProps) {
             if (!disposed && props.sessionID === sessionID)
               toast.show({ title: "Failed to interrupt", message: errorMessage(error), variant: "error" })
           })
-          dialog.clear()
+          if (!event) dialog.clear()
         },
       },
       {

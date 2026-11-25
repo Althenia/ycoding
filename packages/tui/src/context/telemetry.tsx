@@ -4,6 +4,7 @@ import { useClient } from "./client"
 import { useToast } from "../ui/toast"
 import { DialogTelemetryConsent } from "../component/dialog-telemetry-consent"
 import { DataProvider } from "./data"
+import { useLog } from "./log"
 import { useRoute } from "./route"
 
 type TelemetryContext = {
@@ -19,6 +20,7 @@ const Context = createContext<TelemetryContext>()
 
 export function TelemetryProvider(props: ParentProps) {
   const client = useClient()
+  const log = useLog({ component: "telemetry" })
   const [consent, setConsent] = createSignal<TelemetryConsentState["consent"]>()
   const [decided, setDecided] = createSignal(false)
   const [error, setError] = createSignal<unknown>()
@@ -81,7 +83,7 @@ export function TelemetryProvider(props: ParentProps) {
         void read()
         return
       }
-      setError(error)
+      log.warn("Could not save timing samples", { count: samples.length })
     }).finally(() => {
       flushing = false
     })
