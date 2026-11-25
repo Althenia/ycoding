@@ -356,20 +356,27 @@ test.each([
   const publish = parsedWorkflow.jobs["release-tui"]!
   const deploy = parsedWorkflow.jobs["deploy-web"]!
   const gate = publish.steps.find((step) => step.id === "web-deploy")
-  const output = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", gate?.run ?? ":"], {
-    env: { WEB_DEPLOY: value ?? "", GITHUB_OUTPUT: "/dev/stdout" }, stdout: "pipe", stderr: "pipe",
-  })
-  expect(output.exitCode, output.stderr.toString()).toBe(0)
-  const enabled = !deploy.if?.includes(webOptIn) || output.stdout.toString() === "enabled=true\n"
-  const steps = enabled ? deploy.steps.flatMap((step) => {
-    if (step.name === "Deploy to Cloudflare") return [step.name]
-    return step.name === "Deploy app preview Worker" && preview && step.if === "vars.YCODING_APP_PREVIEW_DEPLOY == 'true'" ? [step.name] : []
-  }) : []
-  expect(steps).toEqual([...expected])
-  expect(gate?.env).toEqual({ WEB_DEPLOY: "${{ vars.YCODING_WEB_DEPLOY }}" })
-  expect(publish.outputs?.["web-deploy"]).toBe("${{ steps.web-deploy.outputs.enabled }}")
-  expect(gate?.if).toBeUndefined()
-  expect(publish.steps.indexOf(gate!)).toBeGreaterThan(publish.steps.findIndex((step) => step.name === "Publish GitHub release"))
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ycoding-release-web-opt-in-"))
+  try {
+    const output = path.join(directory, "github-output")
+    fs.writeFileSync(output, "")
+    const result = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", gate?.run ?? ":"], {
+      env: { WEB_DEPLOY: value ?? "", GITHUB_OUTPUT: output }, stdout: "pipe", stderr: "pipe",
+    })
+    expect(result.exitCode, result.stderr.toString()).toBe(0)
+    const enabled = !deploy.if?.includes(webOptIn) || fs.readFileSync(output, "utf8") === "enabled=true\n"
+    const steps = enabled ? deploy.steps.flatMap((step) => {
+      if (step.name === "Deploy to Cloudflare") return [step.name]
+      return step.name === "Deploy app preview Worker" && preview && step.if === "vars.YCODING_APP_PREVIEW_DEPLOY == 'true'" ? [step.name] : []
+    }) : []
+    expect(steps).toEqual([...expected])
+    expect(gate?.env).toEqual({ WEB_DEPLOY: "${{ vars.YCODING_WEB_DEPLOY }}" })
+    expect(publish.outputs?.["web-deploy"]).toBe("${{ steps.web-deploy.outputs.enabled }}")
+    expect(gate?.if).toBeUndefined()
+    expect(publish.steps.indexOf(gate!)).toBeGreaterThan(publish.steps.findIndex((step) => step.name === "Publish GitHub release"))
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 test.each([
