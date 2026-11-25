@@ -1,4 +1,5 @@
 const deckBody = document.querySelector("#deck-body")
+const headerStatus = document.querySelector("#header-status")
 const connection = document.querySelector("#connection")
 const status = document.querySelector("#status")
 const matchCode = document.querySelector("#match-code")
@@ -58,13 +59,13 @@ function row(label, controls) {
 }
 
 function describe(result) {
-  if (result?.status === "") return { text: "", state: "" }
   if (result?.status !== "connected") return statusInfo[result?.status] ?? statusInfo.idle
   if (result.active?.some((item) => item.paused)) return { text: "Paused", state: "paused" }
   return result.active?.length ? { text: "Control active", state: "active" } : { text: "Connected", state: "connected" }
 }
 
 function syncVisibility() {
+  headerStatus.hidden = !headerStatus.textContent.trim()
   status.hidden = !status.textContent.trim()
   feedback.hidden = !feedback.textContent.trim()
   requests.hidden = requests.children.length === 0
@@ -81,9 +82,17 @@ async function statusRead() {
   if (rendered === signature) return
   rendered = signature
   const info = describe(result)
-  status.textContent = info.text
-  if (info.state) status.dataset.state = info.state
-  else delete status.dataset.state
+  if (info.state === "connected") {
+    headerStatus.textContent = info.text
+    headerStatus.dataset.state = info.state
+    status.textContent = ""
+    delete status.dataset.state
+  } else {
+    headerStatus.textContent = ""
+    delete headerStatus.dataset.state
+    status.textContent = info.text
+    status.dataset.state = info.state
+  }
   if (!addressShown && result?.address) {
     address.value = result.address
     addressShown = true

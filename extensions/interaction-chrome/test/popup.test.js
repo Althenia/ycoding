@@ -70,6 +70,7 @@ async function mountPopup(initial, next) {
   const statuses = Array.isArray(initial) ? [...initial] : [initial]
   const selectors = [
     "#deck-body",
+    "#header-status",
     "#connection",
     "#status",
     "#match-code",
@@ -82,6 +83,7 @@ async function mountPopup(initial, next) {
     "#active",
   ]
   for (const selector of selectors) nodes.set(selector, element())
+  nodes.get("#header-status").hidden = true
   nodes.get("input[name=address]").value = "http://127.0.0.1:42188"
   nodes.get("#match-code").hidden = true
   nodes.get("#connect").hidden = true
@@ -139,32 +141,7 @@ async function mountPopup(initial, next) {
 }
 
 describe("interaction-chrome popup states and contracts", () => {
-  test("removes the blank body strip and enclosing dividers when there is no status content", async () => {
-    const { nodes } = await mountPopup({
-      ok: true,
-      status: "",
-      address: "http://127.0.0.1:42188",
-      authorized: false,
-      groupingUnavailable: false,
-      pending: [],
-      active: [],
-    })
-    expect(nodes.get("#status").textContent).toBe("")
-    expect(nodes.get("#status").hidden).toBe(true)
-    expect(nodes.get("#connection").hidden).toBe(true)
-    expect(nodes.get("#deck-body").hidden).toBe(true)
-    expect(nodes.get("#requests").hidden).toBe(true)
-    expect(nodes.get("#active").hidden).toBe(true)
-    expect(nodes.get("#feedback").hidden).toBe(true)
-    expect(nodes.get("#connect").hidden).toBe(true)
-    expect(nodes.get("#match-code").hidden).toBe(true)
-
-    const css = await Bun.file(new URL("../popup.css", import.meta.url)).text()
-    expect(css).toMatch(/\.deck-body\[hidden\][\s\S]*border-bottom:\s*0/)
-    expect(css).toMatch(/\.deck-body\[hidden\][\s\S]*border-top:\s*0/)
-  })
-
-  test("connected idle shows primary Connected status with zero empty list or alert strips", async () => {
+  test("real connected idle shows Connected pill in header, hides #deck-body, and removes dividers between header and Advanced", async () => {
     const { nodes } = await mountPopup({
       ok: true,
       status: "connected",
@@ -174,11 +151,13 @@ describe("interaction-chrome popup states and contracts", () => {
       pending: [],
       active: [],
     })
-    expect(nodes.get("#deck-body").hidden).toBe(false)
-    expect(nodes.get("#connection").hidden).toBe(false)
-    expect(nodes.get("#status").hidden).toBe(false)
-    expect(nodes.get("#status").textContent).toBe("Connected")
-    expect(nodes.get("#status").dataset.state).toBe("connected")
+    expect(nodes.get("#header-status").hidden).toBe(false)
+    expect(nodes.get("#header-status").textContent).toBe("Connected")
+    expect(nodes.get("#header-status").dataset.state).toBe("connected")
+    expect(nodes.get("#status").textContent).toBe("")
+    expect(nodes.get("#status").hidden).toBe(true)
+    expect(nodes.get("#connection").hidden).toBe(true)
+    expect(nodes.get("#deck-body").hidden).toBe(true)
     expect(nodes.get("#connect").hidden).toBe(true)
     expect(nodes.get("#match-code").hidden).toBe(true)
     expect(nodes.get("#requests").hidden).toBe(true)
@@ -186,6 +165,60 @@ describe("interaction-chrome popup states and contracts", () => {
     expect(nodes.get("#feedback").hidden).toBe(true)
     expect(nodes.get("#forget").hidden).toBe(false)
     expect(nodes.get("#open-panel").hidden).toBe(true)
+
+    const html = await Bun.file(new URL("../popup.html", import.meta.url)).text()
+    const head = html.match(/<header[^>]*>([\s\S]*?)<\/header>/)?.[1] ?? ""
+    expect(head).toContain('id="header-status"')
+    expect(head.indexOf('id="header-status"')).toBeGreaterThan(head.indexOf("<h1>"))
+
+    const css = await Bun.file(new URL("../popup.css", import.meta.url)).text()
+    expect(css).toMatch(/\.deck-body\[hidden\][\s\S]*\.deck-head\s*\{[^}]*border-bottom:\s*0/)
+    expect(css).toMatch(/\.deck-body\[hidden\][\s\S]*\.deck-foot\s*\{[^}]*border-top:\s*0/)
+  })
+
+  test("connected with tab-group warning or action feedback keeps #deck-body visible and collapses again when cleared", async () => {
+    const { nodes, click, tick } = await mountPopup(
+      [
+        {
+          ok: true,
+          status: "connected",
+          address: "http://127.0.0.1:42188",
+          authorized: true,
+          groupingUnavailable: true,
+          pending: [],
+          active: [],
+        },
+        {
+          ok: true,
+          status: "connected",
+          address: "http://127.0.0.1:42188",
+          authorized: true,
+          groupingUnavailable: false,
+          pending: [],
+          active: [],
+        },
+      ],
+      { ok: false, code: "busy" },
+    )
+
+    expect(nodes.get("#header-status").hidden).toBe(false)
+    expect(nodes.get("#header-status").textContent).toBe("Connected")
+    expect(nodes.get("#status").hidden).toBe(true)
+    expect(nodes.get("#connection").hidden).toBe(true)
+    expect(nodes.get("#requests").hidden).toBe(false)
+    expect(collectText(nodes.get("#requests"))).toContain("Move it out of that group")
+    expect(nodes.get("#deck-body").hidden).toBe(false)
+
+    await tick()
+    expect(nodes.get("#requests").hidden).toBe(true)
+    expect(nodes.get("#deck-body").hidden).toBe(true)
+
+    await click("#forget", true)
+    expect(nodes.get("#header-status").hidden).toBe(false)
+    expect(nodes.get("#header-status").textContent).toBe("Connected")
+    expect(nodes.get("#feedback").hidden).toBe(false)
+    expect(nodes.get("#feedback").textContent).toBe("Wait for the current step to finish, then try again.")
+    expect(nodes.get("#deck-body").hidden).toBe(false)
   })
 
   test("disconnected idle shows primary Not connected status and Connect action, preserving message payload", async () => {
@@ -213,6 +246,7 @@ describe("interaction-chrome popup states and contracts", () => {
       ],
       { ok: true, status: "enrolling" },
     )
+    expect(nodes.get("#header-status").hidden).toBe(true)
     expect(nodes.get("#status").textContent).toBe("Not connected")
     expect(nodes.get("#status").dataset.state).toBe("disconnected")
     expect(nodes.get("#connect").hidden).toBe(false)
@@ -225,6 +259,7 @@ describe("interaction-chrome popup states and contracts", () => {
     expect(calls.filter((call) => call.type === "connect")).toEqual([
       { type: "connect", address: "http://127.0.0.1:42188", windowId: 7 },
     ])
+    expect(nodes.get("#header-status").hidden).toBe(true)
     expect(nodes.get("#status").textContent).toBe("Confirm on your Mac")
     expect(nodes.get("#status").dataset.state).toBe("waiting")
     expect(nodes.get("#match-code").hidden).toBe(false)
@@ -246,6 +281,7 @@ describe("interaction-chrome popup states and contracts", () => {
       pending: [],
       active: [],
     })
+    expect(nodes.get("#header-status").hidden).toBe(true)
     expect(nodes.get("#status").textContent).toBe(expected)
     expect(nodes.get("#status").dataset.state).toBe("waiting")
     expect(nodes.get("#connect").hidden).toBe(true)
@@ -270,6 +306,7 @@ describe("interaction-chrome popup states and contracts", () => {
       pending: [],
       active: [],
     })
+    expect(nodes.get("#header-status").hidden).toBe(true)
     expect(nodes.get("#status").textContent).toBe(expected)
     expect(nodes.get("#status").dataset.state).toBe("error")
     expect(nodes.get("#connect").hidden).toBe(false)
@@ -337,6 +374,11 @@ describe("interaction-chrome popup states and contracts", () => {
       (msg) => (msg.type === "stop" ? { ok: false, code: "cleanup" } : { ok: true, status: "connected" }),
     )
 
+    expect(nodes.get("#header-status").hidden).toBe(false)
+    expect(nodes.get("#header-status").textContent).toBe("Connected")
+    expect(nodes.get("#status").hidden).toBe(true)
+    expect(nodes.get("#connection").hidden).toBe(true)
+    expect(nodes.get("#deck-body").hidden).toBe(false)
     expect(nodes.get("#requests").hidden).toBe(false)
     expect(nodes.get("#active").hidden).toBe(true)
     const pendingButtons = findButtons(nodes.get("#requests"))
@@ -354,6 +396,8 @@ describe("interaction-chrome popup states and contracts", () => {
       windowId: 7,
     })
 
+    expect(nodes.get("#header-status").hidden).toBe(true)
+    expect(nodes.get("#status").hidden).toBe(false)
     expect(nodes.get("#status").textContent).toBe("Control active")
     expect(nodes.get("#status").dataset.state).toBe("active")
     expect(nodes.get("#requests").hidden).toBe(true)
@@ -366,6 +410,8 @@ describe("interaction-chrome popup states and contracts", () => {
     ])
 
     await tick()
+    expect(nodes.get("#header-status").hidden).toBe(true)
+    expect(nodes.get("#status").hidden).toBe(false)
     expect(nodes.get("#status").textContent).toBe("Paused")
     expect(nodes.get("#status").dataset.state).toBe("paused")
     expect(collectText(nodes.get("#active"))).toContain("You took over this tab.")
@@ -385,6 +431,7 @@ describe("interaction-chrome popup states and contracts", () => {
     const css = await Bun.file(new URL("../popup.css", import.meta.url)).text()
     const manifest = await Bun.file(new URL("../manifest.json", import.meta.url)).json()
 
+    expect(html).toContain('id="header-status"')
     expect(html).toContain('id="deck-body"')
     expect(html).toContain('id="connection"')
     expect(html).toContain('id="status"')
