@@ -19,6 +19,14 @@ import { Spinner } from "./spinner"
 import { errorMessage } from "../util/error"
 import { readableForeground } from "../theme/component"
 import { isBackgroundSession } from "../util/session"
+import {
+  canonicalDirectory,
+  listScopedRecentSessions,
+  matchesRecentSessionScope,
+  recentSessionScopeKey,
+  resolveRecentSessionScope,
+  scopeHintDirectory,
+} from "../util/session-scope"
 
 const REFRESH_EVENTS = new RegExp(
   `^(${[
@@ -67,8 +75,14 @@ export function DialogSessionList(
     tasks: new Set<string>(),
     running: new Set<string>(),
   })
+  const scopeCache = new Map<string, string | null>()
   const waitingRoots = createMemo(() => new Set([...global().decisions, ...global().tasks]))
-  const activeProject = createMemo(() => (location.current ?? data.location.info())?.project)
+  const activeLocation = createMemo(() => location.current ?? data.location.info())
+  const activeScope = createMemo(() => {
+    const current = activeLocation()
+    return current ? resolveRecentSessionScope(current, scopeCache) : undefined
+  })
+  const activeScopeKey = createMemo(() => recentSessionScopeKey(activeScope()))
   let releaseRetained: (() => void) | undefined
   let disposed = false
   let refreshing = false
@@ -121,7 +135,7 @@ export function DialogSessionList(
 
   async function loadGlobal(generation: number, discoverRoots: boolean) {
     const stale = () => disposed || generation !== refreshGeneration
-    if (discoverRoots) await data.session.syncRoots(activeProject()?.id).catch(() => undefined)
+    if (discoverRoots) await data.session.syncRoots(activeLocation()).catch(() => undefined)
     if (stale()) return
     const [decisions, outstanding] = await Promise.allSettled([
       client.api.decision.list(),
@@ -191,7 +205,7 @@ export function DialogSessionList(
   )
   createEffect(
     on(
-      () => activeProject()?.id,
+      activeScopeKey,
       () => {
         refreshGeneration++
         refreshGlobal(true)
@@ -205,24 +219,27 @@ export function DialogSessionList(
     return data.session.sync(sessionID).catch(() => undefined)
   }
 
-  const [searchResults] = createResource(search, async (query) => {
-    if (!query) return
+  const searchSource = createMemo(() => {
+    const query = search()
+    if (!query) return undefined
+    return { query, scopeKey: activeScopeKey() }
+  })
+
+  const [searchResults] = createResource(searchSource, async ({ query }) => {
     try {
-      const current = location.current ?? (await data.location.sync().then(() => data.location.info()))
+      const current = activeLocation() ?? (await data.location.sync().then(() => data.location.info()))
       if (!current) throw new Error("Location unavailable")
-      const response = await client.api.session.list({
-        project: current.project.id,
+      const scope = resolveRecentSessionScope(current, scopeCache)
+      const found = await listScopedRecentSessions({
+        list: client.api.session.list,
+        scope,
         search: query,
         limit: 50,
-        order: "desc",
-        parentID: null,
-        background: "exclude",
+        cache: scopeCache,
       })
-      return { query, sessions: response.data.filter((session) => !isBackgroundSession(session)), error: undefined }
+      return { query, scopeKey: recentSessionScopeKey(scope), sessions: found, error: undefined }
     } catch (error) {
-      // A transient transport failure must degrade search, not crash the TUI
-      // through the root ErrorBoundary when the errored resource is read.
-      return { query, sessions: [] as SessionInfo[], error }
+      return { query, scopeKey: activeScopeKey(), sessions: [] as SessionInfo[], error }
     }
   })
 
@@ -239,7 +256,7 @@ export function DialogSessionList(
     if (!query) return local
     if (query !== search() || searchResults.loading) return local
     const result = searchResults()
-    if (result?.query !== query || result.error) return local
+    if (result?.query !== query || result.scopeKey !== activeScopeKey() || result.error) return local
     return result.sessions
   })
   const searchState = createMemo(() => {
@@ -264,7 +281,8 @@ export function DialogSessionList(
   })
 
   const options = createMemo(() => {
-    const project = activeProject()
+    const scope = activeScope()
+    const hintBase = scope ? canonicalDirectory(scopeHintDirectory(scope)) : undefined
     const byID = new Map<string, SessionInfo>()
     for (const session of data.session.list()) {
       if (!session.parentID && !isBackgroundSession(session)) byID.set(session.id, session)
@@ -306,7 +324,7 @@ export function DialogSessionList(
       const messageCount = props.messageCounts?.[session.id]
       const footer =
         messageCount === undefined
-          ? directory !== project?.directory
+          ? hintBase === undefined || canonicalDirectory(directory) !== hintBase
             ? Locale.truncate(path.basename(directory), 20)
             : ""
           : `${messageCount.toLocaleString("en-US")} msgs`
@@ -345,10 +363,13 @@ export function DialogSessionList(
         return [option(session, category)]
       })
 
-    const recentSessions = project
+    const recentSessions = scope
       ? sessions()
           .filter(
-            (session) => !session.parentID && !isBackgroundSession(session) && session.projectID === project.id,
+            (session) =>
+              !session.parentID &&
+              !isBackgroundSession(session) &&
+              matchesRecentSessionScope(scope, session, scopeCache),
           )
           .slice(0, 50)
       : []

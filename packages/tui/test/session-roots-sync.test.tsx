@@ -91,7 +91,7 @@ test("a resident root unpinned elsewhere is refreshed instead of staying pinned"
   try {
     await waitFor(() => mounted.data().session.get("ses_pin_b")?.time.pinned !== undefined)
     world.pinned.delete("ses_pin_b")
-    await mounted.data().session.syncRoots(project.id)
+    await mounted.data().session.syncRoots({ directory, project })
     await waitFor(() => mounted.data().session.get("ses_pin_b")?.time.pinned === undefined)
     expect(mounted.data().session.get("ses_pin_a")?.time.pinned).toBeDefined()
     expect(world.details).toContain("ses_pin_b")

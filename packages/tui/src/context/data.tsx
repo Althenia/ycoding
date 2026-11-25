@@ -49,6 +49,7 @@ import { batch, createEffect, createSignal, onCleanup, untrack } from "solid-js"
 import { createPromptSubmissions } from "../prompt/submission"
 import { errorMessage } from "../util/error"
 import { isCompactionCheckpoint, sessionShellFamily } from "../util/session"
+import { listScopedRecentSessions, resolveRecentSessionScope, type ScopeLocation } from "../util/session-scope"
 
 export type DataSessionHistory = {
   status: "loading" | "paging" | "ready" | "error"
@@ -2563,11 +2564,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             pruneMetadata()
           }
         },
-        syncRoots(projectID?: string) {
+        syncRoots(location?: ScopeLocation) {
           return sync.run(
             "session.roots",
             async (current, signal) => {
-              const targetProjectID = projectID ?? store.location[locationKey(defaultLocation())]?.info?.project.id
+              const target = location ?? store.location[locationKey(defaultLocation())]?.info
+              const scope = target ? resolveRecentSessionScope(target) : undefined
               const pinned: SessionInfo[] = []
               const listPinned = async () => {
                 let cursor: string | undefined
@@ -2590,15 +2592,18 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               }
               const [, recent] = await Promise.all([
                 listPinned(),
-                targetProjectID === undefined
+                scope === undefined
                   ? undefined
-                  : client.api.session.list(
-                      { project: targetProjectID, pinned: false, parentID: null, background: "exclude", limit: 50, order: "desc" },
-                      { signal },
-                    ),
+                  : listScopedRecentSessions({
+                      list: client.api.session.list,
+                      scope,
+                      pinned: false,
+                      limit: 50,
+                      signal,
+                    }),
               ])
               if (!current()) return
-              const found = [...pinned, ...(recent?.data ?? [])]
+              const found = [...pinned, ...(recent ?? [])]
               const pinnedIDs = new Set(pinned.map((session) => session.id))
               const stale = Object.values(store.session.info).filter(
                 (session) => !session.parentID && session.time.pinned !== undefined && !pinnedIDs.has(session.id),
@@ -3409,13 +3414,13 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                 ...store.location[key],
                 info: location,
               })
-              return location.project.id
+              return location
             })
             .catch((error) => {
               console.error("Failed to resolve location", error)
               return undefined
             })
-            .then((projectID) => result.session.syncRoots(projectID))
+            .then((location) => result.session.syncRoots(location))
             .catch((error) => console.error("Failed to preload sessions", error))
           return
         }
