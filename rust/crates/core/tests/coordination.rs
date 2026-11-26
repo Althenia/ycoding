@@ -381,14 +381,35 @@ async fn archived_retention_is_not_new_admission_and_foreign_directory_projects_
         .wait()
         .unwrap();
     assert_eq!(service.get(&group.id).unwrap().member_session_ids.len(), 1);
-    assert_eq!(
-        service
-            .update(&group.id, update(0))
-            .await
-            .unwrap_err()
-            .reason(),
-        Some("Coordination.IneligibleSessionError")
+    service.activate(&group.id).unwrap();
+    let other = session::Id::new("ses_other").unwrap();
+    let added = service
+        .add_member(&group.id, other.clone(), None, true)
+        .await
+        .unwrap();
+    assert!(added.active);
+    assert_eq!(added.master_session_id, group.master_session_id);
+    assert!(added.member_session_ids.contains(&other));
+    assert!(
+        added
+            .member_session_ids
+            .contains(&group.member_session_ids[0])
     );
+    let mut replacement = update(1);
+    replacement.member_session_ids = Some(group.member_session_ids.clone());
+    service.update(&group.id, replacement).await.unwrap();
+    let mut replacement = update(2);
+    replacement.member_session_ids = Some(added.member_session_ids);
+    assert!(service.update(&group.id, replacement).await.unwrap().active);
+    for id in ["ses_master", "ses_other"] {
+        let session = store
+            .snapshot()
+            .unwrap()
+            .get::<tables::SessionTable>(&key(id))
+            .unwrap()
+            .unwrap();
+        assert!(session.parent_id.is_none() && session.time_archived.is_none());
+    }
     service.delete(&group.id).await.unwrap();
     assert!(
         store

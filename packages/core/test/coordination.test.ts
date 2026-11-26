@@ -367,6 +367,26 @@ describe("Project member addition", () => {
       expect((yield* groupEvents(group.id)).map((row) => row.type)).toEqual(["coordination.group.created.2", "coordination.group.changed.1"])
     })))
 
+  test("retains archived members while enrolling active roots", () =>
+    run(Effect.gen(function* () {
+      const ids = yield* setup
+      const service = yield* CoordinationService.Service
+      const { db } = yield* Database.Service
+      const group = yield* create(ids)
+      yield* service.activate(group.id)
+      yield* db.run(sql`UPDATE session SET time_archived = 1 WHERE id = ${ids.member.id}`).pipe(Effect.orDie)
+      const added = yield* service.addMember(group.id, { sessionID: ids.other.id })
+      const updated = yield* service.update(group.id, { revision: added.revision, memberSessionIDs: [...added.memberSessionIDs, ids.spare.id] })
+      expect(updated.active).toBe(true)
+      expect(updated.masterSessionID).toBe(ids.master.id)
+      expect(updated.memberSessionIDs.slice().sort()).toEqual([ids.member.id, ids.other.id, ids.spare.id].sort())
+      for (const id of [ids.master.id, ids.other.id, ids.spare.id]) {
+        const session = yield* ids.sessions.get(id)
+        expect(session.time.archived).toBeUndefined()
+        expect(session.parentID).toBeUndefined()
+      }
+    })))
+
   test("refuses child, archived, existing and other-Project Sessions without recording anything", () =>
     run(Effect.gen(function* () {
       const ids = yield* setup

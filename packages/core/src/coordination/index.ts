@@ -170,7 +170,10 @@ export const layer = Layer.effect(
       groupID: Coordination.GroupID | undefined,
       masterSessionID: Session.ID,
       memberSessionIDs: ReadonlyArray<Session.ID>,
+      retained: ReadonlyArray<Session.ID> = [],
     ) {
+      if (memberSessionIDs.length > Coordination.maxMembers)
+        return yield* new IneligibleSessionError({ message: `A Project admits at most ${Coordination.maxMembers} members` })
       const ids = [masterSessionID, ...memberSessionIDs]
       if (new Set(ids).size !== ids.length)
         return yield* new IneligibleSessionError({ message: "A Project lists each Session once, and the Master is not a member" })
@@ -187,7 +190,8 @@ export const layer = Layer.effect(
         if (!session) return yield* new IneligibleSessionError({ message: `Session ${id} does not exist` })
         if (session.parent_id !== null)
           return yield* new IneligibleSessionError({ message: `Session ${id} is a child Session, not a root` })
-        if (session.time_archived !== null) return yield* new IneligibleSessionError({ message: `Session ${id} is archived` })
+        if (session.time_archived !== null && (id === masterSessionID || !retained.includes(id)))
+          return yield* new IneligibleSessionError({ message: `Session ${id} is archived` })
       }
       const other = (column: typeof CoordinationGroupTable.id | typeof CoordinationMemberTable.group_id) =>
         groupID === undefined ? undefined : ne(column, groupID)
@@ -344,7 +348,7 @@ export const layer = Layer.effect(
             const previousMemberIDs = yield* memberIDs(groupID)
             const memberSessionIDs = input.memberSessionIDs ?? previousMemberIDs
             const settings = input.settings ?? settingsOf(current)
-            yield* validateSessions(groupID, masterSessionID, memberSessionIDs)
+            yield* validateSessions(groupID, masterSessionID, memberSessionIDs, previousMemberIDs)
             const at = yield* now
             const revision = current.revision + 1
             yield* events.publish(
@@ -494,8 +498,9 @@ export const layer = Layer.effect(
         lock.withLock("projects")(
           Effect.gen(function* () {
             const current = yield* row(groupID)
-            const memberSessionIDs = [...(yield* memberIDs(groupID)), input.sessionID]
-            yield* validateSessions(groupID, current.master_session_id, memberSessionIDs)
+            const previous = yield* memberIDs(groupID)
+            const memberSessionIDs = [...previous, input.sessionID]
+            yield* validateSessions(groupID, current.master_session_id, memberSessionIDs, previous)
             const at = yield* now
             const revision = Coordination.Revision.make(current.revision + 1)
             yield* events.publishBatch([

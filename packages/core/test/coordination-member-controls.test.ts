@@ -7,6 +7,7 @@ import path from "node:path"
 import { LLMClient } from "@ycoding-ai/ai"
 import { Coordination } from "@ycoding-ai/schema/coordination"
 import { Permission } from "@ycoding-ai/schema/permission"
+import { QuestionID } from "@ycoding-ai/schema/session-orchestration"
 import { Agent } from "../src/agent"
 import { AppNodeBuilder } from "../src/effect/app-node-builder"
 import { LayerNode } from "../src/effect/layer-node"
@@ -36,6 +37,7 @@ import { SessionEvent } from "../src/session/event"
 import { SessionExecution } from "../src/session/execution"
 import { SessionMessage } from "../src/session/message"
 import { SessionOrchestration } from "../src/session/orchestration"
+import { SessionOrchestrationIdentity } from "../src/session/orchestration-identity"
 import { SessionStepBoundary } from "../src/session/step-boundary"
 import { SessionAutonomy } from "../src/session/autonomy"
 import { SessionTable, SessionTaskTable } from "../src/session/sql"
@@ -520,6 +522,25 @@ describe("project member detach", () => {
     running.delete(descendant.id)
     expect(yield* f.runtime.remove(f.master.id, { sessionID: f.peer.id })).toEqual({ sessionID: f.peer.id, removed: true })
     unchangedExecution()
+  }))
+
+  it.effect("lists a durable child question and detaches after only its stale notice remains", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const child = yield* launchUnder(f, f.peer.id)
+    const question = QuestionID.make("qst_fixture")
+    yield* f.db.update(SessionTaskTable).set({ state: "waiting", revision: 3, question_id: question, question: "Which format?", question_time: 1 })
+      .where(eq(SessionTaskTable.session_id, child.id)).run().pipe(Effect.orDie)
+    const task = yield* f.db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, child.id)).get().pipe(Effect.orDie)
+    const inputID = SessionOrchestrationIdentity.launch(f.peer.id, task!.parent_assistant_message_id, task!.tool_call_id).notification(3, "question")
+    yield* f.events.publish(SessionEvent.InputAdmitted, { sessionID: f.peer.id, inputID, input: { type: "synthetic", delivery: "steer",
+      data: { text: "Child question", description: "Subagent notification", metadata: { source: "subagent_notification", childID: child.id, revision: 3, type: "question" } } } })
+    const roster = yield* f.runtime.roster(f.master.id)
+    expect(roster.members.find(m => m.sessionID === f.peer.id)?.pending).toContainEqual(expect.objectContaining({ requestID: question, requestSessionID: child.id }))
+    yield* refusedWithoutDetach(f, f.runtime.remove(f.master.id, { sessionID: f.peer.id }), busy(f.peer.id))
+    yield* f.db.update(SessionTaskTable).set({ state: "completed", revision: 4, question_id: null, question: null, question_time: null })
+      .where(eq(SessionTaskTable.session_id, child.id)).run().pipe(Effect.orDie)
+    expect(yield* f.runtime.remove(f.master.id, { sessionID: f.peer.id })).toEqual({ sessionID: f.peer.id, removed: true })
+    expect((yield* f.sessions.pending(f.peer.id)).map(row => row.id)).toContain(inputID)
   }))
 
   it.effect("refuses a member while its own or a deep descendant's request is pending, then detaches it once the request settles", () => Effect.gen(function* () {

@@ -810,7 +810,8 @@ fn session_exists(
                 && !storage_read(operation)
                 && !matches!(
                     operation,
-                    "session.usage"
+                    "session.archive"
+                        | "session.usage"
                         | "session.usageReport"
                         | "session.promptCosts"
                         | "session.taskCosts"

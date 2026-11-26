@@ -578,6 +578,83 @@ struct Runtimes {
     wakes: Arc<AtomicUsize>,
 }
 
+async fn phase_recovered_child_question(family: &Family, runtimes: &Runtimes) {
+    use ycoding_store::session::{Pending, PendingTable};
+    let member_id = family
+        .fixture
+        .session("ses_recovered", None, 0, false, None);
+    let child_id =
+        family
+            .fixture
+            .session("ses_recovered_child", Some("ses_recovered"), 0, false, None);
+    family
+        .coordination
+        .add_member(&family.group, member_id.clone(), None, true)
+        .await
+        .unwrap();
+    family.fixture.store.submit(|tx| {
+        let mut child = task("ses_recovered_child", "ses_recovered", "waiting");
+        child.question_id = Some("qst_fixture".into());
+        child.question = Some("Which format?".into());
+        child.question_time = Some(1);
+        TaskTable::put(tx, &child)?;
+        PendingTable::insert(tx, &Pending {
+            id: ycoding_core::session::orchestration::Launch::new(&SessionId::new("ses_recovered").unwrap(), &ycoding_schema::session_message::Id::new("msg_parent").unwrap(), "call_ses_recovered_child").notification(1, &ycoding_schema::session_orchestration::NotificationType::Question).into_lossless(), session_id: "ses_recovered".into(), type_: "synthetic".into(),
+            data: parse_json(r#"{"text":"Child question","description":"Subagent notification","metadata":{"source":"subagent_notification","childID":"ses_recovered_child","revision":1,"type":"question"}}"#).unwrap(),
+            delivery: Some("steer".into()), admitted_seq: 1, time_created: 1,
+        })
+    }).unwrap().wait().unwrap();
+    let runtime = &runtimes.runtime;
+    let remove = || {
+        runtime.remove(
+            &family.master,
+            coordination::runtime::MemberInput {
+                session_id: member_id.clone(),
+            },
+            Some(&family.group),
+        )
+    };
+    let member = runtime
+        .roster(&family.master)
+        .await
+        .unwrap()
+        .members
+        .into_iter()
+        .find(|row| row.session_id == member_id)
+        .unwrap();
+    assert!(remove().await.is_err());
+    let listed = member.pending.iter().any(|q| {
+        q.request_id.as_str() == Some("qst_fixture")
+            && q.request_session_id.as_ref() == Some(&child_id)
+    });
+    family
+        .fixture
+        .store
+        .submit(|tx| {
+            let mut child = task("ses_recovered_child", "ses_recovered", "completed");
+            child.revision = 2;
+            TaskTable::put(tx, &child)
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    let settled = runtime
+        .roster(&family.master)
+        .await
+        .unwrap()
+        .members
+        .into_iter()
+        .find(|row| row.session_id == member_id)
+        .unwrap();
+    assert!(settled.pending.is_empty());
+    let detached = remove().await;
+    assert!(
+        listed && detached.is_ok(),
+        "listed question: {listed}, detach after settlement: {detached:?}"
+    );
+    assert_eq!(runtimes.sessions.pending_list(&member_id).unwrap().len(), 1);
+}
+
 fn runtime(family: &Family) -> Runtimes {
     let sessions = SessionStore::new(family.fixture.store.client());
     let jobs = job::Jobs::new();
@@ -1085,6 +1162,7 @@ async fn a_members_descendant_requests_route_through_the_member_end_to_end() {
     phase_pending_cap(&family, &runtimes).await;
     phase_unowned_routing(&family, &runtimes).await;
     phase_archived_descendants(&family, &runtimes).await;
+    phase_recovered_child_question(&family, &runtimes).await;
     let _ = runtimes.wakes.load(Ordering::SeqCst);
 }
 

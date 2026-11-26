@@ -551,7 +551,8 @@ impl Runtime {
                 )));
             }
             if self.0.execution.active().contains(&input.session_id)
-                || self.work_remains(&input.session_id)?
+                || self.background_work(&input.session_id)?
+                || self.has_detach_blocking_input(&input.session_id)?
                 || !self
                     .family_pending(&scope, caller, &input.session_id)
                     .await?
@@ -1667,14 +1668,19 @@ impl Runtime {
         let family = if descendants.is_empty() {
             own.clone()
         } else {
-            self.pending_of(scope, &scope.master_session_id, id, descendants)
+            self.pending_of(scope, &scope.master_session_id, id, descendants.clone())
                 .await?
         };
-        let pending = family
+        let mut pending = family
             .into_iter()
             .take(c::MAX_PENDING)
             .map(|pending| pending.summary)
             .collect::<Vec<_>>();
+        pending.extend(
+            self.child_questions(&descendants, c::MAX_PENDING - pending.len())?
+                .into_iter()
+                .map(|(question, _)| question),
+        );
         let state = if !own.is_empty() {
             c::MemberState::Waiting
         } else if running.contains(id.as_lossless()) {
@@ -2303,45 +2309,20 @@ impl Runtime {
             )
             .await?;
         }
-        let snapshot = self.0.coordination.client().snapshot()?;
-        let family = family::members(
-            &mut family::Reader::Snapshot(&snapshot),
-            member.as_lossless(),
-        )?
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-        let mut children = snapshot
-            .scan::<TaskTable>(Bound::Unbounded, Bound::Unbounded, usize::MAX)?
-            .into_iter()
-            .filter(|task| {
-                family.contains(&task.session_id)
-                    && task.state.as_str() == Some("waiting")
-                    && task.question_id.is_some()
-                    && task.question.is_some()
-                    && task.question_time.is_some()
-                    && snapshot
-                        .get::<SessionTable>(&key(&task.session_id))
-                        .is_ok_and(|row| row.is_some_and(|row| row.time_archived.is_none()))
-            })
-            .collect::<Vec<_>>();
-        children.sort_by(|left, right| left.session_id.cmp(&right.session_id));
-        for task in children {
-            let fingerprint: LosslessString = prompt_cache::sha256(&prompt_cache::canonical_json(
-                &ObjectEncoder::new()
-                    .field("sessionID", &task.session_id)
-                    .field("questionID", &task.question_id.clone().unwrap_or_default())
-                    .field("revision", &(task.revision as f64))
-                    .finish(),
-            ))
-            .as_str()
-            .into();
-            let identity = join(&[&"child-question".into(), target.as_lossless(), &fingerprint]);
+        for (question, revision) in
+            self.child_questions(&self.descendants_of(member)?, usize::MAX)?
+        {
+            let identity = join(&[
+                &"child-question".into(),
+                target.as_lossless(),
+                &question.fingerprint,
+            ]);
             let detail = ObjectEncoder::new()
                 .field("kind", &c::RequestKind::Question)
-                .field("requestID", &task.question_id.clone().unwrap_or_default())
-                .field("requestSessionID", &task.session_id)
-                .field("revision", &(task.revision as f64))
-                .field("fingerprint", &fingerprint)
+                .field("requestID", &question.request_id)
+                .optional("requestSessionID", &question.request_session_id)
+                .field("revision", &(revision as f64))
+                .field("fingerprint", &question.fingerprint)
                 .finish();
             self.deliver(
                 scope,
@@ -2354,6 +2335,49 @@ impl Runtime {
             .await?;
         }
         Ok(())
+    }
+    fn child_questions(
+        &self,
+        descendants: &[session::Id],
+        limit: usize,
+    ) -> Result<Vec<(c::PendingRequest, i64)>, Error> {
+        let snapshot = self.0.coordination.client().snapshot()?;
+        let mut questions = Vec::new();
+        for id in descendants {
+            if questions.len() == limit {
+                break;
+            }
+            let Some(task) = snapshot.get::<TaskTable>(&key(id.as_lossless()))? else {
+                continue;
+            };
+            let Some(request_id) = task.question_id else {
+                continue;
+            };
+            if task.state.as_str() != Some("waiting")
+                || task.question.is_none()
+                || task.question_time.is_none()
+            {
+                continue;
+            }
+            let fingerprint = prompt_cache::sha256(&prompt_cache::canonical_json(
+                &ObjectEncoder::new()
+                    .field("sessionID", id)
+                    .field("questionID", &request_id)
+                    .field("revision", &(task.revision as f64))
+                    .finish(),
+            ));
+            questions.push((
+                c::PendingRequest {
+                    kind: c::RequestKind::Question,
+                    request_id,
+                    request_session_id: Some(id.clone()),
+                    fingerprint: fingerprint.as_str().into(),
+                    summary: "Managed child question; the parent Session owns the reply".into(),
+                },
+                task.revision,
+            ));
+        }
+        Ok(questions)
     }
     fn delivered_sequence(
         &self,
@@ -2772,6 +2796,45 @@ impl Runtime {
             root = parent;
         }
         Ok(session::Id::new(root)?)
+    }
+    fn has_detach_blocking_input(&self, id: &session::Id) -> Result<bool, Error> {
+        let snapshot = self.0.coordination.client().snapshot()?;
+        for row in self.0.sessions.pending_list(id)? {
+            if row.type_.as_str() == Some("synthetic")
+                && let JsonValue::Object(data) = &row.data
+                && let Some(metadata @ JsonValue::Object(fields)) = data.get(&"metadata".into())
+                && detail_text(metadata, "source")
+                    .as_ref()
+                    .and_then(LosslessString::as_str)
+                    == Some("subagent_notification")
+                && let Some(child) = detail_text(metadata, "childID")
+                && let Some(JsonValue::Number(revision)) = fields.get(&"revision".into())
+                && let Some(kind) = fields.get(&"type".into()).and_then(|kind| {
+                    ycoding_schema::session_orchestration::NotificationType::decode(kind).ok()
+                })
+                && let Some(task) = snapshot.get::<TaskTable>(&key(&child))?
+                && task.parent_id == *id.as_lossless()
+                && matches!(
+                    task.state.as_str(),
+                    Some("completed" | "failed" | "lost" | "cancelled")
+                )
+                && *revision <= task.revision as f64
+                && *revision >= 0.0
+                && revision.fract() == 0.0
+                && orchestration::Launch::new(
+                    id,
+                    &session_message::Id::new(task.parent_assistant_message_id)?,
+                    &readable(&task.tool_call_id),
+                )
+                .notification(*revision as i64, &kind)
+                .as_lossless()
+                    == &row.id
+            {
+                continue;
+            }
+            return Ok(true);
+        }
+        Ok(false)
     }
     fn work_remains(&self, id: &session::Id) -> Result<bool, Error> {
         Ok(self.background_work(id)? || self.0.sessions.has_pending(id)?)

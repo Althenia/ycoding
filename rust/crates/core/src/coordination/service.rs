@@ -873,7 +873,17 @@ fn validate(
         let row = tx
             .get::<SessionTable>(&key(id.as_lossless()))?
             .ok_or_else(|| error::ineligible("Session does not exist"))?;
-        if row.parent_id.is_some() || row.time_archived.is_some() {
+        let membership = tx.index::<MemberTable>(
+            "coordination_member_session_idx",
+            &key(id.as_lossless()),
+            None,
+            1,
+        )?;
+        let retained = id != master
+            && membership
+                .iter()
+                .any(|member| Some(&member.group_id) == group);
+        if row.parent_id.is_some() || (row.time_archived.is_some() && !retained) {
             return Err(error::ineligible("Only active root Sessions are eligible"));
         }
         if tx
@@ -885,15 +895,7 @@ fn validate(
             )?
             .iter()
             .any(|row| Some(&row.id) != group)
-            || tx
-                .index::<MemberTable>(
-                    "coordination_member_session_idx",
-                    &key(id.as_lossless()),
-                    None,
-                    1,
-                )?
-                .iter()
-                .any(|row| Some(&row.group_id) != group)
+            || membership.iter().any(|row| Some(&row.group_id) != group)
         {
             return Err(error::ineligible(
                 "Session already belongs to another Project",

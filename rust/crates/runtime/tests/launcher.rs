@@ -1319,6 +1319,44 @@ mod store_path {
         assert_eq!(support::units(&missing.session_id), id);
     }
 
+    #[tokio::test]
+    async fn archive_with_missing_recorded_directory() {
+        let directory = Directory::new();
+        let location = mkdir(&directory.0.join("member"), 0o700);
+        let (runtime, url, password, _) = serve(&directory, "local", &[]);
+        let id = create_session(&url, &password, &location).await;
+        stop(runtime);
+        std::fs::remove_dir(&location).unwrap();
+        let (runtime, url, password, _) = serve(&directory, "local", &[]);
+        let mut client = client(&url, &password).await;
+        let _: v5::SessionArchiveResult = support::wire::ask(
+            &mut client,
+            "session.archive",
+            support::session_scope(&id),
+            v5::SessionArchiveRequest {
+                params: v5::SessionArchiveRequestParams {
+                    session_id: support::text(&id),
+                },
+            },
+        )
+        .await;
+        let result: v5::SessionGetResult = support::wire::ask(
+            &mut client,
+            "session.get",
+            support::session_scope(&id),
+            v5::SessionGetRequest {
+                params: v5::SessionGetRequestParams {
+                    session_id: support::text(&id),
+                },
+            },
+        )
+        .await;
+        assert!(result.data.time.archived.is_some());
+        assert!(!location.exists());
+        drop(client);
+        stop(runtime);
+    }
+
     #[test]
     fn paths_output_ignores_the_store_variables() {
         for channel in ["beta", "dev"] {

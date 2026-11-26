@@ -7,6 +7,7 @@ import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Model } from "@ycoding-ai/schema/model"
 import { Permission } from "@ycoding-ai/schema/permission"
 import { SessionStatusEvent } from "@ycoding-ai/schema/session-status-event"
+import { NotificationType } from "@ycoding-ai/schema/session-orchestration"
 import path from "node:path"
 import fs from "node:fs/promises"
 import { homedir } from "node:os"
@@ -40,6 +41,7 @@ import { SessionExecution } from "./execution"
 import { SessionHistory } from "./history"
 import { SessionMessage } from "./message"
 import { SessionOrchestration } from "./orchestration"
+import { SessionOrchestrationIdentity } from "./orchestration-identity"
 import { SessionPermissionCeiling } from "./permission-ceiling"
 import { SessionPending } from "./pending"
 import { SessionRunnerModel } from "./runner/model"
@@ -514,6 +516,14 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
     })
   })
 
+  const childQuestions = (member: SessionSchema.ID, limit: number, after?: SessionSchema.ID) => db.select({ task: SessionTaskTable }).from(SessionTaskTable)
+    .where(and(eq(SessionTaskTable.state, "waiting"), isNotNull(SessionTaskTable.question_id), isNotNull(SessionTaskTable.question), isNotNull(SessionTaskTable.question_time),
+      after === undefined ? undefined : gt(SessionTaskTable.session_id, after),
+      sql`${SessionTaskTable.session_id} in (WITH RECURSIVE family(id) AS (SELECT id FROM session WHERE parent_id = ${member} AND time_archived IS NULL
+        UNION SELECT child.id FROM session child JOIN family ON child.parent_id = family.id WHERE child.time_archived IS NULL) SELECT id FROM family)`))
+    .orderBy(asc(SessionTaskTable.session_id)).limit(limit).all().pipe(Effect.orDie)
+  const childFingerprint = (task: typeof SessionTaskTable.$inferSelect) => Hash.json({ sessionID: task.session_id, questionID: task.question_id, revision: task.revision })
+
   const rootOf = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
     let root = sessionID
     for (let depth = 0; depth < 64; depth++) {
@@ -553,6 +563,12 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
       .pipe(Effect.orDie)
     const own = yield* decisions.pending({ groupID: scope.groupID, coordinatorSessionID: scope.masterSessionID, targetSessionID: sessionID, limit: Coordination.maxPending })
     const pending = (sessionID === scope.masterSessionID ? own : yield* familyPending(scope, scope.masterSessionID, sessionID)).map((item) => summarize(sessionID, item))
+    if (sessionID !== scope.masterSessionID && pending.length < Coordination.maxPending) {
+      for (const { task } of yield* childQuestions(sessionID, Coordination.maxPending - pending.length)) {
+        if (task.question_id !== null) pending.push({ kind: "question", requestID: task.question_id, requestSessionID: task.session_id,
+          fingerprint: childFingerprint(task), summary: "Managed child question; the parent Session owns the reply" })
+      }
+    }
     const state: Coordination.MemberState =
       own.length > 0 ? "waiting" : running.has(sessionID) ? "running" : (yield* lastFailed(sessionID)) ? "failed" : "idle"
     const sender = yield* runningSender(scope, sessionID, running)
@@ -918,7 +934,8 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
   const remove: Interface["remove"] = Effect.fn("CoordinationRuntime.remove")(function* (caller, input, options) {
     const scope = yield* masterScope(caller, options?.groupID, "Only the Project's Master removes member Sessions")
     if (!scope.memberSessionIDs.includes(input.sessionID)) return yield* refuse(`Session ${input.sessionID} is not a member of this Project`)
-    if ((yield* execution.active).has(input.sessionID) || (yield* workRemains(input.sessionID)) || (yield* familyPending(scope, caller, input.sessionID)).length > 0)
+    const active = yield* execution.active
+    if (active.has(input.sessionID) || (yield* SessionCompletion.backgroundWork(db, jobs, input.sessionID, active)) || (yield* hasDetachBlockingInput(input.sessionID)) || (yield* familyPending(scope, caller, input.sessionID)).length > 0)
       return yield* refuse(`Session ${input.sessionID} has active work or pending requests; wait for it to settle or interrupt it before removing it from the Project`)
     yield* coordination.removeMember(scope.groupID, { sessionID: input.sessionID }).pipe(Effect.mapError((error) => refuse(error.message)))
     yield* SessionTask.completeUnownedSupervisors(db, events)
@@ -1034,16 +1051,10 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
     }, { discard: true })
     let after: SessionSchema.ID | undefined
     while (true) {
-      const children = yield* db.select({ task: SessionTaskTable }).from(SessionTaskTable)
-        .innerJoin(SessionTable, eq(SessionTable.id, SessionTaskTable.session_id))
-        .where(and(eq(SessionTaskTable.state, "waiting"), isNotNull(SessionTaskTable.question_id), isNotNull(SessionTaskTable.question), isNotNull(SessionTaskTable.question_time),
-          isNull(SessionTable.time_archived), after === undefined ? undefined : gt(SessionTaskTable.session_id, after),
-          sql`${SessionTaskTable.session_id} in (WITH RECURSIVE family(id) AS (SELECT id FROM session WHERE id = ${member}
-            UNION SELECT child.id FROM session child JOIN family ON child.parent_id = family.id) SELECT id FROM family)`))
-        .orderBy(asc(SessionTaskTable.session_id)).limit(100).all().pipe(Effect.orDie)
+      const children = yield* childQuestions(member, 100, after)
       if (children.length === 0) break
       for (const { task } of children) {
-        const fingerprint = Hash.json({ sessionID: task.session_id, questionID: task.question_id, revision: task.revision })
+        const fingerprint = childFingerprint(task)
         yield* deliver({ scope, member, event: "question", identity: `child-question\0${target}\0${fingerprint}`, receiver: target, resume: wake,
           ...(receiver === undefined ? { escalationReason: reason } : {}),
           detail: { kind: "question", requestID: task.question_id, requestSessionID: task.session_id, revision: task.revision, fingerprint } })
@@ -1210,6 +1221,20 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
     if (scope === undefined) return
     if (member !== sessionID && !(yield* descendantsOf(member)).includes(sessionID)) return
     yield* notify(scope, member, event, requestID, { requestID, excerpt, ...(member === sessionID ? {} : { requestSessionID: sessionID }) })
+  })
+
+  const hasDetachBlockingInput = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+    const inbox = yield* db.select({ id: SessionPendingTable.id, type: SessionPendingTable.type, data: SessionPendingTable.data })
+      .from(SessionPendingTable).where(eq(SessionPendingTable.session_id, sessionID)).all().pipe(Effect.orDie)
+    for (const row of inbox) {
+      const meta = row.type === "synthetic" ? row.data.metadata : undefined
+      if (meta?.source !== "subagent_notification" || !Schema.is(SessionSchema.ID)(meta.childID) || !Schema.is(NotificationType)(meta.type)
+        || typeof meta.revision !== "number" || !Number.isSafeInteger(meta.revision) || meta.revision < 0) return true
+      const task = yield* db.select().from(SessionTaskTable).where(and(eq(SessionTaskTable.session_id, meta.childID), eq(SessionTaskTable.parent_id, sessionID))).get().pipe(Effect.orDie)
+      if (!task || !["completed", "failed", "cancelled", "lost"].includes(task.state) || task.revision < meta.revision ||
+        row.id !== SessionOrchestrationIdentity.launch(sessionID, task.parent_assistant_message_id, task.tool_call_id).notification(meta.revision, meta.type)) return true
+    }
+    return false
   })
 
   const workRemains = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
