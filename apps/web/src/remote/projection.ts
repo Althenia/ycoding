@@ -1121,7 +1121,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
     case "session.idle":
       return { ...clearAssistantRetry(view), status: "idle", executionStarted: undefined, updatedAt: now }
     case "session.retry.scheduled":
-      return { ...withAssistant(view, data, now, (message) => ({ ...message, retry: readAssistantRetry(data) ?? message.retry })), status: "running", updatedAt: now }
+      return { ...withAssistant(view, data, now, (message) => ({ ...message, parts: message.parts.filter((part) => part.kind === "tool" && part.ran !== undefined && (part.status === "completed" || part.status === "failed")), retry: readAssistantRetry(data) ?? message.retry })), status: "running", updatedAt: now }
     case "session.input.admitted":
       return applyAdmitted(view, data, now)
     case "session.input.promoted":
@@ -1211,7 +1211,6 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
       return withToolPart(view, data, now, (part) => ({
         ...part,
         status: "running",
-        ran: part.ran ?? now,
         inputText: stringField(data.text) ?? part.inputText,
       }))
     case "session.tool.called":
@@ -1391,7 +1390,7 @@ export function readSnapshotParts(content: unknown): readonly AssistantPart[] {
     if (item.type === "text") {
       parts.push({
         kind: "text",
-        ordinal: parts.length,
+        ordinal: parts.filter((part) => part.kind === "text").length,
         text: stringField(item.text) ?? "",
         ...(phaseField(item.phase) === undefined ? {} : { phase: phaseField(item.phase) }),
       })
@@ -1399,7 +1398,7 @@ export function readSnapshotParts(content: unknown): readonly AssistantPart[] {
     }
     if (item.type === "reasoning") {
       const time = recordField(item.time)
-      parts.push({ kind: "reasoning", ordinal: parts.length, text: stringField(item.text) ?? "", ...(time && numberField(time.created) !== undefined ? { started: numberField(time.created) } : {}), ...(time && numberField(time.completed) !== undefined ? { completed: numberField(time.completed) } : {}) })
+      parts.push({ kind: "reasoning", ordinal: parts.filter((part) => part.kind === "reasoning").length, text: stringField(item.text) ?? "", ...(time && numberField(time.created) !== undefined ? { started: numberField(time.created) } : {}), ...(time && numberField(time.completed) !== undefined ? { completed: numberField(time.completed) } : {}) })
       continue
     }
     if (item.type === "tool") {

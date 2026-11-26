@@ -1934,7 +1934,7 @@ pub(super) fn language_error(failure: Failed) -> ycoding_ai::Error {
         Error::Stopped | Error::Cancelled => ycoding_ai::Error::interrupted(),
         Error::UnknownOutcome => ycoding_ai::Error::transport(
             "Plugin language model outcome unknown; replay prohibited",
-            "read",
+            "unknown-outcome",
         ),
         Error::Timeout => {
             ycoding_ai::Error::transport("Plugin language model deadline exceeded", "Timeout")

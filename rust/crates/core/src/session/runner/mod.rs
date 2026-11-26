@@ -104,7 +104,11 @@ struct Work {
     cancellation: code_mode::Cancellation,
     progress_error: Mutex<Option<Error>>,
     usage: Mutex<Option<JsonValue>>,
+    latest_usage: Mutex<Option<llm::Usage>>,
+    abandoned_usage: Mutex<AttemptUsage>,
+    prior_route_usage: AttemptUsage,
     attempts: std::sync::atomic::AtomicU32,
+    tool_recovery_attempts: u32,
     timing: Mutex<Timing>,
     meter: Mutex<Option<super::generation_meter::Meter>>,
     recording: Mutex<Option<Recording>>,
@@ -132,7 +136,11 @@ impl Work {
             cancellation: code_mode::Cancellation::default(),
             progress_error: Mutex::new(None),
             usage: Mutex::new(None),
+            latest_usage: Mutex::new(None),
+            abandoned_usage: Mutex::new(AttemptUsage::default()),
+            prior_route_usage: AttemptUsage::default(),
             attempts: std::sync::atomic::AtomicU32::new(attempts),
+            tool_recovery_attempts: 0,
             timing: Mutex::new(Timing {
                 started: std::time::Instant::now(),
                 first_output: None,
@@ -156,6 +164,7 @@ struct Restart {
     assistant: session_message::Id,
     attempts: u32,
     pending: Option<provider_request::Pending>,
+    usage: AttemptUsage,
 }
 #[derive(Default)]
 struct Route {
@@ -248,8 +257,100 @@ pub type Refresh =
     Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Refreshed, Error>> + Send>> + Send + Sync>;
 
 enum AttemptError {
-    Provider(ycoding_ai::Error),
+    Provider {
+        failure: ycoding_ai::Error,
+        stream: bool,
+    },
     Local(Error),
+}
+impl AttemptError {
+    fn opening(failure: ycoding_ai::Error) -> Self {
+        Self::Provider {
+            failure,
+            stream: false,
+        }
+    }
+}
+
+enum AttemptEnd {
+    Finished,
+    RetainedTools { attempts: u32 },
+}
+
+#[derive(Clone, Copy, Default)]
+struct AttemptUsage {
+    counts: [f64; 5],
+    cost: Option<f64>,
+}
+impl AttemptUsage {
+    fn reported(report: &llm::Usage, costs: &[ycoding_schema::model::Cost]) -> Self {
+        let tokens = usage::tokens(Some(report));
+        let normalized = ycoding_schema::token_usage::Info::decode(&tokens)
+            .expect("normalized usage encodes tokens");
+        Self {
+            counts: [
+                normalized.input.get(),
+                normalized.output.get(),
+                normalized.reasoning.get(),
+                normalized.cache.read.get(),
+                normalized.cache.write.get(),
+            ],
+            cost: usage::estimated_cost(costs, &tokens, usage::one_hour_cache_writes(Some(report))),
+        }
+    }
+    fn add(self, next: Self) -> Self {
+        Self {
+            counts: std::array::from_fn(|index| self.counts[index] + next.counts[index]),
+            cost: match (self.cost, next.cost) {
+                (Some(left), Some(right)) => Some(left + right),
+                (left, right) => left.or(right),
+            },
+        }
+    }
+    fn tokens(self) -> JsonValue {
+        let [input, output, reasoning, read, write] = self.counts;
+        ObjectEncoder::new()
+            .field("input", &input)
+            .field("output", &output)
+            .field("reasoning", &reasoning)
+            .field(
+                "cache",
+                &ObjectEncoder::new()
+                    .field("read", &read)
+                    .field("write", &write)
+                    .finish(),
+            )
+            .finish()
+    }
+    fn fields(self, encoder: ObjectEncoder) -> ObjectEncoder {
+        encoder
+            .field("cost", &self.cost.unwrap_or_default())
+            .field("tokens", &self.tokens())
+    }
+}
+
+impl Work {
+    fn request_usage(
+        &self,
+        current: Option<&llm::Usage>,
+        costs: &[ycoding_schema::model::Cost],
+    ) -> AttemptUsage {
+        let latest = self
+            .latest_usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let prior = *self
+            .abandoned_usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        prior.add(
+            current
+                .or(latest.as_ref())
+                .map_or_else(AttemptUsage::default, |report| {
+                    AttemptUsage::reported(report, costs)
+                }),
+        )
+    }
 }
 impl From<Error> for AttemptError {
     fn from(error: Error) -> Self {
@@ -762,6 +863,8 @@ impl Local {
         let mut overflow = None;
         let mut auth_refreshed = false;
         let mut restart: Option<Restart> = None;
+        let mut prior_route_usage = AttemptUsage::default();
+        let mut tool_recovery_attempts = 0;
         let mut route = Route::default();
         let mut request_skills: Vec<(skill_schema::Info, ycoding_schema::LosslessString)> =
             Vec::new();
@@ -955,7 +1058,7 @@ impl Local {
             }
             let primary = route.primary.clone().unwrap_or_else(|| selection.clone());
             let selection = route.current.clone().unwrap_or(selection);
-            let next = if recovery || model_override.is_some() {
+            let next = if recovery || tool_recovery_attempts > 0 || model_override.is_some() {
                 None
             } else {
                 local.next_fallback(&primary, &selection, &route.tried)
@@ -996,6 +1099,7 @@ impl Local {
                     assistant,
                     attempts: 0,
                     pending: None,
+                    usage: AttemptUsage::default(),
                 });
                 force = true;
                 continue;
@@ -1060,6 +1164,7 @@ impl Local {
                 step = 1;
                 recovery = false;
                 recovery_used = false;
+                tool_recovery_attempts = 0;
                 if super::coordination_model::current(&services.store, &session.id)?
                     != model_override
                 {
@@ -1357,6 +1462,7 @@ impl Local {
                 without_unfinished_assistant_tail(&mut prepared.messages, &loaded);
             }
             let text_only = recovery
+                || tool_recovery_attempts > 0
                 || agent
                     .steps
                     .as_ref()
@@ -1421,6 +1527,10 @@ impl Local {
             if let Some(analysis) = &services.analysis {
                 analysis.restrict(&session.id, &mut prepared)?;
             }
+            if tool_recovery_attempts > 0 {
+                prepared.tools.clear();
+                prepared.tool_choice = Some(llm::ToolChoice::None);
+            }
             prepared.system = cursor::system::system(&prepared.model, &prepared.system);
             prepared.generation.max_tokens = prepared
                 .generation
@@ -1462,6 +1572,7 @@ impl Local {
                         assistant,
                         attempts: 0,
                         pending: None,
+                        usage: AttemptUsage::default(),
                     });
                     force = true;
                     continue;
@@ -1637,6 +1748,7 @@ impl Local {
                 && efficiency.responses_continuation
                 && !stateless(&prepared)
                 && !recovery
+                && tool_recovery_attempts == 0
                 && !services
                     .analysis
                     .as_ref()
@@ -1690,7 +1802,7 @@ impl Local {
                 begin,
                 continuation: continuation_plan,
             };
-            let work = Arc::new(Work::new(
+            let mut work = Work::new(
                 assistant.clone(),
                 Attribution::explicit(tracked.pending.usage_anchor.clone()),
                 resumed.as_ref().map_or(0, |restart| restart.attempts),
@@ -1712,7 +1824,15 @@ impl Local {
                         .as_ref()
                         .and_then(|snapshots| snapshots.capture())
                 },
-            ));
+            );
+            work.prior_route_usage = prior_route_usage;
+            work.abandoned_usage = Mutex::new(
+                resumed
+                    .as_ref()
+                    .map_or_else(AttemptUsage::default, |restart| restart.usage),
+            );
+            work.tool_recovery_attempts = tool_recovery_attempts;
+            let work = Arc::new(work);
             self.0
                 .active
                 .lock()
@@ -1761,27 +1881,10 @@ impl Local {
                     &work,
                 )
                 .await;
-            let mut tasks = work.tasks.lock().await;
-            let mut tool_error = None;
-            while let Some(result) = tasks.join_next().await {
-                match result {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => tool_error = Some(error),
-                    Err(_) => tool_error = Some(error("tool.execution", "Tool task panicked")),
-                }
-            }
-            drop(tasks);
-            if let Some(error) = work
-                .progress_error
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .take()
-            {
-                tool_error = Some(error);
-            }
-            let result = result.and_then(|_| tool_error.map_or(Ok(()), Err));
+            let tools = local.join_tools(&work).await;
+            let result = result.and_then(|end| tools.map(|()| end));
             let result =
-                result.and_then(|_| {
+                result.and_then(|end| {
                     if publisher.settlement.as_ref().is_some_and(|settlement| {
                         settlement.reason == llm::FinishReason::ContentFilter
                     }) {
@@ -1790,7 +1893,7 @@ impl Local {
                             "Response blocked by content policy",
                         ));
                     }
-                    Ok(())
+                    Ok(end)
                 });
             publisher.flush(services.clock.now()).await?;
             if let Some(settlement) = publisher.settlement.as_ref() {
@@ -1801,6 +1904,7 @@ impl Local {
                         &resolved.info.cost,
                         &prepared,
                         selection.provider_id.0.as_str().unwrap_or_default(),
+                        &work,
                     )
                     .finish(),
                 );
@@ -1829,6 +1933,7 @@ impl Local {
                                         .attempts
                                         .load(std::sync::atomic::Ordering::Relaxed),
                                     pending: Some(tracked.pending.clone()),
+                                    usage: work.request_usage(None, &resolved.info.cost),
                                 });
                                 force = true;
                                 continue;
@@ -1857,6 +1962,7 @@ impl Local {
                             assistant: assistant.clone(),
                             attempts: work.attempts.load(std::sync::atomic::Ordering::Relaxed),
                             pending: Some(tracked.pending.clone()),
+                            usage: work.request_usage(None, &resolved.info.cost),
                         });
                         force = true;
                         continue;
@@ -1864,6 +1970,8 @@ impl Local {
                     if work.reroutable.load(std::sync::atomic::Ordering::Relaxed)
                         && let Some(next) = &next
                     {
+                        prior_route_usage =
+                            prior_route_usage.add(work.request_usage(None, &resolved.info.cost));
                         local
                             .reroute(Reroute {
                                 session: &session.id,
@@ -1890,6 +1998,7 @@ impl Local {
                             assistant: assistant.clone(),
                             attempts: 0,
                             pending: None,
+                            usage: AttemptUsage::default(),
                         });
                         force = true;
                         continue;
@@ -1920,7 +2029,11 @@ impl Local {
                     self.remove(&session.id);
                     return Err(failure);
                 }
-                Ok(()) => {
+                Ok(end) => {
+                    tool_recovery_attempts = match end {
+                        AttemptEnd::RetainedTools { attempts } => attempts,
+                        AttemptEnd::Finished => 0,
+                    };
                     let needs_continuation = publisher.continuation;
                     match publisher.settlement.as_ref() {
                         None => {
@@ -1946,7 +2059,9 @@ impl Local {
                             }
                         }
                         Some(settlement) => {
-                            terminal_silence = !publisher.assistant_text && !needs_continuation;
+                            terminal_silence = settlement.reason != llm::FinishReason::Length
+                                && !publisher.assistant_text
+                                && !needs_continuation;
                             let explicit_silent = settlement.reason == llm::FinishReason::Stop
                                 && !publisher.evidence
                                 && !publisher.output_content
@@ -1998,6 +2113,7 @@ impl Local {
                                         &resolved.info.cost,
                                         &prepared,
                                         selection.provider_id.0.as_str().unwrap_or_default(),
+                                        &work,
                                     )
                                     .finish(),
                                     services.clock.now(),
@@ -2034,7 +2150,11 @@ impl Local {
                                         &work,
                                         (
                                             Some(settlement),
-                                            super::generation_meter::Outcome::Completed,
+                                            if matches!(end, AttemptEnd::Finished) {
+                                                super::generation_meter::Outcome::Completed
+                                            } else {
+                                                super::generation_meter::Outcome::Failed
+                                            },
                                         ),
                                         &resolved.info.cost,
                                         &prepared.model.route.id,
@@ -2052,6 +2172,7 @@ impl Local {
                 }
             }
             self.remove(&session.id);
+            prior_route_usage = AttemptUsage::default();
             step += 1;
             gate_admissions = 0;
             gate_rounds = 0;
@@ -2077,13 +2198,14 @@ impl Local {
         tools: Arc<materialization::Materialization>,
         agent: &ycoding_schema::agent::Id,
         work: &Arc<Work>,
-    ) -> Outcome {
+    ) -> Result<AttemptEnd, Error> {
         let mut consumption = Consumption {
             ids: inputs,
             observed: false,
         };
         let mut current = std::borrow::Cow::Borrowed(request);
-        let mut attempt = 0u32;
+        let mut attempt = work.tool_recovery_attempts;
+        let mut observed_output = attempt > 0;
         loop {
             attempt += 1;
             work.attempts
@@ -2103,11 +2225,12 @@ impl Local {
                 )
                 .await
             {
-                Ok(()) => return Ok(()),
+                Ok(()) => return Ok(AttemptEnd::Finished),
                 Err(AttemptError::Local(error)) => return Err(error),
-                Err(AttemptError::Provider(failure)) => {
+                Err(AttemptError::Provider { failure, stream }) => {
+                    observed_output |= publisher.evidence;
                     if work.continuation_used
-                        && !publisher.evidence
+                        && !observed_output
                         && !work.fallback.load(std::sync::atomic::Ordering::Relaxed)
                         && stale_continuation(&failure)
                     {
@@ -2119,11 +2242,31 @@ impl Local {
                             .clear_continuation(&publisher.session, self.0.services.clock.now())
                             .await?;
                         current = std::borrow::Cow::Owned(without_continuation(&current));
+                        self.account_abandoned_attempt(work);
                         attempt -= 1;
                         continue;
                     }
-                    if attempt == 10
-                        || publisher.evidence
+                    let interrupted_stream = stream
+                        && matches!(
+                            failure.reason,
+                            provider_error::Reason::Transport
+                                | provider_error::Reason::ProviderInternal
+                        );
+                    let tool_boundary = publisher.tool_boundary();
+                    let replay_safe = !matches!(
+                        failure.transport_kind,
+                        Some("unknown-outcome" | "websocket-permanent")
+                    ) && !matches!(failure.provider_metadata.as_deref(), Some(JsonValue::Object(metadata))
+                        if matches!(metadata.get(&"cursor".into()), Some(JsonValue::Object(cursor))
+                            if cursor.get(&"replaySafe".into()) == Some(&JsonValue::Bool(false))));
+                    let safe = replay_safe
+                        && tool_boundary.is_some()
+                        && ((!stream && failure.transport_kind != Some("write"))
+                            || current.tool_choice == Some(llm::ToolChoice::None)
+                            || current.tools.iter().all(|tool| tool.native.is_none()));
+                    if attempt >= 10
+                        || !safe
+                        || (publisher.evidence && !interrupted_stream)
                         || !matches!(
                             failure.reason,
                             provider_error::Reason::RateLimit
@@ -2135,19 +2278,43 @@ impl Local {
                             .is_some_and(|delay| delay > 120_000.0)
                     {
                         work.overflow.store(
-                            failure.context_overflow && !publisher.evidence,
+                            failure.context_overflow && !observed_output,
                             std::sync::atomic::Ordering::Relaxed,
                         );
                         work.reroutable.store(
-                            !publisher.evidence && reroutable(&failure, attempt),
+                            safe && !observed_output && reroutable(&failure, attempt),
                             std::sync::atomic::Ordering::Relaxed,
                         );
                         work.auth_rejected.store(
-                            !publisher.evidence && auth_refresh::rejected(&failure),
+                            !observed_output && auth_refresh::rejected(&failure),
                             std::sync::atomic::Ordering::Relaxed,
                         );
                         return Err(ai_error(failure));
                     }
+                    let calls = tool_boundary.expect("safe retry has a tool boundary");
+                    let retain_tools = !calls.is_empty();
+                    if retain_tools {
+                        self.join_tools(work).await?;
+                        let Some((_, session_message::Info::Assistant(assistant))) =
+                            self.0.services.store.message(&publisher.assistant)?
+                        else {
+                            return Err(error(
+                                "tool.execution",
+                                "Cannot recover without the settled tool results",
+                            ));
+                        };
+                        if calls.iter().any(|id| !assistant.content.iter().any(|part| {
+                            matches!(part, session_message::AssistantContent::Tool(tool) if &tool.id == *id && tool.time.ran.is_some() && match &tool.state {
+                                session_message::ToolState::Completed(_) => true,
+                                session_message::ToolState::Error(state) => !matches!(state.error.r#type.as_str(), Some("tool.stalled" | "extension.unknown_outcome" | "extension.timeout")),
+                                _ => false,
+                            })
+                        })) {
+                            return Err(ai_error(failure));
+                        }
+                        publisher.retain_tool_captures(&assistant);
+                    }
+                    self.account_abandoned_attempt(work);
                     publisher.flush(self.0.services.clock.now()).await?;
                     let exponential = (2000 * 2u64.pow(attempt - 1)).min(120_000);
                     let delay = failure
@@ -2182,6 +2349,16 @@ impl Local {
                         timing.retry_wait += waiting.elapsed();
                     }
                     drop(timing);
+                    if retain_tools {
+                        publisher.settlement = Some(llm::Finish {
+                            reason: llm::FinishReason::ToolCalls,
+                            usage: None,
+                            provider_metadata: None,
+                        });
+                        publisher.continuation = true;
+                        publisher.assistant_text = false;
+                        return Ok(AttemptEnd::RetainedTools { attempts: attempt });
+                    }
                     let reject_local_tools = publisher.reject_local_tools;
                     *publisher = publisher::Publisher::new(
                         publisher.store.clone(),
@@ -2195,6 +2372,48 @@ impl Local {
                 }
             }
         }
+    }
+
+    async fn join_tools(&self, work: &Work) -> Outcome {
+        let mut tasks = work.tasks.lock().await;
+        let mut failure = None;
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => failure = Some(error),
+                Err(_) => failure = Some(error("tool.execution", "Tool task panicked")),
+            }
+        }
+        drop(tasks);
+        work.progress_error
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+            .or(failure)
+            .map_or(Ok(()), Err)
+    }
+
+    fn account_abandoned_attempt(&self, work: &Work) {
+        let costs = work
+            .recording
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let costs = costs
+            .as_ref()
+            .map_or(&[][..], |recording| recording.costs.as_slice());
+        let Some(report) = work
+            .latest_usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        else {
+            return;
+        };
+        let mut abandoned = work
+            .abandoned_usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *abandoned = abandoned.add(AttemptUsage::reported(&report, costs));
     }
 
     async fn physical(
@@ -2273,14 +2492,25 @@ impl Local {
                 Ok::<_, AttemptError>(ycoding_ai::Error::transport(format!("Provider stream stalled: no events for {} seconds", stall.seconds), "read"))
             };
             let mut stream = match &stall {
-                Some(stall) => match stall::Activity::new(services.clock.clone()).watch(opening, stall.seconds.saturating_mul(1000), || Ok(false)).await? { Some(result) => result.map_err(AttemptError::Provider)?, None => return Err(AttemptError::Provider(provider_stalled().await?)) },
-                None => opening.await.map_err(AttemptError::Provider)?,
+                Some(stall) => match stall::Activity::new(services.clock.clone()).watch(opening, stall.seconds.saturating_mul(1000), || Ok(false)).await? { Some(result) => result.map_err(AttemptError::opening)?, None => return Err(AttemptError::opening(provider_stalled().await?)) },
+                None => opening.await.map_err(AttemptError::opening)?,
             };
             loop {
                 let event = match &stall {
-                    Some(stall) => match stall::Activity::new(services.clock.clone()).watch(stream.next(), stall.seconds.saturating_mul(1000), || Ok(false)).await? { Some(result) => result.map_err(AttemptError::Provider)?, None => return Err(AttemptError::Provider(provider_stalled().await?)) },
-                    None => stream.next().await.map_err(AttemptError::Provider)?,
+                    Some(stall) => match stall::Activity::new(services.clock.clone()).watch(stream.next(), stall.seconds.saturating_mul(1000), || Ok(false)).await? { Some(result) => result, None => Err(provider_stalled().await?) },
+                    None => stream.next().await,
                 };
+                let reported = match &event {
+                    Ok(Some(llm::Event::StepFinish { finish, .. } | llm::Event::Finish(finish))) => finish.usage.clone(),
+                    _ => None,
+                }.or_else(|| stream.reported_usage());
+                if let Some(reported) = reported {
+                    *work.latest_usage.lock().unwrap_or_else(|error| error.into_inner()) = Some(reported);
+                }
+                let event = event.map_err(|failure| AttemptError::Provider {
+                    failure,
+                    stream: true,
+                })?;
                 let Some(event) = event else { break };
                 if let Some(meter) = work
                     .meter
@@ -2320,7 +2550,7 @@ impl Local {
                         ..
                     } = &event
                 {
-                    return Err(AttemptError::Provider(ycoding_ai::Error::new(
+                    return Err(AttemptError::opening(ycoding_ai::Error::new(
                         provider_error::Reason::InvalidRequest,
                         message.to_utf8().unwrap_or_default(),
                     )));
@@ -2644,7 +2874,8 @@ impl Local {
     ) -> Outcome {
         let services = &self.0.services;
         let usage = settlement.and_then(|settlement| settlement.usage.as_ref());
-        let tokens = usage::tokens(settlement.and_then(|settlement| settlement.usage.as_ref()));
+        let totals = work.request_usage(usage, costs);
+        let tokens = totals.tokens();
         let reported = settlement.map(|_| {
             cache_diagnostics::reported(
                 route_id,
@@ -2699,9 +2930,7 @@ impl Local {
                 attempts: work.attempts.load(std::sync::atomic::Ordering::Relaxed),
                 cache_read_reported: reported.as_ref().map(|reported| reported.read),
                 timing: self.timing(work, usage)?,
-                cost: settlement.and_then(|_| {
-                    usage::estimated_cost(costs, &tokens, usage::one_hour_cache_writes(usage))
-                }),
+                cost: totals.cost,
                 tokens: &tokens,
                 time: services.clock.now(),
             },
@@ -2799,9 +3028,9 @@ impl Local {
                 message: failure.to_string().into(),
             },
         };
-        let zero = usage::tokens(None);
         let abandoned = match input.abandoned {
             Some((tracked, work)) => {
+                let totals = work.request_usage(None, &[]);
                 let begin = provider_request::Begin {
                     connection_identity_digest: None,
                     ..tracked.begin.clone()
@@ -2822,8 +3051,8 @@ impl Local {
                             attempts: work.attempts.load(std::sync::atomic::Ordering::Relaxed),
                             cache_read_reported: None,
                             timing: None,
-                            cost: None,
-                            tokens: &zero,
+                            cost: totals.cost,
+                            tokens: &totals.tokens(),
                             time: now,
                         },
                     )?,
@@ -2899,13 +3128,24 @@ impl Local {
         let mut fields = self
             .snapshot_end(work, ObjectEncoder::new().field("error", &failure))
             .finish();
-        if let (JsonValue::Object(fields), Some(JsonValue::Object(usage))) = (
-            &mut fields,
-            work.usage
+        let settled = work
+            .usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        let totals = settled.or_else(|| {
+            let recording = work
+                .recording
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .take(),
-        ) {
+                .unwrap_or_else(|error| error.into_inner());
+            let costs = recording
+                .as_ref()
+                .map_or(&[][..], |recording| recording.costs.as_slice());
+            let totals = work.prior_route_usage.add(work.request_usage(None, costs));
+            (totals.cost.is_some() || totals.counts != [0.0; 5])
+                .then(|| totals.fields(ObjectEncoder::new()).finish())
+        });
+        if let (JsonValue::Object(fields), Some(JsonValue::Object(usage))) = (&mut fields, totals) {
             for (key, value) in usage.iter() {
                 fields.insert(key.clone(), value.clone());
             }
@@ -3377,18 +3617,13 @@ fn with_usage(
     costs: &[ycoding_schema::model::Cost],
     request: &llm::Request,
     provider: &str,
+    work: &Work,
 ) -> ObjectEncoder {
-    let tokens = usage::tokens(settlement.usage.as_ref());
-    encoder
-        .field(
-            "cost",
-            &usage::cost(
-                costs,
-                &tokens,
-                usage::one_hour_cache_writes(settlement.usage.as_ref()),
-            ),
-        )
-        .field("tokens", &tokens)
+    let totals = work
+        .prior_route_usage
+        .add(work.request_usage(settlement.usage.as_ref(), costs));
+    totals
+        .fields(encoder)
         .optional("contextLimit", &request.model.defaults.context_limit)
         .field(
             "providerCache",

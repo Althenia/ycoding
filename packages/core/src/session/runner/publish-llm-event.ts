@@ -467,7 +467,7 @@ export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "pu
         const reasoningEndContentOrdinal = reasoningContentOrdinals.get(event.id)
         if (reasoningEndContentOrdinal === undefined)
           return yield* Effect.die(new Error(`Reasoning end before start: ${event.id}`))
-        const endedReasoningOrdinal = yield* reasoning.append(event.id, "")
+        yield* reasoning.append(event.id, "")
         yield* reasoning.end(
           event.id,
           capturedProviderState(
@@ -669,6 +669,9 @@ export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "pu
     failUnsettledTools,
     failIncompleteToolInputs,
     hasProviderError: () => providerFailed,
+    hasDraft: () => nextContentOrdinal > 0,
+    hasCalledTools: () => Array.from(tools.values()).some((tool) => tool.called),
+    hasUnsettledCalls: () => Array.from(tools.values()).some((tool) => tool.called && !tool.settled),
     hasRetryEvidence: () => retryEvidence,
     hasOutputContent: () => outputContent,
     hasAssistantText: () => assistantText,

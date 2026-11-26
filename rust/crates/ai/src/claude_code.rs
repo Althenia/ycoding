@@ -4,7 +4,7 @@ use crate::{
     auth::{Auth, Credential, Input, Secret},
     cache::anthropic_capabilities,
     json::{self, get, s},
-    llm::{Event, Request},
+    llm::{Event, Request, Usage},
     provider_error::{AuthenticationKind, Reason},
     route::{Executor, Prepared, Protocol, Route, StreamParser},
 };
@@ -593,6 +593,9 @@ impl StreamParser for Parser {
     fn finish(&mut self) -> Result<Vec<Event>, Error> {
         self.0.finish()
     }
+    fn reported_usage(&self) -> Option<Usage> {
+        self.0.reported_usage()
+    }
 }
 fn restore_names(value: &mut JsonValue) {
     match value {
@@ -673,6 +676,9 @@ impl Protocol for ClaudeCode {
     }
     fn parser(&self, request: &Request) -> Box<dyn StreamParser> {
         Box::new(Parser(AnthropicMessages.parser(request)))
+    }
+    fn terminal(&self, event: &JsonValue) -> bool {
+        AnthropicMessages.terminal(event)
     }
     fn dispatch<'a>(
         &'a self,

@@ -16,6 +16,7 @@ export class RetryableFailure extends Data.TaggedError(
   readonly assistantMessageID: SessionMessage.ID;
   readonly error: SessionError.Error;
   readonly step: number;
+  readonly beforeRetry?: Effect.Effect<void>;
 }> {}
 
 /**
@@ -40,8 +41,9 @@ export function isRetryable(error: LLMError) {
   switch (error.reason._tag) {
     case "RateLimit":
     case "ProviderInternal":
-    case "Transport":
       return true;
+    case "Transport":
+      return error.reason.kind !== "websocket-permanent";
     case "Authentication":
     case "QuotaExceeded":
     case "ContentPolicy":
@@ -56,6 +58,11 @@ export function isRetryable(error: LLMError) {
     }
   }
 }
+
+export const canRetryDraft = (error: LLMError) =>
+  isRetryable(error) && (error.reason._tag === "ProviderInternal" ||
+    (error.reason._tag === "Transport" &&
+      (error.reason.kind === "read" || error.reason.kind === "close" || error.reason.kind === "lifecycle")));
 
 const retryAfter = (failure: RetryableFailure) =>
   reasonRetryAfterMs(failure.cause.reason);
@@ -84,13 +91,15 @@ export const schedule = (
     }),
     Schedule.tap((metadata) =>
       metadata.input instanceof RetryableFailure
-        ? events.publish(SessionEvent.RetryScheduled, {
-            sessionID,
-            assistantMessageID: metadata.input.assistantMessageID,
-            attempt: attemptsBeforeRetry + metadata.attempt + 1,
-            at: metadata.now + Duration.toMillis(metadata.duration),
-            error: metadata.input.error,
-          })
+        ? Effect.uninterruptible((metadata.input.beforeRetry ?? Effect.void).pipe(Effect.andThen(
+            events.publish(SessionEvent.RetryScheduled, {
+              sessionID,
+              assistantMessageID: metadata.input.assistantMessageID,
+              attempt: attemptsBeforeRetry + metadata.attempt + 1,
+              at: metadata.now + Duration.toMillis(metadata.duration),
+              error: metadata.input.error,
+            }),
+          )))
         : Effect.void,
     ),
   );

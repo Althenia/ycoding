@@ -347,7 +347,9 @@ export function createSessionRows(sessionID: Accessor<string>) {
         )
     }),
     data.on("session.retry.scheduled", (event) => {
-      if (event.data.sessionID === sessionID()) appendFooter(event.data.assistantMessageID)
+      if (event.data.sessionID !== sessionID()) return
+      setRows(reconcile(reduce(), { key: "key" }))
+      appendFooter(event.data.assistantMessageID)
     }),
     data.on("session.step.rerouted", (event) => {
       if (event.data.sessionID === sessionID()) appendFooter(event.data.assistantMessageID)

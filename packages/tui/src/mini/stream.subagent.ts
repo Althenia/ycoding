@@ -363,7 +363,7 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
       child.tools.set(key, { part })
       return
     }
-    child.finishedTools.add(key)
+    if (part.time.ran !== undefined) child.finishedTools.add(key)
     child.tools.delete(key)
     if (part.state.status === "error" && output) {
       setFrame(child, frame, toolCommit(part, messageID, "progress", output, input.directory))
@@ -376,6 +376,7 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
   const rebuild = (child: ChildState, messages: SessionMessageInfo[]) => {
     child.frames = []
     child.fragments.clear()
+    child.tools.clear()
     child.finishedTools.clear()
     child.toolSources.clear()
     child.messageIDs.clear()
@@ -708,6 +709,25 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
       if (child.label === FALLBACK_LABEL && event.data.agent) child.label = Locale.titlecase(event.data.agent)
       if (child.status !== "running") child.status = "running"
       input.emit()
+      return
+    }
+    if (event.type === "session.retry.scheduled") {
+      const messageID = event.data.assistantMessageID
+      child.fragments.clearMessage(messageID)
+      child.frames = child.frames.filter(({ commit }) => {
+        if (commit.messageID !== messageID) return true
+        if (commit.kind === "assistant" || commit.kind === "reasoning") return false
+        if (commit.kind !== "tool") return true
+        return commit.part?.time.ran !== undefined &&
+          (commit.part.state.status === "completed" || commit.part.state.status === "error")
+      })
+      for (const key of child.tools.keys()) {
+        if (!key.startsWith(`${messageID}\u0000`)) continue
+        child.tools.delete(key)
+        child.toolSources.delete(key)
+      }
+      touch(child, event.created)
+      notifyDetail(child)
       return
     }
     if (event.type === "session.text.started") {
@@ -1076,6 +1096,10 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
   return {
     main(sdk, event, signal = input.signal) {
       if (!active(signal)) return
+      if (event.type === "session.retry.scheduled") {
+        for (const key of pendingCalls.keys()) if (key.startsWith(`${event.data.assistantMessageID}\u0000`)) pendingCalls.delete(key)
+        return
+      }
       if (event.type === "session.tool.input.started") {
         if (canonicalToolName(event.data.name) === "subagent")
           pendingCalls.set(sourceKey(event.data.assistantMessageID, event.data.callID), {})

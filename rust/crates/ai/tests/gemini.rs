@@ -590,7 +590,7 @@ fn sse_utf8_and_every_frame_split_preserve_events_and_surrogates() {
                 events.extend(parser.push(&value(&frame)).unwrap());
             }
         }
-        assert!(framing.finish().is_empty());
+        assert_eq!(framing.finish(), Ok(()));
         events.extend(parser.finish().unwrap());
         let response = Response::from_events(events).unwrap();
         assert_eq!(response.text().as_str(), Some("ไทย🦀"));

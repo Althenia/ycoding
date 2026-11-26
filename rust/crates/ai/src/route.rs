@@ -3,7 +3,7 @@ use crate::{
     auth::{Auth, Input, ProviderAuth},
     framing::{AwsEventStream, Framing, Sse},
     json,
-    llm::{Defaults, Event, Model, Request, Response, ResponseFormat},
+    llm::{Defaults, Event, Model, Request, Response, ResponseFormat, Usage},
     provider_error::{Failure, HttpContext, classify, rate_limit_details, retry_after_ms},
     websocket,
 };
@@ -21,9 +21,15 @@ use std::{
 };
 use ycoding_schema::{JsonValue, LosslessString, parse_json, provider, stringify_json};
 
+mod textual_tools;
+use textual_tools::TextualTools;
+
 pub trait StreamParser: Send {
     fn push(&mut self, event: &JsonValue) -> Result<Vec<Event>, Error>;
     fn finish(&mut self) -> Result<Vec<Event>, Error>;
+    fn reported_usage(&self) -> Option<Usage> {
+        None
+    }
 }
 pub trait Protocol: Send + Sync {
     fn response_formats(&self) -> &'static [&'static str] {
@@ -875,6 +881,10 @@ pub struct EventStream {
     redaction: Prepared,
 }
 impl EventStream {
+    pub fn reported_usage(&self) -> Option<Usage> {
+        self.parser.reported_usage()
+    }
+
     pub async fn next(&mut self) -> Result<Option<Event>, Error> {
         let mut result = self.next_inner().await;
         if let Err(error) = &mut result {
@@ -1002,7 +1012,12 @@ impl EventStream {
                         }
                         continue;
                     }
-                    tracker.settle(true, true, Some(*status));
+                    let result = match decoder {
+                        Decoder::Sse(parser) => parser.finish(),
+                        Decoder::Aws(parser) => parser.finish(),
+                    };
+                    tracker.settle(result.is_ok(), true, Some(*status));
+                    result?;
                 }
                 StreamTransport::Language(parts) => {
                     if let Some(part) = parts.recv().await {
@@ -1217,7 +1232,7 @@ fn response_secrets(headers: &HeaderMap) -> Vec<String> {
 }
 
 fn rate_limit_header(name: &str) -> bool {
-    name == "retry-after"
+    matches!(name, "retry-after" | "retry-after-ms")
         || name.starts_with("x-ratelimit-")
         || name.starts_with("anthropic-ratelimit-")
 }
@@ -1510,133 +1525,4 @@ pub enum InputUsageSemantics {
     Inclusive,
     Exclusive,
     AiSdk,
-}
-
-#[derive(Default)]
-struct TextualTools {
-    buffer: String,
-    call: Option<String>,
-    next_id: u32,
-}
-const CALLS_BEGIN: &str = "<｜ tool▁calls▁begin｜ >";
-const CALLS_END: &str = "<｜ tool▁calls▁end｜ >";
-const CALL_BEGIN: &str = "<｜ tool▁call▁begin｜ >";
-const CALL_END: &str = "<｜ tool▁call▁end｜ >";
-const SEPARATOR: &str = "<｜ tool▁sep｜ >";
-impl TextualTools {
-    fn event(&mut self, event: Event) -> Result<Vec<Event>, Error> {
-        if let Event::TextDelta(delta) = event {
-            let Some(text) = delta.text.as_str() else {
-                return Ok(vec![Event::TextDelta(delta)]);
-            };
-            self.buffer.push_str(text);
-            let mut events = Vec::new();
-            loop {
-                if let Some(call) = &mut self.call {
-                    if let Some(end) = self.buffer.find(CALLS_END) {
-                        call.push_str(&self.buffer[..end]);
-                        let raw = self.call.take().unwrap_or_default();
-                        events.extend(self.parse_calls(&raw)?);
-                        self.buffer = self.buffer[end + CALLS_END.len()..].into();
-                        continue;
-                    }
-                    call.push_str(&self.buffer);
-                    self.buffer.clear();
-                    break;
-                }
-                if let Some(start) = self.buffer.find(CALLS_BEGIN) {
-                    if start > 0 {
-                        events.push(Event::TextDelta(crate::llm::DeltaEvent {
-                            text: self.buffer[..start].into(),
-                            ..delta.clone()
-                        }));
-                    }
-                    self.buffer = self.buffer[start + CALLS_BEGIN.len()..].into();
-                    self.call = Some(String::new());
-                    continue;
-                }
-                let prefix = (1..CALLS_BEGIN.len())
-                    .rev()
-                    .find(|size| {
-                        self.buffer.len() >= *size
-                            && self.buffer.is_char_boundary(self.buffer.len() - size)
-                            && CALLS_BEGIN.starts_with(&self.buffer[self.buffer.len() - size..])
-                    })
-                    .unwrap_or(0);
-                let visible = self.buffer.len() - prefix;
-                if visible > 0 {
-                    events.push(Event::TextDelta(crate::llm::DeltaEvent {
-                        text: self.buffer[..visible].into(),
-                        ..delta.clone()
-                    }));
-                }
-                self.buffer = self.buffer[visible..].into();
-                break;
-            }
-            return Ok(events);
-        }
-        if matches!(event, Event::TextEnd(_) | Event::Finish(_)) && self.call.is_some() {
-            return Err(Error::output(
-                "Provider ended a textual tool call without closing it",
-            ));
-        }
-        if let Event::TextEnd(block) = &event
-            && !self.buffer.is_empty()
-        {
-            let text = std::mem::take(&mut self.buffer);
-            return Ok(vec![
-                Event::TextDelta(crate::llm::DeltaEvent {
-                    id: block.id.clone(),
-                    text: text.into(),
-                    provider_metadata: block.provider_metadata.clone(),
-                }),
-                event,
-            ]);
-        }
-        Ok(vec![event])
-    }
-    fn parse_calls(&mut self, raw: &str) -> Result<Vec<Event>, Error> {
-        let invalid = || Error::output("Provider emitted a malformed textual tool call");
-        let mut remaining = raw;
-        let mut events = Vec::new();
-        while !remaining.trim().is_empty() {
-            remaining = remaining.trim_start();
-            let raw = remaining.strip_prefix(CALL_BEGIN).ok_or_else(invalid)?;
-            let end = raw.find(CALL_END).ok_or_else(invalid)?;
-            let call = &raw[..end];
-            let (kind, body) = call.split_once(SEPARATOR).ok_or_else(invalid)?;
-            if kind.trim() != "function" {
-                return Err(invalid());
-            }
-            let (name, input) = body.trim().split_once('\n').ok_or_else(invalid)?;
-            let name = name.trim();
-            if name.is_empty() {
-                return Err(invalid());
-            }
-            let input = input.trim();
-            let input = input
-                .strip_suffix("```json")
-                .or_else(|| input.strip_suffix("```"))
-                .unwrap_or(input)
-                .trim();
-            let input = parse_json(if input.is_empty() { "{}" } else { input }).map_err(|_| {
-                Error::output(format!(
-                    "Provider emitted invalid JSON for textual tool call {name}"
-                ))
-            })?;
-            events.push(Event::ToolCall(crate::llm::ToolCall {
-                id: format!("textual-tool-{}", self.next_id).into(),
-                name: name.into(),
-                input,
-                provider_executed: None,
-                provider_metadata: None,
-            }));
-            self.next_id += 1;
-            remaining = &raw[end + CALL_END.len()..];
-        }
-        if events.is_empty() {
-            return Err(invalid());
-        }
-        Ok(events)
-    }
 }

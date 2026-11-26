@@ -154,6 +154,50 @@ impl Publisher {
     pub fn provider_tool(&self, id: &LosslessString) -> bool {
         self.tools.get(id).is_some_and(|tool| tool.provider)
     }
+    pub(super) fn tool_boundary(&self) -> Option<Vec<&LosslessString>> {
+        if self
+            .tools
+            .values()
+            .any(|tool| tool.provider && !tool.settled)
+        {
+            return None;
+        }
+        Some(
+            self.tools
+                .iter()
+                .filter_map(|(id, tool)| {
+                    (tool.called && (tool.provider || !self.reject_local_tools)).then_some(id)
+                })
+                .collect(),
+        )
+    }
+
+    pub(super) fn retain_tool_captures(&mut self, assistant: &session_message::Assistant) {
+        let mut ordinals = BTreeMap::new();
+        for part in &assistant.content {
+            if let session_message::AssistantContent::Tool(tool) = part
+                && tool.time.ran.is_some()
+                && matches!(
+                    tool.state,
+                    session_message::ToolState::Completed(_) | session_message::ToolState::Error(_)
+                )
+                && let Some(current) = self.tools.get(&tool.id)
+            {
+                ordinals.insert(current.ordinal, ordinals.len());
+            }
+        }
+        self.captures.retain_mut(|capture| {
+            if !matches!(capture.kind, "tool-call" | "tool-result") {
+                return false;
+            }
+            if let Some(ordinal) = ordinals.get(&capture.ordinal) {
+                capture.ordinal = *ordinal;
+                true
+            } else {
+                false
+            }
+        });
+    }
     pub async fn event(&self, kind: &str, fields: JsonValue, now: i64) -> Outcome {
         publish(
             &self.store,

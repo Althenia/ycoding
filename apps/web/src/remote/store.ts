@@ -1098,7 +1098,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           if (read.sessionID === item.sessionID) read.live.push({ event: item.event, at })
         }
       }
-      if (hydration !== undefined && hydration.sessionID === item.sessionID && key !== undefined) {
+      if (hydration !== undefined && hydration.sessionID === item.sessionID && (key !== undefined || type === "session.retry.scheduled")) {
         hydration.events.push(item.event)
       }
     }
@@ -1767,10 +1767,23 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       ...snapshot.coveredAssistantIDs,
       ...combined.flatMap((message) => message.kind === "assistant" && !view.messages.some((retained) => retained.id === message.id) ? [message.id] : []),
     ]) }
-    let hydrated: SessionView = { ...view, messages: carryStreamedText(view.messages, owned.streamed) }
-    let watermark = snapshot.watermark
-    for (const event of owned.events) {
+    const streamed = new Map(owned.streamed)
+    const coveredRetries = new Map<string, number>()
+    for (const [index, event] of owned.events.entries()) {
+      if (typeof event !== "object" || event === null || Reflect.get(event, "type") !== "session.retry.scheduled") continue
+      const data = Reflect.get(event, "data")
+      const id = typeof data === "object" && data !== null ? Reflect.get(data, "assistantMessageID") : undefined
+      if (typeof id !== "string") continue
+      for (const key of streamed.keys()) if (key.startsWith(`${id}:`)) streamed.delete(key)
       const { seq } = readEventSequence(event)
+      if (seq !== undefined && seq <= snapshot.watermark) coveredRetries.set(id, index)
+    }
+    let hydrated: SessionView = { ...view, messages: carryStreamedText(view.messages, streamed) }
+    let watermark = snapshot.watermark
+    for (const [index, event] of owned.events.entries()) {
+      const { seq } = readEventSequence(event)
+      const assistantID = ephemeralAssistantID(event)
+      if (assistantID !== undefined && index < (coveredRetries.get(assistantID) ?? -1)) continue
       if (seq !== undefined && seq <= watermark || !acceptsPartEvent(sessionID, event, ephemeralPartKey(event))) continue
       hydrated = applySessionEvent(hydrated, event, now())
       if (seq !== undefined) watermark = seq

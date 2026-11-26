@@ -65,10 +65,12 @@ impl Sse {
         }
         self.line.clear();
     }
-    pub fn finish(&mut self) -> Vec<String> {
-        self.line.clear();
-        self.data.clear();
-        Vec::new()
+    pub fn finish(&self) -> Result<(), Error> {
+        if self.line.is_empty() && self.data.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::missing_terminal())
+        }
     }
 }
 #[derive(Default)]
@@ -86,15 +88,20 @@ impl AwsEventStream {
             if total < 16 {
                 return Err(Error::output("Invalid AWS event-stream frame length"));
             }
+            if frame.len() < 12 {
+                break;
+            }
+            let headers = be32(&frame[4..8]) as usize;
+            if headers > total - 16 || crc32(&frame[..8]) != be32(&frame[8..12]) {
+                return Err(Error::output(
+                    "Invalid AWS event-stream frame CRC or headers length",
+                ));
+            }
             if frame.len() < total {
                 break;
             }
             let frame = &frame[..total];
-            let headers = be32(&frame[4..8]) as usize;
-            if headers > total - 16
-                || crc32(&frame[..8]) != be32(&frame[8..12])
-                || crc32(&frame[..total - 4]) != be32(&frame[total - 4..])
-            {
+            if crc32(&frame[..total - 4]) != be32(&frame[total - 4..]) {
                 return Err(Error::output(
                     "Invalid AWS event-stream frame CRC or headers length",
                 ));
@@ -158,9 +165,12 @@ impl AwsEventStream {
         self.buffer.drain(..offset);
         Ok(frames)
     }
-    pub fn finish(&mut self) -> Vec<JsonValue> {
-        self.buffer.clear();
-        Vec::new()
+    pub fn finish(&self) -> Result<(), Error> {
+        if self.buffer.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::missing_terminal())
+        }
     }
 }
 fn be32(bytes: &[u8]) -> u32 {
@@ -177,4 +187,22 @@ fn crc32(bytes: &[u8]) -> u32 {
 pub enum Framing {
     Sse,
     AwsEventStream,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Sse;
+    use crate::Error;
+
+    #[test]
+    fn sse_done_requires_a_complete_delimiter() {
+        let mut parser = Sse::new(true);
+        assert!(parser.push(b"data: [DONE]\r\n").is_empty());
+        assert!(!parser.done());
+        assert_eq!(parser.finish(), Err(Error::missing_terminal()));
+
+        assert!(parser.push(b"\r\ndata: {\"ignored\":").is_empty());
+        assert!(parser.done());
+        assert_eq!(parser.finish(), Ok(()));
+    }
 }

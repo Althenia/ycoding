@@ -174,7 +174,7 @@ let response: LLMEvent[] = []
 let responses: LLMEvent[][] | undefined
 let responseStream: Stream.Stream<LLMEvent, TestStreamError> | undefined
 let responseStreams: Stream.Stream<LLMEvent, TestStreamError>[] | undefined
-let nativeResponses: string[] | undefined
+let nativeResponses: Array<string | { readonly chunks: readonly string[] }> | undefined
 const nativeRequests: Array<{ transport: "http" | "websocket"; url: string; body: unknown }> = []
 let streamGate: Deferred.Deferred<void> | undefined
 let streamStarted: Deferred.Deferred<void> | undefined
@@ -193,7 +193,7 @@ const client = Layer.succeed(
       if (nativeResponses)
         return LLMClient.stream(request).pipe(
           Stream.provide(
-            LLMClient.layer.pipe(
+            LLMClient.configured({ observeAttempt: ProviderRequestObserver.observe }).pipe(
               Layer.provide(
                 Layer.mergeAll(
                   Layer.succeed(RequestExecutor.Service, {
@@ -207,9 +207,18 @@ const client = Layer.succeed(
                           url: request.url,
                           body: JSON.parse(new TextDecoder().decode(request.body.body)),
                         })
+                        const encoder = new TextEncoder()
+                        const chunks = typeof body === "string" ? undefined : body.chunks[Symbol.iterator]()
+                        const stream = chunks === undefined ? undefined : new ReadableStream<Uint8Array>({
+                          pull(controller) {
+                            const chunk = chunks.next()
+                            if (chunk.done) controller.error(new Error("ECONNRESET"))
+                            else controller.enqueue(encoder.encode(chunk.value))
+                          },
+                        }, { highWaterMark: 0 })
                         return HttpClientResponse.fromWeb(
                           request,
-                          new Response(body, {
+                          new Response(typeof body === "string" ? body : stream, {
                             headers: { "content-type": "text/event-stream" },
                           }),
                         )
@@ -218,7 +227,7 @@ const client = Layer.succeed(
                   Layer.succeed(WebSocketExecutor.Service, {
                     open: (request) => Effect.sync(() => {
                       const body = nativeResponses?.shift()
-                      if (body === undefined) throw new Error("Unexpected provider request")
+                      if (typeof body !== "string") throw new Error("Expected a WebSocket fixture")
                       const frames = body.split("\n\n")
                         .filter((frame) => frame.startsWith("data: "))
                         .map((frame) => frame.slice(6))
@@ -9780,12 +9789,137 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  for (const kind of ["read", "internal", "event"] as const) {
-    it.effect(`continues from durable tool results after a post-output ${kind} failure`, () =>
+  for (const ending of ["reset", "eof", "truncated-frame"] as const) {
+    it.effect(`recovers a dropped HTTP response (${ending}) without retaining draft content`, () =>
       Effect.gen(function* () {
         const session = yield* setup
-        currentModel = kind === "read" ? anthropicCacheModel : storedOpenAIResponsesModel
+        currentModel = storedOpenAIResponsesModel
+        yield* admit(session, "Answer after a disconnect")
+        const frame = (item: unknown) => `data: ${JSON.stringify(item)}\n\n`
+        const draft = [
+          frame({ type: "response.reasoning_text.delta", item_id: "draft_reasoning", delta: "Discard this reasoning" }),
+          frame({ type: "response.output_text.delta", item_id: "draft_text", delta: "Discard this text" }),
+          frame({ type: "response.output_item.added", item: { type: "function_call", id: "draft_item", call_id: "draft_call", name: "echo", arguments: "" } }),
+        ]
+        nativeResponses = [
+          ending === "reset"
+            ? { chunks: draft }
+            : draft.join("") + (ending === "truncated-frame" ? 'data: {"type":"response.comple' : ""),
+          frame({ type: "response.output_text.delta", item_id: "final_text", delta: "Recovered answer" }) +
+            frame({ type: "response.completed", response: { id: "resp_final", usage: { input_tokens: 12, output_tokens: 5 } } }),
+        ]
+        const events = yield* EventRuntime.Service
+        const retry = yield* Deferred.make<void>()
+        const unlisten = yield* events.listen((event) => event.type === SessionEvent.RetryScheduled.type
+          ? Deferred.succeed(retry, undefined).pipe(Effect.asVoid)
+          : Effect.void)
+        const run = yield* session.resume(sessionID).pipe(Effect.exit, Effect.forkChild)
+        const boundary = yield* Effect.raceFirst(
+          Deferred.await(retry).pipe(Effect.as("retry")),
+          Fiber.join(run).pipe(Effect.as("finished")),
+        ).pipe(Effect.ensuring(unlisten))
+        const draftEvents = yield* recordedEventTypes(sessionID)
+        expect(draftEvents).toContain("session.text.ended.1")
+        expect(draftEvents).toContain("session.reasoning.ended.1")
+        expect(draftEvents).toContain("session.tool.input.started.1")
+        expect(boundary).toBe("retry")
+        expect(requireAssistant(yield* session.context(sessionID))).toMatchObject({
+          retry: { attempt: 2, error: { type: "provider.transport" } },
+          content: [],
+        })
+        yield* TestClock.adjust("1999 millis")
+        expect(nativeRequests).toHaveLength(1)
+        yield* TestClock.adjust("1 millis")
+        expect(Exit.isSuccess(yield* Fiber.join(run))).toBe(true)
+        expect(nativeRequests).toHaveLength(2)
+        expect(JSON.stringify(nativeRequests[1]?.body)).not.toMatch(/Discard this|draft_call/)
+        const assistants = (yield* session.context(sessionID)).filter((message) => message.type === "assistant")
+        expect(assistants).toHaveLength(1)
+        expect(assistants[0]).toMatchObject({ finish: "stop", content: [{ type: "text", text: "Recovered answer" }] })
+        expect(assistants[0]?.error).toBeUndefined()
+        expect(yield* recordedEventTypes(sessionID)).not.toContain("session.step.failed.1")
+        const providerRequests = yield* SessionProviderRequest.Service
+        expect(yield* providerRequests.summary(sessionID)).toMatchObject({
+          logical: 1, physical: 2, tokens: { input: 12, output: 5 },
+        })
+        yield* replaySessionProjection(sessionID)
+        expect(requireAssistant(yield* session.context(sessionID)).content).toMatchObject([
+          { type: "text", text: "Recovered answer" },
+        ])
+      }),
+    )
+  }
+
+  it.effect("does not retry a complete malformed HTTP frame after a draft", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = storedOpenAIResponsesModel
+      yield* admit(session, "Report malformed output")
+      nativeResponses = [
+        'data: {"type":"response.output_text.delta","item_id":"draft","delta":"Draft"}\n\n' +
+        'data: {"type":99}\n\n',
+      ]
+      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
+      expect(failure).toMatchObject({ reason: { _tag: "InvalidProviderOutput" } })
+      expect(nativeRequests).toHaveLength(1)
+      expect(yield* recordedEventTypes(sessionID)).not.toContain("session.retry.scheduled.1")
+      expect(requireAssistant(yield* session.context(sessionID))).toMatchObject({
+        error: { type: "provider.invalid-output" }, content: [{ type: "text", text: "Draft" }],
+      })
+    }),
+  )
+
+  it.effect("settles an HTTP output-token limit without retry or answer recovery", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = storedOpenAIResponsesModel
+      yield* admit(session, "Respect the output limit")
+      nativeResponses = [
+        'data: {"type":"response.reasoning_text.delta","item_id":"draft","delta":"Partial reasoning"}\n\n' +
+        'data: {"type":"response.incomplete","response":{"id":"limit","incomplete_details":{"reason":"max_output_tokens"}}}\n\n',
+      ]
+      yield* session.resume(sessionID)
+      expect(nativeRequests).toHaveLength(1)
+      expect(yield* recordedEventTypes(sessionID)).not.toContain("session.retry.scheduled.1")
+      expect(requireAssistant(yield* session.context(sessionID))).toMatchObject({
+        finish: "length", content: [{ type: "reasoning", text: "Partial reasoning" }],
+      })
+    }),
+  )
+
+  for (const kind of ["an unconfirmed hosted result", "a defective local tool"] as const) {
+    it.effect(`refuses to replay a dropped stream with ${kind}`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        yield* admit(session, "Do not repeat an uncertain tool effect")
+        const failure = streamReadFailure()
+        const call = kind === "an unconfirmed hosted result"
+          ? hostedCall("uncertain", "check once")
+          : LLMEvent.toolCall({ id: "uncertain", name: "defect", input: {} })
+        responseStreams = [
+          Stream.make(LLMEvent.stepStart({ index: 0 }), call).pipe(Stream.concat(Stream.fail(failure))),
+          Stream.fromIterable(reply.text("Must not execute", "unexpected")),
+        ]
+        expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(failure)
+        expect(requests).toHaveLength(1)
+        expect(yield* recordedEventTypes(sessionID)).not.toContain("session.retry.scheduled.1")
+        expect(requireAssistant(yield* session.context(sessionID))).toMatchObject({
+          error: { type: "provider.transport" },
+          content: [{ type: "tool", id: "uncertain", state: { status: "error" } }],
+        })
+      }),
+    )
+  }
+
+  for (const kind of ["read", "internal", "event"] as const) {
+    it.effect(`continues from joined durable tools after a post-output ${kind} failure`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        currentModel = storedOpenAIResponsesModel
         efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
+        toolExecutionGate = yield* Deferred.make<void>()
+        toolExecutionsStarted = yield* Deferred.make<void>()
+        toolExecutionsReady = 1
         yield* admit(session, "Finish the interrupted response")
         const failure =
           kind === "read"
@@ -9796,11 +9930,13 @@ describe("SessionRunnerLLM", () => {
                 reason: classifyProviderFailure({ message: "server_error: Please retry the request" }),
               })
         responseStreams = [
-          Stream.fromIterable(
-            reply
-              .tool("completed-before-failure", "echo", { text: "run once" })
+          Stream.fromIterable([
+            ...reply.tool("completed-before-failure", "echo", { text: "run once" })
               .filter((event) => !LLMEvent.is.stepFinish(event) && !LLMEvent.is.finish(event)),
-          ).pipe(
+            LLMEvent.textStart({ id: "discarded" }),
+            LLMEvent.textDelta({ id: "discarded", text: "Discard this draft" }),
+            LLMEvent.toolInputStart({ id: "never-dispatched", name: "echo" }),
+          ]).pipe(
             Stream.concat(
               kind === "event"
                 ? Stream.make(LLMEvent.providerError({ message: failure.reason.message }))
@@ -9810,11 +9946,21 @@ describe("SessionRunnerLLM", () => {
           Stream.fromIterable(reply.text("Recovered answer", "after-provider-failure")),
         ]
 
-        yield* session.resume(sessionID)
+        const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+        yield* Deferred.await(toolExecutionsStarted)
+        expect(executions).toEqual(["run once"])
+        expect(yield* recordedEventTypes(sessionID)).not.toContain("session.retry.scheduled.1")
+        expect(requests).toHaveLength(1)
+        yield* Deferred.succeed(toolExecutionGate, undefined)
+        yield* TestClock.adjust("2 seconds")
+        yield* Fiber.join(run)
 
         expect(requests).toHaveLength(2)
         expect(requests[1]?.id).not.toBe(requests[0]?.id)
         expect(requests[1]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
+        expect(requests[1]?.tools).toEqual([])
+        expect(requests[1]?.toolChoice).toMatchObject({ type: "none" })
+        expect(JSON.stringify(requests[1]?.messages)).not.toMatch(/Discard this draft|never-dispatched/)
         expect(userTexts(requests[1])).toEqual(["Finish the interrupted response"])
         expect(requests[1]?.messages).toEqual(
           expect.arrayContaining([
@@ -9833,17 +9979,81 @@ describe("SessionRunnerLLM", () => {
         expect(executions).toEqual(["run once"])
         const assistants = (yield* session.context(sessionID)).filter((message) => message.type === "assistant")
         expect(assistants).toMatchObject([
-          { finish: "error", error: { type: kind === "read" ? "provider.transport" : "provider.internal" } },
+          { finish: "tool-calls", content: [{ type: "tool", id: "completed-before-failure", state: { status: "completed" } }] },
           { finish: "stop", content: [{ type: "text", text: "Recovered answer" }] },
         ])
         const providerRequests = yield* SessionProviderRequest.Service
         expect(yield* providerRequests.summary(sessionID)).toMatchObject({ logical: 2, physical: 2, helpers: 0 })
-        expect(yield* recordedEventTypes(sessionID)).not.toContain("session.retry.scheduled.1")
+        const eventTypes = yield* recordedEventTypes(sessionID)
+        expect(eventTypes.filter((type) => type === "session.retry.scheduled.1")).toHaveLength(1)
+        expect(eventTypes).not.toContain("session.step.failed.1")
+        yield* replaySessionProjection(sessionID)
+        expect(requireAssistant(yield* session.context(sessionID)).content).toMatchObject(assistants[0].content)
       }),
     )
   }
 
-  it.effect("stops repeated post-output internal failures without a third logical request", () =>
+  it.effect("uses durable history after a stored response disconnects and rejects a repeated tool call", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = storedRecoveryResponsesModel
+      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
+      yield* admit(session, "Establish stored state")
+      response = reply.textWithResponse("Stored response", "prior", "resp_prior")
+      yield* session.resume(sessionID)
+
+      yield* admit(session, "Call the tool once")
+      const call = LLMEvent.toolCall({ id: "once", name: "echo", input: { text: "run once" } })
+      responseStreams = [
+        Stream.make(call).pipe(Stream.concat(Stream.fail(streamReadFailure()))),
+        Stream.fromIterable([call, LLMEvent.stepFinish({ index: 0, reason: "tool-calls" })]),
+      ]
+      const run = yield* session.resume(sessionID).pipe(Effect.flip, Effect.forkChild)
+      while (requests.length < 2) yield* Effect.yieldNow
+      yield* TestClock.adjust("2 seconds")
+      expect(yield* Fiber.join(run)).toMatchObject({ error: { type: "provider.invalid-output" } })
+
+      expect(executions).toEqual(["run once"])
+      expect(requests).toHaveLength(3)
+      expect(requests[1]?.providerOptions?.openai?.previousResponseId).toBe("resp_prior")
+      expect(requests[2]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
+      expect(requests[2]?.tools).toEqual([])
+      expect(requests[2]?.toolChoice).toMatchObject({ type: "none" })
+      expect(requests[2]?.messages).toContainEqual(expect.objectContaining({
+        role: "tool", content: [expect.objectContaining({ type: "tool-result", id: "once" })],
+      }))
+      const eventTypes = yield* recordedEventTypes(sessionID)
+      expect(eventTypes.filter((type) => type === "session.tool.called.1")).toHaveLength(1)
+      expect(eventTypes.filter((type) => type === "session.tool.success.1")).toHaveLength(1)
+    }),
+  )
+
+  for (const kind of ["close", "websocket-permanent"] as const) {
+    it.effect(`uses the typed WebSocket ${kind} result after observable output`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        yield* admit(session, "Handle the WebSocket close")
+        const failure = new LLMError({
+          module: "WebSocketExecutor", method: "message", reason: new TransportReason({ kind, message: "Socket closed" }),
+        })
+        responseStreams = [
+          Stream.fromIterable(fragmentFixture("text", "draft", ["Draft"]).partialEvents)
+            .pipe(Stream.concat(Stream.fail(failure))),
+          Stream.fromIterable(reply.text("Recovered", "answer")),
+        ]
+        const run = yield* session.resume(sessionID).pipe(Effect.exit, Effect.forkChild)
+        while (requests.length < 1) yield* Effect.yieldNow
+        yield* TestClock.adjust("2 seconds")
+        expect(Exit.isSuccess(yield* Fiber.join(run))).toBe(kind === "close")
+        expect(requests).toHaveLength(kind === "close" ? 2 : 1)
+        expect(requireAssistant(yield* session.context(sessionID)).content).toMatchObject([
+          { type: "text", text: kind === "close" ? "Recovered" : "Draft" },
+        ])
+      }),
+    )
+  }
+
+  it.effect("caps repeated post-output internal failures within the same logical request", () =>
     Effect.gen(function* () {
       const session = yield* setup
       yield* admit(session, "Recover once")
@@ -9852,24 +10062,35 @@ describe("SessionRunnerLLM", () => {
         method: "stream",
         reason: classifyProviderFailure({ message: "server_error: Please retry the request" }),
       })
-      responseStreams = ["first", "recovery"].map((id) =>
+      responseStreams = ["first", "second", "last"].map((id, index) =>
         Stream.fromIterable([
           LLMEvent.stepStart({ index: 0 }),
           LLMEvent.reasoningStart({ id }),
           LLMEvent.reasoningDelta({ id, text: "Thinking" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop", usage: { outputTokens: index + 1 } }),
         ]).pipe(Stream.concat(Stream.fail(failure))),
       )
 
-      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(failure)
-      expect(requests).toHaveLength(2)
+      const run = yield* session.resume(sessionID).pipe(Effect.flip, Effect.forkChild)
+      while (requests.length < 1) yield* Effect.yieldNow
+      yield* TestClock.adjust("2 seconds")
+      while (requests.length < 2) yield* Effect.yieldNow
+      yield* TestClock.adjust("4 seconds")
+      expect(yield* Fiber.join(run)).toBe(failure)
+      expect(requests).toHaveLength(3)
+      expect(new Set(requests.map((request) => request.id)).size).toBe(1)
       const eventTypes = yield* recordedEventTypes(sessionID)
-      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(2)
-      expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(2)
+      expect(eventTypes.filter((type) => type === "session.retry.scheduled.1")).toHaveLength(2)
+      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(1)
+      expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(1)
+      expect((yield* session.usage(sessionID)).tokens.output).toBe(6)
+      const ledger = yield* SessionProviderRequest.Service
+      expect(yield* ledger.summary(sessionID)).toMatchObject({ logical: 1, physical: 3, tokens: { output: 6 } })
     }),
   )
 
   for (const outcome of ["resume", "interrupt", "retry-interrupt"] as const) {
-    it.effect(`honors logical provider recovery backoff with ${outcome}`, () =>
+    it.effect(`honors post-output internal retry backoff with ${outcome}`, () =>
       Effect.gen(function* () {
         const session = yield* setup
         const runner = yield* SessionRunner.Service
@@ -9883,6 +10104,7 @@ describe("SessionRunnerLLM", () => {
             LLMEvent.stepStart({ index: 0 }),
             LLMEvent.reasoningStart({ id: "before-backoff" }),
             LLMEvent.reasoningDelta({ id: "before-backoff", text: "Thinking" }),
+            LLMEvent.stepFinish({ index: 0, reason: "stop", usage: { outputTokens: 2 } }),
           ]).pipe(
             Stream.concat(
               Stream.fail(
@@ -9927,6 +10149,9 @@ describe("SessionRunnerLLM", () => {
           const eventTypes = yield* recordedEventTypes(sessionID)
           expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(1)
           expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(1)
+          expect((yield* session.usage(sessionID)).tokens.output).toBe(2)
+          const ledger = yield* SessionProviderRequest.Service
+          expect(yield* ledger.summary(sessionID)).toMatchObject({ logical: 1, physical: requests.length, tokens: { output: 2 } })
           return
         }
         yield* TestClock.adjust("4999 millis")
@@ -10022,7 +10247,6 @@ describe("SessionRunnerLLM", () => {
       expect(assistants[0]).toMatchObject({
         finish: "stop",
         content: [
-          { type: "reasoning", text: "", time: { completed: expect.anything() } },
           { type: "text", text: "Recovered answer" },
         ],
       })
@@ -10032,9 +10256,8 @@ describe("SessionRunnerLLM", () => {
       ])
       yield* replaySessionProjection(sessionID)
       expect(requireAssistant(yield* session.context(sessionID)).content[0]).toMatchObject({
-        type: "reasoning",
-        text: "",
-        time: { completed: expect.anything() },
+        type: "text",
+        text: "Recovered answer",
       })
     }),
   )
@@ -10072,7 +10295,6 @@ describe("SessionRunnerLLM", () => {
       expect(assistants[0]).toMatchObject({
         finish: "stop",
         content: [
-          { type: "text", text: "" },
           { type: "text", text: "Recovered answer" },
         ],
       })
@@ -10082,7 +10304,6 @@ describe("SessionRunnerLLM", () => {
       ])
       yield* replaySessionProjection(sessionID)
       expect(requireAssistant(yield* session.context(sessionID)).content).toMatchObject([
-        { type: "text", text: "" },
         { type: "text", text: "Recovered answer" },
       ])
       expect((yield* recordedEventTypes(sessionID)).filter((type) => type === "session.text.ended.1")).toHaveLength(2)
@@ -10148,182 +10369,69 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("continues once in a new logical Step after a Codex read failure with tool evidence", () =>
+  it.effect("replays an unexecuted Codex tool draft without spending an agent step", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const prompt = "Recover the interrupted Codex tool response"
       const agents = yield* Agent.Service
       yield* agents.transform((editor) =>
-        editor.update(Agent.ID.make("build"), (agent) => {
-          agent.steps = 3
-        }),
+        editor.update(Agent.ID.make("build"), (agent) => { agent.steps = 2 }),
       )
       currentModel = codexModel
-      yield* admit(session, prompt)
+      yield* admit(session, "Recover the interrupted Codex tool response")
       responseStreams = [
-        Stream.fromIterable([
-          LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.toolInputStart({ id: "tool-before-codex-read-failure", name: "echo" }),
-          LLMEvent.toolInputDelta({
-            id: "tool-before-codex-read-failure",
-            name: "echo",
-            text: '{"text":"partial',
-          }),
-        ]).pipe(Stream.concat(Stream.fail(streamReadFailure()))),
-        Stream.fromIterable(reply.tool("call-codex-recovery", "echo", { text: "recovered" })),
-        Stream.fromIterable(reply.text("Recovered after tool continuation", "text-after-codex-recovery")),
+        Stream.fromIterable(fragmentFixture("tool input", "discarded-call", ['{"text":"partial']).partialEvents)
+          .pipe(Stream.concat(Stream.fail(streamReadFailure()))),
+        Stream.fromIterable(reply.tool("retry-call", "echo", { text: "run once" })),
+        Stream.fromIterable(reply.text("Recovered after tool continuation", "answer")),
       ]
 
-      yield* session.resume(sessionID)
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while (requests.length < 1) yield* Effect.yieldNow
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.join(run)
 
       expect(requests).toHaveLength(3)
-      expect(requests.every((request) => request.model.route.id === "openai-codex-responses")).toBe(true)
-      expect(new Set(requests.map((request) => request.id)).size).toBe(3)
+      expect(requests[1]?.id).toBe(requests[0]?.id)
       expect(requests[1]?.tools.map((tool) => tool.name)).toContain("echo")
-      expect(requests[1]?.toolChoice).toBeUndefined()
-      expect(userTexts(requests[1])).toEqual([prompt])
-      expect(requests[1]?.messages).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            role: "assistant",
-            content: expect.arrayContaining([
-              expect.objectContaining({
-                type: "tool-call",
-                id: "tool-before-codex-read-failure",
-                name: "echo",
-              }),
-            ]),
-          }),
-          expect.objectContaining({
-            role: "tool",
-            content: expect.arrayContaining([
-              expect.objectContaining({
-                type: "tool-result",
-                id: "tool-before-codex-read-failure",
-                result: expect.objectContaining({
-                  type: "error",
-                  value: expect.objectContaining({
-                    error: expect.objectContaining({ type: "provider.transport" }),
-                  }),
-                }),
-              }),
-            ]),
-          }),
-        ]),
-      )
-      expect(JSON.stringify(requests[1]?.messages)).not.toContain("MAXIMUM STEPS REACHED")
-      expect(requests[2]?.tools).toEqual([])
+      expect(JSON.stringify(requests[1]?.messages)).not.toContain("discarded-call")
       expect(requests[2]?.toolChoice).toMatchObject({ type: "none" })
       expect(JSON.stringify(requests[2]?.messages)).toContain("MAXIMUM STEPS REACHED")
-      expect(executions).toEqual(["recovered"])
-
-      const assistants = (yield* session.context(sessionID)).filter(
-        (message): message is SessionMessage.Assistant => message.type === "assistant",
-      )
-      expect(assistants).toHaveLength(3)
-      expect(assistants[0]).toMatchObject({
-        finish: "error",
-        error: { type: "provider.transport" },
-        content: [
-          {
-            type: "tool",
-            id: "tool-before-codex-read-failure",
-            state: { status: "error", error: { type: "provider.transport" } },
-          },
-        ],
-      })
-      expect((yield* recordedStepSettlementEvents(sessionID, assistants[0].id)).map((event) => event.type)).toEqual([
-        "session.step.started.1",
-        "session.tool.failed.1",
-        "session.step.failed.1",
-      ])
+      expect(executions).toEqual(["run once"])
       const eventTypes = yield* recordedEventTypes(sessionID)
-      expect(eventTypes.filter((type) => type === "session.retry.scheduled.1")).toHaveLength(0)
-      expect(eventTypes.filter((type) => type === "session.input.consumed.1")).toHaveLength(1)
-      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(3)
-      expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(1)
-      expect(eventTypes.filter((type) => type === "session.step.ended.1")).toHaveLength(2)
-
-      const providerRequests = yield* SessionProviderRequest.Service
-      expect(
-        (yield* providerRequests.list(sessionID)).map((record) => ({
-          request: record.request,
-          attempts: record.attempts,
-          continuation: record.continuation,
-        })),
-      ).toEqual([
-        { request: 1, attempts: 1, continuation: "full" },
-        { request: 2, attempts: 1, continuation: "full" },
-        { request: 3, attempts: 1, continuation: "full" },
-      ])
-      expect(yield* providerRequests.summary(sessionID)).toMatchObject({ logical: 3, physical: 3, helpers: 0 })
-    }),
-  )
-
-  it.effect("applies the configured step limit to Codex transport recovery", () =>
-    Effect.gen(function* () {
-      const session = yield* setup
-      const agents = yield* Agent.Service
-      yield* agents.transform((editor) =>
-        editor.update(Agent.ID.make("build"), (agent) => {
-          agent.steps = 2
-        }),
-      )
-      currentModel = codexModel
-      yield* admit(session, "Recover at the configured final step")
-      responseStreams = [
-        Stream.fromIterable([
-          LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.reasoningStart({ id: "reasoning-before-capped-codex-recovery" }),
-          LLMEvent.reasoningDelta({ id: "reasoning-before-capped-codex-recovery", text: "Interrupted" }),
-        ]).pipe(Stream.concat(Stream.fail(streamReadFailure()))),
-        Stream.fromIterable(reply.text("Recovered at the cap", "text-capped-codex-recovery")),
-      ]
-
-      yield* session.resume(sessionID)
-
-      expect(requests).toHaveLength(2)
-      expect(requests[1]?.tools).toEqual([])
-      expect(requests[1]?.toolChoice).toMatchObject({ type: "none" })
-      expect(nonVolatileMessages(requests[1]).at(-1)).toMatchObject({
-        role: "system",
-        content: [{ type: "text", text: expect.stringContaining("MAXIMUM STEPS REACHED") }],
-      })
-    }),
-  )
-
-  it.effect("does not chain a second Codex logical read recovery", () =>
-    Effect.gen(function* () {
-      const session = yield* setup
-      const recoveryFailure = streamReadFailure()
-      currentModel = codexModel
-      yield* admit(session, "Stop after a consecutive Codex recovery failure")
-      responseStreams = [
-        Stream.fromIterable([
-          LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.reasoningStart({ id: "reasoning-before-codex-read-failure" }),
-          LLMEvent.reasoningDelta({ id: "reasoning-before-codex-read-failure", text: "First attempt" }),
-        ]).pipe(Stream.concat(Stream.fail(streamReadFailure()))),
-        Stream.fromIterable([
-          LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.reasoningStart({ id: "reasoning-before-codex-recovery-failure" }),
-          LLMEvent.reasoningDelta({ id: "reasoning-before-codex-recovery-failure", text: "Recovery attempt" }),
-        ]).pipe(Stream.concat(Stream.fail(recoveryFailure))),
-        Stream.fromIterable(reply.text("Must not run", "text-after-consecutive-codex-failure")),
-      ]
-
-      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
-
-      expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isSuccess(exit)) return
-      expect(Cause.squash(exit.cause)).toBe(recoveryFailure)
-      expect(requests).toHaveLength(2)
-      const eventTypes = yield* recordedEventTypes(sessionID)
-      expect(eventTypes.filter((type) => type === "session.retry.scheduled.1")).toHaveLength(0)
+      expect(eventTypes.filter((type) => type === "session.retry.scheduled.1")).toHaveLength(1)
       expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(2)
-      expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(2)
-      const providerRequests = yield* SessionProviderRequest.Service
-      expect(yield* providerRequests.summary(sessionID)).toMatchObject({ logical: 2, physical: 2, helpers: 0 })
+      expect(eventTypes).not.toContain("session.step.failed.1")
+    }),
+  )
+
+  it.effect("counts the reported usage of a dropped Codex attempt and its retry exactly once", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = codexModel
+      yield* admit(session, "Account for both attempts")
+      responseStreams = [
+        Stream.fromIterable([
+          ...reply.text("Discarded draft", "draft").filter((event) => !LLMEvent.is.finish(event) && !LLMEvent.is.stepFinish(event)),
+          LLMEvent.stepFinish({ index: 0, reason: "stop", usage: { inputTokens: 13, nonCachedInputTokens: 13, outputTokens: 5 } }),
+        ]).pipe(Stream.concat(Stream.fail(streamReadFailure()))),
+        Stream.fromIterable([
+          ...reply.text("Recovered answer", "answer").filter((event) => !LLMEvent.is.finish(event) && !LLMEvent.is.stepFinish(event)),
+          LLMEvent.stepFinish({ index: 0, reason: "stop", usage: { inputTokens: 17, nonCachedInputTokens: 17, outputTokens: 7 } }),
+          LLMEvent.finish({ reason: "stop" }),
+        ]),
+      ]
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while (requests.length < 1) yield* Effect.yieldNow
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.join(run)
+      expect(requireAssistant(yield* session.context(sessionID))).toMatchObject({
+        finish: "stop", content: [{ type: "text", text: "Recovered answer" }], tokens: { input: 30, output: 12 },
+      })
+      const providers = yield* SessionProviderRequest.Service
+      expect(yield* providers.summary(sessionID)).toMatchObject({
+        logical: 1, physical: 2, tokens: { input: 30, output: 12 },
+      })
+      expect(yield* session.get(sessionID)).toMatchObject({ tokens: { input: 30, output: 12 } })
     }),
   )
 
@@ -10366,7 +10474,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("rearms Codex logical read recovery after a successful recovery Step", () =>
+  it.effect("rearms the Codex retry budget after a successful tool Step", () =>
     Effect.gen(function* () {
       const session = yield* setup
       currentModel = codexModel
@@ -10386,22 +10494,27 @@ describe("SessionRunnerLLM", () => {
         Stream.fromIterable(reply.text("Recovered twice", "text-after-second-codex-recovery")),
       ]
 
-      yield* session.resume(sessionID)
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while (requests.length < 1) yield* Effect.yieldNow
+      yield* TestClock.adjust("2 seconds")
+      while (requests.length < 3) yield* Effect.yieldNow
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.join(run)
 
       expect(requests).toHaveLength(4)
-      expect(new Set(requests.map((request) => request.id)).size).toBe(4)
+      expect(new Set(requests.map((request) => request.id)).size).toBe(2)
       expect(executions).toEqual(["continue"])
       const eventTypes = yield* recordedEventTypes(sessionID)
-      expect(eventTypes.filter((type) => type === "session.retry.scheduled.1")).toHaveLength(0)
-      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(4)
-      expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(2)
+      expect(eventTypes.filter((type) => type === "session.retry.scheduled.1")).toHaveLength(2)
+      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(2)
+      expect(eventTypes).not.toContain("session.step.failed.1")
       expect(eventTypes.filter((type) => type === "session.step.ended.1")).toHaveLength(2)
       const providerRequests = yield* SessionProviderRequest.Service
-      expect(yield* providerRequests.summary(sessionID)).toMatchObject({ logical: 4, physical: 4, helpers: 0 })
+      expect(yield* providerRequests.summary(sessionID)).toMatchObject({ logical: 2, physical: 4, helpers: 0 })
     }),
   )
 
-  it.effect("promotes a pending steer before Codex logical read recovery", () =>
+  it.effect("promotes a pending steer after the interrupted Codex Step retries", () =>
     Effect.gen(function* () {
       const session = yield* setup
       const failingStreamStarted = yield* Deferred.make<void>()
@@ -10421,6 +10534,7 @@ describe("SessionRunnerLLM", () => {
             ),
           ),
         ),
+        Stream.fromIterable(reply.text("Recovered the original request", "before-steer")),
         Stream.fromIterable(reply.text("Answered the steer", "text-after-steered-codex-failure")),
       ]
 
@@ -10428,13 +10542,15 @@ describe("SessionRunnerLLM", () => {
       yield* Deferred.await(failingStreamStarted)
       yield* session.prompt({ sessionID, text: "Steered Codex request" })
       yield* Deferred.succeed(releaseFailure, undefined)
+      yield* TestClock.adjust("2 seconds")
       yield* Fiber.join(run)
 
-      expect(requests).toHaveLength(2)
-      expect(userTexts(requests[1])).toEqual(["Initial Codex request", "Steered Codex request"])
+      expect(requests).toHaveLength(3)
+      expect(userTexts(requests[1])).toEqual(["Initial Codex request"])
+      expect(userTexts(requests[2])).toEqual(["Initial Codex request", "Steered Codex request"])
       const eventTypes = yield* recordedEventTypes(sessionID)
-      expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(1)
-      expect(eventTypes.filter((type) => type === "session.step.ended.1")).toHaveLength(1)
+      expect(eventTypes).not.toContain("session.step.failed.1")
+      expect(eventTypes.filter((type) => type === "session.step.ended.1")).toHaveLength(2)
     }),
   )
 
@@ -10463,32 +10579,32 @@ describe("SessionRunnerLLM", () => {
             ),
           ),
         ),
-        Stream.fromIterable([
-          LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.reasoningStart({ id: "reasoning-before-steered-codex-failure" }),
-          LLMEvent.reasoningDelta({ id: "reasoning-before-steered-codex-failure", text: "Steered failure" }),
-        ]).pipe(Stream.concat(Stream.fail(streamReadFailure()))),
+        Stream.fromIterable(reply.text("Recovered the original request", "before-steer")),
         Stream.fromIterable(reply.text("Recovered the steered request", "text-after-steered-codex-recovery")),
       ]
 
       const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while (requests.length < 1) yield* Effect.yieldNow
+      yield* TestClock.adjust("2 seconds")
       yield* Deferred.await(recoveryStarted)
       yield* session.prompt({ sessionID, text: "Steered during recovery" })
       yield* Deferred.succeed(releaseRecovery, undefined)
+      yield* TestClock.adjust("4 seconds")
       yield* Fiber.join(run)
 
       expect(requests).toHaveLength(4)
       expect(userTexts(requests[1])).toEqual(["Initial Codex request"])
-      expect(userTexts(requests[2])).toEqual(["Initial Codex request", "Steered during recovery"])
-      expect(new Set(requests.map((request) => request.id)).size).toBe(4)
+      expect(userTexts(requests[2])).toEqual(["Initial Codex request"])
+      expect(userTexts(requests[3])).toEqual(["Initial Codex request", "Steered during recovery"])
+      expect(new Set(requests.map((request) => request.id)).size).toBe(2)
       const eventTypes = yield* recordedEventTypes(sessionID)
       expect(eventTypes.filter((type) => type === "session.input.consumed.1")).toHaveLength(2)
-      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(4)
-      expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(3)
-      expect(eventTypes.filter((type) => type === "session.step.ended.1")).toHaveLength(1)
-      expect(eventTypes.filter((type) => type === "session.retry.scheduled.1")).toHaveLength(0)
+      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(2)
+      expect(eventTypes).not.toContain("session.step.failed.1")
+      expect(eventTypes.filter((type) => type === "session.step.ended.1")).toHaveLength(2)
+      expect(eventTypes.filter((type) => type === "session.retry.scheduled.1")).toHaveLength(2)
       const providerRequests = yield* SessionProviderRequest.Service
-      expect(yield* providerRequests.summary(sessionID)).toMatchObject({ logical: 4, physical: 4, helpers: 0 })
+      expect(yield* providerRequests.summary(sessionID)).toMatchObject({ logical: 2, physical: 4, helpers: 0 })
     }),
   )
 
@@ -12662,6 +12778,27 @@ const eventData = (type: string) =>
 const providerRecords = SessionProviderRequest.Service.pipe(Effect.flatMap((service) => service.list(sessionID)))
 
 describe("SessionRunnerLLM model fallback", () => {
+  it.effect("does not fall back after a dropped draft even if the retry fails before output", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      configureFallbacks(["fake/backup"])
+      yield* admit(session, "Do not switch models after a draft")
+      const failure = quotaExceeded()
+      responseStreams = [
+        Stream.fromIterable(fragmentFixture("text", "draft", ["Discarded draft"]).partialEvents)
+          .pipe(Stream.concat(Stream.fail(streamReadFailure()))),
+        Stream.fail(failure),
+        Stream.fromIterable(reply.text("Unexpected fallback", "fallback")),
+      ]
+      const run = yield* session.resume(sessionID).pipe(Effect.flip, Effect.forkChild)
+      while (requests.length < 1) yield* Effect.yieldNow
+      yield* TestClock.adjust("2 seconds")
+      expect(yield* Fiber.join(run)).toBe(failure)
+      expect(requests.map((request) => String(request.model.id))).toEqual(["fake-model", "fake-model"])
+      expect(yield* recordedEventTypes(sessionID)).not.toContain("session.step.rerouted.1")
+    }),
+  )
+
   for (const failure of ["quota", "unavailable"] as const)
     it.effect(`keeps a coordination message on its overridden model after ${failure} failure`, () =>
       Effect.gen(function* () {
@@ -12826,6 +12963,53 @@ describe("SessionRunnerLLM model fallback", () => {
       ])
     }),
   )
+
+  for (const trigger of ["quota", "retry exhaustion"] as const) {
+    it.effect(`attributes metered attempts to each model when fallback follows ${trigger}`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        const ledger = yield* SessionProviderRequest.Service
+        configureFallbacks(["fake/backup"])
+        currentCost = [{ ...backupCost[0], input: Money.USDPerMillionTokens.make(5), output: Money.USDPerMillionTokens.make(10) }]
+        const attempts = trigger === "quota" ? 1 : 3
+        responseStreams = [
+          ...Array.from({ length: attempts }, (_, index) =>
+            Stream.make(LLMEvent.stepFinish({
+              index: 0,
+              reason: "stop",
+              usage: { inputTokens: 10 + index, nonCachedInputTokens: 10 + index },
+            })).pipe(Stream.concat(Stream.fail(trigger === "quota" ? quotaExceeded() : rateLimited()))),
+          ),
+          Stream.fromIterable([
+            ...fragmentFixture("text", "answer", ["Backup answer"]).partialEvents,
+            LLMEvent.textEnd({ id: "answer" }),
+            LLMEvent.stepFinish({ index: 0, reason: "stop", usage: { inputTokens: 7, nonCachedInputTokens: 7, outputTokens: 4 } }),
+            LLMEvent.finish({ reason: "stop" }),
+          ]),
+        ]
+        yield* admit(session, "Track usage across the fallback")
+
+        const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+        for (const [index, delay] of (attempts === 3 ? [2_000, 4_000] : []).entries()) {
+          while (requests.length < index + 1) yield* Effect.yieldNow
+          yield* TestClock.adjust(delay)
+        }
+        yield* Fiber.join(run)
+
+        const primaryInput = attempts === 1 ? 10 : 33
+        const [primary, backup] = yield* ledger.list(sessionID)
+        expect(primary).toMatchObject({ model: { id: "fake-model" }, attempts, tokens: { input: primaryInput, output: 0 } })
+        expect(backup).toMatchObject({ model: { id: "backup" }, attempts: 1, tokens: { input: 7, output: 4 } })
+        expect(primary?.cost).toBeCloseTo((primaryInput * 5) / 1_000_000, 12)
+        expect(backup?.cost).toBeCloseTo(15 / 1_000_000, 12)
+        const sessionUsage = yield* session.usage(sessionID)
+        expect(sessionUsage.tokens).toMatchObject({ input: primaryInput + 7, output: 4 })
+        expect(sessionUsage.cost).toBeCloseTo((primaryInput * 5 + 15) / 1_000_000, 12)
+        const step = requireAssistant(yield* session.context(sessionID))
+        expect(step).toMatchObject({ finish: "stop", tokens: sessionUsage.tokens, cost: sessionUsage.cost })
+      }),
+    )
+  }
 
   it.effect("switches when the selected model cannot be resolved", () =>
     Effect.gen(function* () {

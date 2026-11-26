@@ -62,7 +62,7 @@ impl World {
                 .finish(),
         );
         let body = format!(
-            "data: {{\"type\":\"message_start\",\"message\":{{\"usage\":{{\"input_tokens\":11,\"output_tokens\":0,\"cache_read_input_tokens\":3,\"cache_creation_input_tokens\":2}}}}}}\n\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":{}}}}}\n\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"output_tokens\":7}}}}\n\n",
+            "data: {{\"type\":\"message_start\",\"message\":{{\"usage\":{{\"input_tokens\":11,\"output_tokens\":0,\"cache_read_input_tokens\":3,\"cache_creation_input_tokens\":2}}}}}}\n\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":{}}}}}\n\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"output_tokens\":7}}}}\n\ndata: {{\"type\":\"message_stop\"}}\n\n",
             stringify_json(&JsonValue::String(text.into()))
         );
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

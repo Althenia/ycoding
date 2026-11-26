@@ -146,7 +146,7 @@ fn provider_error(error: Error) -> AiError {
         Error::Stopped | Error::Cancelled => AiError::interrupted(),
         Error::UnknownOutcome => AiError::transport(
             "Process provider outcome unknown; replay prohibited",
-            "read",
+            "unknown-outcome",
         ),
         _ => AiError::output("Process provider attempt failed"),
     }

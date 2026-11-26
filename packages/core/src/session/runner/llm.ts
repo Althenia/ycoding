@@ -82,13 +82,20 @@ type StepEnd = {
   readonly files?: readonly RelativePath[]
 }
 
+type AttemptUsage = SessionUsage.Recorded & { readonly estimatedCost?: Money.USD }
+
 type AttemptState = {
   current?: SessionProviderRequest.Tracker
-  completeFallback?: (outcome: ProviderRequest.Outcome) => Effect.Effect<void>
+  completeFallback?: (outcome: ProviderRequest.Outcome, rerouted: boolean) => Effect.Effect<void>
   accountIdentityDigest?: string
   mixedAccountProvenance?: boolean
   contextBreakdown?: ReturnType<typeof SessionContextPressure.breakdown>
   attempts: number
+  routeUsage?: AttemptUsage
+  reroutedUsage?: SessionUsage.Recorded
+  blockFallback?: boolean
+  toolResultRecoveryAt?: number
+  closeToolStep?: Effect.Effect<void>
   authRefresh?: "used"
   continuationFallback?: boolean
   overflowRecovery?: "pending" | "used"
@@ -104,7 +111,11 @@ type Route = {
   tried: Model.Ref[]
 }
 
-type RecoveryMode = "normal" | "terminal-response" | "provider"
+type RecoveryMode = "normal" | "terminal-response"
+const addUsage = (previous: SessionUsage.Recorded | undefined, next: SessionUsage.Recorded | undefined) =>
+  previous === undefined ? next : next === undefined ? previous : SessionUsage.add(previous, next)
+const totalStepUsage = (state: AttemptState) => addUsage(state.reroutedUsage, state.routeUsage)
+
 const isContextSource = (value: unknown): value is SessionHistory.ObservationSource =>
   value === "session-state" || value === "team-view" || value === "step-limit" || value === "dots"
 
@@ -443,7 +454,7 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
         Effect.gen(function* () {
           const primary = route.primary ?? attempted
           const next =
-            standalone || recoveryMode === "terminal-response" || selected.modelOverride !== undefined
+            standalone || recoveryMode === "terminal-response" || requestTrackerState.blockFallback || selected.modelOverride !== undefined
               ? undefined
               : SessionModelFallback.next(configEntries, primary, [...route.tried, attempted])
           if (next === undefined) return undefined
@@ -488,6 +499,7 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
       const primary = (route.primary ??= selectedModel ?? attempting)
       route.attempting = attempting
       const fromProjectedHistory = promotion === undefined
+      const toolResultRecovery = requestTrackerState.toolResultRecoveryAt !== undefined
       const prepare = (loaded: SessionContext.Loaded, fullRebase = false) =>
         modelRequests
           .prepare({
@@ -497,9 +509,11 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
             disableContinuation:
               fullRebase ||
               requestTrackerState.continuationFallback === true ||
+              requestTrackerState.blockFallback === true ||
               recoveryMode !== "normal" ||
               route.model !== undefined,
             terminalResponseRecovery: recoveryMode === "terminal-response",
+            toolResultRecovery,
           })
           .pipe(
             Effect.map((prepared) =>
@@ -511,7 +525,7 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
       const compactionPolicy = SessionContextPressure.policy(configEntries)
       const lastProviderInput = SessionCacheDiagnostics.latestAssistant(initialContext.messages)?.tokens
       const fallbackNext =
-        recoveryMode === "terminal-response" || selected.modelOverride !== undefined
+        recoveryMode === "terminal-response" || requestTrackerState.blockFallback || selected.modelOverride !== undefined
           ? undefined
           : SessionModelFallback.next(configEntries, primary, [...route.tried, attempting])
       if (
@@ -651,6 +665,7 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
       const providerStateCaptures: SessionProviderState.CaptureInput[] = []
       let needsContinuation = false
       let rejectedRecoveryTool = false
+      let uncertainToolResult = false
       const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,
         agent: agent.id,
@@ -721,7 +736,7 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
       })
       const meter = yield* activity.start({
         requestID: ProviderRequest.ID.make(requestTracker.requestID),
-        attempt: requestTrackerState.attempts + 1,
+        attempt: requestTrackerState.attempts - (requestTrackerState.toolResultRecoveryAt ?? 0) + 1,
         model: effective.ref,
       })
       yield* requestTracker.attachMeter(meter)
@@ -791,7 +806,8 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
                 reason: classifyProviderFailure({ message: event.message }),
               })
               if (
-                SessionRunnerRetry.isRetryable(failure) ||
+                (SessionRunnerRetry.isRetryable(failure) &&
+                  (failure.reason._tag !== "Transport" || !publisher.hasDraft())) ||
                 (fallbackNext !== undefined && !publisher.hasRetryEvidence() && SessionModelFallback.immediate(failure))
               )
                 yield* failure
@@ -800,6 +816,14 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
             if (change === "phase" ||
               (change === "output" && (lastPublishedNs === undefined || receivedNs - lastPublishedNs >= 250_000_000n)))
               yield* publishLiveGeneration()
+            if (toolResultRecovery && LLMEvent.is.toolCall(event)) {
+              yield* serialized(publisher.failAssistant({
+                type: "provider.invalid-output",
+                message: "Provider called a tool while recovering from an interrupted tool response",
+              }))
+              return
+            }
+            if (toolResultRecovery && publisher.stepFailure() && event.type.startsWith("tool-")) return
             yield* publish(event)
             if (LLMEvent.is.toolInputError(event)) {
               if (prepared.resolveToolCall(event.name).type === "settle") needsContinuation = true
@@ -835,8 +859,10 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
                     }).pipe(Effect.provideService(SessionUsageAttribution.Current, requestTracker.usageAnchor ?? null)),
                   ),
                 ).pipe(
-                  Effect.flatMap((settlement) =>
-                    publish(
+                  Effect.flatMap((settlement) => {
+                    uncertainToolResult ||= settlement.error?.type === "tool.stalled" || settlement.error?.type === "aborted" ||
+                      settlement.error?.type === "extension.unknown_outcome" || settlement.error?.type === "extension.timeout"
+                    return publish(
                       LLMEvent.toolResult({
                         id: event.id,
                         name: event.name,
@@ -844,8 +870,8 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
                         output: settlement.output,
                       }),
                       settlement.error,
-                    ).pipe(Effect.andThen(stall && settlement.error === undefined ? stall.resolveFailure(event.name) : Effect.void)),
-                  ),
+                    ).pipe(Effect.andThen(stall && settlement.error === undefined ? stall.resolveFailure(event.name) : Effect.void))
+                  }),
                 ),
               ).pipe(FiberSet.run(toolFibers)),
             )
@@ -860,16 +886,9 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
         outcome: ProviderRequest.Outcome,
         settlement?: NonNullable<ReturnType<typeof publisher.stepSettlement>>,
         override?: "provider-not-reported" | "retry-fallback",
+        rerouted = false,
       ) => {
-        const usage = settlement
-          ? stepUsage(settlement)
-          : {
-              cost: Money.USD.zero,
-              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-            }
-        const estimatedCost = settlement
-          ? SessionUsage.estimatedCost(effective.cost, settlement.tokens, settlement.oneHourCacheWrites)
-          : undefined
+        const usage: AttemptUsage = requestTrackerState.routeUsage ?? SessionUsage.record(undefined, [])
         const cache = settlement ? providerCache(settlement) : undefined
         const invalidation =
           override ??
@@ -892,11 +911,11 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
           const received = timing?.receivedOutput
           yield* requestTracker.complete({
             assistantMessageID: publisher.currentMessageID(),
-            connectionIdentityDigest: requestTrackerState.mixedAccountProvenance
+            connectionIdentityDigest: rerouted || requestTrackerState.mixedAccountProvenance
               ? null
               : requestTrackerState.accountIdentityDigest,
             tokens: usage.tokens,
-            ...(estimatedCost === undefined ? {} : { cost: estimatedCost }),
+            ...(usage.estimatedCost === undefined ? {} : { cost: usage.estimatedCost }),
             continuation:
               requestTrackerState.continuationFallback === true || override === "retry-fallback"
                 ? "fallback"
@@ -930,8 +949,8 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
           }))
         })
       }
-      requestTrackerState.completeFallback = (outcome) =>
-        completeProviderRequest(outcome, publisher.stepSettlement(), "retry-fallback")
+      requestTrackerState.completeFallback = (outcome, rerouted) =>
+        completeProviderRequest(outcome, publisher.stepSettlement(), "retry-fallback", rerouted)
 
       const captureStepEnd = Effect.fnUntraced(function* () {
         const snapshot = host ? yield* host.snapshots.capture() : undefined
@@ -948,6 +967,7 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
         Effect.gen(function* () {
           const cache = providerCache(settlement)
           const responseID = settlement.providerState?.responseId
+          const { tokens, cost } = totalStepUsage(requestTrackerState) ?? SessionUsage.record(undefined, [])
           yield* serialized(
             events.publish(
               SessionEvent.Step.Ended,
@@ -955,7 +975,8 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
                 sessionID: session.id,
                 assistantMessageID: yield* publisher.startAssistant(),
                 finish: settlement.finish,
-                ...stepUsage(settlement),
+                tokens,
+                cost,
                 contextLimit: effectiveModel.route.defaults.limits?.context,
                 contextBreakdown,
                 ...(cache === undefined ? {} : { providerCache: cache }),
@@ -990,6 +1011,18 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
         Effect.gen(function* () {
           // Gather the evidence: how did the provider stream end?
           const stream = yield* restore(providerStream).pipe(Effect.exit)
+          const reportedUsage = publisher.stepSettlement()
+          if (reportedUsage !== undefined) {
+            const prior = requestTrackerState.routeUsage
+            const usage = stepUsage(reportedUsage)
+            const estimated = SessionUsage.estimatedCost(effective.cost, reportedUsage.tokens, reportedUsage.oneHourCacheWrites)
+            requestTrackerState.routeUsage = {
+              ...(prior === undefined ? usage : SessionUsage.add(prior, usage)),
+              ...(estimated === undefined && prior?.estimatedCost === undefined
+                ? {}
+                : { estimatedCost: Money.USD.make((prior?.estimatedCost ?? 0) + (estimated ?? 0)) }),
+            }
+          }
           const streamFailure = Option.getOrUndefined(Exit.findErrorOption(stream))
           // Note: Exit.hasInterrupts is a type guard whose false branch unsoundly narrows
           // away non-interrupt failures, so both interrupt checks stay Cause-based.
@@ -1005,6 +1038,7 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
           if (streamOutcome !== undefined) meter.settle(streamOutcome, yield* Clock.currentTimeNanos)
           yield* publishLiveGeneration()
           const llmFailure = streamFailure instanceof LLMError ? streamFailure : undefined
+          if (publisher.hasDraft()) requestTrackerState.blockFallback = true
           const contextOverflowFailure =
             overflowFailure !== undefined || (llmFailure !== undefined && isContextOverflowFailure(llmFailure))
 
@@ -1097,49 +1131,27 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
                   detail: refreshed.message,
                 })
               : undefined
-          if (llmFailure && !streamInterrupted && !publisher.hasProviderError()) {
-            const error = toSessionError(reconnect ?? llmFailure)
-            if (fallbackNext !== undefined && !publisher.hasRetryEvidence() && SessionModelFallback.immediate(llmFailure)) {
-              yield* serialized(publisher.flush())
-              return {
-                _tag: "RestartWithFallback",
-                step: currentStep,
-                promoted,
-                assistantMessageID: yield* publisher.startAssistant(),
-                from: attempting,
-                next: fallbackNext,
-                error,
-              } as const
-            }
-            if (
-              recoveryMode !== "terminal-response" &&
-              SessionRunnerRetry.isRetryable(llmFailure) &&
-              !publisher.hasRetryEvidence()
-            ) {
-              yield* serialized(publisher.flush())
-              return yield* new SessionRunnerRetry.RetryableFailure({
-                cause: llmFailure,
-                assistantMessageID: yield* publisher.startAssistant(),
-                error,
-                step: currentStep,
-              })
-            }
-            yield* serialized(publisher.failAssistant(error))
+          const providerFailure = llmFailure !== undefined && !streamInterrupted && !publisher.hasProviderError()
+            ? llmFailure
+            : undefined
+          if (
+            providerFailure && fallbackNext !== undefined && !requestTrackerState.blockFallback &&
+            SessionModelFallback.immediate(providerFailure)
+          ) {
+            return {
+              _tag: "RestartWithFallback",
+              step: currentStep,
+              promoted,
+              assistantMessageID: yield* publisher.startAssistant(),
+              from: attempting,
+              next: fallbackNext,
+              error: toSessionError(providerFailure),
+            } as const
           }
           if (streamSettlementFailure && !llmFailure && !streamInterrupted && !publisher.hasProviderError())
             yield* serialized(publisher.failAssistant(toSessionError(streamSettlementFailure)))
           // Provider error events only arrive from the stream, so the flag is final here.
           const providerFailed = publisher.hasProviderError()
-          const postOutputProviderFailure =
-            !providerFailed &&
-            !streamInterrupted &&
-            llmFailure !== undefined &&
-            SessionRunnerRetry.isRetryable(llmFailure) &&
-            ((llmFailure.reason._tag === "Transport" && llmFailure.reason.kind === "read") ||
-              llmFailure.reason._tag === "ProviderInternal") &&
-            publisher.hasRetryEvidence()
-          const recoverableProviderFailure = recoveryMode === "normal" && postOutputProviderFailure
-
           // Settle every owned tool fiber. FiberSet.join returns on the first failure, so retain
           // the individual fibers and await all exits before publishing the terminal step event.
           if (streamInterrupted) yield* FiberSet.clear(toolFibers)
@@ -1164,6 +1176,46 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
           const settledFailure = settledCauses.find((cause) => !Cause.hasInterrupts(cause))
           const infraError =
             settledFailure === undefined ? undefined : Option.getOrUndefined(Cause.findErrorOption(settledFailure))
+          if (
+            providerFailure && recoveryMode !== "terminal-response" &&
+            !publisher.stepFailure() && settledCauses.length === 0 && !uncertainToolResult &&
+            !publisher.hasUnsettledCalls() &&
+            (prepared.request.toolChoice?.type === "none" || !prepared.request.tools.some((tool) => tool.native !== undefined)) &&
+            (!requestTrackerState.blockFallback || requestTrackerState.attempts < SessionRunnerRetry.MAX_ATTEMPTS) &&
+            (publisher.hasRetryEvidence()
+              ? SessionRunnerRetry.canRetryDraft(providerFailure)
+              : SessionRunnerRetry.isRetryable(providerFailure))
+          ) {
+            const id = yield* publisher.startAssistant()
+            const settlement = publisher.stepSettlement()
+            const { tokens, cost } = totalStepUsage(requestTrackerState) ?? SessionUsage.record(undefined, [])
+            const hasCalls = publisher.hasCalledTools()
+            return yield* new SessionRunnerRetry.RetryableFailure({
+              cause: providerFailure,
+              assistantMessageID: id,
+              error: toSessionError(providerFailure),
+              step: currentStep,
+              beforeRetry: Effect.gen(function* () {
+                if (requestTrackerState.blockFallback) {
+                  yield* continuation.clear(session.id)
+                  if (originalPrepared.continuation.used) requestTrackerState.continuationFallback = true
+                }
+                if (hasCalls) requestTrackerState.closeToolStep = Effect.gen(function* () {
+                  yield* events.publish(SessionEvent.Step.Ended, {
+                    sessionID: session.id,
+                    assistantMessageID: id,
+                    finish: "tool-calls",
+                    tokens,
+                    cost,
+                    contextBreakdown,
+                    ...(yield* captureStepEnd()),
+                  })
+                  yield* completeProviderRequest("failed", settlement)
+                })
+              }),
+            })
+          }
+          if (providerFailure) yield* serialized(publisher.failAssistant(toSessionError(reconnect ?? providerFailure)))
           if (settledFailure !== undefined) {
             const failure = infraError ?? Cause.squash(settledFailure)
             const error = toSessionError(failure)
@@ -1257,7 +1309,7 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
             const cache = stepSettlement ? providerCache(stepSettlement) : undefined
             yield* serialized(
               publisher.publishStepFailure({
-                ...(stepSettlement ? stepUsage(stepSettlement) : {}),
+                ...totalStepUsage(requestTrackerState),
                 ...(cache === undefined ? {} : { providerCache: cache }),
                 contextBreakdown,
                 ...end,
@@ -1275,42 +1327,28 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
             !needsContinuation &&
             (!publisher.hasStepStarted() || stepFailure?.type === "provider.invalid-output")
           const settledIncomplete = unfinishedEnding && !recoverableTerminalSilence
-          const promotePendingSteerAfterProviderRecovery =
-            recoveryMode === "provider" &&
-            postOutputProviderFailure &&
-            (yield* SessionPending.has(db, session.id, "steer"))
           if (overflowLimit) return yield* new StepFailedError({ error: overflowLimit })
           if (streamInterrupted) return yield* Effect.interrupt
           if (reconnect) return yield* reconnect
-          if (stream._tag === "Failure" && !recoverableProviderFailure && !promotePendingSteerAfterProviderRecovery)
-            return yield* Effect.failCause(stream.cause)
+          if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
           if ((toolsInterrupted || infraError !== undefined) && settledFailure)
             return yield* Effect.failCause(settledFailure)
           if (toolsInterrupted && settled._tag === "Failure") return yield* Effect.failCause(settled.cause)
           if (
             stepFailure &&
             !recoverableTerminalSilence &&
-            !settledIncomplete &&
-            !promotePendingSteerAfterProviderRecovery &&
-            !recoverableProviderFailure
+            !settledIncomplete
           )
             return yield* new StepFailedError({ error: stepFailure })
           return {
             _tag: "Completed",
-            needsContinuation: needsContinuation || promotePendingSteerAfterProviderRecovery,
+            needsContinuation,
             step: currentStep,
             promoted,
-            providerRecovery: recoverableProviderFailure
-              ? {
-                  delay:
-                    llmFailure.reason._tag === "ProviderInternal"
-                      ? Math.max(0, llmFailure.reason.retryAfterMs ?? 0)
-                      : 0,
-                }
-              : undefined,
             terminalSilence:
               recoverableTerminalSilence ||
-              (stepSettlement !== undefined && !publisher.hasAssistantText() && !needsContinuation),
+              (stepSettlement !== undefined && stepSettlement.finish !== "length" &&
+                !publisher.hasAssistantText() && !needsContinuation),
           } as const
         }),
       )
@@ -1331,7 +1369,8 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
       const requestTrackerState: AttemptState = { attempts: 0, route }
       const exhaustedFallback = (failure: SessionRunnerRetry.RetryableFailure) =>
         Effect.gen(function* () {
-          if (standalone || route.primary === undefined || route.attempting === undefined) return undefined
+          if (standalone || requestTrackerState.blockFallback || route.primary === undefined || route.attempting === undefined)
+            return undefined
           const next = SessionModelFallback.next(yield* readConfig(), route.primary, [
             ...route.tried,
             route.attempting,
@@ -1347,16 +1386,16 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
             error: failure.error,
           } as const
         })
-      const completeRetryFallback = (outcome: ProviderRequest.Outcome) =>
-        requestTrackerState.completeFallback?.(outcome) ?? requestTrackerState.current?.complete({
+      const completeRetryFallback = (outcome: ProviderRequest.Outcome, rerouted = false) =>
+        requestTrackerState.completeFallback?.(outcome, rerouted) ?? requestTrackerState.current?.complete({
           assistantMessageID,
-          connectionIdentityDigest: requestTrackerState.mixedAccountProvenance
+          connectionIdentityDigest: rerouted || requestTrackerState.mixedAccountProvenance
             ? null
             : requestTrackerState.accountIdentityDigest,
           invalidation: "retry-fallback",
           continuation: "fallback",
-          cost: Money.USD.zero,
-          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          cost: requestTrackerState.routeUsage?.estimatedCost ?? Money.USD.zero,
+          tokens: requestTrackerState.routeUsage?.tokens ?? SessionUsage.tokens(undefined),
           outcome,
         }) ?? Effect.void
       const settleOpenStep = (cause: Cause.Cause<unknown>) =>
@@ -1372,13 +1411,30 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
             error: Cause.hasInterrupts(cause)
               ? { type: "aborted", message: "Step interrupted" }
               : toSessionError(Option.getOrElse(Cause.findErrorOption(cause), () => Cause.squash(cause))),
+            ...totalStepUsage(requestTrackerState),
             contextBreakdown: requestTrackerState.contextBreakdown,
           })
         })
       return yield* Effect.gen(function* () {
       while (true) {
-        const attempt = yield* Effect.suspend(() =>
-          (requestTrackerState.current?.retryResume() ?? Effect.void).pipe(Effect.andThen(attemptStep(
+        const attempt = yield* Effect.gen(function* () {
+          yield* requestTrackerState.current?.retryResume() ?? Effect.void
+          const closeToolStep = requestTrackerState.closeToolStep
+          if (closeToolStep) yield* Effect.uninterruptible(Effect.gen(function* () {
+            yield* closeToolStep
+            requestTrackerState.closeToolStep = undefined
+            requestTrackerState.toolResultRecoveryAt = requestTrackerState.attempts
+            requestTrackerState.current = undefined
+            requestTrackerState.completeFallback = undefined
+            requestTrackerState.accountIdentityDigest = undefined
+            requestTrackerState.mixedAccountProvenance = undefined
+            requestTrackerState.continuationFallback = undefined
+            requestTrackerState.routeUsage = undefined
+            requestTrackerState.reroutedUsage = undefined
+            assistantMessageID = undefined
+            currentStep++
+          }))
+          return yield* attemptStep(
             sessionID,
             currentPromotion,
             currentStep,
@@ -1389,8 +1445,8 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
             () => {
               promoted = true
             },
-          ))),
-        ).pipe(
+          )
+        }).pipe(
           Effect.tapError((error) =>
             error instanceof SessionRunnerRetry.RetryableFailure
               ? Effect.sync(() => {
@@ -1414,7 +1470,6 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
             needsContinuation: attempt.needsContinuation,
             step: attempt.step,
             promoted,
-            providerRecovery: attempt.providerRecovery,
             terminalSilence: attempt.terminalSilence,
           }
         if (attempt._tag === "RestartWithoutContinuation") {
@@ -1427,15 +1482,7 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
           assistantMessageID = attempt.assistantMessageID
           yield* Effect.uninterruptible(
             Effect.gen(function* () {
-              yield* requestTrackerState.current?.complete({
-                assistantMessageID: attempt.assistantMessageID,
-                connectionIdentityDigest: null,
-                invalidation: "retry-fallback",
-                continuation: "fallback",
-                cost: Money.USD.zero,
-                tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-                outcome: "failed",
-              }) ?? Effect.void
+              yield* completeRetryFallback("failed", true)
               const agent = requestTrackerState.agent
               const time = yield* Clock.currentTimeMillis
               yield* events.publish(
@@ -1462,6 +1509,8 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
               )
               route.tried.push(attempt.from)
               route.model = attempt.next
+              requestTrackerState.reroutedUsage = totalStepUsage(requestTrackerState)
+              requestTrackerState.routeUsage = undefined
               requestTrackerState.current = undefined
               requestTrackerState.completeFallback = undefined
               requestTrackerState.accountIdentityDigest = undefined
@@ -1521,18 +1570,6 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
           needsContinuation = result.needsContinuation
           step = result.step + 1
           recoveryMode = "normal"
-          if (result.providerRecovery) {
-            if (result.providerRecovery.delay > 0) yield* Effect.sleep(result.providerRecovery.delay)
-            if (yield* SessionPending.has(db, input.sessionID, "steer")) {
-              needsContinuation = true
-              promotion = "steer"
-              continue
-            }
-            recoveryMode = "provider"
-            needsContinuation = true
-            promotion = undefined
-            continue
-          }
           if (result.terminalSilence && !needsContinuation && !terminalResponseRecoveryUsed) {
             if (yield* SessionPending.has(db, input.sessionID, "steer")) {
               needsContinuation = true

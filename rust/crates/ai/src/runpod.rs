@@ -15,7 +15,7 @@ use crate::{
 };
 use reqwest::Method;
 use std::{sync::Arc, time::Duration};
-use ycoding_schema::{JsonValue, LosslessString, llm::ToolContent, provider};
+use ycoding_schema::{JsonErrorKind, JsonValue, LosslessString, llm::ToolContent, provider};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Worker {
@@ -324,6 +324,18 @@ pub(crate) fn envelope(value: &JsonValue) -> Result<&LosslessString, Error> {
 fn unfinished(status: &LosslessString) -> bool {
     matches!(status.as_str(), Some("IN_QUEUE" | "IN_PROGRESS"))
 }
+fn decode_job(text: &str) -> Result<JsonValue, Error> {
+    ycoding_schema::parse_json(text).map_err(|error| {
+        if error.kind == JsonErrorKind::UnexpectedEnd && text.trim_start().starts_with('{') {
+            Error::transport(
+                "Runpod job response ended before the JSON object was complete",
+                "read",
+            )
+        } else {
+            Error::output("Invalid job response")
+        }
+    })
+}
 pub(crate) async fn frames(executor: &Executor, prepared: &Prepared) -> Result<JsonValue, Error> {
     let mut tracker = Tracker::new(prepared, "http-json", executor.observer.clone());
     let response = match executor.execute(prepared).await {
@@ -342,8 +354,7 @@ pub(crate) async fn frames(executor: &Executor, prepared: &Prepared) -> Result<J
         }
     };
     tracker.settle(true, true, Some(status));
-    let mut job =
-        ycoding_schema::parse_json(&text).map_err(|_| Error::output("Invalid job response"))?;
+    let mut job = decode_job(&text)?;
     if !unfinished(envelope(&job)?) {
         return Ok(job);
     }
@@ -373,8 +384,7 @@ pub(crate) async fn frames(executor: &Executor, prepared: &Prepared) -> Result<J
             .text()
             .await
             .map_err(|_| Error::transport("The HTTP response stream failed", "read"))?;
-        job =
-            ycoding_schema::parse_json(&text).map_err(|_| Error::output("Invalid job response"))?;
+        job = decode_job(&text)?;
         envelope(&job)?;
         if string(&job, "id").is_some_and(|next| next != &id) {
             return Err(Error::output("Status response belongs to another job"));
@@ -498,7 +508,7 @@ impl Parser {
             return Err(invalid());
         }
         if self.worker == Worker::Ollama
-            && (get(output, "done") != Some(&JsonValue::Bool(true))
+            && (!matches!(get(output, "done"), Some(JsonValue::Bool(_)))
                 || string(message, "content").is_none()
                 || !validate(message, &["thinking"], &[], &[])
                 || !validate(
@@ -527,6 +537,9 @@ impl Parser {
         )
         .and_then(LosslessString::as_str);
         if self.worker == Worker::Vllm {
+            if matches!(get(choice, "finish_reason"), Some(JsonValue::Null)) {
+                return Err(Error::missing_terminal());
+            }
             if !matches!(reason, Some("stop" | "length" | "tool_calls")) {
                 return Err(Error::output(format!(
                     "Unsupported vLLM finish reason: {}",
@@ -544,7 +557,9 @@ impl Parser {
             }
         }
         let mut calls = Vec::new();
-        if let Some(value) = get(message, "tool_calls") {
+        if let Some(value) = get(message, "tool_calls")
+            && (self.worker == Worker::Ollama || reason != Some("length"))
+        {
             for (index, call) in json::array(value).ok_or_else(invalid)?.iter().enumerate() {
                 let function = get(call, "function").ok_or_else(invalid)?;
                 let name = string(function, "name").ok_or_else(invalid)?.clone();
@@ -577,6 +592,12 @@ impl Parser {
                     provider_metadata: None,
                 });
             }
+        }
+        if self.worker == Worker::Ollama && get(output, "done") == Some(&JsonValue::Bool(false)) {
+            return Err(Error::missing_terminal());
+        }
+        if reason == Some("length") {
+            calls.clear();
         }
         let usage = if self.worker == Worker::Ollama {
             let input = get(output, "prompt_eval_count").and_then(json::number);
@@ -634,10 +655,10 @@ impl Parser {
         };
         Ok((
             message,
-            if !calls.is_empty() {
-                FinishReason::ToolCalls
-            } else if reason == Some("length") {
+            if reason == Some("length") {
                 FinishReason::Length
+            } else if !calls.is_empty() {
+                FinishReason::ToolCalls
             } else {
                 FinishReason::Stop
             },
@@ -647,25 +668,27 @@ impl Parser {
     }
 }
 fn validate_choice(choice: &JsonValue) -> bool {
-    string(choice, "finish_reason").is_some()
-        && get(choice, "message").is_some_and(|message| {
-            validate(message, &["role"], &["content", "reasoning_content"], &[])
-                && get(message, "content").is_some()
-                && string(message, "role").and_then(LosslessString::as_str) == Some("assistant")
-                && get(message, "tool_calls").is_none_or(|calls| {
-                    json::array(calls).is_some_and(|calls| {
-                        calls.iter().all(|call| {
-                            string(call, "id").is_some()
-                                && string(call, "type").and_then(LosslessString::as_str)
-                                    == Some("function")
-                                && get(call, "function").is_some_and(|function| {
-                                    string(function, "name").is_some()
-                                        && string(function, "arguments").is_some()
-                                })
-                        })
+    matches!(
+        get(choice, "finish_reason"),
+        Some(JsonValue::String(_) | JsonValue::Null)
+    ) && get(choice, "message").is_some_and(|message| {
+        validate(message, &["role"], &["content", "reasoning_content"], &[])
+            && get(message, "content").is_some()
+            && string(message, "role").and_then(LosslessString::as_str) == Some("assistant")
+            && get(message, "tool_calls").is_none_or(|calls| {
+                json::array(calls).is_some_and(|calls| {
+                    calls.iter().all(|call| {
+                        string(call, "id").is_some()
+                            && string(call, "type").and_then(LosslessString::as_str)
+                                == Some("function")
+                            && get(call, "function").is_some_and(|function| {
+                                string(function, "name").is_some()
+                                    && string(function, "arguments").is_some()
+                            })
                     })
                 })
-        })
+            })
+    })
 }
 fn validate_usage(raw: Option<&JsonValue>) -> bool {
     raw.is_none_or(|raw| {

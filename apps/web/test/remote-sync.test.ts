@@ -923,6 +923,44 @@ describe("snapshot synchronization", () => {
     }
   }, 30_000)
 
+  test("a retry during resync does not carry abandoned text into a reopened ordinal", async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let reads = 0
+    const snapshot = (sessionID: string, seq: number) => ({
+      sourceEpoch: "epoch_1", session: { id: sessionID, title: "t", time: { created: 1, updated: 1 } },
+      messages: [{ id: "msg_a", type: "assistant", agent: "god", content: [{ type: "text", text: "" }], time: { created: 1 } }],
+      watermark: { type: "log.synced", aggregateID: sessionID, seq },
+    })
+    const test = await harness({
+      snapshot: (id) => snapshot(id, 10),
+      handler: async (request) => {
+        if (request.operation !== "session.snapshot" || ++reads === 1) return "default"
+        await gate
+        return { ok: true, value: snapshot("ses_a", 12) }
+      },
+    })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      test.relay.pushEvent("ses_a", { type: "session.text.delta", data: { assistantMessageID: "msg_a", ordinal: 0, delta: "abandoned" }, sourceEpoch: "epoch_1" })
+      await test.runUntil(() => textOf(test.store.state().view).includes("abandoned"))
+      const reload = test.store.reloadMessages()
+      await test.runUntil(() => reads === 2)
+      test.relay.pushEvent("ses_a", { type: "session.text.delta", data: { assistantMessageID: "msg_a", ordinal: 0, delta: " more" }, sourceEpoch: "epoch_1" })
+      await test.runUntil(() => textOf(test.store.state().view).includes("abandoned more"))
+      test.relay.pushEvent("ses_a", { type: "session.retry.scheduled", data: { sessionID: "ses_a", assistantMessageID: "msg_a", attempt: 2, at: 20, error: { type: "provider.transport", message: "disconnected" } }, durable: { aggregateID: "ses_a", seq: 11, version: 1 }, sourceEpoch: "epoch_1" })
+      await test.runUntil(() => test.store.state().view?.watermark === 11)
+      release()
+      await reload
+      expect(textOf(test.store.state().view)).toEqual([""])
+    } finally {
+      release()
+      await test.stop()
+    }
+  }, 30_000)
+
   test("a resync keeps an open thought and an open tool input, and never carries text into another part", async () => {
     let watermark = 10
     const messages: readonly unknown[] = [{ id: "msg_a", type: "assistant", agent: "god", time: { created: 1 }, content: [
@@ -933,7 +971,7 @@ describe("snapshot synchronization", () => {
     const test = await harness({
       snapshot: (sessionID) => ({
         sourceEpoch: "epoch_1",
-        session: { title: "t", time: { created: 1, updated: 1 } },
+        session: { id: sessionID, title: "t", time: { created: 1, updated: 1 } },
         messages,
         watermark: { type: "log.synced", aggregateID: sessionID, seq: watermark },
       }),
@@ -962,7 +1000,7 @@ describe("snapshot synchronization", () => {
       input("\"ls\"}")
       await test.runUntil(() => thoughtText() === "Consider more")
       expect(part("tool")).toMatchObject({ inputText: "{\"command\":\"ls\"}" })
-      test.relay.pushEvent("ses_a", { type: "session.reasoning.delta", data: { assistantMessageID: "msg_a", ordinal: 2, delta: "Fresh" }, sourceEpoch: "epoch_1" })
+      test.relay.pushEvent("ses_a", { type: "session.reasoning.delta", data: { assistantMessageID: "msg_a", ordinal: 1, delta: "Fresh" }, sourceEpoch: "epoch_1" })
       await test.runUntil(() => test.store.state().view?.messages.some((item) => item.kind === "assistant" && item.parts.some((entry) => entry.kind === "reasoning" && entry.text === "Fresh")) === true)
       const texts = test.store.state().view?.messages.flatMap((item) => item.kind === "assistant" ? item.parts.flatMap((entry) => entry.kind === "reasoning" ? [entry.text] : []) : [])
       expect(texts).toEqual(["Consider more", "Fresh"])

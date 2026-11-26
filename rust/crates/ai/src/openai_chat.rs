@@ -798,6 +798,9 @@ impl StreamParser for Parser {
     fn push(&mut self, event: &JsonValue) -> Result<Vec<Event>, Error> {
         self.push_event(event).inspect_err(|_| self.settled = true)
     }
+    fn reported_usage(&self) -> Option<crate::llm::Usage> {
+        self.usage.clone()
+    }
     fn finish(&mut self) -> Result<Vec<Event>, Error> {
         if self.settled {
             return Ok(Vec::new());

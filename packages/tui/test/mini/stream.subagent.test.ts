@@ -74,6 +74,11 @@ function sdk(input: {
   let subscription = 0
   spyOn(client.event, "subscribe").mockImplementation(() => input.streams[subscription++]?.stream ?? feed().stream)
   spyOn(client.message, "list").mockImplementation((request) => ok(input.messages?.[request.sessionID] ?? []))
+  spyOn(client.session, "snapshot").mockImplementation(async (request) => ({
+    sourceEpoch: "source_test", session: { id: request.sessionID },
+    messages: (await client.message.list({ sessionID: request.sessionID })).toReversed(),
+    watermark: { type: "log.synced", aggregateID: request.sessionID },
+  }) as never)
   spyOn(client.permission, "list").mockImplementation(() => ok([]))
   spyOn(client.form, "list").mockImplementation(() => ok([]))
   spyOn(client.form.request, "list").mockImplementation(() =>
@@ -650,6 +655,33 @@ test("rehydrates a nested launch from the parent snapshot", async () => {
   const states = ui.events.flatMap((event) => (event.type === "stream.subagent" ? [event.state] : []))
   expect(states.at(-1)?.tabs).toMatchObject([{ sessionID: "ses_child", status: "running" }])
   await transport.close()
+})
+
+test("replaces a child draft on retry without removing a completed tool", async () => {
+  const events = feed()
+  events.push(connected())
+  const ui = createFooterApiFixture()
+  const transport = await createSessionTransport({ sdk: sdk({ streams: [events] }), sessionID: "ses_1", thinking: true, footer: ui.api })
+  try {
+    launchLiveSubagent(events)
+    await waitForState(ui, (state) => state.tabs.some((tab) => tab.sessionID === "ses_child"))
+    transport.selectSubagent("ses_child")
+    await waitForState(ui, (state) => !!state.details.ses_child)
+    const ref = { sessionID: "ses_child", assistantMessageID: "msg_child" }
+    events.push({ id: "child_draft", created: 1, type: "session.text.delta", data: { ...ref, ordinal: 0, delta: "abandoned" } })
+    events.push({ id: "child_tool_start", created: 2, type: "session.tool.input.started", durable: durable("ses_child", 1), data: { ...ref, callID: "done", name: "shell" } })
+    events.push({ id: "child_tool_call", created: 3, type: "session.tool.called", durable: durable("ses_child", 2), data: { ...ref, callID: "done", input: {}, executed: true } })
+    events.push({ id: "child_tool_done", created: 4, type: "session.tool.success", durable: durable("ses_child", 3), data: { ...ref, callID: "done", content: [{ type: "text", text: "result" }], structured: {}, executed: true } })
+    events.push({ id: "child_retry", created: 5, type: "session.retry.scheduled", durable: durable("ses_child", 4), data: { ...ref, attempt: 2, at: 10, error: { type: "provider.transport", message: "disconnected" } } })
+    events.push({ id: "child_replacement", created: 6, type: "session.text.delta", data: { ...ref, ordinal: 0, delta: "replacement" } })
+    await events.flush()
+    const state = ui.events.flatMap((event) => event.type === "stream.subagent" ? [event.state] : []).at(-1)
+    const commits = state?.details.ses_child?.commits ?? []
+    expect(commits.some((commit) => commit.kind === "tool" && commit.part?.id === "done")).toBe(true)
+    expect(commits.filter((commit) => commit.kind === "assistant").map((commit) => commit.text)).toEqual(["replacement"])
+  } finally {
+    await transport.close()
+  }
 })
 
 test("retains nested receipts in a child execute detail after failure", async () => {

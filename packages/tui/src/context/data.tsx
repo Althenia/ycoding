@@ -2100,6 +2100,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           message.update(event.data.sessionID, (draft, index) => {
             const currentAssistant = message.assistant(draft, index, event.data.assistantMessageID)
             if (!currentAssistant) return
+            currentAssistant.content = currentAssistant.content.filter((part) =>
+              part.type === "tool" && part.time.ran !== undefined &&
+              (part.state.status === "completed" || part.state.status === "error"),
+            )
             currentAssistant.retry = {
               attempt: event.data.attempt,
               at: event.data.at,

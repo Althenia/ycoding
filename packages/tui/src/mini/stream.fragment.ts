@@ -31,6 +31,12 @@ export function createFragmentReconciler() {
     clear() {
       fragments.clear()
     },
+    clearMessage(messageID: string) {
+      for (const id of fragments.keys()) if (id.startsWith(`${messageID}\u0000`)) fragments.delete(id)
+    },
+    remove(fragment: FragmentRef) {
+      fragments.delete(key(fragment))
+    },
     key,
     value(fragment: FragmentRef) {
       return fragments.get(key(fragment))?.text

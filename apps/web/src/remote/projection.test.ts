@@ -208,6 +208,36 @@ function apply(view: SessionView, type: string, data: Record<string, unknown>, n
   return applySessionEvent(view, event(type, data), now)
 }
 
+test("transport retry replaces only the interrupted assistant draft and restarts ordinals", () => {
+  const ref = { sessionID: "ses_a", assistantMessageID: "msg_a" }
+  let view = apply(createSessionView("ses_a"), "session.step.started", ref, 1)
+  view = apply(view, "session.text.delta", { ...ref, ordinal: 0, delta: "discarded" }, 2)
+  view = apply(view, "session.reasoning.delta", { ...ref, ordinal: 0, delta: "discarded thought" }, 3)
+  view = apply(view, "session.tool.input.started", { ...ref, callID: "draft", name: "shell" }, 4)
+  view = apply(view, "session.tool.input.started", { ...ref, callID: "done", name: "shell" }, 5)
+  view = apply(view, "session.tool.called", { ...ref, callID: "done", input: {} }, 6)
+  view = apply(view, "session.tool.success", { ...ref, callID: "done", content: [{ type: "text", text: "result" }] }, 7)
+  view = apply(view, "session.step.started", { ...ref, assistantMessageID: "msg_other" }, 8)
+  view = apply(view, "session.text.delta", { ...ref, assistantMessageID: "msg_other", ordinal: 0, delta: "other" }, 9)
+  const empty = apply(createSessionView("ses_a"), "session.retry.scheduled", { ...ref, attempt: 2, at: 20, error: { type: "provider.rate-limit", message: "limited" } }, 10)
+  expect(empty.messages[0]).toMatchObject({ parts: [], retry: { attempt: 2 } })
+  view = apply(view, "session.retry.scheduled", { ...ref, attempt: 2, at: 20, error: { type: "provider.transport", message: "disconnected" } }, 10)
+  expect(view.messages.find((message) => message.id === "msg_a")).toMatchObject({ parts: [{ kind: "tool", callID: "done", status: "completed", content: [{ kind: "text", text: "result" }] }] })
+  expect(view.messages.find((message) => message.id === "msg_other")).toMatchObject({ parts: [{ kind: "text", text: "other" }] })
+  view = apply(view, "session.text.delta", { ...ref, ordinal: 0, delta: "replacement" }, 11)
+  view = apply(view, "session.reasoning.delta", { ...ref, ordinal: 0, delta: "new thought" }, 12)
+  expect(view.messages.find((message) => message.id === "msg_a")).toMatchObject({ parts: [
+    { kind: "tool", callID: "done" }, { kind: "text", ordinal: 0, text: "replacement" }, { kind: "reasoning", ordinal: 0, text: "new thought" },
+  ] })
+  const snapshot = readSnapshotParts([
+    { type: "tool", id: "done", name: "shell", state: { status: "completed", input: {}, content: [{ type: "text", text: "result" }] }, time: { created: 5, ran: 6, completed: 7 } },
+    { type: "text", text: "replacement" }, { type: "reasoning", text: "new thought" },
+  ])
+  const assistant = view.messages.find((message) => message.id === "msg_a")
+  if (assistant?.kind !== "assistant") throw new Error("Missing assistant")
+  expect(snapshot).toEqual(JSON.parse(JSON.stringify(assistant.parts)))
+})
+
 test("standalone scope survives created events and snapshots", () => {
   expect(apply(createSessionView("ses_a"), "session.created", { sessionID: "ses_a", scope: "standalone" })).toMatchObject({ scope: "standalone" })
   expect(readSnapshot({ session: { id: "ses_a", scope: "standalone", projectID: "prj_a", title: "A", location: { directory: "/work" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 1 } }, messages: [] })).toMatchObject({ sessionID: "ses_a", scope: "standalone" })
@@ -743,6 +773,7 @@ describe("assistant streaming", () => {
     view = apply(view, "session.tool.input.started", { assistantMessageID: "msg_1", callID: "call_1", name: "execute" })
     view = apply(view, "session.tool.input.delta", { assistantMessageID: "msg_1", callID: "call_1", delta: '{"code"' })
     view = apply(view, "session.tool.input.ended", { assistantMessageID: "msg_1", callID: "call_1", text: '{"code":"1"}' })
+    view = apply(view, "session.tool.called", { assistantMessageID: "msg_1", callID: "call_1" })
     view = apply(view, "session.tool.success", {
       assistantMessageID: "msg_1",
       callID: "call_1",

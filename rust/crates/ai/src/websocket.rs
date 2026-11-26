@@ -21,7 +21,7 @@ use tokio::{
 };
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream,
-    tungstenite::{Message, client::IntoClientRequest},
+    tungstenite::{Error as SocketError, Message, client::IntoClientRequest, error::ProtocolError},
 };
 use ycoding_schema::{JsonValue, parse_json, stringify_json};
 
@@ -59,7 +59,21 @@ impl Socket {
                         let close=command.message.is_none();let result=match command.message {Some(message)=>socket.send(message).await,None=>socket.close(None).await}.map_err(|_|Error::transport("WebSocket send failed","write"));let failed=result.is_err();let canceled=command.reply.send(result).is_err();if close || failed || canceled {let _=socket.close(None).await;break;}
                     },
                     message=socket.next()=>{
-                        let message=match message {Some(Ok(message))=>message,Some(Err(_))=>{let _=message_tx.send(Err(Error::transport("WebSocket read failed","message"))).await;break;},None=>break};
+                        let message = match message {
+                            Some(Ok(message)) => message,
+                            Some(Err(error)) => {
+                                let failure = match error {
+                                    SocketError::Io(_) | SocketError::ConnectionClosed
+                                    | SocketError::Protocol(ProtocolError::ResetWithoutClosingHandshake) => {
+                                        Error::transport("WebSocket read failed", "read")
+                                    }
+                                    _ => Error::output("Provider sent an invalid WebSocket message"),
+                                };
+                                let _ = message_tx.send(Err(failure)).await;
+                                break;
+                            }
+                            None => break,
+                        };
                         if matches!(message,Message::Ping(_)|Message::Pong(_)) {if socket.flush().await.is_err() {let _=message_tx.send(Err(Error::transport("WebSocket control write failed","write"))).await;break;}continue;}
                         let closed=matches!(message,Message::Close(_));if message_tx.send(Ok(message)).await.is_err() {let _=socket.close(None).await;break;}
                         if closed {break;}
@@ -509,13 +523,16 @@ impl Connection {
                 Message::Text(text) => text.to_string(),
                 Message::Binary(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
                 Message::Close(frame) => {
-                    if frame
-                        .as_ref()
-                        .is_some_and(|frame| !matches!(u16::from(frame.code), 1000 | 1005))
+                    if let Some(code) = frame.as_ref().map(|frame| u16::from(frame.code))
+                        && !matches!(code, 1000 | 1005)
                     {
                         return Err(Error::transport(
                             "WebSocket closed with an abnormal code",
-                            "close",
+                            if matches!(code, 1001 | 1006 | 1011 | 1012 | 1013 | 1014) {
+                                "close"
+                            } else {
+                                "websocket-permanent"
+                            },
                         ));
                     }
                     if self.session.is_some() && !self.terminal {
@@ -620,6 +637,7 @@ impl Drop for Connection {
             }
             if !self.terminal || self.rejected {
                 session.socket = None;
+                session.previous = None;
             }
         }
         self.active = None;

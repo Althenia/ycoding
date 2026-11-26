@@ -99,7 +99,7 @@ export type RunReference = ReferenceListOutput["data"][number]
 
 export type RunClient = Pick<V5Client, "agent" | "command" | "event" | "file" | "form" | "message" | "model" | "permission" | "reference" | "skill"> & {
   provider: Pick<V5Client["provider"], "list">
-  session: Pick<V5Client["session"], "active" | "background" | "command" | "create" | "get" | "interrupt" | "list" | "message" | "prompt" | "shell" | "skill" | "switchAgent" | "switchModel">
+  session: Pick<V5Client["session"], "active" | "background" | "command" | "create" | "get" | "interrupt" | "list" | "message" | "prompt" | "shell" | "skill" | "snapshot" | "switchAgent" | "switchModel">
 }
 
 export type RunInput = {

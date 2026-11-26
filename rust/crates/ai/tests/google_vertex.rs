@@ -229,6 +229,11 @@ fn vertex_messages_reuses_anthropic_protocol_body_and_parser() {
         let mut parser = route.protocol.parser(&request);
         let mut events=parser.push(&parse_json(r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello."}}"#).unwrap()).unwrap();
         events.extend(parser.push(&parse_json(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}"#).unwrap()).unwrap());
+        events.extend(
+            parser
+                .push(&parse_json(r#"{"type":"message_stop"}"#).unwrap())
+                .unwrap(),
+        );
         events.extend(parser.finish().unwrap());
         assert_eq!(
             ycoding_ai::llm::Response::from_events(events)

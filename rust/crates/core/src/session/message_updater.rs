@@ -459,7 +459,11 @@ fn update_assistant(
                 }
             }
         }
-        Some("session.retry.scheduled") => assistant.retry = Some(session_message::AssistantRetry { attempt: object.field("attempt").map_err(record_error)?, at: object.field("at").map_err(record_error)?, error: object.field("error").map_err(record_error)? }),
+        Some("session.retry.scheduled") => {
+            assistant.content.retain(|part| matches!(part, AssistantContent::Tool(tool)
+                if tool.time.ran.is_some() && matches!(tool.state, ToolState::Completed(_) | ToolState::Error(_))));
+            assistant.retry = Some(session_message::AssistantRetry { attempt: object.field("attempt").map_err(record_error)?, at: object.field("at").map_err(record_error)?, error: object.field("error").map_err(record_error)? });
+        }
         Some("session.step.rerouted") => {
             let model: ycoding_schema::model::Ref = object.field("model").map_err(record_error)?;
             let from = std::mem::replace(&mut assistant.model, model.clone());

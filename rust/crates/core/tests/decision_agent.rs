@@ -94,6 +94,7 @@ fn frames(mode: Mode, text: &str, finish: Option<&str>, usage: bool) -> String {
                     frame["usage"] = json!({"output_tokens":7});
                 }
                 frames.push(frame);
+                frames.push(json!({"type":"message_stop"}));
             }
             frames
                 .into_iter()
@@ -183,6 +184,7 @@ async fn serve(mut socket: TcpStream, provider: Arc<Provider>, mode: Mode, shutd
             "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}\n\n",
             "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
             "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
         ).to_owned()),
         Reply::Disconnect => return,
         Reply::Hold => {

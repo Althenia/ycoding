@@ -40,6 +40,7 @@ impl AnthropicMessages {
             started: false,
             text: Vec::new(),
             reasoning: Vec::new(),
+            stop: None,
             terminal: false,
         }
     }
@@ -81,6 +82,9 @@ impl Protocol for AnthropicMessages {
     }
     fn parser(&self, request: &Request) -> Box<dyn StreamParser> {
         Box::new(Self::parser(request))
+    }
+    fn terminal(&self, event: &JsonValue) -> bool {
+        get(event, "type").and_then(json::text) == Some("message_stop")
     }
 }
 
@@ -617,6 +621,7 @@ pub struct Parser {
     started: bool,
     text: Vec<String>,
     reasoning: Vec<String>,
+    stop: Option<(FinishReason, Option<JsonValue>)>,
     terminal: bool,
 }
 fn metadata(key: &str, value: JsonValue) -> Option<JsonValue> {
@@ -717,6 +722,11 @@ impl Parser {
     fn push_event(&mut self, event: &JsonValue) -> Result<Vec<Event>, Error> {
         validate_event(event)?;
         let kind = get(event, "type").and_then(json::text).unwrap_or("");
+        if self.terminal && matches!(kind, "message_delta" | "message_stop") {
+            return Err(Error::output(
+                "Provider emitted an event after the terminal event",
+            ));
+        }
         let index = get(event, "index")
             .and_then(json::number)
             .unwrap_or(0.0)
@@ -916,6 +926,29 @@ impl Parser {
                 if let Some(usage) = get(event, "usage") {
                     self.merge_usage(usage);
                 }
+                let delta = get(event, "delta");
+                let stop = delta
+                    .and_then(|delta| get(delta, "stop_reason"))
+                    .and_then(json::text);
+                let reason = match stop {
+                    Some("end_turn" | "stop_sequence" | "pause_turn") => FinishReason::Stop,
+                    Some("max_tokens") => FinishReason::Length,
+                    Some("tool_use") => FinishReason::ToolCalls,
+                    Some("refusal") => FinishReason::ContentFilter,
+                    _ => FinishReason::Unknown,
+                };
+                if stop.is_some() || self.stop.is_none() {
+                    let metadata = delta
+                        .and_then(|delta| get(delta, "stop_sequence"))
+                        .and_then(json::string)
+                        .filter(|value| !value.is_empty())
+                        .and_then(|value| metadata("stopSequence", s(value.clone())));
+                    self.stop = Some((reason, metadata));
+                }
+            }
+            "message_stop" => {
+                let (reason, provider_metadata) =
+                    self.stop.take().ok_or_else(Error::missing_terminal)?;
                 self.start(&mut events);
                 for id in self.reasoning.clone() {
                     self.end(&mut events, id, true, None);
@@ -923,25 +956,10 @@ impl Parser {
                 for id in self.text.clone() {
                     self.end(&mut events, id, false, None);
                 }
-                let delta = get(event, "delta");
-                let reason = match delta
-                    .and_then(|delta| get(delta, "stop_reason"))
-                    .and_then(json::text)
-                {
-                    Some("end_turn" | "stop_sequence" | "pause_turn") => FinishReason::Stop,
-                    Some("max_tokens") => FinishReason::Length,
-                    Some("tool_use") => FinishReason::ToolCalls,
-                    Some("refusal") => FinishReason::ContentFilter,
-                    _ => FinishReason::Unknown,
-                };
                 let finish = Finish {
                     reason,
                     usage: self.usage.clone(),
-                    provider_metadata: delta
-                        .and_then(|delta| get(delta, "stop_sequence"))
-                        .and_then(json::string)
-                        .filter(|value| !value.is_empty())
-                        .and_then(|value| metadata("stopSequence", s(value.clone()))),
+                    provider_metadata,
                 };
                 events.push(Event::StepFinish {
                     index: 0.0,
@@ -951,6 +969,7 @@ impl Parser {
                 self.started = false;
             }
             "error" => {
+                self.stop = None;
                 let error = get(event, "error");
                 let kind = error
                     .and_then(|error| get(error, "type"))
@@ -1061,6 +1080,25 @@ impl StreamParser for Parser {
     fn finish(&mut self) -> Result<Vec<Event>, Error> {
         Parser::finish(self)?;
         Ok(Vec::new())
+    }
+    fn reported_usage(&self) -> Option<Usage> {
+        self.usage
+            .as_ref()
+            .filter(|usage| {
+                usage.input_tokens.is_some()
+                    || usage.output_tokens.is_some()
+                    || usage
+                        .provider_metadata
+                        .as_ref()
+                        .and_then(|value| get(value, "anthropic"))
+                        .and_then(|value| get(value, "cache_creation"))
+                        .is_some_and(|creation| {
+                            ["ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"]
+                                .iter()
+                                .any(|key| get(creation, key).and_then(json::number).is_some())
+                        })
+            })
+            .cloned()
     }
 }
 fn validate_event(event: &JsonValue) -> Result<(), Error> {

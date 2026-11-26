@@ -678,6 +678,33 @@ async fn streaming_flow_restores_names_usage_and_best_effort_observation() {
 }
 
 #[tokio::test]
+async fn provider_recovery_claude_code_requires_message_stop_after_delta() {
+    let account = Arc::new(FixtureAccount::default());
+    let incomplete = SUCCESS
+        .split_once("data: {\"type\":\"message_stop\"}")
+        .unwrap()
+        .0;
+    let mut fixture = Fixture::new(vec![(200, incomplete)]).await;
+    let executor = Executor::new(Executor::http_client().unwrap());
+    let mut stream = executor.stream(&request(&fixture, account)).await.unwrap();
+    let error = loop {
+        match stream.next().await {
+            Ok(Some(event)) => assert!(!event.terminal()),
+            Ok(None) => panic!("expected missing terminal error"),
+            Err(error) => break error,
+        }
+    };
+    assert_eq!(error.reason, ycoding_ai::provider_error::Reason::Transport);
+    assert_eq!(error.transport_kind, Some("read"));
+    let usage = stream.reported_usage().unwrap();
+    assert_eq!(
+        (usage.input_tokens, usage.output_tokens),
+        (Some(17.0), Some(2.0))
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
 async fn single_changed_token_401_retry_preserves_request_and_observes_only_final_response() {
     let account = Arc::new(FixtureAccount {
         rotated: Some("fixture-rotated"),

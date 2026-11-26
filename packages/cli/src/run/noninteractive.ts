@@ -48,6 +48,8 @@ type StartedPart = {
   timestamp: number
 }
 
+type Draft = { starts: Map<string, StartedPart>; output: Array<() => void> }
+
 type ToolState = StartedPart & {
   assistantMessageID: string
   tool: string
@@ -76,7 +78,7 @@ export async function runNonInteractivePrompt(input: Input) {
   if (connected.done) throw new Error("Event stream disconnected before prompt admission")
 
   const messageID = SessionMessage.ID.create()
-  const starts = new Map<string, StartedPart>()
+  const drafts = new Map<string, Draft>()
   const tools = new Map<string, ToolState>()
   let submitted = false
   let promoted = false
@@ -110,6 +112,20 @@ export async function runNonInteractivePrompt(input: Input) {
     UI.empty()
     UI.println(text)
     UI.empty()
+  }
+
+  const draft = (assistant: string) => {
+    const current = drafts.get(assistant)
+    if (current) return current
+    const next: Draft = { starts: new Map(), output: [] }
+    drafts.set(assistant, next)
+    return next
+  }
+
+  const settleDraft = (assistant: string) => {
+    const current = drafts.get(assistant)
+    drafts.delete(assistant)
+    for (const write of current?.output ?? []) write()
   }
 
   const stopForBlocker = async () => {
@@ -276,8 +292,10 @@ export async function runNonInteractivePrompt(input: Input) {
       }
       if (!promoted && event.type !== "session.execution.failed") continue
 
-      if (event.type === "session.step.rerouted") {
-        metrics.started(event.data.model)
+      if (event.type === "session.step.rerouted" || event.type === "session.retry.scheduled") {
+        drafts.delete(event.data.assistantMessageID)
+        for (const [key, tool] of tools) if (tool.assistantMessageID === event.data.assistantMessageID) tools.delete(key)
+        if (event.type === "session.step.rerouted") metrics.started(event.data.model)
         continue
       }
 
@@ -301,12 +319,14 @@ export async function runNonInteractivePrompt(input: Input) {
       }
 
       if (event.type === "session.text.started") {
-        starts.set("text", { id: partID(event.id), timestamp: time })
+        draft(event.data.assistantMessageID).starts.set(`text:${event.data.ordinal}`, { id: partID(event.id), timestamp: time })
         continue
       }
       if (event.type === "session.text.ended") {
-        const started = starts.get("text")
-        starts.delete("text")
+        const current = draft(event.data.assistantMessageID)
+        const key = `text:${event.data.ordinal}`
+        const started = current.starts.get(key)
+        current.starts.delete(key)
         const part = {
           id: started?.id ?? partID(event.id),
           sessionID: input.sessionID,
@@ -315,17 +335,20 @@ export async function runNonInteractivePrompt(input: Input) {
           text: event.data.text,
           time: { start: started?.timestamp ?? time, end: time },
         }
-        writeText(part, time)
+        current.output.push(() => writeText(part, time))
         continue
       }
 
       if (event.type === "session.reasoning.started") {
-        starts.set("reasoning", { id: partID(event.id), timestamp: time })
+        if (input.thinking)
+          draft(event.data.assistantMessageID).starts.set(`reasoning:${event.data.ordinal}`, { id: partID(event.id), timestamp: time })
         continue
       }
       if (event.type === "session.reasoning.ended" && input.thinking) {
-        const started = starts.get("reasoning")
-        starts.delete("reasoning")
+        const current = draft(event.data.assistantMessageID)
+        const key = `reasoning:${event.data.ordinal}`
+        const started = current.starts.get(key)
+        current.starts.delete(key)
         const part = {
           id: started?.id ?? partID(event.id),
           sessionID: input.sessionID,
@@ -335,17 +358,19 @@ export async function runNonInteractivePrompt(input: Input) {
           metadata: event.data.state,
           time: { start: started?.timestamp ?? time, end: time },
         }
-        if (emit("reasoning", time, { part })) continue
-        const text = part.text.trim()
-        if (!text) continue
-        const line = `Thinking: ${text}`
-        if (!process.stdout.isTTY) {
-          process.stdout.write(line + EOL)
-          continue
-        }
-        UI.empty()
-        UI.println(`${UI.Style.TEXT_DIM}\u001b[3m${line}\u001b[0m${UI.Style.TEXT_NORMAL}`)
-        UI.empty()
+        current.output.push(() => {
+          if (emit("reasoning", time, { part })) return
+          const text = part.text.trim()
+          if (!text) return
+          const line = `Thinking: ${text}`
+          if (!process.stdout.isTTY) {
+            process.stdout.write(line + EOL)
+            return
+          }
+          UI.empty()
+          UI.println(`${UI.Style.TEXT_DIM}\u001b[3m${line}\u001b[0m${UI.Style.TEXT_NORMAL}`)
+          UI.empty()
+        })
         continue
       }
 
@@ -520,6 +545,7 @@ export async function runNonInteractivePrompt(input: Input) {
       }
 
       if (event.type === "session.step.ended") {
+        settleDraft(event.data.assistantMessageID)
         metrics.settled(event.data)
         const part = {
           id: partID(event.id),
@@ -538,6 +564,7 @@ export async function runNonInteractivePrompt(input: Input) {
         continue
       }
       if (event.type === "session.step.failed") {
+        settleDraft(event.data.assistantMessageID)
         metrics.settled(event.data)
         if (interrupted || blockerRejected) continue
         if (event.data.error.type === "provider.invalid-output") {

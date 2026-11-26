@@ -1378,6 +1378,58 @@ fn classifies_streamed_provider_errors() {
 }
 
 #[test]
+fn provider_recovery_sdk_uses_explicit_error_codes_in_named_envelopes() {
+    let request = request(ANTHROPIC, "fixture");
+    for (code, reason) in [
+        ("ECONNRESET", Reason::Transport),
+        ("overloaded_error", Reason::ProviderInternal),
+        ("authentication_error", Reason::Authentication),
+        ("insufficient_quota", Reason::QuotaExceeded),
+        ("invalid_request_error", Reason::InvalidRequest),
+        ("content_filter", Reason::ContentPolicy),
+        ("unrecognized", Reason::UnknownProvider),
+    ] {
+        let frame =
+            json!({"type":"error","error":{"name":"Error","code":code,"message":"Request failed"}})
+                .to_string();
+        let error = stream_error(&request, &[&frame]);
+        assert_eq!(error.reason, reason, "{code}");
+        assert_eq!(error.code.as_deref(), Some(code));
+        assert_eq!(
+            error.transport_kind,
+            (reason == Reason::Transport).then_some("read")
+        );
+    }
+}
+
+#[tokio::test]
+async fn provider_recovery_sdk_language_channel_close_does_not_finish_the_step() {
+    let (send, _, request) = language_fixture();
+    let mut stream = Executor::new(Executor::http_client().unwrap())
+        .stream(&request)
+        .await
+        .unwrap();
+    send.send(Ok(value(
+        r#"{"type":"text-delta","id":"t","delta":"Partial"}"#,
+    )))
+    .await
+    .unwrap();
+    drop(send);
+    assert_eq!(
+        stream.next().await.unwrap(),
+        Some(Event::StepStart { index: 0.0 })
+    );
+    assert_eq!(
+        stream.next().await.unwrap(),
+        Some(Event::TextDelta(delta("t", "Partial")))
+    );
+    assert_eq!(
+        stream.next().await.unwrap_err(),
+        ycoding_ai::Error::missing_terminal()
+    );
+}
+
+#[test]
 fn classifies_structured_http_errors_and_redacts_secrets() {
     let request = request(OPENAI, "gpt-5.6");
     let body = r#"{\"error\":{\"message\":\"slow down sk-synthetic-1234\",\"type\":\"rate_limit_error\"},\"apiKey\":\"abcd\"}"#;

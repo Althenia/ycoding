@@ -82,6 +82,40 @@ async function mountRows(
   return { rows, data, events, client, destroy: () => app.renderer.destroy() }
 }
 
+test("transport retry replaces live draft rows before reusing their ordinals", async () => {
+  const sessionID = "ses_transport_retry"
+  const assistantMessageID = "msg_transport_retry"
+  const mounted = await mountRows(sessionID)
+  let seq = 0
+  const emit = (type: string, data: Record<string, unknown>) => mounted.events.emit({
+    id: `evt_retry_${++seq}`, type, created: seq, location: { directory }, ...(type.endsWith(".delta") ? {} : { durable: durable(sessionID, seq) }),
+    data: { sessionID, assistantMessageID, ...data },
+  } as unknown as YCodingEvent)
+  try {
+    emit("session.step.started", { agent: "build", model: { providerID: "provider", id: "model" } })
+    emit("session.text.started", { ordinal: 0 })
+    emit("session.text.delta", { ordinal: 0, delta: "discarded draft" })
+    emit("session.reasoning.started", { ordinal: 0 })
+    emit("session.reasoning.delta", { ordinal: 0, delta: "discarded thought" })
+    emit("session.tool.input.started", { callID: "draft", name: "shell" })
+    await wait(() => mounted.rows.some((row) => row.type === "part" && row.ref.partID === "draft"))
+    emit("session.retry.scheduled", { attempt: 2, at: 100, error: { type: "provider.transport", message: "disconnected" } })
+    await wait(() => {
+      const message = mounted.data.session.message.get(sessionID, assistantMessageID)
+      return message?.type === "assistant" && message.retry?.attempt === 2
+    })
+    expect(mounted.rows.some((row) => row.type === "part" && row.ref.messageID === assistantMessageID)).toBe(false)
+    expect(mounted.rows.some((row) => row.type === "group" && row.refs.some((ref) => ref.messageID === assistantMessageID))).toBe(false)
+    emit("session.step.started", { agent: "build", model: { providerID: "provider", id: "model" } })
+    emit("session.text.started", { ordinal: 0 })
+    emit("session.text.delta", { ordinal: 0, delta: "replacement" })
+    await wait(() => mounted.rows.some((row) => row.type === "part" && row.ref.partID === "text:0"))
+    expect(JSON.parse(JSON.stringify(mounted.data.session.message.get(sessionID, assistantMessageID)))).toMatchObject({ content: [{ type: "text", text: "replacement" }] })
+  } finally {
+    mounted.destroy()
+  }
+})
+
 test("projects live context observations once as resident chronological messages", async () => {
   const sessionID = "ses_context_observations"
   const mounted = await mountRows(sessionID)

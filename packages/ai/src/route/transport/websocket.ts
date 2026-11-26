@@ -32,6 +32,7 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/LLM
 
 const LIFECYCLE_HEARTBEAT_MS = 25_000
 const LIFECYCLE_SUSPEND_THRESHOLD_MS = LIFECYCLE_HEARTBEAT_MS * 2
+const transientCloseCodes = new Set([1001, 1006, 1011, 1012, 1013, 1014])
 
 const transportError = (
   method: string,
@@ -179,10 +180,12 @@ export const fromWebSocket = (
       closed = true
       stopLifecycle()
       removeListeners()
+      const message = eventMessage(event)
+      const kind = /ECONNRESET|ETIMEDOUT|connection reset|socket hang up|timed out/i.test(message) ? "read" : "message"
       Queue.failCauseUnsafe(
         messages,
         Cause.fail(
-          transportError("message", `WebSocket error: ${eventMessage(event)}`, { url: input.url, kind: "message" }),
+          transportError("message", `WebSocket error: ${message}`, { url: input.url, kind }),
         ),
       )
     }
@@ -194,7 +197,10 @@ export const fromWebSocket = (
       Queue.failCauseUnsafe(
         messages,
         Cause.fail(
-          transportError("message", `WebSocket closed with code ${event.code}`, { url: input.url, kind: "close" }),
+          transportError("message", `WebSocket closed with code ${event.code}`, {
+            url: input.url,
+            kind: transientCloseCodes.has(event.code) ? "close" : "websocket-permanent",
+          }),
         ),
       )
     }

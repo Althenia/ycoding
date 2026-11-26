@@ -171,28 +171,76 @@ fn prepared_model(address: std::net::SocketAddr) -> ycoding_ai::llm::Model {
 }
 
 #[tokio::test]
-async fn session_close_before_terminal_is_error_and_new_session_reopens() {
+async fn session_close_before_terminal_reopens_without_previous_response() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
-        for _ in 0..2 {
-            let (socket, _) = listener.accept().await.unwrap();
-            let mut socket = accept_async(socket).await.unwrap();
-            socket.next().await.unwrap().unwrap();
-            socket.close(None).await.unwrap();
-        }
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(socket).await.unwrap();
+        socket.next().await.unwrap().unwrap();
+        socket.send(Message::Text(r#"{"type":"response.output_item.done","item":{"role":"assistant","content":"answer"}}"#.into())).await.unwrap();
+        socket
+            .send(Message::Text(
+                r#"{"type":"response.completed","response":{"id":"response_1"}}"#.into(),
+            ))
+            .await
+            .unwrap();
+        let continued = socket.next().await.unwrap().unwrap().into_text().unwrap();
+        assert!(continued.contains("previous_response_id"), "{continued}");
+        socket
+            .send(Message::Text(
+                r#"{"type":"response.output_text.delta","delta":"draft"}"#.into(),
+            ))
+            .await
+            .unwrap();
+        socket.close(None).await.unwrap();
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(socket).await.unwrap();
+        let replay = socket.next().await.unwrap().unwrap().into_text().unwrap();
+        assert!(!replay.contains("previous_response_id"), "{replay}");
+        socket
+            .send(Message::Text(
+                r#"{"type":"response.completed","response":{"id":"response_2"}}"#.into(),
+            ))
+            .await
+            .unwrap();
     });
-    let mut transport = JsonTransport::new(|_| Ok(parse_json("{}").unwrap()));
+    let mut transport = JsonTransport::new(|_| {
+        Ok(parse_json(r#"{"type":"response.create","model":"fixture","input":[{"role":"user","content":"hello"}]}"#).unwrap())
+    });
     transport.continuation = Some(continuation());
-    let prepared = prepared(address);
-    for _ in 0..2 {
-        let mut connection = transport.open(&prepared, None).await.unwrap();
-        assert_eq!(
-            connection.next().await.unwrap_err().transport_kind,
-            Some("close")
-        );
-        drop(connection);
-    }
+    let mut first = transport.open(&prepared(address), None).await.unwrap();
+    assert!(
+        first
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .contains("output_item.done")
+    );
+    assert!(
+        first
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .contains("response.completed")
+    );
+    drop(first);
+    let mut request = Request::new(prepared_model(address));
+    request
+        .messages
+        .push(ycoding_ai::llm::Message::user("next"));
+    let prepared = request.model.route.prepare(&request).unwrap();
+    let mut second = transport.open(&prepared, None).await.unwrap();
+    assert!(second.next().await.unwrap().unwrap().contains("draft"));
+    assert_eq!(
+        second.next().await.unwrap_err().transport_kind,
+        Some("close")
+    );
+    drop(second);
+    let mut third = transport.open(&prepared, None).await.unwrap();
+    assert!(third.next().await.unwrap().unwrap().contains("response_2"));
     server.await.unwrap();
 }
 

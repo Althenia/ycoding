@@ -403,7 +403,7 @@ fn binary_header_types_split_frames_exception_error_crc_and_padding() {
     );
     let mut parser = AwsEventStream::default();
     assert!(parser.push(&bytes[..bytes.len() - 1]).unwrap().is_empty());
-    assert!(parser.finish().is_empty());
+    assert_eq!(parser.finish(), Err(ycoding_ai::Error::missing_terminal()));
 }
 
 #[test]

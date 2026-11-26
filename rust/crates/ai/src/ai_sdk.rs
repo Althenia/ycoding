@@ -1034,9 +1034,34 @@ fn stream_error(error: &JsonValue) -> Error {
         .iter()
         .any(|key| get(error, key).is_some());
     if !structured {
-        if get(error, "name")
-            .and_then(json::text)
-            .is_some_and(|name| name.ends_with("Error"))
+        let sources = [
+            get(error, "error"),
+            get(error, "response").and_then(|value| get(value, "error")),
+            Some(error),
+        ];
+        let code = sources
+            .iter()
+            .filter_map(|source| {
+                source
+                    .and_then(|source| get(source, "code"))
+                    .and_then(json::text)
+            })
+            .find(|code| !code.is_empty())
+            .or_else(|| {
+                sources
+                    .iter()
+                    .filter_map(|source| {
+                        source
+                            .and_then(|source| get(source, "type"))
+                            .and_then(json::text)
+                    })
+                    .find(|code| !code.is_empty() && *code != "error")
+            })
+            .map(String::from);
+        if code.is_none()
+            && get(error, "name")
+                .and_then(json::text)
+                .is_some_and(|name| name.ends_with("Error"))
         {
             let message = get(error, "message")
                 .and_then(json::string)
@@ -1059,30 +1084,6 @@ fn stream_error(error: &JsonValue) -> Error {
                 Error::new(Reason::UnknownProvider, message)
             };
         }
-        let sources = [
-            get(error, "error"),
-            get(error, "response").and_then(|value| get(value, "error")),
-            Some(error),
-        ];
-        let code = sources
-            .iter()
-            .filter_map(|source| {
-                source
-                    .and_then(|source| get(source, "code"))
-                    .and_then(json::text)
-            })
-            .find(|code| !code.is_empty())
-            .or_else(|| {
-                sources[..2]
-                    .iter()
-                    .filter_map(|source| {
-                        source
-                            .and_then(|source| get(source, "type"))
-                            .and_then(json::text)
-                    })
-                    .find(|code| !code.is_empty() && *code != "error")
-            })
-            .map(String::from);
         let message = sources
             .iter()
             .find_map(|source| meaningful(source.and_then(|source| get(source, "message"))))
@@ -1091,11 +1092,22 @@ fn stream_error(error: &JsonValue) -> Error {
                     .map(|code| format!("Provider reported {code}"))
                     .unwrap_or_else(|| "Provider stream failed".into())
             });
-        return classify(Failure {
+        let mut failure = classify(Failure {
             message,
             code,
             ..Default::default()
         });
+        if failure.reason == Reason::UnknownProvider {
+            match failure.code.as_deref() {
+                Some("ECONNRESET" | "UND_ERR_SOCKET" | "ConnectionClosed") => {
+                    failure.reason = Reason::Transport;
+                    failure.transport_kind = Some("read");
+                }
+                Some("content_filter") => failure.reason = Reason::ContentPolicy,
+                _ => {}
+            }
+        }
+        return failure;
     }
     let mut secrets = Vec::new();
     if let Some(value) = get(error, "requestBodyValues") {

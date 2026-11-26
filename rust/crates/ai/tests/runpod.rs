@@ -69,6 +69,47 @@ fn selected(worker: Worker) -> Request {
     request.model.route = std::sync::Arc::new(route);
     request
 }
+
+#[test]
+fn provider_recovery_runpod_nonterminal_worker_results_are_transport_errors() {
+    for (worker, output) in [
+        (
+            Worker::Ollama,
+            r#"{"message":{"role":"assistant","content":"Partial"},"done":false}"#,
+        ),
+        (
+            Worker::Vllm,
+            r#"{"choices":[{"message":{"role":"assistant","content":"Partial"},"finish_reason":null}]}"#,
+        ),
+    ] {
+        let request = selected(worker);
+        let mut parser = request.model.route.protocol.parser(&request);
+        let frame = parse_json(&format!(r#"{{"status":"COMPLETED","output":{output}}}"#)).unwrap();
+        assert_eq!(
+            parser.push(&frame).unwrap_err(),
+            ycoding_ai::Error::missing_terminal()
+        );
+    }
+}
+
+#[test]
+fn provider_recovery_runpod_length_ends_partial_output_without_parsing_unfinished_tools() {
+    let request = selected(Worker::Vllm);
+    let mut parser = request.model.route.protocol.parser(&request);
+    let frame = parse_json(r#"{"status":"COMPLETED","output":{"choices":[{"message":{"role":"assistant","content":"Partial","tool_calls":[{"id":"call","type":"function","function":{"name":"lookup","arguments":"{"}}]},"finish_reason":"length"}],"usage":{"completion_tokens":4}}}"#).unwrap();
+    let mut events = parser.push(&frame).unwrap();
+    events.extend(parser.finish().unwrap());
+    let response = ycoding_ai::llm::Response::from_events(events).unwrap();
+    assert_eq!(response.text().as_str(), Some("Partial"));
+    assert_eq!(response.finish_reason, FinishReason::Length);
+    assert_eq!(response.usage.unwrap().output_tokens, Some(4.0));
+    assert!(
+        !response
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::ToolCall(_)))
+    );
+}
 fn tool() -> ToolDefinition {
     ToolDefinition {
         name: "lookup".into(),

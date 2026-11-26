@@ -19,6 +19,53 @@ fn response(parser: &mut dyn StreamParser, frames: &[&str]) -> Result<Response, 
 }
 
 #[test]
+fn provider_recovery_responses_output_limit_retains_partial_text_and_reported_usage() {
+    let request = Request::new(Route::openai_responses().model("fixture"));
+    let result = response(&mut OpenAIResponses::parser(&request), &[
+        r#"{"type":"response.in_progress","response":{"usage":{"input_tokens":11,"output_tokens":4}}}"#,
+        r#"{"type":"response.output_text.delta","item_id":"msg","delta":"Partial"}"#,
+        r#"{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":null}}"#,
+    ]).unwrap();
+    assert_eq!(result.text().as_str(), Some("Partial"));
+    assert_eq!(result.finish_reason, ycoding_ai::llm::FinishReason::Length);
+    assert_eq!(result.usage.unwrap().output_tokens, Some(4.0));
+    assert!(matches!(
+        result.events.as_slice(),
+        [
+            ..,
+            Event::TextEnd(_),
+            Event::StepFinish { .. },
+            Event::Finish(_)
+        ]
+    ));
+}
+
+#[test]
+fn provider_recovery_responses_in_band_failure_keeps_the_provider_classification() {
+    use ycoding_ai::provider_error::Reason;
+
+    let request = Request::new(Route::openai_responses().model("fixture"));
+    for (code, reason) in [
+        ("server_error", Reason::ProviderInternal),
+        ("authentication_error", Reason::Authentication),
+        ("insufficient_quota", Reason::QuotaExceeded),
+        ("invalid_prompt", Reason::InvalidRequest),
+        ("content_filter", Reason::ContentPolicy),
+        ("unrecognized", Reason::UnknownProvider),
+    ] {
+        let frame = format!(
+            r#"{{"type":"response.failed","response":{{"status":"failed","usage":{{"input_tokens":11}},"error":{{"code":"{code}","message":"Request failed"}}}}}}"#
+        );
+        let mut parser = OpenAIResponses::parser(&request);
+        assert!(parser.reported_usage().is_none());
+        let error = response(&mut parser, &[&frame]).unwrap_err();
+        assert_eq!(error.reason, reason, "{code}");
+        assert_eq!(error.code.as_deref(), Some(code));
+        assert_eq!(parser.reported_usage().unwrap().input_tokens, Some(11.0));
+    }
+}
+
+#[test]
 fn direct_api_key_cache_recording_preserves_cold_and_warm_token_counts() {
     let recording: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../packages/ai/test/fixtures/recordings/openai-responses-cache/reports-cached-tokens-on-identical-second-call.json"

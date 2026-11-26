@@ -3,7 +3,7 @@ use crate::{
     json::{self, get, s},
     llm::{
         Event, Finish, FinishReason, Media, MediaData, Message, Part, Request, Role, ToolCall,
-        ToolChoice, ToolDefinition, ToolInputEvent, ToolResult, ToolResultValue,
+        ToolChoice, ToolDefinition, ToolInputEvent, ToolResult, ToolResultValue, Usage,
     },
     openai_options,
     openai_shared::{self, Lifecycle, PendingTool, Tools, join, metadata, pick, string, validate},
@@ -837,6 +837,7 @@ pub struct Parser {
     reasoning: BTreeMap<LosslessString, ReasoningItem>,
     reasoning_active: Option<(LosslessString, usize)>,
     reasoning_observed: bool,
+    usage: Option<JsonValue>,
     terminal: bool,
     refused: bool,
 }
@@ -1254,6 +1255,23 @@ impl Parser {
             ));
         }
         let kind = get(event, "type").and_then(json::text).unwrap_or("");
+        let usage = get(event, "response")
+            .and_then(|value| get(value, "usage"))
+            .filter(|value| !matches!(value, JsonValue::Null));
+        if let Some(raw) = usage {
+            let reported = openai_shared::usage(raw, false, self.reasoning_observed, None);
+            if [
+                reported.input_tokens,
+                reported.output_tokens,
+                reported.reasoning_tokens,
+                reported.total_tokens,
+            ]
+            .iter()
+            .any(Option::is_some)
+            {
+                self.usage = Some(raw.clone());
+            }
+        }
         let mut events = Vec::new();
         match kind {
             "response.output_text.delta" => {
@@ -1443,9 +1461,8 @@ impl Parser {
                     _ if !self.settled_calls.is_empty() => FinishReason::ToolCalls,
                     _ => FinishReason::Stop,
                 };
-                let usage = response
-                    .and_then(|value| get(value, "usage"))
-                    .filter(|value| !matches!(value, JsonValue::Null))
+                let usage = usage
+                    .or(self.usage.as_ref())
                     .map(|value| openai_shared::usage(value, false, self.reasoning_observed, None));
                 let mut extra = json::empty();
                 if let Some(response) = response {
@@ -1534,6 +1551,11 @@ impl StreamParser for Parser {
         } else {
             Err(Error::missing_terminal())
         }
+    }
+    fn reported_usage(&self) -> Option<Usage> {
+        self.usage
+            .as_ref()
+            .map(|raw| openai_shared::usage(raw, false, self.reasoning_observed, None))
     }
 }
 fn hosted_input(item: &JsonValue) -> Option<(&'static str, JsonValue)> {

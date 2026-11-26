@@ -93,6 +93,13 @@ function durable(sessionID: string, seq = 0, version: 1 | 2 = 1) {
   return { aggregateID: sessionID, seq, version }
 }
 
+function endStep(messageID: string): RunEvent {
+  return { id: `evt_end_${messageID}`, created: 10, type: "session.step.ended", durable: durable("ses_1"), data: {
+    sessionID: "ses_1", assistantMessageID: messageID, finish: "stop", cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  } }
+}
+
 function promptAdmission(input: Parameters<YCodingClient["session"]["prompt"]>[0], sessionID = "ses_1") {
   return {
     admittedSeq: 1,
@@ -113,6 +120,150 @@ function promptAdmission(input: Parameters<YCodingClient["session"]["prompt"]>[0
 function footer() {
   return createFooterApiFixture()
 }
+
+test("buffers assistant drafts until step settlement and discards retried drafts", async () => {
+  const events = feed()
+  events.push(connected())
+  const ui = footer()
+  const transport = await createSessionTransport({ sdk: sdk({ streams: [events] }), sessionID: "ses_1", thinking: true, footer: ui.api })
+  const ref = { sessionID: "ses_1", assistantMessageID: "msg_a" }
+  try {
+    events.push({ id: "evt_draft", created: 1, type: "session.text.delta", data: { ...ref, ordinal: 0, delta: "abandoned" } })
+    events.push({ id: "evt_thought", created: 1, type: "session.reasoning.delta", data: { ...ref, ordinal: 0, delta: "old thought" } })
+    events.push({ id: "evt_other", created: 1, type: "session.text.delta", data: { ...ref, assistantMessageID: "msg_b", ordinal: 0, delta: "other" } })
+    await events.flush()
+    expect(ui.commits.filter((item) => item.kind === "assistant")).toEqual([])
+    events.push({ id: "evt_retry", created: 2, type: "session.retry.scheduled", durable: durable("ses_1"), data: { ...ref, attempt: 2, at: 5, error: { type: "provider.transport", message: "disconnected" } } })
+    events.push({ id: "evt_replacement", created: 3, type: "session.text.delta", data: { ...ref, ordinal: 0, delta: "replacement" } })
+    events.push({ id: "evt_new_thought", created: 3, type: "session.reasoning.delta", data: { ...ref, ordinal: 0, delta: "new thought" } })
+    events.push({ id: "evt_failed", created: 4, type: "session.step.failed", durable: durable("ses_1"), data: { ...ref, error: { type: "provider.transport", message: "failed" } } })
+    await events.flush()
+    expect(ui.commits.map((item) => [item.kind, item.text])).toEqual([["assistant", "replacement"], ["reasoning", "Thinking: new thought"], ["error", "failed"]])
+    events.push(endStep("msg_b"))
+    await events.flush()
+    expect(ui.commits.at(-1)?.text).toBe("other")
+  } finally {
+    await transport.close()
+  }
+})
+
+test("buffers an active snapshot and flushes it only when its step settles", async () => {
+  const events = feed()
+  events.push(connected())
+  const ui = footer()
+  const transport = await createSessionTransport({
+    sdk: sdk({ streams: [events], active: () => ({ ses_1: { type: "running" } }), messages: { ses_1: [{
+      id: "msg_active", type: "assistant", agent: "build", model: { providerID: "test", id: "model" },
+      content: [{ type: "text", text: "snapshot draft" }, { type: "reasoning", text: "thought" }], time: { created: 1 },
+    }] } }), sessionID: "ses_1", thinking: true, footer: ui.api,
+  })
+  try {
+    expect(ui.commits).toEqual([])
+    events.push(endStep("msg_active"))
+    await events.flush()
+    expect(ui.commits.map((commit) => commit.text)).toEqual(["snapshot draft", "Thinking: thought"])
+  } finally {
+    await transport.close()
+  }
+})
+
+test("replays older retained messages before the canonical snapshot window", async () => {
+  const events = feed()
+  events.push(connected())
+  const client = sdk({ streams: [events] })
+  const message = (id: string, text: string, created: number) => ({
+    id, type: "assistant" as const, agent: "build", model: { providerID: "test", id: "model" },
+    content: [{ type: "text" as const, text }], time: { created, completed: created + 1 },
+  })
+  const old = message("old", "older", 1)
+  const recent = message("recent", "newer", 3)
+  spyOn(client.message, "list").mockImplementation(() => ok([old, recent]) as never)
+  spyOn(client.session, "snapshot").mockImplementation(() => ok({ sourceEpoch: "source_test", session: { id: "ses_1" },
+    messages: [recent], before: "cursor", watermark: { type: "log.synced", aggregateID: "ses_1", seq: 4 } }) as never)
+  const ui = footer()
+  const transport = await createSessionTransport({ sdk: client, sessionID: "ses_1", thinking: false, replay: true, footer: ui.api })
+  try {
+    expect(ui.commits.map((commit) => commit.text)).toEqual(["older", "newer"])
+  } finally {
+    await transport.close()
+  }
+})
+
+test("reconnect replaces a pre-retry draft with the authoritative retry snapshot", async () => {
+  const first = feed()
+  const second = feed()
+  first.push(connected("first"))
+  second.push(connected("second"))
+  let retry = false
+  const client = sdk({ streams: [first, second], active: () => ({ ses_1: { type: "running" } }) })
+  const rehydrated = defer()
+  spyOn(client.message, "list").mockImplementation(() => {
+    if (retry) rehydrated.resolve()
+    return ok(retry ? [{ id: "msg_a", type: "assistant", agent: "build", model: { providerID: "test", id: "model" },
+      content: [], retry: { attempt: 2, at: 10, error: { type: "provider.transport", message: "disconnected" } }, time: { created: 1 } }] : []) as never
+  })
+  const ui = footer()
+  const transport = await createSessionTransport({ sdk: client, sessionID: "ses_1", thinking: false, footer: ui.api })
+  try {
+    first.push({ id: "old", type: "session.text.delta", created: 1, data: { sessionID: "ses_1", assistantMessageID: "msg_a", ordinal: 0, delta: "old" } })
+    await first.flush()
+    retry = true
+    first.close()
+    await rehydrated.promise
+    const settled = waitForFooter(ui, (event) => event.type === "stream.patch" && event.patch.usage === "")
+    second.push({ id: "new", type: "session.text.delta", created: 2, data: { sessionID: "ses_1", assistantMessageID: "msg_a", ordinal: 0, delta: "new" } })
+    second.push(endStep("msg_a"))
+    await second.flush()
+    await settled
+    expect(ui.commits.filter((commit) => commit.kind === "assistant").map((commit) => commit.text)).toEqual(["new"])
+  } finally {
+    await transport.close()
+  }
+})
+
+test("does not repeat a settled retry captured during reconnect hydration", async () => {
+  const first = feed()
+  const second = feed()
+  first.push(connected("first"))
+  second.push(connected("second"))
+  const started = defer()
+  const snapshot = defer<SessionMessages>()
+  let reconnecting = false
+  const client = sdk({ streams: [first, second], active: () => ({ ses_1: { type: "running" } }) })
+  spyOn(client.message, "list").mockImplementation(() => {
+    if (!reconnecting) return ok([])
+    started.resolve()
+    return snapshot.promise as never
+  })
+  spyOn(client.session, "snapshot").mockImplementation(async (request) => ({
+    sourceEpoch: "source_test", session: { id: request.sessionID },
+    messages: (await client.message.list({ sessionID: request.sessionID })).toReversed(),
+    watermark: { type: "log.synced", aggregateID: request.sessionID, seq: reconnecting ? 2 : undefined },
+  }) as never)
+  const ui = footer()
+  const transport = await createSessionTransport({ sdk: client, sessionID: "ses_1", thinking: false, footer: ui.api })
+  try {
+    const ref = { sessionID: "ses_1", assistantMessageID: "msg_a" }
+    first.push({ id: "old", type: "session.text.delta", created: 1, data: { ...ref, ordinal: 0, delta: "old" } })
+    await first.flush()
+    reconnecting = true
+    first.close()
+    await started.promise
+    second.push({ id: "retry", type: "session.retry.scheduled", created: 2, durable: durable("ses_1", 2), data: {
+      ...ref, attempt: 2, at: 10, error: { type: "provider.transport", message: "disconnected" },
+    } })
+    second.push({ id: "new", type: "session.text.delta", created: 3, data: { ...ref, ordinal: 0, delta: "new" } })
+    second.push(endStep("msg_a"))
+    await second.flush()
+    const settled = waitForFooter(ui, (event) => event.type === "stream.patch" && event.patch.usage === "")
+    snapshot.resolve([{ id: "msg_a", type: "assistant", agent: "build", model: { providerID: "test", id: "model" },
+      content: [{ type: "text", text: "new" }], time: { created: 1, completed: 3 } }])
+    await settled
+    expect(ui.commits.filter((commit) => commit.kind === "assistant").map((commit) => commit.text)).toEqual(["new"])
+  } finally {
+    await transport.close()
+  }
+})
 
 function waitForFooter(ui: ReturnType<typeof createFooterApiFixture>, predicate: (event: FooterEvent) => boolean) {
   if (ui.events.some(predicate)) return Promise.resolve()
@@ -177,6 +328,12 @@ function sdk(input: {
       ],
     ),
   )
+  spyOn(client.session, "snapshot").mockImplementation(async (request) => ({
+    sourceEpoch: "source_test",
+    session: { id: request.sessionID },
+    messages: (await client.message.list({ sessionID: request.sessionID })).toReversed(),
+    watermark: { type: "log.synced", aggregateID: request.sessionID },
+  }) as never)
   spyOn(client.permission, "list").mockImplementation((request) => ok(input.permissions?.[request.sessionID] ?? []))
   spyOn(client.form, "list").mockImplementation((request) => ok(input.forms?.[request.sessionID] ?? []))
   spyOn(client.form.request, "list").mockImplementation(() =>
@@ -1224,6 +1381,8 @@ describe("Mini transport", () => {
       },
     })
     await events.flush()
+    events.push(endStep("msg_assistant"))
+    await events.flush()
     expect(live.map((commit) => commit.text)).toEqual(["partial suffix"])
 
     await transport.replayOnResize({
@@ -1301,6 +1460,8 @@ describe("Mini transport", () => {
     await events.flush()
     reset()
     await replay
+    events.push(endStep("msg_assistant"))
+    await events.flush()
 
     expect(ui.commits.filter((commit) => commit.messageID === "msg_assistant").map((commit) => commit.text)).toEqual([
       "partial",
@@ -1349,13 +1510,16 @@ describe("Mini transport", () => {
       },
     })
     await events.flush()
-    expect(live.map((commit) => commit.text)).toEqual(["hello", "Thinking: thought"])
+    expect(live).toEqual([])
 
     await transport.replayOnResize({
       localRows: () => live.map((commit) => ({ commit })),
       reset: async () => {},
     })
 
+    expect(ui.commits).toEqual([])
+    events.push(endStep("msg_assistant"))
+    await events.flush()
     expect(ui.commits.slice(-2).map((commit) => commit.text)).toEqual(["hello", "Thinking: thought"])
     await transport.close()
   })
@@ -1444,8 +1608,10 @@ describe("Mini transport", () => {
       },
     })
     await expect(replay).rejects.toThrow("projection failed")
-
-    expect(ui.commits.slice(-2).map((commit) => commit.text)).toEqual(["hello", " world"])
+    expect(ui.commits.filter((commit) => commit.kind === "assistant")).toEqual([])
+    events.push(endStep("msg_assistant"))
+    await events.flush()
+    expect(ui.commits.at(-1)?.text).toBe("hello world")
     expect(live.at(-1)?.text).toBe("hello world")
     await transport.close()
   })
@@ -1728,7 +1894,9 @@ describe("Mini transport", () => {
       },
     })
     await events.flush()
-
+    expect(ui.commits).toEqual([])
+    events.push(endStep("msg_assistant"))
+    await events.flush()
     expect(ui.commits.at(-1)?.text).toBe("Thinking: considering")
     await transport.close()
   })

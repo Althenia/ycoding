@@ -737,6 +737,10 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
       },
       "session.retry.scheduled": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+          draft.content = draft.content.filter((part) =>
+            part.type === "tool" && part.time.ran !== undefined &&
+            (part.state.status === "completed" || part.state.status === "error"),
+          )
           draft.retry = {
             attempt: event.data.attempt,
             at: DateTime.makeUnsafe(event.data.at),

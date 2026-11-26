@@ -159,6 +159,17 @@ async fn server_headers(
     mpsc::UnboundedReceiver<ycoding_schema::JsonValue>,
     tokio::task::JoinHandle<()>,
 ) {
+    server_headers_gated(replies, None).await
+}
+
+async fn server_headers_gated(
+    replies: Vec<(u16, &'static str, &'static str)>,
+    mut gate: Option<tokio::sync::oneshot::Receiver<()>>,
+) -> (
+    String,
+    mpsc::UnboundedReceiver<ycoding_schema::JsonValue>,
+    tokio::task::JoinHandle<()>,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = format!("http://{}", listener.local_addr().unwrap());
     let (send, receive) = mpsc::unbounded_channel();
@@ -233,9 +244,12 @@ async fn server_headers(
                 } else {
                     "application/json"
                 },
-                reply.len()
+                reply.len() + usize::from(extra.contains("x-fixture-truncate: true"))
             );
             stream.write_all(response.as_bytes()).await.unwrap();
+            if let Some(gate) = gate.take() {
+                gate.await.unwrap();
+            }
         }
     });
     (address, receive, task)
@@ -2430,6 +2444,303 @@ async fn one_hour_cache_writes_bill_at_twice_input_and_impossible_metadata_keeps
 }
 
 #[tokio::test]
+async fn dropped_response_body_retries_and_replaces_partial_text() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server_headers(vec![
+        (200, "x-fixture-truncate: true\r\n", PARTIAL_TEXT),
+        (200, "", TEXT),
+    ])
+    .await;
+    let delays = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let coordinator = Coordinator::new(Arc::new(local_clock(
+        &store,
+        &endpoint,
+        registry(),
+        Arc::new(ImmediateClock(delays.clone())),
+    )));
+    let result = coordinator.run(&session::Id::new("ses_one").unwrap()).await;
+    if let Err(error) = &result {
+        server.abort();
+        panic!("interrupted provider response did not recover: {error:?}");
+    }
+    assert_eq!(*delays.lock().unwrap(), vec![2000]);
+    let types = event_types(&store);
+    assert_eq!(count(&types, "session.retry.scheduled"), 1);
+    assert_eq!(count(&types, "session.step.ended"), 1);
+    assert_eq!(count(&types, "session.step.failed"), 0);
+    assert_eq!(count(&types, "session.execution.failed"), 0);
+    let assistant = last_assistant(&service);
+    assert!(assistant.error.is_none());
+    assert!(
+        matches!(&assistant.content[..], [session_message::AssistantContent::Text(text)] if text.text.as_str() == Some("Answer"))
+    );
+    assert_eq!(
+        requests.recv().await.unwrap(),
+        requests.recv().await.unwrap()
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+const PARTIAL_TEXT: &str = "data: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Abandoned answer\"},\"finish_reason\":null}]}\n\n";
+const PARTIAL_REASONING: &str = "data: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"Abandoned thought\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"reply\",\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":5}}\n\n";
+const FINAL_PARTIAL_TEXT: &str = "data: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Final partial answer\"},\"finish_reason\":null}]}\n\n";
+
+#[tokio::test]
+async fn dropped_response_body_retries_and_replaces_partial_reasoning() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server_headers(vec![
+        (200, "x-fixture-truncate: true\r\n", PARTIAL_REASONING),
+        (200, "", TEXT),
+    ])
+    .await;
+    let delays = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let coordinator = Coordinator::new(Arc::new(local_clock(
+        &store,
+        &endpoint,
+        registry(),
+        Arc::new(ImmediateClock(delays.clone())),
+    )));
+    let result = coordinator.run(&session::Id::new("ses_one").unwrap()).await;
+    if let Err(error) = result {
+        server.abort();
+        panic!("interrupted reasoning did not recover: {error:?}");
+    }
+    assert_eq!(*delays.lock().unwrap(), vec![2000]);
+    assert_eq!(
+        requests.recv().await.unwrap(),
+        requests.recv().await.unwrap()
+    );
+    let assistant = last_assistant(&service);
+    assert!(assistant.error.is_none());
+    assert!(
+        matches!(&assistant.content[..], [session_message::AssistantContent::Text(text)] if text.text.as_str() == Some("Answer"))
+    );
+    let types = event_types(&store);
+    assert_eq!(count(&types, "session.retry.scheduled"), 1);
+    assert_eq!(count(&types, "session.step.ended"), 1);
+    assert_eq!(count(&types, "session.step.failed"), 0);
+    let tokens = assistant.tokens.as_ref().unwrap();
+    assert_eq!(tokens.input.get(), 10.0);
+    assert_eq!(tokens.output.get(), 7.0);
+    let records = provider_requests(&store);
+    assert_eq!(records.len(), 1);
+    let recorded = records[0].tokens.domain().unwrap();
+    assert_eq!(recorded.input.get(), 10.0);
+    assert_eq!(recorded.output.get(), 7.0);
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn dropped_response_body_exhausts_retries_and_keeps_last_partial_text() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let mut replies = vec![(200, "x-fixture-truncate: true\r\n", PARTIAL_TEXT); 9];
+    replies.push((200, "x-fixture-truncate: true\r\n", FINAL_PARTIAL_TEXT));
+    replies.push((200, "", TEXT));
+    let (endpoint, mut requests, server) = server_headers(replies).await;
+    let delays = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let coordinator = Coordinator::new(Arc::new(local_clock(
+        &store,
+        &endpoint,
+        registry(),
+        Arc::new(ImmediateClock(delays.clone())),
+    )));
+    let id = session::Id::new("ses_one").unwrap();
+    let result = coordinator.run(&id).await;
+    if delays.lock().unwrap().len() != 9 {
+        server.abort();
+        panic!("stream recovery did not reach retry ceiling: {result:?}");
+    }
+    assert!(result.is_err());
+    assert_eq!(
+        *delays.lock().unwrap(),
+        vec![
+            2000, 4000, 8000, 16000, 32000, 64000, 120000, 120000, 120000
+        ]
+    );
+    for _ in 0..10 {
+        requests.recv().await.unwrap();
+    }
+    assert!(requests.try_recv().is_err());
+    let assistant = last_assistant(&service);
+    let failure = assistant.error.as_ref().unwrap();
+    assert_eq!(failure.r#type.as_str(), Some("provider.transport"));
+    assert_eq!(
+        failure.message.as_str(),
+        Some("Provider HTTP response body closed before completion")
+    );
+    assert!(
+        matches!(&assistant.content[..], [session_message::AssistantContent::Text(text)] if text.text.as_str() == Some("Final partial answer"))
+    );
+    let types = event_types(&store);
+    assert_eq!(count(&types, "session.retry.scheduled"), 9);
+    assert_eq!(count(&types, "session.step.failed"), 1);
+    assert_eq!(count(&types, "session.step.ended"), 0);
+    admit_input(&service, "next", "Try the next prompt", "steer").await;
+    coordinator.run(&id).await.unwrap();
+    assert!(last_assistant(&service).error.is_none());
+    requests.recv().await.unwrap();
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn dropped_response_body_backoff_is_promptly_interrupted() {
+    struct Stalled(mpsc::UnboundedSender<u64>);
+    impl ycoding_core::session::runner::Clock for Stalled {
+        fn now(&self) -> i64 {
+            10
+        }
+        fn sleep(
+            &self,
+            milliseconds: u64,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+            self.0.send(milliseconds).unwrap();
+            Box::pin(std::future::pending())
+        }
+    }
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) =
+        server_headers(vec![(200, "x-fixture-truncate: true\r\n", PARTIAL_TEXT)]).await;
+    let (slept, mut backoff) = mpsc::unbounded_channel();
+    let coordinator = Coordinator::new(Arc::new(local_clock(
+        &store,
+        &endpoint,
+        registry(),
+        Arc::new(Stalled(slept)),
+    )));
+    let running = coordinator.clone();
+    let task =
+        tokio::spawn(async move { running.run(&session::Id::new("ses_one").unwrap()).await });
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), backoff.recv())
+            .await
+            .unwrap(),
+        Some(2000)
+    );
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        coordinator.interrupt(
+            &session::Id::new("ses_one").unwrap(),
+            ycoding_core::session::run_coordinator::InterruptReason::User,
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap(),
+        Err(ycoding_core::session::run_coordinator::Error::Interrupted(
+            _
+        ))
+    ));
+    requests.recv().await.unwrap();
+    assert!(requests.try_recv().is_err());
+    let types = event_types(&store);
+    assert_eq!(count(&types, "session.retry.scheduled"), 1);
+    assert_eq!(count(&types, "session.step.failed"), 1);
+    assert_eq!(
+        last_assistant(&service).error.unwrap().r#type.as_str(),
+        Some("aborted")
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn dropped_messages_stream_after_tool_execution_continues_without_reexecution() {
+    let store = support::store();
+    initial_context(&store);
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let registry = registry();
+    let (released, gate) = tokio::sync::oneshot::channel();
+    let released = Arc::new(std::sync::Mutex::new(Some(released)));
+    let called = calls.clone();
+    let _registration = registry.register(vec![("echo".into(), Arc::new(ycoding_core::tools::registry::DynamicTool::new(
+        "Echo input", parse_json(r#"{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}"#).unwrap(), None, None,
+        move |input, _| {
+            let called = called.clone();
+            let released = released.clone();
+            Box::pin(async move {
+                called.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if let Some(released) = released.lock().unwrap().take() { released.send(()).unwrap(); }
+                Ok(ycoding_ai::llm::ToolOutput { structured: input, content: Vec::new() })
+            })
+        },
+    )))], ycoding_core::tools::registry::Options::direct()).unwrap();
+    let partial = concat!(
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_recovery\",\"name\":\"echo\",\"input\":{}}}\n\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"value\\\":\\\"settled-once\\\"}\"}}\n\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+    );
+    let (endpoint, mut requests, server) = server_headers_gated(
+        vec![
+            (200, "x-fixture-truncate: true\r\n", partial),
+            (200, "", THINKING),
+        ],
+        Some(gate),
+    )
+    .await;
+    let coordinator = Coordinator::new(Arc::new(anthropic_local(
+        &store, &endpoint, "fixture", registry,
+    )));
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        coordinator.run(&session::Id::new("ses_one").unwrap()),
+    )
+    .await;
+    if !matches!(&result, Ok(Ok(()))) {
+        server.abort();
+        panic!(
+            "executed tool was not safely continued after disconnect: {result:?}; calls={}",
+            calls.load(std::sync::atomic::Ordering::SeqCst)
+        );
+    }
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    requests.recv().await.unwrap();
+    let continuation = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(continuation.contains("call_recovery"), "{continuation}");
+    assert!(continuation.contains("settled-once"), "{continuation}");
+    assert!(continuation.contains("tool_result"), "{continuation}");
+    assert!(
+        !continuation.contains("previous_response_id"),
+        "{continuation}"
+    );
+    assert!(!continuation.contains("\"tools\""), "{continuation}");
+    let types = event_types(&store);
+    assert_eq!(count(&types, "session.retry.scheduled"), 1);
+    assert_eq!(count(&types, "session.step.ended"), 2);
+    assert_eq!(count(&types, "session.step.failed"), 0);
+    assert_eq!(count(&types, "session.execution.failed"), 0);
+    assert!(requests.try_recv().is_err());
+    let history = ycoding_schema::stringify_json(&ycoding_schema::JsonValue::Array(
+        service
+            .context(&session::Id::new("ses_one").unwrap())
+            .unwrap()
+            .iter()
+            .map(DomainEncode::encode)
+            .collect(),
+    ));
+    assert!(history.contains("settled-once"), "{history}");
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn a_malformed_provider_stream_after_output_publishes_exactly_one_terminal_step_failure() {
     let store = support::store();
     let service = Service::new(store.client());
@@ -2891,7 +3202,12 @@ async fn a_step_that_fails_before_settlement_records_a_not_reported_zero_usage_r
 
 const THINKING: &str = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_t\",\"role\":\"assistant\",\"usage\":{\"input_tokens\":10,\"output_tokens\":1}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"Plan the answer\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"sig_fixture\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"Answer\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
 
-fn anthropic_local(store: &ycoding_store::Store, endpoint: &str, api_key: &str) -> Local {
+fn anthropic_local(
+    store: &ycoding_store::Store,
+    endpoint: &str,
+    api_key: &str,
+    registry: Arc<Registry>,
+) -> Local {
     let mut catalog = Catalog::new(
         models_dev::normalize(
             &parse_json(r#"{"anthropic":{"id":"anthropic","name":"Anthropic","env":["ANTHROPIC_API_KEY"],"npm":"@ai-sdk/anthropic","api":"https://api.anthropic.com/v1","models":{"claude-priced":{"id":"claude-priced","name":"Claude Priced","release_date":"2026-01-01","attachment":false,"reasoning":false,"temperature":true,"tool_call":true,"limit":{"context":200000,"output":8192}}}}}"#).unwrap(),
@@ -2903,7 +3219,7 @@ fn anthropic_local(store: &ycoding_store::Store, endpoint: &str, api_key: &str) 
         store,
         catalog,
         vec![agent::empty("build".into())],
-        registry(),
+        registry,
         Arc::new(WallClock),
         Vec::new(),
     )
@@ -2924,7 +3240,12 @@ async fn provider_executed_error_result_settles_the_tool_and_step_and_replays() 
     let service = Service::new(store.client());
     admit(&service).await;
     let (endpoint, mut requests, server) = server(vec![ERROR, ONE_HOUR]).await;
-    let coordinator = Coordinator::new(Arc::new(anthropic_local(&store, &endpoint, "fixture")));
+    let coordinator = Coordinator::new(Arc::new(anthropic_local(
+        &store,
+        &endpoint,
+        "fixture",
+        registry(),
+    )));
     let id = session::Id::new("ses_one").unwrap();
     let result = coordinator.run(&id).await;
     assert!(
@@ -3016,7 +3337,12 @@ async fn captured_reasoning_state_replays_only_for_the_same_model_and_account() 
     admit(&service).await;
     let (endpoint, mut requests, server) = server(vec![THINKING, ONE_HOUR, ONE_HOUR]).await;
     let id = session::Id::new("ses_one").unwrap();
-    let same = Coordinator::new(Arc::new(anthropic_local(&store, &endpoint, "fixture")));
+    let same = Coordinator::new(Arc::new(anthropic_local(
+        &store,
+        &endpoint,
+        "fixture",
+        registry(),
+    )));
     same.run(&id).await.unwrap();
     let assistant = last_assistant(&service);
     let ycoding_schema::session_message::AssistantContent::Reasoning(reasoning) =
@@ -3036,7 +3362,12 @@ async fn captured_reasoning_state_replays_only_for_the_same_model_and_account() 
     assert!(replayed.contains("\"signature\":\"sig_fixture\""));
     same.shutdown().await.unwrap();
 
-    let other = Coordinator::new(Arc::new(anthropic_local(&store, &endpoint, "rotated")));
+    let other = Coordinator::new(Arc::new(anthropic_local(
+        &store,
+        &endpoint,
+        "rotated",
+        registry(),
+    )));
     admit_input(&service, "third", "Once more", "steer").await;
     other.run(&id).await.unwrap();
     let refused = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
@@ -3384,7 +3715,12 @@ async fn prompt_cache_options_follow_the_model_family_and_anthropic_policy() {
     let store = support::store();
     let service = Service::new(store.client());
     admit(&service).await;
-    let anthropic = Coordinator::new(Arc::new(anthropic_local(&store, &endpoint, "fixture")));
+    let anthropic = Coordinator::new(Arc::new(anthropic_local(
+        &store,
+        &endpoint,
+        "fixture",
+        registry(),
+    )));
     anthropic
         .run(&session::Id::new("ses_one").unwrap())
         .await

@@ -1,9 +1,84 @@
 use ycoding_ai::{
     anthropic::AnthropicMessages,
-    llm::{Event, Request},
-    route::Route,
+    llm::{Event, FinishReason, Request},
+    provider_error::Reason,
+    route::{Route, StreamParser},
 };
 use ycoding_schema::{parse_json, stringify_json};
+
+#[test]
+fn provider_recovery_anthropic_stop_confirms_the_output_limit() {
+    let request = Request::new(Route::anthropic().model("fixture"));
+    let frames = [
+        r#"{"type":"message_start","message":{"usage":{"input_tokens":11}}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Partial"}}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":4}}"#,
+    ];
+    let mut parser = AnthropicMessages::parser(&request);
+    let events = frames
+        .iter()
+        .flat_map(|frame| parser.push(frame).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        parser.finish().unwrap_err(),
+        ycoding_ai::Error::missing_terminal()
+    );
+    assert!(!events.iter().any(Event::terminal));
+    let usage = parser.reported_usage().unwrap();
+    assert_eq!(
+        (usage.input_tokens, usage.output_tokens),
+        (Some(11.0), Some(4.0))
+    );
+    let response = parse_response(
+        &request,
+        &[
+            frames[0],
+            frames[1],
+            frames[2],
+            r#"{"type":"message_delta","delta":{"stop_reason":null},"usage":{"output_tokens":5}}"#,
+            r#"{"type":"message_stop"}"#,
+        ],
+    )
+    .unwrap();
+    assert_eq!(response.text().as_str(), Some("Partial"));
+    assert_eq!(response.finish_reason, FinishReason::Length);
+    assert_eq!(response.usage.unwrap().output_tokens, Some(5.0));
+    assert!(matches!(
+        response.events.as_slice(),
+        [
+            ..,
+            Event::TextEnd(_),
+            Event::StepFinish { .. },
+            Event::Finish(_)
+        ]
+    ));
+}
+
+#[test]
+fn provider_recovery_anthropic_late_error_is_not_a_successful_finish() {
+    let request = Request::new(Route::anthropic().model("fixture"));
+    for (code, reason) in [
+        ("overloaded_error", Reason::ProviderInternal),
+        ("authentication_error", Reason::Authentication),
+        ("insufficient_quota", Reason::QuotaExceeded),
+        ("invalid_request_error", Reason::InvalidRequest),
+        ("content_filter", Reason::ContentPolicy),
+        ("unrecognized", Reason::UnknownProvider),
+    ] {
+        let mut parser = AnthropicMessages::parser(&request);
+        let events = parser
+            .push(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}"#)
+            .unwrap();
+        let error = parser
+            .push(&format!(
+                r#"{{"type":"error","error":{{"type":"{code}","message":"Request failed"}}}}"#
+            ))
+            .unwrap_err();
+        assert_eq!(error.reason, reason, "{code}");
+        assert!(!events.iter().any(Event::terminal), "{code}");
+        assert_eq!(parser.reported_usage().unwrap().output_tokens, Some(2.0));
+    }
+}
 
 #[test]
 fn prepared_anthropic_fixture() {
@@ -32,6 +107,7 @@ fn partial_tool_args_and_malformed_settlement() {
         r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"ไทย\"}"}}"#,
         r#"{"type":"content_block_stop","index":0}"#,
         r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#,
+        r#"{"type":"message_stop"}"#,
     ].into_iter().flat_map(|frame| parser.push(frame).unwrap()).collect::<Vec<_>>();
     assert!(events.iter().any(|event| matches!(event, Event::ToolCall(call) if call.input == parse_json(r#"{"q":"ไทย"}"#).unwrap())));
     assert!(parser.finish().is_ok());
@@ -113,7 +189,7 @@ fn usage_absence_zero_null_refusal_and_errors() {
         let frame = format!(
             r#"{{"type":"message_delta","delta":{{"stop_reason":"refusal"}},"usage":{usage}}}"#
         );
-        let response = parse_response(&request, &[&frame]).unwrap();
+        let response = parse_response(&request, &[&frame, r#"{"type":"message_stop"}"#]).unwrap();
         let usage = response.usage.unwrap();
         assert_eq!(usage.cache_read_input_tokens, expected);
         assert_eq!(usage.input_tokens, expected);
@@ -125,7 +201,10 @@ fn usage_absence_zero_null_refusal_and_errors() {
     }
     let response = parse_response(
         &request,
-        &[r#"{"type":"message_delta","delta":{"stop_reason":"max_tokens"}}"#],
+        &[
+            r#"{"type":"message_delta","delta":{"stop_reason":"max_tokens"}}"#,
+            r#"{"type":"message_stop"}"#,
+        ],
     )
     .unwrap();
     assert!(response.usage.is_none());
@@ -172,6 +251,7 @@ fn usage_null_delta_retains_ttl_breakdown() {
     let response=parse_response(&request,&[
         r#"{"type":"message_start","message":{"usage":{"input_tokens":5,"cache_read_input_tokens":2,"cache_creation":{"ephemeral_5m_input_tokens":3}}}}"#,
         r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"cache_read_input_tokens":null,"cache_creation":null}}"#,
+        r#"{"type":"message_stop"}"#,
     ]).unwrap();
     let usage = response.usage.unwrap();
     assert_eq!(usage.cache_read_input_tokens, Some(2.0));
@@ -209,6 +289,7 @@ fn server_tool_roundtrip_and_unknown_name() {
         r#"{"type":"content_block_stop","index":0}"#,
         r#"{"type":"content_block_start","index":1,"content_block":{"type":"web_search_tool_result","tool_use_id":"search","content":{"type":"web_search_tool_result_error","error_code":"max_uses_exceeded"}}}"#,
         r#"{"type":"message_delta","delta":{"stop_reason":"pause_turn"}}"#,
+        r#"{"type":"message_stop"}"#,
     ]).unwrap();
     assert_eq!(response.finish_reason, ycoding_ai::llm::FinishReason::Stop);
     request.messages.push(response.message);
@@ -239,6 +320,7 @@ fn lossless_provider_strings_and_js_key_order() {
         &[
             r#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"\ud800"}}"#,
             r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#,
+            r#"{"type":"message_stop"}"#,
         ],
     )
     .unwrap();
@@ -258,6 +340,7 @@ fn tool_partial_json_preserves_literal_lone_surrogates() {
         r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"}"}}"#,
         r#"{"type":"content_block_stop","index":0}"#,
         r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#,
+        r#"{"type":"message_stop"}"#,
     ]).unwrap();
     assert!(response.events.iter().any(|event|matches!(event,Event::ToolCall(call) if call.input==parse_json(r#"{"value":"\ud800"}"#).unwrap())));
 }

@@ -466,6 +466,25 @@ async fn runpod_missing_job_id_and_invalid_json_do_not_resubmit() {
 }
 
 #[tokio::test]
+async fn provider_recovery_runpod_truncated_json_is_a_read_failure() {
+    for mut replies in [
+        vec![],
+        vec![(200, r#"{"status":"IN_PROGRESS","id":"job_1"}"#.into())],
+    ] {
+        replies.push((200, r#"{"status":"COMPLETED","output":{ "#.into()));
+        let expected_requests = replies.len();
+        let (url, task) = server(replies).await;
+        let result = executor()
+            .generate(&runpod_request(Worker::Ollama, url))
+            .await;
+        assert_eq!(task.await.unwrap().len(), expected_requests);
+        let error = result.unwrap_err();
+        assert_eq!(error.reason, Reason::Transport);
+        assert_eq!(error.transport_kind, Some("read"));
+    }
+}
+
+#[tokio::test]
 async fn cancelling_an_inflight_poll_drops_the_owned_transport() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/v1", listener.local_addr().unwrap());

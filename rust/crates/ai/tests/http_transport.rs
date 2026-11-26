@@ -111,7 +111,7 @@ async fn actual_request_incremental_stream_and_single_attempt() {
         let (mut socket, _) = listener.accept().await.unwrap();
         captured_tx.send(read_request(&mut socket).await).unwrap();
         let first = "retry: 1000\r\n\r\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ไทย\"}}\r\n\r\n";
-        let last = "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}\n\ndata: [DONE]\n\n";
+        let last = "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}\n\ndata: {\"type\":\"message_stop\"}\n\ndata: [DONE]\n\n";
         socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n",first.len()+last.len()).as_bytes()).await.unwrap();
         for byte in first.bytes() {
             socket.write_all(&[byte]).await.unwrap();

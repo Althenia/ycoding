@@ -259,6 +259,7 @@ async function run(input: {
   pendingGuardrails?: GuardrailInfo[]
   attached?: boolean
   format?: "default" | "json"
+  thinking?: boolean
   close?: boolean
   cancel?: (input: { sessionID: string; formID: string }) => Promise<void>
   renderTool?: (part: SessionMessageAssistantTool) => Promise<void>
@@ -336,7 +337,7 @@ async function run(input: {
     model: input.model,
     variant: input.variant,
     profile: input.profile,
-    thinking: false,
+    thinking: input.thinking ?? false,
     format: input.format ?? "default",
     attached: input.attached ?? false,
     renderTool: input.renderTool ?? (() => Promise.resolve()),
@@ -563,6 +564,38 @@ describe("runNonInteractivePrompt", () => {
     ])
     expect(output.stderr).toBe("")
   })
+
+  for (const outcome of ["success", "failure"] as const) {
+    test(`prints only the settled attempt after a provider retry (${outcome})`, async () => {
+      const ref = { sessionID: "ses_1", assistantMessageID: "msg_assistant" }
+      const envelope = (seq: number) => ({
+        id: `evt_draft_${seq}`,
+        created: seq,
+        durable: { aggregateID: ref.sessionID, seq, version: 1 as const },
+      })
+      const output = await capture({
+        format: "json",
+        thinking: true,
+        turn: (messageID) => [
+          prompted(messageID),
+          stepStarted(),
+          { ...envelope(2), type: "session.reasoning.ended", data: { ...ref, ordinal: 0, text: "Abandoned thought" } },
+          { ...envelope(3), type: "session.text.ended", data: { ...ref, ordinal: 0, text: "Abandoned draft" } },
+          { ...envelope(4), type: "session.retry.scheduled", data: { ...ref, attempt: 2, at: 2004, error: { type: "provider.transport", message: "Connection closed" } } },
+          { ...envelope(5), type: "session.reasoning.ended", data: { ...ref, ordinal: 0, text: "Final thought" } },
+          { ...envelope(6), type: "session.text.ended", data: { ...ref, ordinal: 0, text: "Final text" } },
+          ...(outcome === "success" ? [stepEnded(7), settled()] : [stepFailed("Connection closed"), executionFailed("Connection closed")]),
+        ],
+      })
+      const events = output.stdout.trim().split("\n").map((line) => JSON.parse(line))
+      expect(events.map((event) => event.type)).toEqual([
+        "step_start", "reasoning", "text", outcome === "success" ? "step_finish" : "error", "run_finish",
+      ])
+      expect(events[1].part.text).toBe("Final thought")
+      expect(events[2].part.text).toBe("Final text")
+      expect(events.at(-1)?.status).toBe(outcome === "success" ? "succeeded" : "failed")
+    })
+  }
 
   test("default output emits step_start before an unrelated execution failure", async () => {
     const output = await capture({

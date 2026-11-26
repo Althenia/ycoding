@@ -100,6 +100,7 @@ type Attempt = {
   client: RunClient
   signal: AbortSignal
   generation: number
+  sourceEpoch?: string
 }
 
 type ReplayBuffer = {
@@ -120,6 +121,8 @@ type State = {
   view: FooterView
   messageIDs: Set<string>
   fragments: FragmentReconciler
+  drafts: Map<string, StreamCommit>
+  printed: Map<string, string>
   tools: Map<string, ToolState>
   toolSources: Map<string, SessionMessageAssistantTool>
   finishedTools: Set<string>
@@ -389,6 +392,8 @@ export async function createSessionTransport<Client extends RunClient>(
     view: { type: "prompt" },
     messageIDs: new Set(),
     fragments: createFragmentReconciler(),
+    drafts: new Map(),
+    printed: new Map(),
     tools: new Map(),
     toolSources: new Map(),
     finishedTools: new Set(),
@@ -453,6 +458,54 @@ export async function createSessionTransport<Client extends RunClient>(
       { footer: input.footer, trace: input.trace },
       { commits, updates: patch ? [{ type: "stream.patch", patch }] : undefined },
     )
+    for (const commit of commits) {
+      if (!commit.messageID || !commit.partID || (commit.kind !== "assistant" && commit.kind !== "reasoning")) continue
+      const text = state.fragments.value({ messageID: commit.messageID, partID: commit.partID })
+      if (text !== undefined) state.printed.set(streamPartKey(commit.messageID, commit.partID), text)
+    }
+  }
+
+  const draft = (commit: StreamCommit) => {
+    if (!commit.messageID || !commit.partID) return
+    const key = streamPartKey(commit.messageID, commit.partID)
+    const text = state.fragments.value({ messageID: commit.messageID, partID: commit.partID }) ?? ""
+    state.drafts.set(key, { ...commit, text: commit.kind === "reasoning" ? `Thinking: ${text}` : text })
+  }
+
+  const flushDraft = (messageID: string) => {
+    const commits: StreamCommit[] = []
+    for (const [key, commit] of state.drafts) {
+      if (commit.messageID !== messageID) continue
+      state.drafts.delete(key)
+      const prefix = state.printed.get(key) ?? ""
+      const label = commit.kind === "reasoning" ? "Thinking: " : ""
+      const text = label && commit.text.startsWith(label) ? commit.text.slice(label.length) : commit.text
+      const suffix = text.startsWith(prefix) ? text.slice(prefix.length) : text
+      if (suffix) commits.push({ ...commit, text: prefix ? suffix : `${label}${suffix}` })
+    }
+    if (commits.length) write(commits)
+  }
+
+  const discardDraft = (messageID: string) => {
+    state.fragments.clearMessage(messageID)
+    for (const key of state.printed.keys()) if (key.startsWith(`${messageID}\u0000`)) state.printed.delete(key)
+    for (const [key, commit] of state.drafts) if (commit.messageID === messageID) state.drafts.delete(key)
+    for (const key of state.tools.keys()) {
+      if (!key.startsWith(`${messageID}\u0000`)) continue
+      state.tools.delete(key)
+      state.toolSources.delete(key)
+    }
+  }
+
+  const restoreDraft = (commit: StreamCommit) => {
+    if (!commit.messageID || !commit.partID) return
+    const ref = { messageID: commit.messageID, partID: commit.partID }
+    const text = commit.kind === "reasoning" ? commit.text.replace(/^Thinking: /, "") : commit.text
+    const current = state.fragments.value(ref)
+    if (current === undefined && state.messageIDs.has(commit.messageID)) return
+    if (current !== undefined && !text.startsWith(current)) return
+    state.fragments.restore(ref, text)
+    draft(commit)
   }
 
   const syncBlockers = () => {
@@ -525,7 +578,7 @@ export async function createSessionTransport<Client extends RunClient>(
     }
     if (render && (!current || current.part.state.status === "streaming"))
       write([toolCommit(part, messageID, "start", undefined, input.location?.directory, version)])
-    state.finishedTools.add(key)
+    if (part.time.ran !== undefined) state.finishedTools.add(key)
     state.tools.delete(key)
     if (!sourcePending(key)) state.toolSources.delete(key)
     if (!render) return
@@ -537,7 +590,7 @@ export async function createSessionTransport<Client extends RunClient>(
     ])
   }
 
-  const renderMessage = (message: SessionMessageInfo, render: boolean, reuseVisibleWait: boolean) => {
+  const renderMessage = (message: SessionMessageInfo, render: boolean, reuseVisibleWait: boolean, active: boolean) => {
     if (message.type === "user") {
       const waiting = state.wait?.messageID === message.id
       if (waiting && state.wait) state.wait.promoted = true
@@ -597,33 +650,35 @@ export async function createSessionTransport<Client extends RunClient>(
       if (item.type === "text") {
         const fragment = fragmentRef(message.id, "text", textOrdinal++)
         const update = state.fragments.project(fragment, item.text, render)
-        if (render && item.text.length > update.previous.length)
-          write([
-            {
-              kind: "assistant",
-              source: "assistant",
-              text: item.text.slice(update.previous.length),
-              phase: "progress",
-              messageID: message.id,
-              partID: fragment.partID,
-            },
-          ])
+        if ((render || active && message.time.completed === undefined) && item.text.length > update.previous.length) {
+          const commit: StreamCommit = {
+            kind: "assistant",
+            source: "assistant",
+            text: item.text.slice(update.previous.length),
+            phase: "progress",
+            messageID: message.id,
+            partID: fragment.partID,
+          }
+          if (active && message.time.completed === undefined) draft(commit)
+          else write([commit])
+        }
         continue
       }
       if (item.type === "reasoning") {
         const fragment = fragmentRef(message.id, "reasoning", reasoningOrdinal++)
         const update = state.fragments.project(fragment, item.text, render)
-        if (render && input.thinking && item.text.length > update.previous.length)
-          write([
-            {
-              kind: "reasoning",
-              source: "reasoning",
-              text: update.previous.length === 0 ? `Thinking: ${item.text}` : item.text.slice(update.previous.length),
-              phase: "progress",
-              messageID: message.id,
-              partID: fragment.partID,
-            },
-          ])
+        if ((render || active && message.time.completed === undefined) && input.thinking && item.text.length > update.previous.length) {
+          const commit: StreamCommit = {
+            kind: "reasoning",
+            source: "reasoning",
+            text: update.previous.length === 0 ? `Thinking: ${item.text}` : item.text.slice(update.previous.length),
+            phase: "progress",
+            messageID: message.id,
+            partID: fragment.partID,
+          }
+          if (active && message.time.completed === undefined) draft(commit)
+          else write([commit])
+        }
         continue
       }
       renderTool(message.id, item, render)
@@ -684,8 +739,8 @@ export async function createSessionTransport<Client extends RunClient>(
   ) => {
     const client = attempt.client
     const options = { signal: attempt.signal }
-    const [messages, permissions, forms, globals, active] = await Promise.all([
-      client.message.list({ sessionID: input.sessionID }, options),
+    const [snapshot, permissions, forms, globals, active] = await Promise.all([
+      client.session.snapshot({ sessionID: input.sessionID, limit: 200 }, options),
       client.permission.list({ sessionID: input.sessionID }, options),
       client.form.list({ sessionID: input.sessionID }, options),
       input.location
@@ -699,10 +754,36 @@ export async function createSessionTransport<Client extends RunClient>(
       client.session.active(options),
     ])
     if (!current(attempt)) return
-    const projected = structuredClone(messages).toReversed() as SessionMessageInfo[]
+    if (snapshot.session.id !== input.sessionID || snapshot.watermark.aggregateID !== input.sessionID)
+      throw new Error("The Session snapshot does not belong to the current Session")
+    if (attempt.sourceEpoch && snapshot.sourceEpoch !== attempt.sourceEpoch)
+      throw new Error("The Session snapshot does not belong to the current connection")
+    let older: SessionMessageInfo[] = []
+    if (snapshot.before && snapshot.messages.length) {
+      const messages = await client.message.list({ sessionID: input.sessionID }, options)
+      if (!current(attempt)) return
+      const index = messages.findIndex((message) => message.id === snapshot.messages[0].id)
+      if (index < 0) throw new Error("The Session snapshot history boundary is missing")
+      older = messages.slice(0, index)
+    }
+    const projected = structuredClone([...older, ...snapshot.messages]) as SessionMessageInfo[]
     state.permissions = permissions
     pruneToolSources()
-    for (const message of projected) renderMessage(message, next.render, next.reuseVisibleWait)
+    const drafts = next.render ? [...state.drafts.values()] : []
+    if (next.render) {
+      for (const [key, commit] of state.drafts) {
+        if (commit.messageID && commit.partID) state.fragments.remove({ messageID: commit.messageID, partID: commit.partID })
+        state.drafts.delete(key)
+      }
+    }
+    for (const message of projected) renderMessage(message, next.render, next.reuseVisibleWait, input.sessionID in active)
+    if (input.sessionID in active || next.reconnect !== true) {
+      for (const commit of drafts) {
+        const message = projected.find((item) => item.id === commit.messageID)
+        if (message?.type === "assistant" && (message.retry || message.time.completed !== undefined)) continue
+        restoreDraft(commit)
+      }
+    }
     state.permissions = await resolvePermissionSources(client, permissions, attempt)
     if (!current(attempt)) return
     pruneToolSources()
@@ -731,6 +812,44 @@ export async function createSessionTransport<Client extends RunClient>(
       state.wait = undefined
       current.resolve()
     }
+    return { watermark: snapshot.watermark.seq, messages: snapshot.messages, active: input.sessionID in active }
+  }
+
+  const replayBuffered = (attempt: Attempt, events: RunEvent[], snapshot: Awaited<ReturnType<typeof hydrate>>) => {
+    const watermark = snapshot?.watermark
+    const covered = new Map<string, number>()
+    events.forEach((event, index) => {
+      if (event.type === "session.retry.scheduled" && event.durable.aggregateID === input.sessionID &&
+        watermark !== undefined && event.durable.seq <= watermark) covered.set(event.data.assistantMessageID, index)
+    })
+    events.forEach((event, index) => {
+      if (event.type === "session.retry.scheduled" && event.durable.aggregateID === input.sessionID &&
+        watermark !== undefined && event.durable.seq <= watermark) {
+        const messageID = event.data.assistantMessageID
+        state.fragments.clearMessage(messageID)
+        for (const [key, commit] of state.drafts) if (commit.messageID === messageID) state.drafts.delete(key)
+        const message = snapshot?.messages.find((item) => item.id === messageID)
+        if (message?.type === "assistant") {
+          if (message.retry?.attempt === event.data.attempt)
+            write([], { phase: "running", status: `retry ${event.data.attempt}` })
+          let textOrdinal = 0
+          let reasoningOrdinal = 0
+          for (const part of message.content) {
+            if (part.type !== "text" && part.type !== "reasoning") continue
+            const fragment = fragmentRef(messageID, part.type, part.type === "text" ? textOrdinal++ : reasoningOrdinal++)
+            state.fragments.project(fragment, part.text, true)
+            if (snapshot?.active && message.time.completed === undefined && (part.type === "text" || input.thinking))
+              draft({ kind: part.type === "text" ? "assistant" : "reasoning", source: part.type === "text" ? "assistant" : "reasoning",
+                text: part.text, phase: "progress", messageID, partID: fragment.partID })
+          }
+        }
+        return
+      }
+      if ((event.type === "session.text.delta" || event.type === "session.text.ended" ||
+        event.type === "session.reasoning.delta" || event.type === "session.reasoning.ended") &&
+        event.data.sessionID === input.sessionID && index < (covered.get(event.data.assistantMessageID) ?? -1)) return
+      apply(attempt, event)
+    })
   }
 
   const apply = (attempt: Attempt, event: RunEvent) => {
@@ -779,6 +898,11 @@ export async function createSessionTransport<Client extends RunClient>(
     }
     if (event.type === "session.step.started") {
       write([], { phase: "running", status: "assistant responding" })
+      return
+    }
+    if (event.type === "session.retry.scheduled") {
+      discardDraft(event.data.assistantMessageID)
+      write([], { phase: "running", status: `retry ${event.data.attempt}` })
       return
     }
     if (event.type === "session.skill.activated") {
@@ -837,16 +961,14 @@ export async function createSessionTransport<Client extends RunClient>(
     if (event.type === "session.text.delta") {
       const fragment = fragmentRef(event.data.assistantMessageID, "text", event.data.ordinal)
       if (!state.fragments.delta(fragment, event.data.delta)) return
-      write([
-        {
-          kind: "assistant",
-          source: "assistant",
-          text: event.data.delta,
-          phase: "progress",
-          messageID: event.data.assistantMessageID,
-          partID: fragment.partID,
-        },
-      ])
+      draft({
+        kind: "assistant",
+        source: "assistant",
+        text: event.data.delta,
+        phase: "progress",
+        messageID: event.data.assistantMessageID,
+        partID: fragment.partID,
+      })
       return
     }
     if (event.type === "session.text.ended") {
@@ -854,17 +976,15 @@ export async function createSessionTransport<Client extends RunClient>(
         fragmentRef(event.data.assistantMessageID, "text", event.data.ordinal),
         event.data.text,
       )
-      if (event.data.text.length > update.previous.length)
-        write([
-          {
-            kind: "assistant",
-            source: "assistant",
-            text: event.data.text.slice(update.previous.length),
-            phase: "progress",
-            messageID: event.data.assistantMessageID,
-            partID: update.partID,
-          },
-        ])
+      if (state.drafts.has(update.key) || event.data.text.length > update.previous.length)
+        draft({
+          kind: "assistant",
+          source: "assistant",
+          text: event.data.text.slice(update.previous.length),
+          phase: "progress",
+          messageID: event.data.assistantMessageID,
+          partID: update.partID,
+        })
       return
     }
     if (event.type === "session.reasoning.started") {
@@ -877,16 +997,14 @@ export async function createSessionTransport<Client extends RunClient>(
       )
       if (!update) return
       if (input.thinking)
-        write([
-          {
-            kind: "reasoning",
-            source: "reasoning",
-            text: update.previous ? event.data.delta : `Thinking: ${event.data.delta}`,
-            phase: "progress",
-            messageID: event.data.assistantMessageID,
-            partID: update.partID,
-          },
-        ])
+        draft({
+          kind: "reasoning",
+          source: "reasoning",
+          text: update.previous ? event.data.delta : `Thinking: ${event.data.delta}`,
+          phase: "progress",
+          messageID: event.data.assistantMessageID,
+          partID: update.partID,
+        })
       return
     }
     if (event.type === "session.reasoning.ended") {
@@ -894,17 +1012,15 @@ export async function createSessionTransport<Client extends RunClient>(
         fragmentRef(event.data.assistantMessageID, "reasoning", event.data.ordinal),
         event.data.text,
       )
-      if (input.thinking && event.data.text.length > update.previous.length)
-        write([
-          {
-            kind: "reasoning",
-            source: "reasoning",
-            text: update.previous ? event.data.text.slice(update.previous.length) : `Thinking: ${event.data.text}`,
-            phase: "progress",
-            messageID: event.data.assistantMessageID,
-            partID: update.partID,
-          },
-        ])
+      if (input.thinking && (state.drafts.has(update.key) || event.data.text.length > update.previous.length))
+        draft({
+          kind: "reasoning",
+          source: "reasoning",
+          text: update.previous ? event.data.text.slice(update.previous.length) : `Thinking: ${event.data.text}`,
+          phase: "progress",
+          messageID: event.data.assistantMessageID,
+          partID: update.partID,
+        })
       return
     }
     if (event.type === "session.tool.input.started") {
@@ -1049,6 +1165,7 @@ export async function createSessionTransport<Client extends RunClient>(
       return
     }
     if (event.type === "session.step.ended") {
+      flushDraft(event.data.assistantMessageID)
       const total =
         event.data.tokens.input +
         event.data.tokens.output +
@@ -1062,6 +1179,7 @@ export async function createSessionTransport<Client extends RunClient>(
       return
     }
     if (event.type === "session.step.failed") {
+      flushDraft(event.data.assistantMessageID)
       const rendered = state.errors.has(event.data.assistantMessageID)
       state.errors.add(event.data.assistantMessageID)
       if (state.wait) state.wait.failureRendered = true
@@ -1087,6 +1205,7 @@ export async function createSessionTransport<Client extends RunClient>(
       event.type === "session.execution.failed" ||
       event.type === "session.execution.interrupted"
     ) {
+      for (const messageID of new Set([...state.drafts.values()].flatMap((commit) => commit.messageID ? [commit.messageID] : []))) flushDraft(messageID)
       state.rootActive = false
       write([], { phase: "idle", status: "" })
       const current = state.wait
@@ -1174,12 +1293,13 @@ export async function createSessionTransport<Client extends RunClient>(
         const connection = new AbortController()
         const abortConnection = () => connection.abort()
         controller.signal.addEventListener("abort", abortConnection, { once: true })
-        const attempt = { client, signal: connection.signal, generation: ++generation }
+        const attempt: Attempt = { client, signal: connection.signal, generation: ++generation }
         const stream = client.event.subscribe({ signal: connection.signal })[Symbol.asyncIterator]()
         activeAttempt = attempt
         try {
           const first = await nextEvent(stream, connection.signal)
           if (first.done || first.value.type !== "server.connected") throw new Error("Event stream disconnected")
+          attempt.sourceEpoch = first.value.sourceEpoch
           const buffered: RunEvent[] = []
           let booting = true
           const consume = (async () => {
@@ -1190,7 +1310,7 @@ export async function createSessionTransport<Client extends RunClient>(
               else receive(attempt, next.value)
             }
           })()
-          await Promise.race([
+          const watermark = await Promise.race([
             serializeHydration(attempt, () =>
               hydrate(attempt, {
                 render: state.initial ? input.replay === true : true,
@@ -1204,7 +1324,7 @@ export async function createSessionTransport<Client extends RunClient>(
           if (!current(attempt)) throw new Error("Event stream disconnected")
           state.initial = false
           do {
-            for (const event of buffered.splice(0)) apply(attempt, event)
+            replayBuffered(attempt, buffered.splice(0), watermark)
             await Promise.race([subagents.ready(), consume])
             await Promise.race([settleCatalog(attempt), consume])
           } while (buffered.length > 0)
@@ -1334,9 +1454,11 @@ export async function createSessionTransport<Client extends RunClient>(
   const performResizeReplay = async (attempt: Attempt, next: SessionResizeReplayInput) => {
     if (!input.replay || !state.connected || !current(attempt) || state.closed || input.footer.isClosed) return false
     const localRows = next.localRows()
+    const drafts = [...state.drafts.values()]
     const buffered: RunEvent[] = []
     const replayBuffer = { attempt, events: buffered }
     let failure: unknown
+    let snapshot: Awaited<ReturnType<typeof hydrate>>
     let reset = false
     state.buffered = replayBuffer
     try {
@@ -1347,6 +1469,8 @@ export async function createSessionTransport<Client extends RunClient>(
       reset = true
       state.messageIDs.clear()
       state.fragments.clear()
+      state.drafts.clear()
+      state.printed.clear()
       state.tools.clear()
       state.toolSources.clear()
       state.finishedTools.clear()
@@ -1355,7 +1479,10 @@ export async function createSessionTransport<Client extends RunClient>(
       state.shellStarted.clear()
       state.shellEnded.clear()
       state.errors.clear()
-      await hydrate(attempt, { render: true, reuseVisibleWait: false })
+      for (const commit of drafts) {
+        if (commit.messageID && commit.partID) state.drafts.set(streamPartKey(commit.messageID, commit.partID), commit)
+      }
+      snapshot = await hydrate(attempt, { render: true, reuseVisibleWait: false })
     } catch (error) {
       failure = error
     } finally {
@@ -1364,6 +1491,7 @@ export async function createSessionTransport<Client extends RunClient>(
     if (!current(attempt)) return false
     try {
       if (reset) {
+        if (failure) for (const commit of drafts) restoreDraft(commit)
         for (const row of localRows) {
           if (
             row.commit.messageID &&
@@ -1394,7 +1522,7 @@ export async function createSessionTransport<Client extends RunClient>(
         }
       }
     } finally {
-      for (const event of buffered) apply(attempt, event)
+      replayBuffered(attempt, buffered, snapshot)
     }
     if (reset) await input.footer.idle()
     if (failure) throw failure

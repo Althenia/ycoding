@@ -100,6 +100,7 @@ interface PrepareInput {
   readonly execution?: number
   readonly disableContinuation?: boolean
   readonly terminalResponseRecovery?: boolean
+  readonly toolResultRecovery?: boolean
 }
 
 export const baseSystem = (context: Pick<SessionContext.Loaded, "agent" | "initial">) =>
@@ -169,12 +170,13 @@ const make = <E>(dependencies: Dependencies<E>, options?: SessionModelHeaders.Op
         })
         const stepLimitReached = agent.info.steps !== undefined && input.step >= agent.info.steps
         const terminalResponseRecovery = input.terminalResponseRecovery === true
-        const toolsDisabled = terminalResponseRecovery || stepLimitReached
+        const toolResultRecovery = input.toolResultRecovery === true
+        const toolsDisabled = terminalResponseRecovery || toolResultRecovery || stepLimitReached
         const mode = yield* DecisionChoice.decisionMode(dependencies.autonomy, session.id, "permissions")
         const basePermissions = SessionContext.toolPermissions(agent.info, session.permissionCeiling ?? [], mode)
         const access = yield* coordination.accessOf(session.id)
         const permissions = [...basePermissions, ...CoordinationAccess.visibility(access?.role, (yield* coordination.scopeOf(session.id)) !== undefined)]
-        const executableTools = toolsDisabled && !retainsDisabledToolDefinitions(model)
+        const executableTools = toolResultRecovery || (toolsDisabled && !retainsDisabledToolDefinitions(model))
           ? undefined
           : yield* dependencies.materialize(permissions, Config.capabilities(configEntries), resolved)
         const system = baseSystem(input.context)
@@ -483,7 +485,7 @@ const make = <E>(dependencies: Dependencies<E>, options?: SessionModelHeaders.Op
           continuationMode !== "off" &&
           responsesState === "stored" &&
           OpenAIOptions.store(effectiveRequest) === true &&
-          !terminalResponseRecovery
+          !terminalResponseRecovery && !toolResultRecovery
         const state =
           !eligible || input.disableContinuation === true
             ? undefined
@@ -551,7 +553,9 @@ const make = <E>(dependencies: Dependencies<E>, options?: SessionModelHeaders.Op
                 type: "tool.execution",
                 message: terminalResponseRecovery
                   ? "Tools are disabled for terminal response recovery"
-                  : "Tools are disabled after the maximum agent steps",
+                  : toolResultRecovery
+                    ? "Tools are disabled while recovering from an interrupted tool response"
+                    : "Tools are disabled after the maximum agent steps",
               },
             }
           if (toolsByName.has(name) && !Object.hasOwn(contextEvent.tools, name))
@@ -567,7 +571,7 @@ const make = <E>(dependencies: Dependencies<E>, options?: SessionModelHeaders.Op
           inputIDs,
           continuation: {
             fingerprint: continuationFingerprint,
-            eligible: terminalResponseRecovery ? false : eligible,
+            eligible,
             used: state !== undefined,
             representedThroughMessageID,
             representedMessageCount,

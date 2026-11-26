@@ -63,4 +63,7 @@ impl Protocol for VertexMessages {
     fn parser(&self, request: &Request) -> Box<dyn StreamParser> {
         Box::new(AnthropicMessages::parser(request))
     }
+    fn terminal(&self, event: &JsonValue) -> bool {
+        AnthropicMessages.terminal(event)
+    }
 }
