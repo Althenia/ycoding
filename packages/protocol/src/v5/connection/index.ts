@@ -24,6 +24,10 @@ import {
   ResyncRequiredSchema,
   ScopeSchema,
   WireLimit,
+  Settlement,
+  ResultSchema,
+  Connector_ErrorSchema,
+  Connector_Error_code,
 } from "../../generated/v5/index.js"
 import type {
   Frame,
@@ -32,7 +36,6 @@ import type {
   TypedPayload,
   Request,
   Result,
-  Settlement,
   BulkStart,
   BulkPiece,
   EventBatch,
@@ -40,7 +43,16 @@ import type {
   AssetMetadataResult,
   SubscriptionSnapshot,
 } from "../../generated/v5/index.js"
-import { boundedControl, validateBinary } from "../validate.js"
+import {
+  boundedControl,
+  contractVersionMismatch,
+  decodeCompatible,
+  encodeLossless,
+  encodeStrict,
+  UnsupportedVariant,
+  validateBinary,
+  validateCompatible,
+} from "../validate.js"
 import { validateAssetMetadata } from "../asset.js"
 import { defaultBudgets, ReservationBudget } from "./budgets.js"
 import type { Budgets, ConfigurableBudgets } from "./budgets.js"
@@ -68,7 +80,7 @@ export type Options = {
 
 export type Decision =
   | { type: "ready"; epoch: string; sourceEpoch: string }
-  | { type: "closed"; code: number; category: FailureCategory }
+  | { type: "closed"; code: number; category: FailureCategory; reason?: string }
   | { type: "control"; frame: Frame }
   | { type: "dropped"; reason: "late" | "duplicate" | "unknown" }
   | { type: "dispatch"; requestID: string; request: Request; operation: OperationDescriptor; ordinal: bigint }
@@ -761,13 +773,16 @@ export class Connection {
     if (this.phase === "closed") return decisions
     if (this.phase === "established" || this.phase === "confirm") return this.established(token, frame, now)
     this.releaseIncoming(token)
-    if (frame.revision !== 5) return this.close(FailureCategory.INCOMPATIBLE)
+    if (frame.revision !== Number(WireLimit.REVISION))
+      return this.close(FailureCategory.INCOMPATIBLE, undefined, contractVersionMismatch(frame.revision))
     if (frame.body.case !== "hello" && frame.body.case !== "ready") return this.close(FailureCategory.MALFORMED)
     if (["ledger", "deliveryOrdinal", "tinyConsumedThrough"].some((name) => has(frame, name)))
       return this.close(FailureCategory.MALFORMED)
     if (token.byteLength > this.budgets.handshakeBytes) return this.close(FailureCategory.LIMIT)
     const body = frame.body.value
-    if (body.revision !== 5 || hex(body.contractDigest) !== CONTRACT_DIGEST || body.role !== this.options.peer)
+    if (body.revision !== Number(WireLimit.REVISION))
+      return this.close(FailureCategory.INCOMPATIBLE, undefined, contractVersionMismatch(body.revision))
+    if (body.role !== this.options.peer || body.contractDigest.length !== 32)
       return this.close(FailureCategory.INCOMPATIBLE)
     if (!body.receiveWindows || !this.validWindows(body.receiveWindows)) return this.close(FailureCategory.LIMIT)
     for (const entry of [
@@ -810,6 +825,7 @@ export class Connection {
       })
       this.phase = "confirm"
       this.deadline = now + this.budgets.handshakeTimeoutMs
+      logDigestMismatch(body.contractDigest)
       return []
     }
     if (
@@ -824,6 +840,7 @@ export class Connection {
     this.sourceEpoch = frame.body.value.sourceEpoch
     this.phase = "established"
     this.deadline = Infinity
+    logDigestMismatch(body.contractDigest)
     const generated = this.ping(now)
     return [...generated, { type: "ready", epoch: this.epoch, sourceEpoch: this.sourceEpoch }]
   }
@@ -963,6 +980,7 @@ export class Connection {
     now: number,
     background = false,
     flow = false,
+    unsupported = false,
   ): Decision[] {
     const decisions = this.check(now)
     if (this.phase === "closed") return decisions
@@ -993,9 +1011,10 @@ export class Connection {
     }
     if (body.case === "result") {
       const pending = this.inbound.get(body.value.requestId)
-      if (!pending || !this.validResult(body.value, pending.operation)) return this.close(FailureCategory.MALFORMED)
+      if (!unsupported && (!pending || !this.validResult(body.value, pending.operation)))
+        return this.close(FailureCategory.MALFORMED)
       if (
-        (body.value.outcome.case === "assetMetadata" && pending.assetCount !== undefined) ||
+        (body.value.outcome.case === "assetMetadata" && pending?.assetCount !== undefined) ||
         this.queue.some(
           (record) => record.frame.body.case === "result" && record.frame.body.value.requestId === body.value.requestId,
         ) ||
@@ -1272,8 +1291,8 @@ export class Connection {
     }
     if (token.frame.body.case === "request") this.pending.get(token.frame.body.value.requestId)!.transmitted = true
     if (token.frame.body.case === "result") {
-      const pending = this.inbound.get(token.frame.body.value.requestId)!
-      if (pending.operation.streaming === Streaming.EVENTS && token.frame.body.value.outcome.case === "success")
+      const pending = this.inbound.get(token.frame.body.value.requestId)
+      if (pending?.operation.streaming === Streaming.EVENTS && token.frame.body.value.outcome.case === "success")
         this.awaitingSubscription.set(`sent:${token.frame.body.value.requestId}`, pending)
       if (token.frame.body.value.outcome.case !== "assetMetadata") this.inbound.delete(token.frame.body.value.requestId)
     }
@@ -1319,7 +1338,7 @@ export class Connection {
     return []
   }
 
-  close(category: FailureCategory = FailureCategory.EPOCH, closeCode?: number): Decision[] {
+  close(category: FailureCategory = FailureCategory.EPOCH, closeCode?: number, reason?: string): Decision[] {
     if (this.phase === "closed") return []
     const code = closeCode ?? (this.phase === "established" ? 1002 : 1008)
     const forwarded = [
@@ -1362,7 +1381,12 @@ export class Connection {
     this.subscriptions.forEach((subscription) => this.clearHydration(subscription))
     this.subscriptions.clear()
     this.sendingSubscriptions.clear()
-    return [...httpReleased, ...forwarded, ...settled, { type: "closed", code, category }]
+    return [
+      ...httpReleased,
+      ...forwarded,
+      ...settled,
+      { type: "closed", code, category, ...(reason ? { reason } : {}) },
+    ]
   }
 
   takeDecisions() {
@@ -1466,17 +1490,25 @@ export class Connection {
       const operation = this.options.operations.find((operation) => operation.operationId === request.operationId)
       if (
         !request.requestId ||
-        !operation ||
-        !this.validRequest(operation, request.scope, request.payload, this.options.peer)
+        !request.operationId ||
+        !request.scope ||
+        request.payload.length > this.budgets.inlineBytes ||
+        this.inbound.has(request.requestId)
       )
         return this.close(FailureCategory.MALFORMED)
-      if (this.inbound.has(request.requestId)) return this.close(FailureCategory.MALFORMED)
       if (
         this.inbound.size + [...this.awaitingSubscription.keys()].filter((key) => key.startsWith("sent:")).length >=
         this.budgets.pendingRequests
       )
         return this.close(FailureCategory.LIMIT)
-      this.inbound.set(request.requestId, { operation, scope: request.scope!, transmitted: true })
+      if (!operation || (this.remote && !request.scope.target.case))
+        return this.remote
+          ? this.rejectUnsupported(request, frame.deliveryOrdinal, now)
+          : this.close(FailureCategory.MALFORMED)
+      const validity = this.requestValidity(operation, request.scope, request.payload, this.options.peer)
+      if (validity === "unsupported") return this.rejectUnsupported(request, frame.deliveryOrdinal, now)
+      if (!validity) return this.close(FailureCategory.MALFORMED)
+      this.inbound.set(request.requestId, { operation, scope: request.scope, transmitted: true })
       return [{ type: "dispatch", requestID: request.requestId, request, operation, ordinal: frame.deliveryOrdinal }]
     }
     if (frame.body.case === "result") {
@@ -1524,7 +1556,7 @@ export class Connection {
           type: "settled",
           requestID: result.requestId,
           status: result.outcome.case === "success" ? "success" : "rejected",
-          settlement: pending.operation.settlement,
+          settlement: result.settlement,
           payload: result.outcome.value,
         },
       ]
@@ -1652,6 +1684,19 @@ export class Connection {
   }
 
   private validRequest(operation: OperationDescriptor, scope: Scope | undefined, payload: Uint8Array, role: PeerRole) {
+    return this.requestValidity(operation, scope, payload, role) === true
+  }
+
+  private get remote() {
+    return this.options.role === PeerRole.RELAY || this.options.peer === PeerRole.RELAY
+  }
+
+  private requestValidity(
+    operation: OperationDescriptor,
+    scope: Scope | undefined,
+    payload: Uint8Array,
+    role: PeerRole,
+  ) {
     const expected = scope?.target.case?.replace(/[A-Z]/g, (letter) => `_${letter}`).toUpperCase()
     if (
       !scope ||
@@ -1662,7 +1707,49 @@ export class Connection {
       payload.length > this.budgets.inlineBytes
     )
       return false
-    return validPayload(operation.requestType, payload)
+    try {
+      ;(this.remote ? validateCompatible : validateBinary)(operation.requestType, payload)
+      return true
+    } catch (error) {
+      return error instanceof UnsupportedVariant ? "unsupported" : false
+    }
+  }
+
+  private rejectUnsupported(request: Request, ordinal: bigint, now: number): Decision[] {
+    const body = {
+      case: "result",
+      value: create(ResultSchema, {
+        requestId: request.requestId,
+        operationId: request.operationId,
+        settlement: Settlement.COMPLETED,
+        outcome: {
+          case: "error",
+          value: create(TypedPayloadSchema, {
+            typeName: Connector_ErrorSchema.typeName,
+            payload: encodeStrict(
+              Connector_ErrorSchema,
+              create(Connector_ErrorSchema, {
+                code: Connector_Error_code.CONNECTOR_ERROR_CODE_UNKNOWN_OPERATION,
+                message: encodeLossless("Unsupported operation or request variant"),
+              }),
+            ),
+          }),
+        },
+      }),
+    } as const
+    const consumed = this.consume(LedgerClass.NORMAL, ordinal, now)
+    const bytes = encodeStrict(
+      FrameSchema,
+      create(FrameSchema, {
+        revision: WireLimit.REVISION,
+        connectionEpoch: this.epoch,
+        ledger: LedgerClass.NORMAL,
+        deliveryOrdinal: (1n << 64n) - 1n,
+        tinyConsumedThrough: (1n << 64n) - 1n,
+        body,
+      }),
+    ).length
+    return [...consumed, ...this.queueFrame(body, bytes, now, false, false, true)]
   }
 
   private clearHydration(subscription: Subscription) {
@@ -1737,7 +1824,7 @@ export class Connection {
         !!record.event &&
         this.options.eventTypes.includes(record.event.typeName) &&
         (!subscription || subscription.eventTypes.includes(record.event.typeName)) &&
-        validPayload(record.event.typeName, record.event.payload),
+        validPayload(record.event.typeName, record.event.payload, this.remote),
     )
   }
 
@@ -1887,7 +1974,7 @@ export class Connection {
     if (
       end.outcome.case === "error" &&
       (!pending.operation.errorTypes.includes(end.outcome.value.typeName) ||
-        !validPayload(end.outcome.value.typeName, end.outcome.value.payload))
+        !validPayload(end.outcome.value.typeName, end.outcome.value.payload, this.remote))
     )
       return this.close(FailureCategory.MALFORMED)
     if (end.outcome.case !== "success" && end.outcome.case !== "error") return this.close(FailureCategory.MALFORMED)
@@ -1895,7 +1982,7 @@ export class Connection {
       end.outcome.case === "success" &&
       transfer.start.contentKind === ContentKind.TYPED_MESSAGE &&
       transfer.data &&
-      !validPayload(transfer.start.typeName, transfer.data)
+      !validPayload(transfer.start.typeName, transfer.data, this.remote)
     )
       return this.close(FailureCategory.MALFORMED)
     if (transfer.data && transfer.start.contentKind === ContentKind.ASSET && !transfer.metadata?.metadata)
@@ -1941,11 +2028,18 @@ export class Connection {
   }
 
   private validResult(result: Result, operation: OperationDescriptor) {
-    if (result.operationId !== operation.operationId || result.settlement !== operation.settlement) return false
+    if (result.operationId !== operation.operationId) return false
+    if (this.remote && unsupportedResult(result)) return true
+    if (result.settlement !== operation.settlement) return false
     if (result.outcome.case === "assetMetadata") {
       if (operation.streaming !== Streaming.ASSET_BULK) return false
       try {
-        validateAssetMetadata(result.outcome.value, operation.resultType, this.options.role === PeerRole.RELAY)
+        validateAssetMetadata(
+          result.outcome.value,
+          operation.resultType,
+          this.options.role === PeerRole.RELAY,
+          this.remote,
+        )
         return true
       } catch {
         return false
@@ -1963,7 +2057,7 @@ export class Connection {
         : result.outcome.case !== "error" || !operation.errorTypes.includes(payload.typeName))
     )
       return false
-    return validPayload(payload.typeName, payload.payload)
+    return validPayload(payload.typeName, payload.payload, this.remote)
   }
 
   private removeQueued(predicate: (frame: Frame) => boolean) {
@@ -2230,6 +2324,29 @@ function hex(bytes: Uint8Array) {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
 }
 
+function logDigestMismatch(digest: Uint8Array) {
+  const peerDigest = hex(digest)
+  if (peerDigest !== CONTRACT_DIGEST)
+    console.warn("Contract digest differs", { localDigest: CONTRACT_DIGEST, peerDigest })
+}
+
+function unsupportedResult(result: Result) {
+  if (
+    result.settlement !== Settlement.COMPLETED ||
+    result.outcome.case !== "error" ||
+    result.outcome.value.typeName !== Connector_ErrorSchema.typeName
+  )
+    return false
+  try {
+    return (
+      decodeCompatible(Connector_ErrorSchema, result.outcome.value.payload).code ===
+      Connector_Error_code.CONNECTOR_ERROR_CODE_UNKNOWN_OPERATION
+    )
+  } catch {
+    return false
+  }
+}
+
 function has(frame: Frame, name: string) {
   return isFieldSet(frame, FrameSchema.fields.find((field) => field.localName === name)!)
 }
@@ -2257,9 +2374,9 @@ function streamKey(frame: Frame) {
   return ""
 }
 
-function validPayload(name: string, payload: Uint8Array) {
+function validPayload(name: string, payload: Uint8Array, compatible = false) {
   try {
-    validateBinary(name, payload)
+    ;(compatible ? validateCompatible : validateBinary)(name, payload)
     return true
   } catch {
     return false

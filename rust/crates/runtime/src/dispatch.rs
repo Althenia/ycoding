@@ -9,7 +9,7 @@ use std::{
 use ycoding_core::ycoding_schema::{
     DomainDecode, DomainEncode, JsonValue, LosslessString, session,
 };
-use ycoding_protocol::{Asset, AssetMetadata, decode_strict, limits, v5};
+use ycoding_protocol::{Asset, AssetMetadata, decode_compatible, decode_strict, limits, v5};
 
 pub type Boxed<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 type Authorizer = Arc<dyn Fn(&Environment, &v5::Request) -> Result<(), Failure> + Send + Sync>;
@@ -501,7 +501,12 @@ impl Dispatcher {
         entry.handler = Some(Arc::new(move |invocation, payload| {
             let handler = handler.clone();
             Box::pin(async move {
-                let query = decode_strict::<Q>(&payload)
+                let decode = if invocation.remote && invocation.mcp.is_none() {
+                    decode_compatible::<Q>
+                } else {
+                    decode_strict::<Q>
+                };
+                let query = decode(&payload)
                     .map_err(|_| Failure::Invalid("malformed request payload".into()))?;
                 handler(invocation, query)
                     .await
@@ -536,7 +541,12 @@ impl Dispatcher {
         entry.handler = Some(Arc::new(move |invocation, payload| {
             let handler = handler.clone();
             Box::pin(async move {
-                let query = decode_strict::<Q>(&payload)
+                let decode = if invocation.remote && invocation.mcp.is_none() {
+                    decode_compatible::<Q>
+                } else {
+                    decode_strict::<Q>
+                };
+                let query = decode(&payload)
                     .map_err(|_| Failure::Invalid("malformed request payload".into()))?;
                 let asset = handler(invocation, query).await?;
                 let (metadata, bytes) = asset
@@ -633,7 +643,12 @@ impl Dispatcher {
                 .as_ref()
                 .is_none_or(|access| access.authorized(&connection_id, peer))
         {
-            ycoding_protocol::validate_binary(&entry.descriptor.request_type, &request.payload)
+            let validate = if mcp.is_none() {
+                ycoding_protocol::validate_compatible
+            } else {
+                ycoding_protocol::validate_binary
+            };
+            validate(&entry.descriptor.request_type, &request.payload)
                 .map_err(|_| Failure::Invalid("Invalid remote payload".into()))
                 .and_then(|_| {
                     crate::connector::operations::authorize(

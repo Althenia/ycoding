@@ -31,6 +31,7 @@ export async function harness(
     noticeStorage?: NoticeStorage
     quota?: RelayDeps["quota"]
     start?: number
+    operations?: Options["operations"]
   } = {},
 ) {
   let now = options.start ?? 0
@@ -88,7 +89,7 @@ export async function harness(
     const peer = new Connection({
       role: role === "agent" ? PeerRole.AGENT : PeerRole.REMOTE_CLIENT,
       peer: PeerRole.RELAY,
-      operations,
+      operations: options.operations ?? operations,
       eventTypes: remoteEventTypes,
       now,
       budgets,

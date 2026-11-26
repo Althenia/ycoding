@@ -209,14 +209,14 @@ pub(crate) async fn run(
         if let Some(close) = driver.close.take() {
             tracing::debug!(
                 code = close.code,
-                reason = close.reason(),
+                reason = %close.reason(),
                 "closing v5 connection"
             );
             send(
                 &mut socket,
                 ws::Message::Close(Some(ws::CloseFrame {
                     code: close.code,
-                    reason: close.reason().into(),
+                    reason: close.reason().as_ref().into(),
                 })),
                 delivery_timeout,
             )

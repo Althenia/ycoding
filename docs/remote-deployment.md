@@ -69,6 +69,8 @@ The relay accepts JSON at `/ws/v4/client` and `/ws/v4/agent` and binary protobuf
 
 Deploy the Worker and both Web editions from the same release. Open `/remote` for a Bun device using v4 and `/remote/rust` for a Rust device using v5. If you roll a device back to Bun, reopen that device in the Bun edition. Wait for active Sessions to finish before restarting the local service on either runtime. The relay deployment does not change local stores or require reenrollment.
 
+The v5 relay and native client can ship independently when their contract revisions match and changes within the revision are additive. A digest warning identifies the local and peer schemas without interrupting the connection. A close reason naming two versions means the peers cannot exchange requests. Record the active Worker version before deploying, then verify that an installed device reaches `On` in `ycoding api remote.get` and that a client built from the deployed revision connects. Roll back to the recorded Worker version if either check fails. A Worker rollback does not reverse database migrations.
+
 ### Notification protocol cutover
 
 Deploy the Worker and web assets together. Save unsent drafts and reload every open remote tab and installed web app before using remote controls or notifications after the deployment. A new service worker does not replace JavaScript already running in a page. Notification ownership requires the current client and its `notice.present` frame; unsupported clients can reject that frame and reconnect until reloaded. There is no old-client compatibility path. Browser sign-in and enrolled device credentials remain valid.

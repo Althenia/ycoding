@@ -6,7 +6,7 @@ import {
   PeerRole,
   WireLimit,
   operations,
-  decodeStrict,
+  decodeCompatible,
   encodeStrict,
 } from "@ycoding-ai/protocol/v5"
 import type { Frame } from "@ycoding-ai/protocol/v5"
@@ -60,7 +60,7 @@ export function receiveBinary(
   if (!token) return { decisions: connection.takeDecisions() }
   if (!connection.reservation.reserve(data.byteLength)) return { decisions: connection.close(FailureCategory.LIMIT) }
   try {
-    const frame = decodeStrict(FrameSchema, new Uint8Array(data))
+    const frame = decodeCompatible(FrameSchema, new Uint8Array(data))
     return { frame, decisions: connection.acceptIncoming(token, frame, now) }
   } catch {
     return { decisions: connection.rejectIncoming(token) }

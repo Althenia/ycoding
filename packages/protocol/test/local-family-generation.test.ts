@@ -8,7 +8,7 @@ import { receive } from "./connection-fixtures.js"
 const root = path.resolve(import.meta.dir, "../../..")
 const previousDigest = "03ed82fc9cc1926cab3a2a448f0d45c96fb514cf0fd00880e846f2fea19b6054"
 
-test("M7 digest hashes sorted canonical files and rejects the prior role contract", async () => {
+test("M7 digest hashes sorted canonical files without gating the handshake", async () => {
   const source = path.join(root, "protocol/ycoding/v5")
   const digest = new Bun.CryptoHasher("sha256")
   for (const file of (await readdir(source)).filter((file) => file.endsWith(".proto")).sort()) {
@@ -38,7 +38,8 @@ test("M7 digest hashes sorted canonical files and rejects the prior role contrac
   if (hello.body.case !== "hello") throw new Error("Hello missing")
   hello.body.value.contractDigest = new Uint8Array(Buffer.from(previousDigest, "hex"))
   const decisions = receive(server, hello)
-  expect(decisions).toContainEqual(expect.objectContaining({ type: "closed", code: 1008 }))
+  expect(decisions).toEqual([])
+  expect(server.prepareHandoff()?.frame.body.case).toBe("ready")
   expect(decisions.some((decision) => decision.type === "dispatch")).toBe(false)
 })
 

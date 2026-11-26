@@ -7,10 +7,14 @@ import {
   ScopeSchema,
   schemas,
   encodeStrict,
-  decodeStrict,
+  decodeCompatible,
+  Connector_ErrorSchema,
+  Connector_Error_code,
 } from "@ycoding-ai/protocol/v5"
 import type { TypedPayload, Scope } from "@ycoding-ai/protocol/v5"
 import { remoteDescriptors, remoteEventTypes } from "./binary"
+
+export { Connector_ErrorSchema }
 
 export type RemoteConnectionOptions = Pick<Options, "now" | "budgets" | "reservation">
 export type RemotePayload = Parameters<typeof encodeStrict>[1]
@@ -57,20 +61,24 @@ export function decodeRemoteResult<T extends (typeof schemas)[number]>(
   operation: string,
   payload: TypedPayload,
   schema: T,
-): ReturnType<typeof decodeStrict<T>>
+): ReturnType<typeof decodeCompatible<T>>
 export function decodeRemoteResult(operation: string, payload: TypedPayload): RemotePayload
 export function decodeRemoteResult(operation: string, payload: TypedPayload, schema?: (typeof schemas)[number]) {
   const codec = remotePayloadCodecs.get(operation)
   if (!codec) throw new Error("Unknown remote operation")
   const selected = payload.typeName === codec.result.schema.typeName ? codec.result : codec.errors.get(payload.typeName)
+  if (!selected && payload.typeName === Connector_ErrorSchema.typeName && (!schema || schema.typeName === payload.typeName)) {
+    const error = decodeCompatible(Connector_ErrorSchema, payload.payload)
+    if (error.code === Connector_Error_code.CONNECTOR_ERROR_CODE_UNKNOWN_OPERATION) return error
+  }
   if (!selected || (schema && schema.typeName !== payload.typeName))
     throw new Error("Remote result type does not match its operation")
-  return decodeStrict(schema ?? selected.schema, payload.payload)
+  return decodeCompatible(schema ?? selected.schema, payload.payload)
 }
 
 export function decodeRemoteEvent(payload: TypedPayload) {
-  if (payload.typeName === PublicEventSchema.typeName) return decodeStrict(PublicEventSchema, payload.payload)
-  if (payload.typeName === SessionLogItemSchema.typeName) return decodeStrict(SessionLogItemSchema, payload.payload)
+  if (payload.typeName === PublicEventSchema.typeName) return decodeCompatible(PublicEventSchema, payload.payload)
+  if (payload.typeName === SessionLogItemSchema.typeName) return decodeCompatible(SessionLogItemSchema, payload.payload)
   throw new Error("Unknown remote event type")
 }
 
@@ -79,7 +87,7 @@ export function encodeRemoteScope(scope: Scope) {
 }
 
 export function decodeRemoteScope(bytes: Uint8Array) {
-  return decodeStrict(ScopeSchema, bytes)
+  return decodeCompatible(ScopeSchema, bytes)
 }
 
 const requestContextType = "ycoding.v5.McpEvents_RequestContext"
@@ -110,7 +118,7 @@ function payloadCodec(typeName: string) {
       return encodeStrict(schema, message)
     },
     decode(bytes: Uint8Array) {
-      return decodeStrict(schema, bytes)
+      return decodeCompatible(schema, bytes)
     },
   }
 }

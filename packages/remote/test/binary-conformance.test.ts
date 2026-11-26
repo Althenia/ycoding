@@ -258,16 +258,10 @@ test("handshake establishes epochs and rejects repeated/stale/missing/wrong-dire
 })
 const awaitBytes = { hello: await vector("hello"), request: await vector("request") }
 
-test("handshake rejects digest/revision/window mismatch and enforces both 5-second deadlines", async () => {
+test("handshake accepts the existing Hello vector and digest skew but rejects invalid revisions or windows", async () => {
   for (const mutate of [
     (frame: ReturnType<typeof create<typeof FrameSchema>>) => {
       frame.revision = 6
-    },
-    (frame: ReturnType<typeof create<typeof FrameSchema>>) => {
-      if (frame.body.case !== "hello") throw new Error("fixture")
-      const byte = frame.body.value.contractDigest[0]
-      if (byte === undefined) throw new Error("missing fixture digest")
-      frame.body.value.contractDigest[0] = byte ^ 1
     },
     (frame: ReturnType<typeof create<typeof FrameSchema>>) => {
       if (frame.body.case !== "hello" || !frame.body.value.receiveWindows) throw new Error("fixture")
@@ -280,6 +274,10 @@ test("handshake rejects digest/revision/window mismatch and enforces both 5-seco
   }
   const state = new WireConnection()
   state.observe(await vector("hello"), PeerRole.LOCAL_CLIENT, 0)
+  const skew = decodeStrict(FrameSchema, await vector("hello"))
+  if (skew.body.case !== "hello") throw new Error("Expected Hello")
+  skew.body.value.contractDigest[0]! ^= 1
+  expect(new WireConnection().observe(toBinary(FrameSchema, skew), PeerRole.LOCAL_CLIENT, 0).body.case).toBe("hello")
   const ready = await vector("ready")
   expect(() => state.observe(ready, PeerRole.SERVER, 5000)).toThrow("handshake timeout")
   const confirm = new WireConnection()

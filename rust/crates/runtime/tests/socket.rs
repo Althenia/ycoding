@@ -373,10 +373,6 @@ async fn handshake_mismatches_close_before_ready_without_dispatch() {
                 frame(None, hello(6, digest(), v5::PeerRole::LocalClient)),
             ),
             (
-                "digest",
-                frame(None, hello(5, wrong_digest, v5::PeerRole::LocalClient)),
-            ),
-            (
                 "role",
                 frame(None, hello(5, digest(), v5::PeerRole::RemoteClient)),
             ),
@@ -416,7 +412,10 @@ async fn handshake_mismatches_close_before_ready_without_dispatch() {
         }
         let mut valid = Socket::connect(server.address(), &[]).await.unwrap();
         valid
-            .send_binary(&frame(None, hello(5, digest(), v5::PeerRole::LocalClient)))
+            .send_binary(&frame(
+                None,
+                hello(5, wrong_digest, v5::PeerRole::LocalClient),
+            ))
             .await;
         let Received::Binary(ready) = valid.receive().await else {
             panic!("expected Ready");

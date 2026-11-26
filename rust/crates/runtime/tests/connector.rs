@@ -721,17 +721,17 @@ async fn outbound_connector_authenticates_negotiates_and_dispatches_without_a_lo
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn revision_and_digest_rejections_are_terminal_without_a_legacy_fallback() {
-    for (revision, corrupt) in [(4, false), (5, true)] {
+async fn remote_version_gate_rejects_wrong_ready_revision_but_accepts_digest_skew() {
+    for (revision, corrupt, expected) in [(4, false, State::Error), (5, true, State::On)] {
         let mut relay = Relay::start(revision, corrupt, Budgets::default()).await;
         let access = access(&relay, None);
         let (control, connector, saved) = setup(test_dispatcher(), access.clone()).await;
         let opening = relay.opening().await;
-        wait_state(&control, State::Error).await;
-        relay.closed(opening.generation).await;
+        wait_state(&control, expected).await;
         assert_eq!(access.calls.load(Ordering::Acquire), 1);
         assert!(saved.load(Ordering::Acquire));
         connector.shutdown().await.unwrap();
+        relay.closed(opening.generation).await;
         relay.shutdown().await;
     }
 }

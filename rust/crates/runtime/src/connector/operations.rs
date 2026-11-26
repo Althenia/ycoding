@@ -8,7 +8,7 @@ use ycoding_core::{
     remote::{CredentialState, EnrollError, Enrollment, Summary},
     ycoding_schema::session,
 };
-use ycoding_protocol::{decode_strict, v5};
+use ycoding_protocol::{decode_compatible, v5};
 
 pub fn register(dispatcher: &mut Dispatcher) -> Result<(), RegistrationError> {
     dispatcher.handle("remote.get", get)?;
@@ -27,33 +27,35 @@ pub(crate) fn authorize(
     request: &v5::Request,
 ) -> Result<(), Failure> {
     let caller_location = match descriptor.diagnostic_name.as_str() {
-        "project.current" => decode_strict::<v5::ProjectCurrentRequest>(&request.payload)
+        "project.current" => decode_compatible::<v5::ProjectCurrentRequest>(&request.payload)
             .map_err(|_| Failure::Invalid("Invalid Project identity read".into()))?
             .query
             .location
             .is_some(),
-        "project.directories" => decode_strict::<v5::ProjectDirectoriesRequest>(&request.payload)
-            .map_err(|_| Failure::Invalid("Invalid Project directories read".into()))?
-            .query
-            .location
-            .is_some(),
-        "fs.find" => decode_strict::<v5::FsFindRequest>(&request.payload)
+        "project.directories" => {
+            decode_compatible::<v5::ProjectDirectoriesRequest>(&request.payload)
+                .map_err(|_| Failure::Invalid("Invalid Project directories read".into()))?
+                .query
+                .location
+                .is_some()
+        }
+        "fs.find" => decode_compatible::<v5::FsFindRequest>(&request.payload)
             .map_err(|_| Failure::Invalid("Invalid file search".into()))?
             .query
             .location
             .is_some(),
-        "shell.output" => decode_strict::<v5::ShellOutputRequest>(&request.payload)
+        "shell.output" => decode_compatible::<v5::ShellOutputRequest>(&request.payload)
             .map_err(|_| Failure::Invalid("Invalid shell output read".into()))?
             .query
             .location
             .is_some(),
-        "providerUsage.list" => decode_strict::<v5::ProviderUsageListRequest>(&request.payload)
+        "providerUsage.list" => decode_compatible::<v5::ProviderUsageListRequest>(&request.payload)
             .map_err(|_| Failure::Invalid("Invalid provider usage read".into()))?
             .query
             .location
             .is_some(),
         "session.create" => {
-            let query = decode_strict::<v5::SessionCreateRequest>(&request.payload)
+            let query = decode_compatible::<v5::SessionCreateRequest>(&request.payload)
                 .map_err(|_| Failure::Invalid("Invalid Session creation".into()))?;
             if query.payload.id.is_none() || query.payload.parent_id.is_some() {
                 return Err(Failure::Invalid(
@@ -121,7 +123,7 @@ pub(crate) fn authorize(
         _ => None,
     };
     let event_scope = if descriptor.diagnostic_name == "event.subscribe" {
-        let query = decode_strict::<v5::EventSubscribeRequest>(&request.payload)
+        let query = decode_compatible::<v5::EventSubscribeRequest>(&request.payload)
             .map_err(|_| Failure::Invalid("Invalid event subscription".into()))?;
         if query.scope != request.scope {
             return Err(Failure::Forbidden(

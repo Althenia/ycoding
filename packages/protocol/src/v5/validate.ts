@@ -2,7 +2,6 @@ import { create, fromBinary, toBinary } from "@bufbuild/protobuf"
 import type { DescMessage, MessageShape } from "@bufbuild/protobuf"
 import { messages, enums } from "../generated/v5/contract.js"
 import {
-  CONTRACT_DIGEST,
   FrameSchema,
   LosslessStringSchema,
   PeerRole,
@@ -36,16 +35,36 @@ const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
 
 export function validateBinary(name: string, bytes: Uint8Array) {
   if (bytes.byteLength > WireLimit.BULK_MESSAGE_BYTES) throw new Error("byte limit")
-  return scan(name, bytes, { count: 0, frameBytes: name === "ycoding.v5.Frame" ? bytes.length : 0 }, 0, 0)
+  return scan(
+    name,
+    bytes,
+    { count: 0, frameBytes: name === "ycoding.v5.Frame" ? bytes.length : 0, compatible: false },
+    0,
+    0,
+  )
+}
+
+export class UnsupportedVariant extends Error {}
+
+export function validateCompatible(name: string, bytes: Uint8Array) {
+  if (bytes.byteLength > Number(WireLimit.BULK_MESSAGE_BYTES)) throw new Error("byte limit")
+  return scan(
+    name,
+    bytes,
+    { count: 0, frameBytes: name === "ycoding.v5.Frame" ? bytes.length : 0, compatible: true },
+    0,
+    0,
+  )
 }
 
 function scan(
   name: string,
   bytes: Uint8Array,
-  work: { count: number; frameBytes: number },
+  work: { count: number; frameBytes: number; compatible: boolean },
   depth: number,
   valueDepth: number,
   collectionLimit?: number,
+  allowUnknownScope = false,
 ): Node {
   const rule = rules[name]
   if (!rule) throw new Error("unknown message type")
@@ -53,6 +72,7 @@ function scan(
   if (values > WireLimit.VALUE_DEPTH || depth > WireLimit.VALUE_DEPTH * 3 + 8) throw new Error("depth limit")
   const fields = new Map<number, Field[]>()
   const groups = new Set<number>()
+  let unknown = false
   let offset = 0
   const varint = () => {
     let value = 0n
@@ -76,8 +96,19 @@ function scan(
       throw new Error("event batch bounds")
     if (name === "ycoding.v5.Control" && tag <= 4 && work.frameBytes > WireLimit.TINY_FRAME_BYTES)
       throw new Error("tiny byte limit")
+    const wire = Number(key & 7n)
     const field = rule.fields.find((field) => field.tag === tag)
-    if (!field) throw new Error("unknown field")
+    if (!field) {
+      if (!work.compatible) throw new Error("unknown field")
+      unknown = true
+      if (wire === 0) varint()
+      else {
+        const length = wire === 1 ? 8n : wire === 2 ? varint() : wire === 5 ? 4n : -1n
+        if (length < 0n || length > BigInt(bytes.length - offset)) throw new Error("invalid unknown field")
+        offset += Number(length)
+      }
+      continue
+    }
     const maxCount =
       field.constraints?.countMax ?? field.maxCount ?? (field.repeated && field.tag === 1 ? collectionLimit : undefined)
     if (field.repeated && maxCount !== undefined && (fields.get(tag)?.length ?? 0) >= maxCount)
@@ -85,7 +116,6 @@ function scan(
     if (!field.repeated && fields.has(tag)) throw new Error("duplicate singular")
     if (field.group !== undefined && groups.has(field.group)) throw new Error("duplicate oneof")
     if (field.group !== undefined) groups.add(field.group)
-    const wire = Number(key & 7n)
     const expected = field.type === 1 ? 1 : [9, 11, 12].includes(field.type) ? 2 : 0
     if (wire !== expected) throw new Error("wire type")
     const value: Field = {}
@@ -93,8 +123,10 @@ function scan(
       value.integer = varint()
       if (field.type === 8 && value.integer > 1n) throw new Error("boolean")
       if (field.type === 13 && value.integer > 0xffffffffn) throw new Error("uint32 overflow")
-      if (field.type === 14 && !enumValues[field.target]?.some((item) => BigInt(item) === value.integer))
+      if (field.type === 14 && !enumValues[field.target]?.some((item) => BigInt(item) === value.integer)) {
+        if (work.compatible) throw new UnsupportedVariant("unknown enum value")
         throw new Error("enum")
+      }
       if (field.constraints)
         validateConstraints(
           field.constraints,
@@ -121,6 +153,7 @@ function scan(
           depth + 1,
           values,
           field.repeated ? undefined : field.maxCount,
+          name === "ycoding.v5.Request" && tag === 3,
         )
       if (value.message && field.maxCodepoints !== undefined) {
         const title = stringFromUnits(units(value.message))
@@ -150,8 +183,11 @@ function scan(
     if (existing) existing.push(value)
     if (!existing) fields.set(tag, [value])
   }
-  if (groups.size !== rule.oneofs || rule.fields.some((field) => field.required && !fields.has(field.tag)))
+  if (rule.fields.some((field) => field.required && !fields.has(field.tag))) throw new Error("required presence")
+  if (groups.size !== rule.oneofs && !(work.compatible && unknown && allowUnknownScope)) {
+    if (work.compatible && unknown) throw new UnsupportedVariant("unknown oneof variant")
     throw new Error("required presence")
+  }
   const node = { name, fields }
   for (const field of rule.fields) {
     if (field.repeated && field.constraints)
@@ -263,6 +299,11 @@ export function decodeStrict<T extends DescMessage>(schema: T, bytes: Uint8Array
   return fromBinary(schema, bytes)
 }
 
+export function decodeCompatible<T extends DescMessage>(schema: T, bytes: Uint8Array): MessageShape<T> {
+  validateCompatible(schema.typeName, bytes)
+  return fromBinary(schema, bytes, { readUnknownFields: false })
+}
+
 export function encodeStrict<T extends DescMessage>(schema: T, value: MessageShape<T>) {
   const bytes = toBinary(schema, value)
   validateBinary(schema.typeName, bytes)
@@ -279,7 +320,8 @@ function direction(node: Node, sender: PeerRole) {
 }
 
 function frameRules(node: Node, bytes: number, sender: PeerRole) {
-  if (integer(node, 1) !== BigInt(WireLimit.REVISION)) throw new Error("revision")
+  if (integer(node, 1) !== BigInt(WireLimit.REVISION))
+    throw new Error(contractVersionMismatch(Number(integer(node, 1))))
   const tag = [...node.fields.keys()].find((tag) => tag >= 10)
   if (tag === undefined) throw new Error("body")
   const body = child(node, tag)
@@ -289,12 +331,9 @@ function frameRules(node: Node, bytes: number, sender: PeerRole) {
   if (tag === 10 || tag === 11) {
     if (bytes > WireLimit.HANDSHAKE_BYTES) throw new Error("handshake byte limit")
     if ([3, 4, 5].some((tag) => node.fields.has(tag))) throw new Error("handshake ledger")
-    if (
-      integer(body, 1) !== BigInt(WireLimit.REVISION) ||
-      BufferHex(raw(body, 2)) !== CONTRACT_DIGEST ||
-      integer(body, 3) !== BigInt(sender)
-    )
-      throw new Error("handshake identity")
+    if (integer(body, 1) !== BigInt(WireLimit.REVISION))
+      throw new Error(contractVersionMismatch(Number(integer(body, 1))))
+    if (integer(body, 3) !== BigInt(sender) || raw(body, 2).length !== 32) throw new Error("handshake identity")
     const windows = child(body, 4)
     for (const [tag, limit] of [
       [1, WireLimit.NORMAL_WINDOW_BYTES],
@@ -359,8 +398,8 @@ function frameRules(node: Node, bytes: number, sender: PeerRole) {
   return { tag, body }
 }
 
-function BufferHex(bytes: Uint8Array) {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+export function contractVersionMismatch(peer: number) {
+  return `Contract version mismatch: local v${WireLimit.REVISION}, peer v${peer}`
 }
 
 export class WireConnection {

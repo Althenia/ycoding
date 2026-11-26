@@ -304,7 +304,7 @@ test("all connection defaults are pinned to the plan, including timing and sched
   })
 })
 
-test.each(["epoch", "revision", "digest", "role", "ledger"])("fabricated Hello %s fails before dispatch", (variant) => {
+test.each(["epoch", "revision", "role", "ledger"])("fabricated Hello %s fails before dispatch", (variant) => {
   const client = new Connection({
     role: PeerRole.LOCAL_CLIENT,
     peer: PeerRole.SERVER,
@@ -327,7 +327,6 @@ test.each(["epoch", "revision", "digest", "role", "ledger"])("fabricated Hello %
   if (variant === "revision") frame.revision = 4
   if (variant === "ledger") frame.deliveryOrdinal = 1n
   if (frame.body.case === "hello") {
-    if (variant === "digest") frame.body.value.contractDigest = new Uint8Array(32)
     if (variant === "role") frame.body.value.role = PeerRole.REMOTE_CLIENT
   }
   expect(receive(server, frame)).toContainEqual(expect.objectContaining({ type: "closed", code: 1008 }))

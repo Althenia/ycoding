@@ -593,11 +593,10 @@ fn handshake_identity_windows_and_timeout() {
             hello.revision = 6;
         }
         if let Some(v5::frame::Body::Hello(body)) = &mut hello.body {
-            if change == 1 {
-                body.contract_digest[0] ^= 1;
-            }
-            if change == 2 {
-                body.receive_windows.normal_bytes += 1;
+            match change {
+                1 => body.receive_windows.normal_bytes += 1,
+                2 => body.contract_digest.truncate(31),
+                _ => {}
             }
         }
         assert!(
@@ -861,7 +860,7 @@ fn early_class_budgets_and_bulk_headers() {
 }
 
 #[test]
-fn test_024_version_digest_role_epoch_and_deadline_matrix() {
+fn test_024_version_role_epoch_and_deadline_matrix_accepts_digest_skew() {
     for revision in [4, 6] {
         let mut hello = frame("hello");
         hello.revision = revision;
@@ -879,7 +878,7 @@ fn test_024_version_digest_role_epoch_and_deadline_matrix() {
     assert!(
         WireConnection::default()
             .observe(&hello.encode_to_vec(), v5::PeerRole::LocalClient, 0)
-            .is_err(),
+            .is_ok(),
         "digest"
     );
     let mut hello = frame("hello");

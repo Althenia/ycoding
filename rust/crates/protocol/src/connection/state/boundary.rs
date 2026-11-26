@@ -1,4 +1,4 @@
-use super::{Connection, Decision, Phase, ProtocolError, Queued, classify, digest};
+use super::{Connection, Decision, Phase, ProtocolError, Queued, classify};
 use crate::{limits, v5};
 use std::rc::Rc;
 
@@ -378,7 +378,7 @@ impl Connection {
         sender: v5::PeerRole,
     ) -> Result<(), ProtocolError> {
         if frame.revision != limits::REVISION as u32 {
-            return Err(ProtocolError::Incompatible);
+            return Err(ProtocolError::Revision(frame.revision));
         }
         let body = frame.body.as_ref().ok_or(ProtocolError::Malformed)?;
         if !allowed(body, sender)? {
@@ -392,22 +392,25 @@ impl Connection {
             {
                 return Err(ProtocolError::Malformed);
             }
-            let (revision, hash, role, windows) = match body {
+            let (revision, role, digest_len, windows) = match body {
                 v5::frame::Body::Hello(hello) => (
                     hello.revision,
-                    &hello.contract_digest,
                     hello.role,
+                    hello.contract_digest.len(),
                     &hello.receive_windows,
                 ),
                 v5::frame::Body::Ready(ready) => (
                     ready.revision,
-                    &ready.contract_digest,
                     ready.role,
+                    ready.contract_digest.len(),
                     &ready.receive_windows,
                 ),
                 _ => return Err(ProtocolError::Malformed),
             };
-            if revision != limits::REVISION as u32 || *hash != digest() || role != sender as i32 {
+            if revision != limits::REVISION as u32 {
+                return Err(ProtocolError::Revision(revision));
+            }
+            if role != sender as i32 || digest_len != 32 {
                 return Err(ProtocolError::Incompatible);
             }
             if windows.normal_bytes == 0

@@ -15,5 +15,6 @@ mod field_constraints;
 mod validate;
 pub use validate::limits;
 pub use validate::{
-    WireConnection, WireError, decode_lossless, decode_strict, encode_lossless, validate_binary,
+    WireConnection, WireError, decode_compatible, decode_lossless, decode_strict, encode_lossless,
+    validate_binary, validate_compatible,
 };

@@ -2,7 +2,8 @@ use super::{
     Budgets, Ledger, ReservationBudget, SharedReservation, event_reservation_bytes, events,
 };
 use crate::{limits, v5};
-use prost::Message;
+use prost::{Message, Name};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::{cell::RefCell, rc::Rc};
 
@@ -13,6 +14,8 @@ pub use boundary::{Direction, Incoming, Prepared};
 pub enum ProtocolError {
     Malformed,
     Incompatible,
+    Revision(u32),
+    UnsupportedVariant,
     Limit,
     Direction,
     Epoch,
@@ -28,10 +31,18 @@ pub struct Close {
 }
 
 impl Close {
-    pub fn reason(&self) -> &'static str {
+    pub fn reason(&self) -> Cow<'static, str> {
         match self.category {
             ProtocolError::Malformed => "malformed",
             ProtocolError::Incompatible => "incompatible",
+            ProtocolError::Revision(peer) => {
+                return format!(
+                    "Contract version mismatch: local v{}, peer v{peer}",
+                    limits::REVISION
+                )
+                .into();
+            }
+            ProtocolError::UnsupportedVariant => "unsupported variant",
             ProtocolError::Limit => "limit",
             ProtocolError::Direction => "direction",
             ProtocolError::Epoch => "epoch",
@@ -39,6 +50,7 @@ impl Close {
             ProtocolError::Clock => "clock",
             ProtocolError::Unknown => "unknown",
         }
+        .into()
     }
 }
 
@@ -1676,19 +1688,37 @@ impl Connection {
                 Ok(vec![Decision::StreamComplete(end.subscription_id)])
             }
             v5::frame::Body::Request(request) => {
-                let descriptor = self.descriptor(request.operation_id)?;
-                self.request_contract(
-                    descriptor,
-                    &request.scope,
-                    &request.payload,
-                    self.config.peer_role,
-                )?;
-                if self.incoming.contains_key(&request.request_id) {
+                if request.request_id.is_empty()
+                    || request.operation_id == 0
+                    || self.incoming.contains_key(&request.request_id)
+                {
                     return Err(ProtocolError::Malformed);
+                }
+                if request.payload.len() as u64 > limits::INLINE_BODY_BYTES {
+                    return Err(ProtocolError::Limit);
                 }
                 if self.incoming.len() >= limits::PENDING_REQUESTS as usize {
                     return Err(ProtocolError::Limit);
                 }
+                let descriptor = self.descriptor(request.operation_id);
+                let contract = descriptor.and_then(|descriptor| {
+                    self.request_contract(
+                        descriptor,
+                        &request.scope,
+                        &request.payload,
+                        self.config.peer_role,
+                    )
+                });
+                if self.remote()
+                    && (descriptor.is_err()
+                        || request.scope.target.is_none()
+                        || contract == Err(ProtocolError::UnsupportedVariant))
+                {
+                    let ordinal = frame.delivery_ordinal.ok_or(ProtocolError::Malformed)?;
+                    self.reject_unsupported(request, ordinal)?;
+                    return Ok(Vec::new());
+                }
+                contract?;
                 self.incoming.insert(
                     request.request_id.clone(),
                     Pending {
@@ -2698,6 +2728,52 @@ impl Connection {
             .ok_or(ProtocolError::Malformed)
     }
 
+    fn remote(&self) -> bool {
+        self.config.local_role == v5::PeerRole::Relay
+            || self.config.peer_role == v5::PeerRole::Relay
+    }
+
+    fn reject_unsupported(
+        &mut self,
+        request: v5::Request,
+        ordinal: u64,
+    ) -> Result<(), ProtocolError> {
+        if self.prepared.as_ref().is_some_and(|state| state.request_id.as_ref() == Some(&request.request_id))
+        || self.queues[0].iter().any(|queued| {
+            matches!(&queued.frame.body, Some(v5::frame::Body::Result(result)) if result.request_id == request.request_id)
+        }) {
+            return Err(ProtocolError::Malformed);
+        }
+        let body = v5::frame::Body::Result(v5::Result {
+            request_id: request.request_id,
+            operation_id: request.operation_id,
+            settlement: v5::Settlement::Completed as i32,
+            outcome: Some(v5::result::Outcome::Error(v5::TypedPayload {
+                type_name: v5::ConnectorError::full_name(),
+                payload: v5::ConnectorError {
+                    code: v5::ConnectorErrorCode::UnknownOperation as i32,
+                    message: crate::encode_lossless(
+                        &"Unsupported operation or request variant"
+                            .encode_utf16()
+                            .collect::<Vec<_>>(),
+                    ),
+                }
+                .encode_to_vec(),
+            })),
+        });
+        let bytes = v5::Frame {
+            revision: limits::REVISION as u32,
+            connection_epoch: Some(self.epoch.clone()),
+            ledger: Some(v5::LedgerClass::Normal as i32),
+            delivery_ordinal: Some(u64::MAX),
+            tiny_consumed_through: Some(u64::MAX),
+            body: Some(body.clone()),
+        }
+        .encoded_len() as u64;
+        self.consume(v5::LedgerClass::Normal, ordinal, self.now)?;
+        self.queue_reserved(body, bytes, self.now)
+    }
+
     fn request_contract(
         &self,
         descriptor: &v5::OperationDescriptor,
@@ -2735,7 +2811,11 @@ impl Connection {
         if self.config.local_role == v5::PeerRole::Relay {
             return Ok(());
         }
-        crate::validate_binary(&descriptor.request_type, payload).map_err(wire_error)
+        if self.remote() {
+            crate::validate_compatible(&descriptor.request_type, payload).map_err(wire_error)
+        } else {
+            crate::validate_binary(&descriptor.request_type, payload).map_err(wire_error)
+        }
     }
 
     fn authorized(&self, scope: &v5::Scope) -> bool {
@@ -2753,7 +2833,19 @@ impl Connection {
 
     fn result_contract(&self, result: &v5::Result, operation_id: u32) -> Result<(), ProtocolError> {
         let descriptor = self.descriptor(operation_id)?;
-        if result.operation_id != operation_id || result.settlement != descriptor.settlement {
+        if result.operation_id != operation_id {
+            return Err(ProtocolError::Malformed);
+        }
+        if self.remote()
+            && result.settlement == v5::Settlement::Completed as i32
+            && let Some(v5::result::Outcome::Error(payload)) = &result.outcome
+            && payload.type_name == v5::ConnectorError::full_name()
+            && crate::decode_compatible::<v5::ConnectorError>(&payload.payload)
+                .is_ok_and(|error| error.code == v5::ConnectorErrorCode::UnknownOperation as i32)
+        {
+            return Ok(());
+        }
+        if result.settlement != descriptor.settlement {
             return Err(ProtocolError::Malformed);
         }
         let payload = match result.outcome.as_ref().ok_or(ProtocolError::Malformed)? {
@@ -2790,7 +2882,11 @@ impl Connection {
         if self.config.local_role == v5::PeerRole::Relay {
             return Ok(());
         }
-        crate::validate_binary(&payload.type_name, &payload.payload).map_err(wire_error)
+        if self.remote() {
+            crate::validate_compatible(&payload.type_name, &payload.payload).map_err(wire_error)
+        } else {
+            crate::validate_binary(&payload.type_name, &payload.payload).map_err(wire_error)
+        }
     }
 
     fn late_id(&self, request_id: &str) -> Result<(), ProtocolError> {
@@ -3142,6 +3238,7 @@ fn class_index(class: i32) -> Result<usize, ProtocolError> {
 
 fn wire_error(error: crate::WireError) -> ProtocolError {
     match error.0 {
+        "unsupported variant" => ProtocolError::UnsupportedVariant,
         "connection epoch" | "Ready epoch" | "Hello epoch" => ProtocolError::Epoch,
         "revision" | "handshake identity" | "handshake timeout" | "handshake order"
         | "Ready confirmation" => ProtocolError::Incompatible,

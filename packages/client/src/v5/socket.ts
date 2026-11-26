@@ -492,7 +492,7 @@ export class LocalTransport {
       if (decision.type === "closed") {
         this.shutdown(
           owner,
-          new V5ClientError("protocol", undefined, FailureCategory[decision.category]),
+          new V5ClientError("protocol", undefined, decision.reason ?? FailureCategory[decision.category]),
           decision.code,
         )
         continue

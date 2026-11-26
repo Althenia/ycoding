@@ -1,5 +1,5 @@
 use crate::field_constraints::{Constraints, validate_constraints};
-use crate::{CONTRACT_DIGEST, v5};
+use crate::v5;
 use prost::Message;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -84,33 +84,51 @@ pub fn validate_binary(name: &str, bytes: &[u8]) -> Result<(), WireError> {
     scan_root(name, bytes).map(|_| ())
 }
 
+pub fn validate_compatible(name: &str, bytes: &[u8]) -> Result<(), WireError> {
+    scan_message(name, bytes, true).map(|_| ())
+}
+
 fn scan_root<'a>(name: &str, bytes: &'a [u8]) -> Result<Node<'a>, WireError> {
+    scan_message(name, bytes, false)
+}
+
+struct Scan {
+    count: usize,
+    frame_bytes: usize,
+    compatible: bool,
+}
+
+fn scan_message<'a>(name: &str, bytes: &'a [u8], compatible: bool) -> Result<Node<'a>, WireError> {
     if bytes.len() > limits::BULK_MESSAGE_BYTES as usize {
         return Err(WireError("byte limit"));
     }
     scan(
         name,
         bytes,
-        &mut 0,
-        0,
-        0,
-        if name == "ycoding.v5.Frame" {
-            bytes.len()
-        } else {
-            0
+        &mut Scan {
+            count: 0,
+            frame_bytes: if name == "ycoding.v5.Frame" {
+                bytes.len()
+            } else {
+                0
+            },
+            compatible,
         },
+        0,
+        0,
         None,
+        false,
     )
 }
 
 fn scan<'a>(
     name: &str,
     bytes: &'a [u8],
-    work: &mut usize,
+    work: &mut Scan,
     depth: usize,
     value_depth: usize,
-    frame_bytes: usize,
     collection_limit: Option<usize>,
+    allow_unknown_scope: bool,
 ) -> Result<Node<'a>, WireError> {
     let rule = MESSAGES
         .iter()
@@ -125,10 +143,11 @@ fn scan<'a>(
         fields: BTreeMap::new(),
     };
     let mut groups = BTreeSet::new();
+    let mut unknown = false;
     let mut offset = 0;
     while offset < bytes.len() {
-        *work += 1;
-        if *work > limits::TOTAL_FIELDS as usize {
+        work.count += 1;
+        if work.count > limits::TOTAL_FIELDS as usize {
             return Err(WireError("field count limit"));
         }
         let key = varint(bytes, &mut offset)?;
@@ -150,15 +169,32 @@ fn scan<'a>(
         }
         if name == "ycoding.v5.Control"
             && tag <= 4
-            && frame_bytes > limits::TINY_FRAME_BYTES as usize
+            && work.frame_bytes > limits::TINY_FRAME_BYTES as usize
         {
             return Err(WireError("tiny byte limit"));
         }
-        let field = rule
-            .fields
-            .iter()
-            .find(|field| field.tag == tag)
-            .ok_or(WireError("unknown field"))?;
+        let wire = key & 7;
+        let Some(field) = rule.fields.iter().find(|field| field.tag == tag) else {
+            if !work.compatible {
+                return Err(WireError("unknown field"));
+            }
+            unknown = true;
+            let length = match wire {
+                0 => {
+                    varint(bytes, &mut offset)?;
+                    0
+                }
+                1 => 8,
+                2 => varint(bytes, &mut offset)?,
+                5 => 4,
+                _ => return Err(WireError("invalid unknown field")),
+            };
+            if length > (bytes.len() - offset) as u64 {
+                return Err(WireError("truncated unknown field"));
+            }
+            offset += length as usize;
+            continue;
+        };
         let max_count = field
             .constraints
             .as_ref()
@@ -181,7 +217,6 @@ fn scan<'a>(
         if field.group.is_some_and(|group| !groups.insert(group)) {
             return Err(WireError("duplicate oneof"));
         }
-        let wire = key & 7;
         let expected = match field.kind {
             1 => 1,
             9 | 11 | 12 => 2,
@@ -204,7 +239,11 @@ fn scan<'a>(
                     .iter()
                     .any(|(name, values)| *name == field.target && values.contains(&value.integer))
             {
-                return Err(WireError("enum"));
+                return Err(WireError(if work.compatible {
+                    "unsupported variant"
+                } else {
+                    "enum"
+                }));
             }
             if let Some(rule) = &field.constraints {
                 let integer = match field.kind {
@@ -241,12 +280,12 @@ fn scan<'a>(
                     work,
                     depth + 1,
                     values,
-                    frame_bytes,
                     if field.repeated {
                         None
                     } else {
                         field.max_count
                     },
+                    name == "ycoding.v5.Request" && tag == 3,
                 )?));
             }
             if let (Some(title), Some(limit)) = (value.message.as_deref(), field.max_codepoints) {
@@ -278,13 +317,19 @@ fn scan<'a>(
         }
         node.fields.entry(tag).or_default().push(value);
     }
-    if groups.len() != rule.oneofs
-        || rule
-            .fields
-            .iter()
-            .any(|field| field.required && !node.fields.contains_key(&field.tag))
+    if rule
+        .fields
+        .iter()
+        .any(|field| field.required && !node.fields.contains_key(&field.tag))
     {
         return Err(WireError("required presence"));
+    }
+    if groups.len() != rule.oneofs && !(work.compatible && unknown && allow_unknown_scope) {
+        return Err(WireError(if work.compatible && unknown {
+            "unsupported variant"
+        } else {
+            "required presence"
+        }));
     }
     for field in rule.fields {
         if field.repeated
@@ -398,6 +443,11 @@ pub fn decode_strict<T: Message + Default + prost::Name>(bytes: &[u8]) -> Result
     T::decode(bytes).map_err(|_| WireError("decode"))
 }
 
+pub fn decode_compatible<T: Message + Default + prost::Name>(bytes: &[u8]) -> Result<T, WireError> {
+    validate_compatible(&T::full_name(), bytes)?;
+    T::decode(bytes).map_err(|_| WireError("decode"))
+}
+
 fn direction(node: &Node<'_>, sender: v5::PeerRole) -> Result<(), WireError> {
     let mut name = String::new();
     for (index, letter) in node
@@ -452,14 +502,9 @@ fn frame_rules<'a, 'b>(
         if [3, 4, 5].iter().any(|tag| node.fields.contains_key(tag)) {
             return Err(WireError("handshake ledger"));
         }
-        let digest = body
-            .raw(2)?
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
         if body.integer(1)? != limits::REVISION
-            || digest != CONTRACT_DIGEST
             || body.integer(3)? != sender as u64
+            || body.raw(2)?.len() != 32
         {
             return Err(WireError("handshake identity"));
         }

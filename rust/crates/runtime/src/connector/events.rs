@@ -8,7 +8,7 @@ use std::{
 use ycoding_core::event_feed::{Item, Payload, Scope, Subscriber};
 use ycoding_protocol::{
     connection::{Direction, EventMetadata, ProtocolError},
-    decode_strict, v5,
+    decode_compatible, decode_strict, v5,
 };
 
 pub(super) struct Interests {
@@ -52,7 +52,7 @@ impl Driver {
         if name == "session.log" {
             self.events.pending_logs.insert(
                 request.request_id.clone(),
-                decode_strict(&request.payload).map_err(|_| Error::Incompatible)?,
+                decode_compatible(&request.payload).map_err(|_| Error::Incompatible)?,
             );
         }
         Ok(())

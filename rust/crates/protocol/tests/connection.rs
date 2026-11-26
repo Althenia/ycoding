@@ -1711,7 +1711,7 @@ fn ac_wire_008_event_coalescing_has_caller_timed_interactive_and_background_boun
 
 #[test]
 fn ac_wire_002_handshake_invalid_input_matrix_dispatches_nothing() {
-    for case in 0..8 {
+    for case in 0..7 {
         let mut client = Binding::new(
             config(v5::PeerRole::LocalClient, v5::PeerRole::Server),
             OPERATIONS.clone(),
@@ -1743,11 +1743,6 @@ fn ac_wire_002_handshake_invalid_input_matrix_dispatches_nothing() {
                 }
             }
             5 => {
-                if let Some(v5::frame::Body::Hello(value)) = &mut hello.body {
-                    value.contract_digest = vec![0; 32];
-                }
-            }
-            6 => {
                 if let Some(v5::frame::Body::Hello(value)) = &mut hello.body {
                     value.receive_windows.normal_bytes += 1;
                 }
@@ -1789,6 +1784,150 @@ fn ac_wire_009_settlement_operation_and_body_mismatch_are_terminal_failures() {
         }));
         assert!(matches!(decisions.last(), Some(Decision::Closed(_))));
     }
+}
+
+#[test]
+fn remote_version_accepts_digest_skew_in_hello_and_ready() {
+    let mut agent = Binding::new(
+        config(v5::PeerRole::Agent, v5::PeerRole::Relay),
+        OPERATIONS.clone(),
+        0,
+    )
+    .unwrap();
+    let mut relay = Binding::new(
+        config(v5::PeerRole::Relay, v5::PeerRole::Agent),
+        OPERATIONS.clone(),
+        0,
+    )
+    .unwrap();
+    let mut hello = send(agent.start(0).unwrap());
+    let Some(v5::frame::Body::Hello(body)) = &mut hello.body else {
+        panic!("Expected Hello")
+    };
+    body.contract_digest[0] ^= 1;
+    let mut ready = send(relay.receive(hello.clone(), hello.encoded_len() as u64, 1));
+    let Some(v5::frame::Body::Ready(body)) = &mut ready.body else {
+        panic!("Expected Ready")
+    };
+    body.contract_digest[0] ^= 1;
+    let decisions = agent.receive(ready.clone(), ready.encoded_len() as u64, 2);
+    assert!(decisions.contains(&Decision::Established));
+    let confirmation = send(decisions);
+    assert!(
+        relay
+            .receive(confirmation.clone(), confirmation.encoded_len() as u64, 3)
+            .contains(&Decision::Established)
+    );
+}
+
+#[test]
+fn remote_version_names_both_revisions_on_ready_rejection() {
+    for frame_revision in [true, false] {
+        let mut agent = Binding::new(
+            config(v5::PeerRole::Agent, v5::PeerRole::Relay),
+            OPERATIONS.clone(),
+            0,
+        )
+        .unwrap();
+        let mut relay = Binding::new(
+            config(v5::PeerRole::Relay, v5::PeerRole::Agent),
+            OPERATIONS.clone(),
+            0,
+        )
+        .unwrap();
+        let hello = send(agent.start(0).unwrap());
+        let mut ready = send(relay.receive(hello.clone(), hello.encoded_len() as u64, 1));
+        if frame_revision {
+            ready.revision = 6;
+        } else if let Some(v5::frame::Body::Ready(body)) = &mut ready.body {
+            body.revision = 6;
+        }
+        let decisions = agent.receive(ready.clone(), ready.encoded_len() as u64, 2);
+        assert!(
+            matches!(decisions.as_slice(), [Decision::Closed(close)] if close.code == 1008 && close.reason() == "Contract version mismatch: local v5, peer v6"),
+            "{decisions:?}"
+        );
+    }
+}
+
+#[test]
+fn remote_version_returns_typed_unsupported_and_keeps_the_agent_connected() {
+    let known = OPERATIONS
+        .iter()
+        .find(|item| item.diagnostic_name == "workspace.list")
+        .unwrap();
+    let mut future = known.clone();
+    future.operation_id = 999_999;
+    future.diagnostic_name = "future.start".into();
+    future.settlement = v5::Settlement::DurablyAdmitted as i32;
+    future.error_types.clear();
+    let mut descriptors = OPERATIONS.clone();
+    descriptors.push(future.clone());
+    let mut agent = Binding::new(
+        config(v5::PeerRole::Agent, v5::PeerRole::Relay),
+        OPERATIONS.clone(),
+        0,
+    )
+    .unwrap();
+    let mut relay = Binding::new(
+        config(v5::PeerRole::Relay, v5::PeerRole::Agent),
+        descriptors,
+        0,
+    )
+    .unwrap();
+    let hello = send(agent.start(0).unwrap());
+    let ready = send(relay.receive(hello.clone(), hello.encoded_len() as u64, 1));
+    let ping = send(agent.receive(ready.clone(), ready.encoded_len() as u64, 2));
+    relay.receive(ping.clone(), ping.encoded_len() as u64, 3);
+    let pong = send(relay.poll(3));
+    agent.receive(pong.clone(), pong.encoded_len() as u64, 3);
+    let scope = v5::Scope {
+        target: Some(v5::scope::Target::Machine(v5::Empty {})),
+    };
+    let payload = v5::WorkspaceListRequest {
+        payload: Default::default(),
+    }
+    .encode_to_vec();
+    let id = relay
+        .request(future.operation_id, scope.clone(), payload.clone(), 4)
+        .unwrap();
+    let request = send(relay.poll(4));
+    let decisions = agent.receive(request.clone(), request.encoded_len() as u64, 4);
+    assert!(decisions.is_empty(), "{decisions:?}");
+    let unsupported = send(agent.poll(4));
+    let decisions = relay.receive(unsupported.clone(), unsupported.encoded_len() as u64, 4);
+    let [
+        Decision::Forward(v5::Frame {
+            body: Some(v5::frame::Body::Result(result)),
+            ..
+        }),
+    ] = decisions.as_slice()
+    else {
+        panic!("Expected the relay to forward the rejection: {decisions:?}");
+    };
+    let Some(v5::result::Outcome::Error(error)) = &result.outcome else {
+        panic!("Expected an error")
+    };
+    assert_eq!(result.request_id, id);
+    assert_eq!(result.operation_id, future.operation_id);
+    assert_eq!(error.type_name, v5::ConnectorError::full_name());
+    assert_eq!(
+        v5::ConnectorError::decode(error.payload.as_slice())
+            .unwrap()
+            .code,
+        v5::ConnectorErrorCode::UnknownOperation as i32
+    );
+    let mut payload = payload;
+    payload.extend([0xa0, 0x06, 0x01]);
+    relay
+        .request(known.operation_id, scope, payload, 5)
+        .unwrap();
+    let request = send(relay.poll(5));
+    let decisions = agent.receive(request.clone(), request.encoded_len() as u64, 5);
+    assert!(
+        matches!(decisions.as_slice(), [Decision::Request(request)] if request.operation_id == known.operation_id),
+        "{decisions:?}"
+    );
 }
 
 fn role_pair(

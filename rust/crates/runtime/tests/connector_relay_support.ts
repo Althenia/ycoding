@@ -247,13 +247,6 @@ async function relayBoundaryMatrix() {
         },
       })),
       {
-        name: "digest",
-        change(frame) {
-          if (frame.body.case === "hello") frame.body.value.contractDigest[0]! ^= 1
-          return frame
-        },
-      },
-      {
         name: "role",
         change(frame) {
           if (frame.body.case === "hello") frame.body.value.role = PeerRole.LOCAL_CLIENT
@@ -279,6 +272,8 @@ async function relayBoundaryMatrix() {
       try {
         const closed = await peer.closed
         expect(closed.code === 1008, `${role} ${item.name}: ${JSON.stringify(closed)}`)
+        if (item.name.startsWith("revision-"))
+          expect(closed.reason === `Contract version mismatch: local v5, peer v${item.name.slice(-1)}`, JSON.stringify(closed))
         expect(
           !peer.raw.some((frame) => frame.body.case === "ready" || frame.body.case === "result"),
           `${role} ${item.name} delivered application state`,
@@ -286,6 +281,16 @@ async function relayBoundaryMatrix() {
       } finally {
         peer.stop()
       }
+    }
+    const skew = new TestPeer(url, headers, role, undefined, (frame) => {
+      if (frame.body.case !== "hello") throw new Error("Expected Hello")
+      frame.body.value.contractDigest[0]! ^= 1
+      return frame
+    })
+    try {
+      await skew.ready
+    } finally {
+      skew.stop()
     }
     const classes = new Set<string>()
     for (const fixture of fixtures.filter((entry) => !["hello", "ready"].includes(entry.name))) {

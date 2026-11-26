@@ -263,7 +263,7 @@ test("REQ-WIRE-002 rejects incompatible Ready without dispatching application wo
   const peer = new ScriptedPeer()
   peer.transform = (bytes) => {
     const frame = decodeStrict(FrameSchema, bytes)
-    if (frame.body.case === "ready") frame.body.value.contractDigest = new Uint8Array(32)
+    if (frame.body.case === "ready") frame.body.value.revision = 6
     return encodeStrict(FrameSchema, frame)
   }
   const client = make({
@@ -274,7 +274,7 @@ test("REQ-WIRE-002 rejects incompatible Ready without dispatching application wo
     },
   })
   try {
-    await expect(client.health.get()).rejects.toMatchObject({ status: "protocol" })
+    await expect(client.health.get()).rejects.toMatchObject({ status: "protocol", message: "Contract version mismatch: local v5, peer v6" })
     expect(peer.requests).toHaveLength(0)
   } finally {
     client.transport.close()

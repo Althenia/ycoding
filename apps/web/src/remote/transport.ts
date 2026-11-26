@@ -12,6 +12,7 @@ import {
   SessionLogItemSchema,
   remotePayloadCodecs,
   ConnectorNoticePageSchema,
+  Connector_ErrorSchema,
   decodeLossless,
   quotaFromWire,
   PriorityMode,
@@ -228,8 +229,9 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
     for (const decision of decisions) {
       if (!currentOwner(value)) break
       if (decision.type === "closed") {
-        end(value, decision.code, FailureCategory[decision.category])
-        value.socket.close(decision.code, FailureCategory[decision.category])
+        const reason = decision.reason ?? FailureCategory[decision.category]
+        end(value, decision.code, reason)
+        value.socket.close(decision.code, reason)
         continue
       }
       if (decision.type === "ready") {
@@ -323,7 +325,11 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
         if (!decision.payload) throw new Error("Missing typed result")
         const codec = remotePayloadCodecs.get(entry.operation)!
         const schema =
-          decision.status === "success" ? codec.result.schema : codec.errors.get(decision.payload.typeName)?.schema
+          decision.status === "success"
+            ? codec.result.schema
+            : decision.payload.typeName === Connector_ErrorSchema.typeName
+              ? Connector_ErrorSchema
+              : codec.errors.get(decision.payload.typeName)?.schema
         if (!schema) throw new Error("Unknown result schema")
         if (
           decision.status === "success" &&

@@ -1,7 +1,7 @@
 import {
   create,
   encodeStrict,
-  decodeStrict,
+  decodeCompatible,
   decodeLossless,
   encodeLossless,
   FrameSchema,
@@ -171,7 +171,7 @@ export function createRelay(deps: RelayDeps) {
         for (const forward of forwards)
           if (forward.to === peer && forward.ticket === entry.ticket) releaseForward(forward)
       }
-      if (entry.type === "closed") drop(peer, entry.code, FailureCategory[entry.category])
+      if (entry.type === "closed") drop(peer, entry.code, entry.reason ?? FailureCategory[entry.category])
       if (entry.type === "httpBulkReleased") {
         for (const forward of forwards)
           if (
@@ -522,7 +522,7 @@ export function createRelay(deps: RelayDeps) {
       if (name === "notice.list" || name === "notice.subscribe") {
         const before =
           name === "notice.list"
-            ? decodeLossless(decodeStrict(ConnectorNoticeBeforeSchema, admission.dispatch.request.payload).before!)
+            ? decodeLossless(decodeCompatible(ConnectorNoticeBeforeSchema, admission.dispatch.request.payload).before!)
             : undefined
         const page = deps.notices.page(before ? noticeSequence(before) : undefined)
         if (name === "notice.subscribe") admission.peer.notices = true
@@ -544,7 +544,7 @@ export function createRelay(deps: RelayDeps) {
         name === "notice.readAll"
           ? create(NoticeSchema, { kind: { case: "cleared", value: {} } })
           : (() => {
-              const input = decodeStrict(ConnectorNoticeIDsSchema, admission.dispatch.request.payload)
+              const input = decodeCompatible(ConnectorNoticeIDsSchema, admission.dispatch.request.payload)
               const removed = deps.notices.remove(input.ids.flatMap((id) => noticeSequence(id) ?? []))
               return create(NoticeSchema, {
                 kind: { case: "removed", value: { ids: [...removed.ids], total: BigInt(removed.total) } },
@@ -596,7 +596,7 @@ export function createRelay(deps: RelayDeps) {
       return
     }
     if (operation.diagnosticName === "event.unsubscribe") {
-      const id = decodeStrict(event_unsubscribe_RequestSchema, admission.dispatch.request.payload).subscriptionId
+      const id = decodeCompatible(event_unsubscribe_RequestSchema, admission.dispatch.request.payload).subscriptionId
       const subscription = peer.subscriptions.get(id)
       if (
         !subscription ||
@@ -626,7 +626,7 @@ export function createRelay(deps: RelayDeps) {
         return
       }
       if (operation.diagnosticName === "event.subscribe") {
-        const target = decodeStrict(event_subscribe_RequestSchema, admission.dispatch.request.payload).scope
+        const target = decodeCompatible(event_subscribe_RequestSchema, admission.dispatch.request.payload).scope
         if (target?.target.case !== "session" || target.target.value !== scope.target.value) {
           drop(peer, 4403, "DIRECTION")
           return
@@ -796,7 +796,7 @@ export function createRelay(deps: RelayDeps) {
           drop(peer, 1009, "LIMIT")
           return
         }
-        const prior = statusBytes ? decodeStrict(ControlSchema, statusBytes).kind : undefined
+        const prior = statusBytes ? decodeCompatible(ControlSchema, statusBytes).kind : undefined
         const oldAttention = prior?.case === "status" ? new Set(prior.value.attention) : undefined
         const bytes = encodeStrict(ControlSchema, frame.body.value)
         budget.release(byteLength - bytes.length)
@@ -1062,8 +1062,8 @@ export function createRelay(deps: RelayDeps) {
       const payload = frame.body.value.outcome.value.payload
       const id = decodeLossless(
         operation.diagnosticName === "session.log"
-          ? decodeStrict(session_log_ResultSchema, payload).subscriptionId!
-          : decodeStrict(event_subscribe_ResultSchema, payload).subscriptionId!,
+          ? decodeCompatible(session_log_ResultSchema, payload).subscriptionId!
+          : decodeCompatible(event_subscribe_ResultSchema, payload).subscriptionId!,
       )
       const charge = acceptedInterests.has(id) ? 0 : RelayLimits.forwardingMetadataBytes
       if (!budget.reserve(charge)) {
@@ -1318,7 +1318,7 @@ export function createRelay(deps: RelayDeps) {
       statusBytes &&
       (await authorize(peer))
     ) {
-      queued(peer, { case: "control", value: decodeStrict(ControlSchema, statusBytes) })
+      queued(peer, { case: "control", value: decodeCompatible(ControlSchema, statusBytes) })
     }
     receipts()
     const tasks: Promise<void>[] = []
@@ -1573,11 +1573,11 @@ export function createRelay(deps: RelayDeps) {
       )
         return new Response("Invalid HTTP transfer target", { status: 400 })
       const messageParams = message
-        ? decodeStrict(session_message_RequestSchema, admission.dispatch.request.payload).params
+        ? decodeCompatible(session_message_RequestSchema, admission.dispatch.request.payload).params
         : undefined
       const attachmentParams = message
         ? undefined
-        : decodeStrict(session_attachment_read_RequestSchema, admission.dispatch.request.payload).params
+        : decodeCompatible(session_attachment_read_RequestSchema, admission.dispatch.request.payload).params
       const target = decodeLossless(messageParams ? messageParams.messageID! : attachmentParams!.digest!)
       if (
         decodeLossless((messageParams ?? attachmentParams)!.sessionID!) !== scope.value ||

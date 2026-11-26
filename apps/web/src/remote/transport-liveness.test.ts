@@ -1,10 +1,28 @@
 import { expect, test } from "bun:test"
-import { WireLimit } from "@ycoding-ai/remote"
+import { decodeStrict, encodeStrict, FrameSchema, WireLimit } from "@ycoding-ai/remote"
 import { fillWindow, transportFixture, type BinarySocket } from "../../test/wire-peer"
 
 const probe = { pingIntervalMs: 50, pongTimeoutMs: 10 }
 const pings = (socket: BinarySocket) =>
   socket.sent.filter((frame) => frame.body.case === "control" && frame.body.value.kind.case === "ping").length
+
+test("a mismatched Ready revision reports both versions and does not open the browser connection", () => {
+  const f = transportFixture({ open: false })
+  try {
+    const socket = f.sockets[0]!
+    const receive = socket.message.bind(socket)
+    socket.message = (data) => {
+      if (typeof data === "string") throw new Error("Expected binary Ready")
+      const frame = decodeStrict(FrameSchema, new Uint8Array(data))
+      if (frame.body.case !== "ready") throw new Error("Expected Ready")
+      frame.body.value.revision = 6
+      receive(encodeStrict(FrameSchema, frame).slice().buffer)
+    }
+    socket.open()
+    expect(f.statuses.some((status) => status.kind === "open")).toBe(false)
+    expect(socket.closes).toEqual([{ code: 1008, reason: "Contract version mismatch: local v5, peer v6" }])
+  } finally { f.transport.close() }
+})
 
 test("an unresponsive browser upgrade expires and reconnects without a close event", () => {
   const f = transportFixture({ open: false })

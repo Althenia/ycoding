@@ -7,7 +7,7 @@ import {
   WireLimit,
 } from "../generated/v5/index.js"
 import type { AssetMetadataResult } from "../generated/v5/index.js"
-import { encodeStrict, decodeStrict, decodeLossless } from "./validate.js"
+import { encodeStrict, decodeCompatible, decodeStrict, decodeLossless } from "./validate.js"
 import { validAssetMime } from "./mime.js"
 
 export function encodeAssetMetadata<M extends DescMessage>(schema: M, metadata: MessageShape<M>) {
@@ -22,7 +22,7 @@ export function encodeAssetMetadata<M extends DescMessage>(schema: M, metadata: 
   return result
 }
 
-export function validateAssetMetadata(value: AssetMetadataResult, typeName: string, opaque = false) {
+export function validateAssetMetadata(value: AssetMetadataResult, typeName: string, opaque = false, compatible = false) {
   if (
     !value.metadata ||
     value.metadata.typeName !== typeName ||
@@ -33,18 +33,19 @@ export function validateAssetMetadata(value: AssetMetadataResult, typeName: stri
   )
     throw new Error("asset metadata")
   if (opaque) return
-  const fields = assetFields(typeName, value.metadata.payload)
+  const fields = assetFields(typeName, value.metadata.payload, compatible)
   if (fields.byteCount !== value.byteCount || decodeLossless(fields.mime!) !== decodeLossless(value.mime))
     throw new Error("asset metadata mismatch")
 }
 
-function assetFields(typeName: string, payload: Uint8Array) {
+function assetFields(typeName: string, payload: Uint8Array, compatible = false) {
+  const decode = compatible ? decodeCompatible : decodeStrict
   if (typeName === fs_read_ResultSchema.typeName) {
-    const value = decodeStrict(fs_read_ResultSchema, payload)
+    const value = decode(fs_read_ResultSchema, payload)
     return { mime: value.data!.mime, byteCount: value.data!.byteCount }
   }
   if (typeName === session_attachment_read_ResultSchema.typeName) {
-    const value = decodeStrict(session_attachment_read_ResultSchema, payload)
+    const value = decode(session_attachment_read_ResultSchema, payload)
     return { mime: value.data!.mime, byteCount: value.data!.bytes }
   }
   throw new Error("unknown asset metadata type")

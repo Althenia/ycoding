@@ -22,8 +22,9 @@ use tokio_tungstenite::{
 };
 use ycoding_core::event_feed::{Payload, Scope, Subscriber};
 use ycoding_protocol::{
+    CONTRACT_DIGEST,
     connection::{Config, Connection, Decision, ProtocolError},
-    decode_strict, limits, v5,
+    decode_compatible, limits, v5,
 };
 
 #[path = "events.rs"]
@@ -670,16 +671,24 @@ async fn connect(
                     tracing::debug!("remote frame admission failed");
                     Error::Incompatible
                 })?;
-                let frame = decode_strict::<v5::Frame>(&bytes).map_err(|_| {
-                    tracing::debug!("remote frame failed strict decoding");
+                let frame = decode_compatible::<v5::Frame>(&bytes).map_err(|_| {
+                    tracing::debug!("remote frame failed decoding");
                     Error::Incompatible
                 })?;
-                if let Some(v5::frame::Body::Ready(ready)) = &frame.body { driver.epoch = ready.connection_epoch.clone(); }
+                let peer_digest = if let Some(v5::frame::Body::Ready(ready)) = &frame.body {
+                    driver.epoch = ready.connection_epoch.clone();
+                    Some(ready.contract_digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>())
+                } else {
+                    None
+                };
                 let ordinal = frame.delivery_ordinal;
                 let decisions = driver.machine.accept_incoming(&token, frame, driver.now()).map_err(protocol_error)?;
                 for decision in decisions {
                     match decision {
                         Decision::Established => {
+                            if let Some(peer_digest) = peer_digest.as_deref().filter(|digest| *digest != CONTRACT_DIGEST) {
+                                tracing::warn!(local_digest = CONTRACT_DIGEST, peer_digest, "Contract digest differs");
+                            }
                             opened.store(true, Ordering::Release);
                             driver.established = true;
                             control.publish(intent.generation, State::On, None);
@@ -733,8 +742,9 @@ async fn connect(
                         },
                         Decision::CancelWork { target, mutation: _ } => driver.cancel(&target),
                         Decision::Closed(close) => {
-                            tracing::debug!(category = ?close.category, code = close.code, "remote connection closed while receiving");
-                            let _ = tokio::time::timeout(Duration::from_secs(1), socket.close(Some(tungstenite::protocol::CloseFrame { code: close.code.into(), reason: close.reason().into() }))).await;
+                            let reason = close.reason();
+                            tracing::debug!(category = ?close.category, code = close.code, %reason, "remote connection closed while receiving");
+                            let _ = tokio::time::timeout(Duration::from_secs(1), socket.close(Some(tungstenite::protocol::CloseFrame { code: close.code.into(), reason: reason.as_ref().into() }))).await;
                             return Err(driver.protocol_close(close.category));
                         },
                         Decision::Send(_) => {},
