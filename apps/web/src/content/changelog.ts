@@ -22,6 +22,21 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.13.4",
+    date: "2026-11-26",
+    title: "Cue & Recall and faster startup",
+    tags: ["Changed", "Fixed"],
+    changes: [
+      { tag: "Changed", text: "Memory search reuses a local BM25 index without changing the Markdown collection." },
+      { tag: "Changed", text: "Set `metadata.activation` to `manual` in `SKILL.md` to keep a skill available by name without offering it in automatic guidance." },
+      { tag: "Changed", text: "New memory entries require a YAML mapping between two `---` lines. A write with a missing closing line or duplicate key fails before it creates the entry." },
+      { tag: "Changed", text: "Remote connects when both peers use the same v5 contract revision, even if additive changes give their schemas different digests. It rejects a different revision before dispatching requests." },
+      { tag: "Fixed", text: "After a Session reopens or compaction completes, the first provider request restores eligible skills with a recorded activation origin and retrieves permitted repository references. A missing source, an unverified activation, or a denied permission leaves the item out. Text from an old command does not invoke it again." },
+      { tag: "Fixed", text: "Memory search includes the raw text of older entries that lack a closing `---`. A warning names the affected entry. To repair it, read the entry, add the delimiter, and write it with the digest from that read. Until then, its ID, bytes and digest stay unchanged." },
+      { tag: "Fixed", text: "The native runtime reports ready after store validation and Session recovery, then runs retention and cleanup in the background. Startup logs show how long each phase takes." },
+    ],
+  },
+  {
     version: "0.13.3",
     date: "2026-11-25",
     title: "Swarm board and MCP Apps",
@@ -32,10 +47,12 @@ export const RELEASES: readonly ReleaseEntry[] = [
       { tag: "Added", text: "Desktop and Web can show read-only MCP Apps previews from completed tool calls. The preview runs in an isolated frame." },
       { tag: "Changed", text: "The native Dots executor runs requests from the authenticated Dots connection as the host user, without sandbox, Permission, or Guardrail checks and without limiting them to a workspace. It needs no executor entry in configuration. Turn Dots access Off to revoke it." },
       { tag: "Fixed", text: "The native runtime starts on large stores. Startup recovery settles leftover shells, lost-shell notices, and interrupted steps in bounded batches, and a usage-data rebuild that exceeds its deadline continues in the hourly maintenance run while startup completes. A startup failure names the stage that failed, for example `production composition failed: shell ledger`." },
-      { tag: "Fixed", text: "Remote connection shows why it could not connect. A failed status read shows the read error and leaves the saved choice unchanged. A connector failure after turning it on shows a specific reason, such as an unenrolled device, a rejected device, or another connector already online for the device." },
+      { tag: "Fixed", text: "Startup logs now show how long store preparation, recovery, and readiness take. Startup skips a redundant decode after it recognizes the current usage format. Analytics maintenance reuses a compatible store and yields during slow rebuilds. Web latency recording acknowledges samples once they commit, even if analytics maintenance is delayed." },
+      { tag: "Fixed", text: "Remote connection shows why it could not connect. A failed status read shows the read error and leaves the saved choice unchanged. A connector failure after turning it on identifies what failed, including a rejected device, a declined WebSocket upgrade, or a socket that closed before Remote became ready. `ycoding remote connect` uses the local backend’s enrollment and reports the result of enabling Remote." },
       { tag: "Fixed", text: "Desktop and Web keep Project and Session context visible alongside the conversation. Intelligent UI tables keep their sort and keyboard focus when the transcript refreshes." },
       { tag: "Fixed", text: "The TUI Session picker searches Recent separately from the full Session list. The model picker distinguishes routes that share a provider label." },
       { tag: "Fixed", text: "The Chrome extension popup lets an in-flight connection status read finish before starting another one." },
+      { tag: "Fixed", text: "Sessions retry interrupted provider responses when doing so is safe. A retry replaces the unfinished draft, and a completed tool result carries forward without running the tool again." },
     ],
   },
   {

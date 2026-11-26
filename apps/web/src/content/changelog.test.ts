@@ -7,8 +7,21 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.13.3 first and matches its release notes", async () => {
+  test("lists v0.13.4 first and matches its release notes", async () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.13.4", title: "Cue & Recall and faster startup", tags: ["Changed", "Fixed"] })
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.13.4.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.13.4\n")
+    const changes = notes.split(/^## /m).flatMap((section) => {
+      const tag = TAGS.find((tag) => section.startsWith(`${tag}\n`))
+      return tag ? [...section.matchAll(/^- (.+)$/gm)].map((match) => ({ tag, text: match[1]! })) : []
+    })
+    expect(entry?.changes).toEqual(changes)
+    expect(after("0.13.4")?.version).toBe("0.13.3")
+  })
+
+  test("retains v0.13.3 and matches its release notes", async () => {
+    const entry = byVersion("0.13.3")
     expect(entry).toMatchObject({ version: "0.13.3", title: "Swarm board and MCP Apps", tags: ["Added", "Changed", "Fixed"] })
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.13.3.md", import.meta.url)).text()
     expect(notes).toStartWith("# YCoding v0.13.3\n")
@@ -87,9 +100,9 @@ describe("release entries", () => {
     expect(after("0.13.0")?.version).toBe("0.12.2")
   })
 
-  test.each(["0.13.4", "0.13.5"])("omits v%s and its note file", async (version) => {
-    expect(byVersion(version)).toBeUndefined()
-    expect(await Bun.file(new URL(`../../../../docs/releases/v${version}.md`, import.meta.url)).exists()).toBe(false)
+  test("omits v0.13.5 and its note file", async () => {
+    expect(byVersion("0.13.5")).toBeUndefined()
+    expect(await Bun.file(new URL("../../../../docs/releases/v0.13.5.md", import.meta.url)).exists()).toBe(false)
   })
 
   test("retains the v0.12.2 Bun edition with its published notes", async () => {
@@ -1932,7 +1945,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 66)).toEqual([
+    expect(versions.slice(0, 67)).toEqual([
+      "0.13.4",
       "0.13.3",
       "0.13.2",
       "0.13.1",
