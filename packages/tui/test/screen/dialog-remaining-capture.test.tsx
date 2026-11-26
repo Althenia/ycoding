@@ -548,6 +548,36 @@ function SyncLocation() {
   return null
 }
 
+test.each([
+  { title: "Copy message", value: "Concrete timeline message", view: () => <DialogMessage sessionID={sessionID} messageID="msg_audit" /> },
+  { title: "Copy path", value: "~/Downloads/session export.md", view: () => <DialogExportResult path="~/Downloads/session export.md" /> },
+])("$title writes the selected text to the clipboard", async ({ title, value, view }) => {
+  const writes: string[] = []
+  let ready: () => boolean
+  function Fixture() {
+    const dialog = useDialog()
+    const data = useData()
+    ready = () => !!data.session.message.get(sessionID, "msg_audit")
+    onMount(() => dialog.replace(view))
+    return <SyncLocation />
+  }
+
+  const app = await testRender(() => <DialogProviders clipboard={{ write: async (text) => { writes.push(text) } }}><Fixture /></DialogProviders>, {
+    width: 100, height: 35, kittyKeyboard: true, useMouse: true,
+  })
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes(title) && ready())
+    const rows = app.captureCharFrame().split("\n")
+    const row = rows.findIndex((line) => line.includes(title))
+    await app.mockMouse.click(rows[row].indexOf(title), row)
+    await app.waitForFrame(() => writes.length > 0)
+    expect(writes).toEqual([value])
+  } finally {
+    app.renderer.destroy()
+  }
+}, 30_000)
+
 async function capture(dialogState: (typeof states)[number], viewport: (typeof viewports)[number]) {
   function DialogFixture() {
     const dialog = useDialog()

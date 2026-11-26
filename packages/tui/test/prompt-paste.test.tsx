@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
+import { TextareaRenderable } from "@opentui/core"
 import { json, sessionSnapshot } from "./fixture/tui-client"
 import { materializeClipboardImage } from "../src/clipboard"
 import { renderScreen } from "./screen/harness"
@@ -112,6 +113,50 @@ async function pasteInto(
   await trigger()
   await waitForFrameText(screen, expected)
 }
+
+test("pastes whitespace from the terminal without reading the host clipboard", async () => {
+  let reads = 0
+  const screen = await renderScreen({
+    width: 100,
+    height: 40,
+    args: { sessionID },
+    route,
+    clipboard: { read: async () => {
+      reads++
+      return { type: "text", mime: "text/plain", text: "different host clipboard" }
+    } },
+    settle: "Message YCoding…",
+  })
+  try {
+    await pasteInto(screen, () => screen.input.typeText("Draft"), "Draft")
+    await screen.input.pasteBracketedText(" \r\n ")
+    await screen.renderOnce()
+    const editor = screen.renderer.currentFocusedEditor
+    expect(editor).toBeInstanceOf(TextareaRenderable)
+    expect(reads).toBe(0)
+    if (!(editor instanceof TextareaRenderable)) throw new Error("Expected the focused draft editor")
+    expect(editor.plainText).toBe("Draft \n ")
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("pastes native clipboard text through the configured paste command", async () => {
+  const text = "Clipboard text with Ω"
+  const screen = await renderScreen({
+    width: 100,
+    height: 40,
+    args: { sessionID },
+    route,
+    clipboard: { read: async () => ({ type: "text", mime: "text/plain", text }) },
+    settle: "Message YCoding…",
+  })
+  try {
+    await pasteInto(screen, () => screen.input.pressKey("v", { ctrl: true }), text)
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
 
 test("attaches a clipboard image from ctrl+v", async () => {
   const attachment = await image()

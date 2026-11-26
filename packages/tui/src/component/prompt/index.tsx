@@ -2197,8 +2197,8 @@ export function Prompt(props: PromptProps) {
         return
       }
       // If not all candidates are valid files, fall through to text handling.
-    } else {
-      const filepath = pastedFilepath(pastedContent, terminalEnvironment.platform)
+    } else if (candidates.length === 1) {
+      const filepath = candidates[0]
       const isUrl = /^(https?):\/\//.test(filepath)
       if (!isUrl) {
         const attachment = await readLocalAttachment(filepath)
@@ -2536,11 +2536,10 @@ export function Prompt(props: PromptProps) {
                 // Windows ConPTY/Terminal often sends CR-only newlines in bracketed paste
                 // Replace CRLF first, then any remaining CR
                 const normalizedText = decodePasteBytes(event.bytes).replace(/\r\n/g, "\n").replace(/\r/g, "\n")
-                const pastedContent = normalizedText.trim()
 
                 // Windows Terminal <1.25 can surface image-only clipboard as an
                 // empty bracketed paste. Windows Terminal 1.25+ does not.
-                if (!pastedContent) {
+                if (!normalizedText) {
                   keymap.dispatch("prompt.paste")
                   return
                 }

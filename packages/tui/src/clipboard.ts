@@ -27,14 +27,19 @@ function command(command: string, args: string[] = [], input?: string, signal?: 
       if (code === 0) return resolve(Buffer.concat(output))
       reject(new Error(`${command} exited with code ${code}`))
     })
-    if (input !== undefined) child.stdin?.end(input)
+    if (input !== undefined) {
+      child.stdin?.on("error", reject)
+      child.stdin?.end(input)
+    }
   })
 }
 
 function writeOsc52(text: string) {
   if (!process.stdout.isTTY) return
   const sequence = `\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`
-  process.stdout.write(process.env.TMUX || process.env.STY ? `\x1bPtmux;\x1b${sequence}\x1b\\` : sequence)
+  if (process.env.TMUX) process.stdout.write(`\x1bPtmux;\x1b${sequence}\x1b\\`)
+  else if (process.env.STY) process.stdout.write(`\x1bP${sequence}\x1b\\`)
+  else process.stdout.write(sequence)
 }
 
 export async function read(options?: ClipboardReadOptions) {
@@ -126,6 +131,20 @@ function run(args) {
   return undefined
 }
 
+export async function writeMacOSClipboard(text: string, pasteboardName?: string) {
+  await command("osascript", ["-l", "JavaScript", "-e", `
+ObjC.import('AppKit');
+function run(args) {
+  const board = args[0] ? $.NSPasteboard.pasteboardWithName(args[0]) : $.NSPasteboard.generalPasteboard;
+  const bytes = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
+  const text = $.NSString.alloc.initWithDataEncoding(bytes, $.NSUTF8StringEncoding);
+  if (text.isNil()) throw Error('Clipboard text is not UTF-8');
+  board.clearContents;
+  if (!board.setStringForType(text, $.NSPasteboardTypeString)) throw Error('Could not write clipboard text');
+}
+`, "--", ...(pasteboardName ? [pasteboardName] : [])], text)
+}
+
 export async function materializeClipboardImage(
   root: string,
   write: (file: string) => Promise<void>,
@@ -194,12 +213,7 @@ let copyMethod: Promise<(text: string) => Promise<void>> | undefined
 function getCopyMethod() {
   return (copyMethod ??= (async () => {
     const native = copyCommand(platform(), Boolean(process.env.WAYLAND_DISPLAY), (name) => Boolean(Bun.which(name)))
-    if (native?.[0] === "osascript") {
-      return async (text: string) => {
-        const escaped = text.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
-        await command("osascript", ["-e", `set the clipboard to "${escaped}"`]).catch(() => undefined)
-      }
-    }
+    if (native?.[0] === "osascript") return writeMacOSClipboard
     if (native) {
       return async (text: string) => {
         await command(native[0], native.slice(1), text).catch(() => undefined)
@@ -212,8 +226,13 @@ function getCopyMethod() {
   })())
 }
 
-export async function write(text: string) {
+export async function write(text: string, warn?: (message: string) => void) {
   writeOsc52(text)
   const method = await getCopyMethod()
-  await method(text)
+  await method(text).catch((error: unknown) => {
+    const reason = error instanceof Error && "code" in error && typeof error.code === "string" && /^E[A-Z0-9]+$/.test(error.code)
+      ? error.code
+      : "helper failed"
+    warn?.(`Native clipboard write failed: ${reason}`)
+  })
 }

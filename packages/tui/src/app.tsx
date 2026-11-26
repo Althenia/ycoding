@@ -335,7 +335,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                               skipInitialLoading: Boolean(process.env.YCODING_FAST_BOOT),
                             }}
                           >
-                            <ClipboardProvider value={input.clipboard}>
+                            <ClipboardProvider value={input.clipboard} warn={(message) => log("warn", message, { component: "clipboard" })}>
                               <ArgsProvider {...input.args}>
                                 <ConfigProvider
                                   config={config}
