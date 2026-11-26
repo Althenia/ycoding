@@ -36,6 +36,7 @@ pub(crate) fn bootstrap(
     if let Some(metadata) = initial {
         let mut write = db.begin_write()?;
         write.set_durability(Durability::Immediate)?;
+        write.set_quick_repair(true);
         {
             let mut table = write.open_table(definition("storage_metadata"))?;
             for (key, value) in [

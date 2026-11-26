@@ -55,21 +55,77 @@ pub(crate) fn recover<T>(
     {
         return Err(DatabaseError::DatabaseAlreadyOpen.into());
     }
-    let staged = temporary(database);
-    let mut file = private_file(&staged)?;
-    let result = (|| {
-        io::copy(&mut source, &mut file)?;
-        drop(file);
+    let directory = temporary(database);
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&directory)?;
+    let staged = directory.join("recovered.redb");
+    let result = (|| -> Result<T, Error> {
+        stage_recovery(&mut source, &staged)?;
         let outcome = prepare(&staged)?;
         File::open(&staged)?.sync_all()?;
         std::fs::rename(&staged, database)?;
-        sync_parent(database)?;
         Ok(outcome)
     })();
     if result.is_err() {
-        let _ = std::fs::remove_file(&staged);
+        let _ = std::fs::remove_file(staged);
     }
-    result
+    let _ = std::fs::remove_dir(directory);
+    let outcome = result?;
+    sync_parent(database)?;
+    Ok(outcome)
+}
+
+fn stage_recovery(source: &mut File, staged: &Path) -> Result<(), Error> {
+    #[cfg(target_os = "macos")]
+    if clone_recovery(source, staged)? {
+        return Ok(());
+    }
+    io::copy(source, &mut private_file(staged)?)?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn clone_recovery(source: &File, staged: &Path) -> io::Result<bool> {
+    use std::{
+        ffi::{CString, c_char, c_int},
+        os::{
+            fd::AsRawFd,
+            unix::{ffi::OsStrExt, fs::PermissionsExt},
+        },
+    };
+
+    unsafe extern "C" {
+        fn fclonefileat(srcfd: c_int, dst_dirfd: c_int, dst: *const c_char, flags: u32) -> c_int;
+    }
+    const CLONE_NOOWNERCOPY: u32 = 0x0002;
+
+    let (Some(parent), Some(name)) = (staged.parent(), staged.file_name()) else {
+        return Err(io::ErrorKind::InvalidInput.into());
+    };
+    let parent = File::open(parent)?;
+    let name = CString::new(name.as_bytes())?;
+    if unsafe {
+        fclonefileat(
+            source.as_raw_fd(),
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            CLONE_NOOWNERCOPY,
+        )
+    } == 0
+    {
+        std::fs::set_permissions(staged, std::fs::Permissions::from_mode(0o600))?;
+        return Ok(true);
+    }
+    let error = io::Error::last_os_error();
+    match error.kind() {
+        io::ErrorKind::Unsupported | io::ErrorKind::CrossesDevices => Ok(false),
+        _ => Err(error),
+    }
 }
 
 pub(crate) fn preserve(

@@ -880,6 +880,7 @@ fn transact<R>(
         fenced.store(true, Ordering::Release);
     })?;
     transaction.set_durability(Durability::Immediate)?;
+    transaction.set_quick_repair(true);
     let mut write = Write {
         transaction: &transaction,
         metadata,
@@ -1809,7 +1810,7 @@ mod tests {
     use redb::{Database, StorageBackend};
     use std::fs::OpenOptions;
     use std::io;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
 
@@ -1818,7 +1819,7 @@ mod tests {
     #[derive(Debug)]
     struct SyncFault {
         file: redb::backends::FileBackend,
-        armed: Arc<AtomicBool>,
+        syncs_until_error: Arc<AtomicUsize>,
         barrier: SyncBarrier,
     }
 
@@ -1849,7 +1850,13 @@ mod tests {
                 reached.send(()).unwrap();
                 release.recv_timeout(Duration::from_secs(10)).unwrap();
             }
-            if self.armed.swap(false, Ordering::AcqRel) {
+            if self
+                .syncs_until_error
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+                    left.checked_sub(1)
+                })
+                == Ok(1)
+            {
                 return Err(io::Error::other(
                     "injected post-fsync acknowledgement failure",
                 ));
@@ -1860,11 +1867,16 @@ mod tests {
 
     #[test]
     fn durable_commit_ack_failure_fences_queued_operations_without_replay() {
+        assert_commit_fenced_after_sync(1, 1);
+        assert_commit_fenced_after_sync(2, 2);
+    }
+
+    fn assert_commit_fenced_after_sync(sync: usize, expected_generation: u64) {
         let path = std::env::temp_dir().join(format!(
-            "ycoding-store-sync-fault-{}.redb",
+            "ycoding-store-sync-fault-{}-{sync}.redb",
             std::process::id()
         ));
-        let armed = Arc::new(AtomicBool::new(false));
+        let syncs_until_error = Arc::new(AtomicUsize::new(0));
         let backend = SyncFault {
             file: redb::backends::FileBackend::new(
                 OpenOptions::new()
@@ -1875,7 +1887,7 @@ mod tests {
                     .unwrap(),
             )
             .unwrap(),
-            armed: Arc::clone(&armed),
+            syncs_until_error: Arc::clone(&syncs_until_error),
             barrier: Arc::new(std::sync::Mutex::new(None)),
         };
         let options = Options {
@@ -1916,7 +1928,7 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        armed.store(true, Ordering::Release);
+        syncs_until_error.store(sync, Ordering::Release);
         release.send(()).unwrap();
         assert!(matches!(receipt.wait(), Err(Error::CommitUncertain(_))));
         assert!(store.is_fenced());
@@ -1926,7 +1938,7 @@ mod tests {
         assert!(matches!(store.submit(|_| Ok(())), Err(Error::WriterFenced)));
         store.shutdown().unwrap();
         let reopened = Store::open(&path, options, Catalog::EMPTY).unwrap();
-        assert_eq!(reopened.metadata().generation, 2);
+        assert_eq!(reopened.metadata().generation, expected_generation);
         reopened.shutdown().unwrap();
         std::fs::remove_file(path).unwrap();
     }
@@ -1943,7 +1955,7 @@ mod tests {
             .create_new(true)
             .open(&path)
             .unwrap();
-        let armed = Arc::new(AtomicBool::new(false));
+        let syncs_until_error = Arc::new(AtomicUsize::new(0));
         let barrier = Arc::new(std::sync::Mutex::new(None));
         let options = Options {
             cache_bytes: 1024 * 1024,
@@ -1954,7 +1966,7 @@ mod tests {
             .set_cache_size(options.cache_bytes)
             .create_with_backend(SyncFault {
                 file: redb::backends::FileBackend::new(file).unwrap(),
-                armed: Arc::clone(&armed),
+                syncs_until_error: Arc::clone(&syncs_until_error),
                 barrier: Arc::clone(&barrier),
             })
             .unwrap();
@@ -1980,7 +1992,7 @@ mod tests {
             release.send(()).unwrap();
             receipt.wait().unwrap();
         }
-        armed.store(true, Ordering::Release);
+        syncs_until_error.store(1, Ordering::Release);
         assert!(matches!(
             store.reclaim().unwrap().wait(),
             Err(Error::CommitUncertain(_))
@@ -2873,7 +2885,7 @@ mod tests {
                     .unwrap(),
             )
             .unwrap(),
-            armed: Arc::new(AtomicBool::new(false)),
+            syncs_until_error: Arc::new(AtomicUsize::new(0)),
             barrier: Arc::clone(&barrier),
         };
         let options = Options {

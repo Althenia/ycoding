@@ -335,7 +335,26 @@ fn current_rss() -> Reading {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn current_rss() -> Reading {
+    let mut info = std::mem::MaybeUninit::<libc::proc_taskinfo>::uninit();
+    let bytes = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
+    let read = unsafe {
+        libc::proc_pidinfo(
+            std::process::id() as libc::c_int,
+            libc::PROC_PIDTASKINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            bytes,
+        )
+    };
+    if read != bytes {
+        return Reading::Error("read-failed");
+    }
+    Reading::Available(unsafe { info.assume_init() }.pti_resident_size)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn current_rss() -> Reading {
     Reading::Unsupported
 }

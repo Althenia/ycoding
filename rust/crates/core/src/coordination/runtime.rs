@@ -40,7 +40,7 @@ use ycoding_schema::{
     session_pending, stringify_json,
 };
 use ycoding_store::{
-    IndexOrder, IndexQuery, Snapshot,
+    IndexCursor, IndexEntry, IndexOrder, IndexQuery, KeyPart, Snapshot,
     coordination::MemberTable,
     project::ProjectTable,
     resources::{Kv, KvTable},
@@ -48,12 +48,30 @@ use ycoding_store::{
         Document, Event, EventTable, MessageTable, NewEvent, NotificationTable, PendingTable,
         SessionTable, TaskTable,
     },
+    tuple_key,
 };
 
 pub const NOTICE: &str = "project_notification";
 pub const ESCALATION: &str = "project_escalation";
 pub const INACTIVE_MESSAGE: &str =
     "Project is inactive; send a message in the master chat to resume";
+const MEMBERSHIP_EVENTS: [&str; 2] = [
+    "coordination.group.created.2",
+    "coordination.group.changed.1",
+];
+const HELD_EVENTS: [&str; 4] = [
+    "session.execution.started.1",
+    "session.step.ended.1",
+    "session.execution.succeeded.1",
+    "session.execution.interrupted.1",
+];
+const RECOVERED_EVENTS: [&str; 5] = [
+    HELD_EVENTS[0],
+    HELD_EVENTS[1],
+    HELD_EVENTS[2],
+    HELD_EVENTS[3],
+    "session.execution.failed.1",
+];
 pub const HANDLED_EVENTS: &[&str] = &[
     "session.input.admitted.1",
     "session.input.promoted.1",
@@ -1796,33 +1814,32 @@ impl Runtime {
     }
     fn last_failed(&self, id: &session::Id) -> Result<bool, Error> {
         let snapshot = self.0.coordination.client().snapshot()?;
-        let mut after = None;
-        loop {
-            let page = events(
+        let types = [
+            "session.execution.started.1",
+            "session.execution.succeeded.1",
+            "session.execution.failed.1",
+            "session.execution.interrupted.1",
+        ];
+        let mut latest = None::<Event>;
+        for kind in types {
+            let event = event_page(
                 &snapshot,
-                id.as_lossless(),
+                &event_prefix(id.as_lossless(), kind),
                 IndexOrder::Descending,
-                after.as_ref(),
-                128,
-            )?;
-            for event in &page {
-                if matches!(
-                    event.record.type_.as_str(),
-                    Some(
-                        "session.execution.started.1"
-                            | "session.execution.succeeded.1"
-                            | "session.execution.failed.1"
-                            | "session.execution.interrupted.1"
-                    )
-                ) {
-                    return Ok(event.record.type_.as_str() == Some("session.execution.failed.1"));
-                }
+                None,
+                None,
+                1,
+            )?
+            .pop();
+            if let Some(entry) = event
+                && latest
+                    .as_ref()
+                    .is_none_or(|latest| entry.record.seq > latest.seq)
+            {
+                latest = Some(entry.record);
             }
-            let Some(last) = page.last() else {
-                return Ok(false);
-            };
-            after = Some(last.cursor.clone());
         }
+        Ok(latest.is_some_and(|event| event.type_.as_str() == Some("session.execution.failed.1")))
     }
     fn lookup(&self, target: &session::Id, id: &session_message::Id) -> Result<Lookup, Error> {
         let snapshot = self.0.coordination.client().snapshot()?;
@@ -2387,77 +2404,56 @@ impl Runtime {
     ) -> Result<i64, Error> {
         let snapshot = self.0.coordination.client().snapshot()?;
         let mut receivers = BTreeSet::from([receiver.as_lossless().clone()]);
-        let mut after = None;
-        loop {
-            let page = events(
-                &snapshot,
-                scope.group_id.as_lossless(),
-                IndexOrder::Ascending,
-                after.as_ref(),
-                100,
-            )?;
-            let Some(last) = page.last() else {
-                break;
-            };
-            for event in &page {
-                if event.record.type_.as_str() != Some("coordination.member.owner.changed.1") {
-                    continue;
-                }
-                let change = c::OwnerChangedData::decode(&event.record.data)?;
-                if &change.session_id == member
-                    && let Some(owner) = change.owner_session_id
-                {
-                    receivers.insert(owner.as_lossless().clone());
-                }
+        let mut owners = IndexedEvents::new(
+            &snapshot,
+            scope.group_id.as_lossless(),
+            &["coordination.member.owner.changed.1"],
+            IndexOrder::Ascending,
+            |_| None,
+        );
+        while let Some(event) = owners.next()? {
+            let change = c::OwnerChangedData::decode(&event.data)?;
+            if &change.session_id == member
+                && let Some(owner) = change.owner_session_id
+            {
+                receivers.insert(owner.as_lossless().clone());
             }
-            after = Some(last.cursor.clone());
         }
         let mut sequence = -1i64;
         for aggregate in &receivers {
-            let mut after = None;
-            loop {
-                let page = events(
-                    &snapshot,
-                    aggregate,
-                    IndexOrder::Ascending,
-                    after.as_ref(),
-                    100,
-                )?;
-                let Some(last) = page.last() else {
-                    break;
+            let mut admissions = IndexedEvents::new(
+                &snapshot,
+                aggregate,
+                &["session.input.admitted.1"],
+                IndexOrder::Ascending,
+                |_| None,
+            );
+            while let Some(row) = admissions.next()? {
+                let JsonValue::Object(data) = &row.data else {
+                    continue;
                 };
-                for event in &page {
-                    let row = &event.record;
-                    if row.type_.as_str() != Some("session.input.admitted.1") {
-                        continue;
-                    }
-                    let JsonValue::Object(data) = &row.data else {
-                        continue;
-                    };
-                    let Some(JsonValue::Object(input)) = data.get(&"input".into()) else {
-                        continue;
-                    };
-                    let Some(JsonValue::Object(input)) = input.get(&"data".into()) else {
-                        continue;
-                    };
-                    let Some(JsonValue::Object(metadata)) = input.get(&"metadata".into()) else {
-                        continue;
-                    };
-                    let text = |field: &str| match metadata.get(&field.into()) {
-                        Some(JsonValue::String(value)) => value.as_str(),
-                        _ => None,
-                    };
-                    if text("source") != Some(NOTICE)
-                        || text("groupID") != scope.group_id.as_lossless().as_str()
-                        || text("memberSessionID") != member.as_lossless().as_str()
-                    {
-                        continue;
-                    }
-                    if let Some(JsonValue::Number(value)) = metadata.get(&"memberSequence".into()) {
-                        sequence = sequence.max(*value as i64);
-                    }
+                let Some(JsonValue::Object(input)) = data.get(&"input".into()) else {
+                    continue;
+                };
+                let Some(JsonValue::Object(input)) = input.get(&"data".into()) else {
+                    continue;
+                };
+                let Some(JsonValue::Object(metadata)) = input.get(&"metadata".into()) else {
+                    continue;
+                };
+                let text = |field: &str| match metadata.get(&field.into()) {
+                    Some(JsonValue::String(value)) => value.as_str(),
+                    _ => None,
+                };
+                if text("source") != Some(NOTICE)
+                    || text("groupID") != scope.group_id.as_lossless().as_str()
+                    || text("memberSessionID") != member.as_lossless().as_str()
+                {
+                    continue;
                 }
-                after = Some(last.cursor.clone());
+                if let Some(JsonValue::Number(value)) = metadata.get(&"memberSequence".into()) {
+                    sequence = sequence.max(*value as i64);
+                }
             }
         }
         Ok(sequence)
@@ -2468,70 +2464,44 @@ impl Runtime {
         member: &session::Id,
         receiver: &session::Id,
         wake: bool,
-    ) -> Result<(), Error> {
+    ) -> Result<(i64, bool), Error> {
         let snapshot = self.0.coordination.client().snapshot()?;
         let mut joined: Option<i64> = None;
-        let mut boundary = false;
-        let mut after = None;
-        while !boundary {
-            let history = events(
-                &snapshot,
-                scope.group_id.as_lossless(),
-                IndexOrder::Descending,
-                after.as_ref(),
-                100,
-            )?;
-            if history.is_empty() {
+        let mut membership = IndexedEvents::new(
+            &snapshot,
+            scope.group_id.as_lossless(),
+            &MEMBERSHIP_EVENTS,
+            IndexOrder::Descending,
+            |_| None,
+        );
+        while let Some(event) = membership.next()? {
+            let current = c::Snapshot::decode(&event.data)?;
+            if !current.member_session_ids.contains(member) {
                 break;
             }
-            for event in &history {
-                if !matches!(
-                    event.record.type_.as_str(),
-                    Some("coordination.group.created.2" | "coordination.group.changed.1")
-                ) {
-                    continue;
-                }
-                let current = c::Snapshot::decode(&event.record.data)?;
-                if !current.member_session_ids.contains(member) {
-                    boundary = true;
-                    break;
-                }
-                joined = Some(event.record.created);
-            }
-            after = history.last().map(|entry| entry.cursor.clone());
+            joined = Some(event.created);
         }
         let Some(joined) = joined else {
-            return Ok(());
+            return Ok((-1, false));
         };
         let delivered = self.delivered_sequence(scope, member, receiver)?;
-        let types = [
-            "session.execution.started.1",
-            "session.step.ended.1",
-            "session.execution.succeeded.1",
-            "session.execution.interrupted.1",
-        ];
-        let mut held = Vec::new();
-        let mut after = None;
-        loop {
-            let page = events(
-                &snapshot,
-                member.as_lossless(),
-                IndexOrder::Ascending,
-                after.as_ref(),
-                100,
-            )?;
-            if page.is_empty() {
-                break;
+        let mut pending = IndexedEvents::new(
+            &snapshot,
+            member.as_lossless(),
+            &HELD_EVENTS,
+            IndexOrder::Ascending,
+            |_| Some(delivered),
+        );
+        let mut count = 0usize;
+        let mut latest = None;
+        while let Some(event) = pending.next()? {
+            if event.created >= joined {
+                count += 1;
+                latest = Some(event);
             }
-            after = page.last().map(|entry| entry.cursor.clone());
-            held.extend(page.into_iter().map(|entry| entry.record).filter(|event| {
-                event.created >= joined
-                    && event.seq > delivered
-                    && types.contains(&event.type_.as_str().unwrap_or_default())
-            }));
         }
-        let Some(latest) = held.last() else {
-            return Ok(());
+        let Some(latest) = latest else {
+            return Ok((delivered, false));
         };
         let event = match latest.type_.as_str() {
             Some("session.execution.started.1") => Notice::Started,
@@ -2540,7 +2510,7 @@ impl Runtime {
             _ => Notice::Interrupted,
         };
         if event == Notice::Completed && self.work_remains(member)? {
-            return Ok(());
+            return Ok((delivered, false));
         }
         let identity = join(&[&"held".into(), receiver.as_lossless(), &latest.id]);
         let detail = ObjectEncoder::new()
@@ -2548,7 +2518,7 @@ impl Runtime {
             .field(
                 "held",
                 &ObjectEncoder::new()
-                    .field("count", &(held.len() as f64))
+                    .field("count", &(count as f64))
                     .finish(),
             )
             .finish();
@@ -2561,7 +2531,7 @@ impl Runtime {
             (detail, None),
         )
         .await?;
-        Ok(())
+        Ok((delivered, true))
     }
     async fn notify(
         &self,
@@ -3142,35 +3112,22 @@ impl Runtime {
         for group in self.0.coordination.list()? {
             let snapshot = self.0.coordination.client().snapshot()?;
             let mut joined = BTreeMap::new();
-            let mut after = None;
-            loop {
-                let changes = events(
-                    &snapshot,
-                    group.id.as_lossless(),
-                    IndexOrder::Ascending,
-                    after.as_ref(),
-                    100,
-                )?;
-                for change in &changes {
-                    if !matches!(
-                        change.record.type_.as_str(),
-                        Some("coordination.group.created.2" | "coordination.group.changed.1")
-                    ) {
-                        continue;
-                    }
-                    let snapshot = c::Snapshot::decode(&change.record.data)?;
-                    joined.retain(|member, _| snapshot.member_session_ids.contains(member));
-                    for member in snapshot.member_session_ids {
-                        joined.entry(member).or_insert(change.record.created);
-                    }
+            let mut membership = IndexedEvents::new(
+                &snapshot,
+                group.id.as_lossless(),
+                &MEMBERSHIP_EVENTS,
+                IndexOrder::Ascending,
+                |_| None,
+            );
+            while let Some(change) = membership.next()? {
+                let state = c::Snapshot::decode(&change.data)?;
+                joined.retain(|member, _| state.member_session_ids.contains(member));
+                for member in state.member_session_ids {
+                    joined.entry(member).or_insert(change.created);
                 }
-                let Some(last) = changes.last() else {
-                    break;
-                };
-                after = Some(last.cursor.clone());
             }
             for member in group.member_session_ids {
-                let Some(since) = joined.get(&member) else {
+                let Some(&since) = joined.get(&member) else {
                     continue;
                 };
                 self.0
@@ -3182,7 +3139,7 @@ impl Runtime {
                         if scope.group_id != group.id {
                             return Ok(());
                         }
-                        if self
+                        let delivered = if self
                             .0
                             .sessions
                             .get(&member)?
@@ -3201,93 +3158,78 @@ impl Runtime {
                                     )
                                     .await?;
                             }
-                            return Ok(());
+                            i64::MAX
+                        } else {
+                            let receiver = self.receiver_of(&scope, &member, false).await?;
+                            let mut delivered = i64::MAX;
+                            if let Some(receiver) = &receiver {
+                                let (previous, attempted) =
+                                    self.deliver_held(&scope, &member, receiver, false).await?;
+                                delivered = if attempted {
+                                    self.delivered_sequence(&scope, &member, receiver)?
+                                } else {
+                                    previous
+                                };
+                            }
+                            self.handoff(&scope, &member, receiver.as_ref(), false, "unowned")
+                                .await?;
+                            delivered
+                        };
+                        let mut retained = IndexedEvents::new(
+                            &snapshot,
+                            member.as_lossless(),
+                            &RECOVERED_EVENTS,
+                            IndexOrder::Ascending,
+                            |kind| (kind != "session.execution.failed.1").then_some(delivered),
+                        );
+                        while let Some(event) = retained.next()? {
+                            if event.created < since {
+                                continue;
+                            }
+                            let notice = match event.type_.as_str() {
+                                Some("session.execution.started.1") => Notice::Started,
+                                Some("session.step.ended.1") => Notice::Progress,
+                                Some("session.execution.succeeded.1") => Notice::Completed,
+                                Some("session.execution.failed.1") => Notice::Failed,
+                                Some("session.execution.interrupted.1") => Notice::Interrupted,
+                                _ => continue,
+                            };
+                            if notice == Notice::Completed && self.work_remains(&member)? {
+                                continue;
+                            }
+                            let path = JsonPath::default();
+                            let object = ObjectDecoder::new(&event.data, &path)?;
+                            let detail = match notice {
+                                Notice::Failed => ObjectEncoder::new()
+                                    .field(
+                                        "excerpt",
+                                        &clip(
+                                            &object
+                                                .field::<ycoding_schema::session_error::Error>(
+                                                    "error",
+                                                )?
+                                                .message,
+                                        ),
+                                    )
+                                    .finish(),
+                                Notice::Interrupted => ObjectEncoder::new()
+                                    .field(
+                                        "excerpt",
+                                        format!(
+                                            "Interrupted ({})",
+                                            readable(&object.field("reason")?)
+                                        )
+                                        .as_str(),
+                                    )
+                                    .finish(),
+                                _ => ObjectEncoder::new().finish(),
+                            };
+                            self.notify(&scope, &member, notice, &event.id, detail, false)
+                                .await?;
                         }
-                        let receiver = self.receiver_of(&scope, &member, false).await?;
-                        if let Some(receiver) = &receiver {
-                            self.deliver_held(&scope, &member, receiver, false).await?;
-                        }
-                        self.handoff(&scope, &member, receiver.as_ref(), false, "unowned")
-                            .await
+                        Ok(())
                     })
                     .await?;
-                let mut after = None;
-                loop {
-                    let retained = events(
-                        &snapshot,
-                        member.as_lossless(),
-                        IndexOrder::Ascending,
-                        after.as_ref(),
-                        100,
-                    )?;
-                    for event in &retained {
-                        if event.record.created < *since {
-                            continue;
-                        }
-                        let notice = match event.record.type_.as_str() {
-                            Some("session.execution.started.1") => Notice::Started,
-                            Some("session.step.ended.1") => Notice::Progress,
-                            Some("session.execution.succeeded.1") => Notice::Completed,
-                            Some("session.execution.failed.1") => Notice::Failed,
-                            Some("session.execution.interrupted.1") => Notice::Interrupted,
-                            _ => continue,
-                        };
-                        self.0
-                            .coordination
-                            .with_ownership(&group.id, async {
-                                let Some(scope) = self.0.coordination.member_of(&member)? else {
-                                    return Ok::<(), Error>(());
-                                };
-                                if scope.group_id != group.id {
-                                    return Ok(());
-                                }
-                                if notice == Notice::Completed && self.work_remains(&member)? {
-                                    return Ok(());
-                                }
-                                let path = JsonPath::default();
-                                let object = ObjectDecoder::new(&event.record.data, &path)?;
-                                let detail = match notice {
-                                    Notice::Failed => ObjectEncoder::new()
-                                        .field(
-                                            "excerpt",
-                                            &clip(
-                                                &object
-                                                    .field::<ycoding_schema::session_error::Error>(
-                                                        "error",
-                                                    )?
-                                                    .message,
-                                            ),
-                                        )
-                                        .finish(),
-                                    Notice::Interrupted => ObjectEncoder::new()
-                                        .field(
-                                            "excerpt",
-                                            format!(
-                                                "Interrupted ({})",
-                                                readable(&object.field("reason")?)
-                                            )
-                                            .as_str(),
-                                        )
-                                        .finish(),
-                                    _ => ObjectEncoder::new().finish(),
-                                };
-                                self.notify(
-                                    &scope,
-                                    &member,
-                                    notice,
-                                    &event.record.id,
-                                    detail,
-                                    false,
-                                )
-                                .await
-                            })
-                            .await?;
-                    }
-                    let Some(last) = retained.last() else {
-                        break;
-                    };
-                    after = Some(last.cursor.clone());
-                }
             }
         }
         Ok(())
@@ -3450,23 +3392,103 @@ fn delivery(row: &ycoding_store::session::Pending) -> Result<Delivery, Error> {
             .encode(),
     )?)
 }
-fn events(
+fn event_prefix(aggregate: &LosslessString, kind: &str) -> Vec<u8> {
+    tuple_key(&[KeyPart::String(aggregate), KeyPart::String(&kind.into())])
+}
+
+fn event_page(
     snapshot: &Snapshot,
-    aggregate: &LosslessString,
+    prefix: &[u8],
     order: IndexOrder,
-    after: Option<&ycoding_store::IndexCursor>,
+    after: Option<&IndexCursor>,
+    min: Option<&[u8]>,
     limit: usize,
-) -> Result<Vec<ycoding_store::IndexEntry<Event>>, ycoding_store::Error> {
-    let prefix = key(aggregate);
+) -> Result<Vec<IndexEntry<Event>>, ycoding_store::Error> {
     snapshot.index_range::<EventTable>(
-        "event_aggregate_seq_idx",
+        "event_aggregate_type_seq_idx",
         IndexQuery {
-            lower: Bound::Unbounded,
+            lower: min.map_or(Bound::Unbounded, Bound::Excluded),
             upper: Bound::Unbounded,
-            prefix: Some(&prefix),
+            prefix: Some(prefix),
             order,
             after,
             limit,
         },
     )
+}
+
+struct EventStream {
+    prefix: Vec<u8>,
+    min: Option<Vec<u8>>,
+    after: Option<IndexCursor>,
+    page: std::iter::Peekable<std::vec::IntoIter<IndexEntry<Event>>>,
+    exhausted: bool,
+}
+
+struct IndexedEvents<'a> {
+    snapshot: &'a Snapshot,
+    order: IndexOrder,
+    streams: Vec<EventStream>,
+}
+
+impl<'a> IndexedEvents<'a> {
+    fn new(
+        snapshot: &'a Snapshot,
+        aggregate: &LosslessString,
+        kinds: &[&str],
+        order: IndexOrder,
+        since: impl Fn(&str) -> Option<i64>,
+    ) -> Self {
+        let streams = kinds
+            .iter()
+            .map(|kind| EventStream {
+                prefix: event_prefix(aggregate, kind),
+                min: since(kind).map(|seq| {
+                    tuple_key(&[
+                        KeyPart::String(aggregate),
+                        KeyPart::String(&(*kind).into()),
+                        KeyPart::I64(seq),
+                    ])
+                }),
+                after: None,
+                page: Vec::new().into_iter().peekable(),
+                exhausted: false,
+            })
+            .collect();
+        Self {
+            snapshot,
+            order,
+            streams,
+        }
+    }
+
+    fn next(&mut self) -> Result<Option<Event>, ycoding_store::Error> {
+        const PAGE: usize = 32;
+        let mut head = None::<(usize, i64)>;
+        for (index, stream) in self.streams.iter_mut().enumerate() {
+            if stream.page.peek().is_none() && !stream.exhausted {
+                let page = event_page(
+                    self.snapshot,
+                    &stream.prefix,
+                    self.order,
+                    stream.after.as_ref(),
+                    stream.min.as_deref(),
+                    PAGE,
+                )?;
+                stream.exhausted = page.len() < PAGE;
+                stream.after = page.last().map(|entry| entry.cursor.clone());
+                stream.page = page.into_iter().peekable();
+            }
+            if let Some(entry) = stream.page.peek() {
+                let seq = entry.record.seq;
+                if head.is_none_or(|(_, selected)| match self.order {
+                    IndexOrder::Ascending => seq < selected,
+                    IndexOrder::Descending => seq > selected,
+                }) {
+                    head = Some((index, seq));
+                }
+            }
+        }
+        Ok(head.and_then(|(index, _)| self.streams[index].page.next().map(|entry| entry.record)))
+    }
 }

@@ -9,7 +9,11 @@ use crate::{
     },
 };
 use redb::{ReadTransaction, ReadableTable, WriteTransaction};
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    ops::Bound::{Excluded, Included, Unbounded},
+    thread,
+};
 use ycoding_schema::LosslessString;
 
 const TABLES: [&str; 5] = [
@@ -286,45 +290,106 @@ fn prior_cell(mut cell: Cell, empty: bool) -> Result<Cell, Error> {
     Ok(cell)
 }
 
+fn validate_current_row(name: &str, key: &[u8], bytes: &[u8]) -> Result<(), Error> {
+    if name == BackfillTable::NAME {
+        let row = BackfillTable::decode(bytes)?;
+        return if key == BackfillTable::primary_key(&row) {
+            Ok(())
+        } else {
+            Err(unproven())
+        };
+    }
+    if bytes.first() != Some(&2) || bytes.len() > crate::analytics::ROW_BYTES {
+        return Err(unproven());
+    }
+    match name {
+        CellTable::NAME => CellTable::decode(bytes).map(|_| ()),
+        LeafTable::NAME => LeafTable::decode(bytes).map(|_| ()),
+        SampleTable::NAME => SampleTable::decode(bytes).map(|_| ()),
+        UnpricedTable::NAME => UnpricedTable::decode(bytes).map(|_| ()),
+        _ => Err(unproven()),
+    }
+}
+
+fn validate_current_decimal(read: &ReadTransaction) -> Result<(), Error> {
+    let cuts = [
+        ("backend", 60_000),
+        ("backend", 900_000),
+        ("session", 1),
+        ("session", 60_000),
+        ("session", 900_000),
+    ]
+    .map(|(family, span)| {
+        let cell_prefix = tuple_key(&[
+            KeyPart::String(&family.into()),
+            KeyPart::I64(span),
+            KeyPart::I64(i64::MIN),
+        ]);
+        tuple_key(&[KeyPart::Bytes(&cell_prefix)])
+    });
+    if cuts.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(unproven());
+    }
+    let lower = std::iter::once(Unbounded).chain(cuts.iter().map(|key| Included(key.as_slice())));
+    let upper = cuts
+        .iter()
+        .map(|key| Excluded(key.as_slice()))
+        .chain(std::iter::once(Unbounded));
+    let leaf_cut = tuple_key(&[KeyPart::String(&"session".into())]);
+    let scans = TABLES
+        .into_iter()
+        .filter(|&name| !matches!(name, LeafTable::NAME | SampleTable::NAME))
+        .map(|name| (name, (Unbounded, Unbounded)))
+        .chain([
+            (LeafTable::NAME, (Unbounded, Excluded(leaf_cut.as_slice()))),
+            (LeafTable::NAME, (Included(leaf_cut.as_slice()), Unbounded)),
+        ])
+        .chain(lower.zip(upper).map(|range| (SampleTable::NAME, range)));
+    thread::scope(|scope| {
+        let workers = scans
+            .map(|(name, range)| {
+                thread::Builder::new().spawn_scoped(scope, move || {
+                    let table = read.open_table(definition(name))?;
+                    for entry in table.range::<&[u8]>(range)? {
+                        let (key, value) = entry?;
+                        validate_current_row(name, key.value(), value.value())?;
+                    }
+                    Ok(())
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut validation = Ok(());
+        for worker in workers {
+            match worker.join().map_err(|_| Error::WriterPanicked)? {
+                Err(error @ (Error::Io(_) | Error::Storage(_))) => return Err(error),
+                result => validation = validation.and(result),
+            }
+        }
+        validation
+    })
+}
+
 fn prior_decimal_shape(read: &ReadTransaction) -> Result<bool, Error> {
-    let mut prior = None;
+    let mut prior = false;
     for name in &TABLES[..4] {
         for entry in read.open_table(definition(name))?.iter()? {
             let (_, value) = entry?;
             let bytes = value.value();
-            if bytes.first() != Some(&2) || bytes.len() > crate::analytics::ROW_BYTES {
-                return Err(unproven());
-            }
-            if prior != Some(false) {
-                let cell = match *name {
-                    CellTable::NAME => decode_record::<Cell>(bytes, 2)?,
-                    LeafTable::NAME => decode_record::<Leaf>(bytes, 2)?.contribution,
-                    SampleTable::NAME => decode_record::<Sample>(bytes, 2)?.cell,
-                    UnpricedTable::NAME => decode_record::<Unpriced>(bytes, 2)?.cell,
-                    _ => return Err(unproven()),
-                };
-                match (cell.counts.len(), cell.amounts.len()) {
-                    (16, 10) => {
-                        prior_cell(cell, false)?;
-                        prior = Some(true);
-                        continue;
-                    }
-                    (17, 11) if prior.is_none() => prior = Some(false),
-                    _ => return Err(unproven()),
+            let cell = match *name {
+                CellTable::NAME => decode_record::<Cell>(bytes, 2)?,
+                LeafTable::NAME => decode_record::<Leaf>(bytes, 2)?.contribution,
+                SampleTable::NAME => decode_record::<Sample>(bytes, 2)?.cell,
+                UnpricedTable::NAME => decode_record::<Unpriced>(bytes, 2)?.cell,
+                _ => return Err(unproven()),
+            };
+            match (cell.counts.len(), cell.amounts.len()) {
+                (16, 10) => {
+                    prior_cell(cell, false)?;
+                    prior = true;
                 }
-            }
-            match *name {
-                CellTable::NAME => {
-                    CellTable::decode(bytes)?;
-                }
-                LeafTable::NAME => {
-                    LeafTable::decode(bytes)?;
-                }
-                SampleTable::NAME => {
-                    SampleTable::decode(bytes)?;
-                }
-                UnpricedTable::NAME => {
-                    UnpricedTable::decode(bytes)?;
+                (17, 11) if !prior => {
+                    validate_current_decimal(read)?;
+                    return Ok(false);
                 }
                 _ => return Err(unproven()),
             }
@@ -332,12 +397,9 @@ fn prior_decimal_shape(read: &ReadTransaction) -> Result<bool, Error> {
     }
     for entry in read.open_table(definition(BackfillTable::NAME))?.iter()? {
         let (key, value) = entry?;
-        let row = BackfillTable::decode(value.value())?;
-        if key.value() != BackfillTable::primary_key(&row) {
-            return Err(unproven());
-        }
+        validate_current_row(BackfillTable::NAME, key.value(), value.value())?;
     }
-    Ok(prior == Some(true))
+    Ok(prior)
 }
 
 fn prepare_decimal(read: &ReadTransaction, budget: &mut Budget) -> Result<Option<Plan>, Error> {
@@ -1117,6 +1179,102 @@ mod tests {
         );
         drop(snapshot);
         store.shutdown().unwrap();
+    }
+
+    #[test]
+    fn invalid_sample_in_the_last_populated_range_refuses_startup_without_writes() {
+        let fixture = Fixture::new(false);
+        let path = fixture.path();
+        let catalog = native::catalog(DatabaseKind::Core);
+        upgrade::core(&path, Options::core(), |_| Ok(u64::MAX)).unwrap();
+        let store = Store::open(&path, Options::core(), catalog).unwrap();
+        assert_eq!(
+            store.prepare_pruning(0, |_| Ok(u64::MAX)).unwrap(),
+            backup::Status::Ready
+        );
+        store.shutdown().unwrap();
+        let unexpected_backup = |_: &Path| panic!("current store requested backup space");
+        let options = Options {
+            cache_bytes: 64 * 1024,
+            ..Options::core()
+        };
+        assert!(std::fs::metadata(&path).unwrap().len() > options.cache_bytes as u64);
+        assert_eq!(
+            upgrade::core(&path, options, unexpected_backup).unwrap(),
+            Outcome::Current
+        );
+
+        let database = redb::Database::open(&path).unwrap();
+        let write = database.begin_write().unwrap();
+        {
+            let mut samples = write.open_table(definition(SampleTable::NAME)).unwrap();
+            let (key, mut sample) = samples
+                .last()
+                .unwrap()
+                .map(|(key, value)| {
+                    (
+                        key.value().to_vec(),
+                        SampleTable::decode(value.value()).unwrap(),
+                    )
+                })
+                .unwrap();
+            assert_eq!(sample.cell.span, 900_000);
+            sample.count = 0;
+            let mut malformed = vec![2];
+            sample.encode(&mut malformed).unwrap();
+            samples
+                .insert(key.as_slice(), malformed.as_slice())
+                .unwrap();
+        }
+        write.commit().unwrap();
+        drop(database);
+
+        let files = [path.clone(), backup::path(&path), backup::marker(&path)];
+        let before = files.each_ref().map(|file| std::fs::read(file).unwrap());
+        assert!(matches!(
+            upgrade::core(&path, options, unexpected_backup),
+            Err(Error::Incompatible("invalid prepared Usage histogram"))
+        ));
+        assert_eq!(
+            files.each_ref().map(|file| std::fs::read(file).unwrap()),
+            before
+        );
+    }
+
+    #[test]
+    fn malformed_leaves_outside_known_family_keys_refuse_startup_without_writes() {
+        for edge in [[0], [u8::MAX]] {
+            let fixture = Fixture::new(false);
+            let path = fixture.path();
+            upgrade::core(&path, Options::core(), |_| Ok(u64::MAX)).unwrap();
+            let database = redb::Database::open(&path).unwrap();
+            let write = database.begin_write().unwrap();
+            {
+                let mut leaves = write.open_table(definition(LeafTable::NAME)).unwrap();
+                let mut leaf = leaves
+                    .first()
+                    .unwrap()
+                    .map(|(_, value)| LeafTable::decode(value.value()).unwrap())
+                    .unwrap();
+                leaf.contribution.counts[0] = 2;
+                let mut malformed = vec![2];
+                leaf.encode(&mut malformed).unwrap();
+                leaves
+                    .insert(edge.as_slice(), malformed.as_slice())
+                    .unwrap();
+            }
+            write.commit().unwrap();
+            drop(database);
+
+            let before = std::fs::read(&path).unwrap();
+            assert!(matches!(
+                upgrade::core(&path, Options::core(), |_| panic!(
+                    "current store requested backup space"
+                )),
+                Err(Error::Incompatible("invalid prepared Usage leaf"))
+            ));
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+        }
     }
 
     #[test]

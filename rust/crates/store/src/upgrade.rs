@@ -109,6 +109,10 @@ fn upgrade_open(
     let manifest = stored_manifest(&read)?;
     let predecessor = Predecessor::identify(&manifest)?;
     let metadata = inspect(&read, predecessor.catalog()?)?;
+    #[cfg(target_os = "macos")]
+    if manifest == target.manifest() {
+        warm_validation_source(source, options.cache_bytes);
+    }
     let mut budget = decimal::Budget::default();
     let decimals = decimal::prepare(&read, predecessor.catalog()?, &mut budget)?;
     let current = manifest == target.manifest() && decimals.is_none();
@@ -132,6 +136,41 @@ fn upgrade_open(
         )?;
     }
     Ok(Outcome::Upgraded(predecessor))
+}
+
+#[cfg(target_os = "macos")]
+fn warm_validation_source(source: &Path, cache_bytes: usize) {
+    use std::{
+        fs::OpenOptions,
+        io::Read,
+        os::unix::fs::OpenOptionsExt,
+        time::{Duration, Instant},
+    };
+
+    const O_NONBLOCK: i32 = 0x0004;
+    const O_NOFOLLOW: i32 = 0x0100;
+    const MAX_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+    let Ok(file) = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NONBLOCK | O_NOFOLLOW)
+        .open(source)
+    else {
+        return;
+    };
+    let Ok(metadata) = file.metadata() else {
+        return;
+    };
+    let bytes = metadata.len();
+    if !metadata.is_file() || bytes <= cache_bytes as u64 || bytes > MAX_BYTES {
+        return;
+    }
+    let mut input = file.take(bytes);
+    let mut buffer = vec![0; 1024 * 1024];
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_millis(500)
+        && matches!(input.read(&mut buffer), Ok(count) if count != 0)
+    {}
 }
 
 enum Pruned {
@@ -366,6 +405,7 @@ fn migrate(
     let target = native::catalog(DatabaseKind::Core);
     let mut write = database.begin_write()?;
     write.set_durability(Durability::Immediate)?;
+    write.set_quick_repair(true);
     for name in target.names() {
         if !previous.contains(&name) {
             drop(write.open_table(definition(name))?);

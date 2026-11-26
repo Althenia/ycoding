@@ -169,7 +169,7 @@ async fn succeeded(
     runtime.handle(&Payload::Durable(event)).await.unwrap();
 }
 
-fn completed_notices(sessions: &Service, receiver: &session::Id) -> usize {
+fn notices(sessions: &Service, receiver: &session::Id, kind: &str) -> usize {
     sessions
         .log(receiver, None, 200)
         .unwrap()
@@ -187,9 +187,13 @@ fn completed_notices(sessions: &Service, receiver: &session::Id) -> usize {
             let Some(JsonValue::Object(metadata)) = data.get(&"metadata".into()) else {
                 return false;
             };
-            metadata.get(&"event".into()) == Some(&JsonValue::String("completed".into()))
+            metadata.get(&"event".into()) == Some(&JsonValue::String(kind.into()))
         })
         .count()
+}
+
+fn completed_notices(sessions: &Service, receiver: &session::Id) -> usize {
+    notices(sessions, receiver, "completed")
 }
 
 async fn capacity_refusal(
@@ -804,6 +808,33 @@ async fn coordination_activity_capacity_and_completion_barriers() {
         completed_notices(&sessions, &master) == master_before,
         "L2-B4: receipts delivered to a prior owner must keep recovery from redelivering to the new owner",
     );
+    let missed = tables::NewEvent {
+        id: "evt_failure_before_completion_receipt".into(),
+        aggregate_id: alpha.as_lossless().clone(),
+        created: chrono::Utc::now().timestamp_millis(),
+        type_: "session.execution.failed.1".into(),
+        data: ObjectEncoder::new()
+            .field("sessionID", &alpha)
+            .field(
+                "error",
+                &ycoding_schema::session_error::Error {
+                    r#type: "unknown".into(),
+                    message: "The process stopped before notifying its owner".into(),
+                },
+            )
+            .finish(),
+    };
+    client
+        .submit(move |tx| tables::append(tx, &missed, None).map(|_| ()))
+        .unwrap()
+        .await
+        .unwrap();
+    succeeded(&client, &runtime, &alpha, "evt_later_completion").await;
+    execution.await_idle(&master).await;
+    let before = notices(&sessions, &master, "failed");
+    runtime.recover().await.unwrap();
+    runtime.recover().await.unwrap();
+    assert_eq!(notices(&sessions, &master, "failed"), before + 1);
     record_failure(
         &mut failures,
         validated.load(Ordering::SeqCst) == 0,

@@ -47,6 +47,7 @@ async fn startup_reports_readiness_and_recovery_durations_at_info() {
     stop(runtime, client);
     let log = fs::read_to_string(directory.0.join("data/ycoding/log/ycoding.log")).unwrap();
     for stage in [
+        "launch_admission",
         "store_prepare",
         "store_open",
         "model_catalog",
@@ -57,6 +58,7 @@ async fn startup_reports_readiness_and_recovery_durations_at_info() {
         "project_admitted_inputs",
         "pending_forms",
         "service_composition",
+        "listener_publication",
         "maintenance",
         "ready",
     ] {
@@ -66,11 +68,20 @@ async fn startup_reports_readiness_and_recovery_durations_at_info() {
                 let fields = line.split_ascii_whitespace();
                 fields.clone().any(|value| value == "level=INFO")
                     && fields.clone().any(|value| value == field)
+                    && fields.clone().any(|value| value.starts_with("rss_status="))
+                    && fields
+                        .clone()
+                        .any(|value| value.starts_with("peak_rss_status="))
+                    && (!cfg!(target_os = "macos")
+                        || fields
+                            .clone()
+                            .filter_map(|value| value.strip_prefix("rss_bytes="))
+                            .any(|value| value.parse::<u64>().is_ok_and(|rss| rss > 0)))
                     && fields
                         .filter_map(|value| value.strip_prefix("duration_ms="))
                         .any(|value| value.parse::<u64>().is_ok())
             }),
-            "missing INFO duration for {stage}"
+            "missing INFO duration or memory sample for {stage}"
         );
     }
 }
@@ -94,6 +105,11 @@ async fn ready_runtime_serves_session_inventory_before_optional_maintenance() {
     assert!(stage("store_prepare") < stage("store_open"));
     assert!(stage("store_open") < ready);
     assert!(ready < stage("maintenance"));
+    assert!(
+        !log.lines()
+            .take(ready)
+            .any(|line| line.contains("location services booted"))
+    );
 }
 
 fn bun_source(source: &Path) -> Child {

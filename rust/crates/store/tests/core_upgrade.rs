@@ -808,9 +808,26 @@ fn an_unclean_store_recovers_committed_rows_at_startup() {
         .status()
         .unwrap();
     assert_eq!(status.code(), Some(17));
+    assert!(matches!(
+        redb::ReadOnlyDatabase::open(&path),
+        Err(redb::DatabaseError::RepairAborted)
+    ));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
 
     assert_eq!(run(&path).unwrap(), Outcome::Current);
     drop(redb::ReadOnlyDatabase::open(&path).unwrap());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
     let store = open(&path);
     assert!(
         store
@@ -826,12 +843,145 @@ fn an_unclean_store_recovers_committed_rows_at_startup() {
 }
 
 #[test]
+fn an_unclean_store_is_not_replaced_if_its_sealed_backup_fails_validation() {
+    let directory = Directory::new();
+    let path = directory.database();
+    let store = Store::initialize(&path, Options::core(), target(), identity()).unwrap();
+    assert_eq!(
+        store.prepare_pruning(NOW, plenty).unwrap(),
+        backup::Status::Ready
+    );
+    store.shutdown().unwrap();
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "seed_unclean_store", "--ignored"])
+        .env("YCODING_UNCLEAN_STORE", &path)
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(17));
+    assert!(matches!(
+        redb::ReadOnlyDatabase::open(&path),
+        Err(redb::DatabaseError::RepairAborted)
+    ));
+
+    let backup = backup::path(&path);
+    let marker = backup::marker(&path);
+    let corrupt = vec![
+        0;
+        std::fs::metadata(&backup)
+            .unwrap()
+            .len()
+            .try_into()
+            .unwrap()
+    ];
+    std::fs::remove_file(&backup).unwrap();
+    std::fs::write(&backup, corrupt).unwrap();
+    let files = [path.clone(), backup, marker];
+    let before = files.each_ref().map(|file| std::fs::read(file).unwrap());
+    assert!(run(&path).is_err());
+    assert_eq!(
+        files.each_ref().map(|file| std::fs::read(file).unwrap()),
+        before
+    );
+    assert_eq!(
+        std::fs::read_dir(&directory.0).unwrap().count(),
+        files.len()
+    );
+}
+
+#[test]
 #[ignore = "subprocess-only abrupt-exit fixture"]
 fn seed_unclean_store() {
     let path = PathBuf::from(std::env::var_os("YCODING_UNCLEAN_STORE").unwrap());
     let store = open(&path);
     seed(&store);
+    store.shutdown().unwrap();
+    let database = redb::Database::open(&path).unwrap();
+    database.begin_write().unwrap().commit().unwrap();
     std::process::exit(17);
+}
+
+#[test]
+fn killed_writer_reopens_without_repair_or_uncommitted_rows() {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let directory = Directory::new();
+    let path = directory.database();
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "hold_uncommitted_write",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("YCODING_UNCOMMITTED_STORE", &path)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    std::thread::scope(|scope| {
+        let (ready, writing) = mpsc::sync_channel(1);
+        scope.spawn(move || {
+            let reached = BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+                .any(|line| line == "UNCOMMITTED-WRITE");
+            ready.send(reached).unwrap();
+        });
+        let reached = writing.recv_timeout(Duration::from_secs(30));
+        let killed = child.kill();
+        assert!(!child.wait().unwrap().success());
+        assert!(reached.unwrap());
+        killed.unwrap();
+    });
+
+    let probe = directory.0.join("reopen-probe.redb");
+    std::fs::copy(&path, &probe).unwrap();
+    drop(
+        redb::Database::builder()
+            .set_repair_callback(redb::RepairSession::abort)
+            .open(probe)
+            .expect("reopen without full allocator repair"),
+    );
+    assert_eq!(run(&path).unwrap(), Outcome::Current);
+    let store = open(&path);
+    let snapshot = store.snapshot().unwrap();
+    for (id, exists) in [("ses_root", true), ("ses_uncommitted", false)] {
+        let key = tuple_key(&[KeyPart::String(&s(id))]);
+        assert_eq!(
+            snapshot
+                .get::<session::SessionTable>(&key)
+                .unwrap()
+                .is_some(),
+            exists
+        );
+    }
+    drop(snapshot);
+    store.shutdown().unwrap();
+}
+
+#[test]
+#[ignore = "subprocess-only fixture killed during a write"]
+fn hold_uncommitted_write() {
+    use std::io::Write;
+
+    let path = PathBuf::from(std::env::var_os("YCODING_UNCOMMITTED_STORE").unwrap());
+    let store = Store::initialize(&path, Options::core(), target(), identity()).unwrap();
+    seed(&store);
+    store
+        .submit::<(), _>(|tx| {
+            session::SessionTable::insert(tx, &session_row("ses_uncommitted", None))?;
+            println!("UNCOMMITTED-WRITE");
+            std::io::stdout().flush().unwrap();
+            loop {
+                std::thread::park();
+            }
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
 }
 
 #[test]

@@ -761,6 +761,7 @@ fn run_bootstrap(
             return launch_results([body, diagnostics.close().map_err(message)]);
         }
     };
+    startup_stage("launch_admission", started);
     let prepare_started = Instant::now();
     if let Err(error) = prepare_store(config) {
         let body = runtime.block_on(boot_failure(config, managed.as_mut(), error));
@@ -836,7 +837,9 @@ pub(crate) fn startup_stage(stage: &'static str, started: Instant) {
         stage,
         duration_ms,
         rss_bytes = memory.rss_bytes,
+        rss_status = memory.rss_status,
         peak_rss_bytes = memory.peak_rss_bytes,
+        peak_rss_status = memory.peak_rss_status,
         "server startup"
     );
 }
@@ -1096,6 +1099,7 @@ impl ManagedLaunch {
                 .ok_or_else(|| LaunchError::Message("managed listener already closed".into()))?
                 .address()
         );
+        let publication_started = Instant::now();
         let mut announced = Ok(());
         let mut installed = false;
         if let Err(error) = self.state.ready(services.clone(), || {
@@ -1111,6 +1115,7 @@ impl ManagedLaunch {
             return launch_results([Err(error.into()), local]);
         }
         if installed {
+            startup_stage("listener_publication", publication_started);
             startup_stage("ready", started);
             announce.send_replace(true);
         }
@@ -1196,6 +1201,7 @@ async fn serve_until_stopped(
     started: Instant,
     announce: tokio::sync::watch::Sender<bool>,
 ) -> Result<(), LaunchError> {
+    let publication_started = Instant::now();
     let identity = services.identity.clone();
     let listener = bind(config).await?;
     let signals = shutdown_signals()?;
@@ -1219,6 +1225,7 @@ async fn serve_until_stopped(
         return launch_results([Err(error.into()), local]);
     }
 
+    startup_stage("listener_publication", publication_started);
     startup_stage("ready", started);
     announce.send_replace(true);
     let shutdown = wait_for_shutdown(config.mode, stop, signals);

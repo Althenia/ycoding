@@ -298,15 +298,36 @@ fn maintain(
         directory,
         ready,
     } = reports;
+    if let Some(mut ready) = ready {
+        let admitted = runtime.block_on(async {
+            let stopped = wake.shutdown.notified();
+            tokio::pin!(stopped);
+            stopped.as_mut().enable();
+            if wake.stopped.load(Ordering::Acquire) {
+                return false;
+            }
+            tokio::select! {
+                _ = stopped => false,
+                ready = ready.wait_for(|ready| *ready) => ready.is_ok(),
+            }
+        });
+        if !admitted {
+            return;
+        }
+    }
     let engine = loop {
         if wake.stopped.load(Ordering::Acquire) {
             return;
         }
+        let started = std::time::Instant::now();
         match ycoding_core::ycoding_store::analytics::reports::start(
             client.clone(),
             directory.clone(),
         ) {
-            Ok(engine) => break engine,
+            Ok(engine) => {
+                crate::launch::startup_stage("analytics_open", started);
+                break engine;
+            }
             Err(error) => {
                 tracing::error!(
                     "analytics owner failed to start ({error:?}); report reads remain unavailable"
@@ -327,26 +348,6 @@ fn maintain(
             signal.notify_usage();
         }
     });
-    if let Some(mut ready) = ready {
-        let admitted = runtime.block_on(async {
-            let stopped = wake.shutdown.notified();
-            tokio::pin!(stopped);
-            stopped.as_mut().enable();
-            if wake.stopped.load(Ordering::Acquire) {
-                return false;
-            }
-            tokio::select! {
-                _ = stopped => false,
-                ready = ready.wait_for(|ready| *ready) => ready.is_ok(),
-            }
-        });
-        if !admitted {
-            if let Err(error) = engine.shutdown() {
-                tracing::error!("analytics shutdown failed ({error:?})");
-            }
-            return;
-        }
-    }
     std::thread::scope(|scope| {
         let presentation_inputs = inputs.clone();
         let presentations = std::thread::Builder::new()
