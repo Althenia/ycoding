@@ -6,16 +6,18 @@ import { YCoding } from "@ycoding-ai/client/promise"
 import { watchSession } from "../src/commands/handlers/decision/watch"
 import { followFamily, type FollowReceipt } from "../src/commands/handlers/decision/follow"
 import { validateFollowState, type FollowState } from "../src/commands/handlers/decision/follow-state"
+import { sessionFixture, v5Server } from "./fixture/v5-server"
 
 type LogType = Exclude<SessionLogOutput["type"], "log.synced">
 type LogEvent = Exclude<SessionLogOutput, { type: "log.synced" }>
 type Data<T extends LogType> = Extract<SessionLogOutput, { type: T }>["data"]
 
 const base = Date.UTC(2026, 9, 29, 12, 0, 0)
+const sourceEpoch = "source-1"
 const iso = (seq: number) => new Date(base + seq * 1_000).toISOString()
 
 function logEvent<T extends LogType>(type: T, seq: number, data: Data<T>, sessionID = "ses_target"): LogEvent {
-  return { id: `evt_${sessionID}_${seq}`, created: base + seq * 1_000, sourceEpoch: "epoch_synthetic", type, durable: { aggregateID: sessionID, seq, version: 1 }, data } as LogEvent
+  return { id: `evt_${sessionID}_${seq}`, created: base + seq * 1_000, sourceEpoch, type, durable: { aggregateID: sessionID, seq, version: 1 }, data } as LogEvent
 }
 
 const started = (seq: number, sessionID = "ses_target") => logEvent("session.execution.started", seq, { sessionID }, sessionID)
@@ -84,7 +86,7 @@ type Scenario = {
   readonly decisions?: DecisionItem[]
   readonly messages?: Message[]
   readonly watermark?: number
-  readonly stall?: string
+  readonly stall?: string | { readonly operation: string; readonly sessionID: string }
   readonly active?: string[]
   readonly outstanding?: { readonly data?: string[]; readonly running?: string[]; readonly lost?: string[]; readonly failed?: string[] }
   readonly todos?: Record<string, Todo[]>
@@ -94,7 +96,6 @@ type Scenario = {
   readonly onSubscribe?: (control: Control) => void
   readonly onLog?: (logs: Map<string, LogEvent[]>, count: number) => void
   readonly onFollow?: (sessionID: string, control: Control) => void
-  readonly onRead?: (path: string, control: Control) => void
   readonly epoch?: () => string
   readonly onSnapshot?: (sessionID: string, control: Control) => void
   readonly readActive?: (control: Control) => Promise<readonly string[]>
@@ -104,137 +105,210 @@ const home = `${process.env.YCODING_TEST_XDG_ROOT}/home`
 const servers: Array<{ stop: (force?: boolean) => unknown }> = []
 afterEach(() => { for (const server of servers.splice(0)) server.stop(true) })
 
-function stub(scenario: Scenario) {
+type Subscription<T> = { send: (...values: T[]) => void; end: () => void }
+type Selectors = {
+  readonly params?: { readonly sessionID?: string; readonly parentID?: string }
+  readonly query?: { readonly after?: number; readonly follow?: boolean; readonly limit?: number; readonly parentID?: string | null }
+}
+type WatchRequest = { readonly name: string; readonly data: Selectors }
+
+function selectors(value: unknown): Selectors {
+  const fields = (value: unknown): Record<string, unknown> =>
+    typeof value === "object" && value !== null ? Object.fromEntries(Object.entries(value)) : {}
+  const request = fields(value)
+  const params = fields(request.params)
+  const query = fields(request.query)
+  return {
+    params: {
+      sessionID: typeof params.sessionID === "string" ? params.sessionID : undefined,
+      parentID: typeof params.parentID === "string" ? params.parentID : undefined,
+    },
+    query: {
+      parentID: typeof query.parentID === "string" || query.parentID === null ? query.parentID : undefined,
+      after: typeof query.after === "number" ? query.after : undefined,
+      follow: typeof query.follow === "boolean" ? query.follow : undefined,
+      limit: typeof query.limit === "number" ? query.limit : undefined,
+    },
+  }
+}
+
+function watchScenario(scenario: Scenario) {
   const sessions = scenario.sessions ?? { ses_target: { title: "Watched" }, ses_other: { title: "Unrelated" } }
   const logs = new Map(Object.entries(scenario.log ?? {}))
   let decisions = scenario.decisions ?? []
-  const requests: string[] = []
   let logReads = 0
-  const streams = new Set<ReadableStreamDefaultController<Uint8Array>>()
-  const followers = new Map<string, Set<ReadableStreamDefaultController<Uint8Array>>>()
+  let subscriptions = 0
+  const streams = new Set<Subscription<EventSubscribeOutput>>()
+  const followers = new Map<string, Set<Subscription<SessionLogOutput>>>()
   const closing = new Set<() => void>()
   const openStreams = () => streams.size + [...followers.values()].reduce((sum, items) => sum + items.size, 0)
   const closed = () => { if (openStreams() === 0) for (const resolve of closing) resolve() }
-  const encoder = new TextEncoder()
-  const frame = (value: unknown) => encoder.encode(`data: ${JSON.stringify(value)}\n\n`)
+  function attach<T>(set: Set<Subscription<T>>, stream: Subscription<T>) {
+    set.add(stream)
+    return () => { set.delete(stream); closed() }
+  }
   const control: Control = {
-    subscriptions: 0,
+    get subscriptions() { return subscriptions },
     append: (sessionID, ...items) => {
       logs.set(sessionID, [...(logs.get(sessionID) ?? []), ...items])
-      for (const stream of followers.get(sessionID) ?? []) for (const item of items) stream.enqueue(frame(item))
+      for (const stream of followers.get(sessionID) ?? []) stream.send(...items)
     },
     decisions: (items) => { decisions = items },
-    push: (event) => { for (const stream of streams) stream.enqueue(frame(event)) },
-    drop: () => { for (const stream of streams) stream.close(); streams.clear(); closed() },
-    dropLogs: () => {
-      for (const subscribed of followers.values()) {
-        for (const stream of subscribed) stream.close()
-        subscribed.clear()
-      }
-      closed()
-    },
+    push: (event) => { for (const stream of streams) stream.send(event) },
+    drop: () => { for (const stream of streams) stream.end() },
+    dropLogs: () => { for (const subscribed of followers.values()) for (const stream of subscribed) stream.end() },
   }
   const last = (id: string) => {
     const items = logs.get(id) ?? []
     return items.length ? Math.max(...items.map((item) => item.durable.seq)) : undefined
   }
-  const server = Bun.serve({ port: 0, idleTimeout: 0, fetch(request) {
-    const url = new URL(request.url)
-    const path = url.pathname
-    if (path === "/api/health") return Response.json({ healthy: true, version: InstallationVersion, pid: process.pid })
-    requests.push(`${request.method} ${path}${url.search}`)
-    scenario.onRead?.(path, control)
-    if (path === scenario.stall) return new Promise<Response>(() => {})
-    if (path === "/api/session/active" && scenario.readActive)
-      return scenario.readActive(control).then((active) => Response.json({ data: Object.fromEntries(active.map((id) => [id, { type: "running" }])) }))
-    if (path === "/api/session/active")
-      return Response.json({ data: Object.fromEntries((scenario.active ?? []).map((id) => [id, { type: "running" }])) })
-    if (path === "/api/session/outstanding")
-      return Response.json({ data: scenario.outstanding?.data ?? [], running: scenario.outstanding?.running ?? [], failed: scenario.outstanding?.failed ?? [], lost: scenario.outstanding?.lost ?? [] })
-    const nested = /^\/api\/session\/([^/]+)\/(todo|pending|subagent)$/.exec(path)
-    if (nested) {
-      const id = decodeURIComponent(nested[1])
-      if (nested[2] === "todo") return Response.json({ data: scenario.todos?.[id] ?? [] })
-      if (nested[2] === "pending") return Response.json({ data: Array.from({ length: scenario.pending?.[id] ?? 0 }, (_, index) => ({
-        admittedSeq: index, id: `msg_pending_${index}`, sessionID: id, timeCreated: base, type: "user", data: { text: "Queued" }, delivery: "queue" })) })
-      const tasks = scenario.tasks?.[id] ?? []
+  const info = (id: string, session: typeof sessions[string]) => ({
+    ...sessionFixture(id, "/tmp/watched"), ...session, scope: "bound", projectID: "prj_synthetic", time: { created: base, updated: base },
+  })
+  const missing = (sessionID: string) => ({ _tag: "SessionNotFoundError", sessionID, message: `Session not found: ${sessionID}` })
+  const epoch = () => scenario.epoch?.() ?? sourceEpoch
+  const watermark = (id: string, seq?: number) => ({ type: "log.synced" as const, aggregateID: id, ...(seq === undefined ? {} : { seq }) })
+  const activeResult = (active: readonly string[]) => ({ data: Object.fromEntries(active.map((id) => [id, { type: "running" }])) })
+  const read = (operation: string, { params = {}, query = {} }: Selectors = {}) => {
+    const id = params.sessionID ?? ""
+    if (scenario.stall === operation || (typeof scenario.stall === "object" && scenario.stall.operation === operation && scenario.stall.sessionID === id))
+      return new Promise<never>(() => {})
+    if (operation === "health.get") return { data: { healthy: true, version: InstallationVersion, pid: process.pid } }
+    if (operation === "session.active") return scenario.readActive ? scenario.readActive(control).then(activeResult) : activeResult(scenario.active ?? [])
+    if (operation === "session.outstanding")
+      return { data: scenario.outstanding?.data ?? [], running: scenario.outstanding?.running ?? [], failed: scenario.outstanding?.failed ?? [], lost: scenario.outstanding?.lost ?? [] }
+    if (operation === "session.todo.list") return { data: scenario.todos?.[id] ?? [] }
+    if (operation === "session.pending.list") return { data: Array.from({ length: scenario.pending?.[id] ?? 0 }, (_, index) => ({
+      admittedSeq: index, id: `msg_pending_${index}`, sessionID: id, timeCreated: base, type: "user", data: { text: "Queued" }, delivery: "queue" })) }
+    if (operation === "session.subagent.list") {
+      const tasks = scenario.tasks?.[params.parentID ?? ""] ?? []
       const count = (states: Task["state"][]) => tasks.filter((item) => states.includes(item.state)).length
-      return Response.json({ data: tasks.slice(0, Number(url.searchParams.get("limit") ?? 10)), cursor: {},
-        summary: { total: tasks.length, active: count(["starting", "running", "waiting", "cancelling"]), running: count(["running"]), waiting: count(["waiting"]) } })
+      return { data: { data: tasks.slice(0, query.limit ?? 10), cursor: {},
+        summary: { total: tasks.length, active: count(["starting", "running", "waiting", "cancelling"]), running: count(["running"]), waiting: count(["waiting"]) } } }
     }
-    if (path === "/api/session") {
-      const parentID = url.searchParams.get("parentID")
-      return Response.json({ data: Object.entries(sessions).filter(([, session]) => session.parentID === parentID).map(([id, session]) => ({ id, title: session.title, parentID })), cursor: { next: null } })
+    if (operation === "session.list") {
+      return { data: { data: Object.entries(sessions).filter(([, session]) => session.parentID === query.parentID).map(([id, session]) => info(id, session)), cursor: {} } }
     }
-    const sessionMatch = /^\/api\/session\/([^/]+)(\/snapshot)?$/.exec(path)
-    if (sessionMatch) {
-      const id = decodeURIComponent(sessionMatch[1]!)
+    if (operation === "session.get" || operation === "session.snapshot") {
       const session = sessions[id]
-      if (!session) return Response.json({ _tag: "SessionNotFoundError", sessionID: id, message: `Session not found: ${id}` }, { status: 404 })
-      const info = { id, title: session.title, ...(session.parentID ? { parentID: session.parentID } : {}), projectID: "prj_synthetic",
-        location: { directory: "/tmp/watched" }, time: { created: base, updated: base } }
-      if (!sessionMatch[2]) return Response.json({ data: info })
+      if (!session) return missing(id)
+      if (operation === "session.get") return { data: info(id, session) }
       const seq = scenario.watermark ?? last(id)
       scenario.onSnapshot?.(id, control)
-      return Response.json({ sourceEpoch: scenario.epoch?.() ?? "epoch_synthetic", session: info, messages: scenario.messages ?? [], watermark: { type: "log.synced", aggregateID: id, ...(seq === undefined ? {} : { seq }) } })
+      return { data: { sourceEpoch: epoch(), session: info(id, session), messages: scenario.messages ?? [], watermark: watermark(id, seq) } }
     }
-    const logMatch = /^\/api\/experimental\/session\/([^/]+)\/log$/.exec(path)
-    if (logMatch) {
-      const id = decodeURIComponent(logMatch[1]!)
-      if (!sessions[id]) return Response.json({ _tag: "SessionNotFoundError", sessionID: id, message: `Session not found: ${id}` }, { status: 404 })
-      const follow = url.searchParams.get("follow") === "true"
+    if (operation === "decision.list") return { data: decisions }
+    if (operation === "coordination.group.list") return { data: scenario.members ? [{ id: "cgrp_watch", masterSessionID: "ses_target" }] : [] }
+    if (operation === "coordination.group.get") return { data: { id: "cgrp_watch", revision: 1, members: scenario.members ?? [] } }
+    return new Error(`Unexpected watch operation: ${operation}`)
+  }
+  return {
+    control, read, missing, epoch, hasSession: (id: string) => Object.hasOwn(sessions, id), openStreams,
+    subscribe(stream: Subscription<EventSubscribeOutput>) {
+      const detach = attach(streams, stream)
+      subscriptions++
+      queueMicrotask(() => scenario.onSubscribe?.(control))
+      return detach
+    },
+    log(id: string, query: Selectors["query"], stream: Subscription<SessionLogOutput>) {
       scenario.onLog?.(logs, ++logReads)
-      const after = Number(url.searchParams.get("after") ?? -1)
-      const items = (logs.get(id) ?? []).filter((item) => item.durable.seq > after)
-      const seq = last(id)
-      const values = [...items, { type: "log.synced", aggregateID: id, ...(seq === undefined ? {} : { seq }), sourceEpoch: scenario.epoch?.() ?? "epoch_synthetic" }]
-      if (follow) {
-        const subscribed = followers.get(id) ?? new Set<ReadableStreamDefaultController<Uint8Array>>()
-        followers.set(id, subscribed)
-        let owned: ReadableStreamDefaultController<Uint8Array>
-        const stream = new ReadableStream<Uint8Array>({
-          start(controller) {
-            owned = controller
-            subscribed.add(controller)
-            for (const value of values) controller.enqueue(frame(value))
-            request.signal.addEventListener("abort", () => { subscribed.delete(controller); closed() }, { once: true })
-            queueMicrotask(() => scenario.onFollow?.(id, control))
-          },
-          cancel() { subscribed.delete(owned); closed() },
-        })
-        return new Response(stream, { headers: { "content-type": "text/event-stream" } })
-      }
-      const body = values.map((item) => `data: ${JSON.stringify(item)}\n\n`).join("")
-      return new Response(body, { headers: { "content-type": "text/event-stream" } })
-    }
-    if (path === "/api/event") {
-      let owned: ReadableStreamDefaultController<Uint8Array>
-      const stream = new ReadableStream<Uint8Array>({ start(controller) {
-        owned = controller
-        streams.add(controller)
-        request.signal.addEventListener("abort", () => { streams.delete(controller); closed() }, { once: true })
-        controller.enqueue(frame({ id: "evt_connected", type: "server.connected", data: {} }))
-        Object.assign(control, { subscriptions: control.subscriptions + 1 })
-        queueMicrotask(() => scenario.onSubscribe?.(control))
-      }, cancel() { streams.delete(owned); closed() } })
-      return new Response(stream, { headers: { "content-type": "text/event-stream" } })
-    }
-    if (path === "/api/decision") return Response.json({ data: decisions })
-    if (path === "/api/coordination") return Response.json({ data: scenario.members ? [{ id: "cgrp_watch", masterSessionID: "ses_target" }] : [] })
-    if (path === "/api/coordination/cgrp_watch") return Response.json({ data: { id: "cgrp_watch", revision: 1, members: scenario.members ?? [] } })
-    return new Response("not found", { status: 404 })
-  } })
-  servers.push(server)
-  return { url: server.url.toString(), requests, control, openStreams,
+      const items = (logs.get(id) ?? []).filter((item) => item.durable.seq > (query?.after ?? -1))
+      stream.send(...items, { ...watermark(id, last(id)), sourceEpoch: epoch() })
+      if (!query?.follow) { stream.end(); return () => {} }
+      const subscribed = followers.get(id) ?? new Set<Subscription<SessionLogOutput>>()
+      followers.set(id, subscribed)
+      const detach = attach(subscribed, stream)
+      queueMicrotask(() => scenario.onFollow?.(id, control))
+      return detach
+    },
     closed: () => new Promise<void>((resolve, reject) => {
       if (openStreams() === 0) return resolve()
       const timer = setTimeout(() => { closing.delete(done); reject(new Error(`${openStreams()} streams remain open`)) }, 500)
       const done = () => { clearTimeout(timer); closing.delete(done); resolve() }
       closing.add(done)
-    }) }
+    }),
+  }
 }
 
-type SignalAtRead = { readonly signal: NodeJS.Signals; readonly path: string }
+function sse<T>(request: Request, subscribe: (stream: Subscription<T>) => () => void) {
+  const encoder = new TextEncoder()
+  let detach: (() => void) | undefined
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      detach = subscribe({
+        send: (...values) => { for (const value of values) controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`)) },
+        end: () => { controller.close(); detach?.() },
+      })
+      request.signal.addEventListener("abort", () => detach?.(), { once: true })
+    },
+    cancel() { detach?.() },
+  })
+  return new Response(stream, { headers: { "content-type": "text/event-stream" } })
+}
+
+function stub(scenario: Scenario) {
+  const fixture = watchScenario(scenario)
+  const requests: string[] = []
+  const server = Bun.serve({ port: 0, idleTimeout: 0, async fetch(request) {
+    const url = new URL(request.url)
+    const path = url.pathname
+    requests.push(`${request.method} ${path}${url.search}`)
+    if (request.method !== "GET") return new Response("Method not allowed", { status: 405 })
+    const logMatch = /^\/api\/experimental\/session\/([^/]+)\/log$/.exec(path)
+    if (logMatch) {
+      const id = decodeURIComponent(logMatch[1])
+      if (!fixture.hasSession(id)) return Response.json(fixture.missing(id), { status: 404 })
+      return sse<SessionLogOutput>(request, (stream) => fixture.log(id, {
+        after: Number(url.searchParams.get("after") ?? -1), follow: url.searchParams.get("follow") === "true",
+      }, stream))
+    }
+    if (path === "/api/event") return sse<EventSubscribeOutput>(request, (stream) => {
+      stream.send({ id: "evt_connected", sourceEpoch: fixture.epoch(), type: "server.connected", data: {} })
+      return fixture.subscribe(stream)
+    })
+    const routes: Record<string, string> = {
+      "/api/session": "session.list", "/api/session/active": "session.active", "/api/session/outstanding": "session.outstanding",
+      "/api/decision": "decision.list", "/api/coordination": "coordination.group.list", "/api/coordination/cgrp_watch": "coordination.group.get",
+    }
+    const [, sessionID, resource] = /^\/api\/session\/([^/]+)(?:\/(snapshot|todo|pending|subagent))?$/.exec(path) ?? []
+    const operation = routes[path] ?? (resource === "snapshot" ? "session.snapshot" : resource ? `session.${resource}.list` : "session.get")
+    const result = await fixture.read(operation, {
+      params: { sessionID, parentID: sessionID }, query: { parentID: url.searchParams.get("parentID"), limit: Number(url.searchParams.get("limit") ?? 10) },
+    })
+    if (result instanceof Error) return new Response(result.message, { status: 404 })
+    if ("_tag" in result) return Response.json(result, { status: 404 })
+    return Response.json(["session.list", "session.snapshot", "session.subagent.list"].includes(operation) ? result.data : result)
+  } })
+  servers.push(server)
+  return { url: server.url.toString(), requests, ...fixture }
+}
+
+function nativeStub(scenario: Scenario) {
+  const fixture = watchScenario(scenario)
+  const requests: WatchRequest[] = []
+  const httpRequests: string[] = []
+  const unexpected: string[] = []
+  const server = v5Server((name, value) => {
+    const data = selectors(value)
+    if (name !== "health.get") requests.push({ name, data })
+    const result = fixture.read(name, data)
+    if (result instanceof Error || name.startsWith("coordination.")) unexpected.push(name)
+    return result
+  }, {
+    httpRequests,
+    stream(name, value, stream) {
+      const data = selectors(value)
+      requests.push({ name, data })
+      if (name === "event.subscribe") return fixture.subscribe(stream)
+      if (name !== "session.log" || !data.params?.sessionID || !fixture.hasSession(data.params.sessionID))
+        throw new Error(`Unexpected watch stream: ${name} (${data.params?.sessionID})`)
+      return fixture.log(data.params.sessionID, data.query, stream)
+    },
+  })
+  return { ...server, requests, httpRequests, unexpected, control: fixture.control }
+}
+
+type SignalAtRead = { readonly signal: NodeJS.Signals; readonly operation: string }
 
 test("follow reconciliation waits for attached Project members, then reports proceedable unfinished idle once", async () => {
   const running = ["ses_member"]
@@ -355,24 +429,32 @@ for (const recovered of [false, true]) {
 }
 
 async function watch(scenario: Scenario, args: string[], options: { entry?: "tui" | "index"; signalAfterSubscribe?: NodeJS.Signals; signalAtRead?: SignalAtRead } = {}) {
-  const server = stub(scenario)
+  const server = nativeStub(scenario)
   const child = Bun.spawn([process.execPath, new URL(`../src/${options.entry ?? "tui"}.ts`, import.meta.url).pathname, "decision", "watch", ...args, "--server", server.url], {
     stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: home, YCODING_TEST_HOME: home, YCODING_PASSWORD: "" },
   })
-  if (options.signalAfterSubscribe) {
-    const deadline = Date.now() + 20_000
-    while (server.control.subscriptions === 0 && Date.now() < deadline) await Bun.sleep(25)
-    child.kill(options.signalAfterSubscribe)
+  try {
+    const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+    const signalAt = options.signalAtRead
+    const signal = options.signalAfterSubscribe ?? signalAt?.signal
+    if (signal) {
+      const reached = () => server.requests.some(({ name }) => name === (signalAt?.operation ?? "event.subscribe"))
+      const deadline = Date.now() + 20_000
+      while (!reached() && child.exitCode === null && child.signalCode === null && Date.now() < deadline) await Bun.sleep(25)
+      expect(reached()).toBe(true)
+      child.kill(signal)
+    }
+    const [stdout, stderr, exit] = await output
+    expect(server.unexpected).toEqual([])
+    expect(server.httpRequests.filter((request) => request !== "GET /api/health")).toEqual([])
+    return { stdout, stderr, exit, requests: server.requests, control: server.control, url: server.url }
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL")
+      await child.exited
+    }
+    await server.close()
   }
-  const signalAt = options.signalAtRead
-  if (signalAt) {
-    const deadline = Date.now() + 20_000
-    while (!server.requests.some((request) => request.startsWith(`GET ${signalAt.path}`)) && Date.now() < deadline) await Bun.sleep(25)
-    child.kill(signalAt.signal)
-  }
-  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
-  for (const request of server.requests) expect(request.startsWith("GET ")).toBe(true)
-  return { stdout, stderr, exit, requests: server.requests, control: server.control, url: server.url }
 }
 
 test("both entrypoints advertise decision watch with its flags", async () => {
@@ -492,7 +574,7 @@ test("a timeout reports progress and a resume cursor that replays the open execu
   const resumed = await watch({ log: { ses_target: [...log, succeeded(6)] } }, ["ses_target", "--input", "msg_input", "--after", "1", "--json"])
   expect(resumed.exit).toBe(0)
   expect(JSON.parse(resumed.stdout).execution.status).toBe("succeeded")
-  expect(resumed.requests.some((request) => request.includes("/log?after=1"))).toBe(true)
+  expect(resumed.requests.some(({ name, data }) => name === "session.log" && data.query?.after === 1)).toBe(true)
 }, 60_000)
 
 test("without an input the watch ignores history and returns on the next settlement", async () => {
@@ -502,7 +584,7 @@ test("without an input the watch ignores history and returns on the next settlem
   } }, ["ses_target", "--json"])
   expect(result.exit).toBe(0)
   expect(JSON.parse(result.stdout).execution).toEqual({ status: "succeeded", inputIDs: ["msg_live"], startedAt: iso(4), settledAt: iso(6), startEvent: ref(4), endEvent: ref(6) })
-  expect(result.requests.some((request) => request.startsWith("GET /api/session/ses_target/snapshot"))).toBe(true)
+  expect(result.requests.some(({ name, data }) => name === "session.snapshot" && data.params?.sessionID === "ses_target")).toBe(true)
 }, 30_000)
 
 test("a dropped event stream is resubscribed and state is re-read", async () => {
@@ -523,7 +605,7 @@ test("an unknown Session fails without watching", async () => {
   const result = await watch({}, ["ses_missing"])
   expect(result.exit).toBe(1)
   expect(result.stderr).toContain("Session not found: ses_missing")
-  expect(result.requests.some((request) => request.startsWith("GET /api/event"))).toBe(false)
+  expect(result.requests.some(({ name }) => name === "event.subscribe")).toBe(false)
 }, 30_000)
 
 test("cancelling a watch exits without changing server state", async () => {
@@ -571,7 +653,7 @@ test("a settlement is tied to the watched input only when retained history prove
 
 test("a server read that never answers still ends at the timeout", async () => {
   const started = Date.now()
-  const result = await watch({ stall: "/api/decision" }, ["ses_target", "--timeout", "1", "--json"])
+  const result = await watch({ stall: "decision.list" }, ["ses_target", "--timeout", "1", "--json"])
   expect(result.exit).toBe(3)
   expect(JSON.parse(result.stdout).outcome).toBe("timeout")
   expect(Date.now() - started).toBeLessThan(15_000)
@@ -583,7 +665,7 @@ test("sequence zero is a real cursor", async () => {
   const output = JSON.parse(result.stdout)
   expect(output.after).toBe(0)
   expect(output.resume).toEqual(["ycoding", "decision", "watch", "ses_target", "--after", "0", "--server", result.url, "--timeout", "1", "--json"])
-  expect(result.requests.some((request) => request.includes("/log?after=0"))).toBe(true)
+  expect(result.requests.some(({ name, data }) => name === "session.log" && data.query?.after === 0)).toBe(true)
 }, 30_000)
 
 test("a start pruned between the main read and its proof read never yields a later execution's success", async () => {
@@ -605,9 +687,9 @@ test("an execution starting at sequence zero is proven with a proof read from th
   const result = await watch({ log: { ses_target: [started(0), promoted(1, "msg_input"), succeeded(2)] } }, ["ses_target", "--input", "msg_input", "--json"])
   expect(result.exit).toBe(0)
   expect(JSON.parse(result.stdout).execution).toEqual({ status: "succeeded", inputIDs: ["msg_input"], startedAt: iso(0), settledAt: iso(2), startEvent: { id: "evt_ses_target_0", seq: 0 }, endEvent: ref(2) })
-  const reads = result.requests.filter((request) => request.startsWith("GET /api/experimental/session/ses_target/log"))
-  expect(reads.filter((request) => !request.includes("after=")).length).toBe(2)
-  expect(reads.filter((request) => request.includes("after=")).every((request) => request.includes("after=2"))).toBe(true)
+  const reads = result.requests.filter(({ name, data }) => name === "session.log" && data.params?.sessionID === "ses_target")
+  expect(reads.filter(({ data }) => data.query?.after === undefined).length).toBe(2)
+  expect(reads.filter(({ data }) => data.query?.after !== undefined).every(({ data }) => data.query?.after === 2)).toBe(true)
 }, 30_000)
 
 test("an input promoted at or before --after is refused instead of waiting", async () => {
@@ -619,7 +701,12 @@ test("an input promoted at or before --after is refused instead of waiting", asy
 }, 30_000)
 
 test("duplicate decisions print once and an item too large to print is named without a partial command", async () => {
-  const large = { ...decision("form", "ses_target", "frm_large"), summary: "x".repeat(300 * 1024) }
+  const large = {
+    ...decision("form", "ses_target", "frm_large"),
+    summary: "\x1b".repeat(34 * 1024),
+    decide: [{ label: "Submit", argv: ["ycoding", "api", "session.form.reply", "--param", "sessionID=ses_target", "--param", "formID=frm_large",
+      "-d", JSON.stringify({ answer: { response: "'".repeat(70 * 1024) } })] }],
+  }
   const small = decision("permission", "ses_target", "per_small")
   for (const json of [true, false]) {
     const result = await watch({ decisions: [small, small, large] }, ["ses_target", ...(json ? ["--json"] : [])])
@@ -633,7 +720,7 @@ test("duplicate decisions print once and an item too large to print is named wit
     }
     expect(result.stdout.split("per_small in").length).toBe(2)
     expect(result.stdout).toContain("form frm_large in ses_target is too large to print here; run ycoding decision list --json")
-    expect(result.stdout).not.toContain("itemID=frm_large")
+    expect(result.stdout).not.toContain("formID=frm_large")
   }
 }, 30_000)
 
@@ -791,7 +878,7 @@ test("family watch boundary: duplicate child replay reports one transition after
 }, 5_000)
 
 test("family watch boundary: epoch replacement rejects late old-epoch child events", async () => {
-  let epoch = "epoch_synthetic"
+  let epoch = sourceEpoch
   const current = { ...succeeded(2, "ses_child"), sourceEpoch: "epoch_replaced" }
   const result = await familyBoundary({ sessions: family, epoch: () => epoch, onSubscribe: (control) => {
     if (control.subscriptions !== 1) return
@@ -799,7 +886,7 @@ test("family watch boundary: epoch replacement rejects late old-epoch child even
       epoch = "epoch_replaced"
       control.drop()
       control.dropLogs()
-      control.append("ses_child", { ...succeeded(99, "ses_child"), sourceEpoch: "epoch_synthetic" }, current)
+      control.append("ses_child", { ...succeeded(99, "ses_child"), sourceEpoch }, current)
     }, 20)
   } })
   expect(result.result.outcome).toMatchObject({ outcome: "family" })
@@ -859,7 +946,7 @@ test("family watch boundary: stale-epoch status cannot release a terminal before
     } }), 35)
     setTimeout(() => {
       currentSent = true
-      control.push({ id: "evt_current_busy", created: base, sourceEpoch: "epoch_synthetic", type: "session.status", data: {
+      control.push({ id: "evt_current_busy", created: base, sourceEpoch, type: "session.status", data: {
         sessionID: "ses_child", status: { type: "busy" },
       } })
     }, 60)
@@ -895,7 +982,7 @@ test("family watch boundary: success, timeout, and abort release all owned strea
 
 const checkpoint = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url")
 const familyCursor = {
-  version: 1, rootSessionID: "ses_target", sourceEpoch: "epoch_synthetic",
+  version: 1, rootSessionID: "ses_target", sourceEpoch,
   cursors: [{ sessionID: "ses_target", after: 0 }, { sessionID: "ses_child", after: 0 }],
 }
 
@@ -909,7 +996,7 @@ test("family checkpoint boundary: resuming replays a child terminal committed be
   expect(output.checkpoint).toEqual(expect.any(String))
   expect(output.resume).toContain("--checkpoint")
   const next = JSON.parse(Buffer.from(output.checkpoint, "base64url").toString())
-  expect(next).toMatchObject({ version: 1, rootSessionID: "ses_target", sourceEpoch: "epoch_synthetic" })
+  expect(next).toMatchObject({ version: 1, rootSessionID: "ses_target", sourceEpoch })
   expect(next.cursors).toContainEqual({ sessionID: "ses_child", after: 1 })
 }, 10_000)
 
@@ -938,7 +1025,7 @@ test("family checkpoint boundary: an explicit conflicting root cursor is rejecte
 
 test("family checkpoint boundary: a stalled snapshot preserves an unvisited child cursor", async () => {
   const saved = { ...familyCursor, cursors: [{ sessionID: "ses_target" }, { sessionID: "ses_child", after: 7 }] }
-  const result = await familyBoundary({ sessions: family, stall: "/api/session/ses_child/snapshot" }, { checkpoint: checkpoint(saved) })
+  const result = await familyBoundary({ sessions: family, stall: { operation: "session.snapshot", sessionID: "ses_child" } }, { checkpoint: checkpoint(saved) })
   expect(result.result.outcome).toMatchObject({ outcome: "timeout" })
   expect(JSON.parse(Buffer.from(result.result.checkpoint!, "base64url").toString()).cursors).toContainEqual({ sessionID: "ses_child", after: 7 })
 }, 5_000)
@@ -1053,7 +1140,7 @@ test("an owner idle after its children drained, with open todos and no accepted 
   }))
   expect(output.resume).toEqual(["ycoding", "decision", "watch", "ses_target", "--family", "--after", "9", "--checkpoint", output.checkpoint, "--server", json.url, "--json"])
   expect(JSON.parse(Buffer.from(output.checkpoint, "base64url").toString())).toEqual({
-    version: 1, rootSessionID: "ses_target", sourceEpoch: "epoch_synthetic",
+    version: 1, rootSessionID: "ses_target", sourceEpoch,
     cursors: [{ sessionID: "ses_target", after: 9 }, { sessionID: "ses_child" }],
   })
   const text = await watch(scenario, ["ses_target", "--input", "msg_input", "--family"])
@@ -1140,7 +1227,7 @@ test("an owner still active after its terminal is reported running once, and the
   expect(output.execution.status).toBe("succeeded")
   expect(output.work).toEqual(work("running"))
   expect(output.resume).toEqual(["ycoding", "decision", "watch", "ses_target", "--after", "4", "--server", settling.url, "--json"])
-  expect(settling.requests.filter((request) => request.startsWith("GET /api/session/active")).length).toBe(1)
+  expect(settling.requests.filter(({ name }) => name === "session.active")).toHaveLength(1)
 
   const resumed = await watch({ log: { ses_target: [...ownerRun(succeeded(4)).ses_target, receipt(5, "msg_input", "msg_answer")] } },
     ["ses_target", "--after", "4", "--timeout", "1", "--json"])
@@ -1199,8 +1286,8 @@ test("reconnects and repeated events produce one settlement report with one work
   expect(result.exit).toBe(0)
   expect(result.control.subscriptions).toBe(2)
   expect(JSON.parse(result.stdout).execution.status).toBe("succeeded")
-  expect(result.requests.filter((request) => request.startsWith("GET /api/session/outstanding")).length).toBe(1)
-  expect(result.requests.filter((request) => request.startsWith("GET /api/session/ses_target/todo")).length).toBe(1)
+  expect(result.requests.filter(({ name }) => name === "session.outstanding")).toHaveLength(1)
+  expect(result.requests.filter(({ name, data }) => name === "session.todo.list" && data.params?.sessionID === "ses_target")).toHaveLength(1)
 }, 30_000)
 
 test("a timeout reports the authoritative idle state with bounded todos", async () => {
@@ -1268,7 +1355,7 @@ test("bounded child task and todo lists report how many entries were not listed"
   expect(output.omittedTasks).toBe(2)
   expect(output.children).toEqual({ total: 12, active: 12, running: 12, waiting: 0 })
   expect(output.todos).toEqual({ sessionID: "ses_target", open: 13, items: many.slice(0, 10) })
-  expect(json.requests).toContain("GET /api/session/ses_target/subagent?limit=10")
+  expect(json.requests.some(({ name, data }) => name === "session.subagent.list" && data.params?.parentID === "ses_target" && data.query?.limit === 10)).toBe(true)
   const text = await watch(scenario, ["ses_target", "--input", "msg_input"])
   expect(text.stdout).toContain("Child tasks: 12 of 12 active.")
   expect(text.stdout).toContain("2 more active child tasks not listed; run ycoding api session.subagent.list --param parentID=ses_target and follow cursor.next.")
@@ -1288,7 +1375,7 @@ test("bounded child task and todo lists report how many entries were not listed"
   const wide = await watch(wideScenario, ["ses_target", "--input", "msg_input", "--family", "--json"])
   expect(wide.exit).toBe(0)
   expect(JSON.parse(wide.stdout).work.omittedParents).toBe(2)
-  expect(wide.requests.filter((request) => /^GET \/api\/session\/[^/]+\/subagent/.test(request)).length).toBe(20)
+  expect(wide.requests.filter(({ name }) => name === "session.subagent.list")).toHaveLength(20)
   const wideText = await watch(wideScenario, ["ses_target", "--input", "msg_input", "--family"])
   expect(wideText.stdout).toContain("Child tasks of 2 more family Sessions were not read; run ycoding api session.subagent.list --param parentID=<parent-session-id> for each parent Session in the family, starting with ses_target, and follow cursor.next.")
   const template = printedRequest(wideText.stdout, "session.subagent.list")
@@ -1308,12 +1395,12 @@ function expectUnavailable(...outputs: Record<string, unknown>[]) {
 }
 
 test("an assessment cut off by the deadline marks a timeout result unavailable", async () => {
-  const plain = await watch({ stall: "/api/session/active" }, ["ses_target", "--timeout", "1"])
+  const plain = await watch({ stall: "session.active" }, ["ses_target", "--timeout", "1"])
   expect(plain.exit).toBe(3)
   expect(plain.stdout).toContain(unassessedLine)
-  const json = await watch({ stall: "/api/session/active" }, ["ses_target", "--timeout", "1", "--json"])
+  const json = await watch({ stall: "session.active" }, ["ses_target", "--timeout", "1", "--json"])
   expect(json.exit).toBe(3)
-  expect(json.requests.some((request) => request.startsWith("GET /api/session/active"))).toBe(true)
+  expect(json.requests.some(({ name }) => name === "session.active")).toBe(true)
   const output = JSON.parse(json.stdout)
   expect(output).toMatchObject({ outcome: "timeout", sessionID: "ses_target", progress: { state: "unconfirmed" } })
   const familyJson = await watch({ sessions: family, readActive: slowActive }, ["ses_target", "--family", "--timeout", "1", "--json"])
@@ -1327,7 +1414,7 @@ test("an assessment cut off by the deadline marks a timeout result unavailable",
 const unavailableState = "State: unconfirmed; the Session state could not be assessed before the deadline, so whether it is executing is unknown"
 
 test("a re-armed watch past an open execution's start reports unconfirmed, not idle, when the assessment is unavailable", async () => {
-  const scenario = { log: { ses_target: [started(2), promoted(3, "msg_live")] }, active: ["ses_target"], stall: "/api/session/active" }
+  const scenario = { log: { ses_target: [started(2), promoted(3, "msg_live")] }, active: ["ses_target"], stall: "session.active" }
   const json = await watch(scenario, ["ses_target", "--after", "3", "--timeout", "1", "--json"])
   expect(json.exit).toBe(3)
   const output = JSON.parse(json.stdout)
@@ -1341,12 +1428,12 @@ test("a re-armed watch past an open execution's start reports unconfirmed, not i
 }, 30_000)
 
 test("a timeout whose assessment never ran after an aborted read reports unconfirmed", async () => {
-  const json = await watch({ stall: "/api/decision" }, ["ses_target", "--timeout", "1", "--json"])
+  const json = await watch({ stall: "decision.list" }, ["ses_target", "--timeout", "1", "--json"])
   expect(json.exit).toBe(3)
   const output = JSON.parse(json.stdout)
   expect(output).toMatchObject({ outcome: "timeout", progress: { state: "unconfirmed" } })
   expectUnavailable(output)
-  const text = await watch({ stall: "/api/decision" }, ["ses_target", "--timeout", "1"])
+  const text = await watch({ stall: "decision.list" }, ["ses_target", "--timeout", "1"])
   expect(text.stdout).toContain(unavailableState)
 }, 30_000)
 
@@ -1360,12 +1447,12 @@ test("a completed assessment with no execution still reports idle", async () => 
 }, 30_000)
 
 test("an assessment cut off by the deadline marks a settled result unavailable", async () => {
-  const plain = await watch({ log: ownerRun(succeeded(4)), stall: "/api/session/active" }, ["ses_target", "--input", "msg_input", "--timeout", "1"])
+  const plain = await watch({ log: ownerRun(succeeded(4)), stall: "session.active" }, ["ses_target", "--input", "msg_input", "--timeout", "1"])
   expect(plain.exit).toBe(0)
   expect(plain.stdout).toContain("Execution succeeded in Session \"Watched\" (ses_target).")
   expect(plain.stdout).toContain(unassessedLine)
   const settled = { status: "succeeded", inputIDs: ["msg_input"], startedAt: iso(2), settledAt: iso(4), startEvent: ref(2), endEvent: ref(4) }
-  const json = await watch({ log: ownerRun(succeeded(4)), stall: "/api/session/active" }, ["ses_target", "--input", "msg_input", "--timeout", "1", "--json"])
+  const json = await watch({ log: ownerRun(succeeded(4)), stall: "session.active" }, ["ses_target", "--input", "msg_input", "--timeout", "1", "--json"])
   expect(json.exit).toBe(0)
   const output = JSON.parse(json.stdout)
   expect(output).toMatchObject({ outcome: "settled", sessionID: "ses_target", after: 4, execution: settled })
@@ -1380,21 +1467,21 @@ test("an assessment cut off by the deadline marks a settled result unavailable",
 test("a read cut off by the deadline outside the assessment marks the timeout result unavailable", async () => {
   const outputs: Record<string, unknown>[] = []
   for (const args of [["--json"], ["--family", "--json"]]) {
-    const result = await watch({ sessions: family, stall: "/api/decision" }, ["ses_target", "--timeout", "1", ...args])
+    const result = await watch({ sessions: family, stall: "decision.list" }, ["ses_target", "--timeout", "1", ...args])
     expect(result.exit).toBe(3)
-    expect(result.requests.some((request) => request.startsWith("GET /api/session/active"))).toBe(false)
+    expect(result.requests.some(({ name }) => name === "session.active")).toBe(false)
     const output = JSON.parse(result.stdout)
     expect(output).toMatchObject({ outcome: "timeout", sessionID: "ses_target", progress: { state: "unconfirmed" } })
     outputs.push(output)
   }
-  const plain = await watch({ stall: "/api/decision" }, ["ses_target", "--timeout", "1"])
+  const plain = await watch({ stall: "decision.list" }, ["ses_target", "--timeout", "1"])
   expect(plain.exit).toBe(3)
   expect(plain.stdout).toContain(unassessedLine)
   const changed = await watch({ sessions: family, readActive: slowActive, onSubscribe: (control) => {
     setTimeout(() => control.append("ses_child", succeeded(1, "ses_child")), 20)
   } }, ["ses_target", "--family", "--timeout", "1", "--json"])
   expect(changed.exit).toBe(3)
-  expect(changed.requests.filter((request) => request.startsWith("GET /api/session/active")).length).toBe(1)
+  expect(changed.requests.filter(({ name }) => name === "session.active")).toHaveLength(1)
   const output = JSON.parse(changed.stdout)
   expect(output).toMatchObject({ outcome: "timeout", sessionID: "ses_target" })
   expectUnavailable(...outputs, output)
@@ -1403,7 +1490,7 @@ test("a read cut off by the deadline outside the assessment marks the timeout re
 test("a watch resumed after an unavailable assessment reports the normal assessment once reads succeed", async () => {
   const log = ownerRun(succeeded(4))
   const completed = work("completed", { receipt: { id: "evt_ses_target_5", seq: 5, inputID: "msg_input", assistantMessageID: "msg_answer", current: true } })
-  const cut = await watch({ log, stall: "/api/session/active" }, ["ses_target", "--after", "4", "--timeout", "1", "--json"])
+  const cut = await watch({ log, stall: "session.active" }, ["ses_target", "--after", "4", "--timeout", "1", "--json"])
   expect(cut.exit).toBe(3)
   const first = JSON.parse(cut.stdout)
   expectUnavailable(first)
@@ -1429,9 +1516,9 @@ test("a watch resumed after an unavailable assessment reports the normal assessm
 
 test("cancelling or killing a watch during a stalled assessment prints no result and no assessment", async () => {
   for (const signal of ["SIGINT", "SIGKILL"] as const) {
-    const result = await watch({ log: ownerRun(succeeded(4)), stall: "/api/session/active" }, ["ses_target", "--input", "msg_input", "--timeout", "30", "--json"],
-      { signalAtRead: { signal, path: "/api/session/active" } })
-    expect(result.requests.some((request) => request.startsWith("GET /api/session/active"))).toBe(true)
+    const result = await watch({ log: ownerRun(succeeded(4)), stall: "session.active" }, ["ses_target", "--input", "msg_input", "--timeout", "30", "--json"],
+      { signalAtRead: { signal, operation: "session.active" } })
+    expect(result.requests.some(({ name }) => name === "session.active")).toBe(true)
     expect(result.stdout).toBe("")
     expect([0, 2, 3]).not.toContain(result.exit)
   }

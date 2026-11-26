@@ -15,13 +15,14 @@ import {
 import { DecisionCommand, shellCommand, watchTimeout } from "../../decision"
 import { Runtime } from "../../../framework/runtime"
 import { ServerConnection } from "../../../services/server-connection"
+import { frontendClient } from "../../../services/client"
 import { createFamilyWatch, decodeCheckpoint, discoverFamily, FamilyCheckpointError, type FamilyChange } from "./family"
 import { decisionText, line } from "./decision-text"
 import { followFamily, type FollowReceipt } from "./follow"
 import { createFollowDelivery, type DeliveryReceipt } from "./follow-delivery"
 import { deliveryThreadID, FollowError, followID, followDefaultReaders, followReaderLimit, followPageLimit, openFollowState } from "./follow-state"
 
-type Client = ReturnType<typeof YCoding.make>
+type Client = Pick<ReturnType<typeof YCoding.make>, "session" | "decision" | "event">
 type LogEvent = Exclude<SessionLogOutput, { type: "log.synced" }>
 type Terminal = Extract<LogEvent, { type: "session.execution.succeeded" | "session.execution.failed" | "session.execution.interrupted" }>
 type Status = "succeeded" | "failed" | "interrupted" | "rejected" | "unknown"
@@ -515,9 +516,9 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
   }
 
   const waitNext = async <T>(pending: Promise<T>) => {
+    pending.catch(() => {})
     const remaining = deadline - Math.min(assessmentReserveMs, options.timeout * 200) - Date.now()
     if (remaining <= 0) return "timeout" as const
-    pending.catch(() => {})
     let timer: ReturnType<typeof setTimeout> | undefined
     const expired = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), remaining) })
     try {
@@ -731,8 +732,8 @@ export default Runtime.handler(DecisionCommand.commands.watch, Effect.fn("cli.de
   const connection = yield* ServerConnection.resolve({ server: options.server, standalone: options.standalone, mismatch: "ignore", ...(input.follow ? { diagnostics: "sanitized" as const } : {}) }).pipe(
     Effect.mapError((error) => input.follow ? new FollowError("observer-failed") : error),
   )
-  const client = YCoding.make({ baseUrl: connection.endpoint.url, headers: Service.headers(connection.endpoint) })
   if (input.follow) {
+    const client = YCoding.make({ baseUrl: connection.endpoint.url, headers: Service.headers(connection.endpoint) })
     if (!followID(options.sessionID) || !options.sessionID.startsWith("ses")) return yield* Effect.fail(new Error("Invalid follow root ID"))
     const global = yield* FrontendPaths.Service
     const server = createHash("sha256").update(connection.endpoint.url).digest("hex")
@@ -774,6 +775,7 @@ export default Runtime.handler(DecisionCommand.commands.watch, Effect.fn("cli.de
     })
     return
   }
+  const client = yield* frontendClient(connection.endpoint)
   const result = yield* Effect.tryPromise({ try: (signal) => watchSession(client, options, signal), catch: (error) => new Error(message(error)) })
   const output = render(options, result)
   yield* Effect.sync(() => {

@@ -6,6 +6,7 @@ import { deltaChunk, finishChunk, toolCallChunk } from "../../ai/test/lib/openai
 import { providerConfig, startProviderStandIn } from "./fixture/provider-stand-in"
 import { auth, createSession, password, startServer, type IsolatedServer } from "./remote-harness"
 import { YCoding } from "@ycoding-ai/client/promise"
+import { decisionWatchPeer } from "./fixture/decision-watch-peer"
 import { followFamily, type FollowReceipt } from "../src/commands/handlers/decision/follow"
 import { createFollowDelivery } from "../src/commands/handlers/decision/follow-delivery"
 import { validateFollowState, type FollowState } from "../src/commands/handlers/decision/follow-state"
@@ -200,7 +201,9 @@ async function boot(reply: Reply = shellReply) {
     const response = await server.request(`/api/session/${sessionID}/autonomy`, { method: "PUT", headers: json, body: JSON.stringify({ permissions: "manual", guardrails: "manual", answers: "manual" }) })
     expect(response.status, await response.clone().text()).toBe(200)
   }
-  return { server, directory }
+  const watcher = decisionWatchPeer(server)
+  cleanups.push(watcher.close)
+  return { server, watcher }
 }
 
 async function prompt(server: IsolatedServer, sessionID: string, id: string) {
@@ -224,12 +227,12 @@ async function until<A>(read: () => Promise<A | undefined>, message: string) {
   throw new Error(message)
 }
 
-function watch(server: IsolatedServer, args: string[]) {
-  return rerun(server, ["ycoding", "decision", "watch", ...args, "--json", "--server", server.base])
+function watch(watcher: { base: string }, args: string[]) {
+  return rerun(watcher, ["ycoding", "decision", "watch", ...args, "--json", "--server", watcher.base])
 }
 
-function rerun(server: IsolatedServer, argv: readonly string[]) {
-  expect(argv.slice(argv.indexOf("--server"), argv.indexOf("--server") + 2)).toEqual(["--server", server.base])
+function rerun(watcher: { base: string }, argv: readonly string[]) {
+  expect(argv.slice(argv.indexOf("--server"), argv.indexOf("--server") + 2)).toEqual(["--server", watcher.base])
   const child = Bun.spawn([process.execPath, new URL("../src/index.ts", import.meta.url).pathname, ...argv.slice(1)], {
     stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: home, YCODING_TEST_HOME: home, YCODING_PASSWORD: password },
   })
@@ -237,11 +240,11 @@ function rerun(server: IsolatedServer, argv: readonly string[]) {
 }
 
 test("a real Session's permission ask wakes the watch, stays pending, and the resumed watch reports the correlated completion", async () => {
-  const { server } = await boot()
+  const { server, watcher } = await boot()
   await prompt(server, "ses_watch_other", "msg_watch_other")
   const unrelated = await until(async () => (await permissions(server, "ses_watch_other"))[0], "the unrelated permission was never asked")
 
-  const watching = watch(server, ["ses_watch_target", "--input", "msg_watch_target", "--timeout", "45"])
+  const watching = watch(watcher, ["ses_watch_target", "--input", "msg_watch_target", "--timeout", "45"])
   await Bun.sleep(1_500)
   await prompt(server, "ses_watch_target", "msg_watch_target")
   const first = await watching
@@ -255,15 +258,15 @@ test("a real Session's permission ask wakes the watch, stays pending, and the re
   const pending = await permissions(server, "ses_watch_target")
   expect(pending.map((item) => item.id)).toEqual([decision.decisions[0].id])
 
-  const again = await watch(server, ["ses_watch_target", "--timeout", "5"])
+  const again = await watch(watcher, ["ses_watch_target", "--timeout", "5"])
   expect(again.exit).toBe(2)
   expect(JSON.parse(again.stdout).decisions.map((item: { id: string }) => item.id)).toEqual([decision.decisions[0].id])
 
   const reply = await server.request(`/api/session/ses_watch_target/permission/${decision.decisions[0].id}/reply`, { method: "POST", headers: json, body: JSON.stringify({ reply: "once" }) })
   expect(reply.status, await reply.clone().text()).toBeLessThan(300)
   const resume: string[] = decision.resume
-  expect(resume).toEqual(["ycoding", "decision", "watch", "ses_watch_target", "--input", "msg_watch_target", ...resume.slice(6, -5), "--server", server.base, "--timeout", "45", "--json"])
-  const second = await rerun(server, resume)
+  expect(resume).toEqual(["ycoding", "decision", "watch", "ses_watch_target", "--input", "msg_watch_target", ...resume.slice(6, -5), "--server", watcher.base, "--timeout", "45", "--json"])
+  const second = await rerun(watcher, resume)
   expect(second.stderr).toBe("")
   expect(second.exit).toBe(0)
   const settled = JSON.parse(second.stdout)
@@ -275,18 +278,18 @@ test("a real Session's permission ask wakes the watch, stays pending, and the re
   expect(["incomplete", "running"]).toContain(settled.work.state)
   expect(settled.work).toMatchObject({ todos: { sessionID: "ses_watch_target", open: 0, items: [] }, decisions: [], tasks: [], lost: [], pending: 0 })
   expect(JSON.stringify(settled.work)).not.toContain("ses_watch_other")
-  expect(settled.resume).toEqual(["ycoding", "decision", "watch", "ses_watch_target", "--after", String(settled.after), "--server", server.base, "--timeout", "45", "--json"])
+  expect(settled.resume).toEqual(["ycoding", "decision", "watch", "ses_watch_target", "--after", String(settled.after), "--server", watcher.base, "--timeout", "45", "--json"])
   expect((await permissions(server, "ses_watch_other")).map((item) => item.id)).toEqual([unrelated.id])
 }, 120_000)
 
 test("a family checkpoint observes a real child settlement without completing its idle root", async () => {
-  const { server } = await boot()
+  const { server, watcher } = await boot()
   const response = await server.request("/api/session", {
     method: "POST", headers: json, body: JSON.stringify({ id: "ses_watch_child", parentID: "ses_watch_target" }),
   })
   expect(response.status, await response.clone().text()).toBe(200)
   await prompt(server, "ses_watch_child", "msg_watch_child")
-  const first = await watch(server, ["ses_watch_target", "--family", "--timeout", "20"])
+  const first = await watch(watcher, ["ses_watch_target", "--family", "--timeout", "20"])
   expect(first.stderr).toBe("")
   expect(first.exit).toBe(2)
   const pending = JSON.parse(first.stdout)
@@ -296,7 +299,7 @@ test("a family checkpoint observes a real child settlement without completing it
     method: "POST", headers: json, body: JSON.stringify({ reply: "once" }),
   })
   expect(reply.status, await reply.clone().text()).toBeLessThan(300)
-  const second = await rerun(server, pending.resume)
+  const second = await rerun(watcher, pending.resume)
   expect(second.stderr).toBe("")
   expect(second.exit).toBe(0)
   const settled = JSON.parse(second.stdout)
@@ -309,7 +312,7 @@ test("a family checkpoint observes a real child settlement without completing it
 
 test("a real question tool's form wakes the watch and the answered input completes", async () => {
   let asked = false
-  const { server } = await boot((request) => {
+  const { server, watcher } = await boot((request) => {
     const messages = typeof request === "object" && request !== null ? Reflect.get(request, "messages") : undefined
     if (asked && Array.isArray(messages) && messages.some((message) => message?.role === "tool"))
       return [deltaChunk({ role: "assistant", content: "Answer received." }), finishChunk("stop")]
@@ -317,7 +320,7 @@ test("a real question tool's form wakes the watch and the answered input complet
     return [toolCallChunk("call_watch_question", "question", JSON.stringify({ questions: [{ header: "Evidence", question: "Which synthetic input should I use?", options: [] }] })), finishChunk("tool_calls")]
   })
   await prompt(server, "ses_watch_target", "msg_watch_question")
-  const first = await watch(server, ["ses_watch_target", "--input", "msg_watch_question", "--timeout", "45"])
+  const first = await watch(watcher, ["ses_watch_target", "--input", "msg_watch_question", "--timeout", "45"])
   expect(first.stderr).toBe("")
   expect(first.exit).toBe(2)
   const decision = JSON.parse(first.stdout)
@@ -329,8 +332,8 @@ test("a real question tool's form wakes the watch and the answered input complet
   expect(pending.map((item) => item.id)).toEqual([decision.decisions[0].id])
   const reply = await server.request(`/api/session/ses_watch_target/form/${pending[0]!.id}/reply`, { method: "POST", headers: json, body: JSON.stringify({ answer: { q0: "Synthetic input" } }) })
   expect(reply.status, await reply.clone().text()).toBeLessThan(300)
-  expect((decision.resume as string[]).slice(-5)).toEqual(["--server", server.base, "--timeout", "45", "--json"])
-  const second = await rerun(server, decision.resume)
+  expect((decision.resume as string[]).slice(-5)).toEqual(["--server", watcher.base, "--timeout", "45", "--json"])
+  const second = await rerun(watcher, decision.resume)
   expect(second.stderr).toBe("")
   expect(second.exit).toBe(0)
   expect(JSON.parse(second.stdout).execution).toMatchObject({ status: "succeeded", inputIDs: ["msg_watch_question"], response: "Answer received." })
@@ -343,7 +346,7 @@ async function executionStarts(server: IsolatedServer, sessionID: string) {
 }
 
 test("after real history pruning a resumed watch reports unknown for the pruned execution and success only for the retained one", async () => {
-  const { server } = await boot((request) => {
+  const { server, watcher } = await boot((request) => {
     const text = JSON.stringify(request).includes("Second synthetic task") ? "Second answer." : "First answer."
     return [deltaChunk({ role: "assistant", content: text }), finishChunk("stop")]
   })
@@ -353,7 +356,7 @@ test("after real history pruning a resumed watch reports unknown for the pruned 
   const run = async (id: string, text: string) => {
     const response = await server.request("/api/session/ses_watch_target/prompt", { method: "POST", headers: json, body: JSON.stringify({ id, text }) })
     expect(response.status, await response.clone().text()).toBe(200)
-    const result = await watch(server, ["ses_watch_target", "--input", id, ...after, "--timeout", "45"])
+    const result = await watch(watcher, ["ses_watch_target", "--input", id, ...after, "--timeout", "45"])
     expect(result.stderr).toBe("")
     expect(result.exit).toBe(0)
     return JSON.parse(result.stdout).execution
@@ -368,21 +371,21 @@ test("after real history pruning a resumed watch reports unknown for the pruned 
     await Bun.sleep(1_000)
   }
 
-  const first = await watch(server, ["ses_watch_target", "--input", "msg_prune_first", ...after, "--timeout", "20"])
+  const first = await watch(watcher, ["ses_watch_target", "--input", "msg_prune_first", ...after, "--timeout", "20"])
   expect(first.stderr).toBe("")
   expect(first.exit).toBe(0)
   expect(JSON.parse(first.stdout).execution).toEqual({ status: "unknown", inputIDs: ["msg_prune_first"] })
-  const second = await watch(server, ["ses_watch_target", "--input", "msg_prune_second", ...after, "--timeout", "20"])
+  const second = await watch(watcher, ["ses_watch_target", "--input", "msg_prune_second", ...after, "--timeout", "20"])
   expect(second.stderr).toBe("")
   expect(second.exit).toBe(0)
   expect(JSON.parse(second.stdout).execution).toMatchObject({ status: "succeeded", inputIDs: ["msg_prune_second"], response: "Second answer." })
 }, 180_000)
 
 test("cancelling a real watch exits without answering a pending decision of another Session", async () => {
-  const { server } = await boot()
+  const { server, watcher } = await boot()
   await prompt(server, "ses_watch_other", "msg_watch_other")
   const pending = await until(async () => (await permissions(server, "ses_watch_other"))[0], "the unrelated permission was never asked")
-  const child = Bun.spawn([process.execPath, new URL("../src/index.ts", import.meta.url).pathname, "decision", "watch", "ses_watch_target", "--json", "--timeout", "60", "--server", server.base], {
+  const child = Bun.spawn([process.execPath, new URL("../src/index.ts", import.meta.url).pathname, "decision", "watch", "ses_watch_target", "--json", "--timeout", "60", "--server", watcher.base], {
     stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: home, YCODING_TEST_HOME: home, YCODING_PASSWORD: password },
   })
   await Bun.sleep(3_000)

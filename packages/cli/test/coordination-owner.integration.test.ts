@@ -10,6 +10,7 @@ import { deltaChunk, finishChunk, toolCallChunk } from "../../ai/test/lib/openai
 import { availablePort } from "./fixture/loopback-port"
 import { providerConfig, startProviderStandIn } from "./fixture/provider-stand-in"
 import { auth, createSession, password, startServer } from "./remote-harness"
+import { decisionWatchPeer } from "./fixture/decision-watch-peer"
 
 const cleanups: Array<() => Promise<unknown>> = []
 afterEach(async () => {
@@ -214,6 +215,7 @@ const syntheticInputs = async (server: Server, sessionID: string, source: string
   )
 
 const notices = (server: Server, sessionID: string) => syntheticInputs(server, sessionID, "project_notification") as Promise<Notice[]>
+const escalations = (server: Server, sessionID: string) => syntheticInputs(server, sessionID, "project_escalation")
 
 async function tasks(server: Server, parentID: string) {
   const response = await server.request(`/api/session/${parentID}/subagent`)
@@ -395,7 +397,9 @@ test("a member question wakes only its owner, watch reports it, the owner's esca
   expect(denied).toContain("plan_exit")
   const formID = await until(async () => (await forms(server, beta.sessionID))[0]?.id, "the member question was never asked")
 
-  const watched = Bun.spawn([process.execPath, new URL("../src/index.ts", import.meta.url).pathname, "decision", "watch", beta.sessionID, "--json", "--server", server.base, "--timeout", "30"], {
+  const watcher = decisionWatchPeer(server)
+  cleanups.push(watcher.close)
+  const watched = Bun.spawn([process.execPath, new URL("../src/index.ts", import.meta.url).pathname, "decision", "watch", beta.sessionID, "--json", "--server", watcher.base, "--timeout", "30"], {
     stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: home, YCODING_TEST_HOME: home, YCODING_PASSWORD: password },
   })
   const [stdout, stderr, exit] = await Promise.all([new Response(watched.stdout).text(), new Response(watched.stderr).text(), watched.exited])
@@ -413,12 +417,10 @@ test("a member question wakes only its owner, watch reports it, the owner's esca
   expect(ownerQuestions).toEqual([expect.objectContaining({ groupID, memberSessionID: beta.sessionID, requestID: formID })])
   const ownerStarts = (await events(server, ownerID)).filter((event) => event.type === "session.execution.started")
   expect(ownerStarts.length).toBeGreaterThanOrEqual(2)
-  const masterBefore = await notices(server, "ses_master")
-  expect(masterBefore.filter((item) => item.event === "question")).toEqual([])
-  expect(masterBefore.filter((item) => item.event === "escalated")).toEqual([
-    expect.objectContaining({ memberSessionID: beta.sessionID, requestID: formID, kind: "question", escalatedBy: expect.objectContaining({ sessionID: ownerID }) }),
+  expect(await notices(server, "ses_master")).toEqual([])
+  expect(await escalations(server, "ses_master")).toEqual([
+    expect.objectContaining({ event: "escalated", memberSessionID: beta.sessionID, requestID: formID, kind: "question", escalatedBy: expect.objectContaining({ sessionID: ownerID }) }),
   ])
-  expect(masterBefore.filter((item) => item.event !== "escalated")).toEqual([])
   expect(await notices(server, "ses_unrelated")).toEqual([])
   expect((await forms(server, beta.sessionID)).map((item) => item.id)).toEqual([formID])
 
@@ -429,7 +431,7 @@ test("a member question wakes only its owner, watch reports it, the owner's esca
   expect(((await cancelled.json()) as { data: { state: string } }).data.state).toBe("cancelled")
 
   const handedOff = await until(async () => {
-    const items = (await notices(server, "ses_master")).filter((item) => item.event === "question")
+    const items = (await escalations(server, "ses_master")).filter((item) => item.event === "question")
     return items.length > 0 ? items : undefined
   }, "the pending question was never handed to the Master")
   expect(handedOff).toEqual([expect.objectContaining({ groupID, memberSessionID: beta.sessionID, requestID: formID })])
@@ -444,7 +446,8 @@ test("a member question wakes only its owner, watch reports it, the owner's esca
   const ownerCount = (await notices(server, ownerID)).length
   const interrupted = await server.request(`/api/session/${beta.sessionID}/interrupt`, { method: "POST" })
   expect(interrupted.status, await interrupted.clone().text()).toBeLessThan(300)
-  await until(async () => (await notices(server, "ses_master")).some((item) => item.event === "interrupted" && item.memberSessionID === beta.sessionID), "the next member notice never reached the Master")
+  await until(async () => (await events(server, beta.sessionID)).some((event) => event.type === "session.execution.interrupted"), "the member interruption was not recorded")
+  expect((await notices(server, "ses_master")).filter((item) => item.event === "interrupted" && item.memberSessionID === beta.sessionID)).toEqual([])
   expect(await notices(server, ownerID)).toHaveLength(ownerCount)
   expect(await notices(server, "ses_unrelated")).toEqual([])
   expect(server.logs.filter((line) => line.includes("Project event handling failed"))).toEqual([])

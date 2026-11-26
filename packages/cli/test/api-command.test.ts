@@ -78,6 +78,14 @@ test.skipIf(!native)("named API reads an isolated native runtime without OpenAPI
     expect(created).toMatchObject({ data: { id: sessionID, title: "Named API fixture", location: { directory: project } } })
     expect(await read("session.list", "--param", "limit=1", "--param", "parentID=null")).toMatchObject({ data: [created.data] })
     expect(await read("session.get", ...selector)).toEqual(created)
+    for (const flags of [[], ["--family"]]) {
+      const watcher = Bun.spawn([process.execPath, cli, "decision", "watch", sessionID, ...flags, "--server", url, "--timeout", "2", "--json"], {
+        cwd: root, env, stdout: "pipe", stderr: "pipe",
+      })
+      const [exit, stdout, stderr] = await Promise.all([watcher.exited, new Response(watcher.stdout).text(), new Response(watcher.stderr).text()])
+      expect(exit, stderr).toBe(3)
+      expect(JSON.parse(stdout)).toMatchObject({ outcome: "timeout", sessionID, progress: { state: "idle" } })
+    }
     const snapshot = await read("session.snapshot", ...selector, "--param", "limit=1")
     expect(snapshot).toMatchObject({ session: created.data, messages: [], watermark: { aggregateID: sessionID } })
     expect(await read("session.autonomy.get", ...selector)).toMatchObject({ data: { mode: "normal" } })

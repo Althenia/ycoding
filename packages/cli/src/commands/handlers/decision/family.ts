@@ -1,6 +1,6 @@
 import { YCoding, type EventSubscribeOutput } from "@ycoding-ai/client/promise"
 
-type Client = ReturnType<typeof YCoding.make>
+type Client = Pick<ReturnType<typeof YCoding.make>, "session">
 export type FamilyChange = { readonly sessionID: string; readonly type: string; readonly id: string; readonly seq?: number }
 type Cursor = { readonly sessionID: string; readonly after?: number }
 type Checkpoint = { readonly version: 1; readonly rootSessionID: string; readonly sourceEpoch: string; readonly cursors: readonly Cursor[] }
