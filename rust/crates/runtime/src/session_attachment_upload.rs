@@ -142,7 +142,10 @@ impl Staging {
         let upload = uploads
             .get_mut(&(connection.to_owned(), id.to_owned()))
             .filter(|upload| upload.session == session && upload.complete)
-            .ok_or_else(|| invalid("Attachment upload is unavailable or incomplete"))?;
+            .ok_or_else(|| Failure::InvalidField {
+                message: "Attachment upload is unavailable or incomplete".into(),
+                field: "files",
+            })?;
         upload.expires = now + TTL;
         Ok(upload.bytes.clone())
     }

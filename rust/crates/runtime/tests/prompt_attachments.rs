@@ -9,6 +9,7 @@ use prost::{Message, Name};
 use remote_derived_support::{Fixture, now, world};
 use std::{fs, path::Path, sync::Arc};
 use support::{operation, session_scope, text, units};
+use tracing::instrument::WithSubscriber;
 use ycoding_core::{
     resources::{attachment_store, reference},
     ycoding_schema::{DomainDecode, parse_json, session},
@@ -187,12 +188,145 @@ fn oversized_png() -> Vec<u8> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_prompt_reports_one_safe_info_outcome_per_request() {
+    use std::{io, sync::Mutex};
+
+    struct Log(Arc<Mutex<Vec<u8>>>);
+    impl io::Write for Log {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let fixture = Fixture::new().await;
+    let environment = fixture.environment(true);
+    let dispatcher = standard().unwrap();
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let output = lines.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(move || Log(output.clone()))
+        .finish();
+    async {
+        let uri = "file:///private/synthetic-admission-secret.png";
+        for (id, delivery, uris) in [
+            (
+                "msg_private_queue",
+                Some(v5::SessionPromptRequestPayloadDelivery::Queue),
+                &[][..],
+            ),
+            ("msg_private_steer", None, &[][..]),
+            ("msg_private_invalid", None, &[uri][..]),
+        ] {
+            let mut body =
+                v5::SessionPromptRequest::decode(prompt(&fixture.root, id, uris).as_slice())
+                    .unwrap();
+            body.payload.delivery = delivery.map(|value| value as i32);
+            let result = dispatcher
+                .invoke(
+                    environment.clone(),
+                    "local-a".into(),
+                    request("session.prompt", &fixture.root, body.encode_to_vec()),
+                )
+                .await;
+            if uris.is_empty() {
+                let _: v5::SessionPromptResult = success(result);
+            } else {
+                let error: v5::InvalidRequestError = failure(result);
+                assert_eq!(error.field.as_ref().map(units).as_deref(), Some("files"));
+            }
+        }
+        let missing = "ses_private_missing";
+        let _: v5::SessionNotFoundError = failure(
+            dispatcher
+                .invoke(
+                    environment.clone(),
+                    "local-a".into(),
+                    request(
+                        "session.prompt",
+                        missing,
+                        prompt(missing, "msg_missing", &[]),
+                    ),
+                )
+                .await,
+        );
+        let _: v5::InvalidRequestError = failure(
+            dispatcher
+                .invoke(
+                    environment.clone(),
+                    "local-a".into(),
+                    request("session.prompt", &fixture.root, vec![0xff]),
+                )
+                .await,
+        );
+    }
+    .with_subscriber(subscriber)
+    .await;
+    fixture.close().await;
+
+    let logs = String::from_utf8(lines.lock().unwrap().clone()).unwrap();
+    let entries = logs
+        .lines()
+        .filter(|line| line.contains("prompt admission"))
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), 5, "{logs}");
+    for (entry, (outcome, reason)) in entries.iter().zip([
+        ("queued", "admitted"),
+        ("accepted", "admitted"),
+        ("rejected", "attachment_invalid"),
+        ("rejected", "session_not_found"),
+        ("rejected", "invalid_request"),
+    ]) {
+        assert!(entry.contains("INFO"), "{entry}");
+        assert!(entry.contains(&format!("outcome=\"{outcome}\"")), "{entry}");
+        assert!(entry.contains(&format!("reason=\"{reason}\"")), "{entry}");
+        assert!(entry.contains("session_ref="), "{entry}");
+        assert!(entry.contains("request_ref="), "{entry}");
+    }
+    assert!(
+        entries[..2]
+            .iter()
+            .all(|entry| entry.contains("input_ref="))
+    );
+    for value in [
+        "see attachments",
+        "synthetic-admission-secret",
+        "file://",
+        "msg_private_",
+        "ses_private_missing",
+        "request-a",
+    ] {
+        assert!(entries.iter().all(|entry| !entry.contains(value)), "{logs}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn local_staged_png_is_admitted_and_scoped_to_its_connection_and_session() {
     let fixture = Fixture::new().await;
     let environment = fixture.environment(true);
     let dispatcher = standard().unwrap();
     let image = oversized_png();
     let id = "3b4e28ba-2fa1-4d3b-9b5a-3f2b8f6c9d10";
+    let unresolved = format!("ycoding-upload://{id}");
+    let denied: v5::InvalidRequestError = failure(
+        dispatcher
+            .invoke(
+                environment.clone(),
+                "local-a".into(),
+                request(
+                    "session.prompt",
+                    &fixture.root,
+                    prompt(&fixture.root, "msg_local_upload", &[&unresolved]),
+                ),
+            )
+            .await,
+    );
+    assert_eq!(denied.field.as_ref().map(units).as_deref(), Some("files"));
     let mut staged = String::new();
     for (index, data) in image.chunks(20_000).enumerate() {
         let last = (index + 1) * 20_000 >= image.len();
@@ -221,7 +355,7 @@ async fn local_staged_png_is_admitted_and_scoped_to_its_connection_and_session()
                 request(
                     "session.prompt",
                     &fixture.root,
-                    prompt(&fixture.root, "msg_foreign_upload", &[&staged]),
+                    prompt(&fixture.root, "msg_local_upload", &[&staged]),
                 ),
             )
             .await,
@@ -229,6 +363,16 @@ async fn local_staged_png_is_admitted_and_scoped_to_its_connection_and_session()
     assert_eq!(
         units(&denied.message),
         "Attachment upload is unavailable or incomplete"
+    );
+    assert_eq!(denied.field.as_ref().map(units).as_deref(), Some("files"));
+    let session = session::Id::new(fixture.root.as_str()).unwrap();
+    assert!(
+        world()
+            .core
+            .sessions
+            .pending_list(&session)
+            .unwrap()
+            .is_empty()
     );
     let admitted: v5::SessionPromptResult = success(
         dispatcher
@@ -243,10 +387,30 @@ async fn local_staged_png_is_admitted_and_scoped_to_its_connection_and_session()
             )
             .await,
     );
+    environment.uploads.clear_connection("local-a");
+    let retried: v5::SessionPromptResult = success(
+        dispatcher
+            .invoke(
+                environment.clone(),
+                "local-reconnected".into(),
+                request(
+                    "session.prompt",
+                    &fixture.root,
+                    prompt(&fixture.root, "msg_local_upload", &[&staged]),
+                ),
+            )
+            .await,
+    );
+    assert_eq!(retried, admitted);
+    assert_eq!(
+        world().core.sessions.pending_list(&session).unwrap().len(),
+        1
+    );
     let files = files(&admitted);
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].1, "image/png");
     assert_eq!(read(&environment, &fixture.root, &files[0].0).await, image);
+    fixture.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -669,6 +833,11 @@ async fn remote_prompts_attach_location_files_catalog_references_and_their_own_u
                 .await,
         );
         assert_eq!(units(&error.message), message, "{attachment}");
+        assert_eq!(
+            error.field.as_ref().map(units).as_deref(),
+            (message == unavailable).then_some("files"),
+            "{attachment}"
+        );
     }
     let local: v5::InvalidRequestError = failure(
         dispatcher
@@ -687,6 +856,7 @@ async fn remote_prompts_attach_location_files_catalog_references_and_their_own_u
         units(&local.message),
         "Attachment upload is unavailable or incomplete"
     );
+    assert_eq!(local.field.as_ref().map(units).as_deref(), Some("files"));
     assert_eq!(
         environment.uploads.retained(),
         (1, 14),

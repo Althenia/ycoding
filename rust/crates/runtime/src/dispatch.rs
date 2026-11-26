@@ -566,6 +566,7 @@ impl Dispatcher {
             observer(&request);
         }
         let request_id = request.request_id.clone();
+        let admission_log = PromptAdmissionLog::for_request(entry, &request);
         let outcome = run(
             entry,
             environment,
@@ -576,6 +577,9 @@ impl Dispatcher {
             Arc::new(AtomicBool::new(false)),
         )
         .await;
+        if let Some(log) = admission_log {
+            log.record(&request_id, &outcome);
+        }
         Some(settle(&entry.descriptor, request_id, outcome))
     }
 
@@ -623,6 +627,7 @@ impl Dispatcher {
             return None;
         }
         let request_id = request.request_id.clone();
+        let admission_log = PromptAdmissionLog::for_request(entry, &request);
         let authorized = if peer.authorized()
             && mcp
                 .as_ref()
@@ -672,6 +677,9 @@ impl Dispatcher {
             }
             Err(error) => Err(error),
         };
+        if let Some(log) = admission_log {
+            log.record(&request_id, &outcome);
+        }
         Some(settle(&entry.descriptor, request_id, outcome))
     }
 
@@ -680,6 +688,78 @@ impl Dispatcher {
             .values_mut()
             .find(|entry| entry.descriptor.diagnostic_name == name)
             .ok_or_else(|| RegistrationError::UnknownOperation(name.into()))
+    }
+}
+
+struct PromptAdmissionLog {
+    session_ref: Option<String>,
+}
+
+impl PromptAdmissionLog {
+    fn for_request(entry: &Entry, request: &v5::Request) -> Option<Self> {
+        use ycoding_core::session::prompt_cache::sha256;
+
+        (entry.descriptor.diagnostic_name == "session.prompt"
+            && tracing::enabled!(tracing::Level::INFO))
+        .then(|| Self {
+            session_ref: match &request.scope.target {
+                Some(v5::scope::Target::Session(id)) => Some(sha256(id)),
+                _ => None,
+            },
+        })
+    }
+
+    fn record(self, request_id: &str, result: &Result<Body, Failure>) {
+        use ycoding_core::session::prompt_cache::sha256;
+
+        let (outcome, reason, input_ref) = match result {
+            Ok(body) => {
+                let pending = match body {
+                    Body::Inline(bytes) | Body::Bulk(bytes) => {
+                        v5::SessionPromptResult::decode(bytes.as_slice()).ok()
+                    }
+                    Body::Asset(..) => None,
+                };
+                let outcome = if pending.as_ref().is_some_and(|result| {
+                    result.data.delivery
+                        == v5::SessionPendingUserDelivery::SessionpendingUserDeliveryQueue as i32
+                }) {
+                    "queued"
+                } else {
+                    "accepted"
+                };
+                let input_ref = pending
+                    .and_then(|result| convert::domain(&result.data.id).ok())
+                    .and_then(|id| id.to_utf8().ok().map(|id| sha256(&id)));
+                (outcome, "admitted", input_ref)
+            }
+            Err(error) => (
+                "rejected",
+                match error {
+                    Failure::InvalidField { field: "files", .. } => "attachment_invalid",
+                    Failure::Invalid(_)
+                    | Failure::InvalidField { .. }
+                    | Failure::InvalidRequest { .. } => "invalid_request",
+                    Failure::SessionNotFound(_) => "session_not_found",
+                    Failure::Unauthorized(_) => "unauthorized",
+                    Failure::Connector { code: 6, .. } => "subagent_read_only",
+                    Failure::Forbidden(_) | Failure::Connector { .. } => "forbidden",
+                    Failure::Conflict(_) | Failure::SessionBusy(_) => "conflict",
+                    Failure::Unavailable(_) | Failure::ServiceUnavailable { .. } => "unavailable",
+                    _ => "rejected",
+                },
+                None,
+            ),
+        };
+        tracing::info!(
+            parent: None,
+            outcome,
+            reason,
+            request_ref = sha256(request_id).as_str(),
+            session_ref = self.session_ref.as_deref(),
+            input_ref = input_ref.as_deref(),
+            "prompt admission"
+        );
     }
 }
 
