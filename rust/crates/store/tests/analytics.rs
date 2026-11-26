@@ -18,6 +18,7 @@ static PAGE_BARRIER: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>> = Mut
 static NESTED_REPORT: Mutex<Option<analytics::Handle>> = Mutex::new(None);
 static SOURCE_ROWS: AtomicU64 = AtomicU64::new(0);
 static SOURCE_PAGE: AtomicU64 = AtomicU64::new(0);
+static SOURCE_DELAY_MS: AtomicU64 = AtomicU64::new(0);
 
 struct Facts;
 #[derive(Clone)]
@@ -130,6 +131,10 @@ fn page(snapshot: &Snapshot, after: Option<&[u8]>, limit: usize) -> Result<Vec<S
         .map(normalized)
         .collect::<Vec<_>>();
     SOURCE_ROWS.fetch_add(rows.len() as u64, Ordering::Relaxed);
+    let delay = SOURCE_DELAY_MS.load(Ordering::Relaxed);
+    if delay > 0 && !rows.is_empty() {
+        std::thread::sleep(Duration::from_millis(delay));
+    }
     Ok(rows)
 }
 
@@ -2442,6 +2447,59 @@ fn cancellation_after_a_maintenance_yield_keeps_the_generation_and_exact_rows() 
         ]
     );
     engine.shutdown().unwrap();
+    assert_eq!(derived_files(&root).len(), 1);
+}
+
+#[test]
+fn maintenance_yields_before_slow_pages_exhaust_the_deadline() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    let rows = (analytics::BATCH_SIZE * 6) as u64;
+    seed_facts(&store, rows);
+    let engine = root.engine(&store);
+    SOURCE_DELAY_MS.store(1_000, Ordering::Relaxed);
+    let first = engine.maintain();
+    SOURCE_DELAY_MS.store(0, Ordering::Relaxed);
+    assert_eq!(first.unwrap(), analytics::Maintenance::Pending);
+    let generation = delivery(&store).generation;
+    maintain_to_completion(&engine);
+    assert_eq!(delivery(&store).generation, generation);
+    assert_eq!(
+        mirror_totals(&engine),
+        vec![
+            Value::BigInt(rows as i64),
+            Value::BigInt((0..rows as i64).sum())
+        ]
+    );
+    engine.shutdown().unwrap();
+    assert_eq!(derived_files(&root).len(), 1);
+}
+
+#[test]
+fn maintenance_reopens_a_compatible_generation_without_recopied_rows() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    put(&store, 1, 10);
+    let engine = root.engine(&store);
+    maintain_to_completion(&engine);
+    let generation = delivery(&store).generation;
+    engine.shutdown().unwrap();
+
+    put(&store, 2, 20);
+    let reopened = root.engine(&store);
+    assert_eq!(
+        reopened.maintain().unwrap(),
+        analytics::Maintenance::Complete
+    );
+    assert_report(&reopened, &[10, 20]);
+    let current = delivery(&store);
+    assert_eq!(current.generation, generation);
+    assert_eq!(current.applied, current.order);
+    reopened.shutdown().unwrap();
     assert_eq!(derived_files(&root).len(), 1);
 }
 

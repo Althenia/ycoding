@@ -292,39 +292,41 @@ fn prior_decimal_shape(read: &ReadTransaction) -> Result<bool, Error> {
         for entry in read.open_table(definition(name))?.iter()? {
             let (_, value) = entry?;
             let bytes = value.value();
-            let cell = match *name {
-                CellTable::NAME => decode_record::<Cell>(bytes, 2)?,
-                LeafTable::NAME => decode_record::<Leaf>(bytes, 2)?.contribution,
-                SampleTable::NAME => decode_record::<Sample>(bytes, 2)?.cell,
-                UnpricedTable::NAME => decode_record::<Unpriced>(bytes, 2)?.cell,
-                _ => return Err(unproven()),
-            };
-            let old = match (cell.counts.len(), cell.amounts.len()) {
-                (16, 10) => true,
-                (17, 11) => false,
-                _ => return Err(unproven()),
-            };
-            if prior.replace(old).is_some_and(|previous| previous != old) {
+            if bytes.first() != Some(&2) || bytes.len() > crate::analytics::ROW_BYTES {
                 return Err(unproven());
             }
-            if old {
-                prior_cell(cell, false)?;
-            } else {
-                match *name {
-                    CellTable::NAME => {
-                        CellTable::decode(bytes)?;
+            if prior != Some(false) {
+                let cell = match *name {
+                    CellTable::NAME => decode_record::<Cell>(bytes, 2)?,
+                    LeafTable::NAME => decode_record::<Leaf>(bytes, 2)?.contribution,
+                    SampleTable::NAME => decode_record::<Sample>(bytes, 2)?.cell,
+                    UnpricedTable::NAME => decode_record::<Unpriced>(bytes, 2)?.cell,
+                    _ => return Err(unproven()),
+                };
+                match (cell.counts.len(), cell.amounts.len()) {
+                    (16, 10) => {
+                        prior_cell(cell, false)?;
+                        prior = Some(true);
+                        continue;
                     }
-                    LeafTable::NAME => {
-                        LeafTable::decode(bytes)?;
-                    }
-                    SampleTable::NAME => {
-                        SampleTable::decode(bytes)?;
-                    }
-                    UnpricedTable::NAME => {
-                        UnpricedTable::decode(bytes)?;
-                    }
+                    (17, 11) if prior.is_none() => prior = Some(false),
                     _ => return Err(unproven()),
                 }
+            }
+            match *name {
+                CellTable::NAME => {
+                    CellTable::decode(bytes)?;
+                }
+                LeafTable::NAME => {
+                    LeafTable::decode(bytes)?;
+                }
+                SampleTable::NAME => {
+                    SampleTable::decode(bytes)?;
+                }
+                UnpricedTable::NAME => {
+                    UnpricedTable::decode(bytes)?;
+                }
+                _ => return Err(unproven()),
             }
         }
     }

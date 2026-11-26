@@ -6,7 +6,7 @@ use std::fmt;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
@@ -652,6 +652,7 @@ fn run_started(
     runtime: &tokio::runtime::Runtime,
     parent: Option<Arc<ycoding_core::extension::ParentOwner>>,
 ) -> Result<(), LaunchError> {
+    let started = Instant::now();
     let mut managed = if config.mode == Mode::Service {
         match runtime.block_on(ManagedLaunch::admit(&config))? {
             Some(managed) => Some(managed),
@@ -660,7 +661,7 @@ fn run_started(
     } else {
         None
     };
-    let body = run_bootstrap(&config, runtime, &mut managed, parent);
+    let body = run_bootstrap(&config, runtime, &mut managed, parent, started);
     let cleanup = match managed.as_mut() {
         Some(managed) => runtime.block_on(managed.finish()),
         None => Ok(()),
@@ -673,6 +674,7 @@ fn run_bootstrap(
     runtime: &tokio::runtime::Runtime,
     managed: &mut Option<ManagedLaunch>,
     parent: Option<Arc<ycoding_core::extension::ParentOwner>>,
+    started: Instant,
 ) -> Result<(), LaunchError> {
     if managed
         .as_ref()
@@ -757,6 +759,7 @@ fn run_bootstrap(
             return launch_results([body, diagnostics.close().map_err(message)]);
         }
     };
+    let prepare_started = Instant::now();
     if let Err(error) = prepare_store(config) {
         let body = runtime.block_on(boot_failure(config, managed.as_mut(), error));
         return launch_results([
@@ -765,6 +768,8 @@ fn run_bootstrap(
             diagnostics.close().map_err(message),
         ]);
     }
+    startup_stage("store_prepare", prepare_started);
+    let open_started = Instant::now();
     let store = match open_store(config) {
         Ok(store) => store,
         Err(error) => {
@@ -776,13 +781,20 @@ fn run_bootstrap(
             ]);
         }
     };
+    startup_stage("store_open", open_started);
     let attached = diagnostics
         .attach_events(ycoding_core::event_feed::Feed::attach(&store.client()))
         .map_err(message);
     let (body, cleanup) = match attached {
         Ok(()) => {
             let joined = crate::ProductionOwner::scope_with_parent(runtime, parent, |owner| {
-                runtime.block_on(run_hosted(&owner, config, &store, managed.as_mut()))
+                runtime.block_on(run_hosted(
+                    &owner,
+                    config,
+                    &store,
+                    managed.as_mut(),
+                    started,
+                ))
             });
             let body = joined
                 .body
@@ -815,11 +827,20 @@ fn run_bootstrap(
     ])
 }
 
+pub(crate) fn startup_stage(stage: &'static str, started: Instant) {
+    tracing::info!(
+        stage,
+        duration_ms = started.elapsed().as_millis() as u64,
+        "server startup"
+    );
+}
+
 async fn run_hosted(
     owner: &crate::Handle,
     config: &LaunchConfig,
     store: &Store,
     managed: Option<&mut ManagedLaunch>,
+    started: Instant,
 ) -> Result<(), LaunchError> {
     if managed
         .as_ref()
@@ -844,8 +865,8 @@ async fn run_hosted(
     };
     let core = services.core.clone();
     let result = match managed {
-        Some(managed) => managed.serve(config, services).await,
-        None => serve_until_stopped(config, services).await,
+        Some(managed) => managed.serve(config, services, started).await,
+        None => serve_until_stopped(config, services, started).await,
     };
     let suspended = match (&core, config.mode) {
         (Some(core), Mode::Service) => core
@@ -1054,6 +1075,7 @@ impl ManagedLaunch {
         &mut self,
         config: &LaunchConfig,
         services: Services,
+        started: Instant,
     ) -> Result<(), LaunchError> {
         if *self.stopped.borrow() {
             return self.close_http().await;
@@ -1078,6 +1100,9 @@ impl ManagedLaunch {
         if let Err(error) = announced {
             let local = self.close_http().await;
             return launch_results([Err(error.into()), local]);
+        }
+        if installed {
+            startup_stage("ready", started);
         }
         if !installed || *self.stopped.borrow() {
             return self.close_http().await;
@@ -1155,7 +1180,11 @@ fn followed_by(first: LaunchError, later: Result<(), LaunchError>) -> LaunchErro
     }
 }
 
-async fn serve_until_stopped(config: &LaunchConfig, services: Services) -> Result<(), LaunchError> {
+async fn serve_until_stopped(
+    config: &LaunchConfig,
+    services: Services,
+    started: Instant,
+) -> Result<(), LaunchError> {
     let identity = services.identity.clone();
     let listener = bind(config).await?;
     let signals = shutdown_signals()?;
@@ -1179,6 +1208,7 @@ async fn serve_until_stopped(config: &LaunchConfig, services: Services) -> Resul
         return launch_results([Err(error.into()), local]);
     }
 
+    startup_stage("ready", started);
     let shutdown = wait_for_shutdown(config.mode, stop, signals);
     tokio::pin!(shutdown);
     let started = tokio::select! {

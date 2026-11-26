@@ -40,6 +40,37 @@ async fn assert_no_sessions(client: &mut Client) {
     assert!(listed.data.data.items.is_empty());
 }
 
+#[tokio::test]
+async fn startup_reports_readiness_and_recovery_durations_at_info() {
+    let directory = Directory::new();
+    let (runtime, client) = open(&directory).await;
+    stop(runtime, client);
+    let log = fs::read_to_string(directory.0.join("data/ycoding/log/ycoding.log")).unwrap();
+    for stage in [
+        "store_prepare",
+        "store_open",
+        "model_catalog",
+        "interrupted_steps",
+        "shell_ledger",
+        "managed_tasks",
+        "maintenance",
+        "ready",
+    ] {
+        let field = format!("stage={stage}");
+        assert!(
+            log.lines().any(|line| {
+                let fields = line.split_ascii_whitespace();
+                fields.clone().any(|value| value == "level=INFO")
+                    && fields.clone().any(|value| value == field)
+                    && fields
+                        .filter_map(|value| value.strip_prefix("duration_ms="))
+                        .any(|value| value.parse::<u64>().is_ok())
+            }),
+            "missing INFO duration for {stage}"
+        );
+    }
+}
+
 fn bun_source(source: &Path) -> Child {
     stable_sources::source_fixture(
         source,

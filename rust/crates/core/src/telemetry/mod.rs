@@ -195,8 +195,7 @@ impl Service {
             .map(|sample| Document::<telemetry::Sample<LosslessString>>::new(sample.encode()))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| Error::InvalidSample)?;
-        let accepted = self
-            .store
+        self.store
             .submit(move |tx| {
                 if !allowed(tx)? {
                     return Ok(Err(Error::Disabled));
@@ -239,9 +238,7 @@ impl Service {
                 }
                 Ok(Ok(samples.len()))
             })?
-            .await??;
-        purge_pending(&self.store).await?;
-        Ok(accepted)
+            .await?
     }
     pub async fn list(
         &self,

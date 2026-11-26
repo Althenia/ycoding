@@ -164,7 +164,6 @@ fn setup() -> (Root, Store, Worker) {
         generation: None,
         progress: None,
         staged: None,
-        rebuilt: false,
         before_release: None,
     };
     (root, store, worker)

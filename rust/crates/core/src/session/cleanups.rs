@@ -171,9 +171,15 @@ impl Cleanups {
     async fn backup_ready(&self) -> Result<bool, Error> {
         let client = self.client.clone();
         let now = self.clock.now();
+        let started = std::time::Instant::now();
         let status = tokio::task::spawn_blocking(move || client.prepare_pruning(now, free_bytes))
             .await
             .map_err(Error::Worker)??;
+        tracing::info!(
+            duration_ms = started.elapsed().as_millis() as u64,
+            ready = matches!(status, Status::Ready),
+            "pruning backup preparation"
+        );
         match status {
             Status::Ready => Ok(true),
             Status::Blocked { notice } => {

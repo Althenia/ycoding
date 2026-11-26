@@ -407,10 +407,12 @@ impl Core {
             git,
             globals,
         } = input;
+        let catalog_started = Instant::now();
         globals.catalog.get().await.map_err(|error| {
             eprintln!("production composition diagnostic: stage=model catalog; category={error:?}");
             Failure::Unavailable("model catalog unavailable".into())
         })?;
+        crate::launch::startup_stage("model_catalog", catalog_started);
         let feed = events.clone();
         let factory = Arc::new(Factory {
             parent_plugins: context.parent_plugins(),
@@ -529,6 +531,7 @@ impl Core {
             .coordination_runtime
             .set(coordination_runtime.clone())
             .map_err(|_| unavailable("Project runtime"))?;
+        let tasks_started = Instant::now();
         if started.recover {
             orchestration
                 .recover_restart()
@@ -548,6 +551,7 @@ impl Core {
             .reconcile(crate::ids::now_millis())
             .await
             .map_err(|_| unavailable("review reconciliation"))?;
+        crate::launch::startup_stage("managed_tasks", tasks_started);
         let publisher = factory.publisher.clone();
         let credentials = factory.credentials.clone();
         let resolver_locations = locations.clone();
@@ -788,6 +792,7 @@ impl Core {
         let events_key = factory.options.roots.data.join("mcp-events-native.key");
         started.maintenance = Some(maintenance.clone());
         let telemetry_settings = factory.settings.clone();
+        let maintenance_started = Instant::now();
         maintenance
             .start(
                 sessions.clone(),
@@ -801,6 +806,7 @@ impl Core {
                 },
             )
             .await?;
+        crate::launch::startup_stage("maintenance", maintenance_started);
         let incidents = ycoding_core::model_incident::Service::new(client.clone());
         let event_authorization = Arc::new(
             crate::connector::mcp_events_authorization::Authorizer::production(remote.clone())
@@ -3655,10 +3661,13 @@ impl Drop for Maintenance {
 struct SkillResolver(Arc<tokio::sync::Mutex<ycoding_core::resources::skill::Service>>);
 
 async fn reconcile(sessions: &Service, client: &Client) -> Result<(), Failure> {
+    let started = Instant::now();
     sessions
         .reconcile_interrupted(crate::ids::now_millis())
         .await
         .map_err(|_| unavailable("interrupted steps"))?;
+    crate::launch::startup_stage("interrupted_steps", started);
+    let started = Instant::now();
     let reconciled = ycoding_core::platform::shell::ledger::Ledger::new(client.clone())
         .reconcile(ycoding_core::platform::shell::ledger::TERMINATE_GRACE)
         .await
@@ -3666,6 +3675,7 @@ async fn reconcile(sessions: &Service, client: &Client) -> Result<(), Failure> {
     if reconciled.process_list_unavailable || !reconciled.signal_failures.is_empty() {
         return Err(unavailable("shell process reconciliation"));
     }
+    crate::launch::startup_stage("shell_ledger", started);
     Ok(())
 }
 

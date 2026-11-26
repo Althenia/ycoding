@@ -2,7 +2,8 @@ use super::numeric;
 use super::{
     BATCH_SIZE, Cancellation, ColumnType, Command, Delivery, DeliveryTable, Error, Intent,
     IntentTable, Maintenance, Operation, Phase, Query, REBUILD_SLICE_PAGES, REPORT_BYTES,
-    REPORT_ROWS, ROW_BYTES, ReportRows, Request, Source, SourceRow, identifier, state,
+    REPORT_DEADLINE, REPORT_ROWS, ROW_BYTES, ReportRows, Request, Source, SourceRow, identifier,
+    state,
 };
 use crate::engine::SnapshotView;
 use crate::{Snapshot, TableSpec};
@@ -59,7 +60,6 @@ pub(super) fn run(
         generation: None,
         progress: None,
         staged: None,
-        rebuilt: false,
         #[cfg(test)]
         before_release: None,
     };
@@ -167,6 +167,7 @@ impl Progress {
         schema: &[u8],
         cancellation: &Cancellation,
         deadline: Instant,
+        yield_at: Instant,
     ) -> Result<bool, Error> {
         cancellation.attach(&self.connection);
         if self.committed.source == sources.len() {
@@ -183,12 +184,17 @@ impl Progress {
         }
         let window = self.pending.as_mut().ok_or(Error::Invalid)?;
         let mut pages = 0;
+        let fits_slice = |pages, window: &CopyWindow| {
+            pages < REBUILD_SLICE_PAGES
+                && window.fits_page()
+                && (pages == 0 || Instant::now() < yield_at)
+        };
         while let Some(source) = sources.get(window.cursor.source) {
-            if pages == REBUILD_SLICE_PAGES || !window.fits_page() {
+            if !fits_slice(pages, window) {
                 break;
             }
             let mut ingress = None;
-            while pages < REBUILD_SLICE_PAGES && window.fits_page() {
+            while fits_slice(pages, window) {
                 cancellation.enter(Phase::SourceRead, Some(source.name), deadline)?;
                 let rows =
                     (source.page)(&self.snapshot, window.cursor.after.as_deref(), BATCH_SIZE)?;
@@ -292,7 +298,6 @@ struct Worker {
     generation: Option<u64>,
     progress: Option<Progress>,
     staged: Option<StagedReport>,
-    rebuilt: bool,
     #[cfg(test)]
     before_release: Option<Box<dyn FnOnce() + Send>>,
 }
@@ -531,6 +536,17 @@ impl Worker {
         cancellation: &Cancellation,
         deadline: Instant,
     ) -> Result<Delivery, Error> {
+        match self.synchronize_existing(cancellation, deadline)? {
+            Some(active) => Ok(active),
+            None => self.rebuild(cancellation, deadline),
+        }
+    }
+
+    fn synchronize_existing(
+        &mut self,
+        cancellation: &Cancellation,
+        deadline: Instant,
+    ) -> Result<Option<Delivery>, Error> {
         cancellation.enter(Phase::SynchronizeRead, None, deadline)?;
         private_root(&self.root)?;
         let snapshot = self.store.snapshot()?;
@@ -538,8 +554,7 @@ impl Worker {
             .get::<DeliveryTable>(&[])?
             .unwrap_or_else(|| Delivery::initial(self.store.metadata()));
         if !captured.valid || captured.rebuilding || !captured.matches(self.store.metadata()) {
-            drop(snapshot);
-            return self.rebuild(cancellation, deadline);
+            return Ok(None);
         }
         if self.generation != Some(captured.generation) {
             cancellation.enter(Phase::SynchronizeOpen, None, deadline)?;
@@ -557,8 +572,7 @@ impl Worker {
                 && checkpoint.order <= captured.order
         });
         if !compatible {
-            drop(snapshot);
-            return self.rebuild(cancellation, deadline);
+            return Ok(None);
         }
         let checkpoint = checkpoint.ok_or(Error::Invalid)?;
         let intents = snapshot.scan::<IntentTable>(
@@ -569,8 +583,7 @@ impl Worker {
         if !complete_boundary(&captured, &intents)?
             || (checkpoint.order < captured.order && intents.is_empty())
         {
-            drop(snapshot);
-            return self.rebuild(cancellation, deadline);
+            return Ok(None);
         }
         let connection = self.connection.as_mut().ok_or(Error::Unavailable)?;
         cancellation.attach(connection);
@@ -593,7 +606,7 @@ impl Worker {
             acknowledge(&self.store, &captured, intents, false)?;
         }
         cancellation.enter(Phase::SynchronizeRead, None, deadline)?;
-        self.read_state()
+        self.read_state().map(Some)
     }
 
     fn maintain(
@@ -610,22 +623,18 @@ impl Worker {
         {
             return Ok(Maintenance::Pending);
         }
-        cancellation.enter(Phase::DeliveryRead, None, deadline)?;
-        let current = self.read_state()?;
-        let settled = self.rebuilt
-            && self.progress.is_none()
-            && current.valid
-            && !current.rebuilding
-            && current.matches(self.store.metadata())
-            && !current.pending_purge();
-        if !settled && self.rebuild_slice(cancellation, deadline)?.is_none() {
-            return Ok(Maintenance::Pending);
-        }
-        cancellation.enter(Phase::DeliveryRead, None, deadline)?;
-        if self.read_state()?.pending_purge() {
+        let active = match self.synchronize_existing(cancellation, deadline)? {
+            Some(active) => active,
+            None => {
+                match self.rebuild_slice(cancellation, deadline, deadline - REPORT_DEADLINE / 2)? {
+                    Some(active) => active,
+                    None => return Ok(Maintenance::Pending),
+                }
+            }
+        };
+        if active.pending_purge() {
             self.finish_purge(cancellation, deadline)?;
         }
-        self.synchronize(cancellation, deadline)?;
         Ok(Maintenance::Complete)
     }
 
@@ -635,7 +644,7 @@ impl Worker {
         deadline: Instant,
     ) -> Result<Delivery, Error> {
         loop {
-            if let Some(active) = self.rebuild_slice(cancellation, deadline)? {
+            if let Some(active) = self.rebuild_slice(cancellation, deadline, deadline)? {
                 return Ok(active);
             }
         }
@@ -645,6 +654,7 @@ impl Worker {
         &mut self,
         cancellation: &Cancellation,
         deadline: Instant,
+        yield_at: Instant,
     ) -> Result<Option<Delivery>, Error> {
         cancellation.enter(Phase::DeliveryRead, None, deadline)?;
         private_root(&self.root)?;
@@ -657,7 +667,7 @@ impl Worker {
         {
             self.start_rebuild(cancellation, deadline)?;
         }
-        if !self.copy_slice(cancellation, deadline)? {
+        if !self.copy_slice(cancellation, deadline, yield_at)? {
             return Ok(None);
         }
         self.activate(cancellation, deadline).map(Some)
@@ -758,9 +768,11 @@ impl Worker {
         &mut self,
         cancellation: &Cancellation,
         deadline: Instant,
+        yield_at: Instant,
     ) -> Result<bool, Error> {
         let progress = self.progress.as_mut().ok_or(Error::Unavailable)?;
-        let result = progress.copy_slice(self.sources, &self.schema, cancellation, deadline);
+        let result =
+            progress.copy_slice(self.sources, &self.schema, cancellation, deadline, yield_at);
         if result.is_err()
             && progress.pending.take().is_some()
             && progress.connection.execute_batch("ROLLBACK").is_err()
@@ -825,7 +837,6 @@ impl Worker {
                 let progress = self.progress.take().ok_or(Error::Unavailable)?;
                 self.connection = Some(progress.connection);
                 self.generation = Some(generation);
-                self.rebuilt = true;
                 cancellation.enter(Phase::RebuildCleanup, None, deadline)?;
                 cleanup(&self.root, Some(&filename(&current)))?;
                 cancellation.enter(Phase::DeliveryRead, None, deadline)?;

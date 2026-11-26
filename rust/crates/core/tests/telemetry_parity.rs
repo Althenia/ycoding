@@ -526,6 +526,47 @@ async fn retention_boundary_read_write_housekeeping_and_ten_thousand_cap() {
 }
 
 #[tokio::test]
+async fn append_acknowledges_committed_samples_while_the_mirror_is_offline() {
+    let store = Store::disposable(Options::core(), CATALOG, Metadata::new([1; 16], 1)).unwrap();
+    let client = store.client();
+    let service = Service::with_clock(
+        client.clone(),
+        Arc::new(|| RETENTION_MS + 1),
+        Arc::new(Settings::default),
+    );
+    consent(&service, true).await;
+    let expired = Document::new(sample().encode()).unwrap();
+    client
+        .submit(move |tx| resources::append_latency(tx, 0, &expired).map(|_| ()))
+        .unwrap()
+        .await
+        .unwrap();
+    let accepted = service.append(vec![sample()]).await;
+    assert_eq!(count_rows(&store), 1);
+    let reports = report_support::start(client.clone());
+    let handle = client.analytics().unwrap();
+    let query = || {
+        vec![analytics::Query {
+            sql: "SELECT count(*) FROM web_latency",
+            parameters: vec![],
+            max_rows: 1,
+        }]
+    };
+    assert!(matches!(
+        handle.report(query()),
+        Err(analytics::Error::Privacy)
+    ));
+    while handle.maintain().unwrap() == analytics::Maintenance::Pending {}
+    assert_eq!(
+        handle.report(query()).unwrap(),
+        vec![vec![vec![analytics::Value::BigInt(1)]]]
+    );
+    assert_eq!(accepted, Ok(1));
+    drop(reports);
+    store.shutdown().unwrap();
+}
+
+#[tokio::test]
 async fn consent_samples_and_sequence_survive_reopen() {
     let path = std::env::temp_dir().join(format!(
         "ycoding-telemetry-parity-{}.redb",
