@@ -25,10 +25,11 @@ const session = {
  * prompt, because the retry attempt already published `Step.Started`. Reading that open row as
  * activity pinned the header at "cooking" for a Session that had already settled.
  */
-test("an interrupted retry does not keep the header cooking", async () => {
+test("an interrupt during provider retry sends once and keeps the draft editable until settlement", async () => {
   const interrupts: string[] = []
   const requested = Promise.withResolvers<void>()
   const retried = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<Response>()
   let sessionStatus = () => "idle"
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
@@ -41,7 +42,7 @@ test("an interrupted retry does not keep the header cooking", async () => {
         interrupts.push(sessionID)
         if (interrupts.length === 2) {
           retried.resolve()
-          return json({ data: {} })
+          return release.promise
         }
         requested.resolve()
         return json({ _tag: "InvalidRequestError", message: "Interrupt unavailable", field: "sessionID" }, { status: 400 })
@@ -144,6 +145,21 @@ test("an interrupted retry does not keep the header cooking", async () => {
     await pressEscape()
     await waitForInterrupt(retried.promise)
     expect(interrupts).toEqual([sessionID, sessionID])
+    await pressEscape()
+    await pressEscape()
+    await screen.input.typeText("Draft during interrupt")
+    await screen.renderOnce()
+    expect(screen.frame()).toContain("Draft during interrupt")
+    expect(screen.frame()).toContain("Interrupt requested")
+    const deadlineWarning = Date.now() + 6_000
+    while (!screen.frame().includes("No reply within 5 seconds") && Date.now() < deadlineWarning) {
+      await Bun.sleep(20)
+    }
+    expect(screen.frame()).toContain("No reply within 5 seconds")
+    expect(screen.frame()).toContain("Draft during interrupt")
+    expect(interrupts).toEqual([sessionID, sessionID])
+    expect(sessionStatus()).toBe("running")
+    release.resolve(json({ data: {} }))
     await execution(4, false)
 
     const deadline = Date.now() + 2_000
@@ -156,7 +172,9 @@ test("an interrupted retry does not keep the header cooking", async () => {
     const header = screen.lines()[1] ?? ""
     expect(header).not.toContain("cooking")
     expect(header).toContain("ready")
+    expect(screen.frame()).toContain("Draft during interrupt")
   } finally {
+    release.resolve(json({ data: {} }))
     await screen.dispose()
   }
 }, 60_000)

@@ -73,6 +73,10 @@ import { modelVariantIDs } from "../../util/model"
 import { openBtwSession, steerBtwConclusion } from "../../util/session"
 import { establishLandingSession, landingAutonomyOf, landingAutonomyPayloads } from "../../util/landing-session"
 import type { ModelDaybreak, ModelRef, SessionAutonomyView } from "@ycoding-ai/client"
+import { V5ClientError } from "@ycoding-ai/client/v5"
+
+const interruptConfirmationMs = 5_000
+const interruptReplyMs = 5_000
 
 registerYCodingSpinner()
 
@@ -469,7 +473,15 @@ export function Prompt(props: PromptProps) {
     extmarkToPart: new Map(),
   })
   let interruptDeadline = 0
-  createEffect(on([() => props.sessionID, status], () => { interruptDeadline = 0 }))
+  let interruptAttempt: AbortSignal | undefined
+  const resetInterrupt = () => {
+    interruptDeadline = 0
+    interruptAttempt = undefined
+  }
+  createEffect(on([() => props.sessionID, status], resetInterrupt))
+  onCleanup(data.on("session.execution.started", (event) => {
+    if (event.data.sessionID === props.sessionID) resetInterrupt()
+  }))
   const temporaryAttachments = new Map<string, ClipboardTemporary>()
   const predictionShortcut = Keymap.useShortcut("prompt.prediction.accept")
   const predictionEligible = createMemo(() => {
@@ -665,24 +677,38 @@ export function Prompt(props: PromptProps) {
         enabled: status() === "running" || automationOrGoalActive(),
         run: (_input: string | undefined, event?: KeyEvent) => {
           const sessionID = props.sessionID
-          if (!sessionID) return
+          if (!sessionID || interruptAttempt) return
           if (event) {
-            if (auto()?.visible || !input.focused) return
+            if (event.eventType === "repeat" || auto()?.visible || !input.focused) return
             if (store.mode === "shell") {
               setStore("mode", "normal")
               return
             }
             const now = performance.now()
             if (interruptDeadline <= now) {
-              interruptDeadline = now + 5000
-              toast.show({ variant: "info", message: "Press again to interrupt the Session", duration: 5000 })
+              interruptDeadline = now + interruptConfirmationMs
+              toast.show({ variant: "info", message: "Press again to interrupt the Session", duration: interruptConfirmationMs })
               return
             }
           }
           interruptDeadline = 0
-          void client.api.session.interrupt({ sessionID }).catch((error) => {
-            if (!disposed && props.sessionID === sessionID)
+          const signal = AbortSignal.timeout(interruptReplyMs)
+          interruptAttempt = signal
+          toast.show({ message: "Interrupt requested", variant: "info" })
+          void client.api.session.interrupt({ sessionID }, { signal }).then(() => {
+            if (interruptAttempt === signal && status() === "idle") interruptAttempt = undefined
+          }).catch((error) => {
+            if (disposed || props.sessionID !== sessionID || interruptAttempt !== signal) return
+            if (signal.aborted || (error instanceof V5ClientError && error.status === "unknown")) {
+              toast.show({
+                title: "Interrupt not confirmed",
+                message: signal.aborted ? "No reply within 5 seconds. Check the Session’s activity." : errorMessage(error),
+                variant: "error",
+              })
+            } else {
+              interruptAttempt = undefined
               toast.show({ title: "Failed to interrupt", message: errorMessage(error), variant: "error" })
+            }
           })
           if (!event) dialog.clear()
         },
