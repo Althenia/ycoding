@@ -1885,125 +1885,119 @@ impl Runtime {
         })
     }
     pub async fn handle(&self, payload: &Payload) -> Result<(), Error> {
-        match payload {
+        let (id, advance) = match payload {
             Payload::Durable(event) => {
-                if !HANDLED_EVENTS.contains(&event.type_.as_str().unwrap_or("")) {
+                let kind = event.type_.as_str().unwrap_or("");
+                if !HANDLED_EVENTS.contains(&kind) {
                     return Ok(());
                 }
                 let path = JsonPath::default();
                 let object = ObjectDecoder::new(&event.data, &path)?;
                 if matches!(
-                    event.type_.as_str(),
-                    Some("coordination.group.changed.1" | "coordination.group.deleted.1")
+                    kind,
+                    "coordination.group.changed.1" | "coordination.group.deleted.1"
                 ) {
                     let group: c::GroupId = object.field("groupID")?;
                     return self
                         .0
                         .coordination
-                        .with_ownership(&group, async {
-                            self.complete_unowned_supervisors().await?;
-                            if event.type_.as_str() == Some("coordination.group.changed.1") {
-                                self.advance_tasks(&group).await?;
-                                self.0.coordination.invalidate(&group)?;
-                            }
-                            Ok(())
-                        })
+                        .with_ownership(
+                            &group,
+                            Box::pin(async {
+                                self.complete_unowned_supervisors().await?;
+                                if kind == "coordination.group.changed.1" {
+                                    self.advance_tasks(&group).await?;
+                                    self.0.coordination.invalidate(&group)?;
+                                }
+                                Ok(())
+                            }),
+                        )
                         .await;
                 }
-                if event.type_.as_str() == Some("session.task.updated.1") {
+                let board_only = if kind == "session.task.updated.1" {
                     let change: Change = object.field("change")?;
-                    if !matches!(
+                    (!matches!(
                         change,
                         Change::Cancelled
                             | Change::Failed { .. }
                             | Change::Lost { .. }
                             | Change::QuestionAsked { .. }
-                    ) {
-                        let id = object.field("sessionID")?;
-                        return self
-                            .board_changed(&id, matches!(change, Change::Completed { .. }))
-                            .await;
-                    }
-                }
-                let id = if event.type_.as_str() == Some("coordination.member.owner.changed.1") {
+                    ))
+                    .then_some(matches!(change, Change::Completed { .. }))
+                } else {
+                    None
+                };
+                let id = if kind == "coordination.member.owner.changed.1" {
                     c::OwnerChangedData::decode(&event.data)?.session_id
                 } else {
                     object.field("sessionID")?
                 };
-                self.under_ownership(&id, self.handle_durable(event, &id))
-                    .await?;
-                self.board_changed(
-                    &id,
+                let advance = if let Some(advance) = board_only {
+                    advance
+                } else {
+                    self.under_ownership(&id, Box::pin(self.handle_durable(event, &id)))
+                        .await?;
                     matches!(
-                        event.type_.as_str(),
-                        Some(
-                            "session.execution.succeeded.1"
-                                | "session.execution.failed.1"
-                                | "session.execution.interrupted.1"
-                                | "session.review.decided.1"
-                                | "session.review.withdrawn.1"
-                                | "session.review.consumed.1"
-                                | "session.input.admitted.1"
-                                | "session.input.consumed.1"
-                                | "session.revert.cleared.1"
-                                | "coordination.member.owner.changed.1"
-                                | "session.archived.2"
-                                | "session.unarchived.2"
-                        )
-                    ),
-                )
-                .await
+                        kind,
+                        "session.execution.succeeded.1"
+                            | "session.execution.failed.1"
+                            | "session.execution.interrupted.1"
+                            | "session.review.decided.1"
+                            | "session.review.withdrawn.1"
+                            | "session.review.consumed.1"
+                            | "session.input.admitted.1"
+                            | "session.input.consumed.1"
+                            | "session.revert.cleared.1"
+                            | "coordination.member.owner.changed.1"
+                            | "session.archived.2"
+                            | "session.unarchived.2"
+                    )
+                };
+                (id, advance)
             }
             Payload::Ephemeral(event) => {
-                match &event.data {
+                let request = match &event.data {
                     event_feed::Data::FormCreated(data) => {
                         let Ok(id) = session::Id::new(data.form.session_id.clone()) else {
                             return Ok(());
                         };
-                        let request = string_value(&data.form.id)?;
-                        self.request_event(&id, c::RequestKind::Question, request)
-                            .await
+                        Some((id, c::RequestKind::Question, string_value(&data.form.id)?))
                     }
-                    event_feed::Data::PermissionAsked(data) => {
-                        self.request_event(
-                            &data.session_id,
-                            c::RequestKind::Permission,
-                            data.id.as_lossless().clone(),
-                        )
-                        .await
-                    }
-                    event_feed::Data::GuardrailAsked(data) => {
-                        self.request_event(
-                            &data.session_id,
-                            c::RequestKind::Review,
-                            string_value(&data.id)?,
-                        )
-                        .await
-                    }
-                    _ => Ok(()),
-                }?;
-                if let Some(id) = event.data.session().map_err(Error::refused)? {
-                    self.board_changed(
-                        &id,
-                        !matches!(
-                            &event.data,
-                            event_feed::Data::FormCreated(_)
-                                | event_feed::Data::PermissionAsked(_)
-                                | event_feed::Data::GuardrailAsked(_)
-                                | event_feed::Data::QuestionAsked(_)
-                        ),
-                    )
-                    .await?;
+                    event_feed::Data::PermissionAsked(data) => Some((
+                        data.session_id.clone(),
+                        c::RequestKind::Permission,
+                        data.id.as_lossless().clone(),
+                    )),
+                    event_feed::Data::GuardrailAsked(data) => Some((
+                        data.session_id.clone(),
+                        c::RequestKind::Review,
+                        string_value(&data.id)?,
+                    )),
+                    _ => None,
+                };
+                if let Some((id, kind, request)) = request {
+                    self.request_event(&id, kind, request).await?;
                 }
-                Ok(())
+                let Some(id) = event.data.session().map_err(Error::refused)? else {
+                    return Ok(());
+                };
+                let advance = !matches!(
+                    &event.data,
+                    event_feed::Data::FormCreated(_)
+                        | event_feed::Data::PermissionAsked(_)
+                        | event_feed::Data::GuardrailAsked(_)
+                        | event_feed::Data::QuestionAsked(_)
+                );
+                (id, advance)
             }
-        }
+        };
+        self.board_changed(&id, advance).await
     }
     async fn handle_durable(&self, event: &Event, id: &session::Id) -> Result<(), Error> {
         let path = JsonPath::default();
         let object = ObjectDecoder::new(&event.data, &path)?;
-        match event.type_.as_str() {
-            Some("session.deleted.2") => self.complete_unowned_supervisors().await,
+        let (notice, detail) = match event.type_.as_str() {
+            Some("session.deleted.2") => return self.complete_unowned_supervisors().await,
             Some("session.archived.2") => {
                 if let Some(scope) = self.0.coordination.member_of(id)?
                     && self.owner_of(&scope, id)?.is_some()
@@ -2025,7 +2019,7 @@ impl Runtime {
                         self.release_stale(&access.scope, &member, true).await?;
                     }
                 }
-                self.complete_unowned_supervisors().await
+                return self.complete_unowned_supervisors().await;
             }
             Some("session.task.updated.1") => {
                 let change: Change = object.field("change")?;
@@ -2047,7 +2041,7 @@ impl Runtime {
                 for member in access.owned_session_ids.clone() {
                     self.release_stale(&access.scope, &member, true).await?;
                 }
-                Ok(())
+                return Ok(());
             }
             Some("coordination.member.owner.changed.1") => {
                 self.complete_unowned_supervisors().await?;
@@ -2066,8 +2060,9 @@ impl Runtime {
                     self.supervise_attached(receiver).await?;
                     self.deliver_held(&scope, id, receiver, true).await?;
                 }
-                self.handoff(&scope, id, receiver.as_ref(), true, "unowned")
-                    .await
+                return self
+                    .handoff(&scope, id, receiver.as_ref(), true, "unowned")
+                    .await;
             }
             Some("session.input.admitted.1") => {
                 let input: session_pending::Message = object.field("input")?;
@@ -2081,76 +2076,48 @@ impl Runtime {
                 {
                     self.0.coordination.activate(&scope.group_id)?;
                 }
-                Ok(())
+                return Ok(());
             }
             Some("session.execution.interrupted.1") => {
                 let reason: LosslessString = object.field("reason")?;
                 if reason.as_str() == Some("user") {
                     self.0.coordination.pause_master(id)?;
                 }
-                self.member_notice(
-                    id,
+                (
                     Notice::Interrupted,
-                    &event.id,
                     ObjectEncoder::new()
                         .field(
                             "excerpt",
                             format!("Interrupted ({})", readable(&reason)).as_str(),
                         )
                         .finish(),
-                    true,
                 )
-                .await
             }
-            Some("session.execution.started.1") => {
-                self.member_notice(
-                    id,
-                    Notice::Started,
-                    &event.id,
-                    ObjectEncoder::new().finish(),
-                    true,
-                )
-                .await
-            }
-            Some("session.step.ended.1") => {
-                self.member_notice(
-                    id,
-                    Notice::Progress,
-                    &event.id,
-                    ObjectEncoder::new().finish(),
-                    true,
-                )
-                .await
-            }
+            Some("session.execution.started.1") => (Notice::Started, ObjectEncoder::new().finish()),
+            Some("session.step.ended.1") => (Notice::Progress, ObjectEncoder::new().finish()),
             Some("session.execution.failed.1") => {
                 let error: ycoding_schema::session_error::Error = object.field("error")?;
-                self.member_notice(
-                    id,
+                (
                     Notice::Failed,
-                    &event.id,
                     ObjectEncoder::new()
                         .field("excerpt", &clip(&error.message))
                         .finish(),
-                    true,
                 )
-                .await
             }
             Some("session.execution.succeeded.1") => {
                 if self.work_remains(id)? {
                     return Ok(());
                 }
                 let excerpt = self.excerpt(id)?;
-                self.member_notice(
-                    id,
+                (
                     Notice::Completed,
-                    &event.id,
                     ObjectEncoder::new().optional("excerpt", &excerpt).finish(),
-                    true,
                 )
-                .await
             }
-            _ => Ok(()),
-        }
+            _ => return Ok(()),
+        };
+        self.member_notice(id, notice, &event.id, detail, true)
+            .await
     }
     async fn request_event(
         &self,
