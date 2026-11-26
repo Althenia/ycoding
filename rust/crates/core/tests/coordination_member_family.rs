@@ -1097,7 +1097,7 @@ fn the_master_instructions_route_descendant_requests_through_the_owner_and_prese
     for instruction in [
         "A request raised by a member's subagent or deeper descendant is that member's request: it appears with `requestSessionID`, and you `inspect`, `answer` or `escalate` it with the member's `sessionID`.",
         "The supervising owner resolves the target Project folder or designated worktree before enrollment.",
-        "Pass exactly one placement: `directory` with an absolute or home-relative path for an explicit folder, including a non-Git folder or repository subdirectory; `projectID` for a repository Project's canonical checkout; or `name` with an explicit `repository` for a new managed worktree.",
+        "Pass exactly one placement: `directory` with an absolute or home-relative path for an explicit folder, such as an existing managed worktree or a non-Git Project folder; `projectID` for a repository Project's canonical checkout; or `name` with an explicit `repository` for a new managed worktree.",
         "Attach, assign, send, model, release and remove never change the Session's ID, parent or Location or move or recreate it.",
         "Never create a project work Session under the Master Session as a child or descendant; member Sessions are independently bound root Sessions, and only lightweight supervisor subagents live under the Master.",
     ] {

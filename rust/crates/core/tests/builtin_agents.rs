@@ -53,7 +53,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.6,
             "#e67e22",
             include_str!("../src/resources/agent/prompts/GSD.md"),
-            "8d2cfee8369bac490aef165e2faff2015cc6c69885823413cad49445425951f1",
+            "e967625bd99aea59e021cc59731bd68c00bf9b62daa441abe577a86b0ebd1dd7",
         ),
         (
             "architech",
@@ -62,7 +62,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.5,
             "#3498db",
             include_str!("../src/resources/agent/prompts/architech.md"),
-            "82b31babea1019f35934ac4e3292e77fdd90b870b2f16bf330796298a62d5e13",
+            "e1b5a80d03000426770048995b2c6c3231e8866b80770205eb7656f8bee90e6e",
         ),
         (
             "god",
@@ -71,7 +71,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.6,
             "#f1c40f",
             include_str!("../src/resources/agent/prompts/god.md"),
-            "02fc2f871dea2322918dc5e7d96fa3880e4795e5b04b209ac596e9dc6e1c5759",
+            "1ef9bd421e9dc966621c9a36db829eb43c6eae60d3e6285198c29b1033312a70",
         ),
         (
             "yangi",
@@ -80,7 +80,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.5,
             "#2ecc71",
             include_str!("../src/resources/agent/prompts/yangi.md"),
-            "1d56f821bda8c9d71d9aea942434221c0f50fcb502b91413587cfa5f8c0e554e",
+            "dd8530269755bb3765af7a16ee4fb7e764f769504409c12af0fffdae5f409e17",
         ),
         (
             "occam",
@@ -89,7 +89,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.4,
             "#2ecc71",
             include_str!("../src/resources/agent/prompts/occam.md"),
-            "eebf47ca5847560ab872e14d161d9c9c74818b5e9d543ec397e62d47872614c2",
+            "bee8d03f29014851f19cd2f6f0a22b464fd9d8c0d1e83e1f6e14ec31778a10a3",
         ),
         (
             "omoikane",
@@ -98,7 +98,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.5,
             "#3498db",
             include_str!("../src/resources/agent/prompts/omoikane.md"),
-            "3c23859c62a330422d251ebb3c222122bfad4d490927a70d2db567f24b7bc5bc",
+            "80941065ce0041f9908eb599ca2072a8397fb8107f1ca48c64d8f0015e23fe6c",
         ),
         (
             "wittgenstein",
@@ -107,7 +107,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.4,
             "#95a5a6",
             include_str!("../src/resources/agent/prompts/wittgenstein.md"),
-            "77fe611ff451ac49f5af36b2c762350a96a5fa8262e164344063259f7439e323",
+            "7826bd22f2432d9f34079f2659b186739645eba62b9af50864991b90292afca9",
         ),
         (
             "zeus",
@@ -116,7 +116,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.6,
             "#f1c40f",
             include_str!("../src/resources/agent/prompts/zeus.md"),
-            "fedff9d3e114d5e603354479cae890dae176d209319891e7bb0ea6d482a59151",
+            "6baea4501ce3e967e6b41ad021fa33340176f7301c8ae94dfa8a1aed470ef40c",
         ),
     ];
     for (id, name, mode, temperature, color, source, digest) in fixtures {
@@ -566,6 +566,8 @@ fn primary_and_child_agents_resolve_recoverable_obstacles_within_their_authority
         let system = agent.system.as_ref().unwrap().to_utf8().unwrap();
         let shared = &system[..system.find("You are ").unwrap()];
         for rule in [
+            "As Master or a supervising owner, route repository work to member Sessions at the repository's canonical checkout or a managed worktree for that repository.",
+            "Keep `~/.local/share/ycoding/tasks/` for scratch files, logs, and evidence only; never use it or a subdirectory as a Project member Location.",
             "Use live evidence and permitted tools to settle routine choices and recover from errors, conflicts and failing checks within your authority.",
             "Do not add approval gates or wait for status nudges to continue authorized work.",
             "Keep independent authorized work moving while a dependency or approval is pending.",

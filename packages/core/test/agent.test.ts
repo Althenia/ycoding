@@ -597,6 +597,10 @@ describe("Agent", () => {
         expect(item?.system).toContain(
           "Follow the recorded Session role before applying general execution or delegation guidance.",
         )
+        for (const rule of [
+          "As Master or a supervising owner, route repository work to member Sessions at the repository's canonical checkout or a managed worktree for that repository.",
+          "Keep `~/.local/share/ycoding/tasks/` for scratch files, logs, and evidence only; never use it or a subdirectory as a Project member Location.",
+        ]) expect(item?.system?.split(rule)).toHaveLength(2)
         for (const conflicting of [
           "When the coordinator is instructed to do project work",
           "`project send`",
