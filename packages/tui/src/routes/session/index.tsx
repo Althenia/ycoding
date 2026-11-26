@@ -3304,7 +3304,9 @@ function UserMessage(props: { message: SessionMessageUser; findActive?: boolean 
         retry: true,
         sending: false,
         label: undefined,
-        reason: current.phase.startsWith("Attachment rejected") ? current.error : undefined,
+        reason: current.phase.startsWith("Attachment rejected") || current.phase.startsWith("Attachment upload failed")
+          ? current.error
+          : undefined,
       }
     if (current && !current.admitted && !current.consumed) return { glyph: "", read: false, retry: false, sending: true, label: undefined, reason: undefined }
     if (current?.consumed || props.message.time.consumed !== undefined) return { glyph: "✓✓", read: true, retry: false, sending: false, label: undefined, reason: undefined }

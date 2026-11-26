@@ -918,6 +918,65 @@ test("successful delayed clipboard admission reconciles recalled history to its 
   }
 }, 30_000)
 
+test("a rejected clipboard upload shows its cause and retries the original attachment without overwriting the next draft", async () => {
+  resetFixture()
+  failFirstPrompt = false
+  managedReceipt = true
+  const state = await mkdtemp(path.join(tmpdir(), "ycoding-upload-recovery-"))
+  const png = await Bun.file(new URL("../../../../assets/brand/ycoding-icon-512.png", import.meta.url)).bytes()
+  const attachment = await materializeClipboardImage(state, async (file) => { await Bun.write(file, png) })
+  const pieces: number[] = []
+  let rejected = false
+  const screen = await renderScreen({
+    width: 100, height: 60, state, args: { sessionID }, settle: "Message YCoding…",
+    clipboard: { read: async () => attachment },
+    route: async (url, request) => {
+      if (!url.pathname.endsWith("/attachment/upload")) return route(url, request)
+      if (!rejected) {
+        rejected = true
+        return json({ code: "message_too_large", message: "Attachment exceeds the upload size limit" }, { status: 400 })
+      }
+      const chunk: unknown = await request.json()
+      if (!chunk || typeof chunk !== "object" || !("uploadID" in chunk) || typeof chunk.uploadID !== "string" ||
+        !("offset" in chunk) || !("last" in chunk) || !("data" in chunk) || !chunk.data || typeof chunk.data !== "object")
+        throw new Error("Invalid attachment upload request")
+      const bytes: unknown[] = Object.values(chunk.data)
+      if (!bytes.every((byte) => typeof byte === "number")) throw new Error("Invalid attachment upload bytes")
+      expect(chunk.offset).toBe(pieces.length)
+      pieces.push(...bytes)
+      return json(chunk.last ? { uri: `ycoding-upload://${chunk.uploadID}` } : { received: pieces.length })
+    },
+  })
+  try {
+    await focusComposer(screen)
+    screen.input.pressKey("v", { ctrl: true })
+    await waitFor(() => screen.frame().includes("[Image 1]"), "clipboard attachment")
+    await screen.input.typeText("Inspect the original image")
+    screen.input.pressEnter()
+    await waitFor(() => screen.frame().includes("Retry send"), "upload recovery receipt")
+    expect(screen.frame()).toContain("Attachment upload failed")
+    expect(screen.frame()).toContain("Attachment exceeds the upload size limit")
+    expect(screen.frame()).toContain("Inspect the original image")
+    expect(promptRequests).toHaveLength(0)
+    expect(await Bun.file(attachment.temporary.path).exists()).toBe(true)
+
+    await screen.input.typeText("new draft stays editable")
+    await screen.renderOnce()
+    const row = screen.lines().findIndex((line) => line.includes("Retry send"))
+    await screen.mouse.click(screen.lines()[row].indexOf("Retry send"), row)
+    await waitFor(() => promptRequests.length === 2, "attachment admission and wake")
+    expect(Uint8Array.from(pieces)).toEqual(png)
+    expect(promptRequests[0].text).toContain("Inspect the original image")
+    expect(promptRequests[0].files?.[0].uri).toStartWith("ycoding-upload://")
+    expect(promptRequests[1].id).toBe(promptRequests[0].id)
+    expect(composer(screen.renderer.root)?.plainText).toBe("new draft stays editable")
+  } finally {
+    await screen.dispose()
+    await attachment.temporary.cleanup()
+    await rm(state, { recursive: true, force: true })
+  }
+}, 30_000)
+
 for (const state of ["thinking", "tool running", "question"] as const) {
   test(`Escape handles ${state} without losing the next prompt after telemetry fails`, async () => {
     resetFixture()

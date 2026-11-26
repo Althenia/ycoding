@@ -354,11 +354,13 @@ export function createPromptSubmissions(input: {
                 ? "Prompt admitted · wake unresolved"
                 : error instanceof AttachmentReadError
                   ? "Attachment rejected"
-                  : entry.phase === "Sending prompt" && isConflictError(error)
-                    ? "Prompt ID conflict"
-                    : entry.phase === "Sending prompt" && isInvalidRequestError(error) && error.field === "files"
-                      ? "Attachment rejected"
-                      : entry.phase + " unresolved"
+                  : entry.phase === "Uploading attachments"
+                    ? "Attachment upload failed"
+                    : entry.phase === "Sending prompt" && isConflictError(error)
+                      ? "Prompt ID conflict"
+                      : entry.phase === "Sending prompt" && isInvalidRequestError(error) && error.field === "files"
+                        ? "Attachment rejected"
+                        : entry.phase + " unresolved"
             } · Retry send`,
           })
         }

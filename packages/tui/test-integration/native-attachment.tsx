@@ -4,6 +4,7 @@ import path from "node:path"
 import { createTestRenderer } from "@opentui/core/testing"
 import { TextareaRenderable } from "@opentui/core"
 import { Effect, FileSystem } from "effect"
+import { createComponent } from "solid-js"
 import { make } from "@ycoding-ai/client/v5"
 import { FrontendPaths } from "../src/frontend-paths"
 import { materializeClipboardImage } from "../src/clipboard"
@@ -16,6 +17,24 @@ mock.module("../src/theme/discovery", () => ({
   discoverThemes: async () => ({}),
 }))
 mock.module("../src/component/dialog-telemetry-consent", () => ({ DialogTelemetryConsent: () => null }))
+const dataModule = await import("../src/context/data")
+const originalData = { ...dataModule }
+let data: ReturnType<typeof dataModule.useData> | undefined
+function SessionProbe() {
+  data = originalData.useData()
+  return null
+}
+mock.module("../src/context/data", () => ({
+  ...originalData,
+  DataProvider: (props: Parameters<typeof dataModule.DataProvider>[0]) => {
+    let content: Array<typeof props.children> | undefined
+    return createComponent(originalData.DataProvider, {
+      get recordTelemetry() { return props.recordTelemetry },
+      get selectedSessionID() { return props.selectedSessionID },
+      get children() { return (content ??= [createComponent(SessionProbe, {}), props.children]) },
+    })
+  },
+}))
 const { run } = await import("../src/app")
 const endpoint = { url }
 const client = make({ endpoint, location: { directory } })
@@ -51,7 +70,15 @@ async function wait(predicate: () => boolean | Promise<boolean>) {
   throw new Error(`TUI did not reach expected state:\n${screen.captureCharFrame()}`)
 }
 try {
-  await wait(() => screen.renderer.currentFocusedEditor instanceof TextareaRenderable && screen.captureCharFrame().includes("ready"))
+  await wait(() => {
+    const session = data?.session.get(sessionID)
+    const history = data?.session.message.history(sessionID)
+    if (!session || !history?.sourceEpoch || history.status !== "ready") return false
+    const location = data?.location
+    return !!location?.info(session.location) && !!location.model.default(session.location) &&
+      !!location.agent.list(session.location) && !!location.model.list(session.location) &&
+      screen.renderer.currentFocusedEditor instanceof TextareaRenderable && screen.captureCharFrame().includes("ready")
+  })
   await screen.mockInput.pasteBracketedText("")
   await wait(() => screen.captureCharFrame().includes("[Image 1]"))
   await screen.mockInput.typeText("inspect synthetic image")
@@ -59,6 +86,8 @@ try {
   let pending = await client.session.pending.list({ sessionID })
   await wait(async () => {
     pending = await client.session.pending.list({ sessionID })
+    const frame = screen.captureCharFrame()
+    assert.ok(!frame.includes("Retry send") && !frame.includes("draft retained"), frame)
     return pending.length === 1
   })
   assert.equal(pending.length, 1)

@@ -234,7 +234,7 @@ The backend-owned configuration and enrollment operations retain IDs 2060, 2061,
 | session.subscribe              | event.subscribe                 | 4000 | B-reuse    | S     | MUTATION |
 | session.unsubscribe            | event.unsubscribe               | 4001 | B-reuse    | S     | MUTATION |
 | session.prompt                 | session.prompt                  | 4050 | B-reuse    | S     | MUTATION |
-| session.attachment.upload      | session.attachment.upload       | 5023 | C          | C     | MUTATION |
+| session.attachment.upload      | session.attachment.upload       | 5023 | C          | S     | MUTATION |
 | session.interrupt              | session.interrupt               | 4037 | A          | S     | MUTATION |
 | session.prediction             | session.prediction              | 4082 | B-reuse    | S     | MUTATION |
 | session.promptGenerate         | session.promptGenerate          | 4083 | B-reuse    | S     | MUTATION |

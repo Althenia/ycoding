@@ -437,6 +437,12 @@ function connectorServices(contract: ReturnType<typeof connectorContract>) {
     "usage.providers",
     "machine.latency.list",
   ])
+  const local = new Set([
+    "session.attachment.upload",
+    "session.capturedChanges.list",
+    "session.team.economics",
+    "session.family.activity",
+  ])
   const rpc = (
     id: number,
     name: string,
@@ -446,7 +452,7 @@ function connectorServices(contract: ReturnType<typeof connectorContract>) {
     scope: string,
     roles = ["REMOTE_CLIENT", "RELAY"],
   ) =>
-    `  rpc ${name.replace(/[^a-zA-Z0-9]/g, "_")}(${request}) returns (${result}) {\n    option (ycoding.v5.operation) = {\n      operation_id: ${id}\n      diagnostic_name: "${name}"\n      error_types: "ycoding.v5.Connector_Error"\n${["session.capturedChanges.list", "session.team.economics", "session.family.activity"].includes(name) ? "      roles: LOCAL_CLIENT\n" : ""}${roles.map((role) => `      roles: ${role}\n`).join("")}${connectorScopeOptions(name)}      scope: ${scope}\n      mutation: ${mutation}\n      settlement: COMPLETED\n      paging: ${["session.capturedChanges.list", "session.side-chat.list", "notice.subscribe", "notice.list"].includes(name) ? "CURSOR" : "UNPAGED"}\n      streaming: TYPED_BULK\n      sensitivity: ${name.startsWith("provider.auth.") || name === "session.attachment.upload" || name === "mcp.request" ? "SECRET" : "PRIVATE"}\n    };\n  }`
+    `  rpc ${name.replace(/[^a-zA-Z0-9]/g, "_")}(${request}) returns (${result}) {\n    option (ycoding.v5.operation) = {\n      operation_id: ${id}\n      diagnostic_name: "${name}"\n      error_types: "ycoding.v5.Connector_Error"\n${local.has(name) ? "      roles: LOCAL_CLIENT\n" : ""}${roles.map((role) => `      roles: ${role}\n`).join("")}${connectorScopeOptions(name)}      scope: ${scope}\n      mutation: ${mutation}\n      settlement: COMPLETED\n      paging: ${["session.capturedChanges.list", "session.side-chat.list", "notice.subscribe", "notice.list"].includes(name) ? "CURSOR" : "UNPAGED"}\n      streaming: TYPED_BULK\n      sensitivity: ${name.startsWith("provider.auth.") || name === "session.attachment.upload" || name === "mcp.request" ? "SECRET" : "PRIVATE"}\n    };\n  }`
   const operations = contract.operations.map((item) => {
     const source = Object.entries(connectorOperations).find(([, value]) => value[0] === item.id)![0]
     return rpc(
