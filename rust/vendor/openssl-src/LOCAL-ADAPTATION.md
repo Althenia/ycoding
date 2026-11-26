@@ -16,6 +16,8 @@ The `openssl/` tree uses the official distribution's source files without Node-s
 1. Emit `cargo:rerun-if-changed` for the native source directory when `try_build` runs, so Cargo tracks native source changes.
 2. Keep `no-docs` and `no-demos` alongside the published builder's `no-tests`, preserving the library-only build selection.
 
+`build.rs` tracks the absolute path to the manifest. Cargo rebuilds `openssl-src` when switching checkouts that share a target directory, even if the previous checkout still exists. `openssl-sys` then uses the native source from the current checkout. Repeat builds in the same checkout can reuse the builder.
+
 The local manifest is retained separately from the published crate's generated manifest. It keeps the local version label, the existing `cc = "1.0"` declaration and the published feature names; the published manifest declares `cc = "1.0.79"`. Feature selections are implemented by the restored builder, not silently ignored.
 
 ## Licenses
