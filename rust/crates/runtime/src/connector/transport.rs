@@ -1,4 +1,4 @@
-use super::{Control, Credentials, Error, Intent, Peer, State, quota};
+use super::{ConnectionFailure, Control, Credentials, Error, Intent, Peer, State, quota};
 use crate::{Bulk, Dispatcher, Environment, Settled, ids};
 use axum::http::header::AUTHORIZATION;
 use futures_util::{SinkExt, StreamExt};
@@ -174,9 +174,18 @@ async fn supervise(
                     .reconnect_initial
                     .saturating_mul(2u32.saturating_pow(attempt))
                     .min(settings.reconnect_max),
-                "Remote connection interrupted. Check the network and relay availability; retrying.",
+                match result {
+                    Err(Error::Connection(failure)) => failure.retry_message(),
+                    _ => {
+                        "Remote connection interrupted. Check the network and relay availability; retrying."
+                    }
+                },
             )
         };
+        tracing::debug!(
+            delay_ms = delay.as_millis() as u64,
+            "remote connection retry scheduled"
+        );
         attempt = attempt.saturating_add(1).min(30);
         control.publish(current.generation, State::Connecting, Some(message));
         tokio::select! { _ = tokio::time::sleep(delay) => {}, _ = intent.changed() => { attempt = 0; }, _ = stopped.changed() => break }
@@ -304,6 +313,33 @@ impl Drop for Driver {
     }
 }
 
+impl ConnectionFailure {
+    fn retry_message(self) -> &'static str {
+        match self {
+            Self::Credentials => "Could not refresh the Remote device credential; retrying.",
+            Self::CredentialRenewal => "Refreshing the Remote device credential and reconnecting.",
+            Self::UpgradeTimedOut => "Timed out opening the Remote WebSocket; retrying.",
+            Self::UpgradeRefused(_) => "The relay declined the WebSocket upgrade; retrying.",
+            Self::Tls => "Could not establish TLS with the Remote relay; retrying.",
+            Self::Open => "Could not open the Remote socket to the relay; retrying.",
+            Self::Read(_) => "Could not read from the Remote socket; retrying.",
+            Self::Write => "Could not send data on the Remote socket; retrying.",
+            Self::Closed {
+                established: false, ..
+            } => "The relay closed the connection before Remote became ready; retrying.",
+            Self::Closed {
+                established: true, ..
+            } => "The relay closed the established Remote connection; retrying.",
+            Self::EndedWithoutClose { established: false } => {
+                "The Remote socket ended without a close frame before becoming ready; retrying."
+            }
+            Self::EndedWithoutClose { established: true } => {
+                "The established Remote socket ended without a close frame; retrying."
+            }
+        }
+    }
+}
+
 enum StartupStage {
     Inventory,
     Credentials,
@@ -320,9 +356,13 @@ fn startup_failure(error: Error, stage: StartupStage) {
     };
     let (stage, kind) = match (stage, error) {
         (StartupStage::Inventory, _) => ("inventory", Some("server")),
-        (StartupStage::Credentials, Error::Transport) => ("credentials", Some("transport")),
+        (StartupStage::Credentials, Error::Transport | Error::Connection(_)) => {
+            ("credentials", Some("transport"))
+        }
         (StartupStage::Credentials, _) => ("credentials", None),
-        (StartupStage::Socket, Error::Transport) => ("socket", Some("transport")),
+        (StartupStage::Socket, Error::Transport | Error::Connection(_)) => {
+            ("socket", Some("transport"))
+        }
         (StartupStage::Socket, _) => ("socket", None),
     };
     if let Some(kind) = kind {
@@ -373,6 +413,10 @@ async fn connect(
     .await
     .map_err(|_| Error::Transport)
     .and_then(|result| result)
+    .map_err(|error| match error {
+        Error::Transport => ConnectionFailure::Credentials.into(),
+        error => error,
+    })
     .inspect_err(|error| startup_failure(*error, StartupStage::Credentials))?;
     if !control.current(intent.generation) {
         return Err(Error::Transport);
@@ -397,17 +441,21 @@ async fn connect(
         connect_async_with_config(request, Some(config), false),
     )
     .await
-    .map_err(|_| Error::Transport)
+    .map_err(|_| Error::from(ConnectionFailure::UpgradeTimedOut))
     .inspect_err(|error| startup_failure(*error, StartupStage::Socket))?;
     let (mut socket, _) = upgrade
         .map_err(|error| match error {
-            tungstenite::Error::Http(response) if response.status().as_u16() == 401 => {
-                Error::Unauthorized
+            tungstenite::Error::Http(response) => {
+                let status = response.status().as_u16();
+                tracing::debug!(status, "remote relay declined websocket upgrade");
+                match status {
+                    401 => Error::Unauthorized,
+                    403 => Error::Forbidden,
+                    status => ConnectionFailure::UpgradeRefused(status).into(),
+                }
             }
-            tungstenite::Error::Http(response) if response.status().as_u16() == 403 => {
-                Error::Forbidden
-            }
-            _ => Error::Transport,
+            tungstenite::Error::Tls(_) => ConnectionFailure::Tls.into(),
+            _ => ConnectionFailure::Open.into(),
         })
         .inspect_err(|error| startup_failure(*error, StartupStage::Socket))?;
     if !control.current(intent.generation) {
@@ -530,8 +578,8 @@ async fn connect(
                 std::future::poll_fn(|context| socket.poll_ready_unpin(context)),
             )
             .await
-            .map_err(|_| Error::Transport)?
-            .map_err(|_| Error::Transport)?;
+            .map_err(|_| ConnectionFailure::Write)?
+            .map_err(|_| ConnectionFailure::Write)?;
             if !control.current(intent.generation) {
                 return Err(Error::Transport);
             }
@@ -548,7 +596,7 @@ async fn connect(
             }
             socket
                 .start_send_unpin(tungstenite::Message::Binary(bytes.into()))
-                .map_err(|_| Error::Transport)?;
+                .map_err(|_| ConnectionFailure::Write)?;
             if let Some(id) = association {
                 driver.settle_subscription(&id)?;
             }
@@ -557,8 +605,8 @@ async fn connect(
                 socket.flush(),
             )
             .await
-            .map_err(|_| Error::Transport)?
-            .map_err(|_| Error::Transport)?;
+            .map_err(|_| ConnectionFailure::Write)?
+            .map_err(|_| ConnectionFailure::Write)?;
             next_send = Instant::now() + Duration::from_millis(25);
         }
         if let Some(close) = driver
@@ -574,7 +622,7 @@ async fn connect(
             return Err(driver.protocol_close(close.category));
         }
         tokio::select! {
-            _ = &mut expiry => return Err(Error::Transport),
+            _ = &mut expiry => return Err(ConnectionFailure::CredentialRenewal.into()),
             _ = ticker.tick() => {},
             result = results.recv() => {
                 let Some((id, settled)) = result else { return Err(Error::Transport); };
@@ -590,13 +638,15 @@ async fn connect(
                 let bytes = match incoming {
                     Some(Ok(tungstenite::Message::Binary(bytes))) => bytes,
                     Some(Ok(tungstenite::Message::Ping(_) | tungstenite::Message::Pong(_))) => continue,
-                    Some(Ok(tungstenite::Message::Close(Some(close)))) => {
-                        return Err(match u16::from(close.code) {
-                            4401 if driver.established => Error::Transport,
-                            4401 => Error::Unauthorized,
-                            4403 => Error::Forbidden,
-                            4409 => Error::Conflict,
-                            _ => Error::Transport,
+                    Some(Ok(tungstenite::Message::Close(close))) => {
+                        let code = close.map(|frame| u16::from(frame.code));
+                        tracing::debug!(?code, established = driver.established, "remote websocket closed by peer");
+                        return Err(match code {
+                            Some(4401) if driver.established => ConnectionFailure::CredentialRenewal.into(),
+                            Some(4401) => Error::Unauthorized,
+                            Some(4403) => Error::Forbidden,
+                            Some(4409) => Error::Conflict,
+                            code => ConnectionFailure::Closed { code, established: driver.established }.into(),
                         });
                     }
                     Some(Ok(tungstenite::Message::Text(_))) => return Err(Error::Incompatible),
@@ -604,11 +654,14 @@ async fn connect(
                         tracing::debug!(?error, "remote websocket capacity failed");
                         return Err(Error::Incompatible);
                     },
-                    Some(Err(tungstenite::Error::Protocol(error))) => {
-                        tracing::debug!(?error, "remote websocket protocol failed");
-                        if matches!(error, tungstenite::error::ProtocolError::ResetWithoutClosingHandshake) {
-                            return Err(Error::Transport);
-                        }
+                    Some(Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::Protocol(tungstenite::error::ProtocolError::ResetWithoutClosingHandshake))) | None => {
+                        return Err(ConnectionFailure::EndedWithoutClose { established: driver.established }.into());
+                    }
+                    Some(Err(tungstenite::Error::Io(error))) => {
+                        return Err(ConnectionFailure::Read(error.kind()).into());
+                    }
+                    Some(Err(tungstenite::Error::Protocol(_))) => {
+                        tracing::debug!("remote websocket protocol failed");
                         return Err(Error::Incompatible);
                     },
                     _ => return Err(Error::Transport),

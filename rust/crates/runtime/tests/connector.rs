@@ -798,6 +798,54 @@ async fn relay_credential_expiry_reconnects_but_device_revocation_stops() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_close_before_ready_reports_handshake_failure_and_reconnects() {
+    assert_eq!(
+        relay_retry_message(FirstConnection::CloseBeforeReady(1012)).await,
+        "The relay closed the connection before Remote became ready; retrying."
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_upgrade_refusal_reports_unavailable_and_reconnects() {
+    assert_eq!(
+        relay_retry_message(FirstConnection::RefuseUpgrade).await,
+        "The relay declined the WebSocket upgrade; retrying."
+    );
+}
+
+async fn relay_retry_message(first: FirstConnection) -> &'static str {
+    let relay = Relay::spawn(5, false, Budgets::default(), first).await;
+    let saved = Arc::new(AtomicBool::new(false));
+    let control = Control::load(Arc::new(Saved(saved.clone())), unenrolled()).await;
+    let mut status = control.observe();
+    let mut settings = Settings::new(access(&relay, None));
+    settings.reconnect_initial = Duration::from_millis(500);
+    let connector = Connector::start(
+        control.clone(),
+        settings,
+        environment(Some(control.clone())),
+        Arc::new(test_dispatcher()),
+    )
+    .unwrap();
+    control.set(true).await.unwrap();
+    let message = tokio::time::timeout(
+        connector_support::WAIT,
+        status.wait_for(|(_, value)| value.state == State::Connecting && value.message.is_some()),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .1
+    .message;
+    wait_state(&control, State::On).await;
+    assert_eq!(relay.upgrades(), 2);
+    assert!(saved.load(Ordering::Acquire));
+    connector.shutdown().await.unwrap();
+    relay.shutdown().await;
+    message.unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn initial_relay_4401_stops_before_establishment_without_retrying() {
     let mut relay = Relay::spawn(
         5,

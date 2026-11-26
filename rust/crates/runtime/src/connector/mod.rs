@@ -20,7 +20,33 @@ pub enum Error {
     Forbidden,
     Preference,
     Transport,
+    Connection(ConnectionFailure),
     Incompatible,
     Conflict,
     Shutdown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionFailure {
+    Credentials,
+    CredentialRenewal,
+    UpgradeTimedOut,
+    UpgradeRefused(u16),
+    Tls,
+    Open,
+    Read(std::io::ErrorKind),
+    Write,
+    Closed {
+        code: Option<u16>,
+        established: bool,
+    },
+    EndedWithoutClose {
+        established: bool,
+    },
+}
+
+impl From<ConnectionFailure> for Error {
+    fn from(failure: ConnectionFailure) -> Self {
+        Self::Connection(failure)
+    }
 }

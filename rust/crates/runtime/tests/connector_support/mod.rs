@@ -53,6 +53,7 @@ pub struct Seen {
 pub enum FirstConnection {
     Normal,
     CloseBeforeReady(u16),
+    RefuseUpgrade,
     WithholdInventoryCredit,
 }
 
@@ -225,13 +226,16 @@ async fn upgrade(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    shared.upgrades.fetch_add(1, Ordering::Release);
+    let attempt = shared.upgrades.fetch_add(1, Ordering::Release);
     if headers
         .get("Authorization")
         .and_then(|header| header.to_str().ok())
         != Some("Bearer stand-in-token")
     {
         return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if attempt == 0 && matches!(shared.first, FirstConnection::RefuseUpgrade) {
+        return (StatusCode::SERVICE_UNAVAILABLE, "fixture upgrade body").into_response();
     }
     upgrade.on_upgrade(move |socket| async move {
         let runtime = tokio::runtime::Handle::current();
