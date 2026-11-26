@@ -75,7 +75,7 @@ async fn repository_references_obey_current_authority_and_never_modify_the_stabl
     };
     rules("allow");
     let mut request = prefix.clone();
-    recall
+    let appended = recall
         .append(
             &session,
             &"test".into(),
@@ -85,6 +85,7 @@ async fn repository_references_obey_current_authority_and_never_modify_the_stabl
             2048,
         )
         .await;
+    assert!(appended);
     assert_eq!(request.messages.len(), 2);
     assert_eq!(request.messages[0], prefix.messages[0]);
     assert_eq!(request.tools, prefix.tools);
@@ -101,7 +102,7 @@ async fn repository_references_obey_current_authority_and_never_modify_the_stabl
         item.text = "ready".into();
     }
     let mut abstained = prefix.clone();
-    recall
+    let appended = recall
         .append(
             &session,
             &"test".into(),
@@ -111,9 +112,10 @@ async fn repository_references_obey_current_authority_and_never_modify_the_stabl
             2048,
         )
         .await;
+    assert!(!appended);
     assert_eq!(abstained.messages, prefix.messages);
     let mut clipped = prefix.clone();
-    recall
+    let appended = recall
         .append(
             &session,
             &"test".into(),
@@ -123,6 +125,7 @@ async fn repository_references_obey_current_authority_and_never_modify_the_stabl
             8,
         )
         .await;
+    assert!(!appended);
     assert_eq!(clipped.messages, prefix.messages);
     for effect in ["ask", "deny"] {
         rules(effect);

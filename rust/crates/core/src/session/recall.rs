@@ -21,36 +21,36 @@ impl Context {
         request: &mut llm::Request,
         input_limit: i64,
         automatic_budget: usize,
-    ) {
+    ) -> bool {
         if !request
             .tools
             .iter()
             .any(|tool| tool.name.as_str() == Some("memory"))
         {
-            return;
+            return false;
         }
         let Some(user) = history.iter().rev().find_map(|message| match message {
             session_message::Info::User(user) => Some(user),
             _ => None,
         }) else {
-            return;
+            return false;
         };
         let Ok(query) = shared_context::task_text(&user.text, user.metadata.as_ref()).to_utf8()
         else {
-            return;
+            return false;
         };
         if query.trim().is_empty() || query.encode_utf16().count() > 1024 {
-            return;
+            return false;
         }
         let remaining = input_limit
             .saturating_sub(compaction_gate::estimated_provider_input_tokens(request))
             .clamp(0, 2048) as usize;
         let remaining = remaining.min(automatic_budget);
         if remaining == 0 {
-            return;
+            return false;
         }
         let Ok(state) = self.memory.status(Scope::Repository) else {
-            return;
+            return false;
         };
         let resource: LosslessString = state.root.to_string_lossy().as_ref().into();
         let allowed = || {
@@ -67,24 +67,28 @@ impl Context {
             })
         };
         if !state.enabled || !allowed() {
-            return;
+            return false;
         }
         let memory = self.memory.clone();
         let approved = state.clone();
         let gathered =
             tokio::task::spawn_blocking(move || gather(&memory, &approved, &query)).await;
-        let Ok(Some(items)) = gathered else { return };
+        let Ok(Some(items)) = gathered else {
+            return false;
+        };
         if !allowed()
             || !self
                 .memory
                 .status(Scope::Repository)
                 .is_ok_and(|current| current == state)
         {
-            return;
+            return false;
         }
-        if let Some(message) = suffix(items, remaining) {
-            request.messages.push(message);
-        }
+        let Some(message) = suffix(items, remaining) else {
+            return false;
+        };
+        request.messages.push(message);
+        true
     }
 }
 

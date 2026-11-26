@@ -1938,18 +1938,21 @@ impl Local {
                 .max_tokens
                 .or(prepared.model.defaults.output_limit);
             let context_window = resolved.info.limit.context.get();
-            if let Some(recall) = &local.0.recall {
-                recall
-                    .append(
-                        &session.id,
-                        &agent.id,
-                        &loaded,
-                        &mut prepared,
-                        context_window - services.compaction.context_safety_margin_tokens,
-                        automatic_budget,
-                    )
-                    .await;
-            }
+            let recalled = match &local.0.recall {
+                Some(recall) => {
+                    recall
+                        .append(
+                            &session.id,
+                            &agent.id,
+                            &loaded,
+                            &mut prepared,
+                            context_window - services.compaction.context_safety_margin_tokens,
+                            automatic_budget,
+                        )
+                        .await
+                }
+                None => false,
+            };
             if route.current.is_some() {
                 if let Some(next) = &next
                     && compaction_gate::estimated_provider_input_tokens(&prepared)
@@ -2155,7 +2158,7 @@ impl Local {
                     Some(with_openai(cache.provider_options.clone(), &openai_options));
             }
             let eligible = direct_responses
-                && local.0.recall.is_none()
+                && !recalled
                 && !history_had_skills
                 && route.current.is_none()
                 && account_identity.is_some()
