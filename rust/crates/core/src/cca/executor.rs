@@ -1,7 +1,6 @@
 use super::{
     credential_broker::CredentialBrokerCache,
     encoding::{base64_encode, sha256_hex, uuid_v4},
-    environment_config::{EnvironmentConfigOptions, require_full_access},
     error::{
         Attribution, AuthorizationDenied, AuthorizationInput, Authorize, AuthorizeFn, BoxFuture,
         ExecutorError, Grant, ScopeContext, run_with_grant,
@@ -14,8 +13,8 @@ use super::{
     },
     policy::{
         self, BuildProcessEnv, PolicyCode, PolicyError, ResolveSandboxOptions, SandboxAccess,
-        SandboxIntent, SandboxPolicy, assert_argv, basename, build_process_env, dirname, join,
-        parse_path_uri, resolve, resolve_contained, resolve_sandbox, to_path_uri,
+        SandboxIntent, SandboxPolicy, assert_argv, basename, dirname, join, parse_path_uri,
+        resolve, resolve_contained, resolve_sandbox, to_path_uri,
     },
     shell_snapshot::{
         PrepareInput, ShellInfo, ShellSnapshotCache, ShellSnapshotLaunch, ShellSnapshotRequest,
@@ -27,7 +26,6 @@ use super::{
         object_get, os_text, stringify_json, trim,
     },
 };
-use crate::resources::config::Configuration;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
@@ -379,6 +377,9 @@ pub trait ExecutorScope: Send + Sync {
     fn session_id(&self) -> String;
     fn roots(&self) -> Vec<String>;
     fn authorization(&self) -> Arc<dyn Authorize>;
+    fn ensure_current(&self) -> BoxFuture<'_, Result<(), ExecutorError>> {
+        Box::pin(async { Ok(()) })
+    }
     fn transcript(&self) -> Option<Arc<dyn Recorder>> {
         None
     }
@@ -418,6 +419,12 @@ pub struct ExecutorOptions {
     pub managed_config_path: Option<PathBuf>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ExecutorAccess {
+    Ordinary,
+    UnrestrictedHost,
+}
+
 tokio::task_local! {
     static REFUSALS: Arc<Mutex<Option<LosslessString>>>;
 }
@@ -426,6 +433,7 @@ pub(super) struct ActiveScope {
     pub(super) id: u64,
     pub(super) scope: Arc<dyn ExecutorScope>,
     pub(super) outside: Vec<String>,
+    pub(super) access: ExecutorAccess,
 }
 impl ActiveScope {
     pub(super) fn roots(&self) -> Vec<String> {
@@ -440,6 +448,14 @@ impl ActiveScope {
         &self,
         input: AuthorizationInput,
     ) -> Result<Grant, AuthorizationDenied> {
+        if self.access == ExecutorAccess::UnrestrictedHost {
+            return self
+                .scope
+                .ensure_current()
+                .await
+                .map(|()| Grant::noop())
+                .map_err(|_| AuthorizationDenied::default());
+        }
         let authorization = self.scope.authorization();
         match authorization.authorize(input.clone()).await {
             Ok(grant) => Ok(grant),
@@ -785,6 +801,21 @@ pub(super) async fn authorize_fs_path(
     check_sandbox_access: bool,
 ) -> Result<AuthorizedPath, ExecutorError> {
     let native = parse_path_uri(path).map_err(map_policy_error)?;
+    if active.access == ExecutorAccess::UnrestrictedHost {
+        policy::validate_sandbox(sandbox_value).map_err(map_policy_error)?;
+        let resolved = match policy::real_path(&native).await {
+            Ok(resolved) => resolved,
+            Err(error) if allow_missing_final && error.kind() == io::ErrorKind::NotFound => native,
+            Err(error) => return Err(map_fs_error(&error)),
+        };
+        active.scope.ensure_current().await?;
+        return Ok(AuthorizedPath {
+            resolved,
+            grant: Grant::noop(),
+            sandbox: None,
+            extra_roots: vec![],
+        });
+    }
     let sandbox = resolve_sandbox(
         &SandboxIntent {
             sandbox: sandbox_value,
@@ -1152,6 +1183,7 @@ type ScopeInitialization = Arc<tokio::sync::OnceCell<Result<Arc<ActiveScope>, Ex
 
 pub(super) struct Inner {
     pub(super) options: ExecutorOptions,
+    access: ExecutorAccess,
     pub(super) closed: AtomicBool,
     notifiers: Mutex<HashMap<String, mpsc::UnboundedSender<(String, PValue)>>>,
     callers: Mutex<HashMap<String, SessionCall>>,
@@ -1176,15 +1208,26 @@ pub struct Executor(pub(super) Arc<Inner>);
 
 impl Executor {
     pub fn new(options: ExecutorOptions) -> Self {
-        let environment = build_environment_info(&options);
-        Self::from_environment(options, environment)
+        Self::new_with_access(options, ExecutorAccess::Ordinary)
     }
 
-    fn from_environment(options: ExecutorOptions, environment: EnvironmentInfo) -> Self {
-        let timeout_ms = options
-            .process_timeout_ms
-            .filter(|value| *value > 0)
-            .map_or(600_000, |value| value.min(3_600_000));
+    pub fn new_with_access(options: ExecutorOptions, access: ExecutorAccess) -> Self {
+        let environment = build_environment_info(&options);
+        Self::from_environment(options, environment, access)
+    }
+
+    fn from_environment(
+        options: ExecutorOptions,
+        environment: EnvironmentInfo,
+        access: ExecutorAccess,
+    ) -> Self {
+        let timeout_ms = match access {
+            ExecutorAccess::Ordinary => options
+                .process_timeout_ms
+                .filter(|value| *value > 0)
+                .map_or(600_000, |value| value.min(3_600_000)),
+            ExecutorAccess::UnrestrictedHost => 0,
+        };
         let max_buffered_bytes = options
             .max_buffered_bytes_per_process
             .unwrap_or(1024 * 1024);
@@ -1235,11 +1278,17 @@ impl Executor {
             })
         });
         let inner = Arc::new(Inner {
+            access,
             closed: AtomicBool::new(false),
             notifiers: Mutex::new(HashMap::new()),
             callers: Mutex::new(HashMap::new()),
             processes: Mutex::new(HashMap::new()),
-            shell_snapshots: ShellSnapshotCache::new(snapshot_authorize, platform, None),
+            shell_snapshots: ShellSnapshotCache::with_access(
+                snapshot_authorize,
+                platform,
+                None,
+                access,
+            ),
             credential_brokers: Arc::new(Mutex::new(CredentialBrokerCache::new())),
             library_bridge: LibraryBridge::new(),
             scopes: tokio::sync::Mutex::new(HashMap::new()),
@@ -1276,7 +1325,7 @@ impl Executor {
             ));
         }
         if options.network_proxy_ca_directory.as_deref()
-            != Some(prepared.network_proxy_ca_directory.as_path())
+            != prepared.network_proxy_ca_directory.as_deref()
         {
             return Err(ExecutorError::invalid_params(
                 "network proxy CA directory mismatch",
@@ -1287,10 +1336,11 @@ impl Executor {
                 "separately supplied network proxy upstream trust is not permitted with prepared executor",
             ));
         }
-        options.network_proxy_upstream_trust = Some(prepared.upstream_trust.clone());
+        options.network_proxy_upstream_trust = prepared.upstream_trust.clone();
         Ok(Self::from_environment(
             options,
             prepared.environment_info.clone(),
+            prepared.access,
         ))
     }
 
@@ -1391,13 +1441,14 @@ impl Executor {
     }
 
     fn activate(&self, scope: Arc<dyn ExecutorScope>) -> Result<Arc<ActiveScope>, ExecutorError> {
-        if scope.roots().is_empty() {
+        let access = self.0.access;
+        if access == ExecutorAccess::Ordinary && scope.roots().is_empty() {
             return Err(ExecutorError::new(
                 -32602,
                 "at least one containing root is required",
             ));
         }
-        let outside = if scope.authorization().defers() {
+        let outside = if access == ExecutorAccess::Ordinary && scope.authorization().defers() {
             vec![policy::root_of(
                 &std::env::current_dir()
                     .map(|path| path.to_string_lossy().into_owned())
@@ -1410,6 +1461,7 @@ impl Executor {
             id: self.0.scope_ids.fetch_add(1, Ordering::AcqRel) + 1,
             scope,
             outside,
+            access,
         });
         self.0
             .scope_list
@@ -1718,71 +1770,6 @@ impl Executor {
         entry.changed.notify_waiters();
     }
 
-    pub async fn start_authenticated_process(
-        &self,
-        params: ExecParams,
-        ctx: &HandlerContext,
-        configuration: &Configuration,
-        environment_id: &str,
-        harness_key_sha256: &str,
-    ) -> Result<ExecResult, ExecutorError> {
-        self.check_not_closed()?;
-        let (source, binding) = configuration.native_dots_full_access_executor().map_err(|error| {
-            let source = error.source_path().and_then(Path::file_name).and_then(|name| name.to_str()).unwrap_or("ycoding.json or ycoding.jsonc");
-            ExecutorError::new(-32001, format!("Cannot read the full-access grant: check dots.fullAccessExecutor in trusted global {source}"))
-        })?;
-        let source = source
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("ycoding.json or ycoding.jsonc");
-        let binding = binding.ok_or_else(|| ExecutorError::new(-32001, format!("Full access is not configured: set dots.fullAccessExecutor in trusted global {source}")))?;
-        if binding.environment_id != environment_id {
-            return Err(ExecutorError::new(
-                -32001,
-                format!(
-                    "Authenticated environment does not match dots.fullAccessExecutor.environmentId in trusted global {source}"
-                ),
-            ));
-        }
-        if binding.harness_key_sha256 != harness_key_sha256 {
-            return Err(ExecutorError::new(
-                -32001,
-                format!(
-                    "Authenticated harness key does not match dots.fullAccessExecutor.harnessKeySha256 in trusted global {source}"
-                ),
-            ));
-        }
-        if policy::process_requires_sandbox(params.sandbox.as_ref()).map_err(map_policy_error)? {
-            return Err(ExecutorError::new(
-                -32001,
-                "The requested sandbox or network restrictions are incompatible with full access; use an unrestricted profile",
-            ));
-        }
-        let managed_network = params
-            .managed_network
-            .as_ref()
-            .filter(|value| !matches!(value, PValue::Null));
-        if let Some(network) = managed_network {
-            policy::read_managed_network(network).map_err(map_policy_error)?;
-        }
-        if params.enforce_managed_network == Some(true)
-            || managed_network.is_some()
-            || params.network_proxy.is_some()
-        {
-            return Err(ExecutorError::new(
-                -32001,
-                "The requested managed network or proxy is incompatible with full access; use an unrestricted network profile",
-            ));
-        }
-        require_full_access(&EnvironmentConfigOptions {
-            system_requirements_path: self.0.options.system_requirements_path.clone(),
-            managed_config_path: self.0.options.managed_config_path.clone(),
-            ..EnvironmentConfigOptions::default()
-        })
-        .await?;
-        self.start_process(params, ctx).await
-    }
-
     pub async fn start_process(
         &self,
         params: ExecParams,
@@ -1800,8 +1787,21 @@ impl Executor {
         if public.tty {
             return Err(ExecutorError::new(-32602, "tty is unsupported"));
         }
-        let params = public.clone();
+        let mut params = public.clone();
         assert_argv(&params.argv).map_err(map_policy_error)?;
+        if self.0.access == ExecutorAccess::UnrestrictedHost {
+            policy::validate_sandbox(params.sandbox.as_ref()).map_err(map_policy_error)?;
+            if let Some(network) = params
+                .managed_network
+                .take()
+                .filter(|value| !matches!(value, PValue::Null))
+            {
+                policy::read_managed_network(&network).map_err(map_policy_error)?;
+            }
+            params.sandbox = None;
+            params.enforce_managed_network = None;
+            params.network_proxy = None;
+        }
         let (done, _) = watch::channel(false);
         let entry = Arc::new(ProcEntry {
             process_id: params.process_id.clone(),
@@ -2099,137 +2099,157 @@ impl Executor {
         *refusal_cwd
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = native_cwd.clone();
-        let sandbox = resolve_sandbox(
-            &SandboxIntent {
-                sandbox: sandbox_value.as_ref(),
-                enforce_managed_network: params.enforce_managed_network == Some(true),
-                managed_network: managed_network.as_ref(),
-                network_proxy: None,
-            },
-            &ResolveSandboxOptions {
-                cwd: Some(native_cwd.clone()),
-                readable_policy_cwd: true,
-                temporary_directories: default_temporary_directories(),
-            },
-        )
-        .await
-        .map_err(map_policy_error)?;
-        let active = if attribution
-            .as_ref()
-            .and_then(|attribution| attribution.thread_id.as_ref())
-            .is_none()
-        {
-            self.session_scope(&ctx.session_id).await?
+        let active_scope = || async {
+            let active = if attribution
+                .as_ref()
+                .and_then(|attribution| attribution.thread_id.as_ref())
+                .is_none()
+            {
+                self.session_scope(&ctx.session_id).await?
+            } else {
+                self.resolve_scope(
+                    attribution.clone(),
+                    ScopeContext {
+                        session_id: ctx.session_id.clone(),
+                        cwd: Some(native_cwd.clone()),
+                    },
+                )
+                .await?
+            };
+            Self::lock(entry).active = Some(active.clone());
+            Ok::<_, ExecutorError>(active)
+        };
+        let (active, resolved_cwd, sandbox) = if self.0.access == ExecutorAccess::UnrestrictedHost {
+            let resolved = policy::real_path(&native_cwd)
+                .await
+                .map_err(|_| ExecutorError::new(-32603, "Failed to start process"))?;
+            if !tokio::fs::metadata(&resolved)
+                .await
+                .is_ok_and(|metadata| metadata.is_dir())
+            {
+                return Err(ExecutorError::new(-32603, "Failed to start process"));
+            }
+            let active = active_scope().await?;
+            active.scope.ensure_current().await?;
+            (active, resolved, None)
         } else {
-            self.resolve_scope(
-                attribution.clone(),
-                ScopeContext {
-                    session_id: ctx.session_id.clone(),
+            let sandbox = resolve_sandbox(
+                &SandboxIntent {
+                    sandbox: sandbox_value.as_ref(),
+                    enforce_managed_network: params.enforce_managed_network == Some(true),
+                    managed_network: managed_network.as_ref(),
+                    network_proxy: None,
+                },
+                &ResolveSandboxOptions {
                     cwd: Some(native_cwd.clone()),
+                    readable_policy_cwd: true,
+                    temporary_directories: default_temporary_directories(),
                 },
             )
-            .await?
-        };
-        Self::lock(entry).active = Some(active.clone());
-        let sandboxed = sandbox.as_ref().is_some_and(|sandbox| sandbox.sandboxed);
-        let mut extra = sandbox_operation_roots(sandbox_value.as_ref());
-        extra.extend(active.outside.clone());
-        let resolved_cwd = match resolve_existing_path(
-            &active.roots(),
-            &cwd_uri,
-            false,
-            Missing::Start,
-            &extra,
-            None,
-        )
-        .await
-        {
-            Ok(resolved) => resolved,
-            Err(error) if sandboxed && is_outside_roots(&error) => {
-                return self.deny_as_sandbox(
-                    entry,
-                    params,
-                    attribution.as_ref(),
-                    &native_cwd,
-                    "the working directory is outside the permitted roots",
-                    still_current(self),
-                );
-            }
-            Err(error) => return Err(error),
-        };
-        *refusal_cwd
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = resolved_cwd.clone();
-        if sandbox.as_ref().is_some_and(|sandbox| {
-            sandbox.sandboxed
-                && !permits(
-                    sandbox.access(&resolved_cwd, Some(&native_cwd)),
-                    SandboxAccess::Read,
-                )
-        }) {
-            return self.deny_as_sandbox(
-                entry,
-                params,
-                attribution.as_ref(),
-                &resolved_cwd,
-                "the requested sandbox profile does not permit reading the working directory",
-                still_current(self),
-            );
-        }
-        let external = match authorize_external_directory(&active, &resolved_cwd).await {
-            Ok(external) => external,
-            Err(error) if sandboxed && error.code == -32001 => {
+            .await
+            .map_err(map_policy_error)?;
+            let active = active_scope().await?;
+            let sandboxed = sandbox.as_ref().is_some_and(|sandbox| sandbox.sandboxed);
+            let mut extra = sandbox_operation_roots(sandbox_value.as_ref());
+            extra.extend(active.outside.clone());
+            let resolved_cwd = match resolve_existing_path(
+                &active.roots(),
+                &cwd_uri,
+                false,
+                Missing::Start,
+                &extra,
+                None,
+            )
+            .await
+            {
+                Ok(resolved) => resolved,
+                Err(error) if sandboxed && is_outside_roots(&error) => {
+                    return self.deny_as_sandbox(
+                        entry,
+                        params,
+                        attribution.as_ref(),
+                        &native_cwd,
+                        "the working directory is outside the permitted roots",
+                        still_current(self),
+                    );
+                }
+                Err(error) => return Err(error),
+            };
+            *refusal_cwd
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = resolved_cwd.clone();
+            if sandbox.as_ref().is_some_and(|sandbox| {
+                sandbox.sandboxed
+                    && !permits(
+                        sandbox.access(&resolved_cwd, Some(&native_cwd)),
+                        SandboxAccess::Read,
+                    )
+            }) {
                 return self.deny_as_sandbox(
                     entry,
                     params,
                     attribution.as_ref(),
                     &resolved_cwd,
-                    "Permission denied: external directory access was not granted",
+                    "the requested sandbox profile does not permit reading the working directory",
                     still_current(self),
                 );
             }
-            Err(error) => return Err(error),
-        };
-        let script = shell_wrapper_script(&params.argv);
-        let command = script
-            .cloned()
-            .unwrap_or_else(|| join_units(&params.argv, " "));
-        let mut metadata = JsonObject::new();
-        metadata.insert("cwd".into(), PValue::String(resolved_cwd.clone().into()));
-        metadata.insert(
-            "workdir".into(),
-            PValue::String(resolved_cwd.clone().into()),
-        );
-        if script.is_some() {
-            metadata.insert(
-                "argv".into(),
-                PValue::String(
-                    stringify_json(&PValue::Array(
-                        params.argv.iter().cloned().map(PValue::String).collect(),
-                    ))
-                    .into(),
-                ),
-            );
-        }
-        match active.check("shell", vec![command], Some(metadata)).await {
-            Ok(grant) => Self::lock(entry).grant = Some(Grant::combine(external, grant)),
-            Err(error) => {
-                if let Some(external) = external {
-                    let _ = external.release().await;
-                }
-                if sandboxed && error.code == -32001 {
+            let external = match authorize_external_directory(&active, &resolved_cwd).await {
+                Ok(external) => external,
+                Err(error) if sandboxed && error.code == -32001 => {
                     return self.deny_as_sandbox(
                         entry,
                         params,
                         attribution.as_ref(),
                         &resolved_cwd,
-                        "Permission denied: shell access was not granted",
+                        "Permission denied: external directory access was not granted",
                         still_current(self),
                     );
                 }
-                return Err(error);
+                Err(error) => return Err(error),
+            };
+            let script = shell_wrapper_script(&params.argv);
+            let command = script
+                .cloned()
+                .unwrap_or_else(|| join_units(&params.argv, " "));
+            let mut metadata = JsonObject::new();
+            metadata.insert("cwd".into(), PValue::String(resolved_cwd.clone().into()));
+            metadata.insert(
+                "workdir".into(),
+                PValue::String(resolved_cwd.clone().into()),
+            );
+            if script.is_some() {
+                metadata.insert(
+                    "argv".into(),
+                    PValue::String(
+                        stringify_json(&PValue::Array(
+                            params.argv.iter().cloned().map(PValue::String).collect(),
+                        ))
+                        .into(),
+                    ),
+                );
             }
-        }
+            match active.check("shell", vec![command], Some(metadata)).await {
+                Ok(grant) => Self::lock(entry).grant = Some(Grant::combine(external, grant)),
+                Err(error) => {
+                    if let Some(external) = external {
+                        let _ = external.release().await;
+                    }
+                    if sandboxed && error.code == -32001 {
+                        return self.deny_as_sandbox(
+                            entry,
+                            params,
+                            attribution.as_ref(),
+                            &resolved_cwd,
+                            "Permission denied: shell access was not granted",
+                            still_current(self),
+                        );
+                    }
+                    return Err(error);
+                }
+            }
+            (active, resolved_cwd, sandbox)
+        };
         if !still_current(self) {
             return Err(ExecutorError::session_closed());
         }
@@ -2264,10 +2284,11 @@ impl Executor {
         if !still_current(self) {
             return Err(ExecutorError::session_closed());
         }
-        let base_env: BTreeMap<String, String> = if params
-            .env_policy
-            .as_ref()
-            .is_none_or(|value| matches!(value, PValue::Null))
+        let base_env: BTreeMap<String, String> = if self.0.access == ExecutorAccess::Ordinary
+            && params
+                .env_policy
+                .as_ref()
+                .is_none_or(|value| matches!(value, PValue::Null))
         {
             let mut base = BTreeMap::new();
             base.insert("PATH".to_owned(), std::env::var("PATH").unwrap_or_default());
@@ -2281,17 +2302,28 @@ impl Executor {
             );
             base.extend(self.0.options.base_env.clone());
             base
-        } else {
+        } else if self.0.access == ExecutorAccess::Ordinary {
             let mut base: BTreeMap<String, String> = std::env::vars().collect();
             base.extend(self.0.options.base_env.clone());
             base
+        } else {
+            let mut base: BTreeMap<String, String> = std::env::vars_os()
+                .filter_map(|(key, value)| {
+                    Some((key.into_string().ok()?, value.into_string().ok()?))
+                })
+                .collect();
+            base.extend(self.0.options.base_env.clone());
+            base
         };
-        let mut child_env = build_process_env(&BuildProcessEnv {
-            base: &base_env,
-            env: &params.env,
-            env_policy: params.env_policy.as_ref(),
-            windows: cfg!(windows),
-        })
+        let mut child_env = policy::build_process_env_with_access(
+            &BuildProcessEnv {
+                base: &base_env,
+                env: &params.env,
+                env_policy: params.env_policy.as_ref(),
+                windows: cfg!(windows),
+            },
+            self.0.access,
+        )
         .map_err(map_policy_error)?;
         let (argv_selected, selected) = library_command(&params.argv)?;
         let channel = child_env
@@ -2554,11 +2586,13 @@ impl Executor {
             }
             Self::lock(entry).library = Some(Arc::new(lease));
         }
-        set_environment(
-            &mut child_env,
-            "YCODING_SESSION_ID",
-            active.scope.session_id().into(),
-        );
+        if self.0.access == ExecutorAccess::Ordinary {
+            set_environment(
+                &mut child_env,
+                "YCODING_SESSION_ID",
+                active.scope.session_id().into(),
+            );
+        }
         let native_argv = argv.iter().map(os_text).collect::<Vec<_>>();
         let native_env = child_env
             .iter()
@@ -3371,20 +3405,37 @@ impl Executor {
         let active = self.session_scope(&ctx.session_id).await?;
         let parent_uri = to_path_uri(&dirname(&native))
             .map_err(|error| ExecutorError::new(-32602, error.message))?;
-        let parent = resolve_fs_path(&active.roots(), &parent_uri, true, &active.outside).await?;
-        let target = join(&parent, &[&name]);
-        let external = authorize_external_directory(&active, &target).await?;
-        let grant = match active
-            .check("edit", vec![target.clone().into()], None)
-            .await
-        {
-            Ok(grant) => Grant::combine(external, grant),
-            Err(error) => {
-                if let Some(external) = external {
-                    let _ = external.release().await;
+        let (parent, target, grant) = if active.access == ExecutorAccess::UnrestrictedHost {
+            let opened = authorize_fs_path(
+                &active,
+                &parent_uri,
+                None,
+                true,
+                "edit",
+                SandboxAccess::Write,
+                true,
+            )
+            .await?;
+            let target = join(&opened.resolved, &[&name]);
+            (opened.resolved, target, opened.grant)
+        } else {
+            let parent =
+                resolve_fs_path(&active.roots(), &parent_uri, true, &active.outside).await?;
+            let target = join(&parent, &[&name]);
+            let external = authorize_external_directory(&active, &target).await?;
+            let grant = match active
+                .check("edit", vec![target.clone().into()], None)
+                .await
+            {
+                Ok(grant) => Grant::combine(external, grant),
+                Err(error) => {
+                    if let Some(external) = external {
+                        let _ = external.release().await;
+                    }
+                    return Err(error);
                 }
-                return Err(error);
-            }
+            };
+            (parent, target, grant)
         };
         run_with_grant(grant, async {
             match tokio::fs::symlink_metadata(&target).await {
@@ -3664,12 +3715,13 @@ pub struct PrepareExecutorInput<'a> {
 
 #[derive(Clone)]
 pub struct PreparedExecutor {
+    access: ExecutorAccess,
     home_directory: PathBuf,
     data_directory: PathBuf,
     environment: EnvironmentOverrides,
-    network_proxy_ca_directory: PathBuf,
+    network_proxy_ca_directory: Option<PathBuf>,
     environment_info: EnvironmentInfo,
-    upstream_trust: super::network_proxy::NetworkProxyUpstreamTrust,
+    upstream_trust: Option<super::network_proxy::NetworkProxyUpstreamTrust>,
 }
 
 impl PreparedExecutor {
@@ -3679,10 +3731,6 @@ impl PreparedExecutor {
 
     pub fn environment_overrides(&self) -> EnvironmentOverrides {
         self.environment.clone()
-    }
-
-    pub fn upstream_trust(&self) -> &super::network_proxy::NetworkProxyUpstreamTrust {
-        &self.upstream_trust
     }
 }
 
@@ -3710,11 +3758,29 @@ pub fn prepare_executor(
     prepare_executor_for_platform(input, platform, Some(&defaults))
 }
 
-pub(crate) fn prepare_executor_for_platform(
-    input: PrepareExecutorInput<'_>,
-    platform: super::upstream_roots::platform::Platform,
-    defaults: Option<&super::upstream_roots::platform::CompiledOpenSslDefaults>,
+pub fn prepare_native_dots_executor(
+    home_directory: &Path,
+    data_directory: &Path,
+    startup_environment: &BTreeMap<String, String>,
 ) -> Result<PreparedExecutor, PrepareExecutorError> {
+    let (environment, environment_info) =
+        prepared_environment(home_directory, startup_environment, false)?;
+    Ok(PreparedExecutor {
+        access: ExecutorAccess::UnrestrictedHost,
+        home_directory: home_directory.to_path_buf(),
+        data_directory: data_directory.to_path_buf(),
+        environment,
+        network_proxy_ca_directory: None,
+        environment_info,
+        upstream_trust: None,
+    })
+}
+
+fn prepared_environment(
+    home_directory: &Path,
+    startup_environment: &BTreeMap<String, String>,
+    proxy: bool,
+) -> Result<(EnvironmentOverrides, EnvironmentInfo), PrepareExecutorError> {
     let canonical_overrides = EnvironmentOverrides {
         executor_version: Some(crate::dots::enrollment::registry::EXEC_SERVER_VERSION.into()),
         provider_id: Some(
@@ -3734,14 +3800,23 @@ pub(crate) fn prepare_executor_for_platform(
     })?;
     let standard_temp = std::env::temp_dir();
     let environment_info = build_environment_info_inner(
-        input.home_directory,
+        home_directory,
         &canonical_overrides,
-        true,
-        Some(input.startup_environment),
+        proxy,
+        Some(startup_environment),
         Some(&current_dir),
         &standard_temp,
     );
+    Ok((canonical_overrides, environment_info))
+}
 
+pub(crate) fn prepare_executor_for_platform(
+    input: PrepareExecutorInput<'_>,
+    platform: super::upstream_roots::platform::Platform,
+    defaults: Option<&super::upstream_roots::platform::CompiledOpenSslDefaults>,
+) -> Result<PreparedExecutor, PrepareExecutorError> {
+    let (canonical_overrides, environment_info) =
+        prepared_environment(input.home_directory, input.startup_environment, true)?;
     let plan = match super::upstream_roots::platform::system_plan(
         platform,
         defaults,
@@ -3815,12 +3890,13 @@ pub(crate) fn prepare_executor_for_platform(
     };
 
     Ok(PreparedExecutor {
+        access: ExecutorAccess::Ordinary,
         home_directory: input.home_directory.to_path_buf(),
         data_directory: input.data_directory.to_path_buf(),
         environment: canonical_overrides,
-        network_proxy_ca_directory: input.network_proxy_ca_directory.to_path_buf(),
+        network_proxy_ca_directory: Some(input.network_proxy_ca_directory.to_path_buf()),
         environment_info,
-        upstream_trust,
+        upstream_trust: Some(upstream_trust),
     })
 }
 
@@ -4082,7 +4158,10 @@ mod pre_enrollment_tests {
         let prepared = prepare_executor(input).expect("preparation succeeds");
         assert_eq!(prepared.home_directory, home);
         assert_eq!(prepared.data_directory, data);
-        assert_eq!(prepared.network_proxy_ca_directory, ca);
+        assert_eq!(
+            prepared.network_proxy_ca_directory.as_deref(),
+            Some(ca.as_path())
+        );
         clean_workspace(&base);
     }
 
@@ -4182,7 +4261,14 @@ mod pre_enrollment_tests {
             Some(&defaults),
         )
         .expect("Unix preparation with Node 26.4 OpenSSL defaults succeeds");
-        assert!(!prepared.upstream_trust().certificates_pem.is_empty());
+        assert!(
+            !prepared
+                .upstream_trust
+                .as_ref()
+                .unwrap()
+                .certificates_pem
+                .is_empty()
+        );
         assert_eq!(
             prepared.environment_info().capabilities.credential_masking,
             Some(true)
@@ -4320,8 +4406,7 @@ mod pre_enrollment_tests {
         // Partition 5: separately supplied network proxy upstream trust
         let (mut options_duplicate_trust, _) =
             test_options(&home, &data, Some(&ca), prepared.environment_overrides());
-        options_duplicate_trust.network_proxy_upstream_trust =
-            Some(prepared.upstream_trust().clone());
+        options_duplicate_trust.network_proxy_upstream_trust = prepared.upstream_trust.clone();
         let err5 = match Executor::new_prepared(options_duplicate_trust, &prepared) {
             Err(e) => e,
             Ok(_) => panic!("expected duplicate trust error"),
@@ -4413,8 +4498,12 @@ mod pre_enrollment_tests {
         };
         let home = prepared.home_directory.clone();
         let data = prepared.data_directory.clone();
-        let ca = prepared.network_proxy_ca_directory.clone();
-        let (options, _) = test_options(&home, &data, Some(&ca), prepared.environment_overrides());
+        let (options, _) = test_options(
+            &home,
+            &data,
+            prepared.network_proxy_ca_directory.as_deref(),
+            prepared.environment_overrides(),
+        );
         let exec = match Executor::new_prepared(options, &prepared) {
             Ok(e) => e,
             Err(e) => panic!("binding failed: {e:?}"),

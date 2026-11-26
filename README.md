@@ -88,6 +88,8 @@ Configure `"dots": { "enabled": true, "profile": "<OpenAI OAuth profile>" }` in 
 
 The connection view shows the selected profile, machine name when available, configuration readiness, global access, and actual transport state separately. Connected confirms the transport, not that an external client opened a conversation. Off revokes native authority without stopping admitted work or answering pending decisions. Native tasks and exact typed decisions use a private server-process Channel, not HTTP or the browser relay. Permissions, hard/custom guardrails, Forms, Questions, child questions, deferred reviews, and recovery retain their native validation, explicit denies, ceilings, and one-shot settlement. Prompt text grants no approval authority. Historical transcripts retain their source attribution. See [native Dots](specs/dots-native-connector.md).
 
+An authenticated native executor channel runs commands and opens files with the host user's access. Session decision rules apply to typed decisions, not to these executor requests.
+
 ## Guardrails
 
 Permissions decide what an agent may attempt; guardrails review or deny high-impact operations across the main Session and its subagents. An approval never overrides an explicit permission denial or a built-in catastrophic denial.

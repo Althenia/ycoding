@@ -4,14 +4,38 @@ use std::{
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
-use ycoding_core::resources::config::{
-    Configuration, FullAccessExecutorBinding, LoadOptions, Roots,
-};
+use ycoding_core::resources::config::{Configuration, LoadOptions, Roots, decode_document};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 const WORK: &str = r#"{"dots":{"enabled":true,"profile":"work"}}"#;
 const DISABLED: &str = r#"{"dots":{"enabled":false}}"#;
+
+#[test]
+fn unknown_dots_key_produces_a_diagnostic_and_is_discarded() {
+    let input = r#"{"dots":{"enabled":true,"profile":"work","unknown":true}}"#;
+    let decoded = decode_document(input, "fixture.json");
+    assert_eq!(decoded.diagnostics.len(), 1);
+    assert_eq!(
+        decoded.diagnostics[0].reason.0.as_str(),
+        Some("removed-keys")
+    );
+    assert_eq!(decoded.diagnostics[0].fail_closed, None);
+    assert_eq!(
+        decoded.diagnostics[0]
+            .json_path
+            .as_ref()
+            .and_then(|path| path.as_str()),
+        Some("$.dots.unknown")
+    );
+    assert_eq!(
+        decoded.info,
+        Some(ycoding_schema::parse_json(WORK).unwrap())
+    );
+    let fixture = Fixture::new();
+    fixture.global(Some(input), None);
+    assert_eq!(fixture.profile(), None);
+}
 
 struct Fixture(PathBuf);
 
@@ -371,78 +395,4 @@ fn dots_name_accepts_one_to_one_hundred_printable_ascii_units_without_edge_space
             assert_eq!((selected, profile), (None, None), "{name:?}");
         }
     }
-}
-
-#[test]
-fn full_access_executor_is_trusted_exact_and_source_attributed() {
-    let fixture = Fixture::new();
-    let expected = fixture.0.join("global/ycoding/ycoding.json");
-    assert_eq!(
-        fixture
-            .config(None)
-            .native_dots_full_access_executor()
-            .unwrap(),
-        (expected.clone(), None)
-    );
-    let hash = "a".repeat(64);
-    let binding = format!(
-        r#"{{"dots":{{"fullAccessExecutor":{{"environmentId":"env-1","harnessKeySha256":"{hash}"}}}}}}"#
-    );
-    fixture.global(Some(&binding), None);
-    assert_eq!(
-        fixture
-            .config(Some(r#"{"dots":{}}"#))
-            .native_dots_full_access_executor()
-            .unwrap(),
-        (
-            expected.clone(),
-            Some(FullAccessExecutorBinding {
-                environment_id: "env-1".into(),
-                harness_key_sha256: hash.clone(),
-            })
-        )
-    );
-    fixture.global(None, Some(r#"{"dots":{}}"#));
-    assert_eq!(
-        fixture
-            .config(None)
-            .native_dots_full_access_executor()
-            .unwrap(),
-        (expected.with_file_name("ycoding.jsonc"), None)
-    );
-    fixture.global(
-        None,
-        Some(r#"{"dots":{"enabled":true,"profile":"work","name":"Desk","fullAccessExecutor":{"environmentId":"*","harnessKeySha256":"bad"}}}"#),
-    );
-    let config = fixture.config(None);
-    assert_eq!(
-        config.native_dots_profile().unwrap().as_deref(),
-        Some("work")
-    );
-    assert_eq!(
-        config.native_dots_name().unwrap().unwrap().as_str(),
-        Some("Desk")
-    );
-    let error = config.native_dots_full_access_executor().unwrap_err();
-    assert_eq!(
-        error.source_path(),
-        Some(fixture.0.join("global/ycoding/ycoding.jsonc").as_path())
-    );
-    fixture.global(
-        Some(r#"{"dots":{"fullAccessExecutor":{"environmentId":"*","harnessKeySha256":"bad"}}}"#),
-        Some(&binding),
-    );
-    assert_eq!(
-        fixture
-            .config(None)
-            .native_dots_full_access_executor()
-            .unwrap(),
-        (
-            expected.with_file_name("ycoding.jsonc"),
-            Some(FullAccessExecutorBinding {
-                environment_id: "env-1".into(),
-                harness_key_sha256: hash,
-            })
-        )
-    );
 }

@@ -4,7 +4,7 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    sync::atomic::{AtomicU64, Ordering},
 };
 use ycoding_core::{
     cca::{
@@ -12,7 +12,10 @@ use ycoding_core::{
             Attribution, AuthorizationDenied, AuthorizationInput, Authorize, BoxFuture,
             ExecutorError, Grant, ScopeContext,
         },
-        executor::{EnvironmentOverrides, Executor, ExecutorOptions, ExecutorScope, ScopeProvider},
+        executor::{
+            EnvironmentOverrides, Executor, ExecutorAccess, ExecutorOptions, ExecutorScope,
+            ScopeProvider,
+        },
     },
     ycoding_schema::{JsonValue, stringify_json},
 };
@@ -23,7 +26,11 @@ impl Authorize for Authorizer {
         &self,
         input: AuthorizationInput,
     ) -> BoxFuture<'static, Result<Grant, AuthorizationDenied>> {
-        let allowed = self.0 || input.action != "shell";
+        let allowed = self.0
+            || !matches!(
+                input.action.as_str(),
+                "shell" | "read" | "edit" | "external_directory"
+            );
         Box::pin(async move {
             if allowed {
                 Ok(Grant::noop())
@@ -63,14 +70,17 @@ impl ScopeProvider for Provider {
 }
 
 fn workspace() -> PathBuf {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let directory =
-        std::env::temp_dir().join(format!("cca-rpc-core-{}-{stamp}", std::process::id()));
-    std::fs::create_dir_all(&directory).unwrap();
-    std::fs::canonicalize(directory).unwrap()
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    loop {
+        let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
+        let directory =
+            std::env::temp_dir().join(format!("cca-rpc-core-{}-{sequence}", std::process::id()));
+        match std::fs::create_dir(&directory) {
+            Ok(()) => return std::fs::canonicalize(directory).unwrap(),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("failed to create fixture directory: {error}"),
+        }
+    }
 }
 
 fn uri(path: &Path) -> String {
@@ -78,7 +88,11 @@ fn uri(path: &Path) -> String {
 }
 
 async fn served(root: &Path) -> Harness {
-    let handler = Arc::new(CoreHandler::new(executor(root, true)));
+    let handler = Arc::new(CoreHandler::new(executor(
+        root,
+        true,
+        ExecutorAccess::Ordinary,
+    )));
     let harness = Harness::over(handler, Backend::new(), unadvertised_info_fn(), None);
     let response = harness
         .one(&request(1, "initialize", r#"{"clientName":"synthetic"}"#))
@@ -88,26 +102,29 @@ async fn served(root: &Path) -> Harness {
     harness
 }
 
-fn executor(root: &Path, allow_shell: bool) -> Executor {
-    Executor::new(ExecutorOptions {
-        scope_provider: Arc::new(Provider(root.to_string_lossy().into_owned(), allow_shell)),
-        answer_process: None,
-        base_env: BTreeMap::new(),
-        session_id: None,
-        process_timeout_ms: None,
-        max_buffered_bytes_per_process: None,
-        max_live_processes: None,
-        network_proxy_ca_directory: None,
-        network_proxy_upstream_trust: None,
-        network_policy: None,
-        environment: EnvironmentOverrides::default(),
-        home_directory: root.to_path_buf(),
-        data_directory: root.join("data"),
-        codex_home_env: None,
-        system_config_path: Some(root.join("etc/config.toml")),
-        system_requirements_path: Some(root.join("etc/requirements.toml")),
-        managed_config_path: Some(root.join("etc/managed_config.toml")),
-    })
+fn executor(root: &Path, allow_shell: bool, access: ExecutorAccess) -> Executor {
+    Executor::new_with_access(
+        ExecutorOptions {
+            scope_provider: Arc::new(Provider(root.to_string_lossy().into_owned(), allow_shell)),
+            answer_process: None,
+            base_env: BTreeMap::new(),
+            session_id: None,
+            process_timeout_ms: None,
+            max_buffered_bytes_per_process: None,
+            max_live_processes: None,
+            network_proxy_ca_directory: None,
+            network_proxy_upstream_trust: None,
+            network_policy: None,
+            environment: EnvironmentOverrides::default(),
+            home_directory: root.to_path_buf(),
+            data_directory: root.join("data"),
+            codex_home_env: None,
+            system_config_path: Some(root.join("etc/config.toml")),
+            system_requirements_path: Some(root.join("etc/requirements.toml")),
+            managed_config_path: Some(root.join("etc/managed_config.toml")),
+        },
+        access,
+    )
 }
 
 fn result(response: &JsonValue) -> &JsonValue {
@@ -124,25 +141,24 @@ mod admission {
         supervisor::{Diagnostics, Opened, Serve, ServeFailed, Sessions, Summary},
         test_support,
     };
-    use ycoding_core::resources::config::{Configuration, LoadOptions, Roots};
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     const ENVIRONMENT: &str = "environment-fixture";
     const STREAM: &str = "authenticated-process-stream";
-    const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     struct Fixture(PathBuf);
 
     struct Connected {
         relay: Relay,
         serving: tokio::task::JoinHandle<Result<(), ServeFailed>>,
-        session_id: String,
+        sequence: AtomicU32,
     }
 
     impl Connected {
         async fn rpc(&self, id: u32, method: &str, params: &str) -> JsonValue {
             self.relay.message(
                 STREAM,
-                id,
+                self.sequence.fetch_add(1, Ordering::Relaxed),
                 request(i64::from(id), method, params).as_bytes(),
             );
             self.relay.response(STREAM, id).await
@@ -159,18 +175,7 @@ mod admission {
             let root = workspace();
             std::fs::create_dir(root.join("work")).unwrap();
             std::fs::create_dir(root.join("work/etc")).unwrap();
-            std::fs::create_dir_all(root.join("config/ycoding")).unwrap();
             Self(root)
-        }
-
-        fn config(&self, environment: &str, digest: &str) -> String {
-            format!(
-                r#"{{"dots":{{"enabled":true,"profile":"synthetic","fullAccessExecutor":{{"environmentId":"{environment}","harnessKeySha256":"{digest}"}}}}}}"#
-            )
-        }
-
-        fn trusted(&self, document: &str) {
-            std::fs::write(self.0.join("config/ycoding/ycoding.json"), document).unwrap();
         }
 
         fn requirements(&self, modes: &str) {
@@ -179,25 +184,16 @@ mod admission {
 
         fn serving(&self, allow_shell: bool) -> (Serve, Arc<Sessions>, Diagnostics) {
             let work = self.0.join("work");
-            let spoof = self.config(ENVIRONMENT, DIGEST);
-            std::fs::write(work.join("ycoding.json"), &spoof).unwrap();
-            let global = Configuration::load(LoadOptions {
-                directory: work.clone(),
-                roots: Roots::development(&self.0).unwrap(),
-                project: true,
-                file: None,
-                content: Some(spoof),
-                env: BTreeMap::new(),
-            })
-            .unwrap();
-
             let diagnostics = Diagnostics::new(Arc::new(|_| {}));
             let (clock, _armed) = test_support::clock();
             let sessions = Sessions::new(Arc::new(clock), 5_000, diagnostics.clone());
-            let serve = service::serve(
-                Arc::new(move || Ok(session_backend(executor(&work, allow_shell)))),
-                Arc::new(global),
-            );
+            let serve = service::serve(Arc::new(move || {
+                Ok(session_backend(executor(
+                    &work,
+                    allow_shell,
+                    ExecutorAccess::UnrestrictedHost,
+                )))
+            }));
             (serve, sessions, diagnostics)
         }
 
@@ -205,10 +201,8 @@ mod admission {
             serve: &Serve,
             sessions: &Arc<Sessions>,
             diagnostics: &Diagnostics,
-            digest: &str,
-            resume: Option<&str>,
         ) -> Connected {
-            let mut relay = Relay::standard().with_digest(digest);
+            let mut relay = Relay::standard();
             let channel = relay.open(STREAM).await;
             let serving = tokio::spawn(serve(Opened {
                 channel,
@@ -217,11 +211,8 @@ mod admission {
                 summary: Summary::default(),
                 diagnostics: diagnostics.clone(),
             }));
-            let params = match resume {
-                Some(id) => format!(r#"{{"clientName":"synthetic","resumeSessionId":"{id}"}}"#),
-                None => r#"{"clientName":"synthetic"}"#.to_owned(),
-            };
-            relay.message(STREAM, 0, request(1, "initialize", &params).as_bytes());
+            let params = r#"{"clientName":"synthetic"}"#;
+            relay.message(STREAM, 0, request(1, "initialize", params).as_bytes());
             let response = relay.response(STREAM, 1).await;
             let initialized = result(&response);
             let capabilities = at(at(initialized, "environmentInfo"), "capabilities");
@@ -237,13 +228,15 @@ mod admission {
                 at(capabilities, "environmentConfigRead"),
                 &JsonValue::Bool(true)
             );
-            let session_id = str_of(at(initialized, "sessionId"));
             relay.message(STREAM, 1, notification("initialized").as_bytes());
-            Connected {
+            let connected = Connected {
                 relay,
                 serving,
-                session_id,
-            }
+                sequence: AtomicU32::new(2),
+            };
+            let status = connected.rpc(90, "environment/status", "{}").await;
+            assert_eq!(str_of(at(result(&status), "status")), "ready");
+            connected
         }
 
         async fn start(
@@ -252,8 +245,8 @@ mod admission {
             intent: &str,
         ) -> (JsonValue, Option<JsonValue>) {
             let params = format!(
-                r#"{{"processId":"admission","argv":["/bin/sh","-c","printf launched > ../marker"],"cwd":"{}","metadata":{{"environmentId":"{ENVIRONMENT}","harnessKeySha256":"{DIGEST}"}},"env":{{"YCODING_CONFIG_CONTENT":"{{}}","CODEX_SANDBOX_MODE":"danger-full-access"}}{intent}}}"#,
-                uri(&self.0.join("work")),
+                r#"{{"processId":"admission","argv":["/bin/sh","-c","test \"$YCODING_SESSION_ID\" = synthetic-session && test \"$CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE\" = synthetic-value && /usr/bin/id -u > host-user && printf launched > marker"],"cwd":"{}","env":{{"YCODING_SESSION_ID":"synthetic-session","CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE":"synthetic-value"}}{intent}}}"#,
+                uri(&self.0),
             );
             let response = connected.rpc(2, "process/start", &params).await;
             let mut closed = None;
@@ -276,24 +269,48 @@ mod admission {
             (response, closed)
         }
 
-        async fn rejects(&self, intent: &str, expected_code: i64, guidance: &str) {
-            let (serve, sessions, diagnostics) = self.serving(true);
-            let connected = Self::connect(&serve, &sessions, &diagnostics, DIGEST, None).await;
-            let (response, _) = self.start(&connected, intent).await;
+        async fn assert_unrestricted(&self, intent: &str, fs_intent: &str, allow: bool) {
+            let (serve, sessions, diagnostics) = self.serving(allow);
+            let connected = Self::connect(&serve, &sessions, &diagnostics).await;
+            let (response, closed) = self.start(&connected, intent).await;
+            assert_eq!(str_of(at(result(&response), "sandboxType")), "none");
+            assert_eq!(num_of(at(result(&closed.unwrap()), "exitCode")), 0.0);
+            assert_eq!(
+                std::fs::read_to_string(self.0.join("marker")).unwrap(),
+                "launched"
+            );
+            let current_user = std::process::Command::new("/usr/bin/id")
+                .arg("-u")
+                .output()
+                .unwrap();
+            assert!(current_user.status.success());
+            assert_eq!(
+                std::fs::read(self.0.join("host-user")).unwrap(),
+                current_user.stdout
+            );
+            let params = format!(r#"{{"path":"{}"{fs_intent}}}"#, uri(&self.0.join("marker")));
+            let read = connected.rpc(13, "fs/readFile", &params).await;
+            assert_eq!(str_of(at(result(&read), "dataBase64")), "bGF1bmNoZWQ=");
+            let params = format!(
+                r#"{{"handleId":"outside","path":"{}"{fs_intent}}}"#,
+                uri(&self.0.join("marker"))
+            );
+            result(&connected.rpc(14, "fs/open", &params).await);
+            let read = connected
+                .rpc(
+                    15,
+                    "fs/readBlock",
+                    r#"{"handleId":"outside","offset":0,"len":16}"#,
+                )
+                .await;
+            assert_eq!(str_of(at(result(&read), "chunk")), "bGF1bmNoZWQ=");
+            result(
+                &connected
+                    .rpc(16, "fs/close", r#"{"handleId":"outside"}"#)
+                    .await,
+            );
             connected.close().await;
             sessions.shutdown().await.unwrap();
-            self.assert_rejected(&response, expected_code, guidance);
-        }
-
-        fn assert_rejected(&self, response: &JsonValue, expected_code: i64, guidance: &str) {
-            assert!(has(response, "error"), "{}", stringify_json(response));
-            assert_eq!(error_code(response), expected_code);
-            assert!(
-                error_message(response).contains(guidance),
-                "{}",
-                stringify_json(response)
-            );
-            assert!(!self.0.join("marker").exists());
         }
     }
 
@@ -304,113 +321,124 @@ mod admission {
     }
 
     #[tokio::test]
-    async fn authenticated_start_runs_full_access_with_matching_trusted_grant() {
-        let fixture = Fixture::new();
-        fixture.trusted(&fixture.config(ENVIRONMENT, DIGEST));
-        fixture.requirements(r#"allowed_sandbox_modes = ["danger-full-access"]"#);
-        let (serve, sessions, diagnostics) = fixture.serving(true);
-        let connected = Fixture::connect(&serve, &sessions, &diagnostics, DIGEST, None).await;
-        let (response, closed) = fixture
-            .start(
-                &connected,
-                r#", "sandbox":{"permissions":{"type":"disabled"}}"#,
-            )
-            .await;
-        connected.close().await;
-        sessions.shutdown().await.unwrap();
-        assert_eq!(str_of(at(result(&response), "sandboxType")), "none");
-        let closed = closed.unwrap();
-        assert_eq!(num_of(at(result(&closed), "exitCode")), 0.0);
-        assert_eq!(
-            std::fs::read_to_string(fixture.0.join("marker")).unwrap(),
-            "launched"
+    async fn authenticated_start_and_read_run_unrestricted_by_default() {
+        Fixture::new().assert_unrestricted("", "", true).await;
+    }
+
+    #[tokio::test]
+    async fn authenticated_start_and_read_ignore_sandbox_network_and_proxy_intent() {
+        let sandbox = r#", "sandbox":{"permissions":{"type":"managed","network":"restricted","file_system":{"type":"restricted","entries":[]}}}"#;
+        let process = format!(
+            r#"{sandbox}, "enforceManagedNetwork":true, "managedNetwork":{{"loopbackPorts":[],"allowLocalBinding":false}}, "networkProxy":{{"proxy":{{"enabled":true,"mode":"limited","enableSocks5":false,"enableSocks5Udp":false,"allowUpstreamProxy":false,"dangerouslyAllowAllUnixSockets":false,"allowLocalBinding":false}},"auditMetadata":{{}}}}"#
         );
-    }
-
-    #[tokio::test]
-    async fn authenticated_start_rejects_missing_grant_despite_request_and_local_spoofs() {
-        let fixture = Fixture::new();
-        fixture.rejects("", -32001, "dots.fullAccessExecutor").await;
-    }
-
-    #[tokio::test]
-    async fn authenticated_start_rejects_invalid_trusted_grant() {
-        let fixture = Fixture::new();
-        fixture.trusted(&fixture.config("*", DIGEST));
-        fixture.rejects("", -32001, "ycoding.json").await;
-    }
-
-    #[tokio::test]
-    async fn authenticated_start_rejects_grants_for_another_environment_or_key() {
-        for (environment, digest, guidance) in [
-            ("other-environment", DIGEST, "environmentId"),
-            (ENVIRONMENT, &"b".repeat(64), "harnessKeySha256"),
-        ] {
-            let fixture = Fixture::new();
-            fixture.trusted(&fixture.config(environment, digest));
-            fixture.rejects("", -32001, guidance).await;
-        }
-    }
-
-    #[tokio::test]
-    async fn authenticated_start_rejects_incompatible_sandbox_and_network_requests() {
-        let fixture = Fixture::new();
-        fixture.trusted(&fixture.config(ENVIRONMENT, DIGEST));
-        fixture.rejects(r#", "sandbox":{"permissions":{"type":"managed","network":"enabled","file_system":{"type":"restricted","entries":[]}},"sandboxOverride":"bypassSandboxFirstAttempt"}"#, -32001, "sandbox").await;
-        fixture.rejects(r#", "sandbox":{"permissions":{"type":"managed","network":"restricted","file_system":{"type":"unrestricted"}}}"#, -32001, "network").await;
-        fixture
-            .rejects(r#", "enforceManagedNetwork":true"#, -32001, "network")
+        Fixture::new()
+            .assert_unrestricted(&process, sandbox, true)
             .await;
-        fixture
-            .rejects(
-                r#", "managedNetwork":{"loopbackPorts":[],"allowLocalBinding":false}"#,
-                -32001,
-                "network",
-            )
-            .await;
-        fixture.rejects(r#", "networkProxy":{"proxy":{"enabled":true,"mode":"limited","enableSocks5":false,"enableSocks5Udp":false,"allowUpstreamProxy":false,"dangerouslyAllowAllUnixSockets":false,"allowLocalBinding":false},"auditMetadata":{}}"#, -32001, "proxy").await;
     }
 
     #[tokio::test]
-    async fn authenticated_start_enforces_host_deployment_requirements() {
+    async fn authenticated_start_and_read_ignore_host_deployment_requirements() {
         let fixture = Fixture::new();
-        fixture.trusted(&fixture.config(ENVIRONMENT, DIGEST));
         fixture.requirements(r#"allowed_sandbox_modes = ["read-only"]"#);
-        fixture.rejects("", -32001, "requirements.toml").await;
+        std::fs::write(
+            fixture.0.join("work/etc/managed_config.toml"),
+            r#"sandbox_mode = "read-only""#,
+        )
+        .unwrap();
+        fixture.assert_unrestricted("", "", true).await;
     }
 
     #[tokio::test]
-    async fn authenticated_start_keeps_shell_authorization() {
+    async fn authenticated_start_and_read_skip_scope_authorization() {
+        Fixture::new().assert_unrestricted("", "", false).await;
+    }
+
+    #[tokio::test]
+    async fn authenticated_filesystem_writes_and_copies_outside_location_without_approval() {
         let fixture = Fixture::new();
-        fixture.trusted(&fixture.config(ENVIRONMENT, DIGEST));
         let (serve, sessions, diagnostics) = fixture.serving(false);
-        let connected = Fixture::connect(&serve, &sessions, &diagnostics, DIGEST, None).await;
-        let (response, _) = fixture.start(&connected, "").await;
+        let connected = Fixture::connect(&serve, &sessions, &diagnostics).await;
+        let source = uri(&fixture.0.join("source"));
+        let destination = uri(&fixture.0.join("destination"));
+        for (id, method, params) in [
+            (
+                2,
+                "fs/writeFile",
+                format!(r#"{{"path":"{source}","dataBase64":"aGk="}}"#),
+            ),
+            (
+                3,
+                "fs/copy",
+                format!(
+                    r#"{{"sourcePath":"{source}","destinationPath":"{destination}","recursive":false}}"#
+                ),
+            ),
+            (4, "fs/remove", format!(r#"{{"path":"{source}"}}"#)),
+        ] {
+            result(&connected.rpc(id, method, &params).await);
+        }
+        assert!(!fixture.0.join("source").exists());
+        assert_eq!(std::fs::read(fixture.0.join("destination")).unwrap(), b"hi");
         connected.close().await;
         sessions.shutdown().await.unwrap();
-        fixture.assert_rejected(&response, -32001, "Permission denied");
     }
 
     #[tokio::test]
-    async fn authenticated_start_checks_the_current_peer_after_resume() {
+    async fn authenticated_process_input_signal_and_termination_skip_scope_authorization() {
         let fixture = Fixture::new();
-        fixture.trusted(&fixture.config(ENVIRONMENT, DIGEST));
-        let (serve, sessions, diagnostics) = fixture.serving(true);
-        let first = Fixture::connect(&serve, &sessions, &diagnostics, DIGEST, None).await;
-        let id = first.session_id.clone();
-        let (response, closed) = fixture.start(&first, "").await;
-        first.close().await;
-        result(&response);
-        assert!(closed.is_some());
-        std::fs::remove_file(fixture.0.join("marker")).unwrap();
-
-        let resumed =
-            Fixture::connect(&serve, &sessions, &diagnostics, &"b".repeat(64), Some(&id)).await;
-        assert_eq!(resumed.session_id, id);
-        let (response, _) = fixture.start(&resumed, "").await;
-        resumed.close().await;
+        let (serve, sessions, diagnostics) = fixture.serving(false);
+        let connected = Fixture::connect(&serve, &sessions, &diagnostics).await;
+        let start = format!(
+            r#"{{"processId":"controlled","argv":["/bin/sh","-c","IFS= read -r value; printf '%s' \"$value\" > control; IFS= read -r stop"],"cwd":"{}","env":{{}},"pipeStdin":true}}"#,
+            uri(&fixture.0),
+        );
+        result(&connected.rpc(2, "process/start", &start).await);
+        result(
+            &connected
+                .rpc(
+                    3,
+                    "process/write",
+                    r#"{"processId":"controlled","writeId":"one","chunk":"aGVsbG8K"}"#,
+                )
+                .await,
+        );
+        result(
+            &connected
+                .rpc(
+                    4,
+                    "process/signal",
+                    r#"{"processId":"controlled","signal":"interrupt"}"#,
+                )
+                .await,
+        );
+        result(
+            &connected
+                .rpc(5, "process/terminate", r#"{"processId":"controlled"}"#)
+                .await,
+        );
+        connected.close().await;
         sessions.shutdown().await.unwrap();
-        fixture.assert_rejected(&response, -32001, "harnessKeySha256");
+    }
+
+    #[tokio::test]
+    async fn authenticated_start_still_requires_an_existing_working_directory() {
+        let fixture = Fixture::new();
+        let (serve, sessions, diagnostics) = fixture.serving(false);
+        let connected = Fixture::connect(&serve, &sessions, &diagnostics).await;
+        let file = fixture.0.join("regular-file");
+        std::fs::write(&file, "not a directory").unwrap();
+        for (id, path) in [(2, fixture.0.join("missing")), (3, file)] {
+            let start = format!(
+                r#"{{"processId":"invalid","argv":["/bin/sh","-c","exit 0"],"cwd":"{}","env":{{}}}}"#,
+                uri(&path)
+            );
+            assert_eq!(
+                error_code(&connected.rpc(id, "process/start", &start).await),
+                -32603
+            );
+        }
+        connected.close().await;
+        sessions.shutdown().await.unwrap();
     }
 }
 

@@ -11,7 +11,7 @@ use std::{
 use ycoding_core::{
     resources::{config::Roots, tool_output_store},
     session::{
-        cleanups::{Cleanups, Error, Maintenance},
+        cleanups::{Cleanups, Error, Kind, Maintenance},
         retention::Settings,
         runner::Clock,
     },
@@ -547,8 +547,26 @@ async fn usage_batches_preserve_new_requests_and_updated_aggregates() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn startup_hourly_single_owner_failures_and_close_drain() {
+    static DELAY_FIRST_PAGE: AtomicBool = AtomicBool::new(true);
+    const SOURCES: &[analytics::Source] = &[analytics::Source {
+        name: "cleanup_fixture",
+        version: 1,
+        columns: &[analytics::Column {
+            name: "value",
+            kind: analytics::ColumnType::Integer,
+        }],
+        allowed: |_, _| Ok(true),
+        load: |_, _| Ok(None),
+        page: |_, _, _| {
+            if DELAY_FIRST_PAGE.swap(false, Ordering::SeqCst) {
+                std::thread::sleep(analytics::REPORT_DEADLINE + Duration::from_millis(100));
+            }
+            Ok(Vec::new())
+        },
+    }];
     let store = store();
     seed(&store, "ses_startup", OLD);
+    let reports = report_support::start_sources(store.client(), SOURCES, false);
     let fixture = Fixture::new();
     let sweeping = Arc::new(tokio::sync::Semaphore::new(0));
     let enabled = Arc::new(AtomicBool::new(false));
@@ -569,7 +587,19 @@ async fn startup_hourly_single_owner_failures_and_close_drain() {
     let mut owner = Maintenance::start(cleanup).await.unwrap();
     assert_eq!(owner.startup().file_changes, 1);
     assert_eq!(owner.startup().context_exclusions, 1);
-    assert_eq!(owner.startup().failures.len(), 1);
+    assert!(matches!(
+        owner.startup().failures.as_slice(),
+        [(Kind::Usage, Error::Analytics(analytics::Error::Deadline))]
+    ));
+    assert_eq!(count::<resources::RequestTable>(&store), 0);
+    assert!(matches!(
+        store.analytics().unwrap().report(vec![analytics::Query {
+            sql: "SELECT 1",
+            parameters: Vec::new(),
+            max_rows: 1,
+        }]),
+        Err(analytics::Error::Privacy)
+    ));
     assert!(
         Maintenance::start(fixture.cleanup(store.client()))
             .await
@@ -593,6 +623,14 @@ async fn startup_hourly_single_owner_failures_and_close_drain() {
         .unwrap()
         .forget();
     assert_eq!(count::<tables::FileChangeTable>(&store), 0);
+    assert!(
+        store
+            .snapshot()
+            .unwrap()
+            .get::<analytics::DeliveryTable>(&[])
+            .unwrap()
+            .is_some_and(|delivery| delivery.purges.is_empty() && !delivery.purge_all)
+    );
     seed(&store, "ses_closing", OLD);
     let (entered, blocked) = std::sync::mpsc::sync_channel(1);
     let (release, released) = std::sync::mpsc::channel();
@@ -622,6 +660,7 @@ async fn startup_hourly_single_owner_failures_and_close_drain() {
         .await
         .unwrap();
     next.close().await.unwrap();
+    drop(reports);
     store.shutdown().unwrap();
 }
 

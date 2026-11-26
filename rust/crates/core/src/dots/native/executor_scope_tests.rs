@@ -635,6 +635,7 @@ async fn access_configuration_profile_account_and_generation_rotation_retire_cur
     for rotation in 0..5 {
         let fixture = Fixture::new().await;
         let handle = fixture.scope().await;
+        handle.ensure_current().await.unwrap();
         match rotation {
             0 => fixture.rotate_access().await,
             1 => std::fs::write(
@@ -657,6 +658,7 @@ async fn access_configuration_profile_account_and_generation_rotation_retire_cur
                 }).unwrap().wait().unwrap();
             }
         }
+        assert!(handle.ensure_current().await.is_err());
         assert!(fixture.check()().await.is_err());
         assert!(handle.library().unwrap().open(input()).await.is_err());
         assert!(fixture.library.scopes.lock().unwrap().is_empty());

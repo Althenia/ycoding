@@ -270,6 +270,23 @@ pub fn parse_shell_snapshot(
     env_policy: Option<&Value>,
     replay: Replay,
 ) -> Result<ParsedShellSnapshot, CaptureError> {
+    parse_with_access(
+        shell,
+        output,
+        env_policy,
+        replay,
+        super::executor::ExecutorAccess::Ordinary,
+    )
+}
+
+fn parse_with_access(
+    shell: SnapshotShell,
+    output: &[u8],
+    env_policy: Option<&Value>,
+    replay: Replay,
+    access: super::executor::ExecutorAccess,
+) -> Result<ParsedShellSnapshot, CaptureError> {
+    let ordinary = access == super::executor::ExecutorAccess::Ordinary;
     let mut cursor: &[u8] = output;
     let state_record = take_record(&mut cursor);
     let marker = b"# Snapshot file";
@@ -339,7 +356,7 @@ pub fn parse_shell_snapshot(
         );
     }
     captured = ordered_environment(&captured);
-    if env_get(&captured, &PROXY_ACTIVE_ENV_KEY.into()).is_some() {
+    if ordinary && env_get(&captured, &PROXY_ACTIVE_ENV_KEY.into()).is_some() {
         captured.retain(|(key, value)| !managed_env(key, value, Platform::current()));
     }
     let empty: BTreeMap<String, String> = BTreeMap::new();
@@ -353,12 +370,15 @@ pub fn parse_shell_snapshot(
         })
         .collect::<BTreeMap<_, _>>();
     let environment = match env_policy.filter(|policy| !matches!(policy, Value::Null)) {
-        None => policy::build_process_env(&BuildProcessEnv {
-            base: &empty,
-            env: &captured,
-            env_policy: None,
-            windows: false,
-        }),
+        None => policy::build_process_env_with_access(
+            &BuildProcessEnv {
+                base: &empty,
+                env: &captured,
+                env_policy: None,
+                windows: false,
+            },
+            access,
+        ),
         Some(policy) => {
             let adjusted = match policy {
                 Value::Object(map) => {
@@ -368,12 +388,15 @@ pub fn parse_shell_snapshot(
                 }
                 other => other.clone(),
             };
-            policy::build_process_env(&BuildProcessEnv {
-                base: &native_captured,
-                env: &[],
-                env_policy: Some(&adjusted),
-                windows: false,
-            })
+            policy::build_process_env_with_access(
+                &BuildProcessEnv {
+                    base: &native_captured,
+                    env: &[],
+                    env_policy: Some(&adjusted),
+                    windows: false,
+                },
+                access,
+            )
         }
     };
     let environment = environment.map_err(|_| {
@@ -389,11 +412,13 @@ pub fn parse_shell_snapshot(
         }
     }
     let mut environment = ordered_environment(&ordered);
-    environment.retain(|(key, _)| {
-        ![THREAD_ID_ENV, TOOL_CALL_ID_ENV, "PWD", "OLDPWD"]
-            .iter()
-            .any(|name| key.as_str() == Some(*name))
-    });
+    if ordinary {
+        environment.retain(|(key, _)| {
+            ![THREAD_ID_ENV, TOOL_CALL_ID_ENV, "PWD", "OLDPWD"]
+                .iter()
+                .any(|name| key.as_str() == Some(*name))
+        });
+    }
     Ok(ParsedShellSnapshot {
         state,
         file_source: replay == Replay::File,
@@ -476,6 +501,7 @@ struct CacheEntry {
 }
 
 pub struct ShellSnapshotCache {
+    access: super::executor::ExecutorAccess,
     authorize: AuthorizeFn,
     platform: Platform,
     temp_root: PathBuf,
@@ -504,7 +530,22 @@ fn kill_group(_pid: u32) {}
 
 impl ShellSnapshotCache {
     pub fn new(authorize: AuthorizeFn, platform: Platform, temp_root: Option<PathBuf>) -> Self {
+        Self::with_access(
+            authorize,
+            platform,
+            temp_root,
+            super::executor::ExecutorAccess::Ordinary,
+        )
+    }
+
+    pub(super) fn with_access(
+        authorize: AuthorizeFn,
+        platform: Platform,
+        temp_root: Option<PathBuf>,
+        access: super::executor::ExecutorAccess,
+    ) -> Self {
         Self {
+            access,
             authorize,
             platform,
             temp_root: temp_root.unwrap_or_else(std::env::temp_dir),
@@ -557,7 +598,9 @@ impl ShellSnapshotCache {
             let mut argv = input.argv.iter().map(os_text).collect::<Vec<_>>();
             argv[2] = capture_script(shell, probe.is_some(), protected);
             let mut env = ordered_environment(&input.env);
-            env.retain(|(key, _)| key.as_str() != Some(TOOL_CALL_ID_ENV));
+            if self.access == super::executor::ExecutorAccess::Ordinary {
+                env.retain(|(key, _)| key.as_str() != Some(TOOL_CALL_ID_ENV));
+            }
             if self.closed.load(Ordering::Acquire) {
                 return Err(capture_error("closed", "shell snapshot cache closed"));
             }
@@ -680,7 +723,13 @@ impl ShellSnapshotCache {
                     format!("shell snapshot capture exceeds {MAX_SNAPSHOT_CAPTURE_BYTES} bytes"),
                 ));
             }
-            parse_shell_snapshot(shell, &flagged[2..], input.env_policy.as_ref(), replay)
+            parse_with_access(
+                shell,
+                &flagged[2..],
+                input.env_policy.as_ref(),
+                replay,
+                self.access,
+            )
         }
         .await;
         let _ = grant.release().await;
@@ -1637,6 +1686,28 @@ mod tests {
                 ("Z".into(), "first".into()),
                 ("A".into(), "second".into()),
                 ("ADDED".into(), LosslessString::from_utf16(vec![0xd800]))
+            ]
+        );
+    }
+
+    #[test]
+    fn unrestricted_capture_keeps_host_environment_values() {
+        let parsed = parse_with_access(
+            SnapshotShell::Zsh,
+            b"# Snapshot file\n\0\0\0CODEX_TOOL_CALL_ID=synthetic\0CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE=value\0",
+            None,
+            Replay::Environment,
+            super::super::executor::ExecutorAccess::UnrestrictedHost,
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.environment,
+            vec![
+                ("CODEX_TOOL_CALL_ID".into(), "synthetic".into()),
+                (
+                    "CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE".into(),
+                    "value".into()
+                ),
             ]
         );
     }

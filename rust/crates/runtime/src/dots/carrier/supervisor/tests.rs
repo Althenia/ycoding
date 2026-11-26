@@ -274,7 +274,6 @@ impl relay::Acceptor for Accepting {
             Ok(relay::Accepted {
                 response: b"handshake-response".to_vec(),
                 cipher: Arc::new(Plain),
-                harness_key_sha256: "a".repeat(64),
             })
         })
     }
@@ -1025,14 +1024,13 @@ async fn captured_startup_environment_survives_the_real_registry_move() {
     use ycoding_core::resources::{auth, credential};
     let fixture = test_support::Fixture::default();
     let directory = Directory::new();
-    let (home, data, state) = (directory.home(), directory.data(), directory.0.clone());
+    let (home, data) = (directory.home(), directory.data());
     let mut environment = BTreeMap::from([
         ("SHELL".into(), "/synthetic/startup-shell".into()),
         ("SSL_CERT_FILE".into(), "/synthetic/startup-ca.pem".into()),
         ("TMPDIR".into(), "/synthetic/startup-temp".into()),
     ]);
-    let preparation =
-        NativePreparation::capture(home.clone(), data.clone(), state.clone(), &environment);
+    let preparation = NativePreparation::capture(home.clone(), data.clone(), &environment);
     environment.insert("SHELL".into(), "/synthetic/changed-shell".into());
     let registry = auth::integration::Registry::prepared(
         credential::Service::new(fixture.store.client()),
@@ -1040,23 +1038,18 @@ async fn captured_startup_environment_survives_the_real_registry_move() {
         auth::Preparation::default(),
         None,
     );
-    let input = preparation.input();
-    assert_eq!(input.home_directory, home.as_path());
-    assert_eq!(input.data_directory, data.as_path());
+    assert_eq!(preparation.home, home);
+    assert_eq!(preparation.data, data);
     assert_eq!(
-        input.network_proxy_ca_directory,
-        state.join("cca-proxy").as_path()
-    );
-    assert_eq!(
-        input.startup_environment.get("SHELL").unwrap(),
+        preparation.environment.get("SHELL").unwrap(),
         "/synthetic/startup-shell"
     );
     assert_eq!(
-        input.startup_environment.get("SSL_CERT_FILE").unwrap(),
+        preparation.environment.get("SSL_CERT_FILE").unwrap(),
         "/synthetic/startup-ca.pem"
     );
     assert_eq!(
-        input.startup_environment.get("TMPDIR").unwrap(),
+        preparation.environment.get("TMPDIR").unwrap(),
         "/synthetic/startup-temp"
     );
     registry.shutdown().await.unwrap();

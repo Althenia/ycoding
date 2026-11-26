@@ -1,5 +1,27 @@
 use super::*;
 
+#[test]
+fn session_cleanup_only_defers_unavailable_or_timed_out_derived_analytics() {
+    use ycoding_core::{session::cleanups::Error, ycoding_store};
+    use ycoding_store::analytics::Error as AnalyticsError;
+
+    assert_eq!(
+        session_cleanup_deferral(&Error::Analytics(AnalyticsError::Deadline)),
+        Some("analytics maintenance deadline exceeded")
+    );
+    assert_eq!(
+        session_cleanup_deferral(&Error::Analytics(AnalyticsError::Unavailable)),
+        Some("analytics engine unavailable")
+    );
+    for error in [
+        Error::Store(ycoding_store::Error::Closed),
+        Error::Analytics(AnalyticsError::Store(ycoding_store::Error::Closed)),
+        Error::Analytics(AnalyticsError::Invalid),
+    ] {
+        assert_eq!(session_cleanup_deferral(&error), None);
+    }
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn housekeeping_retries_abandoned_stages_and_preserves_live_paths() {

@@ -308,7 +308,6 @@ struct Fake {
     mode: Mutex<Mode>,
     gate: Arc<Semaphore>,
     calls: AtomicUsize,
-    digest: Mutex<String>,
 }
 impl Acceptor for Fake {
     fn accept(
@@ -318,7 +317,6 @@ impl Acceptor for Fake {
         authorize: Authorize,
     ) -> Pin<Box<dyn Future<Output = Result<Accepted, ()>> + Send>> {
         let mode = *self.mode.lock().unwrap();
-        let digest = self.digest.lock().unwrap().clone();
         self.calls.fetch_add(1, Ordering::SeqCst);
         let gate = self.gate.clone();
         Box::pin(async move {
@@ -343,7 +341,6 @@ impl Acceptor for Fake {
             Ok(Accepted {
                 response: b"handshake-response".to_vec(),
                 cipher: Arc::new(Xor),
-                harness_key_sha256: digest,
             })
         })
     }
@@ -368,7 +365,6 @@ impl Harness {
             mode: Mutex::new(Mode::Accept),
             gate: Arc::new(Semaphore::new(0)),
             calls: AtomicUsize::new(0),
-            digest: Mutex::new("a".repeat(64)),
         });
         let sent = Arc::new(Mutex::new(Vec::new()));
         let output_ready = Arc::new(Notify::new());
@@ -445,12 +441,6 @@ impl Harness {
 
     pub(super) fn standard() -> Self {
         Self::new(4 * 1024 * 1024, 32 * 1024 * 1024)
-    }
-
-    #[cfg(unix)]
-    pub(super) fn with_digest(self, digest: &str) -> Self {
-        *self.fake.digest.lock().unwrap() = digest.to_owned();
-        self
     }
 
     fn deliver(&self, stream: &str, body: Body) {
@@ -559,7 +549,6 @@ async fn a_handshake_is_authorized_once_answered_and_opens_a_channel() {
     let mut harness = Harness::standard();
     let channel = harness.open("stream-1").await;
     assert_eq!(channel.stream_id(), "stream-1");
-    assert_eq!(channel.harness_key_sha256(), "a".repeat(64));
     assert_eq!(
         harness.validations.lock().unwrap().as_slice(),
         [("stream-1".to_owned(), "harness-authorization".to_owned())]

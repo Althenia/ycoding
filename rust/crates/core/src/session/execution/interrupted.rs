@@ -12,20 +12,20 @@ use ycoding_store::{
 
 impl Service {
     pub async fn reconcile_interrupted(&self, now: i64) -> Result<usize, Error> {
-        self.client
-            .submit(move |tx| {
-                let mut cursor = None;
-                let mut reconciled = 0;
-                loop {
+        let mut cursor: Option<Vec<u8>> = None;
+        let mut reconciled = 0;
+        loop {
+            let (settled, next) = self
+                .client
+                .submit(move |tx| {
+                    const PAGE: usize = 128;
                     let sequences = tx.scan::<SequenceTable>(
                         cursor.as_deref().map_or(Bound::Unbounded, Bound::Excluded),
                         Bound::Unbounded,
-                        128,
+                        PAGE,
                     )?;
-                    if sequences.is_empty() {
-                        return Ok(reconciled);
-                    }
-                    cursor = sequences.last().map(|row| key(&row.aggregate_id));
+                    let next = (sequences.len() == PAGE)
+                        .then(|| key(&sequences.last().unwrap().aggregate_id));
                     for sequence in sequences {
                         let lifecycle = latest(
                             tx,
@@ -93,11 +93,17 @@ impl Service {
                                     .finish(),
                             },
                         )?;
-                        reconciled += 1;
+                        return Ok((1, Some(key(&sequence.aggregate_id))));
                     }
-                }
-            })?
-            .await
+                    Ok((0, next))
+                })?
+                .await?;
+            reconciled += settled;
+            if next.is_none() {
+                return Ok(reconciled);
+            }
+            cursor = next;
+        }
     }
 }
 

@@ -1474,6 +1474,16 @@ async fn local_control_socket_owns_enable_disable_and_server_lifetime_cleanup() 
         support::success(local.call("remote.get", machine(), Vec::new()).await);
     assert_eq!(online.data.state, 3);
     assert_eq!(online.data.device, None);
+    opening.commands.send(Command::Close(4403)).await.unwrap();
+    wait_state(&control, State::Error).await;
+    let rejected: v5::RemoteGetResult =
+        support::success(local.call("remote.get", machine(), Vec::new()).await);
+    assert_eq!(rejected.data.state, 4);
+    assert_eq!(
+        rejected.data.message.as_ref().map(units).as_deref(),
+        Some("The relay rejected this device. Enroll it again, then turn Remote connection on.")
+    );
+    assert!(saved.load(Ordering::Acquire));
     let disabled: v5::RemoteSetResult = support::success(
         local
             .call(

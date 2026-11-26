@@ -1,6 +1,7 @@
 use super::{
     encoding::{ascii_lower, base64_encode, percent_decode},
     error::{AuthorizationInput, AuthorizeFn, BoxFuture, ExecutorError, Grant},
+    executor::ExecutorAccess,
     signal::Signal,
     value::{JsonObject, LosslessString, Value, ascii_lower as lower_units, concat, join, os_text},
 };
@@ -255,6 +256,7 @@ struct Prepared {
 fn prepare(
     params: &HttpRequestParams,
     env: &dyn Fn(&LosslessString) -> Option<LosslessString>,
+    access: ExecutorAccess,
 ) -> Result<Prepared, ExecutorError> {
     let method = params.method.as_str().filter(|method| is_token(method));
     let Some(method) = method else {
@@ -286,9 +288,10 @@ fn prepare(
         let mut value = header.value.clone();
         if let Some(variable) = &header.value_env_var {
             let lowered = lower_units(variable);
-            if HEADER_ENV_DENYLIST
-                .iter()
-                .any(|denied| LosslessString::from(ascii_lower(denied)) == lowered)
+            if access == ExecutorAccess::Ordinary
+                && HEADER_ENV_DENYLIST
+                    .iter()
+                    .any(|denied| LosslessString::from(ascii_lower(denied)) == lowered)
             {
                 return Err(invalid_params(concat(&[
                     &"http/request header ".into(),
@@ -396,6 +399,7 @@ impl Flight {
 type EnvironmentValue = Arc<dyn Fn(&LosslessString) -> Option<LosslessString> + Send + Sync>;
 
 struct Inner {
+    access: ExecutorAccess,
     authorize: AuthorizeFn,
     env: EnvironmentValue,
     client: reqwest::Client,
@@ -436,6 +440,14 @@ impl HttpHandler {
         authorize: AuthorizeFn,
         env: Option<EnvironmentValue>,
     ) -> Result<Self, ExecutorError> {
+        Self::with_access(authorize, env, ExecutorAccess::Ordinary)
+    }
+
+    pub(super) fn with_access(
+        authorize: AuthorizeFn,
+        env: Option<EnvironmentValue>,
+        access: ExecutorAccess,
+    ) -> Result<Self, ExecutorError> {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
@@ -443,6 +455,7 @@ impl HttpHandler {
             .build()
             .map_err(|_| internal_error("http client unavailable"))?;
         Ok(Self(Arc::new(Inner {
+            access,
             authorize,
             env: env.unwrap_or_else(|| Arc::new(environment_value)),
             client,
@@ -748,7 +761,7 @@ impl HttpHandler {
             params.stream_response.then(|| params.request_id.clone()),
         );
         let env = self.0.env.clone();
-        let prepared = match prepare(&params, &*env) {
+        let prepared = match prepare(&params, &*env, self.0.access) {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.settle(&flight).await;
@@ -954,5 +967,32 @@ impl HttpBodyStream {
                 self.handler.settle(&self.flight).await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unrestricted_http_resolves_headers_from_the_host_environment() {
+        let params = HttpRequestParams {
+            method: "GET".into(),
+            url: "http://127.0.0.1/".into(),
+            headers: vec![HttpHeader {
+                name: "x-fixture".into(),
+                value: "prefix ".into(),
+                value_env_var: Some("OPENAI_API_KEY".into()),
+            }],
+            body: None,
+            timeout_ms: None,
+            redirect_policy: RedirectPolicy::Stop,
+            request_id: "request".into(),
+            stream_response: false,
+        };
+        let env = |_: &LosslessString| Some("synthetic-value".into());
+        assert!(prepare(&params, &env, ExecutorAccess::Ordinary).is_err());
+        let request = prepare(&params, &env, ExecutorAccess::UnrestrictedHost).unwrap();
+        assert_eq!(request.headers[0].1, "prefix synthetic-value");
     }
 }

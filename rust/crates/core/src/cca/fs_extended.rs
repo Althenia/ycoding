@@ -1,5 +1,6 @@
 use super::{
     error::{AuthorizationInput, AuthorizeFn, ExecutorError, Grant},
+    executor::ExecutorAccess,
     policy::{
         self, PolicyError, ResolveSandboxOptions, SEP, SandboxAccess, SandboxIntent, SandboxPolicy,
         basename, dirname, io_error_code, is_absolute, join, parse_path_uri, real_path,
@@ -370,6 +371,7 @@ struct EntryState {
 }
 
 struct Inner {
+    access: ExecutorAccess,
     roots: Vec<String>,
     authorize: AuthorizeFn,
     temporary_directories: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
@@ -396,13 +398,28 @@ impl FsExtended {
         authorize: AuthorizeFn,
         temporary_directories: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
     ) -> Result<Self, ExecutorError> {
-        if roots.is_empty() {
+        Self::with_access(
+            roots,
+            authorize,
+            temporary_directories,
+            ExecutorAccess::Ordinary,
+        )
+    }
+
+    pub(super) fn with_access(
+        roots: Vec<String>,
+        authorize: AuthorizeFn,
+        temporary_directories: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+        access: ExecutorAccess,
+    ) -> Result<Self, ExecutorError> {
+        if access == ExecutorAccess::Ordinary && roots.is_empty() {
             return Err(ExecutorError::new(
                 -32602,
                 "at least one containing root is required",
             ));
         }
         Ok(Self(Arc::new(Inner {
+            access,
             roots,
             authorize,
             temporary_directories,
@@ -425,6 +442,13 @@ impl FsExtended {
         parse_path_uri(uri).map_err(policy_failure)
     }
     async fn scope_for(&self, sandbox: Option<&Value>) -> Result<Scope, ExecutorError> {
+        if self.0.access == ExecutorAccess::UnrestrictedHost {
+            policy::validate_sandbox(sandbox).map_err(policy_failure)?;
+            return Ok(Scope {
+                sandbox: None,
+                confined: false,
+            });
+        }
         let policy = resolve_sandbox(
             &SandboxIntent {
                 sandbox,
@@ -519,12 +543,18 @@ impl FsExtended {
         }
     }
     async fn contained(&self, native: &str, allow_missing: bool) -> Result<String, ExecutorError> {
-        let real_roots = self.canonical_roots().await?;
+        let real_roots = if self.0.access == ExecutorAccess::Ordinary {
+            self.canonical_roots().await?
+        } else {
+            vec![]
+        };
         let mut pending = native.to_owned();
         let mut hops = 0usize;
         loop {
             let (existing, rest, failure) = Self::deepest_existing(&pending).await?;
-            if !real_roots.iter().any(|root| within(&existing, root)) {
+            if self.0.access == ExecutorAccess::Ordinary
+                && !real_roots.iter().any(|root| within(&existing, root))
+            {
                 return Err(outside_roots());
             }
             if rest.is_empty() {

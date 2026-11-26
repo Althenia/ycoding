@@ -140,33 +140,46 @@ async fn supervise(
         }
         tracing::debug!(?result, "remote connection attempt ended");
         reap(&mut tasks.jobs).await?;
-        match result {
-            Err(Error::Unauthorized | Error::Forbidden | Error::Setup | Error::Incompatible) => {
-                control.publish(
-                    current.generation,
-                    State::Error,
-                    Some("Remote setup or authentication failed"),
-                );
-                tokio::select! { _ = intent.changed() => { attempt = 0; }, _ = stopped.changed() => break }
+        let terminal = match result {
+            Err(Error::Unauthorized | Error::Forbidden) => Some(
+                "The relay rejected this device. Enroll it again, then turn Remote connection on.",
+            ),
+            Err(Error::NotEnrolled) => {
+                Some("Enroll this device first: ycoding remote enroll <enrollmentID>.")
             }
-            result => {
-                let delay = if result == Err(Error::Conflict) {
-                    settings.conflict_delay
-                } else {
-                    settings
-                        .reconnect_initial
-                        .saturating_mul(2u32.saturating_pow(attempt))
-                        .min(settings.reconnect_max)
-                };
-                attempt = attempt.saturating_add(1).min(30);
-                control.publish(
-                    current.generation,
-                    State::Connecting,
-                    Some("Remote connection interrupted; retrying"),
-                );
-                tokio::select! { _ = tokio::time::sleep(delay) => {}, _ = intent.changed() => { attempt = 0; }, _ = stopped.changed() => break }
-            }
+            Err(Error::EnrollmentStore) => Some(
+                "Could not access remote-device.json. Check that the file is valid and private.",
+            ),
+            Err(Error::Incompatible) => Some(
+                "The relay protocol is incompatible. Check that YCoding and the relay are up to date.",
+            ),
+            Err(Error::Setup) => Some(
+                "Could not initialize the remote connector. Check the runtime log, then restart YCoding.",
+            ),
+            _ => None,
+        };
+        if let Some(message) = terminal {
+            control.publish(current.generation, State::Error, Some(message));
+            tokio::select! { _ = intent.changed() => { attempt = 0; }, _ = stopped.changed() => break }
+            continue;
         }
+        let (delay, message) = if result == Err(Error::Conflict) {
+            (
+                settings.conflict_delay,
+                "Another connector is online for this device. Close that connection or wait for it to expire; retrying.",
+            )
+        } else {
+            (
+                settings
+                    .reconnect_initial
+                    .saturating_mul(2u32.saturating_pow(attempt))
+                    .min(settings.reconnect_max),
+                "Remote connection interrupted. Check the network and relay availability; retrying.",
+            )
+        };
+        attempt = attempt.saturating_add(1).min(30);
+        control.publish(current.generation, State::Connecting, Some(message));
+        tokio::select! { _ = tokio::time::sleep(delay) => {}, _ = intent.changed() => { attempt = 0; }, _ = stopped.changed() => break }
     }
     let mut joined = 0;
     let drain = async {
@@ -300,7 +313,9 @@ enum StartupStage {
 fn startup_failure(error: Error, stage: StartupStage) {
     let cause = match error {
         Error::Unauthorized | Error::Forbidden => "authorization_rejected",
-        Error::Setup | Error::Incompatible => "setup_failed",
+        Error::Setup | Error::Incompatible | Error::NotEnrolled | Error::EnrollmentStore => {
+            "setup_failed"
+        }
         _ => "startup_failed",
     };
     let (stage, kind) = match (stage, error) {

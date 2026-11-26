@@ -11,7 +11,6 @@ use ycoding_core::cca::{
     environment_config::{
         EnvironmentConfigLayer, EnvironmentConfigLayerStack, EnvironmentConfigOptions,
         EnvironmentConfigReadParams, EnvironmentConfigReadResult, read_environment_config,
-        require_full_access,
     },
     error::ExecutorError,
     value::{LosslessString, Value, parse_json},
@@ -675,75 +674,6 @@ async fn managed_config_becomes_a_legacy_requirements_layer_after_the_system_req
         message(&error),
         "failed to load executor-local config: Failed to parse config requirements as TOML: invalid type integer for `sandbox_mode`, expected one of `read-only`, `workspace-write`, `danger-full-access`"
     );
-}
-
-#[tokio::test]
-async fn full_access_admission_enforces_system_and_managed_sandbox_requirements() {
-    let base = Scratch::new();
-    let requirements = base.join("etc/requirements.toml");
-    let managed = base.join("etc/managed_config.toml");
-    let options = options(&base);
-    assert!(require_full_access(&options).await.is_ok());
-    for (contents, allowed) in [
-        ("allowed_sandbox_modes = [\"danger-full-access\"]\n", true),
-        (
-            "allowed_sandbox_modes = [\"read-only\", \"danger-full-access\"]\n",
-            true,
-        ),
-        ("allowed_sandbox_modes = [\"read-only\"]\n", false),
-        ("allowed_sandbox_modes = []\n", false),
-        ("allowed_sandbox_modes = \"danger-full-access\"\n", false),
-        (
-            "allowed_sandbox_modes = [\"danger-full-access\", \"unknown\"]\n",
-            false,
-        ),
-        (
-            "allowed_sandbox_modes = [\"danger-full-access\", 1]\n",
-            false,
-        ),
-        ("bad = = 1\n", false),
-    ] {
-        put(&requirements, contents);
-        assert_eq!(
-            require_full_access(&options).await.is_ok(),
-            allowed,
-            "{contents}"
-        );
-    }
-    put(
-        &requirements,
-        "allowed_sandbox_modes = [\"danger-full-access\"]\n",
-    );
-    for (contents, allowed) in [
-        ("sandbox_mode = \"danger-full-access\"\n", true),
-        ("sandbox_mode = \"workspace-write\"\n", false),
-        ("sandbox_mode = \"read-only\"\n", false),
-        ("sandbox_mode = \"unknown\"\n", false),
-        ("sandbox_mode = 1\n", false),
-        ("bad = = 1\n", false),
-    ] {
-        put(&managed, contents);
-        assert_eq!(
-            require_full_access(&options).await.is_ok(),
-            allowed,
-            "{contents}"
-        );
-    }
-    put(&managed, "sandbox_mode = \"danger-full-access\"\n");
-    put(&requirements, "allowed_sandbox_modes = [\"read-only\"]\n");
-    assert!(require_full_access(&options).await.is_err());
-    fs::remove_file(&requirements).unwrap();
-    fs::create_dir(&requirements).unwrap();
-    assert!(require_full_access(&options).await.is_err());
-    fs::remove_dir(&requirements).unwrap();
-    put(
-        &managed,
-        "sandbox_mode = \"synthetic-unrecognized-value\"\n",
-    );
-    let error = require_full_access(&options).await.unwrap_err();
-    let message = error.message.as_str().unwrap();
-    assert!(message.contains("managed_config.toml"));
-    assert!(!message.contains("synthetic-unrecognized-value"));
 }
 
 const BROKER_ENABLED: &str = "[features.network_proxy]\ncredential_broker = true\nenabled = true\n[features.network_proxy.credentials.custom]\nenv = [\"CUSTOM_KEY\"]\nurl_prefix_from_env = \"CUSTOM_URL\"\n";

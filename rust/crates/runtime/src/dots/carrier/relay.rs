@@ -55,7 +55,6 @@ pub type Authorizer =
 pub struct Accepted {
     pub response: Vec<u8>,
     pub cipher: Arc<dyn Cipher>,
-    pub harness_key_sha256: String,
 }
 
 pub trait Acceptor: Send + Sync {
@@ -100,7 +99,6 @@ impl Acceptor for NoiseAcceptor {
             Ok(Accepted {
                 response: accepted.response,
                 cipher: Arc::new(accepted.transport),
-                harness_key_sha256: accepted.harness_key_sha256,
             })
         })
     }
@@ -218,7 +216,6 @@ struct Inbound {
 struct Stream {
     instance: u64,
     cipher: Arc<dyn Cipher>,
-    harness_key_sha256: String,
     closed: watch::Sender<bool>,
     inbound: Mutex<Inbound>,
     queue: Mutex<Queue>,
@@ -263,10 +260,6 @@ impl Channel {
     #[cfg(test)]
     pub fn stream_id(&self) -> &str {
         &self.stream_id
-    }
-
-    pub fn harness_key_sha256(&self) -> &str {
-        &self.stream.harness_key_sha256
     }
 
     pub fn closed(&self) -> watch::Receiver<bool> {
@@ -599,11 +592,7 @@ impl Inner {
             .acceptor
             .accept(stream_id, request, authorize)
             .await;
-        let Accepted {
-            response,
-            cipher,
-            harness_key_sha256,
-        } = match completed {
+        let Accepted { response, cipher } = match completed {
             Ok(completed) => completed,
             Err(()) => {
                 let current = {
@@ -655,7 +644,6 @@ impl Inner {
             let stream = Arc::new(Stream {
                 instance: state.next_instance,
                 cipher,
-                harness_key_sha256,
                 closed,
                 inbound: Mutex::new(Inbound::default()),
                 queue: Mutex::new(Queue::default()),

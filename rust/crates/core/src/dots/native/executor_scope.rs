@@ -936,6 +936,10 @@ struct Handle {
     released: tokio::sync::OnceCell<Result<(), ExecutorError>>,
 }
 impl ExecutorScope for Handle {
+    fn ensure_current(&self) -> BoxFuture<'_, Result<(), ExecutorError>> {
+        Box::pin(self.scopes.validate(&self.entry))
+    }
+
     fn session_id(&self) -> String {
         lossless_text(
             self.entry

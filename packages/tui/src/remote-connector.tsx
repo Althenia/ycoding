@@ -5,6 +5,7 @@ import { useClient } from "./context/client"
 import { useToast } from "./ui/toast"
 import { useTheme } from "./context/theme"
 import type { PaletteStatusCommand } from "./component/command-palette"
+import { errorMessage } from "./util/error"
 
 export type RemoteStatus = Remote.Status
 
@@ -51,35 +52,62 @@ function createSwitch(
   let generation = 0
   let disposed = false
   let requested: boolean | undefined
+  let statusFailure: string | undefined
+  let enabling: { message?: string } | undefined
   let poll: ReturnType<typeof setInterval> | undefined
+
+  function report(message: string) {
+    if (!enabling || enabling.message === message) return
+    enabling.message = message
+    onFailure(message)
+  }
+
+  function accept(next: RemoteStatus) {
+    statusFailure = undefined
+    setStatus(() => next)
+    if (next.state === "error") report(next.message ?? "Remote connection failed. Check the runtime log.")
+    if (next.state === "connecting" && next.message) report(next.message)
+    if (next.state === "off") report("Remote connection stayed off. Check the server status before trying again.")
+    if (next.state !== "connecting") enabling = undefined
+  }
+
+  function recordFailure(error: unknown) {
+    const message = errorMessage(error)
+    statusFailure = message
+    setStatus(() => ({ state: "error", message }))
+    return message
+  }
 
   async function refresh() {
     if (requested !== undefined) return
     const cycle = generation
     try {
       const next = await server.get()
-      if (!disposed && cycle === generation && requested === undefined) setStatus(() => next)
+      if (!disposed && cycle === generation && requested === undefined) accept(next)
     } catch (error) {
-      if (!disposed && cycle === generation && requested === undefined)
-        setStatus(() => ({ state: "error", message: error instanceof Error ? error.message : String(error) }))
+      if (!disposed && cycle === generation && requested === undefined) report(recordFailure(error))
     }
   }
 
   async function toggle() {
+    if (requested === undefined && statusFailure !== undefined) {
+      onFailure(statusFailure)
+      return
+    }
     const cycle = ++generation
     const enabled = requested === undefined ? status().state === "off" : !requested
     requested = enabled
+    enabling = enabled ? {} : undefined
     try {
       const next = await server.set(enabled)
       if (!disposed && cycle === generation) {
-        setStatus(() => next)
         if (enabled) onEnabled(next)
+        accept(next)
       }
     } catch (error) {
       if (disposed || cycle !== generation) return
-      const message = error instanceof Error ? error.message : String(error)
-      setStatus(() => ({ state: "error", message }))
-      onFailure(message)
+      enabling = undefined
+      onFailure(recordFailure(error))
     } finally {
       if (cycle === generation) requested = undefined
     }
@@ -87,7 +115,9 @@ function createSwitch(
 
   onMount(() => {
     void refresh()
-    poll = setInterval(() => { void refresh() }, 2_000)
+    poll = setInterval(() => {
+      void refresh()
+    }, 2_000)
   })
   onCleanup(() => {
     disposed = true

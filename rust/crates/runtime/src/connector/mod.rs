@@ -14,6 +14,8 @@ pub use transport::{Connector, Settings};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     Setup,
+    NotEnrolled,
+    EnrollmentStore,
     Unauthorized,
     Forbidden,
     Preference,

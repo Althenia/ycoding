@@ -4,7 +4,7 @@ use std::ops::Bound;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use ycoding_schema::{DomainDecode, DomainEncode, LosslessString, schema::Int, telemetry};
-use ycoding_store::analytics::{Query, Value, reports};
+use ycoding_store::analytics::{Error as AnalyticsError, Query, Value, reports};
 use ycoding_store::{Client, KeyPart, TableSpec, Write, resources, session::Document, tuple_key};
 
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
@@ -23,6 +23,63 @@ pub enum Error {
 impl From<ycoding_store::Error> for Error {
     fn from(_: ycoding_store::Error) -> Self {
         Self::Storage
+    }
+}
+
+#[derive(Debug)]
+pub enum PruningError {
+    Store(ycoding_store::Error),
+    Analytics(AnalyticsError),
+    Worker(tokio::task::JoinError),
+}
+
+impl PruningError {
+    pub fn category(&self) -> &'static str {
+        use ycoding_store::Error as StoreError;
+
+        match self {
+            Self::Store(error) | Self::Analytics(AnalyticsError::Store(error)) => match error {
+                StoreError::QueueFull => "storage request queue full",
+                StoreError::SnapshotLimit => "storage snapshot limit reached",
+                StoreError::Domain {
+                    kind: "transaction_work_limit",
+                    ..
+                } => "storage transaction work limit reached",
+                StoreError::Incompatible(_) => "incompatible storage",
+                StoreError::WriterFenced | StoreError::WriterPanicked => "storage writer fenced",
+                StoreError::CommitUncertain(_) | StoreError::RollbackFailed(_) => {
+                    "storage transaction outcome uncertain"
+                }
+                StoreError::Io(_) => "storage I/O failed",
+                StoreError::Closed => "storage closed",
+                _ => "storage operation failed",
+            },
+            Self::Analytics(AnalyticsError::Deadline) => "analytics maintenance deadline exceeded",
+            Self::Analytics(AnalyticsError::Invalid | AnalyticsError::Privacy) => {
+                "analytics state changed during maintenance"
+            }
+            Self::Analytics(AnalyticsError::Cancelled) => "analytics maintenance cancelled",
+            Self::Analytics(error) if derived_engine_unavailable(error) => {
+                "analytics engine unavailable"
+            }
+            Self::Analytics(_) => "analytics maintenance failed",
+            Self::Worker(_) => "analytics maintenance worker stopped",
+        }
+    }
+}
+
+impl From<ycoding_store::Error> for PruningError {
+    fn from(error: ycoding_store::Error) -> Self {
+        Self::Store(error)
+    }
+}
+
+impl From<PruningError> for Error {
+    fn from(error: PruningError) -> Self {
+        match error {
+            PruningError::Analytics(error) if derived_engine_unavailable(&error) => Self::Derived,
+            _ => Self::Storage,
+        }
     }
 }
 
@@ -237,34 +294,40 @@ impl Service {
             cursor: telemetry::Cursor { next },
         })
     }
-    pub async fn prune(&self) -> Result<(), Error> {
+    pub async fn prune(&self) -> Result<(), PruningError> {
         self.prune_before(self.cutoff((self.clock)())).await
     }
-    async fn prune_before(&self, cutoff: i64) -> Result<(), Error> {
-        self.store
-            .submit(move |tx| prune(tx, cutoff))?
-            .await
-            .map_err(Error::from)?;
+    async fn prune_before(&self, cutoff: i64) -> Result<(), PruningError> {
+        self.store.submit(move |tx| prune(tx, cutoff))?.await?;
         purge_pending(&self.store).await
     }
     pub async fn housekeeping(
         &self,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
-        on_error: impl Fn(Error) + Send + 'static,
-    ) -> Result<tokio::task::JoinHandle<()>, Error> {
+        on_error: impl Fn(PruningError) + Send + 'static,
+    ) -> Result<tokio::task::JoinHandle<()>, PruningError> {
         if *shutdown.borrow() {
             return Ok(tokio::spawn(async {}));
         }
-        match self.prune().await {
-            Ok(()) => {}
-            Err(Error::Derived) => on_error(Error::Derived),
+        let run_now = match self.prune().await {
+            Ok(()) => false,
+            Err(error @ PruningError::Analytics(AnalyticsError::Deadline)) => {
+                on_error(error);
+                true
+            }
+            Err(error) if matches!(&error, PruningError::Analytics(cause) if derived_engine_unavailable(cause)) =>
+            {
+                on_error(error);
+                false
+            }
             Err(error) => return Err(error),
-        }
+        };
         let service = self.clone();
         Ok(tokio::spawn(async move {
+            let period = Duration::from_secs(3600);
             let mut interval = tokio::time::interval_at(
-                tokio::time::Instant::now() + Duration::from_secs(3600),
-                Duration::from_secs(3600),
+                tokio::time::Instant::now() + if run_now { Duration::ZERO } else { period },
+                period,
             );
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
@@ -321,7 +384,7 @@ fn prune(tx: &mut Write<'_>, cutoff: i64) -> Result<(), ycoding_store::Error> {
     Ok(())
 }
 
-async fn purge_pending(store: &Client) -> Result<(), Error> {
+async fn purge_pending(store: &Client) -> Result<(), PruningError> {
     let pending = store
         .snapshot()?
         .get::<ycoding_store::analytics::DeliveryTable>(&[])?
@@ -329,14 +392,14 @@ async fn purge_pending(store: &Client) -> Result<(), Error> {
     if !pending {
         return Ok(());
     }
-    let handle = store.analytics().map_err(derived)?;
+    let handle = store.analytics().map_err(PruningError::Analytics)?;
     tokio::task::spawn_blocking(move || {
         while handle.maintain()? == ycoding_store::analytics::Maintenance::Pending {}
         Ok(())
     })
     .await
-    .map_err(|_| Error::Storage)?
-    .map_err(derived)
+    .map_err(PruningError::Worker)?
+    .map_err(PruningError::Analytics)
 }
 pub fn derived_engine_unavailable(error: &ycoding_store::analytics::Error) -> bool {
     use ycoding_store::analytics::Error;
@@ -349,13 +412,6 @@ pub fn derived_engine_unavailable(error: &ycoding_store::analytics::Error) -> bo
             | Error::Io(_)
             | Error::Duck(_)
     )
-}
-fn derived(error: ycoding_store::analytics::Error) -> Error {
-    if derived_engine_unavailable(&error) {
-        Error::Derived
-    } else {
-        Error::Storage
-    }
 }
 fn valid_sample(sample: &telemetry::Sample) -> bool {
     let at = match sample {

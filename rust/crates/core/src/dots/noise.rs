@@ -159,7 +159,6 @@ pub struct Accept<'a> {
 pub struct Accepted {
     pub response: Vec<u8>,
     pub transport: Transport,
-    pub harness_key_sha256: String,
 }
 
 struct Direction {
@@ -398,7 +397,6 @@ impl Pending {
             initiator_static_dh,
             initiator_ephemeral_kem,
             initiator_static_kem,
-            initiator_static_kem_bytes,
             ..
         } = self;
 
@@ -461,10 +459,6 @@ impl Pending {
         Ok(Accepted {
             response,
             transport: Transport::new(send_key, recv_key),
-            harness_key_sha256: crate::cca::encoding::hex(&sha256(&[
-                &initiator_static_dh,
-                &initiator_static_kem_bytes,
-            ])),
         })
     }
 }

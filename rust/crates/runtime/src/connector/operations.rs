@@ -232,7 +232,12 @@ async fn get(
         .device()
         .summary(crate::ids::now_millis().max(0) as u64)
         .await
-        .map_err(|_| Failure::Unavailable("Remote device enrollment could not be read".into()))?;
+        .map_err(|_| {
+            Failure::Unavailable(
+                "Remote device enrollment could not be read. Check that remote-device.json is valid and private."
+                    .into(),
+            )
+        })?;
     Ok(v5::RemoteGetResult {
         data: v5::RemoteGetResultData {
             state,
@@ -336,7 +341,12 @@ async fn set(
         control
             .set(request.payload.enabled)
             .await
-            .map_err(|_| Failure::Unavailable("Remote preference could not be saved".into()))?,
+            .map_err(|_| {
+                Failure::Unavailable(
+                    "Remote preference could not be saved. Check that the YCoding state directory and remote.json are writable."
+                        .into(),
+                )
+            })?,
     );
     Ok(v5::RemoteSetResult {
         data: v5::RemoteSetResultData { state, message },

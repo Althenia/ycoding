@@ -358,6 +358,105 @@ async fn owed(ledger: &Ledger, shell: &Id, session: &str, pid: u32) {
 }
 
 #[tokio::test]
+async fn reconcile_settles_more_orphans_than_the_writer_queue_can_hold() {
+    let fixture = Fixture::default();
+    fixture.session("ses_recover", None, 0, false, None);
+    let client = fixture.store.client();
+    let ledger = Ledger::new(client.clone());
+    let notice = id("sh_recover_notice");
+    owed(&ledger, &notice, "ses_recover", 0).await;
+    let orphan = owner();
+    client
+        .submit(move |tx| {
+            for index in 0..2048 {
+                ShellTable::insert(
+                    tx,
+                    &ycoding_store::resources::Shell {
+                        id: format!("sh_orphan_{index:04}").into(),
+                        session_id: None,
+                        pid: 0,
+                        process_started: None,
+                        owner_pid: i64::from(orphan.pid),
+                        owner_started: orphan.started.as_str().into(),
+                        notice_pending: 0,
+                        time_created: 1,
+                        time_lost: None,
+                        start_seq: -1,
+                    },
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap()
+        .await
+        .unwrap();
+
+    for _ in 0..2 {
+        let result = ledger.reconcile(Duration::ZERO).await.unwrap();
+        assert!(!result.process_list_unavailable);
+        assert!(result.signal_failures.is_empty());
+        assert_eq!(
+            client
+                .snapshot()
+                .unwrap()
+                .scan::<ShellTable>(Bound::Unbounded, Bound::Unbounded, 2)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(ledger.lost_sessions().unwrap(), vec!["ses_recover".into()]);
+    }
+}
+
+#[tokio::test]
+async fn reconcile_retires_more_lost_notices_than_fit_in_one_transaction() {
+    let fixture = Fixture::default();
+    fixture.session("ses_retained", None, 0, false, None);
+    let client = fixture.store.client();
+    let ledger = Ledger::new(client.clone());
+    let notice = id("sh_retained");
+    owed(&ledger, &notice, "ses_retained", 0).await;
+    ledger.reconcile(Duration::ZERO).await.unwrap();
+    for start in (0..22_000).step_by(1_000) {
+        client
+            .submit(move |tx| {
+                for index in start..(start + 1_000).min(22_000) {
+                    ShellTable::insert(
+                        tx,
+                        &ycoding_store::resources::Shell {
+                            id: format!("sh_stale_{index:05}").into(),
+                            session_id: Some("ses_removed".into()),
+                            pid: 0,
+                            process_started: None,
+                            owner_pid: 0,
+                            owner_started: "former owner".into(),
+                            notice_pending: 1,
+                            time_created: 1,
+                            time_lost: Some(2),
+                            start_seq: -1,
+                        },
+                    )?;
+                }
+                Ok(())
+            })
+            .unwrap()
+            .await
+            .unwrap();
+    }
+    ledger.reconcile(Duration::ZERO).await.unwrap();
+    assert_eq!(
+        client
+            .snapshot()
+            .unwrap()
+            .scan::<ShellTable>(Bound::Unbounded, Bound::Unbounded, 2)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(ledger.lost_sessions().unwrap(), vec!["ses_retained".into()]);
+}
+
+#[tokio::test]
 async fn lost_notices_of_terminal_subagents_are_acknowledged_and_discarded_at_startup() {
     let fixture = Fixture::default();
     fixture.session("ses_lost_root", None, 0, false, None);

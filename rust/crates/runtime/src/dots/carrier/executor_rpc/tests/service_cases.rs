@@ -106,7 +106,6 @@ fn context() -> HandlerContext {
     HandlerContext {
         signal: Signal::never(),
         session_id: SESSION_ID.to_string(),
-        authenticated_executor: None,
     }
 }
 

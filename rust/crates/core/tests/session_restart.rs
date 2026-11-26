@@ -1,9 +1,50 @@
 use ycoding_core::session::store::Service;
 use ycoding_schema::{parse_json, session, session_message};
-use ycoding_store::session::NewEvent;
+use ycoding_store::session::{NewEvent, Sequence, SequenceTable};
 
 #[path = "session_support/mod.rs"]
 mod support;
+
+#[tokio::test]
+async fn reconciles_open_runs_across_more_sequences_than_fit_in_one_transaction() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    for start in (0..13_200).step_by(1_000) {
+        store
+            .client()
+            .submit(move |tx| {
+                for index in start..(start + 1_000).min(13_200) {
+                    SequenceTable::put(
+                        tx,
+                        &Sequence {
+                            aggregate_id: format!("ses_one_history_{index:05}").into(),
+                            seq: 0,
+                            owner_id: None,
+                        },
+                    )?;
+                }
+                Ok(())
+            })
+            .unwrap()
+            .await
+            .unwrap();
+    }
+    for (id, aggregate) in [("evt_before", "ses_one"), ("evt_after", "ses_two")] {
+        service
+            .publish(NewEvent {
+                id: id.into(),
+                aggregate_id: aggregate.into(),
+                created: 1,
+                type_: "session.execution.started.1".into(),
+                data: parse_json(&format!(r#"{{"sessionID":"{aggregate}"}}"#)).unwrap(),
+            })
+            .await
+            .unwrap();
+    }
+
+    assert_eq!(service.reconcile_interrupted(2).await.unwrap(), 2);
+    assert_eq!(service.reconcile_interrupted(3).await.unwrap(), 0);
+}
 
 #[tokio::test]
 async fn reconciles_missing_step_and_execution_terminals_without_resuming_or_repeating_them() {

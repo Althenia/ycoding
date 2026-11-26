@@ -119,15 +119,22 @@ impl fmt::Display for LaunchError {
             Self::Usage(message) | Self::Message(message) => formatter.write_str(message),
             Self::Io(error) => write!(formatter, "{error}"),
             Self::Owner(_) => formatter.write_str("production owner shutdown failed"),
-            Self::Production(crate::Failure::ServiceUnavailable { service, message })
-                if *service == crate::production::GLOBAL_CONFIGURATION =>
-            {
+            Self::Production(failure) => {
                 write!(
                     formatter,
-                    "production composition failed: {service}: {message}"
-                )
+                    "production composition failed: {}",
+                    production_stage(failure)
+                )?;
+                if let crate::Failure::ServiceUnavailable {
+                    service:
+                        crate::production::GLOBAL_CONFIGURATION | crate::production::TELEMETRY_PRUNING,
+                    message,
+                } = failure
+                {
+                    write!(formatter, ": {message}")?;
+                }
+                Ok(())
             }
-            Self::Production(_) => formatter.write_str("production composition failed"),
             Self::CoreShutdown(_) => formatter.write_str("production shutdown failed"),
             Self::Shutdown { first, later } => {
                 write!(formatter, "{first}")?;
@@ -137,6 +144,81 @@ impl fmt::Display for LaunchError {
                 Ok(())
             }
         }
+    }
+}
+
+fn production_stage(failure: &crate::Failure) -> &str {
+    let message = match failure {
+        crate::Failure::ServiceUnavailable { service, .. } => return service,
+        crate::Failure::Unavailable(message) => message,
+        _ => return "production",
+    };
+    let primary = message
+        .split_once("; cleanup failure: ")
+        .map_or(message.as_str(), |(primary, _)| primary);
+    match primary {
+        "production owner admission is closed" => "production owner",
+        "Location guardrail directory is unavailable" | "stored Location is not representable" => {
+            "Location guardrail directories"
+        }
+        "Pending Form checkpoint is invalid"
+        | "Pending Form owner is invalid"
+        | "Pending Form restoration failed" => "Pending Form restoration",
+        "Native Dots services are unavailable" => "Native Dots",
+        "Relay MCP is unavailable" | "Relay MCP authorization already has a backend owner" => {
+            "Relay MCP"
+        }
+        "MCP Events already has a backend owner" => "MCP Events",
+        _ => match primary.strip_suffix(" unavailable") {
+            Some(
+                stage @ ("account catalog"
+                | "agent configuration"
+                | "artifact accounting secret"
+                | "built-in agent catalog"
+                | "Claude account source"
+                | "Claude account store"
+                | "composition runtime"
+                | "computer Electron bridge"
+                | "Cursor account store"
+                | "Goal decision subscription"
+                | "Interaction attachments"
+                | "Interaction helper"
+                | "Interaction helper discovery"
+                | "Interaction platforms"
+                | "interrupted steps"
+                | "managed attachments"
+                | "managed task recovery"
+                | "MCP Events authorization"
+                | "MCP Events capture"
+                | "model catalog"
+                | "model catalog events"
+                | "native account methods"
+                | "notification outbox"
+                | "process-global Session execution"
+                | "Project admitted input resumption"
+                | "Project notification recovery"
+                | "Project notification subscription"
+                | "Project runtime"
+                | "provider context"
+                | "provider execution"
+                | "provider usage"
+                | "remote control"
+                | "review reconciliation"
+                | "ripgrep acquisition"
+                | "runtime directories"
+                | "session cleanup startup"
+                | "Session status feed"
+                | "Session store"
+                | "shell ledger"
+                | "shell process reconciliation"
+                | "sleep keep-awake holds"
+                | "stale tasks"
+                | "stored autonomy"
+                | "task notifications subscription"
+                | "wellknown source"),
+            ) => stage,
+            _ => "production",
+        },
     }
 }
 
@@ -452,26 +534,7 @@ async fn build_services(
         config.mode == Mode::Service,
     )
     .await
-    .map_err(|failure| {
-        if !matches!(
-            failure,
-            crate::dispatch::Failure::Unavailable(_)
-                | crate::dispatch::Failure::ServiceUnavailable {
-                    service: crate::production::GLOBAL_CONFIGURATION,
-                    ..
-                }
-        ) {
-            let category = match failure {
-                crate::dispatch::Failure::Invalid(_)
-                | crate::dispatch::Failure::InvalidField { .. } => "invalid",
-                crate::dispatch::Failure::Unknown { .. } => "unknown",
-                crate::dispatch::Failure::ServiceUnavailable { .. } => "unavailable",
-                _ => "other",
-            };
-            eprintln!("production composition diagnostic: stage=production; category={category}");
-        }
-        LaunchError::Production(failure)
-    })?;
+    .map_err(LaunchError::Production)?;
     Ok(Services {
         identity,
         auth: LocalAuth::with_password(config.password.clone()),
@@ -1602,7 +1665,10 @@ fn prepare_store(config: &LaunchConfig) -> Result<(), BootFailure> {
             Options::core(),
             ycoding_core::session::history_pruning::free_bytes,
         )
-        .map_err(|_| BootFailure::Refused(unsupported_store()))?;
+        .map_err(|error| {
+            tracing::error!(%error, "Store upgrade failed");
+            BootFailure::Refused(unsupported_store())
+        })?;
     }
     Ok(())
 }
@@ -1614,8 +1680,10 @@ fn open_store(config: &LaunchConfig) -> Result<Store, BootFailure> {
             .map_err(|error| BootFailure::Retained(message(error)));
     };
     if storage.file.try_exists()? {
-        return Store::open(&storage.file, Options::core(), catalog)
-            .map_err(|_| BootFailure::Refused(unsupported_store()));
+        return Store::open(&storage.file, Options::core(), catalog).map_err(|error| {
+            tracing::error!(%error, "Store open failed");
+            BootFailure::Refused(unsupported_store())
+        });
     }
     let store =
         Store::initialize(&storage.file, Options::core(), catalog, metadata()?).map_err(message)?;
@@ -1904,6 +1972,38 @@ fn sha1(input: &[u8]) -> [u8; 20] {
 #[cfg(test)]
 mod frontend_launch_tests {
     use super::{LaunchError, Parsed, parse_launch, production_environment};
+
+    #[test]
+    fn composition_error_reports_the_stage_without_internal_details() {
+        let failure = crate::production::bootstrap_failure(
+            crate::Failure::Unavailable("shell ledger unavailable".into()),
+            Err(crate::Failure::Unavailable(
+                "synthetic private details".into(),
+            )),
+        );
+        assert_eq!(
+            LaunchError::Production(failure).to_string(),
+            "production composition failed: shell ledger"
+        );
+        let failure = crate::Failure::Unavailable("synthetic private contents unavailable".into());
+        assert_eq!(
+            LaunchError::Production(failure).to_string(),
+            "production composition failed: production"
+        );
+        let failure = crate::production::bootstrap_failure(
+            crate::Failure::ServiceUnavailable {
+                service: crate::production::TELEMETRY_PRUNING,
+                message: "storage request queue full".into(),
+            },
+            Err(crate::Failure::Unavailable(
+                "synthetic private details".into(),
+            )),
+        );
+        assert_eq!(
+            LaunchError::Production(failure).to_string(),
+            "production composition failed: telemetry pruning: storage request queue full"
+        );
+    }
 
     #[test]
     fn shutdown_errors_retain_the_owner_report_and_later_host_failures() {

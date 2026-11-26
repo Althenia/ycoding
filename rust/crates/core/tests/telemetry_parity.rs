@@ -15,8 +15,8 @@ use ycoding_core::{
     telemetry::{Error, MAX_ROWS, Service},
     ycoding_schema::{DomainDecode, DomainEncode, parse_json, telemetry},
     ycoding_store::{
-        Catalog, Metadata, Options, Receipt, Store, TableDeclaration, analytics, resources,
-        session::Document, usage_cells,
+        Catalog, Metadata, Options, Receipt, Store, TableDeclaration, TableSpec, analytics,
+        resources, session::Document, usage_cells,
     },
 };
 
@@ -709,6 +709,105 @@ async fn housekeeping_prunes_exactly_once_before_returning_a_task_that_joins_on_
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     drop(reports);
     store.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn housekeeping_keeps_reports_fenced_after_a_purge_deadline_until_the_worker_retries() {
+    static PAGES: AtomicUsize = AtomicUsize::new(0);
+    const SOURCES: &[analytics::Source] = &[analytics::Source {
+        name: "report_fixture",
+        version: 1,
+        columns: &[analytics::Column {
+            name: "value",
+            kind: analytics::ColumnType::Integer,
+        }],
+        allowed: |_, _| Ok(true),
+        load: |_, _| Ok(None),
+        page: |_, _, _| {
+            if PAGES.fetch_add(1, Ordering::SeqCst) == 0 {
+                std::thread::sleep(analytics::REPORT_DEADLINE + Duration::from_millis(100));
+            }
+            Ok(Vec::new())
+        },
+    }];
+    let store = Store::disposable(Options::core(), CATALOG, Metadata::new([1; 16], 1)).unwrap();
+    let client = store.client();
+    let service = Service::with_clock(
+        client.clone(),
+        Arc::new(|| RETENTION_MS + 1),
+        Arc::new(Settings::default),
+    );
+    let sample = Document::new(sample().encode()).unwrap();
+    client
+        .submit(move |tx| resources::append_latency(tx, 0, &sample).map(|_| ()))
+        .unwrap()
+        .await
+        .unwrap();
+    let reports = report_support::start_sources(client.clone(), SOURCES, false);
+    let (purged, settled) = tokio::sync::oneshot::channel();
+    let purged = std::sync::Mutex::new(Some(purged));
+    let snapshot_client = client.clone();
+    client.observe_commits(move |tables| {
+        if tables.contains(&analytics::DeliveryTable::NAME)
+            && snapshot_client
+                .snapshot()
+                .unwrap()
+                .get::<analytics::DeliveryTable>(&[])
+                .unwrap()
+                .is_some_and(|delivery| delivery.purges.is_empty() && !delivery.purge_all)
+        {
+            let _ = purged.lock().unwrap().take().unwrap().send(());
+            return false;
+        }
+        true
+    });
+    let logged = Arc::new(AtomicUsize::new(0));
+    let count = logged.clone();
+    let handle = client.analytics().unwrap();
+    let (stop, shutdown) = tokio::sync::watch::channel(false);
+    let task = service
+        .housekeeping(shutdown, move |error| {
+            assert_eq!(error.category(), "analytics maintenance deadline exceeded");
+            assert!(matches!(
+                handle.report(vec![analytics::Query {
+                    sql: "SELECT 1",
+                    parameters: Vec::new(),
+                    max_rows: 1,
+                }]),
+                Err(analytics::Error::Privacy)
+            ));
+            count.fetch_add(1, Ordering::SeqCst);
+        })
+        .await
+        .unwrap();
+    assert_eq!(logged.load(Ordering::SeqCst), 1);
+    assert_eq!(count_rows(&store), 0);
+    tokio::time::timeout(Duration::from_secs(15), settled)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(PAGES.load(Ordering::SeqCst) >= 2);
+    stop.send(true).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(reports);
+    store.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn housekeeping_keeps_a_source_store_failure_fatal() {
+    let store = Store::disposable(Options::core(), CATALOG, Metadata::new([1; 16], 1)).unwrap();
+    let service = Service::new(store.client(), Arc::new(Settings::default));
+    store.shutdown().unwrap();
+
+    let (_stop, shutdown) = tokio::sync::watch::channel(false);
+    let error = service
+        .housekeeping(shutdown, |_| panic!("source failure was deferred"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.category(), "storage closed");
 }
 
 #[tokio::test]

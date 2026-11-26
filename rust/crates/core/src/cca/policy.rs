@@ -751,14 +751,8 @@ fn read_sandbox(value: &JsonValue) -> Result<ParsedSandbox, PolicyError> {
         _ => Err(bad_sandbox()),
     }
 }
-pub(super) fn process_requires_sandbox(sandbox: Option<&JsonValue>) -> Result<bool, PolicyError> {
-    let sandbox = present(sandbox).map(read_sandbox).transpose()?;
-    Ok(sandbox.is_some_and(|sandbox| {
-        sandbox.profile == Profile::External
-            || sandbox.restricted
-            || sandbox.network == "restricted"
-            || sandbox.override_mode == "escalatedSandboxWithRestrictions"
-    }))
+pub(super) fn validate_sandbox(sandbox: Option<&JsonValue>) -> Result<(), PolicyError> {
+    present(sandbox).map(read_sandbox).transpose().map(|_| ())
 }
 
 pub(super) fn read_managed_network(value: &JsonValue) -> Result<(), PolicyError> {
@@ -1458,9 +1452,18 @@ pub struct BuildProcessEnv<'a> {
     pub windows: bool,
 }
 
-pub fn build_process_env(
+#[cfg(test)]
+fn build_process_env(
     input: &BuildProcessEnv<'_>,
 ) -> Result<Vec<(LosslessString, LosslessString)>, PolicyError> {
+    build_process_env_with_access(input, super::executor::ExecutorAccess::Ordinary)
+}
+
+pub(super) fn build_process_env_with_access(
+    input: &BuildProcessEnv<'_>,
+    access: super::executor::ExecutorAccess,
+) -> Result<Vec<(LosslessString, LosslessString)>, PolicyError> {
+    let ordinary = access == super::executor::ExecutorAccess::Ordinary;
     let policy = read_env_policy(input.env_policy)?;
     let core = if input.windows {
         WINDOWS_CORE_ENV
@@ -1499,12 +1502,13 @@ pub fn build_process_env(
             {
                 continue;
             }
-            if osc_secret_key(key) {
+            if ordinary && osc_secret_key(key) {
                 continue;
             }
-            if policy
-                .as_ref()
-                .is_some_and(|policy| !policy.ignore_default_excludes)
+            if ordinary
+                && policy
+                    .as_ref()
+                    .is_some_and(|policy| !policy.ignore_default_excludes)
                 && broad_secret_key(key)
             {
                 continue;
@@ -1534,12 +1538,14 @@ pub fn build_process_env(
     for (key, value) in input.env {
         insert(&mut result, key, value);
     }
-    result.retain(|(key, _)| {
-        key.as_str() != Some("CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE")
-            && !NON_INHERITABLE_ENV
-                .iter()
-                .any(|name| LosslessString::from(ascii_lower(name)) == lower_units(key))
-    });
+    if ordinary {
+        result.retain(|(key, _)| {
+            key.as_str() != Some("CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE")
+                && !NON_INHERITABLE_ENV
+                    .iter()
+                    .any(|name| LosslessString::from(ascii_lower(name)) == lower_units(key))
+        });
+    }
     if result.len() > MAX_ENV_ENTRIES {
         return Err(PolicyError::new(
             PolicyCode::InvalidEnv,

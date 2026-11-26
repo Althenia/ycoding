@@ -15,7 +15,6 @@ use std::{
 use ycoding_core::cca::executor::{
     PrepareExecutorError, PrepareExecutorInput, PreparedExecutor, prepare_executor,
 };
-use ycoding_core::resources::config::{LoadOptions, Roots};
 
 struct Directory(PathBuf);
 
@@ -132,6 +131,26 @@ fn owned(test: impl FnOnce(Context) -> Pin<Box<dyn Future<Output = ()>>>) {
 }
 
 #[test]
+fn native_preparation_does_not_read_proxy_certificate_files() {
+    let directory = Directory::new();
+    let ca = directory.0.join("invalid-ca.pem");
+    std::fs::write(&ca, "not a certificate").unwrap();
+    let prepared = ycoding_core::cca::executor::prepare_native_dots_executor(
+        &directory.0,
+        &directory.0,
+        &BTreeMap::from([("SSL_CERT_FILE".to_owned(), ca.to_str().unwrap().to_owned())]),
+    )
+    .unwrap();
+    assert!(
+        prepared
+            .environment_info()
+            .capabilities
+            .credential_masking
+            .is_none()
+    );
+}
+
+#[test]
 fn advertised_metadata_is_the_frozen_core_snapshot_without_scope_effects() {
     owned(|context| {
         Box::pin(async move {
@@ -144,16 +163,7 @@ fn advertised_metadata_is_the_frozen_core_snapshot_without_scope_effects() {
             let expected = environment_info(fixture.prepared.environment_info());
             let composition = fixture.composition();
             assert_eq!(fixture.host.subscriptions(), baseline_subscriptions);
-            let global = Configuration::load(LoadOptions {
-                directory: fixture.directory.0.clone(),
-                roots: Roots::development(&fixture.directory.0).unwrap(),
-                project: false,
-                file: None,
-                content: None,
-                env: BTreeMap::new(),
-            })
-            .unwrap();
-            let serving = composition.into_serving(Arc::new(global)).unwrap();
+            let serving = composition.into_serving().unwrap();
             assert_eq!(serving.advertised, expected);
             assert_eq!(
                 serving.advertised.shell.path.as_str(),

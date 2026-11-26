@@ -209,3 +209,27 @@ test("the Remote authority notice keeps its wrapped final line visible", async (
     expect(view.app.captureCharFrame()).toContain("Connecting grants")
   } finally { view.app.renderer.destroy() }
 }, 10_000)
+
+test("a relay rejection after enabling shows the reason without another command", async () => {
+  const fixture = fakeServer()
+  const message = "The relay rejected this device. Enroll it again."
+  const server = {
+    ...fixture,
+    set: async (enabled: boolean): Promise<RemoteStatus> => {
+      fixture.writes.push(enabled)
+      fixture.change({ state: "connecting" })
+      return { state: "connecting" }
+    },
+  }
+  const view = await renderRemote(server)
+  try {
+    view.dispatch("remote.toggle")
+    await view.app.waitForFrame((frame) => frame.includes("Connecting grants"))
+    fixture.change({ state: "error", message })
+    await awaitFrame(view.app, (frame) => frame.includes("Remote fixture: error"))
+    expect(view.app.captureCharFrame()).toContain(message)
+    expect(fixture.writes).toEqual([true])
+  } finally {
+    view.app.renderer.destroy()
+  }
+})

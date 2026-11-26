@@ -10,6 +10,7 @@ use ycoding_store::{
 
 pub const TERMINATE_GRACE: Duration = Duration::from_secs(3);
 const STARTED_TYPE: &str = "session.execution.started.1";
+const PAGE_SIZE: usize = 128;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Process {
@@ -216,18 +217,20 @@ impl Ledger {
     }
 
     pub async fn reconcile(&self, grace: Duration) -> io::Result<Reconciliation> {
-        let pending = self
-            .0
-            .submit(|tx| {
-                let mut pending = Vec::new();
-                let mut cursor = None;
-                loop {
+        let mut cursor: Option<Vec<u8>> = None;
+        let mut pending = Vec::new();
+        loop {
+            let (page, next) = self
+                .0
+                .submit(move |tx| {
                     let page = tx.scan::<ShellTable>(
                         cursor.as_deref().map_or(Bound::Unbounded, Bound::Excluded),
                         Bound::Unbounded,
-                        128,
+                        PAGE_SIZE,
                     )?;
-                    cursor = page.last().map(ShellTable::primary_key);
+                    let next = (page.len() == PAGE_SIZE)
+                        .then(|| ShellTable::primary_key(page.last().unwrap()));
+                    let mut pending = Vec::new();
                     for row in page {
                         if row.time_lost.is_none() {
                             pending.push(row);
@@ -245,15 +248,17 @@ impl Ledger {
                             tx.delete::<ShellTable>(&ShellTable::primary_key(&row))?;
                         }
                     }
-                    if cursor.is_none() {
-                        break;
-                    }
-                }
-                Ok(pending)
-            })
-            .map_err(io::Error::other)?
-            .await
-            .map_err(io::Error::other)?;
+                    Ok((pending, next))
+                })
+                .map_err(io::Error::other)?
+                .await
+                .map_err(io::Error::other)?;
+            pending.extend(page);
+            cursor = next;
+            if cursor.is_none() {
+                break;
+            }
+        }
         let mut report = Reconciliation::default();
         if pending.is_empty() {
             return Ok(report);
@@ -266,58 +271,66 @@ impl Ledger {
             }
         };
         let mut work = tokio::task::JoinSet::new();
-        for mut row in pending {
+        let mut orphaned = Vec::new();
+        for row in pending {
             if alive(&snapshot, Some(row.owner_pid), Some(&row.owner_started)) {
                 continue;
             }
-            let alive = survivors(&row, &snapshot);
-            let store = self.0.clone();
+            if !survivors(&row, &snapshot) {
+                orphaned.push(row);
+                continue;
+            }
             work.spawn(async move {
                 let mut failures = Vec::new();
-                if alive {
-                    if let Err(error) = signal(&row, false) {
-                        failures.push((row.id.clone(), error.to_string()));
-                    }
-                    let deadline = tokio::time::Instant::now() + grace;
-                    let mut exited = false;
-                    while tokio::time::Instant::now() < deadline {
-                        tokio::time::sleep(Duration::from_millis(100).min(grace)).await;
-                        if processes().await.is_ok_and(|after| survivors(&row, &after)) {
-                            continue;
-                        }
-                        exited = true;
-                        break;
-                    }
-                    if !exited && let Err(error) = signal(&row, true) {
-                        failures.push((row.id.clone(), error.to_string()));
-                    }
+                if let Err(error) = signal(&row, false) {
+                    failures.push((row.id.clone(), error.to_string()));
                 }
-                store
-                    .submit(move |tx| {
-                        let Some(owner) =
-                            row.session_id.clone().filter(|_| row.notice_pending != 0)
-                        else {
-                            tx.delete::<ShellTable>(&ShellTable::primary_key(&row))?;
-                            return Ok(());
-                        };
-                        if terminal(tx.get::<TaskTable>(&key(&owner))?) {
-                            tx.delete::<ShellTable>(&ShellTable::primary_key(&row))?;
-                            return Ok(());
-                        }
-                        row.time_lost = Some(super::super::now() as i64);
-                        row.start_seq = latest_start(tx, &owner)?;
-                        ShellTable::put(tx, &row)
-                    })
-                    .map_err(io::Error::other)?
-                    .await
-                    .map_err(io::Error::other)?;
-                Ok::<_, io::Error>(failures)
+                let deadline = tokio::time::Instant::now() + grace;
+                let mut exited = false;
+                while tokio::time::Instant::now() < deadline {
+                    tokio::time::sleep(Duration::from_millis(100).min(grace)).await;
+                    if processes().await.is_ok_and(|after| survivors(&row, &after)) {
+                        continue;
+                    }
+                    exited = true;
+                    break;
+                }
+                if !exited && let Err(error) = signal(&row, true) {
+                    failures.push((row.id.clone(), error.to_string()));
+                }
+                (row, failures)
             });
         }
         while let Some(result) = work.join_next().await {
-            report
-                .signal_failures
-                .extend(result.map_err(io::Error::other)??);
+            let (row, failures) = result.map_err(io::Error::other)?;
+            orphaned.push(row);
+            report.signal_failures.extend(failures);
+        }
+        let mut orphaned = orphaned.into_iter();
+        loop {
+            let batch: Vec<_> = orphaned.by_ref().take(PAGE_SIZE).collect();
+            if batch.is_empty() {
+                break;
+            }
+            self.0
+                .submit(move |tx| {
+                    for mut row in batch {
+                        if let Some(owner) = &row.session_id
+                            && row.notice_pending != 0
+                            && !terminal(tx.get::<TaskTable>(&key(owner))?)
+                        {
+                            row.time_lost = Some(super::super::now() as i64);
+                            row.start_seq = latest_start(tx, owner)?;
+                            ShellTable::put(tx, &row)?;
+                        } else {
+                            tx.delete::<ShellTable>(&ShellTable::primary_key(&row))?;
+                        }
+                    }
+                    Ok(())
+                })
+                .map_err(io::Error::other)?
+                .await
+                .map_err(io::Error::other)?;
         }
         Ok(report)
     }
@@ -402,7 +415,7 @@ fn rows<T: TableSpec>(snapshot: &Snapshot) -> Result<Vec<T::Record>, Error> {
         let page = snapshot.scan::<T>(
             cursor.as_deref().map_or(Bound::Unbounded, Bound::Excluded),
             Bound::Unbounded,
-            128,
+            PAGE_SIZE,
         )?;
         cursor = page.last().map(T::primary_key);
         rows.extend(page);

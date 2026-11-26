@@ -13,6 +13,14 @@ pub fn start(client: Client) -> Reports {
 }
 
 pub fn start_with(client: Client, drain_cells: bool) -> Reports {
+    start_sources(client, analytics::reports::SOURCES, drain_cells)
+}
+
+pub fn start_sources(
+    client: Client,
+    sources: &'static [analytics::Source],
+    drain_cells: bool,
+) -> Reports {
     let (ready, started) = mpsc::sync_channel(1);
     let (stop, stopped) = mpsc::channel();
     let thread = std::thread::spawn(move || {
@@ -26,7 +34,7 @@ pub fn start_with(client: Client, drain_cells: bool) -> Reports {
                 .as_nanos()
         ));
         let drain = client.clone();
-        let engine = analytics::reports::start(client, &directory).unwrap();
+        let engine = analytics::Engine::start(client, &directory, sources).unwrap();
         while drain_cells && !usage_cells::ready(&drain.snapshot().unwrap()).unwrap() {
             usage_cells::maintain(&drain).unwrap();
         }

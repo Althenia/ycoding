@@ -512,7 +512,6 @@ impl RpcSession {
                 HandlerContext {
                     signal: self.inner.controller.signal(),
                     session_id: state.session_id.clone().unwrap_or_default(),
-                    authenticated_executor: None,
                 },
                 state.connection.clone(),
             )

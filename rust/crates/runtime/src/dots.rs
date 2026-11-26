@@ -17,7 +17,7 @@ use std::{
 use ycoding_core::{
     cca::{
         error::ExecutorError,
-        executor::{self as core_executor, PrepareExecutorInput, PreparedExecutor},
+        executor::{self as core_executor, PreparedExecutor},
     },
     dots::{Admission, DecisionServices, Decisions, access, conversation, enrollment, native},
     event_feed::{self, Feed},
@@ -77,31 +77,15 @@ pub(crate) struct Settings {
 struct NativePreparation {
     home: PathBuf,
     data: PathBuf,
-    ca_directory: PathBuf,
     environment: Arc<BTreeMap<String, String>>,
 }
 
 impl NativePreparation {
-    fn capture(
-        home: PathBuf,
-        data: PathBuf,
-        state: PathBuf,
-        environment: &BTreeMap<String, String>,
-    ) -> Self {
+    fn capture(home: PathBuf, data: PathBuf, environment: &BTreeMap<String, String>) -> Self {
         Self {
             home,
             data,
-            ca_directory: state.join("cca-proxy"),
             environment: Arc::new(environment.clone()),
-        }
-    }
-
-    fn input(&self) -> PrepareExecutorInput<'_> {
-        PrepareExecutorInput {
-            home_directory: &self.home,
-            data_directory: &self.data,
-            network_proxy_ca_directory: &self.ca_directory,
-            startup_environment: &self.environment,
         }
     }
 }
@@ -206,25 +190,22 @@ async fn start_native_executor(
     };
     let published = Arc::new(OnceLock::<Arc<PreparedExecutor>>::new());
     let writer = published.clone();
-    let (home, data, ca_directory) = (
-        preparation.home.clone(),
-        preparation.data.clone(),
-        preparation.ca_directory.clone(),
-    );
+    let (home, data) = (preparation.home.clone(), preparation.data.clone());
     let prepare: supervisor::Prepare = Box::new(move || {
         Box::pin(async move {
-            let prepared = core_executor::prepare_executor(preparation.input()).map_err(
-                |error| match error {
-                    core_executor::PrepareExecutorError::Held { prerequisite, .. } => {
-                        PrepareError::Held {
-                            reason: prerequisite,
-                        }
+            let prepared = core_executor::prepare_native_dots_executor(
+                &preparation.home,
+                &preparation.data,
+                &preparation.environment,
+            )
+            .map_err(|error| match error {
+                core_executor::PrepareExecutorError::Held { prerequisite, .. } => {
+                    PrepareError::Held {
+                        reason: prerequisite,
                     }
-                    core_executor::PrepareExecutorError::Failed(error) => {
-                        PrepareError::Failed(error)
-                    }
-                },
-            )?;
+                }
+                core_executor::PrepareExecutorError::Failed(error) => PrepareError::Failed(error),
+            })?;
             let advertised = rpc::core_adapter::environment_info(prepared.environment_info());
             rpc::readiness::check(&advertised, &rpc::core_adapter::backend_features())?;
             writer.set(Arc::new(prepared)).map_err(|_| {
@@ -243,13 +224,11 @@ async fn start_native_executor(
     );
     let (owner, codex_home) = (settings.owner.clone(), settings.codex_home.clone());
     let serve_host = host.clone();
-    let serve_global = settings.global.clone();
     let serve: supervisor::Serve = Arc::new(move |opened| {
         let (prepared, host) = (published.get().cloned(), serve_host.clone());
-        let global = serve_global.clone();
         let (locations, sessions, git) = (locations.clone(), sessions.clone(), git.clone());
         let (owner, codex_home) = (owner.clone(), codex_home.clone());
-        let (home, data, ca_directory) = (home.clone(), data.clone(), ca_directory.clone());
+        let (home, data) = (home.clone(), data.clone());
         Box::pin(async move {
             let Some(prepared) = prepared else {
                 opened
@@ -271,7 +250,7 @@ async fn start_native_executor(
                 home,
                 data,
                 prepared,
-                network_proxy_ca_directory: Some(ca_directory),
+                network_proxy_ca_directory: None,
                 answer_process: None,
                 library: Some(library),
                 review_directories: None,
@@ -279,7 +258,7 @@ async fn start_native_executor(
                 codex_home_env: Some(codex_home),
                 system_config_path: None,
             }
-            .into_serving(global)
+            .into_serving()
             .map_err(|_| {
                 opened
                     .diagnostics
@@ -348,12 +327,7 @@ impl Services {
         rest: conversation::RestDriver,
     ) -> Result<Self, Failure> {
         let preparation = executor_configured(&settings.global)?.then(|| {
-            NativePreparation::capture(
-                settings.home.clone(),
-                settings.data.clone(),
-                settings.state.clone(),
-                &settings.env,
-            )
+            NativePreparation::capture(settings.home.clone(), settings.data.clone(), &settings.env)
         });
         let registry = auth::integration::Registry::prepared(
             settings.credentials.clone(),

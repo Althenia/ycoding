@@ -103,7 +103,8 @@ impl Credentials for Device {
 
 fn failure(error: remote::Error) -> Error {
     match error {
-        remote::Error::Store | remote::Error::NotEnrolled => Error::Setup,
+        remote::Error::Store => Error::EnrollmentStore,
+        remote::Error::NotEnrolled => Error::NotEnrolled,
         remote::Error::Revoked => Error::Unauthorized,
         remote::Error::Relay => Error::Transport,
     }

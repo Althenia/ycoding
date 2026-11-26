@@ -53,19 +53,7 @@ test("only global configuration document provenance can opt in Dots", () => {
   expect(Config.capabilities([global, project]).dots).toBe(true)
 })
 
-test("full access executor requires an exact environment and lowercase key digest", () => {
+test("unknown Dots keys follow excess-property validation", () => {
   const decode = Schema.decodeUnknownSync(Config.Info)
-  const binding = { environmentId: "env-1", harnessKeySha256: "a".repeat(64) }
-  const info = decode({ dots: { fullAccessExecutor: binding } }, { onExcessProperty: "error" })
-  expect(info.dots?.fullAccessExecutor).toEqual(binding)
-  expect(Config.dots([new Config.Document({ type: "document", scope: "global", info })])).toEqual({ enabled: false })
-  for (const value of [
-    { ...binding, environmentId: "*" },
-    { ...binding, environmentId: "" },
-    { ...binding, environmentId: "a".repeat(257) },
-    { ...binding, harnessKeySha256: "A".repeat(64) },
-    { ...binding, harnessKeySha256: `${binding.harnessKeySha256}\n` },
-    { environmentId: "env-1" },
-  ])
-    expect(() => decode({ dots: { fullAccessExecutor: value } }, { onExcessProperty: "error" })).toThrow()
+  expect(() => decode({ dots: { unknown: true } }, { onExcessProperty: "error" })).toThrow()
 })

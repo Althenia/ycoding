@@ -233,6 +233,21 @@ pub(crate) fn cleanup_results(
 pub(crate) fn bootstrap_failure(primary: Failure, released: Result<(), Failure>) -> Failure {
     match released {
         Ok(()) => primary,
+        Err(_)
+            if matches!(
+                &primary,
+                Failure::ServiceUnavailable {
+                    service: TELEMETRY_PRUNING,
+                    ..
+                }
+            ) =>
+        {
+            tracing::error!(
+                stage = TELEMETRY_PRUNING,
+                "Cleanup after a failed production startup also failed"
+            );
+            primary
+        }
         Err(released) => {
             let message = match primary {
                 Failure::Unavailable(message) => message,
@@ -3053,11 +3068,18 @@ impl Maintenance {
     async fn housekeeping(&self, factory: &Factory) -> Result<(), Failure> {
         let task =
             ycoding_core::telemetry::Service::new(factory.client.clone(), factory.settings.clone())
-                .housekeeping(self.stop.subscribe(), |_| {
-                    tracing::error!("Web latency pruning failed")
+                .housekeeping(self.stop.subscribe(), |error| {
+                    tracing::warn!(
+                        stage = TELEMETRY_PRUNING,
+                        cause = error.category(),
+                        "Web latency housekeeping will retry"
+                    );
                 })
                 .await
-                .map_err(|_| unavailable("telemetry pruning"))?;
+                .map_err(|error| Failure::ServiceUnavailable {
+                    service: TELEMETRY_PRUNING,
+                    message: error.category().into(),
+                })?;
         *self
             .telemetry
             .lock()
@@ -3075,18 +3097,19 @@ impl Maintenance {
         )
         .await
         .map_err(|_| unavailable("session cleanup startup"))?;
-        let failures = &cleanup.startup().failures;
-        let deferred = failures
-            .iter()
-            .filter(|(_, error)| {
-                matches!(
-                    error,
-                    ycoding_core::session::cleanups::Error::Analytics(analytics)
-                        if ycoding_core::telemetry::derived_engine_unavailable(analytics)
-                )
-            })
-            .count();
-        if deferred < failures.len() {
+        let mut failed = false;
+        for (kind, error) in &cleanup.startup().failures {
+            if let Some(cause) = session_cleanup_deferral(error) {
+                tracing::warn!(
+                    ?kind,
+                    cause,
+                    "Session cleanup will retry the derived analytics purge"
+                );
+            } else {
+                failed = true;
+            }
+        }
+        if failed {
             let released = cleanup
                 .close()
                 .await
@@ -3098,12 +3121,6 @@ impl Maintenance {
                 unavailable("session cleanup startup"),
                 released,
             ));
-        }
-        if deferred > 0 {
-            tracing::error!(
-                deferred,
-                "derived analytics cleanup deferred while the analytics engine is unavailable"
-            );
         }
         *self.cleanups.lock().unwrap_or_else(PoisonError::into_inner) = Some(cleanup);
         Ok(())
@@ -3824,11 +3841,27 @@ fn field<'a>(value: Option<&'a JsonValue>, key: &str) -> Option<&'a JsonValue> {
     }
 }
 fn unavailable(service: &'static str) -> Failure {
-    eprintln!("production composition diagnostic: stage={service}; category=unavailable");
     Failure::Unavailable(format!("{service} unavailable"))
 }
 
 pub(crate) const GLOBAL_CONFIGURATION: &str = "global configuration";
+pub(crate) const TELEMETRY_PRUNING: &str = "telemetry pruning";
+
+fn session_cleanup_deferral(
+    error: &ycoding_core::session::cleanups::Error,
+) -> Option<&'static str> {
+    use ycoding_core::{session::cleanups::Error, ycoding_store::analytics};
+
+    match error {
+        Error::Analytics(analytics::Error::Deadline) => {
+            Some("analytics maintenance deadline exceeded")
+        }
+        Error::Analytics(error) if ycoding_core::telemetry::derived_engine_unavailable(error) => {
+            Some("analytics engine unavailable")
+        }
+        _ => None,
+    }
+}
 
 fn global_configuration_error(error: config::Error) -> Failure {
     use std::error::Error as _;

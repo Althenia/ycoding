@@ -8,6 +8,51 @@ import { renderScreen } from "./harness"
 import { json } from "../fixture/tui-client"
 import type { RemoteStatus } from "../../src/remote-connector"
 
+test("the remote command reports a failed status read instead of writing Off", async () => {
+  const writes: boolean[] = []
+  const message = "Remote device enrollment could not be read"
+  const screen = await renderScreen({
+    width: 80,
+    height: 24,
+    settle: "Message YCoding…",
+    route: async (url, request) => {
+      if (url.pathname !== "/api/remote") return undefined
+      if (request.method === "GET") {
+        return json(
+          {
+            _tag: "InvalidRequestError",
+            kind: "unavailable",
+            message: `${message}. Check that remote-device.json is valid and private.`,
+          },
+          { status: 400 },
+        )
+      }
+      writes.push((await request.json()).enabled)
+      return json({ data: { state: "off" } })
+    },
+  })
+  const wait = async (text: string, ready: () => boolean = () => true) => {
+    const deadline = Date.now() + 5_000
+    while ((!screen.frame().includes(text) || !ready()) && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      await screen.renderOnce()
+    }
+    expect(screen.frame()).toContain(text)
+    expect(ready()).toBe(true)
+  }
+  try {
+    screen.input.pressKey("p", { ctrl: true })
+    await wait("Commands", () => screen.renderer.currentFocusedEditor instanceof InputRenderable)
+    await screen.input.typeText("Remote connection")
+    await wait("● error")
+    screen.input.pressEnter()
+    await wait(message)
+    expect(writes).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
 test("the full TUI shows one server remote switch without a bottom remote line", async () => {
   const directory = "/tmp/ycoding/remote-status"
   const state = await mkdtemp(path.join(os.tmpdir(), "ycoding-remote-screen-"))
@@ -15,17 +60,21 @@ test("the full TUI shows one server remote switch without a bottom remote line",
   const writes: boolean[] = []
   const screen = await renderScreen({
     width: 80, height: 24, settle: "Message YCoding…", state,
-    route: (url) => {
+    route: async (url, request) => {
+      if (url.pathname === "/api/remote") {
+        if (request.method === "PUT") {
+          const { enabled } = await request.json()
+          writes.push(enabled)
+          status = { state: enabled ? "on" : "off" }
+        }
+        return json({ data: status })
+      }
       const location = { directory, project: { id: "proj_remote", directory } }
       if (url.pathname === "/api/location") return json(location)
       if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main" } })
       if (["/api/agent", "/api/model", "/api/provider", "/api/integration", "/api/command", "/api/skill", "/api/reference"].includes(url.pathname))
         return json({ location, data: [] })
       return undefined
-    },
-    remote: {
-      get: async () => status,
-      set: async (enabled) => { writes.push(enabled); status = { state: enabled ? "on" : "off" }; return status },
     },
   })
   try {

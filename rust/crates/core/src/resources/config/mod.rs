@@ -15,7 +15,6 @@ mod roots;
 pub mod standalone;
 mod validation;
 mod variable;
-pub use native_dots::FullAccessExecutorBinding;
 pub use operations::{
     Endpoint, EndpointApi, EndpointModel, EndpointWorker, Mutation, MutationPolicy,
     ProviderConfiguration, Scope, Target, WriteError, native_package_declaration,

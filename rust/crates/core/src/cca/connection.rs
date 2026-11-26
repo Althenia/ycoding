@@ -8,7 +8,7 @@ use super::{
         AuthorizationDenied, AuthorizationInput, AuthorizeFn, BoxFuture, ExecutorError, Grant,
     },
     executor::{
-        ActiveScope, Executor, FsDirectoryEntry, FsMetadata, FsPathParams,
+        ActiveScope, Executor, ExecutorAccess, FsDirectoryEntry, FsMetadata, FsPathParams,
         authorize_external_directory, authorize_fs_path, default_temporary_directories,
         file_contents, map_policy_error, permits, refusing, resolve_fs_path,
         sandbox_operation_roots, sandbox_permission_denied,
@@ -70,12 +70,18 @@ impl ReadTree {
             return Err(ExecutorError::new(-32603, "Read tree released"));
         }
         let native = parse_path_uri(target).map_err(map_policy_error)?;
-        let resolved =
+        let resolved = if inner.active.access == ExecutorAccess::UnrestrictedHost {
+            match super::policy::real_path(&native).await {
+                Ok(path) => path,
+                Err(error) => return Err(super::executor::map_fs_error(&error)),
+            }
+        } else {
             match resolve_fs_path(&inner.active.roots(), target, false, &inner.extra_roots).await {
                 Ok(resolved) => resolved,
                 Err(error) if error.code == -32004 => return Err(error),
                 Err(_) => return Ok(None),
-            };
+            }
+        };
         Ok(within(&resolved, &inner.tree_root).then_some((resolved, native)))
     }
     fn readable(&self, resolved: &str, native: &str) -> Result<(), ExecutorError> {
@@ -324,6 +330,28 @@ impl Connection {
         sandbox: Option<&Value>,
     ) -> Result<(Arc<ActiveScope>, FsExtended), ExecutorError> {
         let active = self.0.executor.session_scope(&ctx.session_id).await?;
+        if active.access == ExecutorAccess::UnrestrictedHost {
+            let mut filesystems = self
+                .0
+                .filesystems
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let key = active.id.to_string();
+            let handlers = match filesystems.get(&key) {
+                Some(handlers) => handlers.clone(),
+                None => {
+                    let handlers = FsExtended::with_access(
+                        vec![],
+                        active_authorize(&active),
+                        Arc::new(default_temporary_directories),
+                        active.access,
+                    )?;
+                    filesystems.insert(key, handlers.clone());
+                    handlers
+                }
+            };
+            return Ok((active, handlers));
+        }
         let mut extra = sandbox_operation_roots(sandbox);
         extra.extend(active.outside.clone());
         let mut seen = vec![];
@@ -610,7 +638,11 @@ impl Connection {
                 match https.get(&active.id) {
                     Some(handler) => handler.clone(),
                     None => {
-                        let created = HttpHandler::new(active_authorize(&active), None)?;
+                        let created = HttpHandler::with_access(
+                            active_authorize(&active),
+                            None,
+                            active.access,
+                        )?;
                         https.insert(active.id, created.clone());
                         created
                     }
