@@ -1,11 +1,13 @@
 import { useDialog, type DialogContext } from "./dialog"
 import { DialogSelect } from "./dialog-select"
 import { useClipboard } from "../context/clipboard"
+import { useToast } from "./toast"
 import open from "open"
 
 export function DialogExportResult(props: { path: string; size?: string; onClose?: () => void }) {
   const dialog = useDialog()
   const clipboard = useClipboard()
+  const toast = useToast()
 
   const close = () => {
     props.onClose?.()
@@ -18,7 +20,7 @@ export function DialogExportResult(props: { path: string; size?: string; onClose
       options={[
         { title: props.path, footer: props.size, state: "connected", category: "Written to", value: "path" },
         { title: "Open in editor", category: "Written to", value: "open", onSelect: () => void open(props.path) },
-        { title: "Copy path", category: "Written to", value: "copy", onSelect: () => void clipboard.write?.(props.path) },
+        { title: "Copy path", category: "Written to", value: "copy", onSelect: () => void clipboard.write?.(props.path).catch(toast.error) },
         { title: "Dismiss", category: "Written to", value: "dismiss", onSelect: close },
       ]}
     />

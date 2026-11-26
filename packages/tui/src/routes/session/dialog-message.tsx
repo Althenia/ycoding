@@ -33,9 +33,9 @@ export function DialogMessage(props: {
     try { await action() }
     catch (error) { toast.show({ message: errorMessage(error), variant: "error", duration: 5000 }) }
   }
-  const copy = async () => {
+  const copy = async (dialog: DialogContext) => {
     const value = message()
-    if (!value) return
+    if (!value || !clipboard.write) return
     const text =
       value.type === "user"
         ? value.text
@@ -47,7 +47,12 @@ export function DialogMessage(props: {
           : "text" in value
             ? value.text
             : ""
-    await clipboard.write?.(text)
+    try {
+      await clipboard.write(text)
+      dialog.clear()
+    } catch (error) {
+      toast.error(error)
+    }
   }
 
   return (
@@ -71,18 +76,12 @@ export function DialogMessage(props: {
         {
           title: "Copy message",
           value: "message.copy",
-          onSelect: async (dialog) => {
-            await copy()
-            dialog.clear()
-          },
+          onSelect: copy,
         },
         {
           title: "Copy as markdown",
           value: "message.copy-markdown",
-          onSelect: async (dialog) => {
-            await copy()
-            dialog.clear()
-          },
+          onSelect: copy,
         },
         {
           title: "Open in editor",

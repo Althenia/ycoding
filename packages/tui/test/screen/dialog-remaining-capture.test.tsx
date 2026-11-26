@@ -551,7 +551,10 @@ function SyncLocation() {
 test.each([
   { title: "Copy message", value: "Concrete timeline message", view: () => <DialogMessage sessionID={sessionID} messageID="msg_audit" /> },
   { title: "Copy path", value: "~/Downloads/session export.md", view: () => <DialogExportResult path="~/Downloads/session export.md" /> },
-])("$title writes the selected text to the clipboard", async ({ title, value, view }) => {
+].flatMap((action) => [
+  { ...action, result: "writes the selected text to the clipboard", fails: false },
+  { ...action, result: "reports a clipboard failure", fails: true },
+]))("$title $result", async ({ title, value, view, fails }) => {
   const writes: string[] = []
   let ready: () => boolean
   function Fixture() {
@@ -559,10 +562,13 @@ test.each([
     const data = useData()
     ready = () => !!data.session.message.get(sessionID, "msg_audit")
     onMount(() => dialog.replace(view))
-    return <SyncLocation />
+    return <><SyncLocation /><Toast /></>
   }
 
-  const app = await testRender(() => <DialogProviders clipboard={{ write: async (text) => { writes.push(text) } }}><Fixture /></DialogProviders>, {
+  const app = await testRender(() => <DialogProviders clipboard={{ write: async (text) => {
+    writes.push(text)
+    if (fails) throw new Error("Could not copy to the system clipboard.")
+  } }}><Fixture /></DialogProviders>, {
     width: 100, height: 35, kittyKeyboard: true, useMouse: true,
   })
   app.renderer.start()
@@ -573,6 +579,10 @@ test.each([
     await app.mockMouse.click(rows[row].indexOf(title), row)
     await app.waitForFrame(() => writes.length > 0)
     expect(writes).toEqual([value])
+    if (fails) {
+      await app.waitForFrame((frame) => frame.includes("Could not copy to the system clipboard."))
+      expect(app.captureCharFrame()).not.toContain("Copied to clipboard")
+    }
   } finally {
     app.renderer.destroy()
   }

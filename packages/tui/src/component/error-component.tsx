@@ -24,7 +24,8 @@ export function ErrorComponent(props: { error: Error; reset: () => void; mode?: 
   const term = useTerminalDimensions()
   const exit = useExit()
   const clipboard = useClipboard()
-  const [copied, setCopied] = createSignal(false)
+  const [copyState, setCopyState] = createSignal<"idle" | "copied" | "failed">("idle")
+  const copied = () => copyState() === "copied"
 
   // Safe fallback palette per mode (mirrors theme/assets/ycoding.json) since the
   // theme context may be the thing that crashed.
@@ -59,11 +60,14 @@ export function ErrorComponent(props: { error: Error; reset: () => void; mode?: 
   const report = buildCrashReport(message, stack)
 
   const copyReport = () => {
-    void clipboard.write?.(report).then(() => setCopied(true))
+    void clipboard.write?.(report).then(
+      () => setCopyState("copied"),
+      () => setCopyState("failed"),
+    )
   }
 
   const actions = [
-    { key: "c", label: () => (copied() ? "✓ Copied" : "Copy report"), copy: true, onUse: copyReport },
+    { key: "c", label: () => (copied() ? "✓ Copied" : copyState() === "failed" ? "Copy failed · retry" : "Copy report"), copy: true, onUse: copyReport },
     { key: "r", label: () => "Restart", onUse: props.reset },
     { key: "q", label: () => "Quit", onUse: () => exit() },
   ]

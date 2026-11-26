@@ -180,3 +180,30 @@ test("CLP-003 aborts clipboard materialization and releases its owned temporary 
   await expect(acquisition).rejects.toThrow("cancel clipboard acquisition")
   expect(await readdir(root)).toEqual([])
 })
+
+test.skipIf(process.platform !== "darwin")("rejects with a generic error when the native helper fails after OSC 52 is offered", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ycoding-copy-failure-"))
+  try {
+    const helper = path.join(root, "osascript")
+    await Bun.write(helper, "#!/bin/sh\n/bin/cat >/dev/null\necho HELPER-SECRET-DETAIL >&2\nexit 3\n")
+    await chmod(helper, 0o700)
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: root }
+    delete env.TMUX
+    delete env.STY
+    const result = Bun.spawnSync(["/usr/bin/script", "-q", "/dev/null", process.execPath, "-e", `
+      import { write } from ${JSON.stringify(path.join(import.meta.dir, "../src/clipboard.ts"))};
+      const warnings = [];
+      const outcome = await write("clip", (message) => warnings.push(message)).then(() => "resolved", (error) => error.message);
+      console.log("OUTCOME:" + JSON.stringify({ outcome, warnings }));
+    `], { env, stdin: "ignore", stderr: "pipe", stdout: "pipe", timeout: 10_000 })
+    const output = result.stdout.toString()
+    expect(result.exitCode, result.stderr.toString()).toBe(0)
+    expect(output).toContain("\x1b]52;c;Y2xpcA==\x07")
+    expect(output).not.toContain("HELPER-SECRET-DETAIL")
+    const outcome = JSON.parse(output.split("OUTCOME:")[1]!.split("\n")[0]!)
+    expect(outcome.outcome).toStartWith("Could not copy to the system clipboard")
+    expect(outcome.warnings).toEqual(["Native clipboard write failed: helper failed"])
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 20_000)
