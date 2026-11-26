@@ -1,4 +1,6 @@
 import { expect, mock, test } from "bun:test"
+import { mkdir } from "node:fs/promises"
+import path from "node:path"
 import { createTestRenderer } from "@opentui/core/testing"
 import { InputRenderable, ScrollBoxRenderable, TextareaRenderable, type Renderable } from "@opentui/core"
 import { Effect, FileSystem } from "effect"
@@ -9,6 +11,7 @@ import { fixture } from "../../../rust/crates/runtime/tests/support/launcher-cli
 import { FrontendPaths } from "../src/frontend-paths"
 import { useClient } from "../src/context/client"
 import { saveCustomEndpoint } from "../src/custom-endpoint-save"
+import { materializeClipboardImage } from "../src/clipboard"
 
 test("an empty Rust Session resumes with an editable draft and no admitted input", async () => {
   const binary = process.env.YCODING_TEST_RUST_RUNTIME
@@ -62,11 +65,8 @@ test("an empty Rust Session resumes with an editable draft and no admitted input
   }
 }, 30_000)
 
-test("Rust history renders opaque pages, preserves Timeline identity, and copies canonical history across restart", async () => {
-  const binary = process.env.YCODING_TEST_RUST_RUNTIME
-  if (!binary) throw new Error("YCODING_TEST_RUST_RUNTIME must name the built Rust runtime")
-  const runtime = await fixture(binary)
-  const provider = Bun.serve({
+function viewProvider() {
+  return Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     fetch(request) {
@@ -78,6 +78,13 @@ test("Rust history renders opaque pages, preserves Timeline identity, and copies
       )
     },
   })
+}
+
+test("Rust history renders opaque pages, preserves Timeline identity, and copies canonical history across restart", async () => {
+  const binary = process.env.YCODING_TEST_RUST_RUNTIME
+  if (!binary) throw new Error("YCODING_TEST_RUST_RUNTIME must name the built Rust runtime")
+  const runtime = await fixture(binary)
+  const provider = viewProvider()
   const endpoint = await Service.ensure({ file: runtime.file, command: runtime.command("view-history") })
   const client = make({ endpoint, location: { directory: runtime.configDir } })
   const screen = await createTestRenderer({ width: 120, height: 36, useThread: false, kittyKeyboard: true })
@@ -142,29 +149,7 @@ test("Rust history renders opaque pages, preserves Timeline identity, and copies
   let connections = 0
   let task: Promise<void> | undefined
   try {
-    let listed = [] as Awaited<ReturnType<typeof client.integration.list>>["data"]
-    await saveCustomEndpoint(
-      runtime.configDir,
-      {
-        provider: "view-provider",
-        baseURL: provider.url.href + "v1",
-        api: "chat",
-        apiKey: "synthetic-view-key",
-        profile: "view-profile",
-        catalog: "openai-models",
-        models: [{ id: "view-model" }],
-      },
-      {
-        async syncRegistration() {
-          listed = (await client.integration.list({ location: { directory: runtime.configDir } })).data
-        },
-        registered: (id) => listed.some((item) => item.id === id && item.methods.some((method) => method.type === "key")),
-        connectKey: ({ integrationID, key, label }) =>
-          client.integration.connect.key({ integrationID, key, label, location: { directory: runtime.configDir } }),
-        activate: (credentialID) => client.credential.activate({ credentialID, location: { directory: runtime.configDir } }),
-        refresh: () => client.model.list(),
-      },
-    )
+    await connectViewProvider(client, runtime.configDir, provider.url.href)
     await client.server.telemetry.consent.set({ enabled: false, noticeVersion: 1 })
     const session = await client.session.create({
       location: { directory: runtime.configDir },
@@ -347,3 +332,117 @@ test("Rust history renders opaque pages, preserves Timeline identity, and copies
     await mock.module("../src/context/data", () => originalData)
   }
 }, 120_000)
+
+async function connectViewProvider(client: ReturnType<typeof make>, directory: string, url: string) {
+  let listed = [] as Awaited<ReturnType<typeof client.integration.list>>["data"]
+  await saveCustomEndpoint(directory, {
+    provider: "view-provider", baseURL: url + "v1", api: "chat", apiKey: "synthetic-view-key",
+    profile: "view-profile", catalog: "openai-models", models: [{ id: "view-model" }],
+  }, {
+    async syncRegistration() { listed = (await client.integration.list({ location: { directory } })).data },
+    registered: (id) => listed.some((item) => item.id === id && item.methods.some((method) => method.type === "key")),
+    connectKey: ({ integrationID, key, label }) => client.integration.connect.key({ integrationID, key, label, location: { directory } }),
+    activate: (credentialID) => client.credential.activate({ credentialID, location: { directory } }),
+    refresh: () => client.model.list(),
+  })
+}
+
+for (const kind of ["text", "clipboard image"] as const) {
+  test(`an admitted ${kind} wakes the Session when prompt history is unwritable`, async () => {
+    const binary = process.env.YCODING_TEST_RUST_RUNTIME
+    if (!binary) throw new Error("YCODING_TEST_RUST_RUNTIME must name the built Rust runtime")
+    const runtime = await fixture(binary)
+    const provider = viewProvider()
+    const endpoint = await Service.ensure({ file: runtime.file, command: runtime.command("prompt-history") })
+    const client = make({ endpoint, location: { directory: runtime.configDir } })
+    const screen = await createTestRenderer({ width: 120, height: 40, useThread: false, kittyKeyboard: true })
+    const state = path.join(runtime.configDir, "tui-state")
+    const png = Bun.file(new URL("../../../assets/brand/ycoding-icon-512.png", import.meta.url))
+    const image = kind === "text" ? undefined : await materializeClipboardImage(runtime.configDir, async (file) => { await Bun.write(file, png) })
+    const cwd = process.cwd()
+    const warnings: string[] = []
+    const dataModule = await import("../src/context/data")
+    const originalData = { ...dataModule }
+    let data: ReturnType<typeof dataModule.useData> | undefined
+    function CatalogProbe() {
+      data = originalData.useData()
+      return null
+    }
+    let task: Promise<void> | undefined
+    async function wait(ready: () => boolean | Promise<boolean>) {
+      const deadline = Date.now() + 10_000
+      while (Date.now() < deadline) {
+        await screen.renderOnce()
+        if (await ready()) return
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+      throw new Error(`TUI did not settle:\n${screen.captureCharFrame()}`)
+    }
+    try {
+      process.chdir(runtime.configDir)
+      await mkdir(path.join(state, "prompt-history.jsonl"), { recursive: true })
+      await connectViewProvider(client, runtime.configDir, provider.url.href)
+      await client.server.telemetry.consent.set({ enabled: false, noticeVersion: 1 })
+      const session = await client.session.create({ location: { directory: runtime.configDir }, model: { providerID: "view-provider", id: "view-model", profile: "view-profile" } })
+      await mock.module("../src/context/data", () => ({
+        ...originalData,
+        DataProvider: (props: Parameters<typeof dataModule.DataProvider>[0]) => {
+          let content: Array<typeof props.children> | undefined
+          return createComponent(originalData.DataProvider, {
+            get recordTelemetry() { return props.recordTelemetry },
+            get selectedSessionID() { return props.selectedSessionID },
+            get children() { return (content ??= [createComponent(CatalogProbe, {}), props.children]) },
+          })
+        },
+      }))
+      const { run } = await import("../src/app")
+      task = Effect.runPromise(run({
+        server: { endpoint }, args: { sessionID: session.id },
+        config: { get: async () => ({ animations: false, session: { sidebar: "hide" } }), update: async () => ({}) },
+        packages: { resolve: async () => undefined }, clipboard: { read: async () => image },
+        terminalHandoff: async () => ({ renderer: screen.renderer, mode: "dark", complete: () => {} }),
+        log: (level, message) => { if (level === "warn") warnings.push(message) },
+      }).pipe(Effect.provide(FrontendPaths.layerWith({ state })), Effect.provide(FileSystem.layerNoop({}))))
+      await wait(() => screen.renderer.currentFocusedEditor instanceof TextareaRenderable && screen.captureCharFrame().includes("ready"))
+      await wait(() => !!data?.location.agent.list(session.location) && !!data.location.model.list(session.location))
+      if (image) {
+        await screen.mockInput.pasteBracketedText("")
+        await wait(() => screen.captureCharFrame().includes("[Image 1]"))
+      }
+      await screen.mockInput.typeText("Inspect this input")
+      screen.mockInput.pressEnter()
+      await wait(() => /Retry send|Run the focused tests|needs attention|draft retained/i.test(screen.captureCharFrame()))
+      const recovery = data?.session.submissions.list(session.id).find((entry) => entry.state === "attention")
+      if (recovery) {
+        const admitted = await client.session.pending.list({ sessionID: session.id })
+        throw new Error(`${recovery.phase}: ${recovery.error}; durable pending: ${admitted.length}`)
+      }
+      expect(screen.captureCharFrame()).toContain("Run the focused tests")
+      expect(screen.captureCharFrame()).not.toContain("Retry send")
+      expect(await client.session.pending.list({ sessionID: session.id })).toEqual([])
+      const messages = (await client.session.snapshot({ sessionID: session.id })).messages.filter((message) => message.type === "user")
+      expect(messages).toHaveLength(1)
+      expect(messages[0].text).toContain("Inspect this input")
+      await wait(() => warnings.includes("Could not save admitted prompt history"))
+      if (image) {
+        const attachment = messages[0].files?.[0]
+        expect(attachment?.mime).toBe("image/png")
+        if (!attachment) throw new Error("Missing admitted attachment")
+        const read = await client.session.attachment.read({ sessionID: session.id, digest: attachment.content.digest })
+        const bytes = await png.bytes()
+        const digest = new Bun.CryptoHasher("sha256").update(bytes).digest("hex")
+        expect(attachment.content).toEqual({ type: "managed", digest, bytes: bytes.length, path: `attachments/sha256/${digest.slice(0, 2)}/${digest}` })
+        expect(Buffer.from(read.data, "base64")).toEqual(Buffer.from(bytes))
+        await wait(async () => !(await Bun.file(image.temporary.path).exists()))
+      }
+    } finally {
+      process.chdir(cwd)
+      screen.renderer.destroy()
+      await task
+      client.transport.close()
+      await runtime.dispose()
+      await provider.stop(true)
+      await mock.module("../src/context/data", () => originalData)
+    }
+  }, 30_000)
+}

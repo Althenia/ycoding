@@ -246,10 +246,10 @@ const route: FetchHandler = async (url, request) => {
   return undefined
 }
 
-async function waitFor(predicate: () => boolean, label: string) {
+async function waitFor(predicate: () => boolean | Promise<boolean>, label: string) {
   const deadline = Date.now() + 5000
   while (Date.now() < deadline) {
-    if (predicate()) return
+    if (await predicate()) return
     await new Promise<void>((resolve) => setImmediate(resolve))
   }
   throw new Error(`timed out waiting for ${label}; prompts=${JSON.stringify(promptRequests)}`)
@@ -895,7 +895,7 @@ test("successful delayed clipboard admission reconciles recalled history to its 
     expect(composer(screen.renderer.root)?.plainText).toBe("")
     release()
     await waitFor(() => promptRequests.length === 2, "canonical receipt and wake")
-    expect(await Bun.file(attachment.temporary.path).exists()).toBe(false)
+    await waitFor(async () => !(await Bun.file(attachment.temporary.path).exists()), "temporary attachment release")
     screen.input.pressKey("ARROW_UP")
     await waitFor(() => composer(screen.renderer.root)?.plainText.includes("[Image 1]") === true, "history recall")
     screen.input.pressEnter()

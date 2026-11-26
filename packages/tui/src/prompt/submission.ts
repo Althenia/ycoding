@@ -72,6 +72,7 @@ export function createPromptSubmissions(input: {
   admitted: (pending: SessionPendingInfo) => void
   created?: (session: SessionInfo) => void
   promptAdmitted?: (durationMs: number) => void
+  warn?: (message: string) => void
 }) {
   const [entries, setEntries] = createSignal<Submission[]>([])
   const running = new Set<string>()
@@ -89,6 +90,23 @@ export function createPromptSubmissions(input: {
     const session = entry.createdSession
     entry.createdSession = undefined
     input.created?.(session)
+  }
+
+  function finishAdmittedLocally(entry: Submission) {
+    if (entry.completed.has("local")) return
+    entry.completed.add("local")
+    void (async () => {
+      try {
+        await entry.onAdmitted?.(entry.input.payload.history)
+      } catch {
+        input.warn?.("Could not save admitted prompt history")
+      }
+      try {
+        await entry.cleanup()
+      } catch {
+        input.warn?.("Could not release admitted prompt attachments")
+      }
+    })()
   }
 
   async function request<T>(
@@ -128,21 +146,21 @@ export function createPromptSubmissions(input: {
     update(entry, { state: "sending" })
     if (entry.consumed || entry.discarded) {
       announceCreated(entry)
-      if (entry.completed.has("cleanup")) return
-      if (entry.discarded) await entry.onDiscarded?.()
-      if (!entry.discarded) {
-        const canonical = entry.consumedMessage ?? entry.admitted?.data
-        if (canonical)
-          payload.history.files = projectedPromptInput(canonical).files?.map((file, index) => ({
-            ...file,
-            mention: payload.files?.[index]?.mention ?? file.mention,
-          }))
-        if (!entry.completed.has("history")) await entry.onAdmitted?.(payload.history)
-        entry.completed.add("history")
+      if (entry.completed.has("local")) return
+      if (entry.discarded) {
+        await entry.onDiscarded?.()
+        update(entry, { phase: "Releasing attachments" })
+        await entry.cleanup()
+        entry.completed.add("local")
+        return
       }
-      update(entry, { phase: "Releasing attachments" })
-      await entry.cleanup()
-      entry.completed.add("cleanup")
+      const canonical = entry.consumedMessage ?? entry.admitted?.data
+      if (canonical)
+        payload.history.files = projectedPromptInput(canonical).files?.map((file, index) => ({
+          ...file,
+          mention: payload.files?.[index]?.mention ?? file.mention,
+        }))
+      finishAdmittedLocally(entry)
       return
     }
     if (!entry.admitted && entry.resolved === undefined) {
@@ -309,7 +327,7 @@ export function createPromptSubmissions(input: {
         update(entry, {
           phase: phase.type === "admission" ? "Sending prompt" : "Prompt admitted · waking session",
         }),
-      onAdmitted: async (admitted) => {
+      onAdmitted: (admitted) => {
         update(entry, { admitted })
         entry.resolved = undefined
         payload.files = projectedPromptInput(admitted.data).files?.map((file, index) => ({
@@ -318,11 +336,7 @@ export function createPromptSubmissions(input: {
         }))
         payload.history.files = payload.files
         if (!entry.consumed) input.admitted(admitted)
-        if (!entry.completed.has("history")) await entry.onAdmitted?.(payload.history)
-        entry.completed.add("history")
-        if (entry.completed.has("cleanup")) return
-        await entry.cleanup()
-        entry.completed.add("cleanup")
+        finishAdmittedLocally(entry)
       },
     })
     if (result.wakeError !== undefined) throw result.wakeError

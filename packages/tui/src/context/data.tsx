@@ -45,6 +45,7 @@ import type { Plugin } from "@ycoding-ai/plugin/tui"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import { useClient } from "./client"
+import { useLog } from "./log"
 import { batch, createEffect, createSignal, onCleanup, untrack } from "solid-js"
 import { createPromptSubmissions } from "../prompt/submission"
 import { errorMessage } from "../util/error"
@@ -750,6 +751,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     })
 
     const client = useClient()
+    const submissionLog = useLog({ component: "prompt" })
     const submissions = createPromptSubmissions({
       api: () => client.api,
       upload: (sessionID, piece, signal) => client.api.transport.call(
@@ -759,6 +761,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         { signal },
       ),
       promptAdmitted: (durationMs) => props.recordTelemetry?.("prompt.admit", durationMs),
+      warn: submissionLog.warn,
       created: (session) => {
         setStore("session", "info", session.id, session)
         registerSession(session.id)
