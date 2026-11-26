@@ -553,7 +553,7 @@ impl Service {
             atomic(
                 &state.root,
                 &stored.with_extension("json"),
-                &format!("{{\"version\":1,\"id\":{}}}\n", json_string(id)),
+                format!("{{\"version\":1,\"id\":{}}}\n", json_string(id)),
             )?;
             filesystem::move_across(
                 &state.root,
@@ -1294,7 +1294,7 @@ fn indexes(state: &State, concepts: &[Concept]) -> Result<(), Error> {
             ]);
         }
         lines.push(String::new());
-        atomic(&state.root, &target, &lines.join("\n"))?;
+        atomic(&state.root, &target, lines.join("\n"))?;
     }
     Ok(())
 }

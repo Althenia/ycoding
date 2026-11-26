@@ -1,4 +1,4 @@
-mod filesystem_fixture;
+pub mod filesystem_fixture;
 mod policy_fixture;
 
 use std::{fs, sync::Arc};

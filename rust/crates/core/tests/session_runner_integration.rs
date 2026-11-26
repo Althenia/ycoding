@@ -982,13 +982,13 @@ async fn recovery_boundary(restart: bool) {
             .context(&checkpoint::id("ses_recovery"))
             .unwrap()
             .into_iter()
-            .filter_map(|item| match item {
+            .rev()
+            .find_map(|item| match item {
                 session_message::Info::Assistant(item) if item.time.completed.is_some() => {
                     Some(item.id.as_lossless().to_utf8().unwrap())
                 }
                 _ => None,
             })
-            .last()
             .unwrap();
         checkpoint::compaction(
             &store.client(),
@@ -1219,13 +1219,13 @@ async fn compaction_cue_activates_before_a_resumed_request_without_new_input() {
         .context(&id)
         .unwrap()
         .into_iter()
-        .filter_map(|item| match item {
+        .rev()
+        .find_map(|item| match item {
             session_message::Info::Assistant(item) if item.time.completed.is_some() => {
                 Some(item.id.as_lossless().to_utf8().unwrap())
             }
             _ => None,
         })
-        .last()
         .unwrap();
     checkpoint::compaction(
         &store.client(),
@@ -1299,13 +1299,13 @@ async fn promoted_cue_survives_interruption_until_explicit_activation_is_durable
         .context(&id)
         .unwrap()
         .into_iter()
-        .filter_map(|item| match item {
+        .rev()
+        .find_map(|item| match item {
             session_message::Info::Assistant(item) if item.time.completed.is_some() => {
                 Some(item.id.as_lossless().to_utf8().unwrap())
             }
             _ => None,
         })
-        .last()
         .unwrap();
     checkpoint::compaction(
         &store.client(),

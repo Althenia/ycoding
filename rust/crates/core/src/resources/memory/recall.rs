@@ -87,6 +87,45 @@ impl Cache {
     }
 }
 
+fn load(path: &Path) -> Option<Vec<u8>> {
+    if !safe_path(path.parent()?, path).ok()? {
+        return None;
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(path).ok()?;
+    let info = file.metadata().ok()?;
+    if !info.is_file() || info.len() > SNAPSHOT_LIMIT as u64 + 32 || info.len() < 32 {
+        return None;
+    }
+    let mut buf = Vec::with_capacity(info.len() as usize);
+    file.take(info.len() + 1).read_to_end(&mut buf).ok()?;
+    if buf.len() as u64 != info.len()
+        || ring::digest::digest(&ring::digest::SHA256, &buf[32..]).as_ref() != &buf[..32]
+    {
+        return None;
+    }
+    buf.drain(..32);
+    Some(buf)
+}
+
+fn save(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    if bytes.len() > SNAPSHOT_LIMIT {
+        return Err(Error::TooLarge);
+    }
+    let root = path.parent().ok_or(Error::UnsafePath)?;
+    create_root(root)?;
+    let mut buffer = Vec::with_capacity(32 + bytes.len());
+    buffer.extend_from_slice(ring::digest::digest(&ring::digest::SHA256, bytes).as_ref());
+    buffer.extend_from_slice(bytes);
+    atomic(root, path, &buffer)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,43 +219,4 @@ mod tests {
         assert_eq!(score(&mut cache, "canary ready", future()), (current, true));
         fs::remove_dir_all(root).unwrap();
     }
-}
-
-fn load(path: &Path) -> Option<Vec<u8>> {
-    if !safe_path(path.parent()?, path).ok()? {
-        return None;
-    }
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let file = options.open(path).ok()?;
-    let info = file.metadata().ok()?;
-    if !info.is_file() || info.len() > SNAPSHOT_LIMIT as u64 + 32 || info.len() < 32 {
-        return None;
-    }
-    let mut buf = Vec::with_capacity(info.len() as usize);
-    file.take(info.len() + 1).read_to_end(&mut buf).ok()?;
-    if buf.len() as u64 != info.len()
-        || ring::digest::digest(&ring::digest::SHA256, &buf[32..]).as_ref() != &buf[..32]
-    {
-        return None;
-    }
-    buf.drain(..32);
-    Some(buf)
-}
-
-fn save(path: &Path, bytes: &[u8]) -> Result<(), Error> {
-    if bytes.len() > SNAPSHOT_LIMIT {
-        return Err(Error::TooLarge);
-    }
-    let root = path.parent().ok_or(Error::UnsafePath)?;
-    create_root(root)?;
-    let mut buffer = Vec::with_capacity(32 + bytes.len());
-    buffer.extend_from_slice(ring::digest::digest(&ring::digest::SHA256, bytes).as_ref());
-    buffer.extend_from_slice(bytes);
-    atomic(root, path, &buffer)
 }

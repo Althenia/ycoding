@@ -653,3 +653,6 @@ fn discard_stage(stage: &Path, device: u64) -> Result<(), MigrationError> {
     fs::remove_dir_all(stage)?;
     Ok(())
 }
+
+#[cfg(all(test, unix))]
+mod tests;

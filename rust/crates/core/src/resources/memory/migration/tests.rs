@@ -1,5 +1,7 @@
-#![cfg(unix)]
-
+use super::{Checkpoint, Fence, LegacyWriters, MigrationError};
+use crate::resources::memory::{
+    Error, Limits, Options, Repository, Scope, Search, Service, format::sha256,
+};
 use std::{
     fs, io,
     os::unix::fs::{PermissionsExt, symlink},
@@ -9,14 +11,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-use ycoding_core::resources::memory::{
-    Error, Limits, Options, Repository, Scope, Search, Service, format::sha256,
-};
-
-#[path = "../src/resources/memory/migration.rs"]
-mod migration;
-
-use migration::{Checkpoint, Fence, LegacyWriters, MigrationError};
 
 const LEGACY: &str = "---\ntype: Decision\nnote: cobalt\n";
 const ARCHIVE: &str = "---\ntype: Decision\n---\nArchived.\n";
