@@ -1,40 +1,28 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::{Arc, Mutex, OnceLock},
-    time::Duration,
-};
-use tokio::sync::Semaphore;
+use std::sync::{Arc, OnceLock};
 use ycoding_core::{
     coordination::{
-        self, Admission, Service as Coordination,
+        self, Admission,
         runtime::{
-            AssignInput, DecisionEscalateInput, DecisionEscalateResult, DecisionResult, Decisions,
-            Delegation, EvaluateInput, Future, HANDLED_EVENTS, INACTIVE_MESSAGE, Options, Pending,
-            PendingInput, RequestDetail, Runtime, SendInput,
+            AssignInput, Delegation, HANDLED_EVENTS, INACTIVE_MESSAGE, Pending, RequestDetail,
+            Runtime,
         },
     },
-    event_feed::{Feed, Scope, Subscriber},
-    job,
-    session::{
-        execution::{Execution, Locations, Runner},
-        pending::Request,
-        run_coordinator::{DrainRequest, Error, RunFuture},
-        store::Service,
-    },
+    event_feed::{Scope, Subscriber},
+    session::{execution::Execution, pending::Request, store::Service},
     tools::{builtin::project::Project, context::Context, registry::Tool},
 };
 use ycoding_schema::{
-    JsonValue, coordination as c, parse_json, session, session_delivery::Delivery, session_error,
-    session_message, session_pending,
+    JsonValue, coordination as c, parse_json, session, session_delivery::Delivery, session_pending,
 };
 use ycoding_store::{
-    KeyPart, Metadata, Options as StoreOptions, Store, native,
+    KeyPart,
     session::{NewEvent, SessionTable},
     tuple_key,
 };
 
-#[path = "session_support/record.rs"]
+#[path = "session_support/coordination_admission.rs"]
 mod support;
+use support::{Fixture, fixture, id, message, quiesce, send, send_to, trace};
 
 const STARTUP: [&str; 9] = [
     "ses_boot",
@@ -51,47 +39,6 @@ const STARTUP: [&str; 9] = [
 async fn startup(runtime: &Runtime) {
     runtime.recover().await.unwrap();
     runtime.resume_admitted().await.unwrap();
-}
-
-const BOUND: Duration = Duration::from_secs(10);
-
-fn id(text: &str) -> session::Id {
-    session::Id::new(text).unwrap()
-}
-
-fn message(text: &str) -> session_message::Id {
-    session_message::Id::new(text).unwrap()
-}
-
-async fn quiesce(execution: &Execution, session: &session::Id) {
-    tokio::time::timeout(BOUND, execution.await_idle(session))
-        .await
-        .expect("Session execution settles");
-}
-
-#[derive(Default)]
-struct Waits(Mutex<Vec<Pending>>);
-
-struct Gates(Arc<Waits>);
-
-impl Decisions for Gates {
-    fn settings(&self) -> Future<'_, c::Settings> {
-        Box::pin(async { Err(coordination::Error::refused("outside this fixture")) })
-    }
-    fn pending(&self, input: PendingInput) -> Future<'_, Vec<Pending>> {
-        let items = if input.target_session_id == id("ses_alpha") {
-            self.0.0.lock().unwrap().clone()
-        } else {
-            vec![]
-        };
-        Box::pin(async move { Ok(items) })
-    }
-    fn evaluate(&self, _: EvaluateInput) -> Future<'_, DecisionResult> {
-        Box::pin(async { Err(coordination::Error::refused("outside this fixture")) })
-    }
-    fn escalate(&self, _: DecisionEscalateInput) -> Future<'_, DecisionEscalateResult> {
-        Box::pin(async { Err(coordination::Error::refused("outside this fixture")) })
-    }
 }
 
 fn permission_wait() -> Pending {
@@ -113,113 +60,6 @@ fn permission_wait() -> Pending {
             request_session_id: None,
         },
     }
-}
-
-struct Script {
-    drains: Mutex<BTreeMap<String, usize>>,
-    failing: Mutex<BTreeSet<String>>,
-    blocking: Mutex<BTreeSet<String>>,
-    member_started: Semaphore,
-    release: Semaphore,
-}
-
-impl Script {
-    fn new() -> Self {
-        Self {
-            drains: Mutex::default(),
-            failing: Mutex::default(),
-            blocking: Mutex::default(),
-            member_started: Semaphore::new(0),
-            release: Semaphore::new(0),
-        }
-    }
-    async fn wait_for_member_start(&self) {
-        tokio::time::timeout(BOUND, self.member_started.acquire())
-            .await
-            .expect("Project member reaches the runner")
-            .unwrap()
-            .forget();
-    }
-    fn drains(&self, session: &str) -> usize {
-        self.drains
-            .lock()
-            .unwrap()
-            .get(session)
-            .copied()
-            .unwrap_or(0)
-    }
-}
-
-struct Scripted {
-    sessions: Service,
-    script: Arc<Script>,
-}
-
-impl Runner for Scripted {
-    fn drain(&self, request: DrainRequest) -> RunFuture {
-        let sessions = self.sessions.clone();
-        let script = self.script.clone();
-        Box::pin(async move {
-            let name = request.session_id.as_lossless().to_utf8().unwrap();
-            *script
-                .drains
-                .lock()
-                .unwrap()
-                .entry(name.clone())
-                .or_default() += 1;
-            if name == "ses_alpha" {
-                script.member_started.add_permits(1);
-            }
-            if script.blocking.lock().unwrap().remove(&name) {
-                script.release.acquire().await.unwrap().forget();
-            }
-            sessions.promote_steers(&request.session_id, 30).await?;
-            sessions
-                .promote_next_queued(&request.session_id, 30)
-                .await?;
-            if script.failing.lock().unwrap().remove(&name) {
-                return Err(Error::Runner(session_error::Error {
-                    r#type: "unknown".into(),
-                    message: "Synthetic turn failure after start".into(),
-                }));
-            }
-            Ok(())
-        })
-    }
-}
-
-struct Placement(Arc<Scripted>);
-
-impl Locations for Placement {
-    fn get(&self, _: &ycoding_schema::session::Info) -> Result<Arc<dyn Runner>, Error> {
-        Ok(self.0.clone())
-    }
-}
-
-fn trace(sessions: &Service, session: &session::Id) -> Vec<String> {
-    sessions
-        .log(session, None, 200)
-        .unwrap()
-        .events
-        .into_iter()
-        .filter_map(|entry| {
-            let kind = entry.event.0.event_type.to_utf8().unwrap();
-            let data = &entry.event.0.data.0;
-            match kind.as_str() {
-                "session.input.admitted" => match data.get(&"inputID".into()) {
-                    Some(JsonValue::String(input)) => {
-                        Some(format!("admitted:{}", input.to_utf8().unwrap()))
-                    }
-                    _ => None,
-                },
-                "session.execution.started" => Some("started".into()),
-                "session.execution.succeeded" => Some("succeeded".into()),
-                "session.execution.failed" => Some("failed".into()),
-                "session.execution.interrupted" => Some("interrupted".into()),
-                _ => None,
-            }
-        })
-        .collect()
 }
 
 fn notices(sessions: &Service, receiver: &session::Id) -> Vec<String> {
@@ -252,24 +92,15 @@ fn notices(sessions: &Service, receiver: &session::Id) -> Vec<String> {
         .collect()
 }
 
-async fn pump(runtime: &Runtime, subscriber: &Subscriber) {
-    while let Some(item) = subscriber.next().unwrap() {
-        runtime.handle(&item.payload).await.unwrap();
-    }
-}
-
-fn send(text: &str, message_id: &str) -> SendInput {
-    send_to("ses_alpha", text, message_id)
-}
-
-fn send_to(member: &str, text: &str, message_id: &str) -> SendInput {
-    SendInput {
-        session_id: id(member),
-        text: text.into(),
-        delivery: Some(Delivery::Queue),
-        message_id: Some(message(message_id)),
-        model: None,
-    }
+fn pump<'a>(
+    runtime: &'a Runtime,
+    subscriber: &'a Subscriber,
+) -> impl std::future::Future<Output = ()> + 'a {
+    Box::pin(async move {
+        while let Some(item) = subscriber.next().unwrap() {
+            runtime.handle(&item.payload).await.unwrap();
+        }
+    })
 }
 
 fn ledger(sessions: &Service, session: &session::Id) -> Vec<String> {
@@ -394,83 +225,28 @@ async fn state(runtime: &Runtime, master: &session::Id) -> c::MemberState {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn admitted_project_input_reaches_execution_through_pause_gate_restart_and_settlement() {
-    let store = Store::disposable(
-        StoreOptions::core(),
-        native::catalog(native::DatabaseKind::Core),
-        Metadata::new([9; 16], 1),
-    )
-    .unwrap();
+    let fixture = fixture(["ses_alpha"].into_iter().chain(STARTUP)).await;
+    let Fixture {
+        store,
+        feed,
+        coordination,
+        sessions,
+        execution,
+        script,
+        waits,
+        group,
+        ..
+    } = &fixture;
+    let execution = *execution;
+    let sessions = sessions.clone();
     let client = store.client();
-    client
-        .submit(|tx| {
-            ycoding_store::project::ProjectTable::insert(
-                tx,
-                &ycoding_store::project::Project {
-                    id: "prj_one".into(),
-                    worktree: "/project".into(),
-                    vcs: None,
-                    name: None,
-                    icon_url: None,
-                    icon_url_override: None,
-                    icon_color: None,
-                    time_created: 1,
-                    time_updated: 1,
-                    time_initialized: None,
-                    sandboxes: vec![],
-                    commands: None,
-                },
-            )?;
-            for name in ["ses_master", "ses_alpha"].into_iter().chain(STARTUP) {
-                SessionTable::insert(tx, &support::record(name))?;
-            }
-            Ok(())
-        })
-        .unwrap()
-        .await
-        .unwrap();
-    let feed = Feed::attach(&client);
     let subscriber = feed
         .subscribe_types(Scope::Global, HANDLED_EVENTS, || {})
         .unwrap();
-    let coordination = Coordination::new(client.clone(), feed.clone());
+    coordination.activate(&group.id).unwrap();
     let master = id("ses_master");
     let alpha = id("ses_alpha");
-    let group = coordination
-        .create(c::CreateInput {
-            name: "Admission".into(),
-            master_session_id: master.clone(),
-            member_session_ids: ["ses_alpha"].into_iter().chain(STARTUP).map(id).collect(),
-        })
-        .await
-        .unwrap();
-    coordination.activate(&group.id).unwrap();
-    let sessions = Service::new(client.clone());
-    let jobs = job::Jobs::new();
-    let script = Arc::new(Script::new());
-    let execution = Execution::install(
-        sessions.clone(),
-        Arc::new(Placement(Arc::new(Scripted {
-            sessions: sessions.clone(),
-            script: script.clone(),
-        }))),
-        jobs.clone(),
-        None,
-    )
-    .unwrap();
-    let waits = Arc::new(Waits::default());
-    let options = || Options {
-        coordination: coordination.clone(),
-        sessions: sessions.clone(),
-        execution,
-        decisions: Arc::new(Gates(waits.clone())),
-        jobs: jobs.clone(),
-        validate_model: Arc::new(|_, _| Box::pin(async { Ok(()) })),
-        model_services: Arc::new(|_| {
-            Box::pin(async { Err(coordination::Error::refused("outside this fixture")) })
-        }),
-        creator: None,
-    };
-    let runtime = Runtime::new(options());
+    let runtime = fixture.runtime();
     runtime
         .assign(
             &master,
@@ -744,7 +520,7 @@ async fn admitted_project_input_reaches_execution_through_pause_gate_restart_and
         }
     };
 
-    let restarted = Runtime::new(options());
+    let restarted = fixture.runtime();
     restarted.recover().await.unwrap();
     pump(&restarted, &subscriber).await;
     idle(execution).await;
@@ -1122,7 +898,7 @@ async fn admitted_project_input_reaches_execution_through_pause_gate_restart_and
             "{name} must settle from its own Session events"
         );
     }
-    let replayed = Runtime::new(options());
+    let replayed = fixture.runtime();
     startup(&replayed).await;
     pump(&replayed, &subscriber).await;
     submit(dependent).await.unwrap();
