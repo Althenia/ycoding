@@ -172,7 +172,7 @@ fn fixture_with(
         feed.clone(),
         git.clone(),
         reports,
-        roots.data.join("analytics"),
+        None,
     )
     .unwrap();
     let factory_options = config::LoadOptions {
@@ -1890,7 +1890,7 @@ async fn analytics_outage_does_not_block_startup_admission_or_canonical_reads() 
             Feed::attach(&client),
             Arc::new(git::Service::new(16 * 1024 * 1024)),
             true,
-            roots.data.join("analytics"),
+            None,
         );
         (globals, credentials)
     };
@@ -2344,7 +2344,7 @@ async fn telemetry_housekeeping_prunes_expired_latency_samples_at_start_and_join
         f.feed.clone(),
         Arc::new(git::Service::new(16 * 1024 * 1024)),
         true,
-        f.roots.data.join("analytics"),
+        None,
     )
     .unwrap();
     Arc::get_mut(&mut f.factory).unwrap().globals = globals.clone();
@@ -2441,7 +2441,10 @@ async fn telemetry_housekeeping_initial_prune_failure_fails_startup_without_a_ta
     let maintenance = Maintenance::new(&factory);
     assert!(matches!(
         maintenance.housekeeping(&factory).await,
-        Err(Failure::Unavailable(_))
+        Err(Failure::ServiceUnavailable {
+            service: TELEMETRY_PRUNING,
+            message,
+        }) if message == "storage closed"
     ));
     assert!(maintenance.telemetry.lock().unwrap().is_none());
 }

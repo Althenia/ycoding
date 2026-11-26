@@ -53,6 +53,10 @@ async fn startup_reports_readiness_and_recovery_durations_at_info() {
         "interrupted_steps",
         "shell_ledger",
         "managed_tasks",
+        "project_notification_recovery",
+        "project_admitted_inputs",
+        "pending_forms",
+        "service_composition",
         "maintenance",
         "ready",
     ] {
@@ -69,6 +73,27 @@ async fn startup_reports_readiness_and_recovery_durations_at_info() {
             "missing INFO duration for {stage}"
         );
     }
+}
+
+#[tokio::test]
+async fn ready_runtime_serves_session_inventory_before_optional_maintenance() {
+    let directory = Directory::new();
+    let (runtime, mut client) = open(&directory).await;
+    assert_no_sessions(&mut client).await;
+    stop(runtime, client);
+    let log = fs::read_to_string(directory.0.join("data/ycoding/log/ycoding.log")).unwrap();
+    let stage = |name| {
+        log.lines()
+            .position(|line| {
+                line.split_ascii_whitespace()
+                    .any(|field| field.strip_prefix("stage=") == Some(name))
+            })
+            .unwrap_or_else(|| panic!("missing {name} stage"))
+    };
+    let ready = stage("ready");
+    assert!(stage("store_prepare") < stage("store_open"));
+    assert!(stage("store_open") < ready);
+    assert!(ready < stage("maintenance"));
 }
 
 fn bun_source(source: &Path) -> Child {

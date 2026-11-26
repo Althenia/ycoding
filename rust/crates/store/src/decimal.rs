@@ -562,33 +562,27 @@ impl Field for Decimal {
             .and_then(|length| length.checked_sub(exponent))
             .and_then(|scale| i32::try_from(scale).ok())
             .ok_or(Error::Incompatible("native decimal scale"))?;
-        let mut value = Self::default();
-        for (index, digit) in digits.iter().enumerate() {
-            let digit = digit ^ mask;
-            if !(1..=10).contains(&digit)
-                || (digit == 1 && (index == 0 || index + 1 == digits.len()))
-            {
-                return Err(Error::Incompatible(
-                    "noncanonical native decimal coefficient",
-                ));
-            }
-            value.multiply_small(10)?;
-            let mut carry = u64::from(digit - 1);
-            for part in &mut value.coefficient {
-                let sum = u64::from(*part) + carry;
-                *part = (sum % BASE) as u32;
-                carry = sum / BASE;
-                if carry == 0 {
-                    break;
-                }
-            }
-            if carry != 0 {
-                value.coefficient.push(carry as u32);
-            }
+        let invalid = || Error::Incompatible("noncanonical native decimal coefficient");
+        if digits[0] ^ mask == 1 || digits[end - 1] ^ mask == 1 {
+            return Err(invalid());
         }
-        value.negative = negative;
-        value.scale = scale;
+        let mut coefficient = Vec::with_capacity(end.div_ceil(9));
+        for word in digits.rchunks(9) {
+            let mut value = 0;
+            for digit in word {
+                let digit = digit ^ mask;
+                if !(1..=10).contains(&digit) {
+                    return Err(invalid());
+                }
+                value = value * 10 + u32::from(digit - 1);
+            }
+            coefficient.push(value);
+        }
         *input = &input[end + 1..];
-        Ok(value)
+        Ok(Self {
+            negative,
+            scale,
+            coefficient,
+        })
     }
 }

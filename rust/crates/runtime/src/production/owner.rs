@@ -327,11 +327,12 @@ impl Handle {
         client: Client,
         production: Production,
         recover: bool,
+        ready: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> Result<Request<Result<Core, Failure>>, Failure> {
         self.register_production(
             move |context| {
                 Box::pin(Core::production_registered(
-                    client, production, recover, context,
+                    client, production, recover, ready, context,
                 ))
             },
             |result| {

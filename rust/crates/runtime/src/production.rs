@@ -167,6 +167,7 @@ struct Started {
     locations: Option<Locations>,
     maintenance: Option<Arc<Maintenance>>,
     dots: Option<Arc<crate::dots::Services>>,
+    ready: Option<watch::Receiver<bool>>,
 }
 
 #[derive(Default)]
@@ -298,7 +299,7 @@ impl Core {
         client: Client,
         production: Production,
     ) -> Result<Self, Failure> {
-        Self::production_with_recovery(owner, client, production, false).await
+        Self::production_with_recovery(owner, client, production, false, None).await
     }
 
     pub(crate) async fn production_with_recovery(
@@ -306,9 +307,10 @@ impl Core {
         client: Client,
         production: Production,
         recover: bool,
+        ready: Option<watch::Receiver<bool>>,
     ) -> Result<Self, Failure> {
         owner
-            .register_bootstrap(client, production, recover)?
+            .register_bootstrap(client, production, recover, ready)?
             .await?
     }
 
@@ -316,6 +318,7 @@ impl Core {
         client: Client,
         production: Production,
         recover: bool,
+        ready: Option<watch::Receiver<bool>>,
         context: owner::Context,
     ) -> Result<Core, Failure> {
         production
@@ -326,6 +329,7 @@ impl Core {
         let credentials = credential::Service::new(client.clone());
         let events = Feed::attach(&client);
         let git = Arc::new(git::Service::new(16 * 1024 * 1024));
+        let globals_started = Instant::now();
         let globals = match globals::Globals::start(
             client.clone(),
             &production,
@@ -333,7 +337,7 @@ impl Core {
             events.clone(),
             git.clone(),
             true,
-            production.analytics.clone(),
+            ready.clone(),
         ) {
             Ok(globals) => globals,
             Err(error) => {
@@ -352,8 +356,10 @@ impl Core {
                 ));
             }
         };
+        crate::launch::startup_stage("global_services", globals_started);
         let mut started = Started {
             recover,
+            ready,
             ..Default::default()
         };
         match Core::bootstrap(
@@ -378,7 +384,7 @@ impl Core {
                     &credentials,
                     started.execution,
                     started.locations.as_ref(),
-                    started.maintenance.as_deref(),
+                    started.maintenance.as_ref(),
                     started.dots.as_ref(),
                     context.parent_owner().as_deref(),
                 )
@@ -785,28 +791,24 @@ impl Core {
             })
         });
         let browser = factory.globals.browser.clone();
+        let remote_started = Instant::now();
         let remote = crate::connector::Control::open(&factory.options.roots.state)
             .await
             .map_err(|_| unavailable("remote control"))?;
-        let maintenance = Arc::new(Maintenance::new(&factory));
+        crate::launch::startup_stage("remote_state", remote_started);
+        let maintenance = Maintenance::new(&factory);
         let events_key = factory.options.roots.data.join("mcp-events-native.key");
         started.maintenance = Some(maintenance.clone());
         let telemetry_settings = factory.settings.clone();
-        let maintenance_started = Instant::now();
-        maintenance
-            .start(
-                sessions.clone(),
-                execution,
-                factory.clone(),
-                autonomy.changes(),
-                AutonomyConsumers {
-                    locations: locations.clone(),
-                    orchestration: orchestration.clone(),
-                    reviews: reviews.clone(),
-                },
-            )
-            .await?;
-        crate::launch::startup_stage("maintenance", maintenance_started);
+        maintenance.subscribe(
+            &factory,
+            autonomy.changes(),
+            AutonomyConsumers {
+                locations: locations.clone(),
+                orchestration: orchestration.clone(),
+                reviews: reviews.clone(),
+            },
+        )?;
         let incidents = ycoding_core::model_incident::Service::new(client.clone());
         let event_authorization = Arc::new(
             crate::connector::mcp_events_authorization::Authorizer::production(remote.clone())
@@ -896,6 +898,7 @@ impl Core {
             locations: locations.downgrade(),
             settings: crate::coordination::configured_settings(global.clone()),
         });
+        let dots_started = Instant::now();
         let dots = Arc::new(
             crate::dots::Services::start(crate::dots::Settings {
                 owner: context.handle(),
@@ -933,6 +936,7 @@ impl Core {
             })
             .await?,
         );
+        crate::launch::startup_stage("dots_services", dots_started);
         started.dots = Some(dots.clone());
         maintenance
             .attach_coordination(coordination_runtime.clone(), events.clone())
@@ -940,6 +944,38 @@ impl Core {
         maintenance
             .attach_goal(&goal, &events, autonomy.clone())
             .await?;
+        let start = {
+            let maintenance = maintenance.clone();
+            let factory = factory.clone();
+            let sessions = sessions.clone();
+            let locations = locations.clone();
+            async move {
+                maintenance
+                    .start(sessions, execution, factory, locations)
+                    .await
+            }
+        };
+        if let Some(mut ready) = started.ready.take() {
+            let mut stop = maintenance.stop.subscribe();
+            let task = tokio::spawn(async move {
+                tokio::select! {
+                    biased;
+                    result = ready.wait_for(|ready| *ready) => if result.is_err() { return Ok(()); },
+                    _ = stop.wait_for(|stopped| *stopped) => return Ok(()),
+                }
+                let result = start.await;
+                if let Err(error) = &result {
+                    tracing::error!(?error, "Runtime maintenance could not start");
+                }
+                result
+            });
+            *maintenance
+                .startup
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(task);
+        } else {
+            start.await?;
+        }
         let mut snapshot = Self {
             generation: factory.globals.generation.clone(),
             usage_dashboard: Some(factory.globals.usage_dashboard.clone()),
@@ -1006,7 +1042,9 @@ impl Core {
             lifetime: None,
         };
         let mut core = snapshot.clone();
+        let forms_started = Instant::now();
         core.locations.restore_forms().await?;
+        crate::launch::startup_stage("pending_forms", forms_started);
         snapshot.shutdown = Arc::new(Shutdown::with_parent(context.parent_owner()));
         core.lifetime = Some(context.retain(
             context.production_retirement(),
@@ -1041,7 +1079,7 @@ impl Core {
                 &maintenance.credentials,
                 Some(self.execution),
                 Some(&self.locations),
-                Some(maintenance.as_ref()),
+                Some(maintenance),
                 self.dots.as_ref(),
                 self.shutdown.parent.as_deref(),
             )
@@ -1095,7 +1133,7 @@ async fn release(
     credentials: &credential::Service,
     execution: Option<&'static execution::Execution>,
     locations: Option<&Locations>,
-    maintenance: Option<&Maintenance>,
+    maintenance: Option<&Arc<Maintenance>>,
     dots: Option<&Arc<crate::dots::Services>>,
     parent: Option<&ycoding_core::extension::ParentOwner>,
 ) -> Result<(), Failure> {
@@ -2973,6 +3011,7 @@ fn reconcile_retention_analytics(
 
 pub(crate) struct Maintenance {
     stop: watch::Sender<bool>,
+    startup: Mutex<Option<JoinHandle<Result<(), Failure>>>>,
     task: Mutex<Option<JoinHandle<()>>>,
     telemetry: Mutex<Option<JoinHandle<()>>>,
     credentials: credential::Service,
@@ -2987,9 +3026,10 @@ pub(crate) struct Maintenance {
 }
 
 impl Maintenance {
-    fn new(factory: &Factory) -> Self {
-        Self {
+    fn new(factory: &Factory) -> Arc<Self> {
+        Arc::new(Self {
             stop: watch::channel(false).0,
+            startup: Mutex::new(None),
             task: Mutex::new(None),
             telemetry: Mutex::new(None),
             credentials: factory.credentials.clone(),
@@ -3001,7 +3041,7 @@ impl Maintenance {
             shutdown: Shutdown::default(),
             coordination_shutdown: Shutdown::default(),
             goal_shutdown: Shutdown::default(),
-        }
+        })
     }
 
     async fn attach_coordination(
@@ -3141,11 +3181,28 @@ impl Maintenance {
         sessions: Service,
         execution: &'static execution::Execution,
         factory: Arc<Factory>,
+        locations: Locations,
+    ) -> Result<(), Failure> {
+        let started = Instant::now();
+        self.housekeeping(&factory).await?;
+        self.cleanups(&factory).await?;
+        self.spawn(
+            sessions,
+            locations,
+            factory,
+            Arc::new(runner::WallClock),
+            Arc::new(move || execution.active()),
+        );
+        crate::launch::startup_stage("maintenance", started);
+        Ok(())
+    }
+
+    fn subscribe(
+        &self,
+        factory: &Factory,
         autonomy: autonomy::Changes,
         consumers: AutonomyConsumers,
     ) -> Result<(), Failure> {
-        self.housekeeping(&factory).await?;
-        self.cleanups(&factory).await?;
         let notify = Arc::new(tokio::sync::Notify::new());
         let notified = notify.clone();
         let subscriber = factory
@@ -3163,15 +3220,8 @@ impl Maintenance {
             subscriber,
             notify,
             autonomy,
-            consumers.clone(),
+            consumers,
         )));
-        self.spawn(
-            sessions,
-            consumers.locations,
-            factory,
-            Arc::new(runner::WallClock),
-            Arc::new(move || execution.active()),
-        );
         Ok(())
     }
 
@@ -3313,7 +3363,7 @@ impl Maintenance {
     }
 
     #[cfg(test)]
-    async fn stop(&self) -> Result<(), Failure> {
+    async fn stop(self: &Arc<Self>) -> Result<(), Failure> {
         self.stop.send_replace(true);
         let goal = self.stop_goal().await;
         let coordination = self.stop_coordination().await;
@@ -3321,32 +3371,46 @@ impl Maintenance {
         cleanup_results([goal, coordination, workers])
     }
 
-    async fn stop_workers(&self) -> Result<(), Failure> {
+    async fn stop_workers(self: &Arc<Self>) -> Result<(), Failure> {
         self.stop.send_replace(true);
         self.shutdown
             .run(|| {
-                let task = self
-                    .task
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .take();
-                let notifications = self
-                    .notifications
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .take();
-                let telemetry = self
-                    .telemetry
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .take();
-                let cleanups = self
-                    .cleanups
+                let maintenance = self.clone();
+                let startup = self
+                    .startup
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .take();
                 async move {
+                    let started = match startup {
+                        Some(task) => task
+                            .await
+                            .map_err(|_| unavailable("maintenance startup"))
+                            .and_then(|result| result),
+                        None => Ok(()),
+                    };
+                    let task = maintenance
+                        .task
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .take();
+                    let notifications = maintenance
+                        .notifications
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .take();
+                    let telemetry = maintenance
+                        .telemetry
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .take();
+                    let cleanups = maintenance
+                        .cleanups
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .take();
                     let results = [
+                        started,
                         match task {
                             Some(task) => {
                                 task.await.map_err(|_| unavailable("runtime maintenance"))

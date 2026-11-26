@@ -79,18 +79,16 @@ pub fn core(
 }
 
 fn upgrade(path: &Path, options: Options, free_bytes: FreeBytes<'_>) -> Result<Outcome, Error> {
-    match ReadOnlyDatabase::open(path) {
+    let mut builder = Database::builder();
+    builder.set_cache_size(options.cache_bytes);
+    match builder.open_read_only(path) {
         Ok(database) => upgrade_open(path, path, database, options, free_bytes),
         Err(DatabaseError::RepairAborted) => backup::recover(path, |staged| {
-            drop(
-                Database::builder()
-                    .set_cache_size(options.cache_bytes)
-                    .open(staged)?,
-            );
+            drop(builder.open(staged)?);
             upgrade_open(
                 path,
                 staged,
-                ReadOnlyDatabase::open(staged)?,
+                builder.open_read_only(staged)?,
                 options,
                 free_bytes,
             )

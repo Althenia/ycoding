@@ -54,10 +54,10 @@ impl Globals {
         events: Feed,
         git: Arc<git::Service>,
         reports: bool,
-        analytics: PathBuf,
+        ready: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> Result<Arc<Self>, Failure> {
         let composition = if reports {
-            Composition::start_reports(client.clone(), analytics)?
+            Composition::start_reports(client.clone(), production.analytics.clone(), ready)?
         } else {
             Composition::start()?
         };

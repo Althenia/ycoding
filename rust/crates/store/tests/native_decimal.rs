@@ -158,3 +158,26 @@ fn native_decimal_codec_accepts_the_full_coefficient_byte_budget_and_rejects_ove
     bytes.insert(bytes.len() - 1, 2);
     assert!(Decimal::from_bytes(&bytes).is_err());
 }
+
+#[test]
+fn native_decimal_codec_preserves_word_boundaries_and_rejects_noncanonical_digits() {
+    for sign in [0, 2] {
+        let mask = if sign == 0 { 255 } else { 0 };
+        let mut bytes = vec![sign];
+        bytes.extend(
+            (20_u64 ^ (1_u64 << 63))
+                .to_be_bytes()
+                .map(|byte| byte ^ mask),
+        );
+        bytes.extend(b"10900000000000000001".map(|digit| (digit - b'0' + 1) ^ mask));
+        bytes.push(mask);
+        let value = Decimal::from_bytes(&bytes).unwrap();
+        assert_eq!(value.to_bytes().unwrap(), bytes);
+        assert_eq!(value.is_negative(), sign == 0);
+        for (index, rejected) in [(9, 1), (19, 11), (28, 1)] {
+            let mut invalid = bytes.clone();
+            invalid[index] = rejected ^ mask;
+            assert!(Decimal::from_bytes(&invalid).is_err());
+        }
+    }
+}

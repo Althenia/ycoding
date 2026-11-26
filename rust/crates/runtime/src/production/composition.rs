@@ -8,7 +8,10 @@ use std::{
     },
     thread::JoinHandle,
 };
-use tokio::{runtime::Handle, sync::oneshot};
+use tokio::{
+    runtime::Handle,
+    sync::{oneshot, watch},
+};
 
 type Owner = (oneshot::Sender<()>, JoinHandle<Result<(), Failure>>);
 
@@ -19,6 +22,12 @@ pub(super) struct Composition {
     reports: Arc<Mutex<Option<Maintainer>>>,
     inputs: Arc<Mutex<Option<Inputs>>>,
     wake: Wake,
+}
+
+struct Reports {
+    client: ycoding_core::ycoding_store::Client,
+    directory: std::path::PathBuf,
+    ready: Option<watch::Receiver<bool>>,
 }
 
 #[derive(Clone)]
@@ -70,12 +79,15 @@ impl Composition {
     pub fn start_reports(
         client: ycoding_core::ycoding_store::Client,
         directory: std::path::PathBuf,
+        ready: Option<watch::Receiver<bool>>,
     ) -> Result<Self, Failure> {
-        Self::build(Some((client, directory)))
+        Self::build(Some(Reports {
+            client,
+            directory,
+            ready,
+        }))
     }
-    fn build(
-        reports: Option<(ycoding_core::ycoding_store::Client, std::path::PathBuf)>,
-    ) -> Result<Self, Failure> {
+    fn build(reports: Option<Reports>) -> Result<Self, Failure> {
         let (ready, receiver) = std::sync::mpsc::sync_channel(1);
         let (stop, stopped) = oneshot::channel();
         let (sender, incoming) = std::sync::mpsc::sync_channel(1);
@@ -102,11 +114,10 @@ impl Composition {
                     .build();
                 match runtime {
                     Ok(runtime) => {
-                        if let Some((client, directory)) = reports {
+                        if let Some(reports) = reports {
                             *owners.lock().unwrap_or_else(PoisonError::into_inner) =
                                 start_analytics(
-                                    client,
-                                    directory,
+                                    reports,
                                     source,
                                     signal,
                                     (incoming, mirror_incoming, presentation_incoming),
@@ -251,8 +262,7 @@ impl Drop for Maintainer {
 type Receiver = std::sync::mpsc::Receiver<()>;
 
 fn start_analytics(
-    client: ycoding_core::ycoding_store::Client,
-    directory: std::path::PathBuf,
+    reports: Reports,
     inputs: Arc<Mutex<Option<Inputs>>>,
     wake: Wake,
     incoming: (Receiver, Receiver, Receiver),
@@ -261,7 +271,7 @@ fn start_analytics(
     let signal = wake.clone();
     match std::thread::Builder::new()
         .name("ycoding-analytics-rebuild".into())
-        .spawn(move || maintain(client, directory, inputs, signal, incoming, runtime))
+        .spawn(move || maintain(reports, inputs, signal, incoming, runtime))
     {
         Ok(task) => Some(Maintainer {
             wake,
@@ -277,13 +287,17 @@ fn start_analytics(
 }
 
 fn maintain(
-    client: ycoding_core::ycoding_store::Client,
-    directory: std::path::PathBuf,
+    reports: Reports,
     inputs: Arc<Mutex<Option<Inputs>>>,
     wake: Wake,
     (incoming, mirror_incoming, presentation_incoming): (Receiver, Receiver, Receiver),
     runtime: Handle,
 ) {
+    let Reports {
+        client,
+        directory,
+        ready,
+    } = reports;
     let engine = loop {
         if wake.stopped.load(Ordering::Acquire) {
             return;
@@ -313,6 +327,26 @@ fn maintain(
             signal.notify_usage();
         }
     });
+    if let Some(mut ready) = ready {
+        let admitted = runtime.block_on(async {
+            let stopped = wake.shutdown.notified();
+            tokio::pin!(stopped);
+            stopped.as_mut().enable();
+            if wake.stopped.load(Ordering::Acquire) {
+                return false;
+            }
+            tokio::select! {
+                _ = stopped => false,
+                ready = ready.wait_for(|ready| *ready) => ready.is_ok(),
+            }
+        });
+        if !admitted {
+            if let Err(error) = engine.shutdown() {
+                tracing::error!("analytics shutdown failed ({error:?})");
+            }
+            return;
+        }
+    }
     std::thread::scope(|scope| {
         let presentation_inputs = inputs.clone();
         let presentations = std::thread::Builder::new()

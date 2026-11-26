@@ -470,7 +470,7 @@ pub async fn build_production_services(
     config: &LaunchConfig,
     client: ycoding_core::ycoding_store::Client,
 ) -> Result<Services, LaunchError> {
-    build_services(owner, config, client, process_identity(config)?).await
+    build_services(owner, config, client, process_identity(config)?, None).await
 }
 
 fn process_identity(config: &LaunchConfig) -> Result<Identity, LaunchError> {
@@ -486,6 +486,7 @@ async fn build_services(
     config: &LaunchConfig,
     client: ycoding_core::ycoding_store::Client,
     identity: Identity,
+    ready: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> Result<Services, LaunchError> {
     let core = crate::Core::production_with_recovery(
         owner,
@@ -532,6 +533,7 @@ async fn build_services(
             analytics: config.storage.analytics().to_path_buf(),
         },
         config.mode == Mode::Service,
+        ready,
     )
     .await
     .map_err(LaunchError::Production)?;
@@ -828,9 +830,13 @@ fn run_bootstrap(
 }
 
 pub(crate) fn startup_stage(stage: &'static str, started: Instant) {
+    let duration_ms = started.elapsed().as_millis() as u64;
+    let memory = ycoding_core::observability::memory::Scalar::sample();
     tracing::info!(
         stage,
-        duration_ms = started.elapsed().as_millis() as u64,
+        duration_ms,
+        rss_bytes = memory.rss_bytes,
+        peak_rss_bytes = memory.peak_rss_bytes,
         "server startup"
     );
 }
@@ -848,12 +854,14 @@ async fn run_hosted(
     {
         return Ok(());
     }
-    let built = match managed.as_ref() {
-        Some(managed) => {
-            build_services(owner, config, store.client(), managed.identity.clone()).await
-        }
-        None => build_production_services(owner, config, store.client()).await,
+    let composition_started = Instant::now();
+    let identity = match managed.as_ref() {
+        Some(managed) => managed.identity.clone(),
+        None => process_identity(config)?,
     };
+    let (announce, ready) = tokio::sync::watch::channel(false);
+    let built = build_services(owner, config, store.client(), identity, Some(ready)).await;
+    startup_stage("service_composition", composition_started);
     let services = match built {
         Ok(services) => services,
         Err(error) => {
@@ -865,8 +873,8 @@ async fn run_hosted(
     };
     let core = services.core.clone();
     let result = match managed {
-        Some(managed) => managed.serve(config, services, started).await,
-        None => serve_until_stopped(config, services, started).await,
+        Some(managed) => managed.serve(config, services, started, announce).await,
+        None => serve_until_stopped(config, services, started, announce).await,
     };
     let suspended = match (&core, config.mode) {
         (Some(core), Mode::Service) => core
@@ -1076,6 +1084,7 @@ impl ManagedLaunch {
         config: &LaunchConfig,
         services: Services,
         started: Instant,
+        announce: tokio::sync::watch::Sender<bool>,
     ) -> Result<(), LaunchError> {
         if *self.stopped.borrow() {
             return self.close_http().await;
@@ -1103,6 +1112,7 @@ impl ManagedLaunch {
         }
         if installed {
             startup_stage("ready", started);
+            announce.send_replace(true);
         }
         if !installed || *self.stopped.borrow() {
             return self.close_http().await;
@@ -1184,6 +1194,7 @@ async fn serve_until_stopped(
     config: &LaunchConfig,
     services: Services,
     started: Instant,
+    announce: tokio::sync::watch::Sender<bool>,
 ) -> Result<(), LaunchError> {
     let identity = services.identity.clone();
     let listener = bind(config).await?;
@@ -1209,6 +1220,7 @@ async fn serve_until_stopped(
     }
 
     startup_stage("ready", started);
+    announce.send_replace(true);
     let shutdown = wait_for_shutdown(config.mode, stop, signals);
     tokio::pin!(shutdown);
     let started = tokio::select! {

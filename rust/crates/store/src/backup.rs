@@ -13,6 +13,7 @@ use std::{
 
 pub const HEADROOM_BYTES: u64 = 1024 * 1024 * 1024;
 const BYTE_BUDGET: usize = 2 * 1024 * 1024;
+const CACHE_BYTES: usize = 8 * 1024 * 1024;
 const NOTICE_INTERVAL: i64 = 60 * 60 * 1000;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -128,7 +129,9 @@ pub(crate) fn open_copy(copy: &Path) -> Result<ReadOnlyDatabase, Error> {
     if !std::fs::symlink_metadata(copy)?.is_file() {
         return Err(Error::Rejected("pre-upgrade copy is not a regular file"));
     }
-    Ok(ReadOnlyDatabase::open(copy)?)
+    Ok(Database::builder()
+        .set_cache_size(CACHE_BYTES)
+        .open_read_only(copy)?)
 }
 
 pub(crate) fn sealed(database: &Path, metadata: &Metadata) -> Result<Option<bool>, Error> {
@@ -340,7 +343,7 @@ fn verify(path: &Path, catalog: Catalog, metadata: &Metadata) -> Result<(), Erro
     std::fs::remove_file(temporary)?;
     io::copy(&mut source, &mut file)?;
     let candidate = Database::builder()
-        .set_cache_size(8 * 1024 * 1024)
+        .set_cache_size(CACHE_BYTES)
         .set_repair_callback(redb::RepairSession::abort)
         .create_file(file)?;
     verify_candidate(candidate, catalog, metadata)?;
@@ -372,7 +375,7 @@ fn copy(
     metadata: &Metadata,
 ) -> Result<(), Error> {
     let database = Database::builder()
-        .set_cache_size(8 * 1024 * 1024)
+        .set_cache_size(CACHE_BYTES)
         .create_file(private_file(path)?)?;
     for name in catalog.names() {
         let table = source.open_table(definition(name))?;
@@ -409,9 +412,7 @@ fn copy(
         }
     }
     drop(database);
-    let candidate = Database::builder()
-        .set_cache_size(8 * 1024 * 1024)
-        .open(path)?;
+    let candidate = Database::builder().set_cache_size(CACHE_BYTES).open(path)?;
     let candidate = verify_candidate(candidate, catalog, metadata)?;
     same_rows(source, &candidate.begin_read()?, catalog)
 }

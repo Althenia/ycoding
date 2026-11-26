@@ -501,14 +501,18 @@ impl Worker {
         let notify = Arc::new(Notify::new());
         let subscriber =
             subscribe(&feed, &notify).map_err(|_| failed("Project notification subscription"))?;
+        let recovery_started = std::time::Instant::now();
         runtime
             .recover()
             .await
             .map_err(|_| failed("Project notification recovery"))?;
+        crate::launch::startup_stage("project_notification_recovery", recovery_started);
+        let admission_started = std::time::Instant::now();
         runtime
             .resume_admitted()
             .await
             .map_err(|_| failed("Project admitted input resumption"))?;
+        crate::launch::startup_stage("project_admitted_inputs", admission_started);
         let (stop, stopped) = watch::channel(false);
         let task = tokio::spawn(drive(runtime, feed, subscriber, notify, stopped));
         Ok(Self {
