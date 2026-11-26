@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import { browserSessionTtlMs, createAuthService } from "../src/auth/service"
 import { parseAllowedEmails } from "../src/auth/allowlist"
 import { boundedCleanupInterval, cleanupIntervalMs, maxCleanupIntervalMs, minCleanupIntervalMs } from "../src/router"
@@ -738,6 +738,41 @@ describe.each([4, 5])("router: websocket upgrades v%i", (protocol) => {
 })
 
 describe("router: websocket upgrades", () => {
+  test("logs a failed v5 agent upgrade without exposing request credentials", async () => {
+    let accessToken = ""
+    const cookie = "yc_session=synthetic-browser-cookie"
+    const h = await harness({
+      relay: {
+        getByName: () => ({
+          fetch: async () => {
+            throw new Error(`Durable Object unavailable: ${accessToken}; ${cookie}`)
+          },
+        }),
+      },
+    })
+    const owner = await signIn(h)
+    const device = await enrollDevice(h, owner.userID)
+    const issued = await h.service.issueCredentials(device.deviceID)
+    if (!issued.ok) throw new Error("issue failed")
+    accessToken = issued.value.accessToken
+    const log = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const response = await h.router(new Request(`${origin}/ws/v5/agent`, {
+        headers: { upgrade: "websocket", authorization: `Bearer ${accessToken}`, cookie },
+      }))
+      expect(response.status).toBe(500)
+      expect(await response.json()).toEqual({ error: { code: "internal_error", message: "Relay request failed" } })
+      expect(log).toHaveBeenCalledTimes(1)
+      const diagnostic = JSON.stringify(log.mock.calls[0])
+      expect(diagnostic).toContain("Durable Object unavailable")
+      expect(diagnostic).toContain("at ")
+      expect(diagnostic).not.toContain(accessToken)
+      expect(diagnostic).not.toContain("synthetic-browser-cookie")
+    } finally {
+      log.mockRestore()
+    }
+  })
+
   test("rejects missing and unknown WebSocket protocol routes before upgrade", async () => {
     const h = await harness()
     for (const path of ["/ws/client", "/ws/agent", "/ws/v1/client", "/ws/v1/agent", "/ws/v2/client", "/ws/v2/agent", "/ws/v6/client", "/ws/v6/agent"])

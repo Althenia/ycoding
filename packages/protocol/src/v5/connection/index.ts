@@ -57,6 +57,7 @@ import { validateAssetMetadata } from "../asset.js"
 import { defaultBudgets, ReservationBudget } from "./budgets.js"
 import type { Budgets, ConfigurableBudgets } from "./budgets.js"
 import { Ledger } from "./ledger.js"
+import type { Delivery } from "./ledger.js"
 import type { Transfer } from "./bulk.js"
 import { sameScope } from "./subscription.js"
 import type { Subscription } from "./subscription.js"
@@ -143,6 +144,43 @@ type Pending = {
 }
 export type Prepared = { frame: Frame; reservedBytes: number }
 export type Incoming = { readonly byteLength: number; readonly authority: number }
+type Rate = { direction: "send" | "receive"; tiny: boolean; bytes: number; time: number }
+type LedgerState = {
+  kind: LedgerClass
+  window: number
+  sent: Delivery[]
+  sentOrdinal: bigint
+  receivedOrdinal: bigint
+  credited: bigint
+  consumed: bigint
+  grantSent: bigint
+}
+export type ConnectionSnapshot = {
+  epoch: string
+  sourceEpoch: string
+  now: number
+  started: boolean
+  ledgers: LedgerState[]
+  sendWindows: [LedgerClass, number][]
+  rates: Rate[]
+  lastEvent: string
+  lastBulk: string
+  eventRun: number
+  lastPing: number
+  pingID: bigint
+  outstandingPing?: bigint
+  peerPing: bigint
+  tinyReceiptSent: bigint
+  requestOrdinal: bigint
+  authority: number
+  subscriptions: [string, Subscription][]
+  sendingSubscriptions: [string, Subscription][]
+  dropped: { results: number; transfers: number; events: number; oversizedInvalidations: number }
+  eventTicket: bigint
+  queueOrder: bigint
+  relayClients: [string, { snapshot: SubscriptionSnapshot; bytes: number }][]
+  relayIdentities: [string, { id: string; bytes: number }][]
+}
 export type EventMetadata = {
   subscriptionID: string
   scope: Scope
@@ -166,7 +204,7 @@ export class Connection {
   private notifications: Decision[] = []
   private ledgers: Map<LedgerClass, Ledger>
   private sendWindows: Map<LedgerClass, number>
-  private rates: { direction: "send" | "receive"; tiny: boolean; bytes: number; time: number }[] = []
+  private rates: Rate[] = []
   private lastEvent = ""
   private lastBulk = ""
   private eventRun = 0
@@ -1316,10 +1354,170 @@ export class Connection {
       const httpCredits = this.flushHttpCredits(now)
       const credits = this.flushCredits(now)
       const heartbeat =
-        now - this.lastPing >= this.budgets.pingIntervalMs && this.outstandingPing === undefined ? this.ping(now) : []
+        this.options.role !== PeerRole.RELAY &&
+        now - this.lastPing >= this.budgets.pingIntervalMs &&
+        this.outstandingPing === undefined
+          ? this.ping(now)
+          : []
       return [...decisions, ...httpCredits, ...credits, ...heartbeat]
     }
     return decisions
+  }
+
+  nextDeadline(): number | undefined {
+    if (this.phase === "closed") return undefined
+    let deadline = this.deadline
+    const relay = this.options.role === PeerRole.RELAY
+    for (const ledger of this.ledgers.values()) {
+      if (relay && ledger.kind === LedgerClass.TINY) continue
+      const oldest = ledger.sent[0]
+      if (oldest) deadline = Math.min(deadline, oldest.time + this.budgets.deliveryTimeoutMs)
+    }
+    for (const owner of this.httpSending.values()) {
+      const oldest = owner.handed[0]
+      if (oldest) deadline = Math.min(deadline, oldest.time + this.budgets.deliveryTimeoutMs)
+    }
+    if (this.phase === "established") {
+      for (const record of this.queue) {
+        if (record.available > this.now) deadline = Math.min(deadline, record.available)
+      }
+      if (this.hasTinyRoom()) {
+        if (!relay && this.outstandingPing === undefined)
+          deadline = Math.min(deadline, this.lastPing + this.budgets.pingIntervalMs)
+        for (const ledger of this.ledgers.values()) {
+          if (!ledger.grantBytes || ledger.consumed === ledger.grantSent) continue
+          deadline = Math.min(deadline, ledger.grantTime! + this.budgets.creditDelayMs)
+        }
+      }
+    }
+    return deadline === Infinity ? undefined : deadline
+  }
+
+  snapshot(): ConnectionSnapshot | undefined {
+    if (
+      this.phase !== "established" ||
+      this.queue.length ||
+      this.prepared ||
+      this.incoming.size ||
+      this.notifications.length ||
+      this.pending.size ||
+      this.inbound.size ||
+      this.awaitingSubscription.size ||
+      this.transfers.size ||
+      this.outgoingTransfers.size ||
+      this.httpSending.size ||
+      this.httpCredits.size ||
+      [...this.ledgers.values()].some(
+        (ledger) =>
+          ledger.received.length ||
+          ledger.sent.some((record) => record.forwarded) ||
+          (ledger.kind !== LedgerClass.TINY && (ledger.sent.length || ledger.grantBytes)),
+      ) ||
+      [...this.subscriptions.values(), ...this.sendingSubscriptions.values()].some(
+        (subscription) => subscription.hydrating || subscription.buffered.length,
+      )
+    )
+      return undefined
+    return {
+      epoch: this.epoch,
+      sourceEpoch: this.sourceEpoch,
+      now: this.now,
+      started: this.started,
+      ledgers: [...this.ledgers.values()].map((ledger) => ({
+        kind: ledger.kind,
+        window: ledger.window,
+        sent: ledger.sent.map((record) => ({ ...record })),
+        sentOrdinal: ledger.sentOrdinal,
+        receivedOrdinal: ledger.receivedOrdinal,
+        credited: ledger.credited,
+        consumed: ledger.consumed,
+        grantSent: ledger.grantSent,
+      })),
+      sendWindows: [...this.sendWindows],
+      rates: this.rates.map((rate) => ({ ...rate })),
+      lastEvent: this.lastEvent,
+      lastBulk: this.lastBulk,
+      eventRun: this.eventRun,
+      lastPing: this.lastPing,
+      pingID: this.pingID,
+      outstandingPing: this.outstandingPing,
+      peerPing: this.peerPing,
+      tinyReceiptSent: this.tinyReceiptSent,
+      requestOrdinal: this.requestOrdinal,
+      authority: this.authority,
+      subscriptions: [...this.subscriptions],
+      sendingSubscriptions: [...this.sendingSubscriptions],
+      dropped: { ...this.dropped },
+      eventTicket: this.eventTicket,
+      queueOrder: this.queueOrder,
+      relayClients: [...this.relayClients],
+      relayIdentities: [...this.relayIdentities],
+    }
+  }
+
+  static restore(options: Options, snapshot: ConnectionSnapshot): Connection {
+    if (!(options.now >= snapshot.now)) throw new Error("monotonic time")
+    const connection = new Connection({ ...options, epoch: snapshot.epoch, sourceEpoch: snapshot.sourceEpoch })
+    connection.resume(snapshot)
+    return connection
+  }
+
+  private resume(snapshot: ConnectionSnapshot) {
+    this.phase = "established"
+    this.deadline = Infinity
+    this.epoch = snapshot.epoch
+    this.sourceEpoch = snapshot.sourceEpoch
+    this.started = snapshot.started
+    this.readyHanded = true
+    this.helloHanded = true
+    for (const state of snapshot.ledgers) {
+      const ledger = this.ledgers.get(state.kind)
+      if (!ledger || (state.kind !== LedgerClass.TINY && state.sent.length)) throw new Error("ledger snapshot")
+      ledger.window = state.window
+      ledger.sent.push(...state.sent.map((record) => ({ ...record })))
+      ledger.sentOrdinal = state.sentOrdinal
+      ledger.receivedOrdinal = state.receivedOrdinal
+      ledger.credited = state.credited
+      ledger.consumed = state.consumed
+      ledger.grantSent = state.grantSent
+    }
+    this.sendWindows = new Map(snapshot.sendWindows)
+    this.rates = snapshot.rates.map((rate) => ({ ...rate }))
+    this.lastEvent = snapshot.lastEvent
+    this.lastBulk = snapshot.lastBulk
+    this.eventRun = snapshot.eventRun
+    this.lastPing = snapshot.lastPing
+    this.pingID = snapshot.pingID
+    this.outstandingPing = snapshot.outstandingPing
+    this.peerPing = snapshot.peerPing
+    this.tinyReceiptSent = snapshot.tinyReceiptSent
+    this.requestOrdinal = snapshot.requestOrdinal
+    this.authority = snapshot.authority
+    this.subscriptions = new Map(snapshot.subscriptions)
+    this.sendingSubscriptions = new Map(snapshot.sendingSubscriptions)
+    this.dropped = { ...snapshot.dropped }
+    this.eventTicket = snapshot.eventTicket
+    this.queueOrder = snapshot.queueOrder
+    this.relayClients = new Map(snapshot.relayClients)
+    this.relayIdentities = new Map(snapshot.relayIdentities)
+    if (!this.reservation.reserve(this.retainedBytes)) throw new Error("reservation")
+  }
+
+  private hasTinyRoom(): boolean {
+    const ledger = this.ledgers.get(LedgerClass.TINY)!
+    let count = ledger.sent.length
+    let bytes = ledger.handedBytes
+    for (const record of this.queue) {
+      if (this.classify(record.frame) !== LedgerClass.TINY) continue
+      count++
+      bytes += record.bytes
+    }
+    const prepared = this.prepared?.record
+    if (prepared && this.classify(prepared.frame) === LedgerClass.TINY) {
+      count++
+      bytes += prepared.bytes
+    }
+    return count < this.budgets.tinyCount && bytes + this.budgets.tinyFrameBytes <= this.budgets.tinyBytes
   }
 
   private check(now: number): Decision[] {
@@ -1327,7 +1525,13 @@ export class Connection {
     this.now = now
     if (this.phase === "closed") return []
     if (now >= this.deadline) return this.close(FailureCategory.INCOMPATIBLE)
-    if ([...this.ledgers.values()].some((ledger) => ledger.stalled(now, this.budgets)))
+    if (
+      [...this.ledgers.values()].some(
+        (ledger) =>
+          !(this.options.role === PeerRole.RELAY && ledger.kind === LedgerClass.TINY) &&
+          ledger.stalled(now, this.budgets),
+      )
+    )
       return this.close(FailureCategory.LIMIT)
     if (
       [...this.httpSending.values()].some(
@@ -1464,6 +1668,10 @@ export class Connection {
       const freed = this.ledgers.get(LedgerClass.TINY)!.credit(frame.tinyConsumedThrough, true)
       if (freed === undefined) return this.close(FailureCategory.MALFORMED)
       this.reservation.release(freed)
+    }
+    if (this.options.role === PeerRole.RELAY && this.ledgers.get(LedgerClass.TINY)!.stalled(now, this.budgets)) {
+      this.releaseIncoming(token)
+      return this.close(FailureCategory.LIMIT)
     }
     this.incoming.delete(token)
     ledger.receivedOrdinal++

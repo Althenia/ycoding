@@ -269,7 +269,20 @@ export function createRouter(deps: RouterDeps) {
   return async function route(request: Request): Promise<Response> {
     try {
       return await handle(request)
-    } catch {
+    } catch (error) {
+      const credentials = [
+        ...request.headers.values(),
+        request.headers.get("authorization")?.split(/\s+/, 2)[1],
+        ...Array.from(request.headers.get("cookie")?.matchAll(/(?:^|;\s*)[^=;]+?=([^;]+)/g) ?? [], (match) => match[1]),
+      ].filter((value): value is string => !!value).sort((a, b) => b.length - a.length)
+      const redact = (text: string) => {
+        for (const value of credentials) text = text.replaceAll(value, "[redacted]")
+        return text.replace(/\b(?:Bearer|Basic)\s+[\w./+~=-]+/gi, "[redacted]").slice(0, 2048)
+      }
+      console.error("Relay request failed", {
+        message: error instanceof Error ? redact(error.message) : "Non-Error thrown by relay handler",
+        stack: error instanceof Error ? redact(error.stack?.split("\n").filter((line) => /^\s+at /.test(line)).join("\n") ?? "") : "",
+      })
       return apiError(500, "internal_error", "Relay request failed")
     }
   }

@@ -1,26 +1,52 @@
 import { RemoteWebSocketPath } from "../../../../packages/remote/src/index"
 import { randomToken } from "../auth/crypto"
 import type { AuthService } from "../auth/service"
-import { createRelay, type RelayAuthority, type RelayConnection, type RelayDeps } from "./binary-core"
+import {
+  createRelay,
+  type DeviceSnapshot,
+  type PeerSnapshot,
+  type RelayAuthority,
+  type RelayConnection,
+  type RelayDeps,
+} from "./binary-core"
 
 export const binaryRelaySocketTag = "v5"
 
 type RelayDelivery = Pick<RelayDeps, "notices" | "loadOfflineCheck" | "saveOfflineCheck" | "notifyPush" | "quota">
+type Attachment = { identity: RelayConnection; generation?: number; device?: DeviceSnapshot; peer?: PeerSnapshot }
+
+const persistRetryMs = 1_000
 
 export class BinaryRelayAdapter {
-  readonly #relay: ReturnType<typeof createRelay>
+  #relay: ReturnType<typeof createRelay>
   readonly #attached = new Map<string, RelayConnection>()
+  #protocolTimer?: ReturnType<typeof setTimeout>
+  #protocolDeadline?: number
+  #alarmAt?: number | null
+  #generation = 0
+  #resumable?: boolean
 
   constructor(
     private readonly ctx: DurableObjectState,
     private readonly namespace: DurableObjectNamespace,
-    service: AuthService,
+    private readonly service: AuthService,
     private readonly delivery: RelayDelivery,
   ) {
-    this.#relay = createRelay({
+    this.#relay = this.#createRelay()
+    this.ctx.setWebSocketAutoResponse()
+    const restored = this.#resume()
+    for (const socket of this.ctx.getWebSockets())
+      if (!restored.has(socket)) closeSocket(socket, 1012, "EPOCH")
+    this.#armProtocolTimer()
+  }
+
+  #createRelay(): ReturnType<typeof createRelay> {
+    const { delivery, service } = this
+    return createRelay({
       ...delivery,
       now: () => Date.now(),
       monotonic: () => performance.now(),
+      scheduleProtocol: () => this.#settle(),
       newID: () => randomToken(24),
       send: (connectionID, bytes) => {
         const socket = this.#socketFor(connectionID)
@@ -35,8 +61,31 @@ export class BinaryRelayAdapter {
         toAuthority(await service.authorizeClientCommand(sessionID, deviceID)),
       authorizeAgentCommand: async (deviceID) => toAuthority(await service.authorizeAgentCommand(deviceID)),
     })
-    this.ctx.setWebSocketAutoResponse()
-    for (const socket of this.ctx.getWebSockets()) closeSocket(socket, 1012, "EPOCH")
+  }
+
+  #resume(): Set<WebSocket> {
+    const saved = this.ctx
+      .getWebSockets(binaryRelaySocketTag)
+      .map((socket) => ({ socket, attachment: readAttachment(socket) }))
+    const latest = saved.find((entry) => entry.attachment?.device)?.attachment
+    const device = latest?.device
+    if (!device) return new Set()
+    const restored = saved.flatMap(({ socket, attachment }) =>
+      attachment?.peer && attachment.generation === latest.generation && device.peers.includes(attachment.identity.connectionID)
+        ? [{ socket, identity: attachment.identity, peer: attachment.peer }]
+        : [],
+    )
+    try {
+      this.#relay.resume(device, restored)
+    } catch (error) {
+      console.error("v5 relay snapshot could not be restored", error)
+      this.#relay = this.#createRelay()
+      return new Set()
+    }
+    for (const entry of restored) this.#attached.set(entry.identity.connectionID, entry.identity)
+    this.#generation = latest.generation ?? 0
+    this.#resumable = true
+    return new Set(restored.map((entry) => entry.socket))
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -56,11 +105,12 @@ export class BinaryRelayAdapter {
 
     const pair = new WebSocketPair()
     const identity = { ...trusted, connectionID: crypto.randomUUID() }
-    pair[1].serializeAttachment(identity)
+    pair[1].serializeAttachment({ identity } satisfies Attachment)
     this.ctx.acceptWebSocket(pair[1], [binaryRelaySocketTag, identity.role, identity.connectionID])
     this.#attached.set(identity.connectionID, identity)
     try {
       await this.#relay.attach(identity)
+      this.#settle()
       await this.#armAlarm()
     } catch (error) {
       this.#failSocket(pair[1], identity.connectionID)
@@ -83,6 +133,7 @@ export class BinaryRelayAdapter {
     }
     await this.#armAlarm()
     await this.#relay.settleDeliveries()
+    this.#settle()
   }
 
   async webSocketClose(socket: WebSocket): Promise<void> {
@@ -91,14 +142,17 @@ export class BinaryRelayAdapter {
     this.#attached.delete(identity.connectionID)
     if (identity.role === "agent") await this.#relay.agentClosed(identity)
     else this.#relay.detach(identity.connectionID)
+    this.#settle()
     await this.#armAlarm()
   }
 
   async alarm(): Promise<void> {
+    this.#alarmAt = undefined
     this.#relay.sweep()
     await this.#relay.confirmOffline()
     await this.#armAlarm()
     await this.#relay.settleDeliveries()
+    this.#settle()
   }
 
   async #internal(pathname: string, request: Request): Promise<Response> {
@@ -125,6 +179,7 @@ export class BinaryRelayAdapter {
       }
       case "/_ycoding/v5/close-device":
         this.#relay.closeDevice()
+        this.#settle()
         this.delivery.notices.clear()
         break
       case "/_ycoding/v5/revoke-session": {
@@ -135,17 +190,14 @@ export class BinaryRelayAdapter {
       default:
         return new Response("Not found", { status: 404 })
     }
+    this.#settle()
     await this.#armAlarm()
     return new Response(null, { status: 204 })
   }
 
   #identity(socket: WebSocket): RelayConnection | undefined {
-    const attachment: unknown = socket.deserializeAttachment()
-    if (
-      typeof attachment !== "object" || attachment === null ||
-      !("connectionID" in attachment) || typeof attachment.connectionID !== "string"
-    ) return undefined
-    return this.#attached.get(attachment.connectionID)
+    const connectionID = readAttachment(socket)?.identity.connectionID
+    return connectionID === undefined ? undefined : this.#attached.get(connectionID)
   }
 
   #socketFor(connectionID: string): WebSocket | undefined {
@@ -159,10 +211,81 @@ export class BinaryRelayAdapter {
   }
 
   async #armAlarm(): Promise<void> {
-    const deadline = this.#relay.nextDeadline()
-    if (deadline === undefined) await this.ctx.storage.deleteAlarm()
-    else await this.ctx.storage.setAlarm(deadline)
+    const deadline = await this.#relay.nextAlarm() ?? null
+    this.#alarmAt ??= await this.ctx.storage.getAlarm()
+    if (deadline === this.#alarmAt) return
+    this.#alarmAt = deadline
+    try {
+      if (deadline === null) await this.ctx.storage.deleteAlarm()
+      else await this.ctx.storage.setAlarm(deadline)
+    } catch (error) {
+      if (this.#alarmAt === deadline) this.#alarmAt = undefined
+      throw error
+    }
   }
+
+  #settle(): void {
+    this.#persist()
+    this.#armProtocolTimer()
+  }
+
+  #persist(): void {
+    const sockets = this.ctx
+      .getWebSockets(binaryRelaySocketTag)
+      .filter((socket) => socket.readyState === WebSocket.OPEN)
+    const snapshot = this.#relay.snapshot()
+    if (snapshot) {
+      const generation = ++this.#generation
+      try {
+        for (const socket of sockets) {
+          const identity = this.#identity(socket)
+          if (!identity) continue
+          const peer = snapshot.peers.find((entry) => entry.connectionID === identity.connectionID)
+          socket.serializeAttachment(
+            (peer ? { identity, generation, device: snapshot.device, peer } : { identity }) satisfies Attachment,
+          )
+        }
+        this.#resumable = true
+        return
+      } catch (error) {
+        console.error("v5 relay snapshot exceeds the WebSocket attachment limit", error)
+      }
+    }
+    if (this.#resumable === false) return
+    this.#resumable = false
+    for (const socket of sockets) {
+      const identity = this.#identity(socket)
+      if (identity) socket.serializeAttachment({ identity } satisfies Attachment)
+    }
+  }
+
+  #armProtocolTimer(): void {
+    let deadline = this.#relay.nextProtocolDeadline()
+    if (this.#resumable === false) {
+      const retry = performance.now() + persistRetryMs
+      const pending = this.#protocolDeadline !== undefined && this.#protocolDeadline <= retry ? this.#protocolDeadline : retry
+      deadline = Math.min(deadline ?? Infinity, pending)
+    }
+    if (deadline === this.#protocolDeadline) return
+    if (this.#protocolTimer !== undefined) clearTimeout(this.#protocolTimer)
+    this.#protocolDeadline = deadline
+    this.#protocolTimer = deadline === undefined ? undefined : setTimeout(() => {
+      this.#protocolDeadline = undefined
+      this.#protocolTimer = undefined
+      this.#relay.sweep()
+    }, Math.max(0, Math.ceil(deadline - performance.now())))
+  }
+}
+
+function readAttachment(socket: WebSocket): Attachment | undefined {
+  const value: unknown = socket.deserializeAttachment()
+  if (typeof value !== "object" || value === null || !("identity" in value)) return undefined
+  const identity: unknown = value.identity
+  if (
+    typeof identity !== "object" || identity === null ||
+    !("connectionID" in identity) || typeof identity.connectionID !== "string"
+  ) return undefined
+  return value as Attachment
 }
 
 function closeSocket(socket: WebSocket, code: number, reason: string): void {

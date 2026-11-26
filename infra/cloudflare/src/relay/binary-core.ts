@@ -35,10 +35,11 @@ import {
   session_attachment_read_RequestSchema,
   QuotaPaceResultSchema,
   QuotaPaceStatus,
+  operations,
 } from "../../../../packages/protocol/src/v5"
 import type { Frame, Notice, Presentation, Scope, OperationDescriptor, BulkStart, QuotaPace } from "../../../../packages/protocol/src/v5"
-import type { Connection, Decision } from "../../../../packages/protocol/src/v5/connection"
-import { ReservationBudget } from "../../../../packages/protocol/src/v5/connection"
+import type { ConnectionSnapshot, Decision } from "../../../../packages/protocol/src/v5/connection"
+import { Connection, ReservationBudget } from "../../../../packages/protocol/src/v5/connection"
 import {
   RelayLimits,
   RemoteLimits,
@@ -49,6 +50,7 @@ import {
   createRelayConnection,
   receiveBinary,
   frameReservation,
+  remoteEventTypes,
 } from "../../../../packages/remote/src/index"
 import type { RemoteNotice, RemoteAlertDetail, RemoteQuota } from "../../../../packages/remote/src/index"
 import type { NoticeEvent, NoticeStore } from "./notice-store"
@@ -64,6 +66,25 @@ export type RelayConnection = {
   readonly browserSessionID: string
   readonly credentialExpiresAt: number
 }
+export type PeerSnapshot = {
+  readonly connectionID: string
+  readonly seenAt: number
+  readonly notices: boolean
+  readonly subscriptions: [string, Peer["subscriptions"] extends Map<string, infer V> ? V : never][]
+  readonly connection: ConnectionSnapshot
+}
+export type DeviceSnapshot = {
+  readonly sourceEpoch: string
+  readonly identity?: { ownerID: string; deviceID: string }
+  readonly statusBytes?: Uint8Array
+  readonly backendEpochs: [string, { epoch: string; bytes: number }][]
+  readonly acceptedInterests: [string, Scope][]
+  readonly pushWindow: number
+  readonly pushCount: number
+  readonly summarized: PushEvent["category"][]
+  readonly peers: string[]
+}
+export type RelaySnapshot = { readonly device: DeviceSnapshot; readonly peers: PeerSnapshot[] }
 export type OfflineCheck = { readonly ownerID: string; readonly deviceID: string; readonly closedAt: number }
 export type RelayAuthority =
   | { readonly ok: true; readonly ownerID: string }
@@ -94,6 +115,7 @@ export type RelayDeps = {
   readonly authorizeAgentCommand: (deviceID: string) => Promise<RelayAuthority>
   readonly loadOfflineCheck: () => Promise<OfflineCheck | undefined>
   readonly saveOfflineCheck: (check: OfflineCheck | undefined) => Promise<void>
+  readonly scheduleProtocol?: () => void
   readonly notifyPush?: (ownerID: string, event: PushEvent) => Promise<readonly PushOutcome[]>
   readonly quota?: QuotaDelivery
 }
@@ -141,7 +163,7 @@ type HttpRead = {
 
 export function createRelay(deps: RelayDeps) {
   const budget = new ReservationBudget(RelayLimits.applicationBytes)
-  const sourceEpoch = deps.newID()
+  let sourceEpoch = deps.newID()
   const peers = new Map<string, Peer>()
   const agentRequests = new Map<string, Admission>()
   const forwards = new Set<Forward>()
@@ -259,9 +281,18 @@ export function createRelay(deps: RelayDeps) {
     }
     decisions(peer, entries)
   }
+  async function loadOffline() {
+    if (offlineLoaded) return
+    const stored = await deps.loadOfflineCheck()
+    if (offlineLoaded) return
+    offline = stored
+    offlineLoaded = true
+  }
+
   function flushAll() {
     receipts()
     for (const peer of peers.values()) flush(peer)
+    deps.scheduleProtocol?.()
   }
   function finish(admission: Admission) {
     if (!admission.peer.requests.delete(admission.dispatch.requestID)) return
@@ -1001,6 +1032,7 @@ export function createRelay(deps: RelayDeps) {
             requestID: admission.dispatch.requestID,
           })
           read.controller.enqueue(piece.data.slice())
+          deps.scheduleProtocol?.()
           return
         }
       } else
@@ -1538,6 +1570,85 @@ export function createRelay(deps: RelayDeps) {
 
   return {
     reservation: budget,
+    snapshot(): RelaySnapshot | undefined {
+      if (agentRequests.size || forwards.size || heldInputs.size || httpReads.size || deliveries.size) return undefined
+      const saved: PeerSnapshot[] = []
+      for (const peer of peers.values()) {
+        const connection = peer.requests.size ? undefined : peer.connection.snapshot()
+        if (!connection) return undefined
+        saved.push({
+          connectionID: peer.identity.connectionID,
+          seenAt: peer.seenAt,
+          notices: peer.notices,
+          subscriptions: [...peer.subscriptions],
+          connection,
+        })
+      }
+      return {
+        device: {
+          sourceEpoch,
+          identity,
+          statusBytes,
+          backendEpochs: [...backendEpochs],
+          acceptedInterests: [...acceptedInterests],
+          pushWindow,
+          pushCount,
+          summarized: [...summarized],
+          peers: saved.map((peer) => peer.connectionID),
+        },
+        peers: saved,
+      }
+    },
+    resume(device: DeviceSnapshot, restored: readonly { identity: RelayConnection; peer: PeerSnapshot }[]) {
+      if (peers.size || restored.length !== device.peers.length) throw new Error("relay snapshot")
+      const reserve = (bytes: number) => {
+        if (!budget.reserve(bytes)) throw new Error("relay snapshot reservation")
+      }
+      sourceEpoch = device.sourceEpoch
+      identity = device.identity
+      if (device.statusBytes) reserve(device.statusBytes.length)
+      statusBytes = device.statusBytes
+      for (const [id, entry] of device.backendEpochs) {
+        reserve(entry.bytes)
+        backendEpochs.set(id, entry)
+      }
+      for (const [id, scope] of device.acceptedInterests) {
+        reserve(RelayLimits.forwardingMetadataBytes)
+        acceptedInterests.set(id, scope)
+      }
+      pushWindow = device.pushWindow
+      pushCount = device.pushCount
+      for (const category of device.summarized) summarized.add(category)
+      for (const { identity: connection, peer: saved } of restored) {
+        if (connection.connectionID !== saved.connectionID || !device.peers.includes(saved.connectionID))
+          throw new Error("relay snapshot")
+        reserve(RelayLimits.peerMetadataBytes + saved.subscriptions.length * RelayLimits.forwardingMetadataBytes)
+        const peer: Peer = {
+          identity: connection,
+          connection: Connection.restore(
+            {
+              role: PeerRole.RELAY,
+              peer: connection.role === "agent" ? PeerRole.AGENT : PeerRole.REMOTE_CLIENT,
+              operations,
+              eventTypes: remoteEventTypes,
+              now: deps.monotonic(),
+              reservation: budget,
+            },
+            saved.connection,
+          ),
+          seenAt: saved.seenAt,
+          notices: saved.notices,
+          requests: new Map(),
+          subscriptions: new Map(saved.subscriptions),
+        }
+        peers.set(connection.connectionID, peer)
+        if (connection.role === "agent") agent = peer
+      }
+      if (agent) {
+        offline = undefined
+        offlineLoaded = true
+      }
+    },
     connection: (connectionID: string) => peers.get(connectionID)?.connection,
     async readContent(request: Request, message: boolean) {
       const epoch = request.headers.get("x-ycoding-connection-epoch")
@@ -1691,9 +1802,6 @@ export function createRelay(deps: RelayDeps) {
       offlineLoaded = true
       await deps.saveOfflineCheck(offline)
     },
-    async restore(connections: readonly RelayConnection[]) {
-      for (const connection of connections) deps.close(connection.connectionID, 1012, "EPOCH")
-    },
     async revokeSession(sessionID: string) {
       for (const peer of peers.values()) if (peer.identity.browserSessionID === sessionID) drop(peer, 4401, "DIRECTION")
       flushAll()
@@ -1710,14 +1818,19 @@ export function createRelay(deps: RelayDeps) {
       }
       flushAll()
     },
-    nextDeadline() {
-      return peers.size ? deps.now() + 25 : offline ? offline.closedAt + RemoteLimits.agentOfflineConfirmMs : undefined
+    nextProtocolDeadline() {
+      let deadline = Infinity
+      for (const peer of peers.values()) deadline = Math.min(deadline, peer.connection.nextDeadline() ?? Infinity)
+      return deadline === Infinity ? undefined : deadline
+    },
+    async nextAlarm() {
+      await loadOffline()
+      let deadline = offline ? offline.closedAt + RemoteLimits.agentOfflineConfirmMs : Infinity
+      for (const peer of peers.values()) deadline = Math.min(deadline, peer.identity.credentialExpiresAt)
+      return deadline === Infinity ? undefined : deadline
     },
     async confirmOffline() {
-      if (!offlineLoaded) {
-        offline = await deps.loadOfflineCheck()
-        offlineLoaded = true
-      }
+      await loadOffline()
       const check = offline
       if (!check || agent || deps.now() < check.closedAt + RemoteLimits.agentOfflineConfirmMs) return
       const authority = await deps.authorizeAgentCommand(check.deviceID)
