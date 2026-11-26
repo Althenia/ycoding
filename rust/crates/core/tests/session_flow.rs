@@ -150,6 +150,19 @@ async fn test007_retry_matrix_admit_only_then_resumed_single_consumer_message() 
             .count(),
         1
     );
+    store.shutdown().unwrap();
+    let store = reopen(&root);
+    let service = Service::new(store.client());
+    let retried = service
+        .admit(request(
+            "ses_one",
+            "msg_input",
+            r#"{"type":"user","data":{"text":"after restart"},"delivery":"queue"}"#,
+            "evt_restart_retry",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(retried, first);
     // Resumed wake: real runner promotes and calls the provider exactly once.
     let (endpoint, mut requests, server) = server(vec![TEXT]).await;
     let coordinator = Coordinator::new(Arc::new(local_skills(
@@ -167,6 +180,7 @@ async fn test007_retry_matrix_admit_only_then_resumed_single_consumer_message() 
     let sent = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
     assert!(sent.contains("first text"), "{sent}");
     assert!(!sent.contains("changed text"));
+    assert!(!sent.contains("after restart"));
     assert_eq!(user_texts(&service, "ses_one"), ["first text"]);
     assert!(service.pending_list(&sid("ses_one")).unwrap().is_empty());
     // Promoted retry reconciles against durable history, still one message.

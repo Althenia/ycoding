@@ -381,8 +381,16 @@ impl Execution {
                     message: "Session not found",
                 }),
             })?;
-        if resume != Some(false) && admitted.wake {
-            self.wake(&id)?;
+        if resume != Some(false)
+            && admitted.wake
+            && let Err(error) = self.wake(&id)
+        {
+            let reason = match error {
+                Error::Closed => "coordinator_closed",
+                Error::Store(_) => "store_unavailable",
+                _ => "execution_unavailable",
+            };
+            tracing::warn!(parent: None, reason, "Failed to wake Session after prompt admission");
         }
         Ok(admitted.pending)
     }

@@ -53,22 +53,22 @@ impl Locations for LocationMap {
     }
 }
 
+fn input(session_id: &str, name: &str, created: i64) -> Request {
+    Request {
+        id: session_message::Id::new(format!("msg_{name}")).unwrap(),
+        session_id: session::Id::new(session_id).unwrap(),
+        input: session_pending::Message::decode(
+            &parse_json(r#"{"type":"user","data":{"text":"pending"},"delivery":"steer"}"#).unwrap(),
+        )
+        .unwrap(),
+        event_id: ycoding_schema::event::Id::new(format!("evt_{name}")).unwrap(),
+        created,
+    }
+}
+
 async fn prompt(execution: &Execution, session_id: &str, name: &str, created: i64) {
     execution
-        .prompt(
-            Request {
-                id: session_message::Id::new(format!("msg_{name}")).unwrap(),
-                session_id: session::Id::new(session_id).unwrap(),
-                input: session_pending::Message::decode(
-                    &parse_json(r#"{"type":"user","data":{"text":"pending"},"delivery":"steer"}"#)
-                        .unwrap(),
-                )
-                .unwrap(),
-                event_id: ycoding_schema::event::Id::new(format!("evt_{name}")).unwrap(),
-                created,
-            },
-            Some(false),
-        )
+        .prompt(input(session_id, name, created), Some(false))
         .await
         .unwrap();
 }
@@ -131,4 +131,10 @@ async fn pre_promotion_failure_reschedules_a_bounded_successor_drain() {
     execution.await_idle(&two).await;
     assert_eq!(count("ses_two"), 1);
     execution.shutdown().await.unwrap();
+    let request = input("ses_two", "accepted_after_shutdown", 40);
+    let result = execution.prompt(request.clone(), None).await;
+    let admitted = service.pending(&request.id).unwrap().unwrap();
+    assert_eq!(result.unwrap(), admitted);
+    assert_eq!(execution.prompt(request, None).await.unwrap(), admitted);
+    assert_eq!(service.pending_list(&two).unwrap().len(), 2);
 }

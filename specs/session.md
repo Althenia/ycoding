@@ -62,7 +62,7 @@ A command carrying an existing input ID performs that reconciliation before comm
 
 `resume` controls scheduling, not durability:
 
-- Omitted or `true` records the input, then schedules `SessionExecution.wake(sessionID)`.
+- Omitted or `true` records the input, then asks `SessionExecution.wake(sessionID)` to schedule execution. A wake failure leaves the admission receipt valid and the input durable.
 - `false` records the input without scheduling execution.
 
 Delivery is explicit:
