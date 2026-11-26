@@ -418,7 +418,7 @@ for (const follow of [true, false]) {
         expect(stderr).toContain("[observer-failed]")
         for (const value of ["NEVER-OUTPUT", server.url.toString(), dir, homedir()]) expect(stderr).not.toContain(value)
       } else expect(stderr).toContain(`Warning: Server at ${server.url.toString()} has version NEVER-OUTPUT-native-version; this client is ${InstallationVersion}. Continuing anyway.`)
-      expect(routes).toEqual(["/api/health", "/api/session/ses_root"])
+      expect(routes).toEqual(["/api/health", follow ? "/api/session/ses_root" : "/ws/v5/local"])
     } finally { server.stop(true); await rm(dir, { recursive: true, force: true }) }
   }, 20_000)
 }

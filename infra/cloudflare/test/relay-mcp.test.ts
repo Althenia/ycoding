@@ -1,10 +1,13 @@
 import { expect, test } from "bun:test"
 import {
+  Connector_ErrorSchema,
+  Connector_Error_code,
   ControlSchema,
   FrameSchema,
   LedgerClass,
   ScopeSchema,
   create,
+  decodeStrict,
   encodeLossless,
   encodeStrict,
   mcp_request_RequestSchema,
@@ -14,7 +17,7 @@ import { retiredOperations } from "../../../packages/protocol/src/v5/retired-ope
 import { frameReservation } from "../../../packages/remote/src/index"
 import { harness } from "./support/relay"
 
-test("the binary relay rejects the retired MCP request without dispatching to the agent", async () => {
+test("the binary relay rejects the retired MCP request without closing the browser or dispatching to the agent", async () => {
   const h = await harness()
   await h.attach("agent", "agent")
   const client = await h.attach("browser")
@@ -46,7 +49,15 @@ test("the binary relay rejects the retired MCP request without dispatching to th
     },
   })
   await h.relay.handleClientMessage("browser", encodeStrict(FrameSchema, frame).slice().buffer)
-  expect(h.close).toEqual([{ id: "browser", code: 1002, reason: "MALFORMED" }])
+  const result = h.receive("browser").find(({ frame }) => frame?.body.case === "result")?.frame?.body
+  if (result?.case !== "result" || result.value.outcome.case !== "error") throw new Error("Expected a typed rejection")
+  expect(result.value).toMatchObject({ requestId: "1", operationId: operationID })
+  const error = result.value.outcome.value
+  expect(error.typeName).toBe(Connector_ErrorSchema.typeName)
+  expect(decodeStrict(Connector_ErrorSchema, error.payload).code).toBe(
+    Connector_Error_code.CONNECTOR_ERROR_CODE_UNKNOWN_OPERATION,
+  )
+  expect(h.close).toEqual([])
   expect(h.receive("agent").flatMap(({ decisions }) => decisions).filter(({ type }) => type === "dispatch")).toEqual([])
   expect(h.relay.agentConnected()).toBe(true)
   h.relay.closeDevice()
