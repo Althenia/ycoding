@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { createSession, password, startServer } from "./remote-harness"
 import { RemoteConnection } from "@ycoding-ai/server/remote-connection"
+import { v5Server } from "./fixture/v5-server"
 
 const cli = path.join(import.meta.dir, "../src/index.ts")
 setDefaultTimeout(30_000)
@@ -108,13 +109,68 @@ describe("remote command surface", () => {
     })
   })
 
-  test("tells an unenrolled machine how to enroll before connecting", async () => {
-    await withHome(async (root) => {
-      const connect = await run(isolatedEnv(root), ["remote", "connect"])
-      expect(connect.exitCode).not.toBe(0)
-      expect(connect.output).toContain("not enrolled")
+  const device = {
+    deviceID: "dev_fixture", name: "Remote fixture", relayOrigin: "https://relay.example",
+    enrolledAt: 1, credentialState: "valid",
+  }
+
+  test("remote connect enables the enrolled native backend once without a CLI identity file", async () => {
+    const requests: { name: string; data: unknown }[] = []
+    let state: "off" | "on" = "off"
+    const server = v5Server((name, data) => {
+      if (name === "health.get") return { data: { version: "local" } }
+      requests.push({ name, data })
+      if (name === "remote.get") return { data: { state, device } }
+      if (name === "remote.set") {
+        state = "on"
+        return { data: { state: "connecting" } }
+      }
+      return new Error(`Unexpected operation: ${name}`)
     })
+    try {
+      await withHome(async (root) => {
+        const connect = await run(isolatedEnv(root), ["remote", "connect", "--server", server.url, "--relay", device.relayOrigin])
+        expect(connect.exitCode, connect.stderr).toBe(0)
+        expect(connect.stdout).toContain("all backend Sessions are available to its owner")
+        expect(connect.stdout).toContain("Remote connection on.")
+        expect(requests).toEqual([
+          { name: "remote.get", data: {} },
+          { name: "remote.set", data: { payload: { enabled: true } } },
+          { name: "remote.get", data: {} },
+        ])
+      })
+    } finally {
+      await server.close()
+    }
   })
+
+  for (const scenario of [
+    { title: "asks an unenrolled native backend to enroll", device: undefined, args: [], error: "not enrolled", enables: false },
+    { title: "refuses a relay that differs from the native enrollment", device, args: ["--relay", "https://other-relay.example"], error: `this device is enrolled at ${device.relayOrigin}`, enables: false },
+    { title: "reports a failure returned by native enable", device, args: [], error: "The relay rejected this device.", enables: true },
+  ]) {
+    test(`remote connect ${scenario.title}`, async () => {
+      const operations: string[] = []
+      const server = v5Server((name) => {
+        if (name === "health.get") return { data: { version: "local" } }
+        operations.push(name)
+        if (name === "remote.get") return { data: { state: "off", device: scenario.device } }
+        if (name === "remote.set" && scenario.enables) return { data: { state: "error", message: scenario.error } }
+        return new Error(`Unexpected operation: ${name}`)
+      })
+      try {
+        await withHome(async (root) => {
+          const connect = await run(isolatedEnv(root), ["remote", "connect", "--server", server.url, ...scenario.args])
+          expect(connect.exitCode).toBe(1)
+          expect(connect.stderr).toContain(scenario.error)
+          expect(connect.stdout).not.toContain("Remote connection on.")
+          expect(operations).toEqual(scenario.enables ? ["remote.get", "remote.set"] : ["remote.get"])
+        })
+      } finally {
+        await server.close()
+      }
+    })
+  }
 
   test("reports an empty backend inventory without per-session commands", async () => {
     await withHome(async (root) => {
@@ -154,9 +210,9 @@ describe("remote command surface", () => {
     }
   }, 60_000)
 
-  test("connects, reports, and disconnects the remote switch on one isolated server", async () => {
+  test("reports and disconnects the remote switch on one isolated server", async () => {
     await withHome(async (root) => {
-      let state: "off" | "on" = "off"
+      let state: "off" | "on" = "on"
       const enabled: boolean[] = []
       let shutdowns = 0
       const server = await startServer(root, { remote: {
@@ -180,17 +236,13 @@ describe("remote command surface", () => {
         await fs.mkdir(path.join(root, "state", "ycoding"), { recursive: true })
         await fs.writeFile(path.join(root, "state", "ycoding", "remote-device.json"), JSON.stringify(identity), { mode: 0o600 })
         const env = isolatedEnv(root, { YCODING_PASSWORD: password })
-        const connect = await run(env, ["remote", "connect", "--server", server.base])
-        expect(connect.exitCode, connect.output).toBe(0)
-        expect(connect.stdout).toContain("all backend Sessions are available to its owner")
-        expect(connect.stdout).toContain("Remote connection on")
         const status = await run(env, ["remote", "status", "--server", server.base])
         expect(status.exitCode, status.output).toBe(0)
         expect(status.stdout).toContain("Connection    on")
         const disconnect = await run(env, ["remote", "disconnect", "--server", server.base])
         expect(disconnect.exitCode, disconnect.output).toBe(0)
         expect(disconnect.stdout).toContain("Remote connection off")
-        expect(enabled).toEqual([true, false])
+        expect(enabled).toEqual([false])
       } finally {
         await server.close()
       }
