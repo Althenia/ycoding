@@ -1,8 +1,4 @@
-use crate::{
-    Catalog, Error, Metadata, Snapshot,
-    catalog::definition,
-    metadata::{bootstrap, inspect},
-};
+use crate::{Catalog, Error, Metadata, Snapshot, catalog::definition, metadata::inspect};
 use redb::{
     Database, DatabaseError, ReadOnlyDatabase, ReadTransaction, ReadableDatabase, ReadableTable,
     StorageBackend, backends::FileBackend,
@@ -330,18 +326,37 @@ pub(crate) fn sync_parent(path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-pub(crate) fn verify(
-    path: &Path,
+fn verify(path: &Path, catalog: Catalog, metadata: &Metadata) -> Result<(), Error> {
+    let mut source = File::open(path)?;
+    let locked = FileBackend::new(source.try_clone()?)?;
+    if !locked
+        .try_lock_shared_range(Bound::Unbounded, Bound::Unbounded)
+        .map_err(DatabaseError::from)?
+    {
+        return Err(DatabaseError::DatabaseAlreadyOpen.into());
+    }
+    let temporary = temporary(path);
+    let mut file = private_file(&temporary)?;
+    std::fs::remove_file(temporary)?;
+    io::copy(&mut source, &mut file)?;
+    let candidate = Database::builder()
+        .set_cache_size(8 * 1024 * 1024)
+        .set_repair_callback(redb::RepairSession::abort)
+        .create_file(file)?;
+    verify_candidate(candidate, catalog, metadata)?;
+    Ok(())
+}
+
+fn verify_candidate(
+    mut database: Database,
     catalog: Catalog,
     metadata: &Metadata,
 ) -> Result<Database, Error> {
-    let mut database = Database::builder()
-        .set_cache_size(8 * 1024 * 1024)
-        .open(path)?;
-    if !database.check_integrity()? || bootstrap(&database, catalog, None)? != *metadata {
-        return Err(Error::Rejected(
-            "pre-prune backup integrity or identity mismatch",
-        ));
+    if !database.check_integrity()? {
+        return Err(Error::Rejected("pre-prune backup integrity mismatch"));
+    }
+    if inspect(&database.begin_read()?, catalog)? != *metadata {
+        return Err(Error::Rejected("pre-prune backup identity mismatch"));
     }
     Ok(database)
 }
@@ -394,8 +409,11 @@ fn copy(
         }
     }
     drop(database);
-    let database = verify(path, catalog, metadata)?;
-    same_rows(source, &database.begin_read()?, catalog)
+    let candidate = Database::builder()
+        .set_cache_size(8 * 1024 * 1024)
+        .open(path)?;
+    let candidate = verify_candidate(candidate, catalog, metadata)?;
+    same_rows(source, &candidate.begin_read()?, catalog)
 }
 
 pub(crate) fn same_rows(

@@ -752,6 +752,49 @@ fn a_sealed_current_pruning_backup_allows_startup_without_any_write_or_copy() {
 }
 
 #[test]
+fn three_starts_preserve_the_first_pruning_backup_and_marker() {
+    let directory = Directory::new();
+    let path = directory.database();
+    let store = Store::initialize(&path, Options::core(), target(), identity()).unwrap();
+    store
+        .submit(|tx| tx.put::<session::SessionTable>(&session_row("ses_root", None)))
+        .unwrap()
+        .wait()
+        .unwrap();
+    store.shutdown().unwrap();
+
+    let backup = backup::path(&path);
+    let marker = backup::marker(&path);
+    assert!(!backup.exists() && !marker.exists());
+    let start = || {
+        assert_eq!(run(&path).unwrap(), Outcome::Current);
+        let store = open(&path);
+        let status = store.prepare_pruning(NOW, plenty).unwrap();
+        store.shutdown().unwrap();
+        status
+    };
+    assert_eq!(start(), backup::Status::Ready);
+    let sealed = std::fs::read(&backup).unwrap();
+    let completion = std::fs::read(&marker).unwrap();
+    let second = start();
+    let after_second = std::fs::read(&backup).unwrap();
+    assert_eq!(start(), backup::Status::Ready);
+    assert_eq!(second, backup::Status::Ready);
+    assert!(sealed == after_second && std::fs::read(&backup).unwrap() == sealed);
+    assert_eq!(std::fs::read(&marker).unwrap(), completion);
+
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&backup)
+        .unwrap()
+        .set_len(0)
+        .unwrap();
+    assert!(run(&path).is_err());
+    assert_eq!(std::fs::metadata(backup).unwrap().len(), 0);
+    assert_eq!(std::fs::read(marker).unwrap(), completion);
+}
+
+#[test]
 fn an_unclean_store_recovers_committed_rows_at_startup() {
     let directory = Directory::new();
     let path = directory.database();

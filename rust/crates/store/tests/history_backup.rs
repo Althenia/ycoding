@@ -171,6 +171,42 @@ fn failed_copy_and_integrity_refuse_publication_and_retry_without_overwrite() {
 }
 
 #[test]
+fn a_sealed_backup_with_a_corrupt_row_is_refused_without_repair() {
+    let scratch = Scratch::new();
+    let store = scratch.store();
+    let payload = b"backup checksum test payload";
+    store
+        .submit(move |tx| tx.put::<Item>(&(1, payload.to_vec())))
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(
+        store.prepare_pruning(0, |_| Ok(u64::MAX)).unwrap(),
+        backup::Status::Ready
+    );
+    store.shutdown().unwrap();
+
+    let target = backup::path(&scratch.database());
+    let mut damaged = std::fs::read(&target).unwrap();
+    let offset = damaged
+        .windows(payload.len())
+        .position(|row| row == payload)
+        .unwrap();
+    damaged[offset] ^= 1;
+    std::fs::write(&target, &damaged).unwrap();
+    let marker = backup::marker(&scratch.database());
+    let completion = std::fs::read(&marker).unwrap();
+
+    let reopened = Store::open(scratch.database(), Options::core(), CATALOG).unwrap();
+    assert!(matches!(
+        reopened.prepare_pruning(1, |_| Ok(u64::MAX)).unwrap(),
+        backup::Status::Blocked { notice: Some(_) }
+    ));
+    assert!(std::fs::read(target).unwrap() == damaged);
+    assert_eq!(std::fs::read(marker).unwrap(), completion);
+}
+
+#[test]
 fn missing_or_foreign_completion_blocks_and_disposable_has_no_disk_gate() {
     let scratch = Scratch::new();
     let store = scratch.store();
