@@ -45,7 +45,7 @@ Generation fails on any of these conditions:
 | `elections` | Owner-approved election of one offered license for a crate version whose package and upstream publish no text. The canonical Apache-2.0 text is pinned by SHA-256; the package must still contain the stated grant. `caveats` records unresolved upstream matters and is printed with the election. |
 | `corrections` | Owner-approved evidence that a crate version's declared SPDX metadata is wrong, pinned to the declared value. |
 | `headers` | Source-header notices reproduced from a crate file between two marker strings. |
-| `native` | DuckDB `third_party` licenses (pinned to the DuckDB revision recorded in the crate) and the SQLite dedication. |
+| `native` | DuckDB `third_party` licenses and the SQLite dedication. |
 | `embedded` | License files kept in this repository for ported code. |
 | `models` | License of the bundled models.dev snapshot. |
 

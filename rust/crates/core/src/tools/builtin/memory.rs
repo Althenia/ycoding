@@ -22,7 +22,7 @@ impl Tool for Memory {
     fn definition(&self, name: &str) -> ToolDefinition {
         ToolDefinition {
             name: name.into(),
-            description: "Use on-demand knowledge for the active workspace: status, list, lexical search, read, write linked Markdown, export an offline HTML graph, or maintain entries.\nscope defaults to the active Git repository and may be 'knowledge' for shared cross-repository concepts; outside Git only the knowledge scope is available.\nNever automatically save transcripts or inject memory. Read before replacing or deleting a concept and supply its digest.\ndelete moves an entry to recoverable trash, trash lists it, restore returns it without overwriting, purge permanently removes one exact trash entry, and vacuum previews derived cleanup (dryRun defaults true).\nIDs are lowercase paths without extensions; index/log are reserved. Markdown requires YAML frontmatter type. The graph is a local file; it makes no network requests.".into(),
+            description: "Use on-demand knowledge for the active workspace: status, list, ranked local search, read, write linked Markdown, export an offline HTML graph, or maintain entries.\nscope defaults to the active Git repository and may be 'knowledge' for shared cross-repository concepts; outside Git only the knowledge scope is available.\nNever automatically save transcripts or inject memory. Read before replacing or deleting a concept and supply its digest.\ndelete moves an entry to recoverable trash, trash lists it, restore returns it without overwriting, purge permanently removes one exact trash entry, and vacuum previews derived cleanup (dryRun defaults true).\nIDs are lowercase paths without extensions; index/log are reserved. For an unterminated-frontmatter warning, read the entry, add the closing --- line after its YAML fields, and write with the current digest. New concepts require a nonempty YAML type. The graph is a local file; it makes no network requests.".into(),
             input_schema: parse_json(include_str!("memory.input-schema.json")).unwrap(),
             output_schema: Some(parse_json(include_str!("memory.output-schema.json")).unwrap()),
             cache: None,
@@ -166,15 +166,15 @@ impl Tool for Memory {
             let result = match action.as_str() {
                 "list" => self
                     .service
-                    .list(scope, number(input, "limit")?, number(input, "offset")?)
+                    .list_at(&status, number(input, "limit")?, number(input, "offset")?)
                     .map(listing_output),
                 "search" => {
                     let query = text(input, "query")?;
                     let type_ = optional_text(input, "type")?;
                     let tag = optional_text(input, "tag")?;
                     self.service
-                        .search(
-                            scope,
+                        .search_at(
+                            &status,
                             memory::Search {
                                 query: &query,
                                 limit: number(input, "limit")?,
@@ -186,7 +186,7 @@ impl Tool for Memory {
                 }
                 "read" => self
                     .service
-                    .read(scope, &text(input, "id")?)
+                    .read_at(&status, &text(input, "id")?)
                     .map(read_output),
                 "trash" => self
                     .service
@@ -504,7 +504,7 @@ fn warnings(values: Vec<memory::Warning>) -> JsonValue {
             .collect(),
     )
 }
-fn listing_output(value: memory::Listing) -> JsonValue {
+pub fn listing_output(value: memory::Listing) -> JsonValue {
     object_value([
         (
             "concepts".into(),
@@ -514,7 +514,7 @@ fn listing_output(value: memory::Listing) -> JsonValue {
         ("warnings".into(), warnings(value.warnings)),
     ])
 }
-fn read_output(value: memory::ReadResult) -> JsonValue {
+pub fn read_output(value: memory::ReadResult) -> JsonValue {
     object_value([
         ("id".into(), json_string(value.id)),
         ("content".into(), json_string(value.content)),
@@ -596,7 +596,7 @@ fn graph_output(value: memory::graph::Export) -> JsonValue {
         ("warnings".into(), warnings(value.warnings)),
     ])
 }
-fn search_output(value: memory::SearchResult) -> JsonValue {
+pub fn search_output(value: memory::SearchResult) -> JsonValue {
     object_value([
         (
             "hits".into(),

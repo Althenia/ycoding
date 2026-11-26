@@ -49,6 +49,45 @@ fn activate_artifact(skills: &mut skill::Service, root: &Path, id: &str) {
 }
 
 #[tokio::test]
+async fn manual_activation_keeps_the_file_discoverable_but_out_of_implicit_guidance() {
+    let root = std::env::temp_dir().join(format!("ycoding-activation-{}", std::process::id()));
+    fs::create_dir(&root).unwrap();
+    let root = fs::canonicalize(root).unwrap();
+    for (id, metadata) in [
+        ("explicit", "metadata: {activation: manual}"),
+        ("malformed", "metadata: {activation: [auto]}"),
+        ("standard", ""),
+        (
+            "triggered",
+            "metadata: {activation: auto, events: session.input.promoted}",
+        ),
+    ] {
+        fs::create_dir(root.join(id)).unwrap();
+        fs::write(
+            root.join(id).join("SKILL.md"),
+            format!("---\nname: {id}\ndescription: fixture\n{metadata}\n---\nbody"),
+        )
+        .unwrap();
+    }
+    let mut service = skill::Service::new(&root);
+    service.source(Source::Directory(ycoding_schema::skill::DirectorySource {
+        path: ycoding_core::resources::discovery::absolute_path(&root).unwrap(),
+    }));
+    let discovered = service.list().await.unwrap();
+    fs::remove_dir_all(&root).unwrap();
+    assert_eq!(discovered.len(), 4);
+    let offered =
+        skill::instructions::summaries_by(&discovered.iter().collect::<Vec<_>>(), Ord::cmp);
+    assert_eq!(
+        offered
+            .iter()
+            .map(|s| s.id.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["standard", "triggered"]
+    );
+}
+
+#[tokio::test]
 async fn skill_scope_follows_project_then_global_root_containment_of_the_skill_location() {
     let base = std::env::temp_dir().join(format!("ycoding-skill-scope-{}", std::process::id()));
     let _ = fs::remove_dir_all(&base);

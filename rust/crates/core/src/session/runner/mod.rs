@@ -233,12 +233,24 @@ struct Inner {
     services: Services,
     refresh: Option<Refresh>,
     instructions: Option<super::instruction_assembly::Context>,
+    recall: Option<super::recall::Context>,
     title: Option<Arc<super::title::Service>>,
     titles: Mutex<BTreeMap<session::Id, TitleTask>>,
     providers: Result<Option<model::ProviderContext>, model::Error>,
     standalone: Option<Arc<super::standalone::State>>,
     active: Mutex<BTreeMap<session::Id, Arc<Work>>>,
     ingress: Mutex<BTreeMap<ycoding_schema::LosslessString, Arc<tokio::sync::Mutex<()>>>>,
+}
+pub(crate) struct CommandCue(pub(crate) Vec<String>);
+#[derive(Default)]
+pub(crate) struct InputCue {
+    pub command: Option<CommandCue>,
+    pub paths: Vec<super::attachment_admission::VerifiedPath>,
+}
+type CommandCues = Mutex<BTreeMap<(session::Id, session_message::Id, i64, i64), InputCue>>;
+pub(crate) fn command_cues() -> &'static CommandCues {
+    static CUES: std::sync::OnceLock<CommandCues> = std::sync::OnceLock::new();
+    CUES.get_or_init(Default::default)
 }
 struct TitleTask {
     cancellation: code_mode::Cancellation,
@@ -419,6 +431,7 @@ impl Local {
             services,
             refresh: None,
             instructions: None,
+            recall: None,
             title: None,
             titles: Mutex::new(BTreeMap::new()),
             providers: providers.map(Some),
@@ -438,6 +451,7 @@ impl Local {
             services,
             refresh: None,
             instructions: None,
+            recall: None,
             title: None,
             titles: Mutex::new(BTreeMap::new()),
             providers: Ok(None),
@@ -451,6 +465,11 @@ impl Local {
         Arc::get_mut(&mut self.0)
             .expect("unshared runner")
             .instructions = Some(context);
+        self
+    }
+
+    pub fn with_recall(mut self, context: super::recall::Context) -> Self {
+        Arc::get_mut(&mut self.0).expect("unshared runner").recall = Some(context);
         self
     }
 
@@ -702,11 +721,12 @@ impl Local {
         &self,
         session: &session::Info,
         agent: &ycoding_schema::agent::Info,
+        ceiling: &super::instruction_assembly::Ceiling,
         inputs: &[ycoding_store::session::Pending],
-    ) -> Result<Vec<(skill_schema::Info, ycoding_schema::LosslessString)>, Error> {
+        lifecycle: &[skill::LifecycleCue],
+    ) -> Result<Vec<(skill_schema::Info, ycoding_schema::LosslessString, bool)>, Error> {
         let services = &self.0.services;
         let mut requested = Vec::new();
-        let mut has_mentions = false;
         for input in inputs
             .iter()
             .filter(|input| input.type_.as_str() == Some("user"))
@@ -714,9 +734,13 @@ impl Local {
             let data = session_pending::UserData::decode(&input.data)
                 .map_err(|_| error("skill.unavailable", "Pending skill metadata is invalid"))?;
             requested.extend(skill::selected(data.metadata.as_ref()));
-            has_mentions |= super::shared_context::task_text(&data.text, data.metadata.as_ref())
-                .code_units()
-                .any(|unit| unit == u16::from(b'$'));
+        }
+        if inputs.is_empty() {
+            requested.extend(
+                lifecycle
+                    .iter()
+                    .flat_map(|cue| cue.explicit.iter().cloned()),
+            );
         }
         let Some(resolver) = &services.skill_resolver else {
             if requested.is_empty() {
@@ -727,13 +751,11 @@ impl Local {
                 "Session skill catalog is unavailable",
             ));
         };
-        if requested.is_empty() && !has_mentions {
-            return Ok(Vec::new());
-        }
-        let catalog = resolver
+        let mut catalog = resolver
             .list()
             .await
             .map_err(|_| error("skill.unavailable", "Session skills could not be listed"))?;
+        catalog.sort_by(|a, b| a.id.cmp(&b.id));
         let available = catalog
             .iter()
             .map(|skill| skill.id.clone())
@@ -749,6 +771,163 @@ impl Local {
                 &super::shared_context::task_text(&data.text, data.metadata.as_ref()),
                 &available,
             ));
+        }
+        if requested.is_empty() {
+            requested.extend(
+                lifecycle
+                    .iter()
+                    .flat_map(|cue| cue.explicit.iter().cloned()),
+            );
+        }
+        if requested.is_empty() {
+            let permissions = super::instruction_assembly::tool_permissions(agent, ceiling);
+            let active = services.store.skills(&session.id, &[])?;
+            let mut automatic = Vec::new();
+            let mut automatic_bytes = 0usize;
+            let mut candidates = Vec::new();
+            for info in &catalog {
+                let in_location = skill::in_scope(info, session, services.configuration.as_deref());
+                if info.autoinvoke != Some(true)
+                    || !in_location
+                    || crate::tools::policy::evaluate(&"skill".into(), &info.id, &permissions)
+                        .effect
+                        .0
+                        .as_str()
+                        != Some("allow")
+                {
+                    continue;
+                }
+                let Some(metadata) = resolver.activation_metadata(info).await else {
+                    continue;
+                };
+                if !skill::valid_automatic(&metadata) {
+                    continue;
+                }
+                let matched = lifecycle
+                    .iter()
+                    .any(|cue| skill::triggered(&metadata, cue.event, None))
+                    || inputs.iter().any(|input| {
+                        if input.type_.as_str() != Some("user") {
+                            return false;
+                        }
+                        let Ok(message) = session_message::Id::new(input.id.clone()) else {
+                            return false;
+                        };
+                        let cues = command_cues().lock().unwrap_or_else(|e| e.into_inner());
+                        let cue = cues.get(&(
+                            session.id.clone(),
+                            message,
+                            input.admitted_seq,
+                            input.time_created,
+                        ));
+                        let command = cue.and_then(|cue| cue.command.as_ref());
+                        let path = cue.is_some_and(|cue| {
+                            cue.paths
+                                .iter()
+                                .filter_map(|path| {
+                                    path.relative(std::path::Path::new(
+                                        session
+                                            .location
+                                            .directory
+                                            .as_lossless()
+                                            .as_str()
+                                            .unwrap_or_default(),
+                                    ))
+                                })
+                                .any(|path| skill::path_triggered(&metadata, &path))
+                        });
+                        path || skill::triggered(
+                            &metadata,
+                            "session.input.promoted",
+                            command.map(|cue| cue.0.as_slice()),
+                        ) || command.is_some()
+                            && skill::triggered(
+                                &metadata,
+                                "command.invoked",
+                                command.map(|cue| cue.0.as_slice()),
+                            )
+                    });
+                candidates.push((info, metadata, matched));
+            }
+            let query = inputs
+                .iter()
+                .filter(|input| input.type_.as_str() == Some("user"))
+                .filter_map(|input| session_pending::UserData::decode(&input.data).ok())
+                .map(|data| {
+                    super::shared_context::task_text(&data.text, data.metadata.as_ref())
+                        .to_utf8()
+                        .unwrap_or_default()
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            let implicit = candidates
+                .iter()
+                .map(|(info, metadata, _)| (*info, metadata))
+                .collect::<Vec<_>>();
+            let mut ordered = candidates
+                .iter()
+                .enumerate()
+                .filter_map(|(index, (_, _, matched))| matched.then_some(index))
+                .collect::<Vec<_>>();
+            for index in skill::ranked_implicit(&implicit, &query) {
+                if !ordered.contains(&index) {
+                    ordered.push(index);
+                }
+            }
+            for index in ordered {
+                let info = candidates[index].0;
+                if active.iter().any(|status| {
+                    status.id == info.id
+                        && status.state == ycoding_schema::session_skill_status::State::Active
+                }) {
+                    continue;
+                }
+                if info.conflicts.as_ref().is_some_and(|conflicts| {
+                    !conflicts.instructions.is_empty()
+                        || conflicts.skills.iter().any(|id| {
+                            active.iter().any(|status| {
+                                status.id == *id
+                                    && status.state
+                                        == ycoding_schema::session_skill_status::State::Active
+                            }) || automatic.iter().any(
+                                |(other, _, _): &(skill_schema::Info, LosslessString, bool)| {
+                                    other.id == *id
+                                },
+                            )
+                        })
+                }) {
+                    continue;
+                }
+                if active.iter().any(|status| {
+                    status.state == ycoding_schema::session_skill_status::State::Active
+                        && status.declarations.skills.contains(&info.id)
+                }) {
+                    continue;
+                }
+                if automatic.iter().any(
+                    |(other, _, _): &(skill_schema::Info, LosslessString, bool)| {
+                        other
+                            .conflicts
+                            .as_ref()
+                            .is_some_and(|conflicts| conflicts.skills.contains(&info.id))
+                    },
+                ) {
+                    continue;
+                }
+                let content = resolver.instructions(info).await.map_err(|_| {
+                    error(
+                        "skill.unavailable",
+                        "Skill instructions could not be loaded",
+                    )
+                })?;
+                let size = content.to_utf8().map_or(usize::MAX, |text| text.len());
+                if automatic_bytes.saturating_add(size) > 2048 {
+                    continue;
+                }
+                automatic_bytes += size;
+                automatic.push((info.clone(), content, true));
+            }
+            return Ok(automatic);
         }
         let mut ids = Vec::new();
         for id in requested {
@@ -796,7 +975,7 @@ impl Local {
                     "Skill instructions could not be loaded",
                 )
             })?;
-            resolved.push((info.clone(), content));
+            resolved.push((info.clone(), content, false));
         }
         Ok(resolved)
     }
@@ -805,7 +984,7 @@ impl Local {
         &self,
         session: &session::Info,
         assembly: &super::instruction_assembly::Assembly,
-        skills: Vec<(skill_schema::Info, ycoding_schema::LosslessString)>,
+        skills: Vec<(skill_schema::Info, ycoding_schema::LosslessString, bool)>,
     ) -> Outcome {
         let services = &self.0.services;
         let lock = self.ingress_lock(crate::instructions::join(
@@ -818,16 +997,32 @@ impl Local {
             .iter()
             .filter_map(|(key, _)| instruction::Key::decode(&JsonValue::String(key.clone())).ok())
             .collect::<Vec<_>>();
-        for (info, content) in skills {
-            if services
+        for (info, content, automatic) in skills {
+            if let Some(active) = services
                 .store
                 .skills(&session.id, &instruction_keys)?
                 .iter()
-                .any(|status| {
+                .find(|status| {
                     status.id == info.id
                         && status.state == ycoding_schema::session_skill_status::State::Active
                 })
             {
+                if !automatic {
+                    let key = skill::automatic_key(&session.id, &active.activation_message_id);
+                    let now = services.clock.now();
+                    services
+                        .store
+                        .client
+                        .submit(move |tx| {
+                            ycoding_store::resources::set_kv(
+                                tx,
+                                &key,
+                                &ycoding_store::session::Document::new(JsonValue::Bool(false))?,
+                                now,
+                            )
+                        })?
+                        .await?;
+                }
                 continue;
             }
             let directory =
@@ -835,7 +1030,7 @@ impl Local {
                     .parent()
                     .map(|directory| directory.to_string_lossy().into_owned())
                     .unwrap_or_default();
-            super::skill::activate(
+            super::skill::activate_with_origin(
                 &services.store,
                 &session.id,
                 ObjectEncoder::new()
@@ -846,6 +1041,7 @@ impl Local {
                     .optional("conflicts", &info.conflicts)
                     .finish(),
                 services.clock.now(),
+                automatic,
             )
             .await?;
         }
@@ -866,7 +1062,7 @@ impl Local {
         let mut prior_route_usage = AttemptUsage::default();
         let mut tool_recovery_attempts = 0;
         let mut route = Route::default();
-        let mut request_skills: Vec<(skill_schema::Info, ycoding_schema::LosslessString)> =
+        let mut request_skills: Vec<(skill_schema::Info, ycoding_schema::LosslessString, bool)> =
             Vec::new();
         loop {
             if !force
@@ -1125,12 +1321,30 @@ impl Local {
                     {
                         continue;
                     }
+                    let lifecycle =
+                        skill::lifecycle_cues(&services.store.client.snapshot()?, &session.id)?;
                     let prepared = local
-                        .resolve_requested_skills(&session, agent, std::slice::from_ref(&input))
+                        .resolve_requested_skills(
+                            &session,
+                            agent,
+                            &ceiling,
+                            std::slice::from_ref(&input),
+                            &lifecycle,
+                        )
                         .await?;
                     match services
                         .store
-                        .promote_input(&session.id, &input.id, services.clock.now())
+                        .promote_input_with_cues(
+                            &session.id,
+                            &input.id,
+                            services.clock.now(),
+                            lifecycle.clone(),
+                            prepared
+                                .iter()
+                                .filter(|(_, _, automatic)| !automatic)
+                                .map(|(info, _, _)| info.id.clone())
+                                .collect(),
+                        )
                         .await?
                     {
                         super::pending::Promotion::Promoted => {
@@ -1157,6 +1371,22 @@ impl Local {
                     }
                     promoted_skills.extend(prepared.clone());
                     local.activate_skills(&session, &assembly, prepared).await?;
+                    services
+                        .store
+                        .client
+                        .submit(move |tx| skill::acknowledge_cues(tx, &lifecycle))?
+                        .await?;
+                    if let Ok(message) = session_message::Id::new(input.id.clone()) {
+                        command_cues()
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .remove(&(
+                                session.id.clone(),
+                                message,
+                                input.admitted_seq,
+                                input.time_created,
+                            ));
+                    }
                 }
             }
             if promoted > 0 {
@@ -1171,6 +1401,21 @@ impl Local {
                     continuation = true;
                     force = true;
                     continue;
+                }
+            }
+            if !promoting {
+                let lifecycle =
+                    skill::lifecycle_cues(&services.store.client.snapshot()?, &session.id)?;
+                if !lifecycle.is_empty() {
+                    let prepared = local
+                        .resolve_requested_skills(&session, agent, &ceiling, &[], &lifecycle)
+                        .await?;
+                    local.activate_skills(&session, &assembly, prepared).await?;
+                    services
+                        .store
+                        .client
+                        .submit(move |tx| skill::acknowledge_cues(tx, &lifecycle))?
+                        .await?;
                 }
             }
             local
@@ -1314,10 +1559,139 @@ impl Local {
             let mut entries = services.store.model_history(&session.id)?;
             entries.extend(assembly.updates);
             entries.sort_by_key(|entry| entry.seq);
-            let loaded = entries
+            let mut loaded = entries
                 .into_iter()
                 .map(|entry| entry.message)
                 .collect::<Vec<_>>();
+            let snapshot = services.store.client.snapshot()?;
+            let compacted = snapshot
+                .get::<ycoding_store::session::ContextStateTable>(&super::key(
+                    session.id.as_lossless(),
+                ))?
+                .is_some_and(|state| {
+                    state.status.as_str() == Some("active") && state.covered_through_seq.is_some()
+                });
+            if compacted {
+                let instruction_keys = assembly
+                    .current
+                    .iter()
+                    .filter_map(|(key, _)| {
+                        instruction::Key::decode(&JsonValue::String(key.clone())).ok()
+                    })
+                    .collect::<Vec<_>>();
+                let statuses = services.store.skills(&session.id, &instruction_keys)?;
+                let mut restored = Vec::new();
+                for message in services.store.context(&session.id)? {
+                    let session_message::Info::Skill(item) = &message else {
+                        continue;
+                    };
+                    let eligible = statuses.iter().any(|status| {
+                        status.activation_message_id == item.id
+                            && status.conflicts.is_empty()
+                            && match &status.state {
+                                ycoding_schema::session_skill_status::State::Active => true,
+                                ycoding_schema::session_skill_status::State::Inactive {
+                                    inactive_reason,
+                                } => inactive_reason.as_str() == Some("compacted"),
+                            }
+                    });
+                    if !eligible || loaded.iter().any(|existing| matches!(existing, session_message::Info::Skill(current) if current.id == item.id)) { continue; }
+                    if matches!(
+                        ycoding_store::resources::get_kv(
+                            &snapshot,
+                            &skill::automatic_key(&session.id, &item.id),
+                        )?
+                        .as_ref()
+                        .map(|document| document.value()),
+                        Some(JsonValue::Bool(_))
+                    ) {
+                        restored.push(message);
+                    }
+                }
+                restored.extend(loaded);
+                loaded = restored;
+            }
+            let history_had_skills = loaded
+                .iter()
+                .any(|message| matches!(message, session_message::Info::Skill(_)));
+            let mut automatic_skill_ids = Vec::new();
+            if history_had_skills && let Some(resolver) = &services.skill_resolver {
+                let catalog = resolver.list().await.map_err(|_| {
+                    error("skill.unavailable", "Session skills could not be listed")
+                })?;
+                let rules = super::instruction_assembly::tool_permissions(agent, &ceiling);
+                let snapshot = services.store.client.snapshot()?;
+                let mut allowed = Vec::new();
+                for item in loaded.iter().filter_map(|message| match message {
+                    session_message::Info::Skill(item) => Some(item),
+                    _ => None,
+                }) {
+                    let Some(info) = catalog.iter().find(|info| info.id == item.skill) else {
+                        continue;
+                    };
+                    let directory = info
+                        .location
+                        .as_lossless()
+                        .as_str()
+                        .and_then(|path| std::path::Path::new(path).parent());
+                    if directory.is_none()
+                        || directory
+                            != item
+                                .directory
+                                .as_ref()
+                                .and_then(|directory| directory.as_str())
+                                .map(std::path::Path::new)
+                    {
+                        continue;
+                    }
+                    if crate::tools::policy::evaluate(&"skill".into(), &item.skill, &rules)
+                        .effect
+                        .0
+                        .as_str()
+                        != Some("allow")
+                    {
+                        continue;
+                    }
+                    let origin = ycoding_store::resources::get_kv(
+                        &snapshot,
+                        &skill::automatic_key(&session.id, &item.id),
+                    )?;
+                    let Some(JsonValue::Bool(automatic)) =
+                        origin.as_ref().map(|document| document.value())
+                    else {
+                        continue;
+                    };
+                    let automatic = *automatic;
+                    if automatic {
+                        if info.autoinvoke != Some(true)
+                            || !skill::in_scope(info, &session, services.configuration.as_deref())
+                        {
+                            continue;
+                        }
+                        let Some(metadata) = resolver.activation_metadata(info).await else {
+                            continue;
+                        };
+                        if !skill::valid_automatic(&metadata) {
+                            continue;
+                        }
+                    }
+                    let current = resolver.instructions(info).await.map_err(|_| {
+                        error(
+                            "skill.unavailable",
+                            "Skill instructions could not be loaded",
+                        )
+                    })?;
+                    if current == item.text {
+                        allowed.push(item.id.clone());
+                        if automatic {
+                            automatic_skill_ids.push(item.id.clone());
+                        }
+                    }
+                }
+                loaded.retain(|message| !matches!(message, session_message::Info::Skill(item) if !allowed.contains(&item.id)));
+            } else if history_had_skills {
+                loaded.retain(|message| !matches!(message, session_message::Info::Skill(_)));
+            }
             if local.0.standalone.is_some() {
                 super::standalone::check_history(&loaded)?;
             }
@@ -1446,7 +1820,7 @@ impl Local {
                         tools,
                     })
                 };
-            let lowered = loaded
+            let mut lowered = loaded
                 .iter()
                 .map(|message| {
                     messages::convert(
@@ -1457,6 +1831,33 @@ impl Local {
                     )
                 })
                 .collect::<Vec<_>>();
+            let mut automatic_budget = 2048usize;
+            let mut omitted = Vec::new();
+            for (message, messages) in loaded.iter().zip(&lowered) {
+                let session_message::Info::Skill(item) = message else {
+                    continue;
+                };
+                if !automatic_skill_ids.contains(&item.id) {
+                    continue;
+                }
+                let size = messages.iter().fold(0usize, |used, message| {
+                    used.saturating_add(
+                        ycoding_schema::stringify_json(&super::context_pressure::message_value(
+                            message,
+                        ))
+                        .len()
+                        .saturating_add(8),
+                    )
+                });
+                if size > automatic_budget {
+                    omitted.push(item.id.clone());
+                } else {
+                    automatic_budget -= size;
+                }
+            }
+            let mut index = 0;
+            lowered.retain(|_| { let keep = !matches!(&loaded[index], session_message::Info::Skill(item) if omitted.contains(&item.id)); index += 1; keep });
+            loaded.retain(|message| !matches!(message, session_message::Info::Skill(item) if omitted.contains(&item.id)));
             prepared.messages = lowered.iter().flatten().cloned().collect();
             if promoted == 0 {
                 without_unfinished_assistant_tail(&mut prepared.messages, &loaded);
@@ -1537,6 +1938,18 @@ impl Local {
                 .max_tokens
                 .or(prepared.model.defaults.output_limit);
             let context_window = resolved.info.limit.context.get();
+            if let Some(recall) = &local.0.recall {
+                recall
+                    .append(
+                        &session.id,
+                        &agent.id,
+                        &loaded,
+                        &mut prepared,
+                        context_window - services.compaction.context_safety_margin_tokens,
+                        automatic_budget,
+                    )
+                    .await;
+            }
             if route.current.is_some() {
                 if let Some(next) = &next
                     && compaction_gate::estimated_provider_input_tokens(&prepared)
@@ -1742,6 +2155,8 @@ impl Local {
                     Some(with_openai(cache.provider_options.clone(), &openai_options));
             }
             let eligible = direct_responses
+                && local.0.recall.is_none()
+                && !history_had_skills
                 && route.current.is_none()
                 && account_identity.is_some()
                 && efficiency.responses_stored

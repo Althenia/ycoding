@@ -23,6 +23,7 @@ pub struct Service {
     pulled: BTreeMap<LosslessString, Vec<PathBuf>>,
     diagnostics: Vec<Diagnostic>,
     capabilities: super::config::capabilities::ConfigCapabilities,
+    activation: BTreeMap<LosslessString, (Info, ycoding_schema::JsonObject)>,
 }
 impl Service {
     pub fn new(cache: &Path) -> Self {
@@ -34,6 +35,7 @@ impl Service {
             pulled: BTreeMap::new(),
             diagnostics: Vec::new(),
             capabilities: Default::default(),
+            activation: BTreeMap::new(),
         }
     }
     pub fn from_entries(
@@ -167,12 +169,28 @@ impl Service {
             })
             .collect()
     }
+    pub async fn list_resolved(sources: Vec<Source>) -> Result<Vec<Info>, Error> {
+        if sources
+            .iter()
+            .any(|source| matches!(source, Source::Url(_)))
+        {
+            return Err(Error::Rejected("Skill source has not been resolved"));
+        }
+        Self {
+            sources,
+            ..Self::new(Path::new(""))
+        }
+        .list()
+        .await
+    }
     pub async fn list(&mut self) -> Result<Vec<Info>, Error> {
         self.diagnostics.clear();
+        self.activation.clear();
         let mut skills: Vec<Info> = Vec::new();
         for source in &self.sources {
             let directories = match source {
                 Source::Embedded(s) => {
+                    self.activation.remove(&s.skill.id);
                     insert_skill(&mut skills, s.skill.clone());
                     continue;
                 }
@@ -213,68 +231,90 @@ impl Service {
                     }
                 };
                 for file in files {
-                    let loaded = || -> Result<Option<Info>, String> {
-                        let Some(content) = read_text(&file)
-                            .map_err(|e| e.to_string())?
-                            .filter(|s| !s.is_empty())
-                        else {
-                            return Ok(None);
-                        };
-                        let parsed = markdown::parse(&content).map_err(|e| e.to_string())?;
-                        if matches!(
-                            parsed.data,
-                            markdown::Value::Array(_)
-                                | markdown::Value::String(_)
-                                | markdown::Value::Null
-                                | markdown::Value::Bool(_)
-                                | markdown::Value::Number(_)
-                        ) {
-                            return Err("Skill frontmatter must be an object".into());
-                        }
-                        let mut data = parsed
-                            .data
-                            .fields(&["name", "description", "slash"])
-                            .map_err(|e| e.to_string())?;
-                        if let Some(metadata) = parsed.data.get("metadata")
-                            && let markdown::Value::Object(_) = metadata
-                        {
-                            let mut values = ycoding_schema::JsonObject::new();
-                            for key in ["ycoding/slash", "ycoding/autoinvoke"] {
-                                if let Some(value) = metadata.get(key)
-                                    && let Ok(value) = value.json()
-                                {
-                                    values.insert(key.into(), value);
-                                }
+                    let loaded =
+                        || -> Result<Option<(Info, Option<ycoding_schema::JsonObject>)>, String> {
+                            let Some(content) = read_text(&file)
+                                .map_err(|e| e.to_string())?
+                                .filter(|s| !s.is_empty())
+                            else {
+                                return Ok(None);
+                            };
+                            let parsed = markdown::parse(&content).map_err(|e| e.to_string())?;
+                            if matches!(
+                                parsed.data,
+                                markdown::Value::Array(_)
+                                    | markdown::Value::String(_)
+                                    | markdown::Value::Null
+                                    | markdown::Value::Bool(_)
+                                    | markdown::Value::Number(_)
+                            ) {
+                                return Err("Skill frontmatter must be an object".into());
                             }
-                            if let Some(conflicts) = metadata.get("ycoding/conflicts") {
-                                let value = match conflicts {
-                                    markdown::Value::Timestamp(_)
-                                    | markdown::Value::Binary(_)
-                                    | markdown::Value::Cycle => {
-                                        JsonValue::Object(Default::default())
+                            let mut data = parsed
+                                .data
+                                .fields(&["name", "description", "slash"])
+                                .map_err(|e| e.to_string())?;
+                            if let Some(metadata) = parsed.data.get("metadata")
+                                && let markdown::Value::Object(_) = metadata
+                            {
+                                let mut values = ycoding_schema::JsonObject::new();
+                                for key in [
+                                    "ycoding/slash",
+                                    "ycoding/autoinvoke",
+                                    "activation",
+                                    "keywords",
+                                    "events",
+                                    "commands",
+                                    "paths",
+                                    "version",
+                                ] {
+                                    if let Some(value) = metadata.get(key) {
+                                        values.insert(
+                                            key.into(),
+                                            value.json().unwrap_or(JsonValue::Null),
+                                        );
                                     }
-                                    markdown::Value::Object(_) => JsonValue::Object(
-                                        conflicts
-                                            .fields(&["skills", "instructions"])
-                                            .map_err(|e| e.to_string())?,
-                                    ),
-                                    _ => conflicts.json().map_err(|e| e.to_string())?,
-                                };
-                                values.insert("ycoding/conflicts".into(), value);
+                                }
+                                if let Some(conflicts) = metadata.get("ycoding/conflicts") {
+                                    let value = match conflicts {
+                                        markdown::Value::Timestamp(_)
+                                        | markdown::Value::Binary(_)
+                                        | markdown::Value::Cycle => {
+                                            JsonValue::Object(Default::default())
+                                        }
+                                        markdown::Value::Object(_) => JsonValue::Object(
+                                            conflicts
+                                                .fields(&["skills", "instructions"])
+                                                .map_err(|e| e.to_string())?,
+                                        ),
+                                        _ => conflicts.json().map_err(|e| e.to_string())?,
+                                    };
+                                    values.insert("ycoding/conflicts".into(), value);
+                                }
+                                data.insert("metadata".into(), JsonValue::Object(values));
                             }
-                            data.insert("metadata".into(), JsonValue::Object(values));
-                        }
-                        from_frontmatter(
-                            &file,
-                            &directory,
-                            &JsonValue::Object(data),
-                            &parsed.content,
-                        )
-                        .map(Some)
-                        .map_err(|e| e.to_string())
-                    };
+                            let metadata = match data.get(&"metadata".into()) {
+                                Some(JsonValue::Object(metadata)) => Some(metadata.clone()),
+                                _ => None,
+                            };
+                            from_frontmatter(
+                                &file,
+                                &directory,
+                                &JsonValue::Object(data),
+                                &parsed.content,
+                            )
+                            .map(|info| Some((info, metadata)))
+                            .map_err(|e| e.to_string())
+                        };
                     match loaded() {
-                        Ok(Some(skill)) => insert_skill(&mut skills, skill),
+                        Ok(Some((skill, metadata))) => {
+                            self.activation.remove(&skill.id);
+                            if let Some(metadata) = metadata {
+                                self.activation
+                                    .insert(skill.id.clone(), (skill.clone(), metadata));
+                            }
+                            insert_skill(&mut skills, skill);
+                        }
                         Ok(None) => {}
                         Err(message) => self.diagnostics.push(Diagnostic {
                             path: file.display().to_string(),
@@ -290,6 +330,13 @@ impl Service {
     }
     pub fn allows(&self, id: &ycoding_schema::skill::Id) -> bool {
         self.capabilities.skills.allows(id)
+    }
+    pub fn activation_metadata(&self, info: &Info) -> Option<ycoding_schema::JsonObject> {
+        self.activation
+            .get(&info.id)
+            .and_then(|(current, metadata)| {
+                (current == info && self.allows(&info.id)).then(|| metadata.clone())
+            })
     }
     pub fn mcp(
         &self,
@@ -457,9 +504,41 @@ pub fn from_frontmatter(
             .map(LosslessString::decode)
             .transpose()?,
         slash: flag("ycoding/slash").or(slash),
-        autoinvoke: flag("ycoding/autoinvoke"),
+        autoinvoke: match metadata.and_then(|m| m.get(&"activation".into())) {
+            Some(JsonValue::String(mode)) if mode.as_str() == Some("auto") => Some(
+                metadata.is_some_and(valid_activation) && flag("ycoding/autoinvoke") != Some(false),
+            ),
+            Some(_) => Some(false),
+            None => flag("ycoding/autoinvoke"),
+        },
         conflicts,
         location: absolute_path(filepath)?,
         content: content.into(),
     })
+}
+
+fn valid_activation(metadata: &ycoding_schema::JsonObject) -> bool {
+    ["version", "keywords", "events", "commands", "paths"]
+        .into_iter()
+        .all(|key| {
+            let Some(value) = metadata.get(&key.into()) else {
+                return true;
+            };
+            let JsonValue::String(value) = value else {
+                return false;
+            };
+            let Some(value) = value.as_str() else {
+                return false;
+            };
+            if key == "version" {
+                return !value.trim().is_empty();
+            }
+            value.split(',').map(str::trim).all(|item| {
+                !item.is_empty()
+                    && (key != "events" || !item.chars().any(char::is_whitespace))
+                    && (key != "paths"
+                        || !item.contains(['\\', ':'])
+                            && item.split('/').all(|part| !matches!(part, "" | "." | "..")))
+            })
+        })
 }

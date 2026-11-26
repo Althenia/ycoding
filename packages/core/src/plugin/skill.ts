@@ -7,101 +7,45 @@ import { Effect } from "effect"
 import { AbsolutePath } from "../schema"
 import { Skill } from "../skill"
 import { InstallationChannel, InstallationVersion } from "../installation/version"
+import { ConfigMarkdown } from "../config/markdown"
 import { Config } from "../config"
 import { Location } from "../location"
 import { FSUtil } from "../fs-util"
 import os from "os"
 import path from "path"
 import { fileURLToPath } from "url"
-import ycodingContent from "./skill/ycoding.md" with { type: "text" }
-import reportContent from "./skill/report.md" with { type: "text" }
-import chatgptConnectorsContent from "./skill/chatgpt-connectors.md" with { type: "text" }
-import browserUseContent from "./skill/browser-use.md" with { type: "text" }
-import computerUseContent from "./skill/computer-use.md" with { type: "text" }
+import ycodingContent from "./skill/ycoding/SKILL.md" with { type: "text" }
+import reportContent from "./skill/report/SKILL.md" with { type: "text" }
+import chatgptConnectorsContent from "./skill/chatgpt-connectors/SKILL.md" with { type: "text" }
+import browserUseContent from "./skill/browser-use/SKILL.md" with { type: "text" }
+import computerUseContent from "./skill/computer-use/SKILL.md" with { type: "text" }
 
-export const YCodingContent = ycodingContent
-export const ReportContent = reportContent
-export const ChatGPTConnectorsContent = chatgptConnectorsContent
-export const BrowserUseContent = browserUseContent
-export const ComputerUseContent = computerUseContent
+const documents = [ycodingContent, chatgptConnectorsContent, browserUseContent, computerUseContent, reportContent].map((source) => {
+  const { data, content } = ConfigMarkdown.parse(source)
+  if (typeof data.name !== "string" || typeof data.description !== "string" || typeof data.metadata?.["display-name"] !== "string") {
+    throw new Error("Invalid bundled skill document")
+  }
+  return Skill.Info.make({
+    id: Skill.ID.make(data.name),
+    name: Skill.Name.make(data.metadata["display-name"]),
+    description: data.description,
+    slash: data.metadata["ycoding/slash"] === "true" ? true : undefined,
+    location: AbsolutePath.make(`/builtin/${data.name}.md`),
+    content,
+  })
+})
 
-export const YCodingDescription =
-  "Use this skill for questions about YCoding behavior, configuration, troubleshooting, plugins, hooks, Clients, Server, API, agents, commands, skills, tools, permissions, MCP, providers, models, themes, keymaps, the CLI, the TUI, and contributing to this repository."
-const CHATGPT_CONNECTORS_DESCRIPTION =
-  "Use when a YCoding Session needs ChatGPT account connector tools (tools.chatgpt.*): finding which connectors are available, calling them in Code Mode, handling their permissions and failures, or moving files through ChatGPT Library. Do not use for ChatGPT tasks that operate YCoding or for local YCoding operations."
-const BROWSER_USE_DESCRIPTION =
-  "Use when a task needs the interaction tool to operate a Chrome tab: clicking, typing, or navigating a live page the user authorized, or working in a new YCoding-owned tab. Do not use for fetching or searching web content, or for coding tasks."
-const COMPUTER_USE_DESCRIPTION =
-  "Use when a task needs the interaction tool to operate a macOS application window in the background: reading or clicking its controls on the user's Mac. Do not use for web pages in Chrome, shell work, or coding tasks."
-const REPORT_DESCRIPTION =
-  "Use when the user wants to report a YCoding issue or bug. Collect standard diagnostics, add reproduction context, and publish the issue with the GitHub CLI."
+export const [YCodingContent, ChatGPTConnectorsContent, BrowserUseContent, ComputerUseContent, ReportContent] = documents.map((skill) => skill.content)
+export const YCodingDescription = documents[0]!.description!
 
 export const Plugin = define({
   id: "ycoding.skill",
   effect: Effect.fn(function* (ctx) {
-    const reportContent = yield* reportContentWithDiagnostics()
+    const content = yield* reportContentWithDiagnostics()
     yield* ctx.skill.transform((draft) => {
-      draft.source(
-        Skill.EmbeddedSource.make({
-          type: "embedded",
-          skill: Skill.Info.make({
-            id: Skill.ID.make("ycoding"),
-            name: Skill.Name.make("YCoding"),
-            description: YCodingDescription,
-            location: AbsolutePath.make("/builtin/ycoding.md"),
-            content: YCodingContent,
-          }),
-        }),
-      )
-      draft.source(
-        Skill.EmbeddedSource.make({
-          type: "embedded",
-          skill: Skill.Info.make({
-            id: Skill.ID.make("chatgpt-connectors"),
-            name: Skill.Name.make("ChatGPT connectors"),
-            description: CHATGPT_CONNECTORS_DESCRIPTION,
-            location: AbsolutePath.make("/builtin/chatgpt-connectors.md"),
-            content: ChatGPTConnectorsContent,
-          }),
-        }),
-      )
-      draft.source(
-        Skill.EmbeddedSource.make({
-          type: "embedded",
-          skill: Skill.Info.make({
-            id: Skill.ID.make("browser-use"),
-            name: Skill.Name.make("Browser use"),
-            description: BROWSER_USE_DESCRIPTION,
-            location: AbsolutePath.make("/builtin/browser-use.md"),
-            content: BrowserUseContent,
-          }),
-        }),
-      )
-      draft.source(
-        Skill.EmbeddedSource.make({
-          type: "embedded",
-          skill: Skill.Info.make({
-            id: Skill.ID.make("computer-use"),
-            name: Skill.Name.make("Computer use"),
-            description: COMPUTER_USE_DESCRIPTION,
-            location: AbsolutePath.make("/builtin/computer-use.md"),
-            content: ComputerUseContent,
-          }),
-        }),
-      )
-      draft.source(
-        Skill.EmbeddedSource.make({
-          type: "embedded",
-          skill: Skill.Info.make({
-            id: Skill.ID.make("report"),
-            name: Skill.Name.make("Report"),
-            description: REPORT_DESCRIPTION,
-            slash: true,
-            location: AbsolutePath.make("/builtin/report.md"),
-            content: reportContent,
-          }),
-        }),
-      )
+      for (const skill of documents) {
+        draft.source(Skill.EmbeddedSource.make({ type: "embedded", skill: skill.id === "report" ? { ...skill, content } : skill }))
+      }
     })
   }),
 })

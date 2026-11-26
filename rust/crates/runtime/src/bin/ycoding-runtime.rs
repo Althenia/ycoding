@@ -4,8 +4,17 @@ use ycoding_runtime::launch::{
     record_startup_error, run_inherited,
 };
 
+mod resources_stdio;
+
 fn main() -> ExitCode {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args == ["--ycoding-internal-resources-v1"] {
+        return ExitCode::from(if resources_stdio::run().is_ok() {
+            EXIT_OK
+        } else {
+            EXIT_FAILURE
+        });
+    }
     if let Some(result) = ycoding_runtime::regex_worker::run(&args) {
         return match result {
             Ok(code) => ExitCode::from(code),

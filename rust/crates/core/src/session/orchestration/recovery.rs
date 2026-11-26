@@ -334,6 +334,7 @@ impl Service {
         action: Restart,
     ) -> Result<Option<Restart>, Error> {
         let row = row.clone();
+        let resumed = matches!(action, Restart::Resume);
         let committed = self
             .sessions
             .client
@@ -352,8 +353,18 @@ impl Service {
                 {
                     return Ok(false);
                 }
+                let recovered = resumed.then(|| events.last().cloned()).flatten();
                 for event in events {
                     projector::append(tx, &event)?;
+                }
+                if let Some(event) = recovered {
+                    crate::session::skill::mark_cue(
+                        tx,
+                        &row.session_id,
+                        "session.recovered",
+                        &event.id,
+                        event.created,
+                    )?;
                 }
                 Ok(true)
             })?

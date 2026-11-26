@@ -1,10 +1,12 @@
 # Repository memories and shared knowledge
 
-Memory stores linked, human-readable Markdown concepts. It separates repository memories, shared by all worktrees of one local Git repository, from shared knowledge. It is an explicit knowledge store, not Session history, a prompt cache, or a project artifact. Concept content is never injected into Session prompts, and transcripts are never extracted into memory.
+Memory stores linked, human-readable Markdown concepts. It separates repository memories, shared by all worktrees of one local Git repository, from shared knowledge. It is an explicit knowledge store, not Session history, a prompt cache, or a project artifact. The runtime does not extract concepts from transcripts. When a Session has the `memory` tool and effective `allow` for both `memory` and `memory_read` on the repository root, the native runner can append matching repository references to the current provider request. It skips an `ask` or `deny` without prompting. Shared knowledge is never selected automatically. Each reference carries its source IDs and byte digest; identical bodies appear once. These references are not saved as Session messages.
 
 When a `/suggest` request selects memory scopes, bounded search snippets are sent only to that next-message prediction helper request, to its configured helper provider. Selecting a scope in the dialog is consent for that request: the calling Session's selected agent must have effective `memory_read` permission evaluated as `allow` or `ask` for each collection root, and `deny` skips that collection without raising a permission prompt. Repository scope supplies project memory when the Location is in Git; knowledge scope supplies shared/global knowledge. The helper searches each selected, available, permitted scope once, takes at most three hits each, and sends only bounded titles/IDs and snippets of at most 600 characters. Disabled memory or search failures degrade to prediction without those snippets. These snippets never enter the Session's transcript, durable instructions, or subsequent model-visible history. The helper provider's ordinary privacy, quota, and pricing policies apply.
 
 When a `/prompt` request selects memory scopes, the same bounded search is sent only to that prompt-drafting helper. The query is the trimmed intent plus bounded recent user and assistant text. Selecting a scope is consent for that request under the same `memory_read` rule: `allow` or `ask` searches the collection, and `deny` skips it without a permission prompt. Each selected scope contributes at most three hits with snippets of at most 600 characters. Disabled memory or search failures degrade to a draft without those snippets. The snippets never enter the Session transcript. The generated text is returned for composer review only; nothing is admitted or sent.
+
+Opening memory does not migrate a collection. With no published cutover, reads and writes use its configured root. When a cutover has been published, the native service verifies the root identity, generation pointer and rollback inventory before it admits access. A held exclusive fence, a replaced root or a damaged rollback blocks access; the service does not substitute an empty collection or restore over current files.
 
 ## Agent guidance
 
@@ -37,7 +39,7 @@ Every action accepts optional `scope: "repository" | "knowledge"`. Repository sc
 
 Every `digest` is a SHA-256 hash, and its subject depends on the action. For concepts and trash entries it hashes the exact content bytes; for `graph` it hashes the exported HTML; for `vacuum` it is a plan digest over the planned removals, live concepts, and trash inventory. `delete`, `restore`, `purge`, and applied `vacuum` require the current digest and fail without changing anything when it is missing, malformed, or stale. In `write`, `expectedDigest` stays optional: omit it to create, supply the current digest to replace, and an exact retry of identical bytes succeeds. A `trashID` is `trash_` followed by 64 lowercase hexadecimal characters.
 
-Search is local lexical BM25 ranking over the selected collection, not semantic or embedding search:
+Search runs locally and returns BM25 results from the selected collection:
 
 - **Tokens:** the query and concept text are lowercased as a whole string with JavaScript lowercasing, then NFC-normalized, then split into words of Unicode letters, numbers, and underscores. This normalization applies only to matching; stored concept content is never normalized. There is no stemming, accent or locale folding, phrase, prefix, or Boolean syntax. Distinct query tokens are whole-token OR terms: a concept matches when any token occurs.
 - **Fields:** three aggregate fields score: title and ID combined (boost 4), type, tags, and description combined (boost 2), and body (boost 1). Each aggregate field is length-normalized separately against its own average length, which includes every concept in the collection, even those with an empty field. An aggregate field's BM25 term score (`k1` = 1.2, `b` = 0.75) is multiplied by its boost.
@@ -46,7 +48,7 @@ Search is local lexical BM25 ranking over the selected collection, not semantic 
 - **Order:** higher scores rank first; ties sort by ascending concept ID. Scores depend on the collection's contents and are comparable only within one result.
 - **Snippet:** at most 320 UTF-16 code units from the body, positioned at the first matching token's original text and never splitting a surrogate pair. It is not guaranteed to end on a whole-character (grapheme) boundary.
 
-Search and list do not repair or create files, and search keeps no persisted index.
+Search and list leave the Markdown collection unchanged. Search keeps a rebuildable index under `recall/index` in the data directory. A changed ID or digest invalidates the lexical generation. If another process holds the publication lock or the snapshot cannot be saved, search uses the current in-memory index. An interrupted build never publishes a partial index or returns hits from an obsolete generation.
 
 ## Repository identity and storage
 
@@ -120,7 +122,9 @@ See [configuration precedence](./configuration.md#runtime-configuration-discover
 
 IDs are slash-separated lowercase letters, digits, underscores, and hyphens, starting each segment with a letter or digit. Supply no extension. Absolute paths, dot segments, symlink escapes, and reserved `index`, `log`, `_meta`, or `trash` segments are rejected.
 
-Each concept requires YAML frontmatter with a nonempty `type`. Types are open-ended. Optional `title`, `description`, string-array `tags`, and source records are validated. Unknown metadata and exact UTF-8 content, including a byte-order mark, are preserved.
+Each concept requires YAML frontmatter with a nonempty `type`. Types are open-ended. `title` and `description` are optional. A single string tag counts as one tag; an array can specify several. Unknown metadata and exact UTF-8 content, including a byte-order mark, are preserved.
+
+For a native write, put each `---` delimiter on a line by itself. Supply one YAML mapping with unique keys. A missing closing delimiter in an existing entry does not hide its content: `list` and `search` report `unterminated-frontmatter` with the entry ID, and search includes the raw text. To repair it, `read` the entry, insert the closing `---` between the metadata and the body, then `write` the replacement with the digest from that read. Inspection and search leave the original file and its digest unchanged.
 
 ```markdown
 ---
@@ -148,7 +152,7 @@ Without `expectedDigest`, a write is create-only. To replace a concept, read it 
 
 A bundle lock serializes cooperating tool writers, and a same-directory temporary file is atomically renamed for each update. Direct edits in an editor are not transactionally locked: read again before overwriting an externally edited file. Avoid concurrent manual edits during tool writes.
 
-If the concept commits but rebuilding an index fails, the result includes the committed digest and an `index-out-of-date` warning. Do not blindly replay it as a failed write. The next explicit write or graph export rebuilds indexes; read-only operations do not. Malformed unrelated concepts are reported in warnings; capacity excess fails explicitly.
+If the concept commits but refreshing the generated files fails, the result includes the committed digest and an `index-out-of-date` warning. Do not blindly replay it as a failed write. A subsequent write or graph export can refresh those files. Search can rebuild its separate derived index without changing the bundle. Malformed unrelated concepts are reported in warnings; capacity excess fails explicitly.
 
 ## Permission boundary
 

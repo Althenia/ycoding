@@ -18,6 +18,7 @@ pub mod mcp;
 pub mod memory;
 pub mod model;
 pub mod project_artifact;
+pub mod recall;
 pub mod reference;
 pub mod skill;
 pub mod staging;

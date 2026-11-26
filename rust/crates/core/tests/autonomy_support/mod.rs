@@ -24,6 +24,7 @@ const CATALOG: Catalog = Catalog::new(
         TableDeclaration::of::<session::InstructionBlobTable>(),
         TableDeclaration::of::<session::InstructionStateTable>(),
         TableDeclaration::of::<ycoding_store::resources::CredentialTable>(),
+        TableDeclaration::of::<ycoding_store::resources::KvTable>(),
         TableDeclaration::of::<ycoding_store::resources::RequestTable>(),
         TableDeclaration::of::<ycoding_store::resources::UsageAnalyticsRequestTable>(),
         TableDeclaration::of::<ycoding_store::resources::SequenceTable>(),

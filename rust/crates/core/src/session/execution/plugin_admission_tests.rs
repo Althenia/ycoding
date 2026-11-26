@@ -167,6 +167,7 @@ async fn same_location_setup_dollar_prompt_uses_completed_private_runner_and_kee
             autonomy::Origin::Plugin,
             None,
             Some((&location, &scoped)),
+            None,
         )
         .await
         .unwrap();
@@ -180,6 +181,7 @@ async fn same_location_setup_dollar_prompt_uses_completed_private_runner_and_kee
             autonomy::Origin::Plugin,
             None,
             Some((&location, &scoped)),
+            None,
         )
         .await
         .unwrap();
@@ -207,6 +209,7 @@ async fn foreign_workspace_setup_dollar_prompt_keeps_normal_location_acquisition
             autonomy::Origin::Plugin,
             None,
             Some((&foreign, &scoped)),
+            None,
         )
         .await
         .unwrap();
@@ -218,4 +221,74 @@ async fn foreign_workspace_setup_dollar_prompt_keeps_normal_location_acquisition
     assert_eq!(published.runner.calls.load(Ordering::SeqCst), 1);
     assert!(execution.active().is_empty());
     execution.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reused_message_id_does_not_replace_the_admitted_path_cue() {
+    let (_store, execution, _, _) = fixture(true).await;
+    let root = std::env::temp_dir().join(format!(
+        "ycoding-cue-collision-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("first.rs"), "first").unwrap();
+    std::fs::write(root.join("second.rs"), "second").unwrap();
+    let attachments =
+        crate::resources::attachment_store::Store::new(root.join("attachments")).unwrap();
+    let materialize = |name: &str| {
+        execution
+            .store
+            .materialize_scoped_attachment(
+                &attachments,
+                crate::resources::image::Limits::default(),
+                super::super::attachment_admission::Input {
+                    uri: url::Url::from_file_path(root.join(name))
+                        .unwrap()
+                        .to_string()
+                        .into(),
+                    name: None,
+                    description: None,
+                    mention: None,
+                },
+                &root,
+            )
+            .unwrap()
+            .1
+            .unwrap()
+    };
+    let first = materialize("first.rs");
+    let second = materialize("second.rs");
+    execution
+        .prompt_with_paths(
+            request("msg_path_collision", "first"),
+            Some(false),
+            vec![first],
+        )
+        .await
+        .unwrap();
+    execution
+        .prompt_with_paths(
+            request("msg_path_collision", "second"),
+            Some(false),
+            vec![second],
+        )
+        .await
+        .unwrap();
+    {
+        let mut cues = super::super::runner::command_cues().lock().unwrap();
+        let key = cues
+            .keys()
+            .find(|(_, id, _, _)| id.as_lossless().as_str() == Some("msg_path_collision"))
+            .unwrap()
+            .clone();
+        let cue = cues.remove(&key).unwrap();
+        assert_eq!(cue.paths.len(), 1);
+        assert_eq!(cue.paths[0].relative(&root).as_deref(), Some("first.rs"));
+    }
+    execution.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
 }

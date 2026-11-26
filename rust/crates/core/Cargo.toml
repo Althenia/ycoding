@@ -10,6 +10,10 @@ publish.workspace = true
 name = "history_concurrency"
 harness = false
 
+[[bench]]
+name = "cue_recall"
+harness = false
+
 [dependencies]
 jsonschema.workspace = true
 flate2.workspace = true
@@ -20,6 +24,7 @@ axum.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 fff-search.workspace = true
+tantivy.workspace = true
 notify.workspace = true
 icu_properties.workspace = true
 icu_segmenter.workspace = true

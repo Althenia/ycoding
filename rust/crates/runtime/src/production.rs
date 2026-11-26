@@ -2293,6 +2293,10 @@ impl Factory {
                 skill_resolver: Some(Arc::new(SkillResolver(skills.clone()))),
             })
             .with_instructions(instruction_context)
+            .with_recall(ycoding_core::session::recall::Context {
+                memory: memory.clone(),
+                permissions: services.permissions.clone(),
+            })
             .with_title(title);
             let runner = match refresh {
                 Some(refresh) => runner.with_refresh(refresh),
@@ -3700,6 +3704,12 @@ impl ycoding_core::session::skill::Resolver for SkillResolver {
                 &[],
             ))
         })
+    }
+    fn activation_metadata<'a>(
+        &'a self,
+        info: &'a ycoding_core::ycoding_schema::skill::Info,
+    ) -> ycoding_core::session::skill::ActivationFuture<'a> {
+        Box::pin(async move { self.0.lock().await.activation_metadata(info) })
     }
 }
 

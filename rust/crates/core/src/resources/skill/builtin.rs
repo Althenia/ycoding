@@ -5,8 +5,7 @@ use crate::resources::{
 use std::path::Path;
 use ycoding_schema::{
     JsonValue, LosslessString,
-    schema::AbsolutePath,
-    skill::{EmbeddedSource, Info, Source},
+    skill::{EmbeddedSource, Source},
 };
 
 pub fn sources(
@@ -14,67 +13,52 @@ pub fn sources(
     directory: &Path,
     env: impl Fn(&str) -> Option<String>,
 ) -> Result<Vec<Source>, Error> {
-    Ok(vec![
-        embedded(
-            "ycoding",
-            "YCoding",
-            "Use this skill for questions about YCoding behavior, configuration, troubleshooting, plugins, hooks, Clients, Server, API, agents, commands, skills, tools, permissions, MCP, providers, models, themes, keymaps, the CLI, the TUI, and contributing to this repository.",
-            None,
-            include_str!("ycoding.md").into(),
-        )?,
-        embedded(
-            "chatgpt-connectors",
-            "ChatGPT connectors",
-            "Use when a YCoding Session needs ChatGPT account connector tools (tools.chatgpt.*): finding which connectors are available, calling them in Code Mode, handling their permissions and failures, or moving files through ChatGPT Library. Do not use for ChatGPT tasks that operate YCoding or for local YCoding operations.",
-            None,
-            include_str!("chatgpt-connectors.md").into(),
-        )?,
-        embedded(
-            "browser-use",
-            "Browser use",
-            "Use when a task needs the interaction tool to operate a Chrome tab: clicking, typing, or navigating a live page the user authorized, or working in a new YCoding-owned tab. Do not use for fetching or searching web content, or for coding tasks.",
-            None,
-            include_str!("browser-use.md").into(),
-        )?,
-        embedded(
-            "computer-use",
-            "Computer use",
-            "Use when a task needs the interaction tool to operate a macOS application window in the background: reading or clicking its controls on the user's Mac. Do not use for web pages in Chrome, shell work, or coding tasks.",
-            None,
-            include_str!("computer-use.md").into(),
-        )?,
-        embedded(
-            "report",
-            "Report",
-            "Use when the user wants to report a YCoding issue or bug. Collect standard diagnostics, add reproduction context, and publish the issue with the GitHub CLI.",
-            Some(true),
-            report(entries, directory, env),
-        )?,
-    ])
-}
-
-fn embedded(
-    id: &str,
-    name: &str,
-    description: &str,
-    slash: Option<bool>,
-    content: LosslessString,
-) -> Result<Source, Error> {
-    Ok(Source::Embedded(EmbeddedSource {
-        skill: Info {
-            id: id.into(),
-            name: name.into(),
-            description: Some(description.into()),
-            slash,
-            autoinvoke: None,
-            conflicts: None,
-            location: AbsolutePath::new(format!("/builtin/{id}.md"))?,
-            content,
-        },
-    }))
+    let documents = [
+        include_str!("../../../../../../packages/core/src/plugin/skill/ycoding/SKILL.md"),
+        include_str!(
+            "../../../../../../packages/core/src/plugin/skill/chatgpt-connectors/SKILL.md"
+        ),
+        include_str!("../../../../../../packages/core/src/plugin/skill/browser-use/SKILL.md"),
+        include_str!("../../../../../../packages/core/src/plugin/skill/computer-use/SKILL.md"),
+        include_str!("../../../../../../packages/core/src/plugin/skill/report/SKILL.md"),
+    ];
+    documents
+        .into_iter()
+        .map(|source| {
+            let doc = discovery::markdown::parse(source)
+                .map_err(|_| Error::Rejected("Invalid bundled skill document"))?;
+            let data = doc
+                .data
+                .json()
+                .map_err(|_| Error::Rejected("Invalid bundled skill metadata"))?;
+            let id = match doc.data.get("name") {
+                Some(discovery::markdown::Value::String(id)) => id.as_str(),
+                _ => None,
+            }
+            .ok_or(Error::Rejected("Missing bundled skill ID"))?;
+            let path = format!("/builtin/{id}.md");
+            let mut skill = super::from_frontmatter(
+                Path::new(&path),
+                Path::new("/builtin"),
+                &data,
+                &doc.content,
+            )?;
+            let Some(discovery::markdown::Value::String(name)) =
+                doc.data.get("metadata").and_then(|m| m.get("display-name"))
+            else {
+                return Err(Error::Rejected("Missing bundled skill display name"));
+            };
+            skill.name = name.clone();
+            if id == "report" {
+                skill.content = report(skill.content, entries, directory, &env);
+            }
+            Ok(Source::Embedded(EmbeddedSource { skill }))
+        })
+        .collect()
 }
 
 fn report(
+    content: LosslessString,
     entries: &[Entry],
     directory: &Path,
     env: impl Fn(&str) -> Option<String>,
@@ -108,7 +92,7 @@ fn report(
     };
     discovery::join(
         &[
-            include_str!("report.md").into(),
+            content,
             "".into(),
             "## Runtime Diagnostics Snapshot".into(),
             "".into(),

@@ -110,14 +110,6 @@ export function summary(concept: Concept): Summary {
   }
 }
 
-export function words(value: string) {
-  return (
-    value
-      .toLowerCase()
-      .normalize("NFC")
-      .match(/[\p{L}\p{N}_]+/gu) ?? []
-  )
-}
 export function compare(left: string, right: string) {
   return left < right ? -1 : left > right ? 1 : 0
 }

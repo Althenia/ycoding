@@ -293,7 +293,7 @@ skills/
     └── SKILL.md
 ```
 
-For a root Markdown file, the skill ID is the filename. For `SKILL.md`, the skill ID is the containing directory name.
+For a root Markdown file, the skill ID is the filename. For `SKILL.md`, the skill ID is the containing directory name. The five built-in skills use the same packaged `SKILL.md` documents in the native and Bun catalogs. An embedded plugin source can still supply its body directly.
 
 ### Skill format
 
@@ -333,6 +333,12 @@ YCoding metadata keys:
 - `ycoding/autoinvoke`: boolean or string; controls automatic activation eligibility;
 - `ycoding/conflicts.skills`: conflicting skill IDs;
 - `ycoding/conflicts.instructions`: conflicting instruction IDs.
+
+Set `metadata.activation` to `manual` to require explicit selection. An explicit request for a denied or missing skill does not select a similarly named skill.
+
+Use `activation: auto` inside `metadata` to opt into cue-based selection. The `events`, `commands`, `paths` and `keywords` values are comma-separated strings, not YAML arrays. For example, `commands: "cargo check"` matches the admitted argv `cargo check --workspace`, but not `cargo checker` or a prompt quoting that command. `paths: "rust/**/*.rs"` matches a selected path inside the workspace. Implicit relevance uses BM25 over skill names, IDs, descriptions and keywords, with a minimum score and ID ordering for ties. Deterministic cues take precedence. Weak or unrelated prompts can select no skill.
+
+An event rule can match `session.input.promoted`, `command.invoked`, `path.selected`, `session.compacted` or `session.recovered`. These refer to runtime transitions, not words in a prompt. Successful compaction and managed-task resumption can select a skill for the next request even without new input. Selection still checks the current source and permissions and does not run the procedure.
 
 A malformed `ycoding/conflicts` declaration causes that skill file to be skipped.
 

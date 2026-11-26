@@ -52,15 +52,7 @@ export const Input = Schema.Union([
   Schema.Struct({ action: Schema.Literal("restore"), scope: Scope, trashID: Schema.String, expectedDigest: Digest }),
   Schema.Struct({ action: Schema.Literal("purge"), scope: Scope, trashID: Schema.String, expectedDigest: Digest }),
 ])
-const Warning = Schema.Struct({ id: Schema.String, code: Schema.String })
-const Concept = Schema.Struct({
-  id: Schema.String,
-  type: Schema.String,
-  title: Schema.optional(Schema.String),
-  description: Schema.optional(Schema.String),
-  tags: Schema.optional(Schema.Array(Schema.String)),
-  digest: Schema.String,
-})
+const Warning = Memory.Warning
 const TrashEntry = Schema.Struct({ id: Schema.String, trashID: Schema.String, digest: Schema.String })
 export const Output = Schema.Union([
   Schema.Struct({
@@ -85,9 +77,9 @@ export const Output = Schema.Union([
       max_concepts: Schema.Number,
     }),
   }),
-  Schema.Struct({ concepts: Schema.Array(Concept), total: Schema.Number, warnings: Schema.Array(Warning) }),
-  Schema.Struct({ hits: Schema.Array(Schema.Struct({ ...Concept.fields, score: Schema.Number, snippet: Schema.String })), warnings: Schema.Array(Warning) }),
-  Schema.Struct({ id: Schema.String, content: Schema.String, digest: Schema.String }),
+  Memory.Listing,
+  Memory.SearchResult,
+  Memory.ReadResult,
   Schema.Struct({ id: Schema.String, digest: Schema.String, created: Schema.Boolean, warnings: Schema.Array(Warning) }),
   Schema.Struct({ id: Schema.String, trashID: Schema.String, digest: Schema.String, warnings: Schema.Array(Warning) }),
   Schema.Struct({ id: Schema.String, digest: Schema.String, warnings: Schema.Array(Warning) }),
@@ -98,7 +90,7 @@ export const Output = Schema.Union([
 ])
 
 const description = [
-  "Use on-demand knowledge for the active workspace: status, list, lexical search, read, write linked Markdown, export an offline HTML graph, or maintain entries.",
+  "Use on-demand knowledge for the active workspace: status, list, ranked local search, read, write linked Markdown, export an offline HTML graph, or maintain entries.",
   "scope defaults to the active Git repository and may be 'knowledge' for shared cross-repository concepts; outside Git only the knowledge scope is available.",
   "Never automatically save transcripts or inject memory. Read before replacing or deleting a concept and supply its digest.",
   "delete moves an entry to recoverable trash, trash lists it, restore returns it without overwriting, purge permanently removes one exact trash entry, and vacuum previews derived cleanup (dryRun defaults true).",

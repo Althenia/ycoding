@@ -171,7 +171,7 @@ impl Service {
         caused_by: Option<usage_anchor::Ref>,
         origin: Origin,
     ) -> Result<pending::Admitted, Error> {
-        self.admit_checked(sessions, request, caused_by, origin, None)
+        self.admit_checked(sessions, request, caused_by, origin, None, None)
             .await
     }
 
@@ -182,15 +182,35 @@ impl Service {
         caused_by: Option<usage_anchor::Ref>,
         _origin: Origin,
         admission: Option<pending::CheckedAdmission>,
+        command_cue: Option<super::super::runner::InputCue>,
     ) -> Result<pending::Admitted, Error> {
         let service = self.clone();
         let sessions = sessions.clone();
         detached(async move {
             let shared = shared(&service.client);
             let _inbox = shared.lock("inbox", request.session_id.as_lossless()).await;
+            let session = request.session_id.clone();
             let admitted = sessions
                 .admit_input_checked(request, caused_by, admission)
                 .await?;
+            if admitted.fresh
+                && let Ok(message) =
+                    ycoding_schema::session_message::Id::new(admitted.pending.id.clone())
+            {
+                let mut cues = super::super::runner::command_cues()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let key = (
+                    session,
+                    message,
+                    admitted.pending.admitted_seq,
+                    admitted.pending.time_created,
+                );
+                cues.remove(&key);
+                if let Some(cue) = command_cue {
+                    cues.insert(key, cue);
+                }
+            }
             Ok(admitted)
         })
         .await

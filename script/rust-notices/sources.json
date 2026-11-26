@@ -154,6 +154,42 @@
   ],
   "supplements": [
     {
+      "source": "https://github.com/quickwit-oss/tantivy",
+      "revision": "50ac63df66084b8f77bfd067b81b5b8076b8a905",
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/quickwit-oss/tantivy/50ac63df66084b8f77bfd067b81b5b8076b8a905/LICENSE",
+      "file": "texts/tantivy-LICENSE.txt",
+      "sha256": "acacd14bebbffdb30d62443c282fb4da3e81915a9f69c63d5d745a029f44de8a",
+      "crates": ["tantivy-bitpacker 0.27.0", "tantivy-common 0.27.0", "tantivy-query-grammar 0.27.0", "tantivy-sstable 0.27.0"]
+    },
+    {
+      "source": "https://github.com/quickwit-oss/tantivy",
+      "revision": "67889269cae67063c372bc236b102d632a021568",
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/quickwit-oss/tantivy/67889269cae67063c372bc236b102d632a021568/LICENSE",
+      "file": "texts/tantivy-LICENSE.txt",
+      "sha256": "acacd14bebbffdb30d62443c282fb4da3e81915a9f69c63d5d745a029f44de8a",
+      "crates": ["tantivy-columnar 0.27.0", "tantivy-stacker 0.27.0"]
+    },
+    {
+      "source": "https://github.com/quickwit-oss/tantivy",
+      "revision": "9e63fc508153ef770f9ff980c8fa2f11e8e2e6db",
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/quickwit-oss/tantivy/9e63fc508153ef770f9ff980c8fa2f11e8e2e6db/LICENSE",
+      "file": "texts/tantivy-LICENSE.txt",
+      "sha256": "acacd14bebbffdb30d62443c282fb4da3e81915a9f69c63d5d745a029f44de8a",
+      "crates": ["tantivy-tokenizer-api 0.7.0"]
+    },
+    {
+      "source": "https://github.com/quickwit-oss/tantivy",
+      "revision": "c6e77d27c605cb3cea1a933fa7d68632aeb7865e",
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/quickwit-oss/tantivy/c6e77d27c605cb3cea1a933fa7d68632aeb7865e/LICENSE",
+      "file": "texts/tantivy-LICENSE.txt",
+      "sha256": "acacd14bebbffdb30d62443c282fb4da3e81915a9f69c63d5d745a029f44de8a",
+      "crates": ["ownedbytes 0.9.0"]
+    },
+    {
       "source": "https://github.com/duckdb/duckdb-rs",
       "revision": "0fec186cdd4ada2f7703a2df5ee18f9f78d95f8e",
       "path": "LICENSE",
@@ -287,28 +323,6 @@
       "crates": [
         "uuid-simd 0.8.0",
         "vsimd 0.8.0"
-      ]
-    },
-    {
-      "source": "https://github.com/Ethiraric/yaml-rust2",
-      "revision": "e12069447073e0c8dd9ceab415159c4c92927534",
-      "path": "Apache-LICENSE",
-      "url": "https://raw.githubusercontent.com/Ethiraric/yaml-rust2/e12069447073e0c8dd9ceab415159c4c92927534/Apache-LICENSE",
-      "file": "texts/yaml-rust2-Apache-LICENSE.txt",
-      "sha256": "278f0e5c23f023a2f1af8d528dd5c29dc3a5ea2dd63558aa8d4f077c09e037c7",
-      "crates": [
-        "yaml-rust2 0.13.0"
-      ]
-    },
-    {
-      "source": "https://github.com/Ethiraric/yaml-rust2",
-      "revision": "e12069447073e0c8dd9ceab415159c4c92927534",
-      "path": "MIT-LICENSE",
-      "url": "https://raw.githubusercontent.com/Ethiraric/yaml-rust2/e12069447073e0c8dd9ceab415159c4c92927534/MIT-LICENSE",
-      "file": "texts/yaml-rust2-MIT-LICENSE.txt",
-      "sha256": "3dd30063cdb4a378736348c215cb84b78b0711ba7e39903162cae5ce71dc9757",
-      "crates": [
-        "yaml-rust2 0.13.0"
       ]
     }
   ],
@@ -564,6 +578,23 @@
       "evidence": [
         "https://github.com/orlp/glidesort/issues/11 (author: \"The license is specified in Cargo.toml, it's MIT OR Apache-2.0.\")",
         "https://github.com/orlp/glidesort/pull/6 (author declined a contributed license file or copyright line)"
+      ],
+      "caveats": []
+    },
+    {
+      "crate": "htmlescape",
+      "version": "0.3.1",
+      "license": "Apache-2.0",
+      "file": "texts/apache-2.0.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "source": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+      "statement": {
+        "file": "Cargo.toml",
+        "text": "license = \"Apache-2.0 / MIT / MPL-2.0\""
+      },
+      "evidence": [
+        "https://github.com/veddan/rust-htmlescape/commit/446b5a912c86c81ec44e961e08b8d13c2732a409 (upstream added the three license alternatives to the 0.3.1 manifest)",
+        "https://doc.rust-lang.org/cargo/reference/manifest.html#footnote-slash (Cargo accepts the historical slash-separated license alternatives)"
       ],
       "caveats": []
     },

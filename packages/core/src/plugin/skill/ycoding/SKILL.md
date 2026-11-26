@@ -1,3 +1,9 @@
+---
+name: ycoding
+description: "Use this skill for questions about YCoding behavior, configuration, troubleshooting, plugins, hooks, Clients, Server, API, agents, commands, skills, tools, permissions, MCP, providers, models, themes, keymaps, the CLI, the TUI, and contributing to this repository."
+metadata:
+  display-name: "YCoding"
+---
 # YCoding
 
 Use this guide to diagnose, configure, or contribute to the Rust runtime that powers YCoding's terminal client and local service.

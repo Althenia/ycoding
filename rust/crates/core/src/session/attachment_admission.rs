@@ -17,6 +17,59 @@ pub struct Input {
     pub mention: Option<Mention>,
 }
 
+#[derive(Clone)]
+pub struct VerifiedPath {
+    root: std::path::PathBuf,
+    path: std::path::PathBuf,
+    selected: std::path::PathBuf,
+}
+
+impl VerifiedPath {
+    pub(crate) fn relative(&self, location: &Path) -> Option<String> {
+        let root = std::fs::canonicalize(location).ok()?;
+        let path = std::fs::canonicalize(&self.selected).ok()?;
+        if root != self.root || path != self.path || !path.is_file() {
+            return None;
+        }
+        let relative = path.strip_prefix(root).ok()?;
+        Some(relative.to_str()?.replace(std::path::MAIN_SEPARATOR, "/"))
+    }
+}
+
+#[cfg(all(test, unix))]
+mod verified_path_tests {
+    use super::VerifiedPath;
+
+    #[test]
+    fn revalidates_location_and_symlink_target() {
+        let root = std::env::temp_dir().join(format!(
+            "ycoding-path-cue-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let root = std::fs::canonicalize(root).unwrap();
+        let file = root.join("source.rs");
+        let selected = root.join("selected.rs");
+        std::fs::write(&file, "source").unwrap();
+        std::os::unix::fs::symlink(&file, &selected).unwrap();
+        let cue = VerifiedPath {
+            root: root.clone(),
+            path: file.clone(),
+            selected: selected.clone(),
+        };
+        assert_eq!(cue.relative(&root).as_deref(), Some("source.rs"));
+        assert!(cue.relative(root.parent().unwrap()).is_none());
+        std::fs::remove_file(&selected).unwrap();
+        std::os::unix::fs::symlink(root.parent().unwrap(), &selected).unwrap();
+        assert!(cue.relative(&root).is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum MaterializeError {
     Attachment(String),
@@ -32,6 +85,48 @@ struct Resolved {
 }
 
 impl Service {
+    pub fn materialize_scoped_attachment(
+        &self,
+        attachments: &attachment_store::Store,
+        limits: image::Limits,
+        input: Input,
+        location: &Path,
+    ) -> Result<(FileAttachment, Option<VerifiedPath>), MaterializeError> {
+        let root = std::fs::canonicalize(location).ok();
+        let target = input
+            .uri
+            .as_str()
+            .filter(|uri| uri.starts_with("file:"))
+            .and_then(|uri| url::Url::parse(uri).ok())
+            .filter(|url| !url.path().to_ascii_lowercase().contains("%2f"))
+            .and_then(|mut url| {
+                url.set_query(None);
+                url.set_fragment(None);
+                url.to_file_path().ok()
+            });
+        let before = target
+            .as_ref()
+            .and_then(|path| std::fs::canonicalize(path).ok());
+        let attachment = self.materialize_attachment(attachments, limits, input)?;
+        let path = root
+            .zip(before)
+            .filter(|(root, before)| {
+                before.starts_with(root)
+                    && before.is_file()
+                    && target
+                        .as_ref()
+                        .and_then(|path| std::fs::canonicalize(path).ok())
+                        .as_ref()
+                        == Some(before)
+            })
+            .map(|(root, path)| VerifiedPath {
+                root,
+                path,
+                selected: target.expect("target was checked"),
+            });
+        Ok((attachment, path))
+    }
+
     pub fn materialize_attachment(
         &self,
         attachments: &attachment_store::Store,

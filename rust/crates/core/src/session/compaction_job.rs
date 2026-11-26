@@ -549,6 +549,13 @@ fn end(tx: &mut Write<'_>, input: &EndInput) -> Result<Settled<Job>, Error> {
         &ended_event,
         input.now,
     )?;
+    super::skill::mark_cue(
+        tx,
+        &row.session_id,
+        "session.compacted",
+        &ended_event.id,
+        input.now,
+    )?;
     let ended = Job {
         status: "ended".into(),
         lease_owner: None,

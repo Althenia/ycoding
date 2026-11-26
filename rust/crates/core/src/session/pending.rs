@@ -269,6 +269,18 @@ impl Service {
         input_id: &ycoding_schema::LosslessString,
         now: i64,
     ) -> Result<Promotion, Error> {
+        self.promote_input_with_cues(id, input_id, now, Vec::new(), Vec::new())
+            .await
+    }
+
+    pub(crate) async fn promote_input_with_cues(
+        &self,
+        id: &session::Id,
+        input_id: &ycoding_schema::LosslessString,
+        now: i64,
+        cues: Vec<super::skill::LifecycleCue>,
+        explicit: Vec<ycoding_schema::skill::Id>,
+    ) -> Result<Promotion, Error> {
         let _inbox = super::autonomy::inbox(&self.client, id).await;
         let id = id.as_lossless().clone();
         let input_id = input_id.clone();
@@ -324,6 +336,7 @@ impl Service {
                             .finish(),
                     },
                 )?;
+                super::skill::assign_cues(tx, &cues, &pending.id, &explicit, now)?;
                 Ok(Promotion::Promoted)
             })?
             .await

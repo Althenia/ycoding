@@ -5,10 +5,264 @@ pub type SkillsFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Vec<skill::Info>, String>> + Send + 'a>>;
 pub type InstructionsFuture<'a> =
     Pin<Box<dyn Future<Output = Result<LosslessString, String>> + Send + 'a>>;
+pub type ActivationFuture<'a> = Pin<Box<dyn Future<Output = Option<JsonObject>> + Send + 'a>>;
 
 pub trait Resolver: Send + Sync {
     fn list(&self) -> SkillsFuture<'_>;
     fn instructions<'a>(&'a self, info: &'a skill::Info) -> InstructionsFuture<'a>;
+    fn activation_metadata<'a>(&'a self, _info: &'a skill::Info) -> ActivationFuture<'a> {
+        Box::pin(async { None })
+    }
+}
+
+struct Activation {
+    events: Vec<String>,
+    commands: Vec<String>,
+    paths: Vec<String>,
+    keywords: Vec<String>,
+}
+
+fn workspace_relative(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('/')
+        && !value.contains(['\\', ':'])
+        && !value
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+}
+
+fn activation(metadata: &JsonObject) -> Option<Activation> {
+    if !matches!(metadata.get(&"activation".into()), Some(JsonValue::String(value)) if value.as_str() == Some("auto"))
+    {
+        return None;
+    }
+    if metadata.get(&"version".into()).is_some_and(|value| !matches!(value, JsonValue::String(value) if value.as_str().is_some_and(|version| !version.trim().is_empty()))) { return None; }
+    let terms = |key: &str| -> Option<Vec<String>> {
+        match metadata.get(&key.into()) {
+            None => Some(Vec::new()),
+            Some(JsonValue::String(value)) => {
+                let items = value
+                    .as_str()?
+                    .split(',')
+                    .map(str::trim)
+                    .collect::<Vec<_>>();
+                if items.iter().any(|item| item.is_empty()) {
+                    return None;
+                }
+                Some(items.into_iter().map(str::to_owned).collect())
+            }
+            _ => None,
+        }
+    };
+    let events = terms("events")?;
+    let commands = terms("commands")?;
+    let paths = terms("paths")?;
+    let keywords = terms("keywords")?;
+    if events
+        .iter()
+        .any(|item| item.chars().any(char::is_whitespace))
+        || paths.iter().any(|item| !workspace_relative(item))
+    {
+        return None;
+    }
+    Some(Activation {
+        events,
+        commands,
+        paths,
+        keywords,
+    })
+}
+
+pub(crate) fn ranked_implicit(items: &[(&skill::Info, &JsonObject)], query: &str) -> Vec<usize> {
+    use crate::resources::{
+        memory::format::tokens,
+        recall::lexical::{self, Document},
+    };
+    if items.is_empty() || items.len() > 1000 || query.len() > 65536 {
+        return Vec::new();
+    }
+    let Ok(words) = tokens(query) else {
+        return Vec::new();
+    };
+    if words.is_empty() || words.len() > 1024 {
+        return Vec::new();
+    }
+    let terms = words.iter().cloned().collect();
+    let docs: Vec<_> = items
+        .iter()
+        .map(|(info, metadata)| {
+            let keywords = activation(metadata).map(|a| a.keywords).unwrap_or_default();
+            Document {
+                id: info.id.as_str().unwrap_or_default(),
+                title: info.name.to_utf8().unwrap_or_default(),
+                metadata: format!(
+                    "{} {}",
+                    info.description
+                        .as_ref()
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default(),
+                    keywords.join(" ")
+                ),
+                tags: keywords,
+                body: "",
+            }
+        })
+        .collect();
+    if docs
+        .iter()
+        .any(|d| d.title.len() + d.metadata.len() > 65536)
+        || docs
+            .iter()
+            .map(|d| d.title.len() + d.metadata.len())
+            .sum::<usize>()
+            > 8 * 1024 * 1024
+    {
+        return Vec::new();
+    }
+    let Ok(scores) = lexical::bm25_scores(&docs, &terms) else {
+        return Vec::new();
+    };
+    let rows = docs
+        .iter()
+        .zip(scores)
+        .enumerate()
+        .filter(|(_, (_, score))| *score >= 3.583519)
+        .map(|(i, (doc, score))| (i, doc.id, score));
+    crate::resources::recall::ranking::rank(rows, docs.len())
+        .into_iter()
+        .map(|(index, _)| index)
+        .collect()
+}
+
+#[cfg(test)]
+mod relevance_tests {
+    use super::*;
+    use ycoding_schema::{DomainDecode, parse_json};
+
+    fn info(id: &str) -> skill::Info {
+        skill::Info::decode(&parse_json(&format!(r#"{{"id":"{id}","name":"guide","location":"/skills/{id}/SKILL.md","content":"guidance","autoinvoke":true}}"#)).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn bm25_abstains_on_weak_exact_and_phrase_matches_and_breaks_ties_by_id() {
+        let metadata = JsonObject::decode(&parse_json(r#"{"activation":"auto","keywords":"cobalt birch alder willow maple oak pine cedar elm amber quartz violet"}"#).unwrap()).unwrap();
+        let zeta = info("zeta");
+        let alpha = info("alpha");
+        let items = [(&zeta, &metadata), (&alpha, &metadata)];
+        assert!(ranked_implicit(&items, "alpha").is_empty());
+        assert!(ranked_implicit(&items, "cobalt birch").is_empty());
+        assert!(ranked_implicit(&items, "unrelated query").is_empty());
+        assert_eq!(
+            ranked_implicit(
+                &items,
+                "cobalt birch alder willow maple oak pine cedar elm amber quartz violet"
+            ),
+            vec![1, 0]
+        );
+    }
+}
+
+pub(crate) fn valid_automatic(metadata: &JsonObject) -> bool {
+    activation(metadata).is_some()
+}
+
+pub fn triggered(metadata: &JsonObject, event: &str, command: Option<&[String]>) -> bool {
+    let Some(activation) = activation(metadata) else {
+        return false;
+    };
+    activation.events.iter().any(|item| item == event)
+        || command.is_some_and(|argv| {
+            activation.commands.iter().any(|pattern| {
+                let prefix = pattern.split_whitespace().collect::<Vec<_>>();
+                !prefix.is_empty()
+                    && argv.len() >= prefix.len()
+                    && prefix.iter().zip(argv).all(|(a, b)| *a == b)
+            })
+        })
+}
+
+pub fn path_triggered(metadata: &JsonObject, path: &str) -> bool {
+    let Some(activation) = activation(metadata) else {
+        return false;
+    };
+    if !workspace_relative(path) {
+        return false;
+    }
+    activation
+        .events
+        .iter()
+        .any(|event| event == "path.selected")
+        || activation.paths.iter().any(|pattern| {
+            let escaped = pattern.chars().fold(String::new(), |mut output, ch| {
+                if matches!(
+                    ch,
+                    '[' | ']' | '{' | '}' | '(' | ')' | '+' | '^' | '$' | '|'
+                ) {
+                    output.push('\\');
+                }
+                output.push(ch);
+                output
+            });
+            crate::platform::filesystem::glob::matches(&escaped, path).unwrap_or(false)
+        })
+}
+
+pub(crate) fn in_scope(
+    info: &skill::Info,
+    session: &ycoding_schema::session::Info,
+    config: Option<&crate::resources::config::Configuration>,
+) -> bool {
+    let Some(path) = info
+        .location
+        .as_lossless()
+        .as_str()
+        .and_then(|p| std::fs::canonicalize(p).ok())
+    else {
+        return false;
+    };
+    let Some(location) = session
+        .location
+        .directory
+        .as_lossless()
+        .as_str()
+        .and_then(|p| std::fs::canonicalize(p).ok())
+    else {
+        return false;
+    };
+    let project = session
+        .subpath
+        .as_ref()
+        .and_then(|subpath| subpath.as_lossless().as_str())
+        .and_then(|subpath| {
+            let relative = std::path::Path::new(subpath);
+            if !relative
+                .components()
+                .all(|component| matches!(component, std::path::Component::Normal(_)))
+                || !location.ends_with(relative)
+            {
+                return None;
+            }
+            let mut project = location.clone();
+            for _ in relative.components() {
+                project.pop();
+            }
+            Some(project)
+        })
+        .unwrap_or(location);
+    if path.starts_with(project) {
+        return true;
+    }
+    config.is_some_and(|config| {
+        let roots = config.roots();
+        [
+            roots.home.join(".agents/skills"),
+            roots.home.join(".claude/skills"),
+            roots.config.join("skills"),
+        ]
+        .iter()
+        .filter_map(|root| std::fs::canonicalize(root).ok())
+        .any(|root| path.starts_with(root))
+    })
 }
 
 pub async fn activate(
@@ -16,6 +270,204 @@ pub async fn activate(
     session_id: &ycoding_schema::session::Id,
     fields: JsonValue,
     now: i64,
+) -> Result<(), ycoding_store::Error> {
+    activate_with_origin(store, session_id, fields, now, false).await
+}
+
+pub(crate) fn automatic_key(
+    session_id: &ycoding_schema::session::Id,
+    message: &ycoding_schema::session_message::Id,
+) -> LosslessString {
+    use ycoding_schema::DomainEncode;
+    format!(
+        "{}{}",
+        automatic_prefix(session_id),
+        ycoding_schema::stringify_json(&message.encode())
+    )
+    .into()
+}
+
+fn automatic_prefix(session_id: &ycoding_schema::session::Id) -> String {
+    use ycoding_schema::DomainEncode;
+    format!(
+        "skill-automatic:{}:",
+        ycoding_schema::stringify_json(&session_id.encode())
+    )
+}
+
+#[derive(Clone)]
+pub(crate) struct LifecycleCue {
+    key: LosslessString,
+    pub(crate) event: &'static str,
+    identity: LosslessString,
+    pub(crate) explicit: Vec<skill::Id>,
+}
+
+fn cue_key(session_id: &ycoding_schema::session::Id, event: &str) -> LosslessString {
+    format!("{}cue:{event}", automatic_prefix(session_id)).into()
+}
+
+pub(crate) fn mark_cue(
+    tx: &mut ycoding_store::Write<'_>,
+    session: &LosslessString,
+    event: &'static str,
+    identity: &LosslessString,
+    now: i64,
+) -> Result<(), ycoding_store::Error> {
+    let session = ycoding_schema::session::Id::new(session.clone())
+        .map_err(|_| ycoding_store::Error::Rejected("Invalid Session ID"))?;
+    ycoding_store::resources::set_kv(
+        tx,
+        &cue_key(&session, event),
+        &ycoding_store::session::Document::new(JsonValue::String(identity.clone()))?,
+        now,
+    )
+}
+
+pub(crate) fn lifecycle_cues(
+    snapshot: &ycoding_store::Snapshot,
+    session: &ycoding_schema::session::Id,
+) -> Result<Vec<LifecycleCue>, ycoding_store::Error> {
+    let mut cues = Vec::new();
+    for event in ["session.compacted", "session.recovered"] {
+        let key = cue_key(session, event);
+        if let Some(value) = ycoding_store::resources::get_kv(snapshot, &key)?
+            && let Some(identity) = cue_identity(value.value()).cloned()
+        {
+            use ycoding_schema::DomainDecode;
+            let explicit = match value.value() {
+                JsonValue::Object(data) => {
+                    let Some(ids) = data
+                        .get(&"explicit".into())
+                        .and_then(|value| Vec::<skill::Id>::decode(value).ok())
+                    else {
+                        continue;
+                    };
+                    if !matches!(data.get(&"inputID".into()), Some(JsonValue::String(id)) if !id.is_empty())
+                    {
+                        continue;
+                    }
+                    ids
+                }
+                JsonValue::String(_) => Vec::new(),
+                _ => continue,
+            };
+            cues.push(LifecycleCue {
+                key,
+                event,
+                identity,
+                explicit,
+            });
+        }
+    }
+    Ok(cues)
+}
+
+fn cue_identity(value: &JsonValue) -> Option<&LosslessString> {
+    match value {
+        JsonValue::String(identity) => Some(identity),
+        JsonValue::Object(data) => match data.get(&"identity".into()) {
+            Some(JsonValue::String(identity)) => Some(identity),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+pub(crate) fn assign_cues(
+    tx: &mut ycoding_store::Write<'_>,
+    cues: &[LifecycleCue],
+    input: &LosslessString,
+    explicit: &[skill::Id],
+    now: i64,
+) -> Result<(), ycoding_store::Error> {
+    for cue in cues {
+        if tx
+            .get::<ycoding_store::resources::KvTable>(&super::key(&cue.key))?
+            .is_some_and(|row| cue_identity(row.value.value()) == Some(&cue.identity))
+        {
+            let value = ycoding_schema::ObjectEncoder::new()
+                .field("identity", &cue.identity)
+                .field("inputID", input)
+                .field("explicit", &explicit.to_vec())
+                .finish();
+            ycoding_store::resources::set_kv(
+                tx,
+                &cue.key,
+                &ycoding_store::session::Document::new(value)?,
+                now,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn acknowledge_cues(
+    tx: &mut ycoding_store::Write<'_>,
+    cues: &[LifecycleCue],
+) -> Result<(), ycoding_store::Error> {
+    for cue in cues {
+        if tx
+            .get::<ycoding_store::resources::KvTable>(&super::key(&cue.key))?
+            .is_some_and(|row| cue_identity(row.value.value()) == Some(&cue.identity))
+        {
+            ycoding_store::resources::remove_kv(tx, &cue.key)?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn remove_automatic(
+    tx: &mut ycoding_store::Write<'_>,
+    session_id: &ycoding_schema::session::Id,
+) -> Result<(), ycoding_store::Error> {
+    use std::ops::Bound;
+    use ycoding_store::{TableSpec, resources::KvTable};
+    let prefix = automatic_prefix(session_id);
+    let mut after = None;
+    loop {
+        let rows = tx.scan::<KvTable>(
+            after.as_deref().map_or(Bound::Unbounded, Bound::Excluded),
+            Bound::Unbounded,
+            128,
+        )?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        after = rows.last().map(KvTable::primary_key);
+        for row in rows
+            .into_iter()
+            .filter(|row| row.key.as_str().is_some_and(|key| key.starts_with(&prefix)))
+        {
+            ycoding_store::resources::remove_kv(tx, &row.key)?;
+        }
+    }
+}
+
+pub(crate) fn mark_origin(
+    tx: &mut ycoding_store::Write<'_>,
+    event: &ycoding_store::session::NewEvent,
+    automatic: bool,
+) -> Result<(), ycoding_store::Error> {
+    let session = ycoding_schema::session::Id::new(event.aggregate_id.clone())
+        .map_err(|_| ycoding_store::Error::Rejected("Invalid Session ID"))?;
+    let id = ycoding_schema::event::Id::new(event.id.clone())
+        .map_err(|_| ycoding_store::Error::Rejected("Invalid event ID"))?;
+    let message = ycoding_schema::session_message::Id::from_event(&id);
+    ycoding_store::resources::set_kv(
+        tx,
+        &automatic_key(&session, &message),
+        &ycoding_store::session::Document::new(JsonValue::Bool(automatic))?,
+        event.created,
+    )
+}
+
+pub(crate) async fn activate_with_origin(
+    store: &super::store::Service,
+    session_id: &ycoding_schema::session::Id,
+    fields: JsonValue,
+    now: i64,
+    automatic: bool,
 ) -> Result<(), ycoding_store::Error> {
     let JsonValue::Object(mut data) = fields else {
         return Err(ycoding_store::Error::Rejected(
@@ -34,10 +486,16 @@ pub async fn activate(
         data: JsonValue::Object(data),
     };
     if let Some(source) = store.artifact_source() {
-        source.publish_activation(event).await?;
+        source.publish_skill_activation(event, automatic).await?;
         return Ok(());
     }
-    store.publish(event).await?;
+    store
+        .client
+        .submit(move |tx| {
+            mark_origin(tx, &event, automatic)?;
+            super::projector::append(tx, &event)
+        })?
+        .await?;
     Ok(())
 }
 

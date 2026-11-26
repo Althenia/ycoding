@@ -4,7 +4,7 @@ import fs from "node:fs/promises"
 import { constants } from "node:fs"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
-import { Context, Effect, Exit, Layer } from "effect"
+import { Context, Effect, Exit, Layer, Schema } from "effect"
 import { Config } from "./config"
 import { ConfigMemory } from "./config/memory"
 import { makeLocationNode } from "./effect/app-node"
@@ -16,8 +16,8 @@ import { Hash } from "./util/hash"
 import { Flock } from "./util/flock"
 import { MemoryFormat } from "./memory/format"
 import { MemoryGraph } from "./memory/graph"
-import { MemorySearch } from "./memory/search"
 import { MemoryError, memoryError } from "./memory/error"
+import { nativeResource } from "./native-resources"
 import { executeMutation, native } from "./project-artifact/filesystem"
 
 export { MemoryError } from "./memory/error"
@@ -56,6 +56,29 @@ const generatedIndexMarker = "Generated index. Edit concept Markdown, not this f
 const reserved = ["index.md", "log.md", "graph.html", "_meta.json"]
 const trashDirectory = "trash"
 const sidecarLimitBytes = 4096
+const Summary = Schema.Struct({
+  id: Schema.String,
+  type: Schema.String,
+  title: Schema.optional(Schema.String),
+  description: Schema.optional(Schema.String),
+  tags: Schema.optional(Schema.Array(Schema.String)),
+  digest: Schema.String,
+})
+export const Warning = Schema.Struct({ id: Schema.String, code: Schema.String })
+const Warnings = Schema.Array(Warning)
+export const Listing = Schema.Struct({
+  concepts: Schema.Array(Summary),
+  total: Schema.Number,
+  warnings: Warnings,
+})
+export const SearchResult = Schema.Struct({
+  hits: Schema.Array(Schema.Struct({ ...Summary.fields, score: Schema.Number, snippet: Schema.String })),
+  warnings: Warnings,
+})
+export const ReadResult = Schema.Struct({ id: Schema.String, content: Schema.String, digest: Schema.String })
+const decodeListing = Schema.decodeUnknownSync(Listing)
+const decodeSearch = Schema.decodeUnknownSync(SearchResult)
+const decodeRead = Schema.decodeUnknownSync(ReadResult)
 
 export function make(input: {
   readonly directory: string
@@ -85,6 +108,50 @@ export function make(input: {
         }),
       ),
     )
+
+  const readNative = <A>(
+    action: "list" | "read" | "search",
+    options: { scope?: Scope },
+    expectedRoot: string | undefined,
+    decode: (value: unknown) => A,
+  ) => state(options.scope).pipe(Effect.flatMap((resolved) => {
+    if (!resolved.enabled) return Effect.fail(new MemoryError({ code: "Disabled", message: "Workspace memory is disabled." }))
+    if (expectedRoot !== undefined && resolved.root !== expectedRoot)
+      return Effect.fail(new MemoryError({ code: "UnsafePath", message: "Memory location changed during approval; retry the operation." }))
+    return nativeResource({
+      ...options,
+      operation: "memory",
+      action,
+      scope: resolved.scope,
+      approvedRoot: resolved.root,
+      directory: resolved.directory,
+      limits: resolved.limits,
+      repository: resolved.repository,
+      home: input.home,
+      data: input.data,
+    }).pipe(
+      Effect.flatMap((reply) => Effect.try({
+        try: () => {
+          if (reply.ok) return decode(reply.value)
+          switch (reply.code) {
+            case "Disabled": throw new MemoryError({ code: "Disabled", message: "Workspace memory is disabled." })
+            case "NotFound": throw notFound()
+            case "UnsafePath": throw unsafe()
+            case "TooLarge": throw tooLarge()
+            case "InvalidConcept": throw new MemoryError({
+              code: "InvalidConcept",
+              message: action === "search"
+                ? "Search query must contain text and be at most 1024 characters. The limit must be an integer from 1 to 50."
+                : "Invalid memory input or concept.",
+            })
+            default: throw memoryError(undefined)
+          }
+        },
+        catch: memoryError,
+      })),
+      Effect.mapError(memoryError),
+    )
+  }))
 
   /**
    * Runs a committed mutation under the collection lock, then rebuilds derived files best-effort.
@@ -127,45 +194,14 @@ export function make(input: {
   return {
     status: (scope: Scope = "repository") => state(scope),
     list: (options: { scope?: Scope; limit?: number; offset?: number }, expectedRoot?: string) =>
-      operate(options.scope, expectedRoot, async (resolved) => {
-        range(options.limit ?? 20, 1, 100)
-        range(options.offset ?? 0, 0, Number.MAX_SAFE_INTEGER)
-        const bundle = await scan(resolved.root, resolved.limits)
-        const offset = options.offset ?? 0
-        const limit = options.limit ?? 20
-        return {
-          concepts: bundle.concepts.slice(offset, offset + limit).map(MemoryFormat.summary),
-          total: bundle.concepts.length,
-          warnings: bundle.warnings,
-        }
-      }),
+      readNative("list", options, expectedRoot, decodeListing),
     search: (
       options: { scope?: Scope; query: string; limit?: number; type?: string; tag?: string },
       expectedRoot?: string,
     ) =>
-      operate(options.scope, expectedRoot, async (resolved) => {
-        range(options.limit ?? 10, 1, 50)
-        if (!options.query.trim() || options.query.length > 1024)
-          throw new MemoryError({
-            code: "InvalidConcept",
-            message: "Search query must contain text and be at most 1024 characters.",
-          })
-        const bundle = await scan(resolved.root, resolved.limits)
-        return {
-          hits: MemorySearch.rank(bundle.concepts, {
-            query: options.query,
-            limit: options.limit ?? 10,
-            type: options.type,
-            tag: options.tag,
-          }),
-          warnings: bundle.warnings,
-        }
-      }),
+      readNative("search", options, expectedRoot, decodeSearch),
     read: (options: { scope?: Scope; id: string }, expectedRoot?: string) =>
-      operate(options.scope, expectedRoot, async (resolved) => {
-        const concept = await readConcept(resolved.root, resolved.limits, options.id)
-        return { id: concept.id, content: concept.content, digest: concept.digest }
-      }),
+      readNative("read", options, expectedRoot, decodeRead),
     write: (options: { scope?: Scope; id: string; content: string; expectedDigest?: string }, expectedRoot?: string) =>
       mutate(
         options.scope,

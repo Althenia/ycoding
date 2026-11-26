@@ -1,9 +1,10 @@
-<!--
-  Built-in skill. Name and description are registered in code at
-  packages/core/src/plugin/skill.ts. The body below becomes the skill's
-  content.
--->
-
+---
+name: report
+description: "Use when the user wants to report a YCoding issue or bug. Collect standard diagnostics, add reproduction context, and publish the issue with the GitHub CLI."
+metadata:
+  display-name: "Report"
+  ycoding/slash: "true"
+---
 # Report a YCoding Issue
 
 Use this skill when the user wants to report a YCoding issue or bug. Your job

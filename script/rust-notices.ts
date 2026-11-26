@@ -6,7 +6,7 @@ const rule = "=".repeat(80)
 const divider = "-".repeat(80)
 const beginLine = "BEGIN GENERATED RUST THIRD-PARTY NOTICES (script/rust-notices.ts)"
 const endLine = "END GENERATED RUST THIRD-PARTY NOTICES"
-const licenseFile = /^(licen[cs]e|copying|unlicense|notice|copyright)(?![a-z])/i
+const licenseFile = /^(?:(?:[a-z0-9]+-)?licen[cs]e|copying|unlicense|notice|copyright)(?![a-z])/i
 const licenseDirectory = /^licen[cs]es$/i
 const registrySources = ["registry+https://github.com/rust-lang/crates.io-index", "sparse+https://index.crates.io/"]
 
@@ -89,6 +89,9 @@ const signatures: Record<string, (text: string) => boolean> = {
     !text.includes("endorse or promote products"),
   "Unicode-3.0": (text) => text.includes("unicode license v3"),
   Zlib: (text) => text.includes("altered source versions must be plainly marked"),
+  "zlib-acknowledgement": (text) =>
+    text.includes("altered source versions must be plainly marked") &&
+    /an acknowledgment(?: \(see the following\))? in the product documentation is required/.test(text),
   "BSL-1.0": (text) => text.includes("boost software license"),
   "CC0-1.0": (text) => text.includes("cc0 1.0 universal"),
   Unlicense: (text) => text.includes("this is free and unencumbered software released into the public domain"),

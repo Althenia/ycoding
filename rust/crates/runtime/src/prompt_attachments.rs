@@ -11,11 +11,16 @@ use ycoding_core::{
 };
 use ycoding_protocol::v5;
 
+pub struct Materialized {
+    pub files: Vec<FileAttachment>,
+    pub paths: Vec<attachment_admission::VerifiedPath>,
+}
+
 pub async fn materialize(
     invocation: &Invocation,
     session: &session::Id,
     files: &[v5::PromptInputFileAttachment],
-) -> Result<Vec<FileAttachment>, Failure> {
+) -> Result<Materialized, Failure> {
     let core = invocation.core()?;
     let (info, lease) = core.locations.session(session)?;
     let platform =
@@ -61,16 +66,26 @@ pub async fn materialize(
         .map_err(|_| Failure::Unavailable("Managed attachments are unavailable".into()))?;
     let limits = image::Limits::from_configuration(&platform.config);
     let sessions = core.sessions.clone();
+    let root = std::path::PathBuf::from(convert::readable(info.location.directory.as_lossless()));
     tokio::task::spawn_blocking(move || {
-        inputs
-            .into_iter()
-            .map(|(input, uploaded)| match uploaded {
-                Some(bytes) => {
-                    attachment_admission::materialize_upload(&attachments, limits, bytes, input)
+        let mut result = Materialized {
+            files: Vec::new(),
+            paths: Vec::new(),
+        };
+        for (input, uploaded) in inputs {
+            let (file, path) = match uploaded {
+                Some(bytes) => (
+                    attachment_admission::materialize_upload(&attachments, limits, bytes, input)?,
+                    None,
+                ),
+                None => {
+                    sessions.materialize_scoped_attachment(&attachments, limits, input, &root)?
                 }
-                None => sessions.materialize_attachment(&attachments, limits, input),
-            })
-            .collect::<Result<Vec<_>, _>>()
+            };
+            result.files.push(file);
+            result.paths.extend(path);
+        }
+        Ok::<_, MaterializeError>(result)
     })
     .await
     .map_err(|error| Failure::Unavailable(error.to_string()))?

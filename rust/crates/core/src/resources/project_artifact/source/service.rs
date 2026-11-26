@@ -582,7 +582,15 @@ impl Service {
     ) -> Result<(), Error> {
         accounting::Service::activate_in_transaction(tx, activation).map(|_| ())
     }
-    pub async fn publish_activation(&self, mut event: NewEvent) -> Result<Event, Error> {
+    pub async fn publish_activation(&self, event: NewEvent) -> Result<Event, Error> {
+        self.publish_skill_activation(event, false).await
+    }
+
+    pub(crate) async fn publish_skill_activation(
+        &self,
+        mut event: NewEvent,
+        automatic: bool,
+    ) -> Result<Event, Error> {
         let (kind, source, id) = match event.type_.as_str() {
             Some("session.agent.selected.1") => {
                 (kind("agent"), "agent-selected", field(&event.data, "agent"))
@@ -621,6 +629,9 @@ impl Service {
             .options
             .client
             .submit(move |tx| {
+                if event.type_.as_str() == Some("session.skill.activated.1") {
+                    crate::session::skill::mark_origin(tx, &event, automatic)?;
+                }
                 let event = projector::append(tx, &event)?;
                 let activation = provenance
                     .as_ref()

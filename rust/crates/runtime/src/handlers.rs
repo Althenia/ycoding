@@ -294,11 +294,14 @@ async fn session_prompt(
             .message(&id)
             .map_err(|error| store_failure(error, &session_id))?
             .is_some();
-    let files = match payload.files {
-        Some(files) if !admitted_before && !files.items.is_empty() => Some(
-            crate::prompt_attachments::materialize(&invocation, &session_id, &files.items).await?,
-        ),
-        files => files.map(|_| Vec::new()),
+    let (files, paths) = match payload.files {
+        Some(files) if !admitted_before && !files.items.is_empty() => {
+            let materialized =
+                crate::prompt_attachments::materialize(&invocation, &session_id, &files.items)
+                    .await?;
+            (Some(materialized.files), materialized.paths)
+        }
+        files => (files.map(|_| Vec::new()), Vec::new()),
     };
     let data = session_pending::UserData {
         text: convert::domain(&payload.text)?,
@@ -320,7 +323,7 @@ async fn session_prompt(
     };
     let admitted = core
         .execution
-        .prompt(
+        .prompt_with_paths(
             pending::Request {
                 id,
                 session_id,
@@ -335,6 +338,7 @@ async fn session_prompt(
                 created: ids::now_millis(),
             },
             payload.resume,
+            paths,
         )
         .await
         .map_err(prompt_failure)?;

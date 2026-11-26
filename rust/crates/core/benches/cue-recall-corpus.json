@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "concepts": [
+    {"id":"build/linker", "title":"Link editor", "tags":["build"], "body":"After a missing symbol, inspect the archive member list. Diagnostic code: birch."},
+    {"id":"sync/leases", "title":"Exclusive writers", "tags":["locking"], "body":"Serialize updates with one lease per collection. Diagnostic code: alder."},
+    {"id":"import/receipts", "title":"Archive receipts", "tags":["restore"], "body":"Compare the archived bytes before restoring a record. Diagnostic code: willow."},
+    {"id":"network/backoff", "title":"Backoff", "tags":["network"], "body":"Space successive retries after an upstream timeout. Diagnostic code: maple."},
+    {"id":"render/colors", "title":"Theme contrast", "tags":["palette"], "body":"Use distinct foreground and background tones for the selected row. Diagnostic code: oak."},
+    {"id":"render/grid", "title":"Grid renderer", "tags":["render"], "body":"Derive column widths from the visible viewport. Diagnostic code: pine."},
+    {"id":"queue/restart", "title":"Pending input", "tags":["recovery"], "body":"Resume a waiting message once its owner reconnects. Diagnostic code: cedar."},
+    {"id":"cli/quoting", "title":"Argument quoting", "tags":["shell"], "body":"Keep spaces inside a single argument when passing a path. Diagnostic code: elm."}
+  ],
+  "queries": [
+    {"split":"development", "query":"build/linker", "relevant":["build/linker"], "answer":"birch"},
+    {"split":"development", "query":"archive member list", "relevant":["build/linker"], "answer":"birch"},
+    {"split":"development", "query":"locking", "relevant":["sync/leases"], "answer":"alder"},
+    {"split":"development", "query":"rainfall in the Sahara", "relevant":[], "answer":null},
+    {"split":"holdout", "query":"render/grid", "relevant":["render/grid"], "answer":"pine"},
+    {"split":"holdout", "query":"Archive receipts", "relevant":["import/receipts"], "answer":"willow"},
+    {"split":"holdout", "query":"palette", "relevant":["render/colors"], "answer":"oak"},
+    {"split":"holdout", "query":"upstream timeout", "relevant":["network/backoff"], "answer":"maple"},
+    {"split":"holdout", "query":"prevent concurrent mutations", "relevant":["sync/leases"], "answer":"alder"},
+    {"split":"holdout", "query":"delaying repeated connection attempts", "relevant":["network/backoff"], "answer":"maple"},
+    {"split":"holdout", "query":"resume a waiting message", "relevant":["queue/restart"], "answer":"cedar"},
+    {"split":"holdout", "query":"Argument quoting", "relevant":["cli/quoting"], "answer":"elm"},
+    {"split":"holdout", "query":"glacial moraine sediments", "relevant":[], "answer":null},
+    {"split":"holdout", "query":"lunar eclipse observations", "relevant":[], "answer":null}
+  ]
+}

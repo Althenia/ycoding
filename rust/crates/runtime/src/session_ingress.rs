@@ -170,15 +170,17 @@ async fn command(
             .message(&message_id)
             .map_err(|_| Failure::Unavailable("Session store unavailable".into()))?
             .is_some();
-    let files = match payload.files {
+    let (files, paths) = match payload.files {
         Some(files) if !admitted_before && !files.items.is_empty() => {
-            Some(crate::prompt_attachments::materialize(&invocation, &id, &files.items).await?)
+            let materialized =
+                crate::prompt_attachments::materialize(&invocation, &id, &files.items).await?;
+            (Some(materialized.files), materialized.paths)
         }
-        files => files.map(|_| Vec::new()),
+        files => (files.map(|_| Vec::new()), Vec::new()),
     };
     let admitted = services
         .runner
-        .command(
+        .command_with_paths(
             core.execution,
             &commands,
             mcp.as_deref(),
@@ -218,6 +220,7 @@ async fn command(
                 model: payload.model.as_ref().map(model_ref).transpose()?,
                 resume: payload.resume,
             },
+            paths,
         )
         .await
         .map_err(failure)?;

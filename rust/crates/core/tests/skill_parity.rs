@@ -9,13 +9,14 @@ use ycoding_schema::{
     skill::{Info, Source},
 };
 
-const YCODING: &str = include_str!("../src/resources/skill/ycoding.md");
-const REPORT: &str = include_str!("../../../../packages/core/src/plugin/skill/report.md");
+const YCODING: &str = include_str!("../../../../packages/core/src/plugin/skill/ycoding/SKILL.md");
 const CHATGPT_CONNECTORS: &str =
-    include_str!("../../../../packages/core/src/plugin/skill/chatgpt-connectors.md");
-const BROWSER_USE: &str = include_str!("../../../../packages/core/src/plugin/skill/browser-use.md");
+    include_str!("../../../../packages/core/src/plugin/skill/chatgpt-connectors/SKILL.md");
+const BROWSER_USE: &str =
+    include_str!("../../../../packages/core/src/plugin/skill/browser-use/SKILL.md");
 const COMPUTER_USE: &str =
-    include_str!("../../../../packages/core/src/plugin/skill/computer-use.md");
+    include_str!("../../../../packages/core/src/plugin/skill/computer-use/SKILL.md");
+const REPORT: &str = include_str!("../../../../packages/core/src/plugin/skill/report/SKILL.md");
 const BUNDLED_IDS: [&str; 5] = [
     "ycoding",
     "chatgpt-connectors",
@@ -23,8 +24,47 @@ const BUNDLED_IDS: [&str; 5] = [
     "computer-use",
     "report",
 ];
-const PLUGIN: &str = include_str!("../../../../packages/core/src/plugin/skill.ts");
 const SNAPSHOT: &str = "\n\n## Runtime Diagnostics Snapshot\n\nThese values were captured when the built-in report skill was registered. Verify them before publishing.\n\n";
+
+#[tokio::test]
+async fn catalog_refreshes_activation_metadata_and_removes_deleted_sources() {
+    let root = std::env::temp_dir().join(format!(
+        "ycoding-skill-refresh-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let directory = root.join("example");
+    fs::create_dir_all(&directory).unwrap();
+    let file = directory.join("SKILL.md");
+    fs::write(&file, "---\nname: example\ndescription: example\nmetadata:\n  activation: auto\n  keywords: old phrase\n---\nold content\n").unwrap();
+    let mut service = Service::new(&root);
+    service.source(Source::Directory(ycoding_schema::skill::DirectorySource {
+        path: AbsolutePath::new(root.to_str().unwrap()).unwrap(),
+    }));
+    let first = service.list().await.unwrap();
+    assert_eq!(first.len(), 1);
+    let metadata = service.activation_metadata(&first[0]).unwrap();
+    assert_eq!(
+        metadata.get(&"keywords".into()),
+        Some(&ycoding_schema::JsonValue::String("old phrase".into()))
+    );
+    fs::write(&file, "---\nname: example\ndescription: example\nmetadata:\n  activation: auto\n  keywords: new phrase\n---\nnew content\n").unwrap();
+    assert!(service.changed(&file));
+    let second = service.list().await.unwrap();
+    let metadata = service.activation_metadata(&second[0]).unwrap();
+    assert_eq!(
+        metadata.get(&"keywords".into()),
+        Some(&ycoding_schema::JsonValue::String("new phrase".into()))
+    );
+    assert!(second[0].content.as_str().unwrap().contains("new content"));
+    fs::remove_file(&file).unwrap();
+    assert!(service.changed(&file));
+    assert!(service.list().await.unwrap().is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
 
 #[test]
 fn skill_sources_keep_bundled_then_ecosystem_then_ycoding_then_configured_order_and_dedupe() {
@@ -175,70 +215,20 @@ fn skill_conflict_ids_preserve_utf16_and_trim_ecmascript_whitespace() {
 
 #[tokio::test]
 async fn bundled_skills_lead_the_catalog_with_reference_metadata_and_content() {
-    let block = |id: &str| {
-        PLUGIN
-            .split_once(&format!("Skill.ID.make(\"{id}\")"))
-            .unwrap()
-            .1
-            .split_once("content:")
-            .unwrap()
-            .0
-    };
-    for literal in [
-        "Skill.Name.make(\"YCoding\")",
-        "description: YCodingDescription",
-        "AbsolutePath.make(\"/builtin/ycoding.md\")",
-    ] {
-        assert!(block("ycoding").contains(literal), "{literal}");
-    }
-    assert!(!block("ycoding").contains("slash"));
-    for literal in [
-        "Skill.Name.make(\"Report\")",
-        "description: REPORT_DESCRIPTION",
-        "slash: true",
-        "AbsolutePath.make(\"/builtin/report.md\")",
-    ] {
-        assert!(block("report").contains(literal), "{literal}");
-    }
-    for literal in [
-        "Skill.Name.make(\"ChatGPT connectors\")",
-        "description: CHATGPT_CONNECTORS_DESCRIPTION",
-        "AbsolutePath.make(\"/builtin/chatgpt-connectors.md\")",
-    ] {
-        assert!(block("chatgpt-connectors").contains(literal), "{literal}");
-    }
-    assert!(!block("chatgpt-connectors").contains("slash"));
     let interaction = [
         (
             "browser-use",
             "Browser use",
-            "BROWSER_USE_DESCRIPTION",
-            "/builtin/browser-use.md",
             BROWSER_USE,
+            "/builtin/browser-use.md",
         ),
         (
             "computer-use",
             "Computer use",
-            "COMPUTER_USE_DESCRIPTION",
-            "/builtin/computer-use.md",
             COMPUTER_USE,
+            "/builtin/computer-use.md",
         ),
     ];
-    for (id, name, description, path, _) in interaction {
-        let definition = block(id);
-        assert!(definition.contains(&format!("Skill.Name.make(\"{name}\")")));
-        assert!(definition.contains(&format!("description: {description}")));
-        assert!(definition.contains(&format!("AbsolutePath.make(\"{path}\")")));
-        assert!(!definition.contains("slash"));
-    }
-    assert_eq!(
-        PLUGIN
-            .split("id: Skill.ID.make(\"")
-            .skip(1)
-            .map(|source| source.split_once('"').unwrap().0)
-            .collect::<Vec<_>>(),
-        BUNDLED_IDS
-    );
     let mut service = Service::from_entries(
         &[],
         Path::new("/fixture/repo"),
@@ -253,12 +243,12 @@ async fn bundled_skills_lead_the_catalog_with_reference_metadata_and_content() {
         Info {
             id: "ycoding".into(),
             name: "YCoding".into(),
-            description: Some(reference_constant("YCodingDescription").into()),
+            description: Some(description(YCODING).into()),
             slash: None,
             autoinvoke: None,
             conflicts: None,
             location: AbsolutePath::new("/builtin/ycoding.md").unwrap(),
-            content: YCODING.into(),
+            content: body(YCODING).into(),
         }
     );
     let ycoding = skills[0].content.to_utf8().unwrap();
@@ -284,7 +274,7 @@ async fn bundled_skills_lead_the_catalog_with_reference_metadata_and_content() {
         Info {
             id: "report".into(),
             name: "Report".into(),
-            description: Some(reference_constant("REPORT_DESCRIPTION").into()),
+            description: Some(description(REPORT).into()),
             slash: Some(true),
             autoinvoke: None,
             conflicts: None,
@@ -294,7 +284,7 @@ async fn bundled_skills_lead_the_catalog_with_reference_metadata_and_content() {
     );
     let content = skills[4].content.to_utf8().unwrap();
     let diagnostics = content
-        .strip_prefix(REPORT)
+        .strip_prefix(body(REPORT))
         .unwrap()
         .strip_prefix(SNAPSHOT)
         .unwrap();
@@ -318,12 +308,12 @@ async fn bundled_skills_lead_the_catalog_with_reference_metadata_and_content() {
         Info {
             id: "chatgpt-connectors".into(),
             name: "ChatGPT connectors".into(),
-            description: Some(reference_constant("CHATGPT_CONNECTORS_DESCRIPTION").into()),
+            description: Some(description(CHATGPT_CONNECTORS).into()),
             slash: None,
             autoinvoke: None,
             conflicts: None,
             location: AbsolutePath::new("/builtin/chatgpt-connectors.md").unwrap(),
-            content: CHATGPT_CONNECTORS.into(),
+            content: body(CHATGPT_CONNECTORS).into(),
         }
     );
     let connectors = skills[1].content.to_utf8().unwrap();
@@ -347,18 +337,18 @@ async fn bundled_skills_lead_the_catalog_with_reference_metadata_and_content() {
     ] {
         assert!(connectors.contains(literal), "{literal}");
     }
-    for (actual, (id, name, description, path, content)) in skills[2..4].iter().zip(interaction) {
+    for (actual, (id, name, source, path)) in skills[2..4].iter().zip(interaction) {
         assert_eq!(
             *actual,
             Info {
                 id: id.into(),
                 name: name.into(),
-                description: Some(reference_constant(description).into()),
+                description: Some(description(source).into()),
                 slash: None,
                 autoinvoke: None,
                 conflicts: None,
                 location: AbsolutePath::new(path).unwrap(),
-                content: content.into(),
+                content: body(source).into(),
             }
         );
     }
@@ -444,6 +434,7 @@ async fn skill_capability_selection_filters_bundled_skills() {
 #[cfg(unix)]
 #[test]
 fn report_diagnostics_follow_the_reference_snapshot() {
+    const PLUGIN: &str = include_str!("../../../../packages/core/src/plugin/skill.ts");
     for literal in [
         "\"## Runtime Diagnostics Snapshot\"",
         "\"These values were captured when the built-in report skill was registered. Verify them before publishing.\"",
@@ -587,7 +578,7 @@ fn diagnostics(entries: &[Entry], location: &Path, variables: &[(&str, &str)]) -
         .content
         .to_utf8()
         .unwrap()
-        .strip_prefix(REPORT)
+        .strip_prefix(body(REPORT))
         .unwrap()
         .strip_prefix(SNAPSHOT)
         .unwrap()
@@ -601,12 +592,15 @@ fn ids(skills: &[Info]) -> Vec<String> {
         .collect()
 }
 
-fn reference_constant(name: &str) -> &'static str {
-    PLUGIN
-        .split_once(&format!("{name} =\n  \""))
-        .unwrap()
-        .1
-        .split_once('"')
-        .unwrap()
-        .0
+fn body(source: &str) -> &str {
+    source.split_once("\n---\n").unwrap().1
+}
+fn description(source: &str) -> String {
+    serde_json::from_str(
+        source
+            .lines()
+            .find_map(|l| l.strip_prefix("description: "))
+            .unwrap(),
+    )
+    .unwrap()
 }

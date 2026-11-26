@@ -234,8 +234,50 @@ impl Execution {
         resume: Option<bool>,
         origin: autonomy::Origin,
     ) -> Result<Pending, Error> {
-        self.prompt_checked(request, resume, origin, None, None)
+        self.prompt_checked(request, resume, origin, None, None, None)
             .await
+    }
+
+    pub(crate) async fn prompt_command(
+        &self,
+        request: Request,
+        resume: Option<bool>,
+        origin: autonomy::Origin,
+        cue: Option<super::runner::CommandCue>,
+        paths: Vec<super::attachment_admission::VerifiedPath>,
+    ) -> Result<Pending, Error> {
+        self.prompt_checked(
+            request,
+            resume,
+            origin,
+            None,
+            None,
+            (cue.is_some() || !paths.is_empty()).then_some(super::runner::InputCue {
+                command: cue,
+                paths,
+            }),
+        )
+        .await
+    }
+
+    pub async fn prompt_with_paths(
+        &self,
+        request: Request,
+        resume: Option<bool>,
+        paths: Vec<super::attachment_admission::VerifiedPath>,
+    ) -> Result<Pending, Error> {
+        self.prompt_checked(
+            request,
+            resume,
+            autonomy::Origin::User,
+            None,
+            None,
+            (!paths.is_empty()).then_some(super::runner::InputCue {
+                command: None,
+                paths,
+            }),
+        )
+        .await
     }
 
     pub(crate) async fn prompt_plugin(
@@ -250,6 +292,7 @@ impl Execution {
             autonomy::Origin::Plugin,
             None,
             Some((runner.location(), runner)),
+            None,
         )
         .await
     }
@@ -268,6 +311,7 @@ impl Execution {
             Some(super::pending::CheckedAdmission::Native(Box::new(
                 admission,
             ))),
+            None,
             None,
         )
         .await
@@ -293,6 +337,7 @@ impl Execution {
                 admission,
             ))),
             None,
+            None,
         )
         .await
     }
@@ -304,6 +349,7 @@ impl Execution {
         origin: autonomy::Origin,
         admission: Option<super::pending::CheckedAdmission>,
         scoped_runner: Option<(&location::Ref, &dyn Runner)>,
+        command_cue: Option<super::runner::InputCue>,
     ) -> Result<Pending, Error> {
         let prior = self.store.pending(&request.id)?.is_some()
             || self.store.message(&request.id)?.is_some();
@@ -372,7 +418,7 @@ impl Execution {
         }
         let id = request.session_id.clone();
         let admitted = autonomy::Service::new(self.store.client.clone())
-            .admit_checked(&self.store, request, None, origin, admission)
+            .admit_checked(&self.store, request, None, origin, admission, command_cue)
             .await
             .map_err(|error| match error {
                 autonomy::Error::Store(error) => Error::from(error),

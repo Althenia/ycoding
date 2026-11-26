@@ -1,10 +1,11 @@
 use super::Error;
 use crate::{
     regexp::{Budget, RegExp},
-    resources::discovery::{markdown, trim, whitespace},
+    resources::discovery::{trim, whitespace},
 };
 use ring::digest;
 use std::collections::{BTreeMap, BTreeSet};
+use yaml_rust2::Yaml;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Warning {
@@ -52,37 +53,22 @@ pub fn require_id(id: &str) -> Result<(), Error> {
 }
 pub fn parse(id: &str, content: &str) -> Result<Concept, Error> {
     require_id(id)?;
-    let text = content.strip_prefix('\u{feff}').unwrap_or(content);
-    if !text.starts_with("---\n") && !text.starts_with("---\r\n") {
-        return Err(Error::InvalidConcept);
-    }
-    let parsed = markdown::parse(text).map_err(|_| Error::InvalidConcept)?;
-    let type_ = string(parsed.data.get("type"))?.ok_or(Error::InvalidConcept)?;
-    if trim(&text_value(&type_)).is_empty() {
-        return Err(Error::InvalidConcept);
-    }
-    let tags = match parsed.data.get("tags") {
-        None => None,
-        Some(markdown::Value::Array(tags)) => Some(
-            tags.iter()
-                .map(|value| string(Some(value))?.ok_or(Error::InvalidConcept))
-                .collect::<Result<_, _>>()?,
-        ),
-        Some(_) => return Err(Error::InvalidConcept),
-    };
+    let (block, body) = super::frontmatter::split(content)?;
+    let body = body.ok_or(Error::UnterminatedFrontmatter)?;
+    let data = super::frontmatter::mapping(block)?;
+    let summary = metadata(id, content, &data)?;
     let mut declared = BTreeSet::new();
-    if let Some(sources) = parsed.data.get("sources") {
-        let markdown::Value::Array(sources) = sources else {
-            return Err(Error::InvalidConcept);
-        };
+    if let Some(sources) = items(&data["sources"]) {
         for source in sources {
-            if !matches!(source, markdown::Value::Object(_))
-                || string(source.get("resource"))?.is_none_or(|s| trim(&text_value(&s)).is_empty())
+            if source.as_hash().is_none()
+                || source["resource"]
+                    .as_str()
+                    .is_none_or(|s| trim(s).is_empty())
             {
                 return Err(Error::InvalidConcept);
             }
-            if let Some(id) = string(source.get("id"))? {
-                let id = id.as_str().ok_or(Error::InvalidConcept)?;
+            if !source["id"].is_badvalue() {
+                let id = source["id"].as_str().ok_or(Error::InvalidConcept)?;
                 if id.is_empty()
                     || !id
                         .bytes()
@@ -94,34 +80,80 @@ pub fn parse(id: &str, content: &str) -> Result<Concept, Error> {
             }
         }
     }
-    let (links, unresolved) = markdown_links(&parsed.content)?;
+    let (links, unresolved) = markdown_links(body)?;
     for reference in matches(&unresolved, r"\[\^([A-Za-z0-9_-]+)\]", "g")? {
         if !declared.contains(&reference[1]) {
             return Err(Error::InvalidConcept);
         }
     }
     Ok(Concept {
-        summary: Summary {
-            id: id.into(),
-            type_,
-            title: string(parsed.data.get("title"))?,
-            description: string(parsed.data.get("description"))?,
-            tags,
-            digest: sha256(content),
-        },
+        summary,
         content: content.into(),
-        body: parsed.content,
+        body: body.into(),
         links,
     })
 }
-fn string(
-    value: Option<&markdown::Value>,
-) -> Result<Option<ycoding_schema::LosslessString>, Error> {
-    match value {
-        None => Ok(None),
-        Some(markdown::Value::String(s)) => Ok(Some(s.clone())),
-        _ => Err(Error::InvalidConcept),
+pub(super) fn stored(id: &str, content: &str) -> Result<(Concept, Option<Warning>), Error> {
+    let (block, body) = super::frontmatter::split(content)?;
+    if body.is_some() {
+        return parse(id, content).map(|concept| (concept, None));
     }
+    require_id(id)?;
+    let summary = super::frontmatter::mapping(block)
+        .and_then(|data| metadata(id, content, &data))
+        .unwrap_or_else(|_| Summary {
+            id: id.into(),
+            type_: "Unclassified".into(),
+            title: None,
+            description: None,
+            tags: None,
+            digest: sha256(content),
+        });
+    Ok((
+        Concept {
+            summary,
+            body: content.into(),
+            content: content.into(),
+            links: Vec::new(),
+        },
+        Some(Warning {
+            id: id.into(),
+            code: "unterminated-frontmatter".into(),
+        }),
+    ))
+}
+fn items(value: &Yaml) -> Option<&[Yaml]> {
+    match value {
+        Yaml::BadValue => None,
+        Yaml::Array(items) => Some(items),
+        item => Some(std::slice::from_ref(item)),
+    }
+}
+fn metadata(id: &str, content: &str, data: &Yaml) -> Result<Summary, Error> {
+    let text = |key: &str| {
+        if data[key].is_badvalue() {
+            Ok(None)
+        } else {
+            data[key]
+                .as_str()
+                .map(|s| Some(s.into()))
+                .ok_or(Error::InvalidConcept)
+        }
+    };
+    Ok(Summary {
+        id: id.into(),
+        type_: data["type"].as_str().ok_or(Error::InvalidConcept)?.into(),
+        title: text("title")?,
+        description: text("description")?,
+        tags: items(&data["tags"])
+            .map(|tags| {
+                tags.iter()
+                    .map(|tag| tag.as_str().map(Into::into).ok_or(Error::InvalidConcept))
+                    .collect::<Result<_, _>>()
+            })
+            .transpose()?,
+        digest: sha256(content),
+    })
 }
 pub fn tokens(value: &str) -> Result<Vec<String>, Error> {
     let lowered = value.to_lowercase();

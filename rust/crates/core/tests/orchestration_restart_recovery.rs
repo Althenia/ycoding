@@ -94,7 +94,10 @@ struct Harness {
 }
 
 fn harness() -> Harness {
-    let store = support::store();
+    harness_with(support::store())
+}
+
+fn harness_with(store: Store) -> Harness {
     let sessions = store::Service::new(store.client());
     let recorder = Arc::new(Recorder::default());
     let orchestration = Orchestration::new(sessions.clone(), recorder.clone());
@@ -107,6 +110,18 @@ fn harness() -> Harness {
         orchestration,
         recorder,
     }
+}
+
+#[allow(dead_code)]
+pub(crate) async fn resumed_store(store: Store) -> (Store, session::Id) {
+    let harness = harness_with(store);
+    let child = running(&harness, "call_provider_recovery").await;
+    crash(&harness).await;
+    dead_owner(&harness, &child).await;
+    assert_eq!(recover(&harness).await, 1);
+    assert_eq!(harness.recorder.resumed(), [text(child.as_lossless())]);
+    assert!(harness.sessions.pending_list(&child).unwrap().is_empty());
+    (harness.store, child)
 }
 
 fn id(value: &str) -> session::Id {
@@ -470,6 +485,15 @@ async fn an_interrupted_child_without_uncertain_tools_resumes_once_from_projecte
         .filter(|(_, data)| string(field(data, &["change", "type"])).as_deref() == Some("resumed"))
         .collect::<Vec<_>>();
     assert_eq!(resumed.len(), 1);
+    let cue_key: LosslessString = format!(
+        "skill-automatic:{}:cue:session.recovered",
+        ycoding_schema::stringify_json(&ycoding_schema::DomainEncode::encode(&child))
+    )
+    .into();
+    let cue = ycoding_store::resources::get_kv(&harness.store.snapshot().unwrap(), &cue_key)
+        .unwrap()
+        .unwrap();
+    assert_eq!(cue.value(), &JsonValue::String(resumed[0].0.clone()));
     assert_eq!(
         text(&resumed[0].0),
         format!(

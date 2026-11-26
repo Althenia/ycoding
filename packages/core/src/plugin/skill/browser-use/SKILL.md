@@ -1,3 +1,9 @@
+---
+name: browser-use
+description: "Use when a task needs the interaction tool to operate a Chrome tab: clicking, typing, or navigating a live page the user authorized, or working in a new YCoding-owned tab. Do not use for fetching or searching web content, or for coding tasks."
+metadata:
+  display-name: "Browser use"
+---
 # Browser use
 
 Drive the user's Chrome through the single `interaction` tool. Every action needs the user's approval and runs only inside the tabs YCoding controls.

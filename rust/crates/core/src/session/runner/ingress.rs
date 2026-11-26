@@ -767,6 +767,50 @@ impl Local {
         input: CommandInput<'_>,
         origin: crate::session::autonomy::Origin,
     ) -> Result<Pending, IngressError> {
+        self.command_with_paths_from(
+            execution,
+            commands,
+            mcp,
+            config,
+            input,
+            (origin, Vec::new()),
+        )
+        .await
+    }
+
+    pub async fn command_with_paths(
+        &self,
+        execution: &crate::session::execution::Execution,
+        commands: &command::Service,
+        mcp: Option<&crate::resources::mcp::Service>,
+        config: &Configuration,
+        input: CommandInput<'_>,
+        paths: Vec<super::super::attachment_admission::VerifiedPath>,
+    ) -> Result<Pending, IngressError> {
+        self.command_with_paths_from(
+            execution,
+            commands,
+            mcp,
+            config,
+            input,
+            (crate::session::autonomy::Origin::User, paths),
+        )
+        .await
+    }
+
+    async fn command_with_paths_from(
+        &self,
+        execution: &crate::session::execution::Execution,
+        commands: &command::Service,
+        mcp: Option<&crate::resources::mcp::Service>,
+        config: &Configuration,
+        input: CommandInput<'_>,
+        cue: (
+            crate::session::autonomy::Origin,
+            Vec<super::super::attachment_admission::VerifiedPath>,
+        ),
+    ) -> Result<Pending, IngressError> {
+        let (origin, paths) = cue;
         let agents = self.0.services.agents.snapshot();
         let lock = self.ingress_lock(instructions::join(
             &["command:".into(), input.request.id.as_lossless().clone()],
@@ -871,8 +915,23 @@ impl Local {
             metadata.insert("projectArtifact".into(), provenance.message().encode());
             metadata
         });
+        let cue = if let (Some(name), Some(arguments)) =
+            (input.name.as_str(), input.arguments.as_str())
+            && !name
+                .chars()
+                .chain(arguments.chars())
+                .any(|c| matches!(c, '\'' | '"' | '\\'))
+        {
+            Some(super::CommandCue(
+                std::iter::once(name.to_owned())
+                    .chain(arguments.split_whitespace().map(str::to_owned))
+                    .collect(),
+            ))
+        } else {
+            None
+        };
         let admitted = execution
-            .prompt_with_origin(request, input.resume, origin)
+            .prompt_command(request, input.resume, origin, cue, paths)
             .await?;
         if let Some(source) = source.filter(|_| provenance.is_some())
             && source

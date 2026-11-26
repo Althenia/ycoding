@@ -1,3 +1,9 @@
+---
+name: computer-use
+description: "Use when a task needs the interaction tool to operate a macOS application window in the background: reading or clicking its controls on the user's Mac. Do not use for web pages in Chrome, shell work, or coding tasks."
+metadata:
+  display-name: "Computer use"
+---
 # Computer use
 
 Operate a macOS application window through the single `interaction` tool. Every action needs the user's approval and targets one exact window.

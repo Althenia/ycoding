@@ -95,6 +95,29 @@ fn close(left: f64, right: f64) {
         "{left} is not close to {right}"
     );
 }
+
+#[tokio::test]
+async fn derived_recall_index_recovers_without_restoring_removed_concepts() {
+    let f = Fixture::new(Limits::default());
+    f.put("first", "red lantern", "type: Note").await;
+    let digest = f.put("second", "red lantern", "type: Note").await;
+    let contents = snapshot(&f.root());
+    assert_eq!(ids(&f.search("lantern")), ["first", "second"]);
+    assert_eq!(snapshot(&f.root()), contents);
+    let cache = f
+        .path
+        .join("data/recall/index")
+        .join(format::sha256(f.root().as_os_str().as_encoded_bytes()))
+        .join("bm25-v1");
+    assert!(fs::metadata(&cache).unwrap().len() > 64);
+    fs::write(&cache, b"interrupted derived data").unwrap();
+    f.store
+        .delete(Scope::Repository, "second", &digest)
+        .await
+        .unwrap();
+    assert_eq!(ids(&f.search("lantern")), ["first"]);
+    assert_ne!(fs::read(cache).unwrap(), b"interrupted derived data");
+}
 fn snippet(hit: &SearchHit) -> String {
     String::from_utf16(&hit.snippet.code_units().collect::<Vec<_>>()).unwrap()
 }
@@ -128,6 +151,86 @@ fn preserved(root: &Path) -> Vec<(String, Vec<u8>, SystemTime)> {
         .into_iter()
         .filter(|item| item.0 != "index.md" && !item.0.starts_with(".locks"))
         .collect()
+}
+
+#[tokio::test]
+async fn mixed_collection_indexes_unterminated_bytes_and_repairs_only_by_digest() {
+    let f = Fixture::new(Limits::default());
+    f.put("normal", "other", "type: Decision").await;
+    let raw = "---\r\ntype: Decision\r\nx-note: cobalt\r\n";
+    let path = f.root().join("legacy.md");
+    fs::write(&path, raw).unwrap();
+    let before = snapshot(&f.root());
+    let digest = format::sha256(raw);
+    for _ in 0..2 {
+        let read = f.store.read(Scope::Repository, "legacy").unwrap();
+        assert_eq!((read.content.as_str(), &read.digest), (raw, &digest));
+        let list = f.store.list(Scope::Repository, None, None).unwrap();
+        assert_eq!(list.total, 2);
+        assert!(
+            list.warnings
+                .iter()
+                .any(|warning| warning.id == "legacy" && warning.code.contains("unterminated"))
+        );
+        assert_eq!(ids(&f.search("cobalt")), ["legacy"]);
+    }
+    assert_eq!(snapshot(&f.root()), before);
+    let repaired = "---\ntype: Decision\n---\nCobalt.";
+    assert!(matches!(
+        f.store
+            .write(Scope::Repository, "legacy", repaired, Some(&"0".repeat(64)))
+            .await,
+        Err(Error::StaleContent)
+    ));
+    assert_eq!(fs::read(&path).unwrap(), raw.as_bytes());
+    f.store
+        .write(Scope::Repository, "legacy", repaired, Some(&digest))
+        .await
+        .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), repaired.as_bytes());
+    assert!(
+        f.store
+            .list(Scope::Repository, None, None)
+            .unwrap()
+            .warnings
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn singleton_okf_metadata_is_searchable_without_reserializing_it() {
+    let f = Fixture::new(Limits::default());
+    let text = "---\ntype: Reference\ntags: reviewed\nsources: {id: spec, resource: 'repo:///SPEC.md'}\nx-extension: {value: 7}\n---\nCobalt.[^spec]\n";
+    f.store
+        .write(Scope::Repository, "one", text, None)
+        .await
+        .unwrap();
+    assert_eq!(ids(&f.filtered("cobalt", None, Some("reviewed"))), ["one"]);
+    assert_eq!(
+        f.store.read(Scope::Repository, "one").unwrap().content,
+        text
+    );
+}
+
+#[tokio::test]
+async fn new_concepts_require_a_closing_delimiter_and_a_yaml_mapping() {
+    let f = Fixture::new(Limits::default());
+    for (content, message) in [
+        ("---\ntype: Decision\n", "closing ---"),
+        ("---\ntype: Decision\n---suffix\n", "closing ---"),
+        ("---\ntype: Decision\ntitle: x: y\n---\nbody", "YAML"),
+        ("---\ntype: Decision\nx: a\nx: b\n---\n", "YAML"),
+    ] {
+        assert!(
+            f.store
+                .write(Scope::Repository, "new", content, None)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains(message)
+        );
+        assert!(!f.root().exists());
+    }
 }
 
 #[tokio::test]

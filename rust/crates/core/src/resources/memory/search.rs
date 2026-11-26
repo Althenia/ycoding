@@ -1,30 +1,25 @@
 use super::{
     Concept, Error, SearchHit,
-    format::{compare, text_value, tokens},
+    format::{text_value, tokens},
+    recall::Cache,
 };
 use crate::resources::discovery;
+use crate::resources::recall::{lexical::Document, ranking};
 use icu_properties::{
     CodePointMapData,
     props::{GeneralCategory, GeneralCategoryGroup},
 };
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
-const K1: f64 = 1.2;
-const B: f64 = 0.75;
-const WEIGHTS: [f64; 3] = [4.0, 2.0, 1.0];
 const SNIPPET_LENGTH: usize = 320;
 const SNIPPET_LEAD: usize = 60;
+const BM25_CONTEXT_FLOOR: f64 = 3.583519;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Span {
     start: usize,
     end: usize,
 }
-struct Field {
-    length: usize,
-    counts: HashMap<String, usize>,
-}
-
 pub(super) struct Query<'a> {
     pub text: &'a str,
     pub limit: usize,
@@ -32,130 +27,73 @@ pub(super) struct Query<'a> {
     pub tag: Option<&'a str>,
 }
 
-pub(super) fn rank(concepts: Vec<Concept>, query: &Query<'_>) -> Result<Vec<SearchHit>, Error> {
-    let matching = tokens(query.text)?.into_iter().collect::<BTreeSet<_>>();
-    let mut terms = matching.iter().cloned().collect::<Vec<_>>();
-    terms.sort_by(|a, b| compare(a, b));
-    let mut documents = Vec::with_capacity(concepts.len());
-    for concept in concepts {
-        let summary = &concept.summary;
-        let texts = [
-            format!(
-                "{} {}",
-                summary.title.as_ref().map(text_value).unwrap_or_default(),
-                summary.id
-            ),
-            format!(
-                "{} {} {}",
-                text_value(&summary.type_),
-                summary
-                    .tags
-                    .as_ref()
-                    .map(|tags| tags.iter().map(text_value).collect::<Vec<_>>().join(" "))
-                    .unwrap_or_default(),
-                summary
-                    .description
-                    .as_ref()
-                    .map(text_value)
-                    .unwrap_or_default()
-            ),
-            concept.body.clone(),
-        ];
-        let fields = [
-            frequencies(&texts[0])?,
-            frequencies(&texts[1])?,
-            frequencies(&texts[2])?,
-        ];
-        documents.push((concept, fields));
+pub(super) fn rank(
+    cache: &mut Cache,
+    cache_path: &std::path::Path,
+    concepts: Vec<Concept>,
+    query: &Query<'_>,
+) -> Result<Vec<SearchHit>, Error> {
+    if concepts.is_empty() {
+        return Ok(Vec::new());
     }
-    let count = documents.len() as f64;
-    let averages = [0, 1, 2].map(|index| {
-        documents
-            .iter()
-            .map(|(_, fields)| fields[index].length)
-            .sum::<usize>() as f64
-            / count.max(1.0)
-    });
-    let idf = terms
+    let words = tokens(query.text)?;
+    let matching = words.iter().cloned().collect::<BTreeSet<_>>();
+    let docs: Vec<_> = concepts
         .iter()
-        .map(|term| {
-            let frequency = documents
-                .iter()
-                .filter(|(_, fields)| fields.iter().any(|field| field.counts.contains_key(term)))
-                .count() as f64;
-            (
-                term,
-                (1.0 + (count - frequency + 0.5) / (frequency + 0.5)).ln(),
-            )
-        })
-        .collect::<Vec<_>>();
-    let mut hits = Vec::new();
-    for (concept, fields) in documents {
-        let summary = &concept.summary;
-        if query
-            .type_
-            .is_some_and(|value| !value.is_empty() && summary.type_.as_str() != Some(value))
-            || query.tag.is_some_and(|value| {
-                !value.is_empty()
-                    && !summary
-                        .tags
-                        .as_ref()
-                        .is_some_and(|tags| tags.iter().any(|tag| tag.as_str() == Some(value)))
-            })
-        {
-            continue;
-        }
-        let mut score = 0.0;
-        for (term, idf) in &idf {
-            let mut sum = 0.0;
-            for (index, field) in fields.iter().enumerate() {
-                sum += WEIGHTS[index]
-                    * saturation(
-                        field.counts.get(*term).copied().unwrap_or(0) as f64,
-                        field.length as f64,
-                        averages[index],
-                    );
+        .map(|c| {
+            let s = &c.summary;
+            let tags: Vec<_> = s.tags.iter().flatten().map(text_value).collect();
+            Document {
+                id: &s.id,
+                title: s.title.as_ref().map(text_value).unwrap_or_default(),
+                metadata: format!(
+                    "{} {} {}",
+                    text_value(&s.type_),
+                    tags.join(" "),
+                    s.description.as_ref().map(text_value).unwrap_or_default()
+                ),
+                tags,
+                body: &c.body,
             }
-            score += idf * sum;
-        }
-        if score > 0.0 {
-            hits.push((concept, score));
-        }
-    }
-    hits.sort_by(|(left, left_score), (right, right_score)| {
-        right_score
-            .total_cmp(left_score)
-            .then_with(|| compare(&left.summary.id, &right.summary.id))
-    });
-    hits.truncate(query.limit);
-    hits.into_iter()
-        .map(|(concept, score)| {
+        })
+        .collect();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let (scores, _) = cache.scores(cache_path, &concepts, &docs, &matching, deadline)?;
+    let normalized = icu_normalizer::ComposingNormalizerBorrowed::new_nfc()
+        .normalize(&query.text.trim().to_lowercase())
+        .into_owned();
+    let rows = docs
+        .iter()
+        .zip(scores)
+        .enumerate()
+        .filter_map(|(i, (d, score))| {
+            let c = &concepts[i];
+            if query
+                .type_
+                .is_some_and(|v| !v.is_empty() && c.summary.type_.as_str() != Some(v))
+                || query
+                    .tag
+                    .is_some_and(|v| !v.is_empty() && !d.tags.iter().any(|t| t == v))
+            {
+                return None;
+            }
+            Some((i, d.id, score))
+        });
+    ranking::rank(rows, query.limit)
+        .into_iter()
+        .map(|(i, score)| {
+            let c = &concepts[i];
+            let automatic_reason = docs[i]
+                .match_reason(&normalized, &words)?
+                .or((score >= BM25_CONTEXT_FLOOR).then_some("lexical"));
             Ok(SearchHit {
-                snippet: snippet(&concept.body, &matching)?,
-                summary: concept.summary,
+                summary: c.summary.clone(),
                 score,
+                snippet: snippet(&c.body, &matching)?,
+                automatic_reason,
             })
         })
         .collect()
-}
-
-fn frequencies(text: &str) -> Result<Field, Error> {
-    let tokens = tokens(text)?;
-    let mut counts = HashMap::new();
-    for token in &tokens {
-        *counts.entry(token.clone()).or_insert(0) += 1;
-    }
-    Ok(Field {
-        length: tokens.len(),
-        counts,
-    })
-}
-
-fn saturation(frequency: f64, length: f64, average: f64) -> f64 {
-    if frequency == 0.0 {
-        return 0.0;
-    }
-    (frequency * (K1 + 1.0)) / (frequency + K1 * (1.0 - B + (B * length) / average))
 }
 
 fn snippet(body: &str, terms: &BTreeSet<String>) -> Result<ycoding_schema::LosslessString, Error> {

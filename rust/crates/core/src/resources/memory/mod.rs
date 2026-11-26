@@ -14,8 +14,11 @@ use std::{
 use ycoding_schema::JsonValue;
 pub mod boundary;
 pub mod format;
+mod frontmatter;
 pub mod graph;
 pub mod instructions;
+mod migration;
+mod recall;
 mod search;
 pub use format::{Concept, Summary, Warning};
 use format::{parse, require_id, sha256, text_value};
@@ -108,6 +111,8 @@ pub enum Error {
     Disabled,
     NotFound,
     InvalidConcept,
+    InvalidYaml,
+    UnterminatedFrontmatter,
     UnsafePath,
     StaleContent,
     TooLarge,
@@ -117,7 +122,9 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
         Self::Disabled => "Workspace memory is disabled.", Self::NotFound => "Concept, trash entry, or Git repository not found.",
-        Self::InvalidConcept => "Invalid concept: require YAML type, valid optional metadata, and defined source footnotes.",
+        Self::InvalidConcept => "Invalid concept: begin with a --- line, supply a nonempty YAML string type, valid optional metadata, and defined source footnotes.",
+        Self::InvalidYaml => "Invalid YAML frontmatter: provide a single YAML mapping with unique keys between the --- lines. Quote a string containing a colon followed by a space.",
+        Self::UnterminatedFrontmatter => "Unterminated frontmatter: add a closing --- line after the YAML fields and before the Markdown body. To repair an existing entry, read it first and supply its digest to write.",
         Self::UnsafePath => "Unsafe memory path or changed memory location.", Self::StaleContent => "Content changed or preview is stale; read and supply its current digest.",
         Self::TooLarge => "Workspace memory exceeds a configured concept or bundle limit.", Self::Unavailable => "Workspace memory is unavailable; check storage access and configuration.",
     })
@@ -200,6 +207,7 @@ pub struct SearchHit {
     pub summary: Summary,
     pub score: f64,
     pub snippet: ycoding_schema::LosslessString,
+    pub(crate) automatic_reason: Option<&'static str>,
 }
 #[derive(Debug)]
 pub struct SearchResult {
@@ -214,6 +222,7 @@ pub struct Search<'a> {
 }
 pub struct Service {
     options: std::sync::RwLock<Options>,
+    indexes: [std::sync::Mutex<recall::Cache>; 2],
 }
 impl Service {
     pub fn new(options: Options) -> Result<Self, Error> {
@@ -225,6 +234,7 @@ impl Service {
         }
         Ok(Self {
             options: std::sync::RwLock::new(options),
+            indexes: Default::default(),
         })
     }
     pub fn configure(&self, limits: Limits) -> Result<(), Error> {
@@ -236,6 +246,28 @@ impl Service {
         Ok(())
     }
     pub fn status(&self, scope: Scope) -> Result<State, Error> {
+        let (state, configured_base) = self.describe(scope)?;
+        if state.enabled {
+            let verify = |base: &Path| {
+                migration::verify_published(base).map_err(|error| match error {
+                    migration::MigrationError::Unsafe(_) => Error::UnsafePath,
+                    _ => Error::Unavailable,
+                })
+            };
+            if configured_base != state.base
+                && let Some((parent, name)) =
+                    configured_base.parent().zip(configured_base.file_name())
+            {
+                let configured_base = canonical(parent)?.join(name);
+                if configured_base != state.base {
+                    verify(&configured_base)?;
+                }
+            }
+            verify(&state.base)?;
+        }
+        Ok(state)
+    }
+    fn describe(&self, scope: Scope) -> Result<(State, PathBuf), Error> {
         let input = self.options.read().map_err(|_| Error::Unavailable)?;
         let directory = fs::canonicalize(&input.directory)?;
         if scope == Scope::Repository && input.repository.is_none() {
@@ -271,8 +303,8 @@ impl Service {
             .as_ref()
             .map(|r| r.worktrees.first().unwrap_or(&r.directory))
             .unwrap_or(&directory);
-        let base = match &input.limits.path {
-            None => canonical(&input.data.join("memory"))?,
+        let configured_base = match &input.limits.path {
+            None => input.data.join("memory"),
             Some(path) => {
                 let expanded = if path == "~" {
                     input.home.clone()
@@ -281,13 +313,14 @@ impl Service {
                 } else {
                     PathBuf::from(path)
                 };
-                canonical(&if expanded.is_absolute() {
+                if expanded.is_absolute() {
                     expanded
                 } else {
                     anchor.join(expanded)
-                })?
+                }
             }
         };
+        let base = canonical(&configured_base)?;
         let knowledge_root = base.join("knowledge");
         let root = if scope == Scope::Knowledge {
             knowledge_root.clone()
@@ -295,16 +328,19 @@ impl Service {
             base.join("repository")
                 .join(&repository.as_ref().ok_or(Error::NotFound)?.id)
         };
-        Ok(State {
-            enabled: input.limits.enabled,
-            scope,
-            directory,
-            base,
-            root,
-            knowledge_root,
-            repository,
-            limits: input.limits.clone(),
-        })
+        Ok((
+            State {
+                enabled: input.limits.enabled,
+                scope,
+                directory,
+                base,
+                root,
+                knowledge_root,
+                repository,
+                limits: input.limits.clone(),
+            },
+            configured_base,
+        ))
     }
     fn operate(&self, scope: Scope) -> Result<State, Error> {
         let state = self.status(scope)?;
@@ -313,15 +349,29 @@ impl Service {
         }
         Ok(state)
     }
+    fn require_current(&self, state: &State) -> Result<(), Error> {
+        if self.operate(state.scope)? != *state {
+            return Err(Error::UnsafePath);
+        }
+        Ok(())
+    }
     pub fn list(
         &self,
         scope: Scope,
         limit: Option<usize>,
         offset: Option<usize>,
     ) -> Result<Listing, Error> {
-        let state = self.operate(scope)?;
+        self.list_at(&self.describe(scope)?.0, limit, offset)
+    }
+    pub fn list_at(
+        &self,
+        state: &State,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Listing, Error> {
+        self.require_current(state)?;
         let (limit, offset) = page(limit, offset)?;
-        let bundle = scan(&state)?;
+        let bundle = scan(state)?;
         Ok(Listing {
             total: bundle.concepts.len(),
             concepts: bundle
@@ -335,11 +385,14 @@ impl Service {
         })
     }
     pub fn read(&self, scope: Scope, id: &str) -> Result<ReadResult, Error> {
-        let state = self.operate(scope)?;
+        self.read_at(&self.describe(scope)?.0, id)
+    }
+    pub fn read_at(&self, state: &State, id: &str) -> Result<ReadResult, Error> {
+        self.require_current(state)?;
         require_id(id)?;
-        let concept = parse(
+        let (concept, _) = format::stored(
             id,
-            &read_content(&state, &state.root.join(format!("{id}.md")))?,
+            &read_content(state, &state.root.join(format!("{id}.md")))?,
         )?;
         Ok(ReadResult {
             id: id.into(),
@@ -348,7 +401,10 @@ impl Service {
         })
     }
     pub fn search(&self, scope: Scope, options: Search<'_>) -> Result<SearchResult, Error> {
-        let state = self.operate(scope)?;
+        self.search_at(&self.describe(scope)?.0, options)
+    }
+    pub fn search_at(&self, state: &State, options: Search<'_>) -> Result<SearchResult, Error> {
+        self.require_current(state)?;
         let limit = options.limit.unwrap_or(10);
         if !(1..=50).contains(&limit)
             || discovery::trim(options.query).is_empty()
@@ -356,9 +412,26 @@ impl Service {
         {
             return Err(Error::InvalidConcept);
         }
-        let bundle = scan(&state)?;
+        let bundle = scan(state)?;
+        let data = self
+            .options
+            .read()
+            .map_err(|_| Error::Unavailable)?
+            .data
+            .clone();
+        let cache = data
+            .join("recall/index")
+            .join(sha256(state.root.as_os_str().as_encoded_bytes()));
+        if cache.starts_with(&state.root) {
+            return Err(Error::UnsafePath);
+        }
+        let mut index = self.indexes[usize::from(state.scope == Scope::Knowledge)]
+            .lock()
+            .map_err(|_| Error::Unavailable)?;
         Ok(SearchResult {
             hits: search::rank(
+                &mut index,
+                &cache,
                 bundle.concepts,
                 &search::Query {
                     text: options.query,
@@ -378,12 +451,13 @@ impl Service {
         expected_digest: Option<&str>,
     ) -> Result<WriteResult, Error> {
         let state = self.operate(scope)?;
-        let concept = parse(id, content)?;
-        create_root(&state.root)?;
-        let _lock = lock(&state.root).await?;
+        require_id(id)?;
         if content.len() > state.limits.max_concept_bytes {
             return Err(Error::TooLarge);
         }
+        let concept = parse(id, content)?;
+        create_root(&state.root)?;
+        let _lock = lock(&state.root).await?;
         let target = state.root.join(format!("{id}.md"));
         let before = if safe_path(&state.root, &target)? {
             Some(read_content(&state, &target)?)
@@ -755,7 +829,14 @@ fn create_parents(root: &Path, directory: &Path) -> Result<(), Error> {
             use std::os::unix::fs::DirBuilderExt;
             builder.mode(0o700);
         }
-        builder.create(&current)?;
+        match builder.create(&current) {
+            Ok(()) => {}
+            Err(e)
+                if e.kind() == io::ErrorKind::AlreadyExists
+                    && safe_path(root, &current)?
+                    && fs::symlink_metadata(&current)?.is_dir() => {}
+            Err(e) => return Err(e.into()),
+        }
     }
     Ok(())
 }
@@ -894,16 +975,23 @@ fn visit(state: &State, directory: &Path, bundle: &mut Bundle) -> Result<(), Err
         {
             return Err(Error::TooLarge);
         }
-        match read_content(state, &target).and_then(|content| parse(&id, &content)) {
-            Ok(concept) => bundle.concepts.push(concept),
+        match read_content(state, &target).and_then(|content| format::stored(&id, &content)) {
+            Ok((concept, diagnostic)) => {
+                bundle.concepts.push(concept);
+                if let Some(diagnostic) = diagnostic {
+                    bundle.warnings.push(diagnostic);
+                }
+            }
             Err(Error::TooLarge) => return Err(Error::TooLarge),
-            Err(Error::InvalidConcept) => bundle.warnings.push(warning(&id, "invalid-concept")),
+            Err(Error::InvalidConcept | Error::InvalidYaml) => {
+                bundle.warnings.push(warning(&id, "invalid-concept"))
+            }
             Err(_) => bundle.warnings.push(warning(&id, "unreadable-concept")),
         }
     }
     Ok(())
 }
-fn atomic(root: &Path, target: &Path, content: &str) -> Result<(), Error> {
+fn atomic(root: &Path, target: &Path, content: impl AsRef<[u8]>) -> Result<(), Error> {
     safe_path(root, target)?;
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let temporary = target.with_file_name(format!(
@@ -911,15 +999,18 @@ fn atomic(root: &Path, target: &Path, content: &str) -> Result<(), Error> {
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary)?;
     let result = (|| {
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        options.open(&temporary)?.write_all(content.as_bytes())?;
+        file.write_all(content.as_ref())?;
+        file.sync_all()?;
+        drop(file);
         filesystem::execute_mutation(
             MutationRequest::Rename {
                 source_root: root,

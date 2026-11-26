@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { LLM } from "@ycoding-ai/ai"
 import { OpenAIChat, OpenAIResponses } from "@ycoding-ai/ai/protocols"
 import { Auth, LLMClient } from "@ycoding-ai/ai/route"
@@ -104,6 +105,9 @@ test("R5-F exposes on-demand memory and enforces permissions/guardrail lifetime 
     })
     expect((yield* call({ query: "build" })).type).toBe("error")
     expect((yield* call({ action: "write", id: "guide" })).type).toBe("error")
+    expect((yield* call({ action: "list", limit: 101 })).type).toBe("error")
+    expect((yield* call({ action: "search", query: "build", limit: 51 })).type).toBe("error")
+    expect((yield* call({ action: "trash", offset: -1 })).type).toBe("error")
     expect(state.actions).toEqual([])
     state.catalogDenied = true
     expect((yield* call({ action: "write", id: "guide", content: note() })).type).toBe("error")
@@ -140,6 +144,8 @@ test("R5-F exposes on-demand memory and enforces permissions/guardrail lifetime 
     expect(state.releases).toBe(state.reservations)
     state.redirect = true
     expect((yield* call({ action: "write", id: "redirected", content: note() }))).toMatchObject({ type: "error", value: expect.stringContaining("location changed") })
+    f.settings.path = undefined
+    expect((yield* call({ action: "list" }))).toMatchObject({ type: "error", value: expect.stringContaining("location changed") })
     expect(yield* Effect.promise(() => fs.stat(path.join(f.workspace, "redirected")).then(() => true, () => false))).toBe(false)
     expect(state.reservations).toBe(4)
     expect(state.releases).toBe(state.reservations)
@@ -155,5 +161,49 @@ test("R5-F exposes on-demand memory and enforces permissions/guardrail lifetime 
     expect((yield* f.store.list({})).concepts.map(concept => concept.id)).toEqual(["guide"])
     expect((yield* call({ action: "purge", trashID: "missing" })).type).toBe("error")
     expect(state.digests.at(-1)).not.toBe(state.digests[0])
+
+    const decodeOutput = Schema.decodeUnknownSync(MemoryTool.Output)
+    const success = (input: typeof MemoryTool.Input.Type) => call(input).pipe(Effect.map((result) => {
+      if (result.type !== "text" || typeof result.value !== "string")
+        throw new Error(`Expected memory ${input.action} to succeed: ${JSON.stringify(result)}`)
+      return decodeOutput(JSON.parse(result.value))
+    }))
+    const content = note()
+    const digest = createHash("sha256").update(content).digest("hex")
+    expect(yield* success({ action: "status" })).toMatchObject({ enabled: true, scope: "repository" })
+    expect(yield* success({ action: "list" })).toMatchObject({ total: 1, concepts: [{ id: "guide", digest }] })
+
+    const deleted = yield* success({ action: "delete", id: "guide", expectedDigest: digest })
+    if (!("trashID" in deleted)) throw new Error("Expected a trash receipt")
+    const trashID = deleted.trashID
+    expect(deleted).toMatchObject({ id: "guide", digest })
+    expect(trashID).toMatch(/^trash_[a-f0-9]{64}$/)
+    expect(yield* success({ action: "list" })).toMatchObject({ total: 0, concepts: [] })
+    expect(yield* success({ action: "trash" })).toMatchObject({ total: 1, entries: [{ id: "guide", trashID, digest }] })
+    expect((yield* call({ action: "restore", trashID, expectedDigest: "0".repeat(64) })).type).toBe("error")
+    expect(yield* success({ action: "restore", trashID, expectedDigest: digest })).toMatchObject({ id: "guide", digest })
+    expect(yield* success({ action: "read", id: "guide" })).toEqual({ id: "guide", digest, content })
+
+    const archivedAgain = yield* success({ action: "delete", id: "guide", expectedDigest: digest })
+    if (!("trashID" in archivedAgain)) throw new Error("Expected a trash receipt after deleting the restored concept")
+    expect(yield* success({ action: "purge", trashID: archivedAgain.trashID, expectedDigest: digest })).toMatchObject({
+      trashID: archivedAgain.trashID,
+      purged: true,
+    })
+    expect(yield* success({ action: "trash" })).toMatchObject({ total: 0, entries: [] })
+
+    const reservations = state.reservations
+    const preview = yield* success({ action: "vacuum" })
+    expect(state.reservations).toBe(reservations)
+    if (!("dryRun" in preview)) throw new Error("Expected a vacuum preview")
+    expect(preview).toMatchObject({ dryRun: true, removed: [] })
+    expect(preview.digest).toMatch(/^[a-f0-9]{64}$/)
+    expect(yield* success({ action: "vacuum", dryRun: false, expectedDigest: preview.digest })).toMatchObject({
+      dryRun: false,
+      digest: preview.digest,
+      removed: [],
+    })
+    expect(state.reservations).toBe(reservations + 1)
+    expect(state.releases).toBe(state.reservations)
   }).pipe(Effect.provide(layer), Effect.scoped))
-})
+}, 20_000)

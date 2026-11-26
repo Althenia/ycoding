@@ -290,6 +290,16 @@ describe("license evidence", () => {
     const { input, current } = await build([{ name: "reuse", files: { "LICENSES/MIT.txt": mit("Reuse") } }])
     expect(await buildNotice(current, input)).toContain("reuse 1.0.0 (LICENSES/MIT.txt)")
   })
+
+  test("includes named alternatives and distinguishes required zlib acknowledgements", async () => {
+    const zlib = "This software is provided 'as-is'. If you use this software in a product, an acknowledgment in the product documentation would be appreciated but is not required. Altered source versions must be plainly marked."
+    const { input, current } = await build([{ name: "divide", license: "zlib-acknowledgement OR MIT", files: { "LICENSE.txt": "MIT or zlib", "MIT-LICENSE.txt": mit("Author"), "ZLIB-LICENSE.txt": zlib } }])
+    const notice = await buildNotice(current, input)
+    expect(notice).toContain("divide 1.0.0 (MIT-LICENSE.txt)")
+    expect(notice).toContain("divide 1.0.0 (ZLIB-LICENSE.txt)")
+    expect(detectLicenses(zlib)).not.toContain("zlib-acknowledgement")
+    expect(detectLicenses("If you use this software in a product, an acknowledgment in the product documentation is required. Altered source versions must be plainly marked.")).toContain("zlib-acknowledgement")
+  })
 })
 
 describe("supplements", () => {
@@ -642,6 +652,7 @@ describe("repository data", () => {
   test("pins each approved determination by crate and version with canonical Apache evidence", async () => {
     expect(data.elections.map((entry) => `${entry.crate} ${entry.version}`).sort()).toEqual([
       "glidesort 0.1.2",
+      "htmlescape 0.3.1",
       "lmdb-master-sys 0.2.6",
       "objc2-core-foundation 0.3.2",
       "objc2-core-services 0.3.2",

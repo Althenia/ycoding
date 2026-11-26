@@ -67,6 +67,26 @@ fn error(sessions: &Service, store: &Store, uri: &str) -> String {
 }
 
 #[test]
+fn scoped_path_cues_only_follow_materialized_files_inside_the_location() {
+    let temp = Temp::new();
+    let outside = Temp::new();
+    let store = Store::new(temp.0.join("data")).unwrap();
+    let sessions = Service::new(support::store().client());
+    fs::write(temp.0.join("source.rs"), "source").unwrap();
+    fs::write(outside.0.join("external.rs"), "outside").unwrap();
+    std::os::unix::fs::symlink(outside.0.join("external.rs"), temp.0.join("escape.rs")).unwrap();
+    let scoped = |uri: &str| {
+        sessions.materialize_scoped_attachment(&store, Limits::default(), input(uri), &temp.0)
+    };
+    assert!(scoped(&temp.uri("source.rs")).unwrap().1.is_some());
+    assert!(scoped(&temp.uri("escape.rs")).unwrap().1.is_none());
+    assert!(scoped(&outside.uri("external.rs")).unwrap().1.is_none());
+    assert!(scoped(&temp.uri("data")).unwrap().1.is_none());
+    assert!(scoped("data:text/plain,hello").unwrap().1.is_none());
+    assert!(scoped(&temp.uri("missing.rs")).is_err());
+}
+
+#[test]
 fn mime_detection_matches_the_typescript_signatures_and_text_heuristic() {
     for (bytes, mime) in [
         (&b"\x89PNG\r\n\x1a\nrest"[..], "image/png"),

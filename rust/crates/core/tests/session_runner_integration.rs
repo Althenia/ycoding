@@ -41,6 +41,9 @@ mod checkpoint;
 #[path = "session_support/coordination_model.rs"]
 mod coordination_model;
 
+#[path = "orchestration_restart_recovery.rs"]
+mod restart_fixture;
+
 #[tokio::test]
 async fn pruning_changes_neither_next_provider_request_nor_live_state() {
     let (endpoint, mut requests, server) = server(vec![TEXT, TEXT]).await;
@@ -711,6 +714,1151 @@ impl Resolver for FixtureSkills {
             .into())
         })
     }
+}
+
+struct AutomaticSkills(Vec<skill::Info>);
+
+struct RecoverySkills(Vec<skill::Info>, bool);
+impl Resolver for RecoverySkills {
+    fn list(&self) -> SkillsFuture<'_> {
+        Box::pin(async move { Ok(self.0.clone()) })
+    }
+    fn instructions<'a>(&'a self, info: &'a skill::Info) -> InstructionsFuture<'a> {
+        Box::pin(async move { Ok(info.content.clone()) })
+    }
+    fn activation_metadata<'a>(
+        &'a self,
+        info: &'a skill::Info,
+    ) -> ycoding_core::session::skill::ActivationFuture<'a> {
+        Box::pin(async move {
+            let text = if info.id.as_str() == Some("recovery-only") {
+                r#"{"activation":"auto","events":"session.recovered"}"#
+            } else if info.id.as_str() == Some("compaction-only") {
+                r#"{"activation":"auto","events":"session.compacted"}"#
+            } else if info.id.as_str() == Some("command-only")
+                || info.id.as_str().is_some_and(|id| id.starts_with("manual-"))
+            {
+                r#"{"activation":"auto","commands":"cargo check"}"#
+            } else if self.1 {
+                r#"{"activation":"auto","events":"skill.updated"}"#
+            } else {
+                r#"{"activation":"auto","events":"session.input.promoted"}"#
+            };
+            Some(ycoding_schema::JsonObject::decode(&parse_json(text).unwrap()).unwrap())
+        })
+    }
+}
+
+fn recovery_services(
+    store: &ycoding_store::Store,
+    endpoint: &str,
+    root: &std::path::Path,
+    skills: Vec<skill::Info>,
+    deny: bool,
+    tools: Arc<Registry>,
+) -> Services {
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    let mut agent = agent::empty("build".into());
+    if deny {
+        agent.permissions.extend(
+            ycoding_schema::permission::Ruleset::decode(
+                &parse_json(r#"[{"action":"skill","resource":"denied","effect":"deny"},{"action":"skill","resource":"manual-denied","effect":"deny"}]"#).unwrap(),
+            )
+            .unwrap(),
+        );
+    }
+    let mut services = fixture_services(
+        store,
+        catalog,
+        vec![agent],
+        tools,
+        Arc::new(WallClock),
+        Vec::new(),
+    );
+    services.location = ycoding_schema::location::Ref::decode(
+        &parse_json(&format!(r#"{{"directory":"{}"}}"#, root.display())).unwrap(),
+    )
+    .unwrap();
+    services.skill_resolver = Some(Arc::new(RecoverySkills(skills, deny)));
+    services
+}
+
+fn recovery_recall(
+    store: &ycoding_store::Store,
+    memory: Arc<ycoding_core::resources::memory::Service>,
+    rules: Arc<std::sync::Mutex<ycoding_schema::permission::Ruleset>>,
+) -> ycoding_core::session::recall::Context {
+    let authority = ycoding_core::tools::policy::Authority {
+        store: store.client(),
+        agents: Arc::new(move |_| Some(("build".into(), rules.lock().unwrap().clone()))),
+    };
+    ycoding_core::session::recall::Context {
+        memory,
+        permissions: ycoding_core::tools::policy::permissions::Permissions::new(
+            authority,
+            ycoding_schema::project_id::ProjectId::new("prj_one").unwrap(),
+            Arc::new(|_| Ok(())),
+        ),
+    }
+}
+
+async fn recovery_boundary(restart: bool) {
+    let root = std::env::temp_dir().join(format!(
+        "ycoding-skill-recovery-{}-{}-{restart}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let root = std::fs::canonicalize(root).unwrap();
+    let git = root.join(".git");
+    std::fs::create_dir(&git).unwrap();
+    let memory = Arc::new(
+        ycoding_core::resources::memory::Service::new(ycoding_core::resources::memory::Options {
+            home: root.clone(),
+            data: root.join("data"),
+            directory: root.clone(),
+            repository: Some(ycoding_core::resources::memory::Repository {
+                directory: root.clone(),
+                common_directory: git,
+                worktrees: vec![root.clone()],
+            }),
+            limits: Default::default(),
+        })
+        .unwrap(),
+    );
+    memory
+        .write(
+            ycoding_core::resources::memory::Scope::Repository,
+            "checks/cobalt",
+            "---\ntype: Decision\n---\nThe cobalt canary gate is ready.\n",
+            None,
+        )
+        .await
+        .unwrap();
+    let rules = Arc::new(std::sync::Mutex::new(ycoding_schema::permission::Ruleset::decode(&parse_json(r#"[{"action":"memory","resource":"*","effect":"allow"},{"action":"memory_read","resource":"*","effect":"allow"}]"#).unwrap()).unwrap()));
+    let fixture = ToolFixture::new();
+    let tools = registry();
+    let _registration = tools
+        .register(
+            vec![(
+                "memory".to_owned(),
+                Arc::new(ycoding_core::tools::builtin::memory::Memory {
+                    service: memory.clone(),
+                    policy: fixture.policy.clone(),
+                }),
+            )],
+            ycoding_core::tools::registry::Options::direct(),
+        )
+        .unwrap();
+    let db = root.join("store.redb");
+    let seed = support::store();
+    let catalog = seed.catalog();
+    let project = seed
+        .snapshot()
+        .unwrap()
+        .get::<ycoding_store::project::ProjectTable>(&checkpoint::key("prj_one"))
+        .unwrap()
+        .unwrap();
+    let mut store = ycoding_store::Store::initialize(
+        &db,
+        ycoding_store::Options::core(),
+        catalog,
+        ycoding_store::Metadata::new([7; 16], 1),
+    )
+    .unwrap();
+    let mut record = support::record("ses_recovery");
+    record.directory = root.to_str().unwrap().into();
+    store
+        .submit(move |tx| {
+            ycoding_store::project::ProjectTable::insert(tx, &project)?;
+            ycoding_store::session::SessionTable::insert(tx, &record)
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    drop(seed);
+    checkpoint::session(&store.client(), "ses_recovery");
+    let service = Service::new(store.client());
+    let skills = [("kept", "AUTO-KEPT-GUIDANCE"), ("removed", "REMOVED-GUIDANCE"), ("denied", "AUTO-DENIED-GUIDANCE"), ("command-only", "COMMAND-ONLY-GUIDANCE"), ("compaction-only", "COMPACTION-ONLY-GUIDANCE"), ("manual-kept", "MANUAL-KEPT-GUIDANCE"), ("manual-denied", "MANUAL-DENIED-GUIDANCE"), ("manual-unverified", "MANUAL-UNVERIFIED-GUIDANCE"), ("manual-shadow", "MANUAL-SHADOW-GUIDANCE")].into_iter().map(|(id, text)| {
+        let dir = root.join(id);
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("SKILL.md");
+        std::fs::write(&path, text).unwrap();
+        skill::Info::decode(&parse_json(&format!(r#"{{"id":"{id}","name":"{id}","location":"{}","content":"{text}","autoinvoke":true}}"#, path.display())).unwrap()).unwrap()
+    }).collect::<Vec<_>>();
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT, TEXT, TEXT]).await;
+    checkpoint::admit(
+        &service,
+        "ses_recovery",
+        "msg_recovery_before",
+        "initial input cargo check",
+        1,
+    )
+    .await;
+    let coordinator = Coordinator::new(Arc::new(
+        Local::new(recovery_services(
+            &store,
+            &endpoint,
+            &root,
+            skills.clone(),
+            false,
+            tools.clone(),
+        ))
+        .with_recall(recovery_recall(&store, memory.clone(), rules.clone())),
+    ));
+    coordinator
+        .run(&checkpoint::id("ses_recovery"))
+        .await
+        .unwrap();
+    let first = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    for text in [
+        "AUTO-KEPT-GUIDANCE",
+        "REMOVED-GUIDANCE",
+        "AUTO-DENIED-GUIDANCE",
+    ] {
+        assert!(first.contains(text), "{first}");
+    }
+    assert!(!first.contains("COMMAND-ONLY-GUIDANCE"));
+    assert!(!first.contains("COMPACTION-ONLY-GUIDANCE"));
+    service.admit(ycoding_core::session::pending::Request {
+        id: session_message::Id::new("msg_recovery_manual").unwrap(),
+        session_id: checkpoint::id("ses_recovery"),
+        input: session_pending::Message::decode(&parse_json(r#"{"type":"user","data":{"text":"select procedures","metadata":{"skills":[{"id":"manual-kept"},{"id":"manual-denied"},{"id":"manual-unverified"},{"id":"manual-shadow"}]}},"delivery":"steer"}"#).unwrap()).unwrap(),
+        event_id: ycoding_schema::event::Id::new("evt_recovery_manual").unwrap(), created: 2,
+    }).await.unwrap();
+    coordinator
+        .run(&checkpoint::id("ses_recovery"))
+        .await
+        .unwrap();
+    let explicit = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(explicit.contains("MANUAL-KEPT-GUIDANCE"));
+    assert!(explicit.contains("MANUAL-DENIED-GUIDANCE"));
+    assert!(explicit.contains("MANUAL-UNVERIFIED-GUIDANCE"));
+    assert!(explicit.contains("MANUAL-SHADOW-GUIDANCE"));
+    let unverified = service
+        .context(&checkpoint::id("ses_recovery"))
+        .unwrap()
+        .into_iter()
+        .find_map(|message| match message {
+            session_message::Info::Skill(item)
+                if item.skill.as_str() == Some("manual-unverified") =>
+            {
+                Some(item.id)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let key: ycoding_schema::LosslessString = format!(
+        "skill-automatic:{}:{}",
+        ycoding_schema::stringify_json(&checkpoint::id("ses_recovery").encode()),
+        ycoding_schema::stringify_json(&unverified.encode())
+    )
+    .into();
+    store
+        .submit(move |tx| ycoding_store::resources::remove_kv(tx, &key))
+        .unwrap()
+        .wait()
+        .unwrap();
+    coordinator.shutdown().await.unwrap();
+    drop(coordinator);
+    if restart {
+        drop(service);
+        store.shutdown().unwrap();
+        store = ycoding_store::Store::open(&db, ycoding_store::Options::core(), catalog).unwrap();
+    } else {
+        let boundary = service
+            .context(&checkpoint::id("ses_recovery"))
+            .unwrap()
+            .into_iter()
+            .filter_map(|item| match item {
+                session_message::Info::Assistant(item) if item.time.completed.is_some() => {
+                    Some(item.id.as_lossless().to_utf8().unwrap())
+                }
+                _ => None,
+            })
+            .last()
+            .unwrap();
+        checkpoint::compaction(
+            &store.client(),
+            &service,
+            "ses_recovery",
+            &boundary,
+            checkpoint::Compaction::Ended,
+            2,
+        )
+        .await;
+    }
+    let service = Service::new(store.client());
+    checkpoint::admit(
+        &service,
+        "ses_recovery",
+        "msg_recovery_after",
+        "cobalt canary",
+        3,
+    )
+    .await;
+    let shadow = root.join("different-source");
+    std::fs::create_dir(&shadow).unwrap();
+    let shadow = shadow.join("SKILL.md");
+    std::fs::write(&shadow, "MANUAL-SHADOW-GUIDANCE").unwrap();
+    let filtered = skills
+        .into_iter()
+        .filter(|info| info.id.as_str() != Some("removed"))
+        .map(|mut info| {
+            if info.id.as_str() == Some("manual-shadow") {
+                info.location = DomainDecode::decode(&ycoding_schema::JsonValue::String(
+                    shadow.to_str().unwrap().into(),
+                ))
+                .unwrap();
+            }
+            info
+        })
+        .collect();
+    let coordinator = Coordinator::new(Arc::new(
+        Local::new(recovery_services(
+            &store,
+            &endpoint,
+            &root,
+            filtered,
+            true,
+            tools.clone(),
+        ))
+        .with_recall(recovery_recall(&store, memory.clone(), rules.clone())),
+    ));
+    coordinator
+        .run(&checkpoint::id("ses_recovery"))
+        .await
+        .unwrap();
+    let next = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(next.contains("\"name\":\"memory\""), "memory tool missing");
+    assert_eq!(next.matches("AUTO-KEPT-GUIDANCE").count(), 1);
+    assert_eq!(next.matches("MANUAL-KEPT-GUIDANCE").count(), 1);
+    assert_eq!(next.matches("The cobalt canary gate is ready.").count(), 1);
+    assert_eq!(
+        next.matches("COMPACTION-ONLY-GUIDANCE").count(),
+        usize::from(!restart)
+    );
+    for text in [
+        "REMOVED-GUIDANCE",
+        "AUTO-DENIED-GUIDANCE",
+        "COMMAND-ONLY-GUIDANCE",
+        "MANUAL-DENIED-GUIDANCE",
+        "MANUAL-UNVERIFIED-GUIDANCE",
+        "MANUAL-SHADOW-GUIDANCE",
+    ] {
+        assert!(!next.contains(text), "unexpected {text}");
+    }
+    if restart {
+        let read = memory
+            .read(
+                ycoding_core::resources::memory::Scope::Repository,
+                "checks/cobalt",
+            )
+            .unwrap();
+        memory
+            .delete(
+                ycoding_core::resources::memory::Scope::Repository,
+                "checks/cobalt",
+                &read.digest,
+            )
+            .await
+            .unwrap();
+    } else {
+        rules
+            .lock()
+            .unwrap()
+            .push(ycoding_schema::permission::Rule {
+                action: "memory_read".into(),
+                resource: "*".into(),
+                effect: ycoding_schema::permission::Effect("deny".into()),
+            });
+    }
+    checkpoint::admit(
+        &service,
+        "ses_recovery",
+        "msg_recovery_recall_blocked",
+        "cobalt canary",
+        4,
+    )
+    .await;
+    coordinator
+        .run(&checkpoint::id("ses_recovery"))
+        .await
+        .unwrap();
+    let blocked = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(!blocked.contains("The cobalt canary gate is ready."));
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    drop(coordinator);
+    drop(service);
+    store.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn reopened_session_revalidates_automatic_skills_in_first_provider_request() {
+    recovery_boundary(true).await;
+}
+
+#[tokio::test]
+async fn compacted_session_revalidates_automatic_skills_in_first_provider_request() {
+    recovery_boundary(false).await;
+}
+
+#[tokio::test]
+async fn resumed_task_cue_activates_before_first_provider_request_without_new_input() {
+    let root = std::env::temp_dir().join(format!(
+        "ycoding-resumed-cue-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let file = root.join("SKILL.md");
+    std::fs::write(&file, "RECOVERED-CUE-GUIDANCE").unwrap();
+    let (store, child) = restart_fixture::resumed_store(support::store()).await;
+    let key = checkpoint::key(child.as_lossless().as_str().unwrap());
+    let directory: ycoding_schema::LosslessString = root.to_str().unwrap().into();
+    store
+        .submit(move |tx| {
+            let mut record = tx
+                .get::<ycoding_store::session::SessionTable>(&key)?
+                .unwrap();
+            record.directory = directory;
+            record.agent = Some("build".into());
+            record.model = Some(ycoding_store::session::Document::new(
+                parse_json(r#"{"providerID":"openai","id":"gpt-reasoning"}"#).unwrap(),
+            )?);
+            ycoding_store::session::SessionTable::put(tx, &record)
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    let skill = skill::Info::decode(&parse_json(&format!(r#"{{"id":"recovery-only","name":"Recovery","location":"{}","content":"RECOVERED-CUE-GUIDANCE","autoinvoke":true}}"#, file.display())).unwrap()).unwrap();
+    let (endpoint, mut requests, server) = server(vec![TEXT]).await;
+    let service = Service::new(store.client());
+    assert!(service.pending_list(&child).unwrap().is_empty());
+    let coordinator = Coordinator::new(Arc::new(Local::new(recovery_services(
+        &store,
+        &endpoint,
+        &root,
+        vec![skill],
+        true,
+        registry(),
+    ))));
+    coordinator.run(&child).await.unwrap();
+    let request = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert_eq!(request.matches("RECOVERED-CUE-GUIDANCE").count(), 1);
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn compaction_cue_activates_before_a_resumed_request_without_new_input() {
+    let root = std::env::temp_dir().join(format!(
+        "ycoding-skill-cue-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let file = root.join("SKILL.md");
+    std::fs::write(&file, "COMPACTION-RESUME-GUIDANCE").unwrap();
+    let store = support::store();
+    let mut record = support::record("ses_compaction_cue");
+    record.directory = root.to_str().unwrap().into();
+    store
+        .submit(move |tx| ycoding_store::session::SessionTable::insert(tx, &record))
+        .unwrap()
+        .wait()
+        .unwrap();
+    checkpoint::session(&store.client(), "ses_compaction_cue");
+    let service = Service::new(store.client());
+    let skill = skill::Info::decode(&parse_json(&format!(r#"{{"id":"compaction-only","name":"Compaction","location":"{}","content":"COMPACTION-RESUME-GUIDANCE","autoinvoke":true}}"#, file.display())).unwrap()).unwrap();
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(Local::new(recovery_services(
+        &store,
+        &endpoint,
+        &root,
+        vec![skill],
+        true,
+        registry(),
+    ))));
+    checkpoint::admit(
+        &service,
+        "ses_compaction_cue",
+        "msg_compaction_cue",
+        "ordinary input",
+        1,
+    )
+    .await;
+    let id = checkpoint::id("ses_compaction_cue");
+    coordinator.run(&id).await.unwrap();
+    assert!(
+        !ycoding_schema::stringify_json(&requests.recv().await.unwrap())
+            .contains("COMPACTION-RESUME-GUIDANCE")
+    );
+    let boundary = service
+        .context(&id)
+        .unwrap()
+        .into_iter()
+        .filter_map(|item| match item {
+            session_message::Info::Assistant(item) if item.time.completed.is_some() => {
+                Some(item.id.as_lossless().to_utf8().unwrap())
+            }
+            _ => None,
+        })
+        .last()
+        .unwrap();
+    checkpoint::compaction(
+        &store.client(),
+        &service,
+        "ses_compaction_cue",
+        &boundary,
+        checkpoint::Compaction::Ended,
+        2,
+    )
+    .await;
+    assert!(service.pending_list(&id).unwrap().is_empty());
+    coordinator.run(&id).await.unwrap();
+    assert_eq!(
+        ycoding_schema::stringify_json(&requests.recv().await.unwrap())
+            .matches("COMPACTION-RESUME-GUIDANCE")
+            .count(),
+        1
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn promoted_cue_survives_interruption_until_explicit_activation_is_durable() {
+    let root = std::env::temp_dir().join(format!(
+        "ycoding-cue-interruption-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let store = support::store();
+    let mut record = support::record("ses_cue_interruption");
+    record.directory = root.to_str().unwrap().into();
+    store
+        .submit(move |tx| ycoding_store::session::SessionTable::insert(tx, &record))
+        .unwrap()
+        .wait()
+        .unwrap();
+    checkpoint::session(&store.client(), "ses_cue_interruption");
+    let service = Service::new(store.client());
+    let skills = [("manual-kept", "EXPLICIT-RECOVERED-GUIDANCE"), ("compaction-only", "UNREQUESTED-COMPACTION-GUIDANCE")].into_iter().map(|(id, content)| {
+        let file = root.join(format!("{id}.md"));
+        std::fs::write(&file, content).unwrap();
+        skill::Info::decode(&parse_json(&format!(r#"{{"id":"{id}","name":"{id}","location":"{}","content":"{content}","autoinvoke":true}}"#, file.display())).unwrap()).unwrap()
+    }).collect::<Vec<_>>();
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(Local::new(recovery_services(
+        &store,
+        &endpoint,
+        &root,
+        skills.clone(),
+        true,
+        registry(),
+    ))));
+    let id = checkpoint::id("ses_cue_interruption");
+    checkpoint::admit(
+        &service,
+        "ses_cue_interruption",
+        "msg_cue_initial",
+        "ordinary input",
+        1,
+    )
+    .await;
+    coordinator.run(&id).await.unwrap();
+    let _ = requests.recv().await.unwrap();
+    let boundary = service
+        .context(&id)
+        .unwrap()
+        .into_iter()
+        .filter_map(|item| match item {
+            session_message::Info::Assistant(item) if item.time.completed.is_some() => {
+                Some(item.id.as_lossless().to_utf8().unwrap())
+            }
+            _ => None,
+        })
+        .last()
+        .unwrap();
+    checkpoint::compaction(
+        &store.client(),
+        &service,
+        "ses_cue_interruption",
+        &boundary,
+        checkpoint::Compaction::Ended,
+        2,
+    )
+    .await;
+    service.admit(ycoding_core::session::pending::Request {
+        id: session_message::Id::new("msg_cue_explicit").unwrap(), session_id: id.clone(),
+        input: session_pending::Message::decode(&parse_json(r#"{"type":"user","data":{"text":"select procedure","metadata":{"skills":[{"id":"manual-kept"}]}},"delivery":"steer"}"#).unwrap()).unwrap(),
+        event_id: ycoding_schema::event::Id::new("evt_cue_explicit").unwrap(), created: 3,
+    }).await.unwrap();
+    service
+        .promote_input(&id, &"msg_cue_explicit".into(), 3)
+        .await
+        .unwrap();
+    let key: ycoding_schema::LosslessString = format!(
+        "skill-automatic:{}:cue:session.compacted",
+        ycoding_schema::stringify_json(&id.encode())
+    )
+    .into();
+    let identity = ycoding_store::resources::get_kv(&store.snapshot().unwrap(), &key)
+        .unwrap()
+        .unwrap()
+        .value()
+        .clone();
+    let saved_key = key.clone();
+    store
+        .submit(move |tx| {
+            ycoding_store::resources::set_kv(
+                tx,
+                &saved_key,
+                &ycoding_store::session::Document::new(
+                    ycoding_schema::ObjectEncoder::new()
+                        .field("identity", &identity)
+                        .field("inputID", "msg_cue_explicit")
+                        .field(
+                            "explicit",
+                            &vec![ycoding_schema::LosslessString::from("manual-kept")],
+                        )
+                        .finish(),
+                )?,
+                3,
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert!(service.pending_list(&id).unwrap().is_empty());
+    coordinator.shutdown().await.unwrap();
+    let unavailable = Coordinator::new(Arc::new(Local::new(recovery_services(
+        &store,
+        &endpoint,
+        &root,
+        Vec::new(),
+        true,
+        registry(),
+    ))));
+    assert!(unavailable.run(&id).await.is_err());
+    assert!(
+        ycoding_store::resources::get_kv(&store.snapshot().unwrap(), &key)
+            .unwrap()
+            .is_some()
+    );
+    unavailable.shutdown().await.unwrap();
+    let coordinator = Coordinator::new(Arc::new(Local::new(recovery_services(
+        &store,
+        &endpoint,
+        &root,
+        skills,
+        true,
+        registry(),
+    ))));
+    coordinator.run(&id).await.unwrap();
+    let request = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert_eq!(request.matches("EXPLICIT-RECOVERED-GUIDANCE").count(), 1);
+    assert!(!request.contains("UNREQUESTED-COMPACTION-GUIDANCE"));
+    assert!(
+        ycoding_store::resources::get_kv(&store.snapshot().unwrap(), &key)
+            .unwrap()
+            .is_none()
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+struct PathSkills(skill::Info);
+
+struct KeywordSkills(Vec<skill::Info>);
+impl Resolver for KeywordSkills {
+    fn list(&self) -> SkillsFuture<'_> {
+        Box::pin(async { Ok(self.0.clone()) })
+    }
+    fn instructions<'a>(&'a self, info: &'a skill::Info) -> InstructionsFuture<'a> {
+        Box::pin(async { Ok(info.content.clone()) })
+    }
+    fn activation_metadata<'a>(
+        &'a self,
+        info: &'a skill::Info,
+    ) -> ycoding_core::session::skill::ActivationFuture<'a> {
+        Box::pin(async move {
+            Some(
+                ycoding_schema::JsonObject::decode(
+                    &parse_json(if info.id.as_str() == Some("manual") {
+                        r#"{"activation":"manual","keywords":"cargo build"}"#
+                    } else if info.id.as_str() == Some("weak") {
+                        r#"{"activation":"auto","keywords":"cargo"}"#
+                    } else {
+                        r#"{"activation":"auto","keywords":"cargo build"}"#
+                    })
+                    .unwrap(),
+                )
+                .unwrap(),
+            )
+        })
+    }
+}
+
+#[tokio::test]
+async fn keyword_relevance_activates_only_strong_eligible_skills() {
+    let root = std::env::temp_dir().join(format!(
+        "ycoding-keyword-skill-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let store = support::store();
+    for id in ["ses_keyword_match", "ses_keyword_miss"] {
+        let mut record = support::record(id);
+        record.directory = root.to_str().unwrap().into();
+        store
+            .submit(move |tx| ycoding_store::session::SessionTable::insert(tx, &record))
+            .unwrap()
+            .wait()
+            .unwrap();
+    }
+    let skills = [("build", "MATCHED-KEYWORD-SKILL"), ("manual", "MANUAL-KEYWORD-SKILL"), ("weak", "WEAK-KEYWORD-SKILL")].into_iter().map(|(id, content)| {
+        let file = root.join(format!("{id}.md"));
+        std::fs::write(&file, content).unwrap();
+        skill::Info::decode(&parse_json(&format!(r#"{{"id":"{id}","name":"{id}","location":"{}","content":"{content}","autoinvoke":true}}"#, file.display())).unwrap()).unwrap()
+    }).collect();
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT]).await;
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    let mut services = fixture_services(
+        &store,
+        catalog,
+        vec![agent::empty("build".into())],
+        registry(),
+        Arc::new(WallClock),
+        Vec::new(),
+    );
+    services.location = ycoding_schema::location::Ref::decode(
+        &parse_json(&format!(r#"{{"directory":"{}"}}"#, root.display())).unwrap(),
+    )
+    .unwrap();
+    services.skill_resolver = Some(Arc::new(KeywordSkills(skills)));
+    let service = Service::new(store.client());
+    let coordinator = Coordinator::new(Arc::new(Local::new(services)));
+    for (id, text, expected) in [
+        ("ses_keyword_match", "diagnose cargo build failure", true),
+        ("ses_keyword_miss", "paint a fence", false),
+    ] {
+        checkpoint::admit(&service, id, &format!("msg_{id}"), text, 1).await;
+        coordinator
+            .run(&session::Id::new(id).unwrap())
+            .await
+            .unwrap();
+        let request = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+        assert_eq!(request.contains("MATCHED-KEYWORD-SKILL"), expected);
+        assert!(!request.contains("MANUAL-KEYWORD-SKILL"));
+        assert!(!request.contains("WEAK-KEYWORD-SKILL"));
+    }
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+impl Resolver for PathSkills {
+    fn list(&self) -> SkillsFuture<'_> {
+        Box::pin(async move { Ok(vec![self.0.clone()]) })
+    }
+    fn instructions<'a>(&'a self, info: &'a skill::Info) -> InstructionsFuture<'a> {
+        Box::pin(async move { Ok(info.content.clone()) })
+    }
+    fn activation_metadata<'a>(
+        &'a self,
+        _: &'a skill::Info,
+    ) -> ycoding_core::session::skill::ActivationFuture<'a> {
+        Box::pin(async {
+            Some(
+                ycoding_schema::JsonObject::decode(
+                    &parse_json(r#"{"version":"1","activation":"auto","paths":"rust/**/*.rs"}"#)
+                        .unwrap(),
+                )
+                .unwrap(),
+            )
+        })
+    }
+}
+
+struct PathLocations(Arc<Local>);
+impl ycoding_core::session::execution::Locations for PathLocations {
+    fn get(
+        &self,
+        _: &session::Info,
+    ) -> Result<Arc<dyn Runner>, ycoding_core::session::run_coordinator::Error> {
+        Ok(self.0.clone())
+    }
+}
+
+#[tokio::test]
+async fn materialized_workspace_path_activates_only_matching_skill() {
+    let root = std::env::temp_dir().join(format!(
+        "ycoding-path-runner-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(root.join("rust/src")).unwrap();
+    std::fs::write(root.join("SKILL.md"), "path guidance").unwrap();
+    std::fs::write(root.join("rust/src/match.rs"), "match").unwrap();
+    std::fs::write(root.join("rust/src/miss.rs.bak"), "miss").unwrap();
+    let store = support::store();
+    for id in ["ses_path_match", "ses_path_miss"] {
+        let mut record = support::record(id);
+        record.directory = root.to_str().unwrap().into();
+        store
+            .submit(move |tx| ycoding_store::session::SessionTable::insert(tx, &record))
+            .unwrap()
+            .wait()
+            .unwrap();
+    }
+    let service = Service::new(store.client());
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT]).await;
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    let info = skill::Info::decode(&parse_json(&format!(r#"{{"id":"path-auto","name":"Path","location":"{}/SKILL.md","content":"PATH-AUTO-GUIDANCE","autoinvoke":true}}"#, root.display())).unwrap()).unwrap();
+    let mut services = fixture_services(
+        &store,
+        catalog,
+        vec![agent::empty("build".into())],
+        registry(),
+        Arc::new(WallClock),
+        Vec::new(),
+    );
+    services.location = ycoding_schema::location::Ref::decode(
+        &parse_json(&format!(r#"{{"directory":"{}"}}"#, root.display())).unwrap(),
+    )
+    .unwrap();
+    services.skill_resolver = Some(Arc::new(PathSkills(info)));
+    let local = Arc::new(Local::new(services));
+    let execution = ycoding_core::session::execution::Execution::install(
+        service.clone(),
+        Arc::new(PathLocations(local.clone())),
+        ycoding_core::job::Jobs::new(),
+        None,
+    )
+    .unwrap();
+    let coordinator = Coordinator::new(local);
+    let attachments = attachment_store::Store::new(root.join("attachments")).unwrap();
+    for (id, name, expected) in [
+        ("ses_path_match", "match.rs", true),
+        ("ses_path_miss", "miss.rs.bak", false),
+    ] {
+        let uri = url::Url::from_file_path(root.join("rust/src").join(name)).unwrap();
+        let (_, path) = service
+            .materialize_scoped_attachment(
+                &attachments,
+                ycoding_core::resources::image::Limits::default(),
+                ycoding_core::session::attachment_admission::Input {
+                    uri: uri.to_string().into(),
+                    name: None,
+                    description: None,
+                    mention: None,
+                },
+                &root,
+            )
+            .unwrap();
+        execution.prompt_with_paths(ycoding_core::session::pending::Request { id: session_message::Id::new(format!("msg_{id}")).unwrap(), session_id: session::Id::new(id).unwrap(), input: session_pending::Message::decode(&parse_json(r#"{"type":"user","data":{"text":"ordinary input"},"delivery":"steer"}"#).unwrap()).unwrap(), event_id: ycoding_schema::event::Id::new(format!("evt_{id}")).unwrap(), created: 10 }, Some(false), path.into_iter().collect()).await.unwrap();
+        coordinator
+            .run(&session::Id::new(id).unwrap())
+            .await
+            .unwrap();
+        let request = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+        assert_eq!(request.contains("PATH-AUTO-GUIDANCE"), expected);
+    }
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    execution.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+impl Resolver for AutomaticSkills {
+    fn list(&self) -> SkillsFuture<'_> {
+        Box::pin(async move { Ok(self.0.clone()) })
+    }
+
+    fn instructions<'a>(&'a self, info: &'a skill::Info) -> InstructionsFuture<'a> {
+        Box::pin(async move { Ok(info.content.clone()) })
+    }
+
+    fn activation_metadata<'a>(
+        &'a self,
+        _: &'a skill::Info,
+    ) -> ycoding_core::session::skill::ActivationFuture<'a> {
+        Box::pin(async {
+            Some(
+                ycoding_schema::JsonObject::decode(
+                    &parse_json(
+                        r#"{"version":"1","activation":"auto","events":"session.input.promoted"}"#,
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+            )
+        })
+    }
+}
+
+#[tokio::test]
+async fn promoted_input_activates_matching_skill_in_first_request() {
+    let root = std::env::temp_dir().join(format!(
+        "ycoding-auto-skill-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("SKILL.md"), "automatic guidance").unwrap();
+    let store = support::store();
+    let mut record = support::record("ses_auto");
+    record.directory = root.to_str().unwrap().into();
+    store
+        .submit(move |tx| ycoding_store::session::SessionTable::insert(tx, &record))
+        .unwrap()
+        .wait()
+        .unwrap();
+    let service = Service::new(store.client());
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT, TEXT, TEXT]).await;
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    let info = skill::Info::decode(&parse_json(&format!(r#"{{"id":"auto","name":"Auto","location":"{}/SKILL.md","content":"AUTO-SKILL-INSTRUCTIONS","autoinvoke":true}}"#, root.display())).unwrap()).unwrap();
+    let mut services = fixture_services(
+        &store,
+        catalog,
+        vec![agent::empty("build".into())],
+        registry(),
+        Arc::new(WallClock),
+        Vec::new(),
+    );
+    services.location = ycoding_schema::location::Ref::decode(
+        &parse_json(&format!(r#"{{"directory":"{}"}}"#, root.display())).unwrap(),
+    )
+    .unwrap();
+    let mut info = info;
+    info.content = format!("AUTO-SKILL-INSTRUCTIONS{}", "x".repeat(1300)).into();
+    let mut second = info.clone();
+    second.id = "auto-two".into();
+    second.name = "Auto Two".into();
+    second.content = format!("SECOND-AUTO-INSTRUCTIONS{}", "y".repeat(1300)).into();
+    services.skill_resolver = Some(Arc::new(AutomaticSkills(vec![info, second])));
+    service
+        .admit(ycoding_core::session::pending::Request {
+            id: session_message::Id::new("msg_auto").unwrap(),
+            session_id: session::Id::new("ses_auto").unwrap(),
+            input: session_pending::Message::decode(
+                &parse_json(
+                    r#"{"type":"user","data":{"text":"ordinary input"},"delivery":"steer"}"#,
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            event_id: ycoding_schema::event::Id::new("evt_auto").unwrap(),
+            created: 10,
+        })
+        .await
+        .unwrap();
+    let coordinator = Coordinator::new(Arc::new(Local::new(services)));
+    coordinator
+        .run(&session::Id::new("ses_auto").unwrap())
+        .await
+        .unwrap();
+    let request = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(request.contains("AUTO-SKILL-INSTRUCTIONS"));
+    assert!(service.context(&session::Id::new("ses_auto").unwrap()).unwrap().iter().any(|message| {
+        matches!(message, session_message::Info::Skill(item) if item.skill.as_str() == Some("auto"))
+    }));
+    service
+        .admit(ycoding_core::session::pending::Request {
+            id: session_message::Id::new("msg_auto_again").unwrap(),
+            session_id: session::Id::new("ses_auto").unwrap(),
+            input: session_pending::Message::decode(
+                &parse_json(r#"{"type":"user","data":{"text":"next input"},"delivery":"steer"}"#)
+                    .unwrap(),
+            )
+            .unwrap(),
+            event_id: ycoding_schema::event::Id::new("evt_auto_again").unwrap(),
+            created: 20,
+        })
+        .await
+        .unwrap();
+    coordinator
+        .run(&session::Id::new("ses_auto").unwrap())
+        .await
+        .unwrap();
+    let request = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(request.contains("AUTO-SKILL-INSTRUCTIONS"));
+    assert!(!request.contains("SECOND-AUTO-INSTRUCTIONS"));
+    assert!(service.context(&session::Id::new("ses_auto").unwrap()).unwrap().iter().any(|message| matches!(message, session_message::Info::Skill(item) if item.skill.as_str() == Some("auto-two"))));
+    service.admit(ycoding_core::session::pending::Request {
+        id: session_message::Id::new("msg_auto_explicit").unwrap(),
+        session_id: session::Id::new("ses_auto").unwrap(),
+        input: session_pending::Message::decode(&parse_json(r#"{"type":"user","data":{"text":"use second","metadata":{"skills":[{"id":"auto-two"}]}},"delivery":"steer"}"#).unwrap()).unwrap(),
+        event_id: ycoding_schema::event::Id::new("evt_auto_explicit").unwrap(),
+        created: 25,
+    }).await.unwrap();
+    coordinator
+        .run(&session::Id::new("ses_auto").unwrap())
+        .await
+        .unwrap();
+    let request = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(request.contains("AUTO-SKILL-INSTRUCTIONS"));
+    assert!(request.contains("SECOND-AUTO-INSTRUCTIONS"));
+    std::fs::remove_file(root.join("SKILL.md")).unwrap();
+    service
+        .admit(ycoding_core::session::pending::Request {
+            id: session_message::Id::new("msg_auto_source_gone").unwrap(),
+            session_id: session::Id::new("ses_auto").unwrap(),
+            input: session_pending::Message::decode(
+                &parse_json(r#"{"type":"user","data":{"text":"continue"},"delivery":"steer"}"#)
+                    .unwrap(),
+            )
+            .unwrap(),
+            event_id: ycoding_schema::event::Id::new("evt_auto_source_gone").unwrap(),
+            created: 26,
+        })
+        .await
+        .unwrap();
+    coordinator
+        .run(&session::Id::new("ses_auto").unwrap())
+        .await
+        .unwrap();
+    let request = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    assert!(!request.contains("AUTO-SKILL-INSTRUCTIONS"));
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    let session_id = session::Id::new("ses_auto").unwrap();
+    let keys = service
+        .context(&session_id)
+        .unwrap()
+        .into_iter()
+        .filter_map(|message| match message {
+            session_message::Info::Skill(item) => Some(
+                format!(
+                    "skill-automatic:{}:{}",
+                    ycoding_schema::stringify_json(&session_id.encode()),
+                    ycoding_schema::stringify_json(&item.id.encode())
+                )
+                .into(),
+            ),
+            _ => None,
+        })
+        .collect::<Vec<ycoding_schema::LosslessString>>();
+    assert_eq!(keys.len(), 2);
+    assert_eq!(
+        keys.iter()
+            .filter(|key| {
+                ycoding_store::resources::get_kv(&store.client().snapshot().unwrap(), key)
+                    .unwrap()
+                    .is_some_and(|value| value.value() == &ycoding_schema::JsonValue::Bool(true))
+            })
+            .count(),
+        1
+    );
+    assert_eq!(
+        keys.iter()
+            .filter(|key| ycoding_store::resources::get_kv(
+                &store.client().snapshot().unwrap(),
+                key
+            )
+            .unwrap()
+            .is_some_and(|value| value.value() == &ycoding_schema::JsonValue::Bool(false)))
+            .count(),
+        1
+    );
+    store
+        .client()
+        .submit(|tx| {
+            ycoding_store::resources::set_kv(
+                tx,
+                &"unrelated".into(),
+                &ycoding_store::session::Document::new(ycoding_schema::JsonValue::Bool(true))?,
+                1,
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    service
+        .publish(ycoding_store::session::NewEvent {
+            id: "evt_delete_auto".into(),
+            aggregate_id: "ses_auto".into(),
+            type_: "session.deleted.2".into(),
+            data: parse_json(r#"{"sessionID":"ses_auto"}"#).unwrap(),
+            created: 30,
+        })
+        .await
+        .unwrap();
+    assert!(keys.iter().all(|key| {
+        ycoding_store::resources::get_kv(&store.client().snapshot().unwrap(), key)
+            .unwrap()
+            .is_none()
+    }));
+    assert!(
+        ycoding_store::resources::get_kv(&store.client().snapshot().unwrap(), &"unrelated".into())
+            .unwrap()
+            .is_some()
+    );
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 fn fixture_skill(id: &str, name: &str, content: &str) -> skill::Info {

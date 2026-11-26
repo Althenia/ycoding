@@ -477,7 +477,12 @@ fn fold_decoded(
             event.created,
         )?,
         Some("session.task.updated.1") => super::orchestration::apply(tx, event, &decoded.0)?,
-        Some("session.deleted.2") => super::orchestration::delete_session(tx, &event.aggregate_id)?,
+        Some("session.deleted.2") => {
+            let id = ycoding_schema::session::Id::new(event.aggregate_id.clone())
+                .map_err(record_error)?;
+            super::skill::remove_automatic(tx, &id)?;
+            super::orchestration::delete_session(tx, &event.aggregate_id)?
+        }
         Some("session.step.started.1" | "session.step.ended.1" | "session.step.failed.1") => {
             super::message_updater::fold(tx, event, &decoded.0)?;
             super::orchestration::mark_attempt(

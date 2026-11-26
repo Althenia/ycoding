@@ -1,19 +1,18 @@
 export * as Skill from "./skill"
 
 import { makeLocationNode } from "./effect/app-node"
-import path from "path"
 import { Context, Effect, Layer, Schema, Stream, Types } from "effect"
 import { FileSystem } from "@ycoding-ai/schema/filesystem"
 import { Skill } from "@ycoding-ai/schema/skill"
 import { Agent } from "./agent"
 import { Config } from "./config"
 import { ConfigCapabilities } from "./config/capabilities"
-import { ConfigMarkdown } from "./config/markdown"
 import { EventRuntime } from "./event"
 import { LocationAnnouncements } from "./location-announcements"
 import { FSUtil } from "./fs-util"
 import { MCP } from "./mcp"
 import { MCPSkills } from "./mcp/skills"
+import { nativeResource } from "./native-resources"
 import { Permission } from "./permission"
 import { AbsolutePath } from "./schema"
 import { SkillDiscovery } from "./skill/discovery"
@@ -45,46 +44,7 @@ export const Event = Skill.Event
 export const available = <A extends { readonly id: ID }>(skills: ReadonlyArray<A>, agent: Agent.Info) =>
   skills.filter((skill) => Permission.evaluate("skill", skill.id, agent.permissions).effect !== "deny")
 
-const Frontmatter = Schema.Struct({
-  name: Schema.String.pipe(Schema.optional),
-  description: Schema.String.pipe(Schema.optional),
-  slash: Schema.Boolean.pipe(Schema.optional),
-  metadata: Schema.Unknown.pipe(Schema.optional),
-})
-const decodeFrontmatter = Schema.decodeUnknownOption(Frontmatter)
-const decodeConflicts = Schema.decodeUnknownOption(Skill.Conflicts)
-
-const metadataBoolean = (metadata: unknown, key: string) => {
-  if (metadata === undefined || metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) {
-    return undefined
-  }
-  const value = (metadata as { readonly [key: string]: unknown })[key]
-  if (typeof value === "boolean") return value
-  if (typeof value !== "string") return undefined
-  const normalized = value.trim().toLowerCase()
-  if (normalized === "true") return true
-  if (normalized === "false") return false
-  return undefined
-}
-
-const metadataConflicts = (metadata: unknown): Skill.Conflicts | undefined | false => {
-  if (metadata === undefined || metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) {
-    return undefined
-  }
-  const value = (metadata as { readonly [key: string]: unknown })["ycoding/conflicts"]
-  if (value === undefined) return undefined
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false
-  const declarations = value as { readonly [key: string]: unknown }
-  const normalize = (items: unknown) => {
-    if (items === undefined) return [] as string[]
-    if (!Array.isArray(items) || items.some((item) => typeof item !== "string" || item.trim() === "")) return undefined
-    return Array.from(new Set(items.map((item) => item.trim())))
-  }
-  const skills = normalize(declarations.skills)
-  const instructions = normalize(declarations.instructions)
-  if (!skills || !instructions) return false
-  return decodeConflicts({ skills, instructions }).valueOrUndefined ?? false
-}
+const decodeSkills = Schema.decodeUnknownSync(Schema.Array(Info))
 
 export type Data = {
   sources: Types.DeepMutable<Source>[]
@@ -135,7 +95,6 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const discovery = yield* SkillDiscovery.Service
-    const fs = yield* FSUtil.Service
     const events = yield* EventRuntime.Service
     const announcements = yield* LocationAnnouncements.Current
     const mcp = yield* MCP.Service
@@ -164,64 +123,12 @@ const layer = Layer.effect(
     // serving skills that were edited or deleted on disk.
     const pulled = new Map<string, readonly string[]>()
 
-    const directories = Effect.fn("Skill.directories")(function* (source: Source) {
-      if (source.type === "embedded") return [] as readonly string[]
-      if (source.type === "directory") return [source.path] as readonly string[]
+    const resolveSource = Effect.fn("Skill.resolveSource")(function* (source: Source) {
+      if (source.type !== "url") return [source]
       const cached = pulled.get(source.url)
-      if (cached) return cached
-      const resolved = yield* discovery.pull(source.url)
-      pulled.set(source.url, resolved)
-      return resolved
-    })
-
-    const load = Effect.fn("Skill.load")(function* (source: Source) {
-      const skills: Info[] = []
-      if (source.type === "embedded") {
-        yield* Effect.logDebug("skill source loaded", {
-          source: Source.key(source),
-          type: source.type,
-          directories: [],
-          skills: [source.skill.id],
-        })
-        return [source.skill]
-      }
-      const resolved = yield* directories(source)
-      for (const directory of resolved) {
-        const files = yield* fs
-          .scan("{*.md,**/SKILL.md}", { cwd: directory, absolute: true, include: "file", symlink: true, dot: true })
-          .pipe(Effect.catch(() => Effect.succeed([] as string[])))
-        for (const filepath of files.toSorted()) {
-          const content = yield* fs.readFileStringSafe(filepath).pipe(Effect.catch(() => Effect.succeed(undefined)))
-          if (!content) continue
-          const markdown = ConfigMarkdown.parseOption(content)
-          if (!markdown) continue
-          const frontmatter = decodeFrontmatter(markdown.data).valueOrUndefined
-          if (!frontmatter) continue
-          const conflicts = metadataConflicts(frontmatter.metadata)
-          if (conflicts === false) continue
-          const id =
-            path.dirname(filepath) === directory
-              ? path.basename(filepath, ".md")
-              : path.basename(path.dirname(filepath))
-          skills.push({
-            id: ID.make(id),
-            name: Name.make(frontmatter.name ?? id),
-            description: frontmatter.description,
-            slash: metadataBoolean(frontmatter.metadata, "ycoding/slash") ?? frontmatter.slash,
-            autoinvoke: metadataBoolean(frontmatter.metadata, "ycoding/autoinvoke"),
-            conflicts,
-            location: AbsolutePath.make(filepath),
-            content: markdown.content,
-          })
-        }
-      }
-      yield* Effect.logDebug("skill source loaded", {
-        source: Source.key(source),
-        type: source.type,
-        directories: resolved,
-        skills: skills.map((skill) => skill.id),
-      })
-      return skills
+      const directories = cached ?? (yield* discovery.pull(source.url))
+      if (cached === undefined) pulled.set(source.url, directories)
+      return directories.map((directory) => ({ type: "directory" as const, path: AbsolutePath.make(directory) }))
     })
 
     const changed = Effect.fn("Skill.changedFromWatcher")(function* (file: string) {
@@ -241,9 +148,16 @@ const layer = Layer.effect(
     )
 
     const list = Effect.fn("Skill.list")(function* () {
-      const skills = new Map<ID, Info>()
-      for (const source of state.get().sources) for (const skill of yield* load(source)) skills.set(skill.id, skill)
-      return yield* permitted(Array.from(skills.values()))
+      const sources = (yield* Effect.forEach(state.get().sources, resolveSource)).flat()
+      if (sources.length === 0) return []
+      const skills = yield* nativeResource({ operation: "skill", sources }).pipe(
+        Effect.map((reply) => {
+          if (!reply.ok) throw new Error(`Native skill catalog failed: ${reply.code}`)
+          return decodeSkills(reply.value)
+        }),
+        Effect.orDie,
+      )
+      return yield* permitted(skills)
     })
 
     return Service.of({
@@ -271,5 +185,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Config.node, SkillDiscovery.node, FSUtil.node, EventRuntime.node, MCP.node],
+  deps: [Config.node, SkillDiscovery.node, EventRuntime.node, MCP.node],
 })

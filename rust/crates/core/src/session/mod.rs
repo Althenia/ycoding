@@ -58,6 +58,7 @@ pub mod provider_request;
 pub mod provider_state;
 pub mod read_instructions;
 mod read_json;
+pub mod recall;
 pub mod removal;
 pub mod retention;
 mod retired_input;
