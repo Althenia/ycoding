@@ -51,10 +51,10 @@ fn next_ok(calls: Arc<AtomicUsize>) -> Prepare {
 
 #[test]
 fn embedded_skill_matches_the_pinned_digest() {
-    assert_eq!(SKILL.len(), 29_086);
+    assert_eq!(SKILL.len(), 29_778);
     assert_eq!(
         sha256(SKILL),
-        "09c268fce5de8f60923ef72a0d42aac518e0da2321db74167371c7ae1e8c1c8c"
+        "d81f10a8c97322865fadd12b1c7e3c125731c5cee7805fe8f01494cca68c2204"
     );
     assert!(SKILL.ends_with('\n'));
 }

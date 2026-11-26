@@ -42,8 +42,8 @@ test("the default Dots skill root uses Global data, outside the agents skill tre
 test("operator instructions retain refusal, delegation, pending-answer and stop boundaries", async () => {
   const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
   for (const text of [
-    "YCODING_SESSION_ID", "~/.local/bin/ycoding", "folder of its first command",
-    "YCoding did not run this: it needs the user's decision.", "action and risk", "retry the identical action",
+    "YCODING_SESSION_ID", "~/.local/bin/ycoding", "first command selects its project root or working directory",
+    "action and risk", "retry the identical action only when the refusal confirms it did not run",
     "Treat “the user rejected” as final", "Never rephrase or work around a refused command",
     "ycoding decision list --json", "free-text answers for open questions", "the review box is full",
     "only when they authorized that in this chat; quote that instruction", "require an explicit yes for that item",
@@ -54,11 +54,23 @@ test("operator instructions retain refusal, delegation, pending-answer and stop 
   expect(ycodingOperatorSkill.indexOf("pgrep -fl")).toBeLessThan(ycodingOperatorSkill.indexOf("pkill -f"))
 })
 
+test("operator instructions document the native Dots access and Remote recovery boundaries", async () => {
+  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  for (const text of [
+    "host-user execution", "explicit OpenAI OAuth `dots.profile`", "Remove `dots.fullAccessExecutor`",
+    "Do not rely on a sandbox, Location roots, environment filtering, or Session Permissions or Guardrails",
+    "Turn Dots access Off to revoke new native access", "Do not assume a native executor process has a runtime deadline",
+    "Do not select Antigravity or Muse", "On a failed state read, leave the setting unchanged",
+    "Do not reenroll automatically", "production composition failed:",
+  ]) expect(ycodingOperatorSkill).toContain(text)
+})
+
 test("operator watch instructions never treat a settled execution as finished work", async () => {
   const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
   for (const text of [
     "work.state", "completed only when a current accepted completion receipt", "Every other state is unfinished",
-    "Watch the next transition", "never answers, approves, resumes or retries", "descendants' work and decisions",
+    "Watch the next transition", "never answer, approve, resume or retry work", "descendants' work and decisions",
+    "native v5 one-shot watch", 'assessment: "unavailable"', "HTTP/SSE watch endpoints", "family `--checkpoint`",
   ]) expect(ycodingOperatorSkill).toContain(text)
 })
 
@@ -75,11 +87,12 @@ test("operator watch instructions describe push delivery to the Dot thread witho
 test("operator guidance specifies parallel member lanes and durable two-target watch delivery", async () => {
   const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
   for (const text of [
-    "When prompting member or agent Sessions for substantive multi-part work, require five subagents in parallel across disjoint file and check lanes, one writer per file, and at most one heavy build or typecheck at a time.",
+    "Scale direct subagents from zero to five across independent file and check lanes",
+    "one writer per file", "leave edits, builds and delivery to member Sessions",
     "--deliver dot --deliver <task-thread-id>",
     "`dot` resolves to the Dot's current root thread on every delivery pass",
-    "Re-running with the same `--state` and added `--deliver` targets keeps pending deliveries of existing targets and starts new targets with only new events",
-    "removing a target that still has undelivered events is refused",
+    "Use the same `--state` when adding targets: existing deliveries stay queued and new targets receive only new events",
+    "Do not remove a target with undelivered events",
     "`dot` sends through the Dot's messaging room, while an auto-archived task thread is unarchived automatically before sending.",
   ]) expect(ycodingOperatorSkill.split(text)).toHaveLength(2)
 })
@@ -88,7 +101,7 @@ test("operator guidance honors explicit main-agent versus subagent provider, mod
   const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
   const rule = "Honor explicit main-agent versus subagent provider, model, variant and profile splits: keep the main Session on its designated model and profile, switch active children and launch subagents on their designated subagent model and profile, and never substitute another profile."
   expect(ycodingOperatorSkill.split(rule)).toHaveLength(2)
-  const delegation = ycodingOperatorSkill.indexOf("require five subagents in parallel")
+  const delegation = ycodingOperatorSkill.indexOf("Scale direct subagents from zero to five")
   expect(delegation).toBeGreaterThan(-1)
   expect(ycodingOperatorSkill.indexOf(rule)).toBeGreaterThan(delegation)
   expect(ycodingOperatorSkill.indexOf(rule)).toBeLessThan(ycodingOperatorSkill.indexOf("Launch requires an actual parent assistant-message ID"))
@@ -134,8 +147,8 @@ test("the exported operator skill equals the pinned shared Markdown bytes", asyn
   const markdown = await readFile(path.join(import.meta.dir, "..", "src", "remote-control", "ycoding-operator.md"), "utf8")
   expect(ycodingOperatorSkill).toBe(markdown)
   const bytes = new TextEncoder().encode(ycodingOperatorSkill)
-  expect(bytes.byteLength).toBe(28_784)
-  expect(createHash("sha256").update(bytes).digest("hex")).toBe("48e35aa5dff6c72239824e747730772d7f0cc4b2ec86c942941790fa0373e604")
+  expect(bytes.byteLength).toBe(29_778)
+  expect(createHash("sha256").update(bytes).digest("hex")).toBe("d81f10a8c97322865fadd12b1c7e3c125731c5cee7805fe8f01494cca68c2204")
   expect(ycodingOperatorSkill.endsWith("\n")).toBe(true)
   const source = await readFile(path.join(import.meta.dir, "..", "src", "remote-control", "ycoding-operator-skill.ts"), "utf8")
   expect(source).toContain('from "./ycoding-operator.md" with { type: "text" }')
@@ -271,12 +284,14 @@ test("operator API operation ids and example bodies match the current Protocol",
     "providerUsage.list", "providerUsage.forecast", "incident.report", "incident.recent", "incident.guidance.get", "incident.guidance.clear",
     "config.diagnostics", "integration.list", "integration.get", "integration.connect.key", "integration.oauth.connect", "integration.oauth.status", "integration.oauth.complete", "integration.oauth.cancel",
     "credential.refresh", "credential.update", "credential.activate", "credential.remove", "provider.integrations", "provider.refresh",
-    "artifact.list", "artifact.get", "artifact.create", "artifact.update", "coordination.settings", "coordination.list", "coordination.get", "coordination.create", "coordination.update", "coordination.delete", "coordination.attach", "coordination.detach",
+    "artifact.list", "artifact.get", "artifact.create", "artifact.update", "coordination.settings", "coordination.list", "coordination.get", "coordination.board", "coordination.create", "coordination.update", "coordination.delete", "coordination.attach", "coordination.detach",
     "shell.remove", "pty.create", "pty.update", "pty.remove", "pty.control", "pty.connect.token", "pty.connect",
     "dots.get", "dots.set", "dots.attach", "dots.detach", "dots.remove", "remote.get", "remote.set", "telemetry.list", "telemetry.consent.get", "telemetry.consent.set",
     "session.prediction", "session.promptGenerate", "session.compact", "session.compaction.list", "server.session.session.todo.list",
   ]) expect(mentioned.has(required)).toBe(true)
-  for (const operation of mentioned) expect(operationIDs.has(operation)).toBe(true)
+  for (const [, operation] of ycodingOperatorSkill.matchAll(/ycoding api ([\w.-]+)(?=[\s`])/g)) {
+    expect(operationIDs.has(operation), operation).toBe(true)
+  }
   const examples = [...ycodingOperatorSkill.matchAll(/ycoding api ([\w.-]+)[^\n`]*? -d '([^'\n]+)'/g)]
   expect(examples.length).toBeGreaterThanOrEqual(7)
   for (const example of examples) {
@@ -292,8 +307,8 @@ test("operator discovery and conversation instructions preserve cross-project se
   for (const text of [
     "without directory/project filters", "--param parentID=null", "punctuation-free", "curly", "straight",
     "cursor.next", "broaden", "stored Session location", "streams assistant output", "waits for execution",
-    "automatically rejects permissions, questions and guardrail requests", "cancels forms",
-    "pending decisions survive", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted",
+    "automatically rejects permissions, questions and guardrail requests", "cancels forms", "Admission is not completion",
+    "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted",
     "No local API", "browser-local", "captured-change card", "side-chat",
   ]) expect(ycodingOperatorSkill).toContain(text)
 })
