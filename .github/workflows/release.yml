@@ -204,18 +204,21 @@ jobs:
 
       - name: Setup Rust for native contracts
         id: native-rust
-        if: matrix.suite == 'tui-runtime'
+        if: matrix.suite == 'tui-runtime' || matrix.suite == 'tui-project'
         uses: ./.github/actions/setup-rust
         with:
           cache-profile: dev
 
-      - name: Build and verify native runtime receipt
+      - name: Build native runtime
+        if: matrix.suite == 'tui-runtime' || matrix.suite == 'tui-project'
+        run: cargo build --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --bin ycoding-runtime
+
+      - name: Verify native runtime receipt
         if: matrix.suite == 'tui-runtime'
         env:
           RECEIPT_TARGET: linux-x64
         run: |
           set -euo pipefail
-          cargo build --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --bin ycoding-runtime
           bash script/runtime-receipt.sh write rust/target/debug/ycoding-runtime "$RUNNER_TEMP/runtime-receipt"
           bash script/runtime-receipt.sh verify "$RUNNER_TEMP/runtime-receipt" "$RUNNER_TEMP/verified-runtime/ycoding-runtime"
 
@@ -322,7 +325,7 @@ jobs:
           retention-days: 7
 
       - name: Save native contract dependencies
-        if: always() && matrix.suite == 'tui-runtime' && steps.native-rust.outcome == 'success'
+        if: always() && (matrix.suite == 'tui-runtime' || matrix.suite == 'tui-project') && steps.native-rust.outcome == 'success'
         uses: ./.github/actions/setup-rust/save
         with:
           cache-key: ${{ steps.native-rust.outputs.cargo-cache-key }}

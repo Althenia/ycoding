@@ -110,7 +110,7 @@ test("release source verification selects the native startup diagnostic regressi
       `${cargo} --lib production::tests::retention_settings_fail_startup_when_the_first_load_fails -- --exact`,
     ].join("\n") + "\n",
   })
-  expect(steps.indexOf(selected[0]!)).toBeGreaterThan(steps.findIndex((step) => step.startsWith("Build and verify native runtime receipt\n")))
+  expect(steps.indexOf(selected[0]!)).toBeGreaterThan(steps.findIndex((step) => step.startsWith("Verify native runtime receipt\n")))
 })
 
 test("release source verification selects duplicate-pin and reclaim durability cases", () => {
@@ -1179,7 +1179,7 @@ test("test workflow saves generic Rust dependency caches only after workspace ar
   expect(build.indexOf("- name: Verify Node build")).toBeLessThan(build.indexOf("- name: Save Rust dependencies"))
   const verify = workflowJob(workflow, "verify-source")
   const save = verify.split("      - name: Save native contract dependencies\n")[1]?.split("\n      - name: ")[0] ?? ""
-  expect(save).toContain("if: always() && matrix.suite == 'tui-runtime' && steps.native-rust.outcome == 'success'")
+  expect(save).toContain("if: always() && (matrix.suite == 'tui-runtime' || matrix.suite == 'tui-project') && steps.native-rust.outcome == 'success'")
   expect(save).toContain("uses: ./.github/actions/setup-rust/save")
   expect(save).toContain("cache-key: ${{ steps.native-rust.outputs.cargo-cache-key }}")
   expect(save).toContain("cache-hit: ${{ steps.native-rust.outputs.cargo-cache-hit }}")
