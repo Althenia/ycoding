@@ -50,9 +50,19 @@ export type Data = {
       licenses: { directory: string; path: string; url: string; file: string; sha256: string }[]
     }
     sqlite?: { crate: string; version: string; file: string }
+    onnxruntime?: {
+      crate: string
+      version: string
+      runtime: string
+      distribution: string
+      source: string
+      archive: { file: string; sha256: string }
+      licenses: { path: string; file: string; sha256: string }[]
+    }
   }
   embedded: { component: string; path: string }[]
   models: { component: string; url: string; file: string; sha256: string }
+  embeddingModel: { component: string; url: string; file: string; sha256: string }
 }
 
 export type Input = {
@@ -275,6 +285,7 @@ export async function buildNotice(current: string, input: Input) {
   documents.push(...(await nativeDocuments(input, shipped)))
   documents.push(...(await embeddedDocuments(input)))
   documents.push(await modelDocument(input))
+  documents.push(await embeddingModelDocument(input))
   return spliceNotice(current, render(input, prefix, shipped, documents))
 }
 
@@ -414,7 +425,7 @@ async function nestedFiles(directory: string, top: string[]) {
         file.includes("/") &&
         !top.includes(file) &&
         !licenseDirectory.test(file.slice(0, file.indexOf("/"))) &&
-        !file.split("/").some((segment) => segment.startsWith(".")),
+        !file.split("/").some((segment) => segment.startsWith(".") || segment === "node_modules"),
     )
     .sort(compare)
 }
@@ -463,6 +474,28 @@ async function nativeDocuments(input: Input, shipped: Package[]) {
     const sqliteSource = await readText(path.join(path.dirname(sqlite.manifest_path), native.sqlite.file))
     documents.push({ text: sqliteBlessing(sqliteSource, native.sqlite.file), label: `SQLite (bundled by ${sqlite.name} ${sqlite.version}; ${native.sqlite.file})` })
   }
+  const onnx = shipped.find((item) => item.name === "ort-sys")
+  const runtime = native.onnxruntime
+  if ((onnx && (!runtime || onnx.name !== runtime.crate || onnx.version !== runtime.version)) || (!onnx && runtime))
+    throw new Error("ONNX Runtime native evidence does not match the shipped closure")
+  if (onnx && runtime) {
+    const distribution = await readText(path.join(path.dirname(onnx.manifest_path), runtime.distribution))
+    const versions = new Set(
+      distribution
+        .split("\n")
+        .slice(1)
+        .filter((line) => line.length > 0)
+        .map((line) => /\/ms@([^/]+)\//.exec(line.split("\t")[2] ?? "")?.[1]),
+    )
+    if (versions.size !== 1 || !versions.has(runtime.runtime))
+      throw new Error(`ONNX Runtime evidence pins ${runtime.runtime}, but ${onnx.name} downloads ${[...versions].join(", ")}`)
+    for (const entry of runtime.licenses)
+      documents.push({
+        text: await verifiedText(input, entry.file, entry.sha256),
+        label: `ONNX Runtime ${runtime.runtime} ${entry.path} (statically linked by ${onnx.name} ${onnx.version}; ${runtime.archive.file} sha256 ${runtime.archive.sha256.slice(0, 12)})`,
+        source: runtime.source,
+      })
+  }
   return documents
 }
 
@@ -502,6 +535,11 @@ async function embeddedDocuments(input: Input) {
 
 async function modelDocument(input: Input): Promise<Document> {
   const entry = input.data.models
+  return { text: await verifiedText(input, entry.file, entry.sha256), label: entry.component, source: entry.url }
+}
+
+async function embeddingModelDocument(input: Input): Promise<Document> {
+  const entry = input.data.embeddingModel
   return { text: await verifiedText(input, entry.file, entry.sha256), label: entry.component, source: entry.url }
 }
 

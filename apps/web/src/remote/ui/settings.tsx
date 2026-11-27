@@ -222,7 +222,7 @@ export function AppSettings(): JSX.Element {
       <span class="defs__value" role="status">{pwaInstall.isInstalled() ? "Installed app" : "Browser"}</span>
     </div>
     <div class="defs__row"><span class="defs__key">Closing browser</span><span class="defs__value">Closing this browser disconnects only this tab; the enrolled machine and its running Sessions keep working.</span></div>
-    <div class="defs__row"><span class="defs__key">Managed on machine</span><span class="defs__value">Saved permissions, MCP servers, plugins and project artifacts, configuration diagnostics, and interactive terminals or Git working trees are managed in YCoding on the enrolled machine.</span></div>
+    <div class="defs__row"><span class="defs__key">Managed on machine</span><span class="defs__value">Saved permissions, MCP servers, plugins, configuration diagnostics, and interactive terminals or Git working trees are managed in YCoding on the enrolled machine.</span></div>
     <Show when={pwaInstall.canInstall()}>
       <div class="defs__row">
         <span class="defs__key">Install</span>

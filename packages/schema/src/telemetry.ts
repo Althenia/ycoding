@@ -141,6 +141,8 @@ export const Operation = Schema.Literals([
   "incident.guidance.clear",
   "machine.keepAwake.get",
   "machine.keepAwake.set",
+  "machine.autonomyDefaults.get",
+  "machine.autonomyDefaults.set",
 ]).check(Schema.isMaxLength(64))
 
 export const RequestSample = Schema.Struct({

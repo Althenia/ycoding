@@ -95,7 +95,6 @@ export const ProtectedStateSource = Schema.Literals([
   "autonomy",
   "permissions",
   "guardrails",
-  "project_artifacts",
   "pending_work",
   "orchestration",
 ])
@@ -360,7 +359,6 @@ const builtInAuthorityKinds = new Set([
   "autonomy",
   "permissions",
   "guardrails",
-  "project_artifacts",
 ])
 
 export function payloadDigest(value: Schema.Json): string {

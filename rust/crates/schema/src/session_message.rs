@@ -19,14 +19,6 @@ crate::schema::record_type!(DotsInput {
 crate::schema::literal_enum_type!(DotsInputOrigin, { DotsNative => "dots-native" });
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct ArtifactProvenance {
-    pub scope_id: LosslessString,
-    pub version_id: LosslessString,
-    pub kind: LosslessString,
-    pub id: LosslessString,
-    pub source_scope: LosslessString,
-}
-#[derive(Clone, Debug, PartialEq)]
 pub struct BaseTime {
     pub created: DateTimeUtcFromMillis,
 }
@@ -57,7 +49,6 @@ pub struct AgentSelected {
     pub metadata: Option<JsonObject>,
     pub time: BaseTime,
     pub agent: agent::Id,
-    pub artifact: Option<ArtifactProvenance>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModelSelected {
@@ -102,7 +93,6 @@ pub struct Skill {
     pub directory: Option<LosslessString>,
     pub conflicts: Option<skill::Conflicts>,
     pub skill_deactivations: Option<Vec<SkillDeactivation>>,
-    pub artifact: Option<ArtifactProvenance>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shell {
@@ -352,110 +342,6 @@ fn decode_status<'a>(
     Ok(object)
 }
 
-impl DomainDecode for ArtifactProvenance {
-    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
-        let o = ObjectDecoder::new(v, p)?;
-        let scope_id: LosslessString = o.field("scopeID")?;
-        let version_id: LosslessString = o.field("versionID")?;
-        let kind: LosslessString = o.field("kind")?;
-        let id: LosslessString = o.field("id")?;
-        let source_scope: LosslessString = o.field("sourceScope")?;
-        if !matches!(
-            kind.as_str(),
-            Some("skill" | "command" | "agent" | "plugin")
-        ) {
-            return Err(p.key("kind").error(DecodeErrorKind::Literal(
-                ["skill", "command", "agent", "plugin"]
-                    .iter()
-                    .map(|s| JsonValue::String((*s).into()))
-                    .collect(),
-            )));
-        }
-        if !matches!(source_scope.as_str(), Some("project" | "global")) {
-            return Err(p.key("sourceScope").error(DecodeErrorKind::Literal(
-                ["project", "global"]
-                    .iter()
-                    .map(|s| JsonValue::String((*s).into()))
-                    .collect(),
-            )));
-        }
-        if !valid_brand(scope_id.as_str(), "pas_")
-            || !valid_brand(version_id.as_str(), "pav_")
-            || !valid_artifact_id(id.as_str())
-        {
-            return Err(p.error(DecodeErrorKind::Expected("artifact provenance IDs")));
-        }
-        Ok(Self {
-            scope_id,
-            version_id,
-            kind,
-            id,
-            source_scope,
-        })
-    }
-}
-impl DomainEncode for ArtifactProvenance {
-    fn encode(&self) -> JsonValue {
-        ObjectEncoder::new()
-            .field("scopeID", &self.scope_id)
-            .field("versionID", &self.version_id)
-            .field("kind", &self.kind)
-            .field("id", &self.id)
-            .field("sourceScope", &self.source_scope)
-            .finish()
-    }
-}
-fn valid_brand(value: Option<&str>, prefix: &str) -> bool {
-    value.is_some_and(|s| {
-        let suffix = s.strip_prefix(prefix).unwrap_or("");
-        !suffix.is_empty()
-            && suffix.len() <= 60
-            && suffix.is_ascii()
-            && suffix
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-            && suffix.as_bytes()[0].is_ascii_alphanumeric()
-            && suffix.as_bytes()[suffix.len() - 1].is_ascii_alphanumeric()
-    })
-}
-fn valid_artifact_id(value: Option<&str>) -> bool {
-    value.is_some_and(|s| {
-        let valid = !s.is_empty()
-            && s.len() <= 64
-            && s.is_ascii()
-            && s.bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-            && s.as_bytes()[0].is_ascii_alphanumeric()
-            && s.as_bytes()[s.len() - 1].is_ascii_alphanumeric();
-        valid
-            && !matches!(
-                s,
-                "aux"
-                    | "con"
-                    | "nul"
-                    | "prn"
-                    | "com1"
-                    | "com2"
-                    | "com3"
-                    | "com4"
-                    | "com5"
-                    | "com6"
-                    | "com7"
-                    | "com8"
-                    | "com9"
-                    | "lpt1"
-                    | "lpt2"
-                    | "lpt3"
-                    | "lpt4"
-                    | "lpt5"
-                    | "lpt6"
-                    | "lpt7"
-                    | "lpt8"
-                    | "lpt9"
-            )
-    })
-}
-
 impl DomainDecode for BaseTime {
     fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
         Ok(Self {
@@ -565,11 +451,9 @@ base_message!(
         metadata: decode_metadata(&o, "metadata")?,
         time: o.field("time")?,
         agent: o.field("agent")?,
-        artifact: o.optional("artifact")?
     }),
     |s: &AgentSelected| base_encode(&s.id, &s.metadata, &s.time, "agent-switched")
         .field("agent", &s.agent)
-        .optional("artifact", &s.artifact)
         .finish()
 );
 base_message!(
@@ -653,7 +537,6 @@ base_message!(
         directory: o.optional("directory")?,
         conflicts: o.optional("conflicts")?,
         skill_deactivations: o.optional("skillDeactivations")?,
-        artifact: o.optional("artifact")?
     }),
     |s: &Skill| base_encode(&s.id, &s.metadata, &s.time, "skill")
         .field("skill", &s.skill)
@@ -662,7 +545,6 @@ base_message!(
         .optional("directory", &s.directory)
         .optional("conflicts", &s.conflicts)
         .optional("skillDeactivations", &s.skill_deactivations)
-        .optional("artifact", &s.artifact)
         .finish()
 );
 base_message!(

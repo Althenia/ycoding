@@ -38,7 +38,7 @@ export function createRemoteSession(createStore?: () => RemoteStore): RemoteSess
     createStore?.() ??
     createRemoteStore({
       http: createRemoteHttp(),
-      createTransport: (deviceID, handlers) => createRemoteTransport({ url: webSocketURL(deviceID), handlers }),
+      createTransport: (deviceID, handlers, fence) => createRemoteTransport({ url: webSocketURL(deviceID), handlers, ...fence }),
       queryClient: createRemoteQueryClient(),
     })
   return { store, queries: createRemoteQueries(store.link, store.queryClient) }

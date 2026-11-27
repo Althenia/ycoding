@@ -13,12 +13,15 @@ export type AutonomyIntent =
   | { readonly type: "select"; readonly index: number }
   | { readonly type: "cycle"; readonly category: AutonomyCategory; readonly step: 1 | -1 }
   | { readonly type: "all"; readonly mode: AutonomyMode }
+  | { readonly type: "save-default"; readonly category: AutonomyCategory }
+  | { readonly type: "reset-default"; readonly category: AutonomyCategory }
 export type AutonomyRow = {
   readonly category: AutonomyCategory
   readonly title: string
   readonly own: AutonomyMode
   readonly mode: AutonomyMode
   readonly label: string
+  readonly saved?: AutonomyMode
   readonly inheritedFrom?: string
   readonly decider: string
 }
@@ -39,7 +42,21 @@ export function cycleAutonomyMode(mode: AutonomyMode, step: 1 | -1): AutonomyMod
   return autonomyModes[(autonomyModes.indexOf(mode) + step + autonomyModes.length) % autonomyModes.length]!
 }
 
-export function autonomyChange(intent: Exclude<AutonomyIntent, { type: "select" }>, own: AutonomyModes): Partial<AutonomyModes> {
+export function readAutonomyDefaults(payload: unknown): AutonomyModes | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined
+  const data: unknown = Reflect.get(payload, "data")
+  if (typeof data !== "object" || data === null) return undefined
+  const permissions = readAutonomyMode(Reflect.get(data, "permissions"))
+  const guardrails = readAutonomyMode(Reflect.get(data, "guardrails"))
+  const answers = readAutonomyMode(Reflect.get(data, "answers"))
+  return permissions === undefined || guardrails === undefined || answers === undefined ? undefined : { permissions, guardrails, answers }
+}
+
+export function autonomyDefaultChange(intent: Extract<AutonomyIntent, { type: "save-default" | "reset-default" }>, own: AutonomyModes): Partial<AutonomyModes> {
+  return { [intent.category]: intent.type === "reset-default" ? "manual" : own[intent.category] }
+}
+
+export function autonomyChange(intent: Exclude<AutonomyIntent, { type: "select" | "save-default" | "reset-default" }>, own: AutonomyModes): Partial<AutonomyModes> {
   if (intent.type === "all") return { permissions: intent.mode, guardrails: intent.mode, answers: intent.mode }
   return { [intent.category]: cycleAutonomyMode(own[intent.category], intent.step) }
 }
@@ -56,11 +73,13 @@ export function autonomyKeyIntent(
   if (event.key === "ArrowDown") return { type: "select", index: Math.min(selected + 1, autonomyCategories.length - 1) }
   if (event.key === "ArrowUp") return { type: "select", index: Math.max(selected - 1, 0) }
   if (event.key === "ArrowRight" || event.key === "ArrowLeft") return { type: "cycle", category: autonomyCategories[selected]!, step: event.key === "ArrowRight" ? 1 : -1 }
+  if (event.key.toLowerCase() === "d") return { type: "save-default", category: autonomyCategories[selected]! }
+  if (event.key.toLowerCase() === "r") return { type: "reset-default", category: autonomyCategories[selected]! }
   if (event.key in allModeKeys) return { type: "all", mode: allModeKeys[event.key as keyof typeof allModeKeys] }
   return undefined
 }
 
-export function autonomyRows(autonomy: (AutonomyModes & { readonly effective?: EffectiveAutonomyView }) | undefined): readonly AutonomyRow[] {
+export function autonomyRows(autonomy: (AutonomyModes & { readonly effective?: EffectiveAutonomyView }) | undefined, saved?: AutonomyModes): readonly AutonomyRow[] {
   if (autonomy === undefined) return []
   const effective = autonomy.effective
   return autonomyCategories.map((category) => {
@@ -71,6 +90,7 @@ export function autonomyRows(autonomy: (AutonomyModes & { readonly effective?: E
       own: autonomy[category],
       mode,
       label: modeLabels[mode],
+      ...(saved === undefined ? {} : { saved: saved[category] }),
       ...(effective?.inherited[category] === undefined ? {} : { inheritedFrom: effective.inherited[category] }),
       decider: decider(category, mode, effective?.deferred === true, effective?.guardrailsEnabled !== false),
     }
@@ -136,4 +156,12 @@ export function autonomyAnnouncement(change: Partial<AutonomyModes>, rows: reado
   }
   const base = `${changed.map((row) => `${row.title} set to ${modeLabels[row.own]}`).join(", ")} for this Session`
   return inEffect.length === 0 ? base : `${base}; in effect ${inEffect.map((row) => `${row.title} ${row.label}${source(row)}`).join(", ")}`
+}
+
+export function autonomyDefaultAnnouncement(change: Partial<AutonomyModes>) {
+  return autonomyCategories.flatMap((category) => {
+    const mode = change[category]
+    if (mode === undefined) return []
+    return [mode === "manual" ? `${categoryTitles[category]} default reset to Manual for new Sessions` : `${categoryTitles[category]} default saved as ${modeLabels[mode]} for new Sessions`]
+  }).join(", ")
 }

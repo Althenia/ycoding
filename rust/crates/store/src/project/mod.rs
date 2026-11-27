@@ -18,20 +18,6 @@ pub fn delete(tx: &mut Write<'_>, id: &LosslessString) -> Result<bool, Error> {
     if tx.get::<ProjectTable>(&key)?.is_none() {
         return Ok(false);
     }
-    if !tx
-        .index::<crate::artifacts::ProjectScopeTable>(
-            "project_artifact_project_scope_project_id_idx",
-            &key,
-            None,
-            1,
-        )?
-        .is_empty()
-    {
-        return Err(tx.reject(Error::Domain {
-            kind: "restrict",
-            message: "project artifact scope still references project",
-        }));
-    }
     loop {
         let sessions =
             tx.index::<crate::session::SessionTable>("session_project_idx", &key, None, 128)?;
@@ -45,7 +31,6 @@ pub fn delete(tx: &mut Write<'_>, id: &LosslessString) -> Result<bool, Error> {
     remove_children::<WorkspaceTable>(tx, |r| &r.project_id == id)?;
     remove_children::<DirectoryTable>(tx, |r| &r.project_id == id)?;
     remove_children::<PermissionTable>(tx, |r| &r.project_id == id)?;
-    remove_children::<crate::artifacts::TerminalTable>(tx, |r| &r.project_id == id)?;
     crate::resources::source_changed(tx, "project", key.clone(), true)?;
     tx.delete::<ProjectTable>(&key)
 }

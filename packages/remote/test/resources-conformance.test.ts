@@ -9,9 +9,9 @@ import {
   Provider_RequestSchema,
   Permission_RuleSchema,
   Integration_Attempt_timeSchema,
-  ArtifactBadRequestSchema,
+  ConfigurationWriteErrorSchema,
   model_default_Result_dataSchema,
-  ProjectArtifact_ApiExpectationSchema,
+  Dots_AccessSetSchema,
 } from "@ycoding-ai/protocol/v5"
 
 test("Rust/TS model reference corpus preserves optional-empty and lone UTF16 identifiers", () => {
@@ -51,8 +51,8 @@ test("Rust/TS permission and typed-error corpus uses closed enum values", () => 
   ).toEqual(permission)
   expect(encodeStrict(Permission_RuleSchema, decodeStrict(Permission_RuleSchema, permission))).toEqual(permission)
   const error = new Uint8Array(Buffer.from("08011001", "hex"))
-  expect(encodeStrict(ArtifactBadRequestSchema, decodeStrict(ArtifactBadRequestSchema, error))).toEqual(error)
-  expect(() => decodeStrict(ArtifactBadRequestSchema, new Uint8Array([8, 1, 16, 99]))).toThrow("enum")
+  expect(encodeStrict(ConfigurationWriteErrorSchema, decodeStrict(ConfigurationWriteErrorSchema, error))).toEqual(error)
+  expect(() => decodeStrict(ConfigurationWriteErrorSchema, new Uint8Array([8, 1, 16, 99]))).toThrow("enum")
 })
 
 test("Rust/TS attempt-time corpus preserves signed fractional milliseconds", () => {
@@ -77,19 +77,12 @@ test("Rust/TS undefined-result corpus requires an explicit none branch", () => {
   expect(() => decodeStrict(model_default_Result_dataSchema, new Uint8Array())).toThrow("required")
 })
 
-test("Rust/TS artifact revision corpus preserves safe uint64 integers and rejects the first unsafe value", () => {
-  const bytes = new Uint8Array(Buffer.from("08ffffffffffffff0f12070a057061765f781a420a40" + "61".repeat(64), "hex"))
-  const value = create(ProjectArtifact_ApiExpectationSchema, {
-    expectedRevision: 9007199254740991n,
-    expectedVersionID: encodeLossless("pav_x"),
-    expectedDigest: encodeLossless("a".repeat(64)),
-  })
-  expect(encodeStrict(ProjectArtifact_ApiExpectationSchema, value)).toEqual(bytes)
-  expect(decodeStrict(ProjectArtifact_ApiExpectationSchema, bytes).expectedRevision).toBe(9007199254740991n)
+test("Rust/TS revision corpus preserves safe uint64 integers and rejects the first unsafe value", () => {
+  const bytes = new Uint8Array(Buffer.from("080110ffffffffffffff0f", "hex"))
+  const value = create(Dots_AccessSetSchema, { enabled: true, expectedRevision: 9007199254740991n })
+  expect(encodeStrict(Dots_AccessSetSchema, value)).toEqual(bytes)
+  expect(decodeStrict(Dots_AccessSetSchema, bytes).expectedRevision).toBe(9007199254740991n)
   expect(() =>
-    encodeStrict(
-      ProjectArtifact_ApiExpectationSchema,
-      create(ProjectArtifact_ApiExpectationSchema, { ...value, expectedRevision: 9007199254740992n }),
-    ),
+    encodeStrict(Dots_AccessSetSchema, create(Dots_AccessSetSchema, { ...value, expectedRevision: 9007199254740992n })),
   ).toThrow("integer constraint")
 })

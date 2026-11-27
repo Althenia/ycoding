@@ -67,8 +67,6 @@ import { DecisionTool } from "../tool/decision"
 import { SessionStore } from "../session/store"
 import { TaskCompleteTool } from "../tool/task-complete"
 import { MemoryTool } from "../tool/memory"
-import { ProjectArtifactTool } from "../tool/project-artifact"
-import { ProjectArtifactStore } from "../project-artifact"
 import { Tools } from "../tool/tools"
 import { WebFetchTool } from "../tool/webfetch"
 import { WebSearchTool } from "../tool/websearch"
@@ -82,7 +80,6 @@ import { CommandPlugin } from "./command"
 import { PluginRuntime } from "./runtime"
 import { SkillPlugin } from "./skill"
 import { SystemPromptPlugin } from "./system-prompt"
-import { ProjectArtifactSource } from "../project-artifact/source"
 
 const services = Effect.fn("PluginInternal.services")(function* () {
   const aisdk = yield* AISDK.Service
@@ -133,8 +130,6 @@ const services = Effect.fn("PluginInternal.services")(function* () {
   const tools = yield* Tools.Service
   const websearch = yield* WebSearchTool.ConfigService
   const wellknown = yield* WellKnown.Service
-  const projectArtifactSource = yield* ProjectArtifactSource.Service
-  const projectArtifactStore = yield* ProjectArtifactStore.Service
   return Context.mergeAll(
     Context.make(AISDK.Service, aisdk),
     Context.make(Agent.Service, agent),
@@ -184,8 +179,6 @@ const services = Effect.fn("PluginInternal.services")(function* () {
     Context.make(Tools.Service, tools),
     Context.make(WebSearchTool.ConfigService, websearch),
     Context.make(WellKnown.Service, wellknown),
-    Context.make(ProjectArtifactSource.Service, projectArtifactSource),
-    Context.make(ProjectArtifactStore.Service, projectArtifactStore),
   )
 })
 
@@ -213,7 +206,6 @@ const pre = [
   SubagentControlTool.Plugin,
   SubagentReportTool.Plugin,
   TodoWriteTool.Plugin,
-  ProjectArtifactTool.Plugin,
   TaskCompleteTool.Plugin,
   MemoryTool.Plugin,
   WebFetchTool.Plugin,
@@ -231,7 +223,6 @@ const post = [
   ConfigAgentPlugin.Plugin,
   ConfigCommandPlugin.Plugin,
   ConfigSkillPlugin.Plugin,
-  ProjectArtifactSource.Plugin,
 ] as const satisfies readonly InternalPlugin[]
 
 export const list = Effect.fn("PluginInternal.list")(function* () {

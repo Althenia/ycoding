@@ -1,3 +1,4 @@
+pub mod activation;
 pub mod analysis;
 pub mod attachment_admission;
 pub mod attachment_read;
@@ -29,6 +30,10 @@ pub mod generate;
 pub mod generation_meter;
 pub mod goal;
 pub mod goal_decisions;
+pub mod harness_config;
+pub mod harness_events;
+pub mod harness_probe;
+pub mod harness_proposer;
 pub mod helper_generation;
 pub mod history;
 pub mod history_pruning;

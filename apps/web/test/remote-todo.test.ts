@@ -42,7 +42,7 @@ test("selection reads todos, live updates replace the list, and reconnect reads 
     request.operation === "session.todo.list" ? { ok: true, value: { data: listed } } : "default" })
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20 }),
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20 }),
     batchMs: 0,
   })
   try {
@@ -72,7 +72,7 @@ test("a live todo update wins over a pending older list response", async () => {
   const relay = await startRelayDouble({ handler: (request) => request.operation === "session.todo.list" ? held.promise : "default" })
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }),
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers }),
     batchMs: 0,
   })
   try {
@@ -136,7 +136,7 @@ test("a background resync keeps the loaded todos visible and reuses unchanged it
     request.operation === "session.todo.list" ? gate?.promise ?? { ok: true, value: { data: [{ ...first }, { ...second }] } } : "default" })
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }),
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers }),
     batchMs: 0,
   })
   const observed: (readonly TodoView[] | undefined)[] = []
@@ -177,7 +177,7 @@ test("an unreadable background todo answer keeps the todos already shown", async
       : { wire: (peer, dispatch) => peer.malformedResult(dispatch, Uint8Array.of(255)) } })
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }),
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers }),
     batchMs: 0,
   })
   try {

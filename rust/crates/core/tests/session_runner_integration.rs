@@ -844,6 +844,7 @@ async fn recovery_boundary(restart: bool) {
             "checks/cobalt",
             "---\ntype: Decision\n---\nThe cobalt canary gate is ready.\n",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1244,6 +1245,21 @@ async fn compaction_cue_activates_before_a_resumed_request_without_new_input() {
             .count(),
         1
     );
+    let events = cue_recall_events(&service, "ses_compaction_cue");
+    assert!(
+        events
+            .iter()
+            .any(|(kind, data)| kind == "session.cue.detected"
+                && data.contains(r#""kind":"compaction""#)),
+        "{events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|(kind, data)| kind == "session.recall.recorded"
+                && data.contains(r#""stage":"restored""#)),
+        "{events:?}"
+    );
     server.await.unwrap();
     coordinator.shutdown().await.unwrap();
     std::fs::remove_dir_all(root).unwrap();
@@ -1428,6 +1444,113 @@ impl Resolver for KeywordSkills {
     }
 }
 
+fn cue_recall_events(service: &Service, id: &str) -> Vec<(String, String)> {
+    service
+        .log(&session::Id::new(id).unwrap(), None, 200)
+        .unwrap()
+        .events
+        .into_iter()
+        .filter_map(|entry| {
+            let kind = entry.event.0.event_type.as_str()?.to_owned();
+            (kind == "session.cue.detected" || kind == "session.recall.recorded").then(|| {
+                (
+                    kind,
+                    ycoding_schema::stringify_json(&ycoding_schema::JsonValue::Object(
+                        entry.event.0.data.0,
+                    )),
+                )
+            })
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn concurrent_sessions_record_their_own_selection_once() {
+    let root = std::env::temp_dir().join(format!(
+        "ycoding-concurrent-skill-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let store = support::store();
+    let ids = ["ses_concurrent_a", "ses_concurrent_b"];
+    for id in ids {
+        let mut record = support::record(id);
+        record.directory = root.to_str().unwrap().into();
+        store
+            .submit(move |tx| ycoding_store::session::SessionTable::insert(tx, &record))
+            .unwrap()
+            .wait()
+            .unwrap();
+    }
+    let file = root.join("build.md");
+    std::fs::write(&file, "CONCURRENT-KEYWORD-SKILL").unwrap();
+    let skills = vec![skill::Info::decode(&parse_json(&format!(r#"{{"id":"build","name":"build","location":"{}","content":"CONCURRENT-KEYWORD-SKILL","autoinvoke":true}}"#, file.display())).unwrap()).unwrap()];
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT]).await;
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    let mut services = fixture_services(
+        &store,
+        catalog,
+        vec![agent::empty("build".into())],
+        registry(),
+        Arc::new(WallClock),
+        Vec::new(),
+    );
+    services.location = ycoding_schema::location::Ref::decode(
+        &parse_json(&format!(r#"{{"directory":"{}"}}"#, root.display())).unwrap(),
+    )
+    .unwrap();
+    services.skill_resolver = Some(Arc::new(KeywordSkills(skills)));
+    let service = Service::new(store.client());
+    let coordinator = Coordinator::new(Arc::new(Local::new(services)));
+    for id in ids {
+        checkpoint::admit(
+            &service,
+            id,
+            &format!("msg_{id}"),
+            "diagnose cargo build failure",
+            1,
+        )
+        .await;
+    }
+    let first_id = session::Id::new(ids[0]).unwrap();
+    let second_id = session::Id::new(ids[1]).unwrap();
+    let (first, second) = tokio::join!(coordinator.run(&first_id), coordinator.run(&second_id));
+    first.unwrap();
+    second.unwrap();
+    for _ in 0..2 {
+        assert!(
+            ycoding_schema::stringify_json(&requests.recv().await.unwrap())
+                .contains("CONCURRENT-KEYWORD-SKILL")
+        );
+    }
+    for id in ids {
+        let events = cue_recall_events(&service, id);
+        let recorded = events
+            .iter()
+            .filter(|(kind, _)| kind == "session.recall.recorded")
+            .collect::<Vec<_>>();
+        assert_eq!(recorded.len(), 1, "{id}: {events:?}");
+        assert!(recorded[0].1.contains(&format!(r#""sessionID":"{id}""#)));
+        assert!(recorded[0].1.contains(r#""stage":"injected""#));
+    }
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[tokio::test]
 async fn keyword_relevance_activates_only_strong_eligible_skills() {
     let root = std::env::temp_dir().join(format!(
@@ -1493,6 +1616,24 @@ async fn keyword_relevance_activates_only_strong_eligible_skills() {
         assert_eq!(request.contains("MATCHED-KEYWORD-SKILL"), expected);
         assert!(!request.contains("MANUAL-KEYWORD-SKILL"));
         assert!(!request.contains("WEAK-KEYWORD-SKILL"));
+        let recorded = service
+            .log(&session::Id::new(id).unwrap(), None, 200)
+            .unwrap()
+            .events
+            .into_iter()
+            .filter(|entry| entry.event.0.event_type.as_str() == Some("session.recall.recorded"))
+            .map(|entry| {
+                ycoding_schema::stringify_json(&ycoding_schema::JsonValue::Object(
+                    entry.event.0.data.0,
+                ))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(recorded.len(), usize::from(expected));
+        if expected {
+            assert!(recorded[0].contains(r#""id":"build""#));
+            assert!(recorded[0].contains(r#""method":"bm25""#));
+            assert!(recorded[0].contains(r#""stage":"injected""#));
+        }
     }
     server.await.unwrap();
     coordinator.shutdown().await.unwrap();
@@ -2115,6 +2256,13 @@ async fn steer_batch_promotes_and_activates_each_input_in_admission_order_before
         promotion_skill_order(&event_types(&store)),
         ["user", "skill", "user", "skill"]
     );
+    let types = event_types(&store);
+    assert!(types.iter().any(|event| event == "session.cue.detected.1"));
+    assert!(
+        types
+            .iter()
+            .any(|event| event == "session.recall.recorded.1")
+    );
     assert_eq!(
         skill_history_order(
             &service
@@ -2344,6 +2492,11 @@ async fn denied_selected_skills_remain_pending_without_activation_or_provider_re
         !event_types(&store)
             .iter()
             .any(|event| event == "session.skill.activated.1")
+    );
+    assert!(
+        !event_types(&store)
+            .iter()
+            .any(|event| event == "session.recall.recorded.1" || event == "session.cue.detected.1")
     );
     coordinator.shutdown().await.unwrap();
 }

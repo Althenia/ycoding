@@ -12,6 +12,7 @@ import { FileSystemSearch } from "@ycoding-ai/core/filesystem/search"
 import { Observability } from "@ycoding-ai/core/observability"
 import { MemoryTelemetry } from "@ycoding-ai/core/observability/memory-telemetry"
 import { locationServices } from "@ycoding-ai/core/location-services"
+import { AutonomyDefaults } from "@ycoding-ai/core/autonomy-defaults"
 import { KeepAwake } from "@ycoding-ai/core/keep-awake"
 import { InteractionCapture } from "@ycoding-ai/core/interaction/capture"
 import { InteractionRuntime } from "@ycoding-ai/core/interaction/index"
@@ -23,8 +24,6 @@ import { PtyTicket } from "@ycoding-ai/core/pty/ticket"
 import { Pty } from "@ycoding-ai/core/pty"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectInventory } from "@ycoding-ai/core/project/inventory"
-import { ProjectArtifactStore } from "@ycoding-ai/core/project-artifact"
-import { ProjectArtifactAccounting } from "@ycoding-ai/core/project-artifact/accounting"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SessionCompaction } from "@ycoding-ai/core/session/compaction"
@@ -96,8 +95,6 @@ const applicationServices = LayerNode.group([
   Job.node,
   Project.node,
   ProjectInventory.node,
-  ProjectArtifactStore.node,
-  ProjectArtifactAccounting.node,
   Session.node,
   SessionStore.node,
   PluginRuntime.providerNode,
@@ -119,6 +116,7 @@ const applicationServices = LayerNode.group([
   SessionDecisions.node,
   SessionOrchestrationNotifier.node,
   KeepAwake.node,
+  AutonomyDefaults.node,
   InteractionRuntime.node,
   InteractionCapture.node,
   TelemetryConsent.node,

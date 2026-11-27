@@ -183,7 +183,7 @@ async fn migration_updates_real_event_pending_message_rows_and_records_completio
                 .iter()
                 .chain(session::TABLES)
                 .chain(resources::TABLES)
-                .chain(ycoding_store::artifacts::TABLES)
+                .chain(ycoding_store::database_format::TABLES)
                 .chain(
                     [
                         TableDeclaration::of::<analytics::DeliveryTable>(),

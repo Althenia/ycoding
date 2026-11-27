@@ -206,6 +206,25 @@ test("machine keep-awake controls are global and accept only the explicit enable
   expect(parseClientMessage(JSON.stringify({ ...read, input: {} })).ok).toBe(false)
 })
 
+test("machine autonomy defaults controls are global and accept only category modes with explicit acceptance", () => {
+  const read = { type: "request", id: "req_defaults", operation: "machine.autonomyDefaults.get" }
+  const write = { ...read, operation: "machine.autonomyDefaults.set", input: { permissions: "manual" } }
+  for (const frame of [
+    read,
+    write,
+    { ...write, input: { guardrails: "auto", answers: "manual" } },
+    { ...write, input: { permissions: "yolo", acceptYolo: true } },
+    { ...write, input: { answers: "yolo", acceptYolo: false } },
+  ]) {
+    expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+    expect(parseRelayToAgentMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+    expect(parseClientMessage(JSON.stringify({ ...frame, sessionID: "ses_1" })).ok).toBe(false)
+  }
+  for (const input of [undefined, {}, { acceptYolo: true }, { permissions: "sleep" }, { permissions: "yolo", acceptYolo: "true" }, { permissions: "manual", directory: "/private" }, { permissions: "manual", workspaceID: "wsp_other" }])
+    expect(parseClientMessage(JSON.stringify({ ...write, input })).ok).toBe(false)
+  expect(parseClientMessage(JSON.stringify({ ...read, input: {} })).ok).toBe(false)
+})
+
 test("machine telemetry consent controls are global and strictly versioned", () => {
   const read = { type: "request", id: "req_consent", operation: "machine.telemetry.consent.get" }
   const write = { ...read, operation: "machine.telemetry.consent.set", input: { enabled: true, noticeVersion: 1 } }
@@ -976,6 +995,8 @@ describe("remote operations", () => {
     "coordination.board",
       "machine.keepAwake.get",
     "machine.keepAwake.set",
+    "machine.autonomyDefaults.get",
+    "machine.autonomyDefaults.set",
     "machine.telemetry.consent.get",
     "machine.telemetry.consent.set",
       "machine.latency.append",
@@ -998,6 +1019,8 @@ describe("remote operations", () => {
     expect(remoteOperationAccess["session.review.decide"]).toBe("mutation")
     expect(requireSession("machine.keepAwake.get")).toBe(false)
     expect(requireSession("machine.keepAwake.set")).toBe(false)
+    expect(requireSession("machine.autonomyDefaults.get")).toBe(false)
+    expect(requireSession("machine.autonomyDefaults.set")).toBe(false)
     expect(requireSession("machine.latency.append")).toBe(false)
     expect(requireSession("machine.latency.list")).toBe(false)
     expect(RemoteProtocolVersion).toBe(5)

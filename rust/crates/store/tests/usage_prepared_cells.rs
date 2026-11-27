@@ -1,3 +1,5 @@
+mod common;
+
 use std::{
     path::PathBuf,
     sync::{
@@ -712,10 +714,8 @@ fn legacy_backfill_is_bounded_resumable_and_handles_writes_behind_its_cursor() {
     let old = Catalog::new(
         1,
         Box::leak(
-            native::catalog(DatabaseKind::Core)
-                .tables()
-                .iter()
-                .copied()
+            common::with_removed(native::catalog(DatabaseKind::Core).tables())
+                .into_iter()
                 .filter(|table| {
                     !TABLES.contains(&table.name)
                         && !["coordination_group", "coordination_member"].contains(&table.name)
@@ -837,10 +837,8 @@ fn seed_legacy_backend_facts(fixture: &mut Fixture, identity: u8, count: i64) ->
     let old = Catalog::new(
         1,
         Box::leak(
-            native::catalog(DatabaseKind::Core)
-                .tables()
-                .iter()
-                .copied()
+            common::with_removed(native::catalog(DatabaseKind::Core).tables())
+                .into_iter()
                 .filter(|table| {
                     !TABLES.contains(&table.name)
                         && !["coordination_group", "coordination_member"].contains(&table.name)

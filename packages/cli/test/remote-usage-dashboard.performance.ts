@@ -71,7 +71,7 @@ test("the native connector supplies the dashboard within the first-ready, warm, 
     const serverStartMs = round(performance.now() - started)
     const relay = createUsageRelay(scope.deviceID)
     const timings: RemoteRequestTiming[] = []
-    const transport = createRemoteTransport({ url: relay.url, handlers: { onRequestTiming: (timing) => timings.push(timing) } })
+    const transport = createRemoteTransport({ url: relay.url, revision: () => scope.generation, admit: () => true, handlers: { onRequestTiming: (timing) => timings.push(timing) } })
     const link: RemoteLink = { request: (_current, operation, request) => transport.request(operation, request), recoveries: () => 0, recovered: async () => false }
     const inputs = usageReportInputs(now, undefined)
     const readRound = async (name: string) => {

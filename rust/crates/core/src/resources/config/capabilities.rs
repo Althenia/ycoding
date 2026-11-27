@@ -7,7 +7,6 @@ pub const BUILTIN_INSTRUCTIONS: &[&str] = &[
     "date",
     "subagent-reuse",
     "shell-memory",
-    "project-artifact-authoring",
     "git-worktree",
     "git-attribution",
     "decision-input",
@@ -71,7 +70,6 @@ pub struct ConfigCapabilities {
     pub tools: Selection,
     pub mcp: Selection,
     pub plugins: Selection,
-    pub project_artifacts: Option<bool>,
     pub home_roots: Option<bool>,
     pub websearch_provider: Option<WebsearchProvider>,
 }
@@ -102,7 +100,6 @@ impl ConfigCapabilities {
                     selection.merge(value);
                 }
             }
-            merge_bool(&mut resolved.project_artifacts, value, "project_artifacts");
             merge_bool(&mut resolved.home_roots, value, "home_roots");
             if let Some(JsonValue::String(provider)) = field(value, "websearch_provider") {
                 match provider.as_str() {
@@ -119,9 +116,6 @@ impl ConfigCapabilities {
 
     pub fn allows_tool(&self, name: &LosslessString) -> bool {
         if name.as_str() == Some("skill") && self.skills.enabled == Some(false) {
-            return false;
-        }
-        if name.as_str() == Some("project_artifact") && self.project_artifacts == Some(false) {
             return false;
         }
         if name.as_str() == Some("execute") {

@@ -1,3 +1,5 @@
+mod common;
+
 use redb::{ReadableDatabase, ReadableTable, TableDefinition, TableHandle};
 use std::collections::BTreeMap;
 use std::ops::Bound;
@@ -73,7 +75,10 @@ fn target() -> Catalog {
 }
 
 fn predecessor() -> Catalog {
-    Catalog::new(2, Box::leak(target().tables().to_vec().into_boxed_slice()))
+    Catalog::new(
+        2,
+        Box::leak(common::with_removed(target().tables()).into_boxed_slice()),
+    )
 }
 
 fn identity() -> Metadata {
@@ -320,6 +325,10 @@ fn expected(rows: &[session::Session], mapped: &[&str]) -> Vec<session::Session>
 
 fn assert_only_sessions_and_metadata_changed(before: &Dump, after: &Dump, mapped: &[&str]) {
     for (name, rows) in before {
+        if common::removed(name) {
+            assert!(!after.contains_key(name), "{name}");
+            continue;
+        }
         match name.as_str() {
             "session" => assert_eq!(&with_origin(rows, mapped), &after[name], "{name}"),
             "storage_metadata" => {
@@ -347,7 +356,7 @@ fn assert_only_sessions_and_metadata_changed(before: &Dump, after: &Dump, mapped
             _ => assert_eq!(&after[name], rows, "{name}"),
         }
     }
-    assert_eq!(before.len(), after.len());
+    assert_eq!(common::retained(before), after.len());
 }
 
 fn stored_manifest(catalog: Catalog) -> Vec<u8> {
@@ -366,7 +375,10 @@ fn stored_manifest(catalog: Catalog) -> Vec<u8> {
 
 #[test]
 fn the_current_catalog_is_a_distinct_version_from_its_recognized_predecessor() {
-    assert_eq!(predecessor().tables(), target().tables());
+    assert_eq!(
+        predecessor().tables(),
+        common::with_removed(target().tables())
+    );
     assert_ne!(stored_manifest(predecessor()), stored_manifest(target()));
     assert_eq!(target().version, 5);
     assert_eq!(predecessor().version, 2);

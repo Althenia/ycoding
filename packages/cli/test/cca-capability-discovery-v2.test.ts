@@ -19,7 +19,7 @@ import {
   type CcaCapabilityWatcher,
 } from "../src/remote-control/cca-capability-discovery-v2"
 import { CcaRpcError, type CcaRpcHandlerContext } from "../src/remote-control/cca-executor-rpc"
-import { ensureYcodingOperatorSkill } from "../src/remote-control/ycoding-operator-skill"
+import { ensureSessionOperatorSkill } from "../src/remote-control/session-operator-skill"
 import golden from "./fixture/cca-capability-discovery-v2.golden.json"
 import { fixedScopeFor } from "./fixture/cca-scope"
 import {
@@ -148,15 +148,15 @@ describe("capabilities/discoverV2 matches the official exec-server", () => {
     const f = await fixture(bareTree)
     await mkdir(f.tree.codexHome, { recursive: true })
     const root = path.join(f.tree.root, "data", "dots", "skills")
-    await ensureYcodingOperatorSkill(path.join(f.tree.root, "data"))
+    await ensureSessionOperatorSkill(path.join(f.tree.root, "data"))
     const result = await discovery(f).discover({ cwd: CcaPolicy.toPathUri(f.tree.project) }, ctx)
     expect(result.skills).toEqual([expect.objectContaining({
-      name: "ycoding-operator",
-      path: CcaPolicy.toPathUri(path.join(root, "ycoding-operator", "SKILL.md")),
+      name: "session-operator",
+      path: CcaPolicy.toPathUri(path.join(root, "session-operator", "SKILL.md")),
       discoveryRoot: { id: "ycoding-dots-skills", path: CcaPolicy.toPathUri(root) },
     })])
     expect(result.warnings).toEqual([])
-    const instructions = await readFile(path.join(root, "ycoding-operator", "SKILL.md"), "utf8")
+    const instructions = await readFile(path.join(root, "session-operator", "SKILL.md"), "utf8")
     expect(instructions).toContain('{"env":{"CODEX_APPS_MCP_URL":"ycoding-library://process"}}')
     expect(instructions).toContain("python3 <helper-path> < /approved/library-upload.json")
   })
@@ -164,7 +164,7 @@ describe("capabilities/discoverV2 matches the official exec-server", () => {
   test("Dots skill discovery watches its root and preserves sandbox denials", async () => {
     const f = await fixture(bareTree)
     await mkdir(f.tree.codexHome, { recursive: true })
-    await ensureYcodingOperatorSkill(path.join(f.tree.root, "data"))
+    await ensureSessionOperatorSkill(path.join(f.tree.root, "data"))
     const watched = manualWatcher()
     const discover = discovery(f, { watcher: watched.watcher })
     const cwd = CcaPolicy.toPathUri(f.tree.project)

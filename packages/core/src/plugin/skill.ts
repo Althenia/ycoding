@@ -29,8 +29,8 @@ const documents = [ycodingContent, chatgptConnectorsContent, browserUseContent, 
     id: Skill.ID.make(data.name),
     name: Skill.Name.make(data.metadata["display-name"]),
     description: data.description,
-    slash: data.metadata["ycoding/slash"] === "true" ? true : undefined,
-    location: AbsolutePath.make(`/builtin/${data.name}.md`),
+    ...(data.metadata["slash"] === "true" ? { slash: true } : {}),
+    location: AbsolutePath.make(`/builtin/${data.name}/SKILL.md`),
     content,
   })
 })

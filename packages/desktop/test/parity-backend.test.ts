@@ -286,7 +286,7 @@ test("VCS diff and system snapshots project nested status, server URLs and catal
     if (call.route === "/api/dots") return { data: { access: { enabled: false, revision: 0, ...extra }, ...extra } }
     if (call.route.endsWith("/browser")) return { data: { state: "unavailable", ...extra } }
     if (call.route.endsWith("/browser/isolated")) return { data: { mode: "isolated", state: "stopped", ...extra } }
-    if (call.route.endsWith("/tabs") || call.route.endsWith("/skills") || call.route === "/api/skill" || call.route === "/api/artifact" || call.route === "/api/plugin") return { data: [] }
+    if (call.route.endsWith("/tabs") || call.route.endsWith("/skills") || call.route === "/api/skill" || call.route === "/api/plugin") return { data: [] }
     return undefined
   })
   try {
@@ -319,7 +319,7 @@ test("native folder selection registers when connected and external URLs are HTT
   expect(urls).toEqual(["https://example.test/connect"])
 })
 
-test("system management forwards explicit browser and artifact expectations, returns only pairing display data and rejects plugin write kinds as invalid changes", async () => {
+test("system management forwards explicit browser expectations, returns only pairing display data and rejects plugin write kinds as invalid changes", async () => {
   const owned = await syntheticDesktop((call) => {
     if (call.route === "/api/session/ses_test") return { data: sessionInfo }
     if (call.route.endsWith("/browser/start")) return { data: { secret: "synthetic-pairing-code", expiresAt: 1234, ...extra } }
@@ -335,13 +335,8 @@ test("system management forwards explicit browser and artifact expectations, ret
     expect(paired.pairing).toEqual({ secret: "synthetic-pairing-code", expiresAt: 1234 })
     safe(paired)
     expect(paired.notices.Skills).toBeDefined()
-    const artifact = { scope: "project", kind: "skill", id: "sample", expectedRevision: 3, expectedVersionID: "pav_test", expectedDigest: "a".repeat(64) }
-    for (const input of [{ kind: "browser-forget" }, { kind: "isolated-browser-start", url: "https://example.test" }, { kind: "isolated-browser-stop" }, { kind: "artifact-enable", artifact }, { kind: "artifact-disable", artifact }])
+    for (const input of [{ kind: "browser-forget" }, { kind: "isolated-browser-start", url: "https://example.test" }, { kind: "isolated-browser-stop" }])
       safe(await owned.controller.manageSystem({ ...input, sessionID: "ses_test", revision: owned.revision }))
-    expect(owned.calls.filter((call) => call.method === "POST" && call.route.startsWith("/api/artifact")).map((call) => [call.route, call.body])).toEqual([
-      ["/api/artifact/project/skill/sample/enable", { expectedRevision: 3, expectedVersionID: "pav_test", expectedDigest: "a".repeat(64) }],
-      ["/api/artifact/project/skill/sample/disable", { expectedRevision: 3, expectedVersionID: "pav_test", expectedDigest: "a".repeat(64) }],
-    ])
     const before = owned.calls.length
     for (const input of [{ kind: "plugin-add", spec: "synthetic-plugin" }, { kind: "plugin-activate", id: "synthetic-plugin" }, { kind: "plugin-deactivate", id: "synthetic-plugin" }])
       await expect(owned.controller.manageSystem({ ...input, revision: owned.revision })).rejects.toThrow("Invalid desktop change.")

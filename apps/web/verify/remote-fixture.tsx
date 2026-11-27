@@ -30,6 +30,7 @@ import { RemoteLimits, isRemoteLatencySample, noticePageValue, noticeSequence, t
 import { remoteScenario, type WireSession } from "./remote-scenarios"
 import { createProviderAuthFixture } from "./provider-auth-fixture"
 import type { Form } from "../../../packages/schema/src/form"
+import { noResend } from "../test/transport-fence"
 import "../src/styles/tokens.css"
 import "../src/styles/base.css"
 import "../src/styles/site.css"
@@ -1702,7 +1703,7 @@ function createFixtureStore(): Fixture {
       handlers = transportHandlers
       if (distinctMachines) return machineTransport(deviceID, transportHandlers)
       if (relayAddress !== undefined) {
-        const wire = createRemoteTransport({ url: relayAddress.href, handlers: transportHandlers })
+        const wire = createRemoteTransport({ ...noResend, url: relayAddress.href, handlers: transportHandlers })
         return {
           ...wire,
           request: async (operation, request) => {

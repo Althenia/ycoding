@@ -1,3 +1,5 @@
+mod common;
+
 use redb::{ReadableDatabase, ReadableTable, TableDefinition, TableHandle};
 use std::collections::BTreeMap;
 use std::ops::Bound;
@@ -72,7 +74,10 @@ fn target() -> Catalog {
 }
 
 fn predecessor() -> Catalog {
-    Catalog::new(3, Box::leak(target().tables().to_vec().into_boxed_slice()))
+    Catalog::new(
+        3,
+        Box::leak(common::with_removed(target().tables()).into_boxed_slice()),
+    )
 }
 
 fn identity() -> Metadata {
@@ -230,8 +235,12 @@ fn catalog_version(dump: &Dump) -> Option<Vec<u8>> {
 }
 
 fn assert_only_sessions_gained_the_bound_scope(before: &Dump, after: &Dump) {
-    assert_eq!(before.len(), after.len());
+    assert_eq!(common::retained(before), after.len());
     for (name, rows) in before {
+        if common::removed(name) {
+            assert!(!after.contains_key(name), "{name}");
+            continue;
+        }
         match name.as_str() {
             "session" => {
                 let expected = rows
@@ -280,7 +289,10 @@ fn stored_manifest(catalog: Catalog) -> Vec<u8> {
 #[test]
 fn the_scope_catalog_is_a_new_version_over_the_same_tables() {
     assert_eq!(target().version, 5);
-    assert_eq!(predecessor().tables(), target().tables());
+    assert_eq!(
+        predecessor().tables(),
+        common::with_removed(target().tables())
+    );
     assert_ne!(stored_manifest(predecessor()), stored_manifest(target()));
 }
 

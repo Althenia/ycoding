@@ -60,12 +60,6 @@ export const publicEvents = [
     type: "ycoding.v5.SessionLogItemValue4",
   },
   {
-    name: "session.project-artifacts-ended",
-    durable: true,
-    tag: 10,
-    type: "ycoding.v5.SessionLogItemValue5",
-  },
-  {
     name: "session.guardrail.dismissed",
     durable: true,
     tag: 104,
@@ -336,6 +330,54 @@ export const publicEvents = [
     type: "ycoding.v5.SessionLogItemValue27",
   },
   {
+    name: "session.cue.detected",
+    durable: true,
+    tag: 143,
+    type: "ycoding.v5.SessionLogItemValue76",
+  },
+  {
+    name: "session.recall.recorded",
+    durable: true,
+    tag: 144,
+    type: "ycoding.v5.SessionLogItemValue77",
+  },
+  {
+    name: "session.lifecycle.recorded",
+    durable: true,
+    tag: 146,
+    type: "ycoding.v5.SessionLogItemValue78",
+  },
+  {
+    name: "session.harness.evaluated",
+    durable: true,
+    tag: 147,
+    type: "ycoding.v5.SessionLogItemValue79",
+  },
+  {
+    name: "session.harness.probed",
+    durable: true,
+    tag: 148,
+    type: "ycoding.v5.SessionLogItemValue80",
+  },
+  {
+    name: "session.harness.adopted",
+    durable: true,
+    tag: 149,
+    type: "ycoding.v5.SessionLogItemValue81",
+  },
+  {
+    name: "session.harness.rolled-back",
+    durable: true,
+    tag: 150,
+    type: "ycoding.v5.SessionLogItemValue82",
+  },
+  {
+    name: "session.harness.reflected",
+    durable: true,
+    tag: 151,
+    type: "ycoding.v5.SessionLogItemValue83",
+  },
+  {
     name: "session.shell.started",
     durable: true,
     tag: 36,
@@ -538,6 +580,12 @@ export const publicEvents = [
     durable: true,
     tag: 127,
     type: "ycoding.v5.PublicEvent_coordination_member_owner_changed",
+  },
+  {
+    name: "coordination.subagent.request.blocked",
+    durable: true,
+    tag: 145,
+    type: "ycoding.v5.PublicEvent_coordination_subagent_request_blocked",
   },
   {
     name: "coordination.updated",

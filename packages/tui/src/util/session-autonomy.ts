@@ -1,8 +1,16 @@
 import type { SessionAutonomyDecisionMode, SessionAutonomyView } from "@ycoding-ai/client"
+import type { V5Client } from "@ycoding-ai/client/v5"
 
 export type AutonomyState = Omit<SessionAutonomyView, "effective">
 export type AutonomyCategory = "permissions" | "guardrails" | "answers"
 export type AutonomyChange = Partial<Record<AutonomyCategory, SessionAutonomyDecisionMode>>
+
+export type AutonomyDefaults = Awaited<ReturnType<V5Client["autonomyDefaults"]["get"]>>
+export type AutonomyDefaultsChange = NonNullable<Parameters<V5Client["autonomyDefaults"]["set"]>[0]>
+export type AutonomyDefaultsServer = {
+  get: () => Promise<AutonomyDefaults>
+  set: (change: AutonomyDefaultsChange) => Promise<AutonomyDefaults>
+}
 
 export const autonomyCategories = ["permissions", "guardrails", "answers"] as const
 const autonomyModes = ["manual", "yolo", "auto"] as const

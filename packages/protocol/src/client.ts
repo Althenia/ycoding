@@ -52,6 +52,7 @@ export const groupNames = {
   "server.incident": "incident",
   "server.remote": "remote",
   "server.keepAwake": "keepAwake",
+  "server.autonomyDefaults": "autonomyDefaults",
   "server.debug": "debug",
   "server.location": "location",
   "server.agent": "agent",
@@ -84,7 +85,6 @@ export const groupNames = {
   "server.project": "project",
   "server.projectCopy": "projectCopy",
   "server.vcs": "vcs",
-  "server.projectArtifact": "projectArtifact",
 } as const
 
 export const promiseOmitEndpoints = new Set(["browser.connect", "pty.connect"])

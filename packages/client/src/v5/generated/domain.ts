@@ -364,16 +364,6 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   "ycoding.v5.Session_Message_AgentSelected_type": {
     "1": "agent-switched",
   },
-  "ycoding.v5.Session_Message_ArtifactProvenance_kind": {
-    "1": "skill",
-    "2": "command",
-    "3": "agent",
-    "4": "plugin",
-  },
-  "ycoding.v5.Session_Message_ArtifactProvenance_sourceScope": {
-    "1": "project",
-    "2": "global",
-  },
   "ycoding.v5.Session_Message_ModelSelected_type": {
     "1": "model-switched",
   },
@@ -961,24 +951,11 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   "ycoding.v5.SessionLogItemValue2_type": {
     "1": "session.agent.selected",
   },
-  "ycoding.v5.Session_Event_ArtifactProvenance_kind": {
-    "1": "skill",
-    "2": "command",
-    "3": "agent",
-    "4": "plugin",
-  },
-  "ycoding.v5.Session_Event_ArtifactProvenance_sourceScope": {
-    "1": "project",
-    "2": "global",
-  },
   "ycoding.v5.SessionLogItemValue3_type": {
     "1": "session.model.selected",
   },
   "ycoding.v5.SessionLogItemValue4_type": {
     "1": "session.daybreak.set",
-  },
-  "ycoding.v5.SessionLogItemValue5_type": {
-    "1": "session.project-artifacts-ended",
   },
   "ycoding.v5.SessionLogItemValue53_type": {
     "1": "session.guardrail.dismissed",
@@ -1427,6 +1404,139 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   "ycoding.v5.SessionLogItemValue27_data_reason": {
     "1": "conflict_resolved",
   },
+  "ycoding.v5.SessionLogItemValue76_type": {
+    "1": "session.cue.detected",
+  },
+  "ycoding.v5.Recall_CueKind": {
+    "1": "explicit",
+    "2": "command",
+    "3": "path",
+    "4": "symbol",
+    "5": "tool_call",
+    "6": "tool_result",
+    "7": "tool_error",
+    "8": "workspace",
+    "9": "lifecycle",
+    "10": "compaction",
+    "11": "recovery",
+    "12": "memory_revision",
+    "13": "skill_revision",
+  },
+  "ycoding.v5.SessionLogItemValue77_type": {
+    "1": "session.recall.recorded",
+  },
+  "ycoding.v5.Recall_Trigger": {
+    "1": "prompt",
+    "2": "cue",
+    "3": "explicit",
+    "4": "compaction",
+    "5": "recovery",
+    "6": "delegation",
+  },
+  "ycoding.v5.Recall_Outcome": {
+    "1": "injected",
+    "2": "abstained",
+    "3": "restored",
+  },
+  "ycoding.v5.Recall_Abstention": {
+    "1": "no_match",
+    "2": "below_threshold",
+    "3": "explicit_unavailable",
+    "4": "out_of_budget",
+    "5": "offline",
+  },
+  "ycoding.v5.Recall_Method": {
+    "1": "explicit",
+    "2": "cue",
+    "3": "exact",
+    "4": "bm25",
+    "5": "semantic",
+    "6": "rrf",
+  },
+  "ycoding.v5.Recall_Kind": {
+    "1": "memory",
+    "2": "skill",
+  },
+  "ycoding.v5.Recall_Stage": {
+    "1": "candidate",
+    "2": "rejected",
+    "3": "selected",
+    "4": "injected",
+    "5": "restored",
+  },
+  "ycoding.v5.Recall_Rejection": {
+    "1": "denied",
+    "2": "disabled",
+    "3": "stale",
+    "4": "out_of_scope",
+    "5": "over_budget",
+    "6": "duplicate",
+    "7": "conflict",
+    "8": "below_threshold",
+    "9": "manual_only",
+    "10": "missing",
+    "11": "untrusted",
+  },
+  "ycoding.v5.Recall_Trust": {
+    "1": "trusted",
+    "2": "unverified",
+  },
+  "ycoding.v5.Recall_Freshness": {
+    "1": "fresh",
+    "2": "stale",
+    "3": "unknown",
+  },
+  "ycoding.v5.Recall_Lifecycle": {
+    "1": "active",
+    "2": "draft",
+    "3": "deprecated",
+    "4": "superseded",
+    "5": "archived",
+    "6": "unknown",
+  },
+  "ycoding.v5.SessionLogItemValue78_type": {
+    "1": "session.lifecycle.recorded",
+  },
+  "ycoding.v5.Lifecycle_Decision": {
+    "1": "continue",
+    "2": "recover",
+    "3": "complete",
+  },
+  "ycoding.v5.Lifecycle_Basis": {
+    "1": "tool_results",
+    "2": "answered",
+    "3": "truncated",
+    "4": "silent",
+    "5": "unsettled",
+  },
+  "ycoding.v5.SessionLogItemValue79_type": {
+    "1": "session.harness.evaluated",
+  },
+  "ycoding.v5.Harness_Stage": {
+    "1": "baseline",
+    "2": "propose",
+    "3": "probe",
+    "4": "compose",
+    "5": "adopt",
+  },
+  "ycoding.v5.Harness_Mode": {
+    "1": "adaptive",
+    "2": "parallel",
+    "3": "sequential",
+    "4": "disabled",
+  },
+  "ycoding.v5.SessionLogItemValue80_type": {
+    "1": "session.harness.probed",
+  },
+  "ycoding.v5.SessionLogItemValue81_type": {
+    "1": "session.harness.adopted",
+  },
+  "ycoding.v5.SessionLogItemValue82_type": {
+    "1": "session.harness.rolled-back",
+  },
+  "ycoding.v5.SessionLogItemValue83_type": {
+    "1": "session.harness.reflected",
+  },
   "ycoding.v5.SessionLogItemValue28_type": {
     "1": "session.shell.started",
   },
@@ -1726,6 +1836,16 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "1": "completed",
     "2": "released",
   },
+  "ycoding.v5.PublicEvent_coordination_subagent_request_blocked_type": {
+    "1": "coordination.subagent.request.blocked",
+  },
+  "ycoding.v5.PublicEvent_coordination_subagent_request_blocked_data_reason": {
+    "1": "concurrency-ceiling",
+    "2": "agent-missing",
+    "3": "permission-denied",
+    "4": "project-paused",
+    "5": "route-unavailable",
+  },
   "ycoding.v5.PublicEvent_coordination_updated_type": {
     "1": "coordination.updated",
   },
@@ -1951,6 +2071,11 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   },
   "ycoding.v5.PublicEvent_mcp_resources_changed_type": {
     "1": "mcp.resources.changed",
+  },
+  "ycoding.v5.AutonomyDefaults_Mode": {
+    "1": "manual",
+    "2": "yolo",
+    "3": "auto",
   },
   "ycoding.v5.browser_action_Request_payload_actionValue1_type": {
     "1": "navigate",
@@ -2405,6 +2530,8 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "123": "session.deleteMessage",
     "124": "session.message.delete",
     "125": "coordination.board",
+    "126": "machine.autonomyDefaults.get",
+    "127": "machine.autonomyDefaults.set",
   },
   "ycoding.v5.Telemetry_RequestSample_outcome": {
     "1": "ok",
@@ -2479,139 +2606,6 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "5": "warning",
     "6": "error",
     "7": "info",
-  },
-  "ycoding.v5.ProjectArtifact_AutomaticWriteResult": {
-    "1": "created",
-    "2": "updated",
-    "3": "reconciled",
-  },
-  "ycoding.v5.ProjectArtifact_Kind": {
-    "1": "skill",
-    "2": "command",
-    "3": "agent",
-    "4": "plugin",
-  },
-  "ycoding.v5.ProjectArtifact_ApiMutationResult_stage": {
-    "1": "trial",
-  },
-  "ycoding.v5.ArtifactBadRequest__tag": {
-    "1": "ArtifactBadRequest",
-  },
-  "ycoding.v5.ArtifactBadRequest_code": {
-    "1": "ProjectIdentityUnavailable",
-    "2": "InvalidArtifact",
-    "3": "UnsafeContent",
-    "4": "UnsupportedKind",
-    "5": "InvalidScope",
-  },
-  "ycoding.v5.ArtifactNotFound__tag": {
-    "1": "ArtifactNotFound",
-  },
-  "ycoding.v5.ArtifactNotFound_code": {
-    "1": "ArtifactNotFound",
-    "2": "VersionNotFound",
-    "3": "DeletionNotFound",
-  },
-  "ycoding.v5.ArtifactConflict__tag": {
-    "1": "ArtifactConflict",
-  },
-  "ycoding.v5.ArtifactConflict_code": {
-    "1": "ArtifactCollision",
-    "2": "ScopeCollision",
-    "3": "VersionConflict",
-    "4": "OwnershipMismatch",
-    "5": "DestinationExists",
-    "6": "ProjectAdoptionConflict",
-  },
-  "ycoding.v5.ArtifactGone__tag": {
-    "1": "ArtifactGone",
-  },
-  "ycoding.v5.ArtifactGone_code": {
-    "1": "ConfirmationExpired",
-    "2": "TrashExpired",
-  },
-  "ycoding.v5.ArtifactTooLarge__tag": {
-    "1": "ArtifactTooLarge",
-  },
-  "ycoding.v5.ArtifactTooLarge_code": {
-    "1": "ContentTooLarge",
-    "2": "ScopeQuotaExceeded",
-  },
-  "ycoding.v5.ArtifactRateLimited__tag": {
-    "1": "ArtifactRateLimited",
-  },
-  "ycoding.v5.ArtifactRateLimited_code": {
-    "1": "WriteRateExceeded",
-    "2": "ArtifactCooldown",
-  },
-  "ycoding.v5.ArtifactUnavailable__tag": {
-    "1": "ArtifactUnavailable",
-  },
-  "ycoding.v5.ArtifactUnavailable_code": {
-    "1": "StorageUnavailable",
-    "2": "LockTimeout",
-    "3": "ReconciliationRequired",
-  },
-  "ycoding.v5.ProjectArtifact_ApiScope": {
-    "1": "project",
-    "2": "global",
-  },
-  "ycoding.v5.ProjectArtifact_SkillDefinition_kind": {
-    "1": "skill",
-  },
-  "ycoding.v5.ProjectArtifact_CommandDefinition_kind": {
-    "1": "command",
-  },
-  "ycoding.v5.ProjectArtifact_AgentDefinition_kind": {
-    "1": "agent",
-  },
-  "ycoding.v5.ProjectArtifact_AgentDefinition_mode": {
-    "1": "subagent",
-  },
-  "ycoding.v5.ProjectArtifact_PluginDefinition_kind": {
-    "1": "plugin",
-  },
-  "ycoding.v5.ProjectArtifact_Stage": {
-    "1": "trial",
-    "2": "active",
-    "3": "degraded",
-    "4": "disabled",
-    "5": "quarantine",
-  },
-  "ycoding.v5.ProjectArtifact_ProjectScope_type": {
-    "1": "project",
-  },
-  "ycoding.v5.ProjectArtifact_GlobalScope_type": {
-    "1": "global",
-  },
-  "ycoding.v5.ProjectArtifact_VersionState": {
-    "1": "trial",
-    "2": "active",
-    "3": "degraded",
-    "4": "disabled",
-    "5": "quarantine",
-    "6": "superseded",
-  },
-  "ycoding.v5.ProjectArtifact_Source": {
-    "1": "agent",
-    "2": "user",
-    "3": "promotion",
-    "4": "fork",
-    "5": "restore",
-  },
-  "ycoding.v5.ProjectArtifact_CollisionDiagnostic_type": {
-    "1": "existing-source",
-    "2": "cross-scope",
-    "3": "project-over-global-shadow",
-  },
-  "ycoding.v5.ProjectArtifact_ApiListScope": {
-    "1": "project",
-    "2": "global",
-    "3": "trash",
-  },
-  "ycoding.v5.ProjectArtifact_PromotionPreview_risk": {
-    "1": "declarative",
-    "2": "executable",
   },
   "ycoding.v5.Config_DiagnosticReason": {
     "1": "invalid-json",

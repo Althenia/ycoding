@@ -3,6 +3,12 @@ name: browser-use
 description: "Use when a task needs the interaction tool to operate a Chrome tab: clicking, typing, or navigating a live page the user authorized, or working in a new YCoding-owned tab. Do not use for fetching or searching web content, or for coding tasks."
 metadata:
   display-name: "Browser use"
+  purpose: "Operate a Chrome tab the user authorized through the interaction tool."
+  applicability: "Live pages in Chrome; not for fetching web content or coding tasks."
+  triggers: "click or type in a web page, navigate a live page, work in a YCoding-owned tab"
+  capabilities: "page observation, clicking, typing, navigation"
+  prerequisites: "Chrome paired with YCoding, user approval for each action"
+  related: "computer-use"
 ---
 # Browser use
 

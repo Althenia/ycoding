@@ -4,6 +4,7 @@ import { BackendController } from "../src/backend-controller"
 import { DESKTOP_RPC_MAX_REQUEST_TIME } from "../src/rpc"
 import { Coordination, KeepAwake, PermissionSaved, ProjectCopy, Schema, Telemetry } from "@ycoding-ai/client/effect"
 import type { ConnectionState } from "../src/contract"
+import { V5ClientError } from "@ycoding-ai/client/v5"
 import { env, launch, peer, revision, syntheticBundle } from "./synthetic-backend"
 
 const id = "ses_synthetic"
@@ -248,6 +249,7 @@ test.each(["settings", "project", "workspace"] as const)("%s mutation interrupte
     expect(writes).toBe(1)
   })
 })
+const defaultsRoute = (route: string) => route.replaceAll("-", "").toLowerCase() === "/api/autonomydefaults"
 const autonomy = { mode: "normal", permissions: "manual", guardrails: "auto", answers: "yolo", goal: { text: "Synthetic goal", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 }, effective: { permissions: "auto", guardrails: "manual", answers: "yolo", inherited: { permissions: "ses_parent" }, deferred: false, guardrailsEnabled: true } } as const
 
 test("autonomy reads and fenced updates project valid views without replay", async () => {
@@ -269,6 +271,50 @@ test("autonomy reads and fenced updates project valid views without replay", asy
     await expect(controller.autonomy(id)).rejects.toThrow()
     await expect(controller.setAutonomy({ sessionID: id, revision: rev, payload: { goal: null } })).rejects.toThrow("not confirmed")
     expect(calls).toEqual([{ method: "GET" }, { method: "PUT", payload: { permissions: "auto", answers: "manual" } }, ...[{ guardrails: "manual" }, { answers: "auto" }, { defer: true }, { goal: "synthetic", maxNoProgress: 2 }, { goal: true }].map((payload) => ({ method: "PUT", payload })), { method: "GET" }, { method: "PUT", payload: { goal: null } }])
+  })
+})
+
+test("autonomy defaults read, save one category and confirm the stored result without replay", async () => {
+  const calls: { method: string; payload?: unknown }[] = []
+  let stored: Record<string, unknown> = { permissions: "manual", guardrails: "auto", answers: "yolo", yoloAcceptedAt: { answers: 5, extra: 1 }, extra: "hidden" }
+  await connected(async (route, request) => {
+    if (!defaultsRoute(route)) return undefined
+    const payload = request.method === "PUT" ? await request.json() as Record<string, unknown> : undefined
+    calls.push({ method: request.method, ...(payload ? { payload } : {}) })
+    if (payload?.permissions === "yolo" && payload.acceptYolo !== true) return Response.json({ error: "refused" }, { status: 400 })
+    if (payload) stored = { ...stored, ...payload, acceptYolo: undefined }
+    return Response.json({ data: stored })
+  }, async (controller, rev) => {
+    expect(await controller.autonomyDefaults()).toEqual({ revision: rev, defaults: { permissions: "manual", guardrails: "auto", answers: "yolo", yoloAcceptedAt: { answers: 5 } } })
+    expect((await controller.setAutonomyDefaults({ revision: rev, payload: { guardrails: "manual" } })).defaults.guardrails).toBe("manual")
+    expect((await controller.setAutonomyDefaults({ revision: rev, payload: { permissions: "yolo", acceptYolo: true } })).defaults.permissions).toBe("yolo")
+    await expect(controller.setAutonomyDefaults({ revision: rev + 1, payload: { answers: "manual" } })).rejects.toThrow()
+    for (const payload of [{}, { acceptYolo: true }, { permissions: "invalid" }, { permissions: "yolo", acceptYolo: false }, { answers: "auto", extra: true }, { defer: true }])
+      await expect(controller.setAutonomyDefaults({ revision: rev, payload })).rejects.toThrow()
+    await expect(controller.setAutonomyDefaults({ revision: rev, payload: { permissions: "auto" }, extra: 1 })).rejects.toThrow()
+    await expect(controller.setAutonomyDefaults({ payload: { permissions: "auto" } })).rejects.toThrow()
+    stored = { permissions: "invalid", guardrails: "auto", answers: "yolo" }
+    await expect(controller.autonomyDefaults()).rejects.toThrow()
+    expect(calls).toEqual([{ method: "GET" }, { method: "PUT", payload: { guardrails: "manual" } }, { method: "PUT", payload: { permissions: "yolo", acceptYolo: true } }, { method: "GET" }])
+  })
+})
+
+test("an autonomy default update interrupted in flight is unconfirmed and never replayed", async () => {
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  let writes = 0
+  await connected(async (route, request) => {
+    if (!defaultsRoute(route) || request.method !== "PUT") return undefined
+    writes++; entered.resolve(); await release.promise
+    return Response.json({ data: { permissions: "manual", guardrails: "manual", answers: "manual" } })
+  }, async (controller, rev) => {
+    const pending = controller.setAutonomyDefaults({ revision: rev, payload: { answers: "manual" } })
+    const outcome = pending.then(() => "resolved", (error: unknown) => error instanceof Error ? error.message : String(error))
+    await entered.promise
+    await controller.disconnect()
+    release.resolve()
+    expect(await outcome).toContain("not confirmed")
+    expect(writes).toBe(1)
   })
 })
 
@@ -706,6 +752,61 @@ async function connected(handle: (route: string, request: Request) => Promise<Re
   try { await run(controller, revision(await controller.connect({ mode: "shared", server: server.url.href }))) }
   finally { await controller.disconnect(); await fs.rm(resources, { recursive: true, force: true }) }
 }
+
+test("a request sent after the backend connection closed reports the changed connection, never the transport status", async () => {
+  await connected(async () => undefined, async (controller) => {
+    ;(controller as unknown as { current: { native: { api: { transport: { close(): void } } } } }).current.native.api.transport.close()
+    const message = await controller.fileChanges(id).then(() => "resolved", (error: unknown) => error instanceof Error ? error.message : String(error))
+    expect(message).toBe("Captured file changes could not be read. Refresh to retry. The backend connection changed.")
+    expect(message).not.toContain("unsent")
+  })
+})
+
+type Attempt = { revision: number; native: unknown }
+type PinScript = (attempt: Attempt, call: number, transport: { connectionEpoch: string }) => void
+
+async function pinWith(script: PinScript) {
+  let message = ""
+  let pins = 0
+  await connected(async () => undefined, async (controller, current) => {
+    const attempt = (controller as unknown as { current: Attempt }).current
+    const real = attempt.native
+    const transport = { connectionEpoch: "epoch-1", state: "established", ready: async () => {} }
+    attempt.native = { ...(real as object), api: { transport, session: { pin: async () => { pins++; script(attempt, pins, transport) } } } }
+    try {
+      message = await controller.pin({ sessionID: id, revision: current, pinned: true }).then(() => "pinned", (error: unknown) => error instanceof Error ? error.message : String(error))
+    } finally { attempt.native = real }
+  })
+  return { message, pins }
+}
+const neverSent = () => new V5ClientError("unsent", "session.pin", "Connection closed before the request was sent", true)
+
+test("a never-sent mutation is resent once when the revision fence still accepts it", async () => {
+  const result = await pinWith((_, call, transport) => {
+    if (call === 1) { transport.connectionEpoch = "epoch-2"; throw neverSent() }
+  })
+  expect(result).toEqual({ message: "pinned", pins: 2 })
+})
+
+test("a never-sent mutation is not resent when the revision fence rejects it", async () => {
+  const result = await pinWith((attempt, call, transport) => {
+    if (call === 1) { attempt.revision += 1; transport.connectionEpoch = "epoch-2"; throw neverSent() }
+  })
+  expect(result).toEqual({ message: "The pin change was not confirmed before the connection changed. Refresh Sessions to see whether it changed.", pins: 1 })
+})
+
+test("an uncertain mutation is never resent and reports the changed connection", async () => {
+  const result = await pinWith((attempt, call) => {
+    if (call === 1) { attempt.revision += 1; throw new V5ClientError("unknown", "session.pin") }
+  })
+  expect(result.message).toContain("connection changed")
+  expect(result.pins).toBe(1)
+})
+
+test("a transmitted mutation stays unknown, is never resent and never shows a bare status", async () => {
+  const result = await pinWith(() => { throw new V5ClientError("unknown", "session.pin") })
+  expect(result).toEqual({ message: "The pin change was not confirmed. Refresh Sessions to see whether it changed.", pins: 1 })
+})
 
 test("pending messages are removed and steered through their Session routes and report a stale input", async () => {
   const writes: string[] = []

@@ -83,7 +83,7 @@ YCoding discovers:
 - the global YCoding config directory;
 - global `~/.claude` and `~/.agents` skill directories when present, unless `capabilities.home_roots` is `false`.
 
-[Capability toggles](./configuration.md#capability-toggles) narrow what discovery exposes: `capabilities.home_roots: false` omits `~/.claude` and `~/.agents` (including when the project lies below the home directory), and `capabilities.skills`, `tools`, `mcp`, `plugins`, `project_artifacts`, and `instructions` filter the discovered resources by ID, name, or path.
+[Capability toggles](./configuration.md#capability-toggles) narrow what discovery exposes: `capabilities.home_roots: false` omits `~/.claude` and `~/.agents` (including when the project lies below the home directory), and `capabilities.skills`, `tools`, `mcp`, `plugins`, and `instructions` filter the discovered resources by ID, name, or path.
 
 Runtime config document order is documented in [`configuration.md`](./configuration.md#runtime-configuration-discovery-and-precedence).
 
@@ -93,7 +93,7 @@ Resource-specific rules:
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | Agents     | Recursive `agent/**/*.md` and `agents/**/*.md` inside YCoding config directories.                                             |
 | Commands   | Recursive `command/**/*.md` and `commands/**/*.md` inside YCoding config directories.                                         |
-| Skills     | Root `*.md` and recursive `**/SKILL.md` under each skill source.                                                              |
+| Skills     | `<directory>/SKILL.md` under each skill source; the first `SKILL.md` in a directory ends descent. |
 | Plugins    | Direct children only: `plugin/*.{ts,js}` and `plugins/*.{ts,js}`.                                                             |
 | Themes     | Direct `themes/*.json` files.                                                                                                 |
 | Guardrails | Direct children only: `guardrails/*.md` under the global config directory and every discovered repository `Config.Directory`. |
@@ -114,7 +114,7 @@ The detailed sections below are authoritative. This index makes scope, recursion
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Agents               | `<global config>/agent/**/*.md`, `<global config>/agents/**/*.md`; `.ycoding/agent/**/*.md`, `.ycoding/agents/**/*.md`                                        | Recursive. ID is the path below `agent` or `agents` without `.md`.                                                                           | Markdown body is `system`. Frontmatter: `model`, `request.headers`, `request.body`, `description`, `mode` (`subagent` \| `primary` \| `all`), `hidden`, `color`, `steps`, `disabled`, `permissions`. | Same ID updates the earlier or built-in definition; request objects merge and permission rules append. Every frontmatter field is unset when omitted; the body is optional.              |
 | Commands             | `<global config>/command/**/*.md`, `<global config>/commands/**/*.md`; `.ycoding/command/**/*.md`, `.ycoding/commands/**/*.md`                                | Recursive. Name is the path below `command` or `commands` without `.md`.                                                                     | Markdown body is required `template`. Frontmatter: `description`, `agent`, `model`, `subtask`.                                                                                                       | Configured or Markdown command with the same name wins over an MCP prompt. Every frontmatter field is unset when omitted.                                                                |
-| Skills               | `<global config>/skill` and `skills`; ancestor `.ycoding/skill` and `skills`; compatible `.claude/skills`, `.agents/skills`; configured local/HTTP(S) sources | Direct root `*.md` or recursive `**/SKILL.md`. Root-file ID is filename; `SKILL.md` ID is its directory.                                     | Markdown is the skill content. Frontmatter: `name`, `description`, `slash`, `metadata`; recognized metadata includes `ycoding/slash`, `ycoding/autoinvoke`, and conflict lists.                      | `name` defaults to the ID. Other fields are unset when omitted. Compatibility roots contribute skills only and are re-read on demand.                                                    |
+| Skills               | `<global config>/skill` and `skills`; ancestor `.ycoding/skill` and `skills`; compatible `.claude/skills`, `.agents/skills`; configured local/HTTP(S) sources | `<directory>/SKILL.md`. The ID is the directory name; root `*.md` and nested `SKILL.md` files are not skills. | Markdown is the skill content. Frontmatter: `name`, `description`, `license`, `compatibility`, `allowed-tools`, `metadata`; recognized metadata includes `display-name`, `slash`, `conflicts`, `instruction-conflicts` and the activation keys. | `name` and `description` are required and validated against the Agent Skills specification; a violating skill is skipped with a diagnostic. Compatibility roots contribute skills only and are re-read on demand. |
 | Plugins              | `<global config>/plugin/*.{ts,js}`, `<global config>/plugins/*.{ts,js}`; equivalent `.ycoding` paths                                                          | Direct children only; nested files are not auto-discovered. Plugin identity is supplied by its exported plugin definition.                   | TypeScript or JavaScript module; options come from JSON `{ package, options }`.                                                                                                                      | JSON directives run after auto-discovered files and can remove exact, `*`, or `<prefix>.*` IDs. There is no Markdown body or frontmatter format.                                         |
 | Themes               | `<global config>/themes/*.json`; `.ycoding/themes/*.json`                                                                                                     | Direct children only. ID is filename without `.json`.                                                                                        | Theme JSON shape is owned by the `ThemeFile` schema in `packages/tui/src/theme/schema.ts`.                                                                                                           | Global, broad ancestor, then nearer project files load in order; later equal IDs replace earlier files.                                                                                  |
 | Ambient instructions | `<global config>/AGENTS.md`; project-root-to-current-directory `AGENTS.md` files                                                                              | Direct `AGENTS.md` file at each discovered level; no recursive filename glob. There is no derived instruction ID exposed as a resource name. | Whole file is instruction content, truncated per `instruction_max_bytes`.                                                                                                                            | Broader context precedes narrower context. Top-level JSON `instructions` is Schema-accepted but is not a current discovery source.                                                       |
@@ -274,18 +274,11 @@ YCoding adds skill sources from:
 
 Local skill listings re-read and parse the current Markdown bytes without adding full documents to a process-wide parser cache. Unquoted colons in frontmatter scalar values use the YAML block-scalar fallback; malformed frontmatter remains invalid on repeated reads.
 
-`capabilities.skills` filters skills by ID after discovery from every source above, managed project-artifact skills, MCP-served skills, and the built-in `ycoding`, `chatgpt-connectors`, `browser-use`, `computer-use` and `report` skills; a filtered skill is absent from the catalog and cannot be loaded by explicit ID. `capabilities.skills.enabled: false` also hides the `skill` tool.
+`capabilities.skills` filters skills by ID after discovery from every source above, MCP-served skills, and the built-in `ycoding`, `chatgpt-connectors`, `browser-use`, `computer-use` and `report` skills; a filtered skill is absent from the catalog and cannot be loaded by explicit ID. `capabilities.skills.enabled: false` also hides the `skill` tool.
 
 ### Supported layouts
 
-A skill source supports either:
-
-```text
-skills/
-└── incident-response.md
-```
-
-or:
+A skill is a directory that contains a `SKILL.md` file:
 
 ```text
 skills/
@@ -293,23 +286,21 @@ skills/
     └── SKILL.md
 ```
 
-For a root Markdown file, the skill ID is the filename. For `SKILL.md`, the skill ID is the containing directory name. The five built-in skills use the same packaged `SKILL.md` documents in the native and Bun catalogs. An embedded plugin source can still supply its body directly.
+The skill ID is the directory name and must equal the frontmatter `name`. Discovery stops at the first `SKILL.md` in a directory, so a `SKILL.md` nested under `references/` or `assets/` is supporting content, not a second skill. Root-level `*.md` files are not skills. The five built-in skills use the same packaged `SKILL.md` documents in the native and Bun catalogs. An embedded plugin source can still supply its body directly.
+
+A skill that violates the Agent Skills specification is skipped and reported as a discovery diagnostic: a `name` that is not lowercase letters, digits and single hyphens (at most 64 characters) or differs from the directory name, a missing or empty `description` (at most 1024 characters), a `compatibility` over 500 characters, or non-string `license`, `allowed-tools` and `compatibility` values. `metadata` must be a mapping.
 
 ### Skill format
 
 ```markdown
 ---
-name: Incident Response
-description: Diagnose production incidents with evidence-first triage
-slash: true
+name: incident-response
+description: Diagnose production incidents with evidence-first triage. Use when an alert fires or a deploy misbehaves.
 metadata:
-  ycoding/autoinvoke: false
-  ycoding/slash: true
-  ycoding/conflicts:
-    skills:
-      - destructive-recovery
-    instructions:
-      - emergency-readonly
+  display-name: Incident Response
+  slash: "true"
+  conflicts: destructive-recovery
+  instruction-conflicts: emergency-readonly
 ---
 
 # Incident Response
@@ -320,19 +311,35 @@ Collect logs and runtime evidence at each component boundary.
 
 Frontmatter fields:
 
-| Field         | Type    | Meaning                                  |
-| ------------- | ------- | ---------------------------------------- |
-| `name`        | string  | Display name; defaults to the skill ID.  |
-| `description` | string  | Picker and status description.           |
-| `slash`       | boolean | Expose as slash-invokable.               |
-| `metadata`    | object  | YCoding-specific and arbitrary metadata. |
+| Field           | Type   | Meaning                                       |
+| --------------- | ------ | --------------------------------------------- |
+| `name`          | string | Skill ID; equals the directory name.          |
+| `description`   | string | What the skill does and when to use it.       |
+| `license`       | string | Optional license name or reference.           |
+| `compatibility` | string | Optional environment requirements.            |
+| `allowed-tools` | string | Optional pre-approved tools.                  |
+| `metadata`      | object | String-valued keys, listed below.             |
 
-YCoding metadata keys:
+Metadata keys:
 
-- `ycoding/slash`: boolean or string `"true"`/`"false"`; overrides `slash`;
-- `ycoding/autoinvoke`: boolean or string; controls automatic activation eligibility;
-- `ycoding/conflicts.skills`: conflicting skill IDs;
-- `ycoding/conflicts.instructions`: conflicting instruction IDs.
+- `display-name`: name shown in pickers; defaults to `name`;
+- `slash`: `"true"` or `"false"`; exposes the skill as slash-invokable;
+- `conflicts`: comma-separated conflicting skill IDs;
+- `instruction-conflicts`: comma-separated conflicting instruction IDs;
+- `purpose`: one sentence on what the skill achieves;
+- `applicability`: when the skill applies and when it does not;
+- `triggers`: comma-separated situations or phrases that should bring the skill to mind;
+- `capabilities`: comma-separated names of what the skill can do;
+- `prerequisites`: tools, access or state the skill needs;
+- `related`: comma-separated IDs of related skills and memory concepts;
+- `tags`: comma-separated lowercase labels;
+- `activation`, `version`, `keywords`, `events`, `commands` and `paths`: cue-based selection, described below.
+
+Each descriptive key (`purpose`, `applicability`, `triggers`, `capabilities`, `prerequisites`, `related`) is a nonempty string of at most 1024 characters. A skill with a non-string, blank or longer value is skipped with a discovery diagnostic. Descriptive keys never trigger activation by themselves.
+
+Discovery builds one retrieval document for every permitted skill, whichever source supplied it, so Cue and Recall find skills without a separate registration step. The document keeps the frontmatter `description` as its description and indexes `triggers` with `keywords`, `capabilities` with the skill ID as identifiers, and `related` as relationships. `purpose`, `applicability` and `prerequisites` lead the indexed body. Each document records the source path, a content hash and a revision.
+
+A skill that does not set `slash` is not slash-invokable.
 
 Set `metadata.activation` to `manual` to require explicit selection. An explicit request for a denied or missing skill does not select a similarly named skill.
 
@@ -340,9 +347,18 @@ Use `activation: auto` inside `metadata` to opt into cue-based selection. The `e
 
 An event rule can match `session.input.promoted`, `command.invoked`, `path.selected`, `session.compacted` or `session.recovered`. These refer to runtime transitions, not words in a prompt. Successful compaction and managed-task resumption can select a skill for the next request even without new input. Selection still checks the current source and permissions and does not run the procedure.
 
-A malformed `ycoding/conflicts` declaration causes that skill file to be skipped.
+A malformed `conflicts` or `instruction-conflicts` value causes that skill file to be skipped.
 
-Invoke a registered local skill with `$skill-id` at the start of a prompt or after whitespace, followed by whitespace, supported punctuation, or the end of the prompt. The runtime records the request and loads its instructions before model execution on every prompt-entry surface; this explicit invocation is independent of `ycoding/autoinvoke`. Existing active skills are not loaded twice. Unknown dollar tokens remain text. If an explicitly recorded skill becomes unavailable or permission-denied before execution, the input stays pending and the runtime reports the failure rather than asking the model to decide whether to load it.
+Invoke a registered local skill with `$skill-id` at the start of a prompt or after whitespace, followed by whitespace, supported punctuation, or the end of the prompt. The runtime records the request and loads its instructions before model execution on every prompt-entry surface; this explicit invocation is independent of `metadata.activation`. Existing active skills are not loaded twice. Unknown dollar tokens remain text. If an explicitly recorded skill becomes unavailable or permission-denied before execution, the input stays pending and the runtime reports the failure rather than asking the model to decide whether to load it.
+
+### Where knowledge lives
+
+- Memory holds durable, verified knowledge: facts, decisions and their sources.
+- Skills hold procedures: how to do a kind of task, when it applies and what it needs.
+- Session history holds events: what was asked, tried and decided in one Session.
+- Harness configuration holds behavior: permissions, agents, commands, hooks and provider settings.
+
+A skill links to knowledge with `related` instead of copying it, and a memory concept links to the skill that uses it. Do not store a procedure in memory, an event log in a skill, or a setting in either.
 
 ### Loading and reload
 
@@ -598,14 +614,6 @@ Servers declaring the Resources capability and `io.modelcontextprotocol/skills` 
 Loading an MCP-served skill is lazy and requires the `skill` tool permission. For a fixed manifest, YCoding first binds approval to a digest-derived identity of the server, skill URI, and complete resource manifest, then fetches `SKILL.md`. It verifies the retrieved file's manifest membership, size, digest, and parsed frontmatter before content reaches the model. Dynamic manifests are listed but cannot load. Supporting resources are read only by a later `skill` call for an already active skill, from the manifest retained by its durable activation; unlisted, changed, malformed, or escaping resource references fail without exposing bytes or downloading files to disk.
 
 See [`configuration.md`](./configuration.md#mcp) for local and remote server shapes.
-
-## Project artifacts
-
-YCoding's project-artifact system manages agents, commands, skills, and plugin drafts with validation, preview, confirmation, deletion, restore, and rollback. Project artifacts are durable managed records; filesystem resources are their deployed or imported representation.
-
-Use the TUI project-artifact manager for lifecycle operations when provenance and rollback matter. Direct file edits remain valid for repository-owned resources and are reloaded by the watcher.
-
-`capabilities.project_artifacts: false` applies no managed project artifacts to the Location and hides the `project_artifact` tool and its guidance.
 
 ## Reload behavior
 

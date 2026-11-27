@@ -79,6 +79,18 @@ enum PublicEvent_coordination_member_owner_changed_data_reason {
   PUBLICEVENT_COORDINATION_MEMBER_OWNER_CHANGED_DATA_REASON_RELEASED = 2 [(ycoding.v5.domain_label) = "released"];
 }
 
+enum PublicEvent_coordination_subagent_request_blocked_type {
+  PUBLICEVENT_COORDINATION_SUBAGENT_REQUEST_BLOCKED_TYPE_COORDINATION_SUBAGENT_REQUEST_BLOCKED = 1 [(ycoding.v5.domain_label) = "coordination.subagent.request.blocked"];
+}
+
+enum PublicEvent_coordination_subagent_request_blocked_data_reason {
+  PUBLICEVENT_COORDINATION_SUBAGENT_REQUEST_BLOCKED_DATA_REASON_CONCURRENCY_CEILING = 1 [(ycoding.v5.domain_label) = "concurrency-ceiling"];
+  PUBLICEVENT_COORDINATION_SUBAGENT_REQUEST_BLOCKED_DATA_REASON_AGENT_MISSING = 2 [(ycoding.v5.domain_label) = "agent-missing"];
+  PUBLICEVENT_COORDINATION_SUBAGENT_REQUEST_BLOCKED_DATA_REASON_PERMISSION_DENIED = 3 [(ycoding.v5.domain_label) = "permission-denied"];
+  PUBLICEVENT_COORDINATION_SUBAGENT_REQUEST_BLOCKED_DATA_REASON_PROJECT_PAUSED = 4 [(ycoding.v5.domain_label) = "project-paused"];
+  PUBLICEVENT_COORDINATION_SUBAGENT_REQUEST_BLOCKED_DATA_REASON_ROUTE_UNAVAILABLE = 5 [(ycoding.v5.domain_label) = "route-unavailable"];
+}
+
 enum PublicEvent_coordination_updated_type {
   PUBLICEVENT_COORDINATION_UPDATED_TYPE_COORDINATION_UPDATED = 1 [(ycoding.v5.domain_label) = "coordination.updated"];
 }
@@ -843,6 +855,39 @@ message PublicEvent_coordination_member_owner_changed_data {
   required LosslessString sessionID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
   optional LosslessString ownerSessionID = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
   optional PublicEvent_coordination_member_owner_changed_data_reason reason = 5;
+}
+
+message PublicEvent_coordination_subagent_request_blocked {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_coordination_subagent_request_blocked_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_coordination_subagent_request_blocked_type type = 5;
+  required PublicEvent_coordination_subagent_request_blocked_durable durable = 6;
+  optional Location_Ref location = 7;
+  required PublicEvent_coordination_subagent_request_blocked_data data = 8;
+}
+
+message PublicEvent_coordination_subagent_request_blocked_metadata {
+  repeated PublicEvent_coordination_subagent_request_blocked_metadataEntry entries = 1;
+}
+
+message PublicEvent_coordination_subagent_request_blocked_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_coordination_subagent_request_blocked_durable {
+  required LosslessString aggregateID = 1;
+  required uint64 seq = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" integer_min: "0" integer_max: "9007199254740991" }];
+  required int64 version = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" integer_min: "1" integer_max: "9007199254740991" }];
+}
+
+message PublicEvent_coordination_subagent_request_blocked_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString agent = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 utf16_max: 256 }];
+  required PublicEvent_coordination_subagent_request_blocked_data_reason reason = 3;
+  required LosslessString message = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 utf16_max: 4096 }];
 }
 
 message PublicEvent_coordination_updated {
@@ -2226,7 +2271,6 @@ message PublicEvent {
     SessionLogItemValue2 session_agent_selected = 7 [(ycoding.v5.public_event) = { diagnostic_name: "session.agent.selected" durable: true }];
     SessionLogItemValue3 session_model_selected = 8 [(ycoding.v5.public_event) = { diagnostic_name: "session.model.selected" durable: true }];
     SessionLogItemValue4 session_daybreak_set = 9 [(ycoding.v5.public_event) = { diagnostic_name: "session.daybreak.set" durable: true }];
-    SessionLogItemValue5 session_project_artifacts_ended = 10 [(ycoding.v5.public_event) = { diagnostic_name: "session.project-artifacts-ended" durable: true }];
     SessionLogItemValue53 session_guardrail_dismissed = 104 [(ycoding.v5.public_event) = { diagnostic_name: "session.guardrail.dismissed" durable: true }];
     SessionLogItemValue54 session_guardrail_escalated = 105 [(ycoding.v5.public_event) = { diagnostic_name: "session.guardrail.escalated" durable: true }];
     SessionLogItemValue55 session_guardrail_decided = 106 [(ycoding.v5.public_event) = { diagnostic_name: "session.guardrail.decided" durable: true }];
@@ -2272,6 +2316,14 @@ message PublicEvent {
     SessionLogItemValue25 session_synthetic = 33 [(ycoding.v5.public_event) = { diagnostic_name: "session.synthetic" durable: true }];
     SessionLogItemValue26 session_skill_activated = 34 [(ycoding.v5.public_event) = { diagnostic_name: "session.skill.activated" durable: true }];
     SessionLogItemValue27 session_skill_deactivated = 35 [(ycoding.v5.public_event) = { diagnostic_name: "session.skill.deactivated" durable: true }];
+    SessionLogItemValue76 session_cue_detected = 143 [(ycoding.v5.public_event) = { diagnostic_name: "session.cue.detected" durable: true }];
+    SessionLogItemValue77 session_recall_recorded = 144 [(ycoding.v5.public_event) = { diagnostic_name: "session.recall.recorded" durable: true }];
+    SessionLogItemValue78 session_lifecycle_recorded = 146 [(ycoding.v5.public_event) = { diagnostic_name: "session.lifecycle.recorded" durable: true }];
+    SessionLogItemValue79 session_harness_evaluated = 147 [(ycoding.v5.public_event) = { diagnostic_name: "session.harness.evaluated" durable: true }];
+    SessionLogItemValue80 session_harness_probed = 148 [(ycoding.v5.public_event) = { diagnostic_name: "session.harness.probed" durable: true }];
+    SessionLogItemValue81 session_harness_adopted = 149 [(ycoding.v5.public_event) = { diagnostic_name: "session.harness.adopted" durable: true }];
+    SessionLogItemValue82 session_harness_rolled_back = 150 [(ycoding.v5.public_event) = { diagnostic_name: "session.harness.rolled-back" durable: true }];
+    SessionLogItemValue83 session_harness_reflected = 151 [(ycoding.v5.public_event) = { diagnostic_name: "session.harness.reflected" durable: true }];
     SessionLogItemValue28 session_shell_started = 36 [(ycoding.v5.public_event) = { diagnostic_name: "session.shell.started" durable: true }];
     SessionLogItemValue29 session_shell_ended = 37 [(ycoding.v5.public_event) = { diagnostic_name: "session.shell.ended" durable: true }];
     SessionLogItemValue30 session_step_started = 38 [(ycoding.v5.public_event) = { diagnostic_name: "session.step.started" durable: true }];
@@ -2306,6 +2358,7 @@ message PublicEvent {
     PublicEvent_coordination_group_changed coordination_group_changed = 121 [(ycoding.v5.public_event) = { diagnostic_name: "coordination.group.changed" durable: true }];
     PublicEvent_coordination_group_deleted coordination_group_deleted = 122 [(ycoding.v5.public_event) = { diagnostic_name: "coordination.group.deleted" durable: true }];
     PublicEvent_coordination_member_owner_changed coordination_member_owner_changed = 127 [(ycoding.v5.public_event) = { diagnostic_name: "coordination.member.owner.changed" durable: true }];
+    PublicEvent_coordination_subagent_request_blocked coordination_subagent_request_blocked = 145 [(ycoding.v5.public_event) = { diagnostic_name: "coordination.subagent.request.blocked" durable: true }];
     PublicEvent_coordination_updated coordination_updated = 123 [(ycoding.v5.public_event) = { diagnostic_name: "coordination.updated" durable: false }];
     PublicEvent_coordination_request_escalated coordination_request_escalated = 128 [(ycoding.v5.public_event) = { diagnostic_name: "coordination.request.escalated" durable: false }];
     PublicEvent_filesystem_changed filesystem_changed = 64 [(ycoding.v5.public_event) = { diagnostic_name: "filesystem.changed" durable: false }];
@@ -2358,6 +2411,6 @@ message PublicEvent {
     PublicEvent_mcp_status_changed mcp_status_changed = 100 [(ycoding.v5.public_event) = { diagnostic_name: "mcp.status.changed" durable: false }];
     PublicEvent_mcp_resources_changed mcp_resources_changed = 101 [(ycoding.v5.public_event) = { diagnostic_name: "mcp.resources.changed" durable: false }];
   }
-  reserved 116;
+  reserved 10, 116;
   reserved "shell_updated";
 }

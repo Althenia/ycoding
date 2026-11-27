@@ -9,6 +9,7 @@ import {
   decodeStrict,
 } from "@ycoding-ai/remote"
 import { clientFrameDelay, createRemoteTransport, type RemoteTransportStatus } from "../src/remote/transport"
+import { noResend } from "./transport-fence"
 import { startRelayDouble, waitFor } from "./relay-double"
 
 describe("remote transport integration", () => {
@@ -41,6 +42,7 @@ describe("remote transport integration", () => {
     let invalidations = 0
     const statuses: RemoteTransportStatus[] = []
     const transport = createRemoteTransport({
+      ...noResend,
       url: relay.wsURL("dev_1"),
       handlers: {
         onStatus: (status) => statuses.push(status),
@@ -82,6 +84,7 @@ describe("remote transport integration", () => {
     const relay = await startRelayDouble({})
     const frames: unknown[] = []
     const transport = createRemoteTransport({
+      ...noResend,
       url: relay.wsURL("dev_1"),
       handlers: { onNotices: (frame) => frames.push(frame) },
       resetDelayMs: 10,
@@ -104,6 +107,7 @@ describe("remote transport integration", () => {
     const relay = await startRelayDouble({ noticePage: { notices: [notice], total: 1, unavailable: false } })
     const frames: unknown[] = []
     const transport = createRemoteTransport({
+      ...noResend,
       url: relay.wsURL("dev_1"),
       handlers: { onNotices: (frame) => frames.push(frame) },
       resetDelayMs: 10,
@@ -168,7 +172,7 @@ describe("remote transport integration", () => {
         }
       },
     })
-    const transport = createRemoteTransport({ url: relay.wsURL("dev_1"), resetDelayMs: 10 })
+    const transport = createRemoteTransport({ ...noResend, url: relay.wsURL("dev_1"), resetDelayMs: 10 })
     try {
       transport.connect()
       await waitFor(() => transport.status().kind === "open")
@@ -190,7 +194,7 @@ describe("remote transport integration", () => {
     const relay = await startRelayDouble({
       handler: () => ({ ok: true, value: payload }),
     })
-    const transport = createRemoteTransport({ url: relay.wsURL("dev_1"), resetDelayMs: 10 })
+    const transport = createRemoteTransport({ ...noResend, url: relay.wsURL("dev_1"), resetDelayMs: 10 })
     try {
       transport.connect()
       await waitFor(() => transport.status().kind === "open")
@@ -220,7 +224,12 @@ describe("remote transport integration", () => {
         },
       }),
     })
-    const transport = createRemoteTransport({ url: relay.wsURL("dev_1"), resetDelayMs: 10, requestTimeoutMs: 500 })
+    const transport = createRemoteTransport({
+      ...noResend,
+      url: relay.wsURL("dev_1"),
+      resetDelayMs: 10,
+      requestTimeoutMs: 500,
+    })
     try {
       transport.connect()
       await waitFor(() => transport.status().kind === "open")
@@ -243,6 +252,7 @@ describe("remote transport integration", () => {
       }),
     })
     const transport = createRemoteTransport({
+      ...noResend,
       url: relay.wsURL("dev_1"),
       resetDelayMs: 10,
       createSocket: relay.createSocket,
@@ -288,7 +298,12 @@ describe("remote transport integration", () => {
         },
       }),
     })
-    const transport = createRemoteTransport({ url: relay.wsURL("dev_1"), resetDelayMs: 10, requestTimeoutMs: 500 })
+    const transport = createRemoteTransport({
+      ...noResend,
+      url: relay.wsURL("dev_1"),
+      resetDelayMs: 10,
+      requestTimeoutMs: 500,
+    })
     try {
       transport.connect()
       await waitFor(() => transport.status().kind === "open")
@@ -306,14 +321,17 @@ describe("remote transport integration", () => {
     const relay = await startRelayDouble({
       handler: () => "close",
     })
-    const transport = createRemoteTransport({ url: relay.wsURL("dev_1"), resetDelayMs: 10 })
+    const transport = createRemoteTransport({ ...noResend, url: relay.wsURL("dev_1"), resetDelayMs: 10 })
     try {
       transport.connect()
       await waitFor(() => transport.status().kind === "open")
       const response = await transport.request("session.list")
       expect(response).toEqual({
         status: "unknown",
-        error: { code: "outcome_unknown", message: "The relay connection closed before this request settled" },
+        error: {
+          code: "outcome_unknown",
+          message: "The connection changed after this request was sent. Check the current state before repeating it.",
+        },
       })
       expect(relay.requests).toHaveLength(1)
     } finally {
@@ -324,7 +342,7 @@ describe("remote transport integration", () => {
 
   test("marks an in-flight request unknown when the agent connection is replaced", async () => {
     const relay = await startRelayDouble({ handler: () => "close" })
-    const transport = createRemoteTransport({ url: relay.wsURL("dev_1"), resetDelayMs: 10 })
+    const transport = createRemoteTransport({ ...noResend, url: relay.wsURL("dev_1"), resetDelayMs: 10 })
     try {
       transport.connect()
       await waitFor(() => transport.status().kind === "open")
@@ -340,7 +358,12 @@ describe("remote transport integration", () => {
 
   test("times out a silent request as unknown instead of retrying it", async () => {
     const relay = await startRelayDouble({ handler: () => "silent" })
-    const transport = createRemoteTransport({ url: relay.wsURL("dev_1"), resetDelayMs: 10, requestTimeoutMs: 40 })
+    const transport = createRemoteTransport({
+      ...noResend,
+      url: relay.wsURL("dev_1"),
+      resetDelayMs: 10,
+      requestTimeoutMs: 40,
+    })
     try {
       transport.connect()
       await waitFor(() => transport.status().kind === "open")
@@ -356,6 +379,7 @@ describe("remote transport integration", () => {
   test("bounds in-flight requests and refuses further work without sending it", async () => {
     const relay = await startRelayDouble({ handler: () => "silent" })
     const transport = createRemoteTransport({
+      ...noResend,
       url: relay.wsURL("dev_1"),
       resetDelayMs: 10,
       maxInFlight: 1,
@@ -376,7 +400,7 @@ describe("remote transport integration", () => {
   })
 
   test("refuses work while the socket is not open", async () => {
-    const transport = createRemoteTransport({ url: "ws://127.0.0.1:1/ws/v5/client", resetDelayMs: 10 })
+    const transport = createRemoteTransport({ ...noResend, url: "ws://127.0.0.1:1/ws/v5/client", resetDelayMs: 10 })
     expect(await transport.request("session.list")).toEqual({ status: "unavailable", reason: "not-connected" })
     transport.close()
   })
@@ -385,6 +409,7 @@ describe("remote transport integration", () => {
     const relay = await startRelayDouble()
     const statuses: RemoteTransportStatus[] = []
     const transport = createRemoteTransport({
+      ...noResend,
       url: relay.wsURL("dev_1"),
       handlers: { onStatus: (status) => statuses.push(status) },
       resetDelayMs: 10,
@@ -409,6 +434,7 @@ describe("remote transport integration", () => {
     const relay = await startRelayDouble()
     let reconnects = 0
     const transport = createRemoteTransport({
+      ...noResend,
       url: relay.wsURL("dev_1"),
       handlers: { onReconnect: () => (reconnects += 1) },
       resetDelayMs: 10,

@@ -673,6 +673,8 @@ export function transportFixture(
     resetDelayMs: 2,
     random: () => 0,
     pingIntervalMs: 600_000,
+    revision: () => 0,
+    admit: () => false,
     ...options,
     handlers: {
       onStatus: (status) => statuses.push(status),

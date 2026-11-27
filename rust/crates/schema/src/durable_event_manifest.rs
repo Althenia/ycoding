@@ -5,7 +5,6 @@ pub const DURABLE: &[&str] = &[
     "session.agent.selected.1",
     "session.model.selected.1",
     "session.daybreak.set.1",
-    "session.project-artifacts-ended.1",
     "session.guardrail.dismissed.1",
     "session.guardrail.escalated.1",
     "session.guardrail.decided.1",
@@ -48,6 +47,14 @@ pub const DURABLE: &[&str] = &[
     "session.synthetic.1",
     "session.skill.activated.1",
     "session.skill.deactivated.1",
+    "session.cue.detected.1",
+    "session.recall.recorded.1",
+    "session.lifecycle.recorded.1",
+    "session.harness.evaluated.1",
+    "session.harness.probed.1",
+    "session.harness.adopted.1",
+    "session.harness.rolled-back.1",
+    "session.harness.reflected.1",
     "session.shell.started.1",
     "session.shell.ended.1",
     "session.step.started.1",
@@ -86,6 +93,7 @@ pub const DURABLE: &[&str] = &[
     "coordination.group.changed.1",
     "coordination.group.deleted.1",
     "coordination.member.owner.changed.1",
+    "coordination.subagent.request.blocked.1",
 ];
 pub fn definitions() -> Vec<LosslessString> {
     DURABLE

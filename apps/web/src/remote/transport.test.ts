@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
-import { RemoteLimits } from "@ycoding-ai/remote"
+import { RemoteLimits, WireLimit } from "@ycoding-ai/remote"
+import { fillWindow as fillBinaryWindow, transportFixture } from "../../test/wire-peer"
 import { createRemoteTransport, type RemoteTransportOptions, type RemoteTransportStatus } from "./transport"
 
 class Socket extends EventTarget {
@@ -56,6 +57,8 @@ function fixture(options: Partial<RemoteTransportOptions> = {}) {
       onEvents: (sessionID, events) => { batches.push({ sessionID, events }) },
     },
     createSocket: () => { const socket = new Socket(); sockets.push(socket); return socket as unknown as WebSocket },
+    revision: () => 0,
+    admit: () => false,
     ...options,
   })
   transport.connect()
@@ -157,39 +160,41 @@ test("records sent timeout once and a rejected preflight with no wire time", asy
 })
 
 test("a timed-out mutation cancels relay work without replaying or reporting a definite failure", async () => {
-  const f = fixture()
+  const f = transportFixture()
   try {
     const outcome = f.transport.request("session.interrupt", { sessionID: "ses_a", timeoutMs: 15 })
-    const id = f.sockets[0]!.frames()[0]!.id
+    const first = f.sockets[0]!
+    const requestID = first.dispatches[0]!.requestID
     f.advance(15)
     expect(await outcome).toMatchObject({ status: "unknown", error: { code: "outcome_unknown" } })
-    expect(f.sockets[0]!.frames().slice(1)).toEqual([{ type: "cancel", id }])
-    f.sockets[0]!.dispatchEvent(Object.assign(new Event("close"), { code: 1006, reason: "" }))
+    expect(first.cancelled.has(requestID)).toBe(true)
+    first.drop()
     f.advance(2)
     f.sockets[1]!.open()
-    expect(f.sockets[1]!.sent).toEqual([])
+    expect(f.sockets[1]!.requests()).toEqual([])
   } finally { f.transport.close() }
 })
 
 test("keeps sent and unsent close outcomes distinct in the timing record", async () => {
   const timings: unknown[] = []
-  const f = fixture({ handlers: { onRequestTiming: (sample) => timings.push(sample) } })
+  const f = transportFixture({ handlers: { onRequestTiming: (sample) => timings.push(sample) } })
   try {
-    const sent = f.transport.request("session.status", { timeoutMs: 0 })
-    await fillWindow(f, RemoteLimits.maxClientRequestsPerWindow - 4)
+    await fillBinaryWindow(f, WireLimit.CLIENT_RATE - 5)
     timings.length = 0
-    const queued = f.transport.request("session.list", { timeoutMs: 0 })
+    const sent = f.transport.request("session.interrupt", { sessionID: "ses_a", timeoutMs: 0 })
+    const queued = f.transport.request("session.interrupt", { sessionID: "ses_a", timeoutMs: 0 })
     f.advance(9)
-    f.sockets[0]!.dispatchEvent(Object.assign(new Event("close"), { code: 1006, reason: "" }))
+    f.sockets[0]!.drop()
     expect((await sent).status).toBe("unknown")
-    expect(await queued).toEqual({ status: "unavailable", reason: "not-connected" })
+    f.advance(1)
+    f.sockets[1]!.open()
+    expect(await queued).toEqual({ status: "unavailable", reason: "connection-changed" })
     expect(timings).toEqual([
-      { operation: "session.status", outcome: "unknown", queueMs: 0, settlementMs: 9, totalMs: 9 },
-      { operation: "session.list", outcome: "unavailable", reason: "not-connected", queueMs: 9, totalMs: 9 },
+      { operation: "session.interrupt", outcome: "unknown", queueMs: 0, settlementMs: 9, totalMs: 9 },
+      { operation: "session.interrupt", outcome: "unavailable", reason: "not-connected", queueMs: 9, totalMs: 9 },
     ])
   } finally { f.transport.close() }
 })
-
 test("a failed local timing observer cannot change a request outcome", async () => {
   const f = fixture({ handlers: { onRequestTiming: () => { throw new Error("observer failed") } } })
   try {

@@ -9,8 +9,8 @@ const root = path.resolve(import.meta.dir, "../../..")
 
 test("TEST-057 every manifest member has exactly one owner and a live descriptor or endpoint source", async () => {
   const manifest = await generateManifest(root)
-  expect(manifest.counts).toEqual({ endpoint: 246, connector: 103, notice: 4 })
-  expect(manifest.members).toHaveLength(353)
+  expect(manifest.counts).toEqual({ endpoint: 230, connector: 105, notice: 4 })
+  expect(manifest.members).toHaveLength(339)
   expect(manifest.unresolved).toEqual([])
   const keys = manifest.members.map((member) => `${member.kind}:${member.name}`)
   expect(new Set(keys).size).toBe(keys.length)
@@ -65,6 +65,8 @@ test("TEST-057 retired source names are migration evidence, never manifest alias
   const retired: Record<string, string> = {
     "machine.keepAwake.get": "keepAwake.get",
     "machine.keepAwake.set": "keepAwake.set",
+    "machine.autonomyDefaults.get": "autonomyDefaults.get",
+    "machine.autonomyDefaults.set": "autonomyDefaults.set",
     "machine.latency.append": "telemetry.append",
     "machine.latency.list": "telemetry.list",
     "machine.telemetry.consent.get": "telemetry.consent.get",

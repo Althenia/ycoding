@@ -775,7 +775,7 @@ async fn operator_provisioning_failure_prevents_preflight_and_enrollment() {
     let directory = Directory::new();
     let skill = directory
         .data()
-        .join("dots/skills/ycoding-operator/SKILL.md");
+        .join("dots/skills/session-operator/SKILL.md");
     std::fs::create_dir_all(&skill).unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let called = calls.clone();
@@ -797,16 +797,16 @@ async fn preflight_failure_after_operator_provisioning_prevents_enrollment() {
     let directory = Directory::new();
     let skill = directory
         .data()
-        .join("dots/skills/ycoding-operator/SKILL.md");
+        .join("dots/skills/session-operator/SKILL.md");
     let calls = Arc::new(AtomicUsize::new(0));
     let called = calls.clone();
     let next: Prepare = Box::new(move || {
         Box::pin(async move {
             let bytes = tokio::fs::read(skill).await.unwrap();
-            assert_eq!(bytes.len(), 29_778);
+            assert_eq!(bytes.len(), 30_366);
             assert_eq!(
                 ycoding_core::session::prompt_cache::sha256(std::str::from_utf8(&bytes).unwrap()),
-                "d81f10a8c97322865fadd12b1c7e3c125731c5cee7805fe8f01494cca68c2204",
+                "241dae490283dd37951d7e415d290d2876bf3cf45b55004f4489b455ab2383b9",
             );
             called.fetch_add(1, Ordering::SeqCst);
             Err(PrepareError::Held {
@@ -825,7 +825,7 @@ async fn unbacked_advertisement_after_operator_and_preflight_prevents_enrollment
     let directory = Directory::new();
     let skill = directory
         .data()
-        .join("dots/skills/ycoding-operator/SKILL.md");
+        .join("dots/skills/session-operator/SKILL.md");
     let calls = Arc::new(AtomicUsize::new(0));
     let called = calls.clone();
     let next: Prepare = Box::new(move || {

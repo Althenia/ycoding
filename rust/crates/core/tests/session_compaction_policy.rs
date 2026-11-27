@@ -90,7 +90,7 @@ fn constraints_keep_whole_blocks_and_replace_the_overflow_with_one_digest_notice
 fn pressure_levels_follow_the_advisory_thresholds_and_the_hard_input_cap() {
     let capabilities = Capabilities {
         context_window_tokens: 1000,
-        max_output_tokens: 100,
+        max_output_tokens: 0,
         context_safety_margin_tokens: 50,
     };
     let policy = resolve(&[]);
@@ -124,6 +124,31 @@ fn pressure_levels_follow_the_advisory_thresholds_and_the_hard_input_cap() {
     };
     assert_eq!(
         context_pressure::level(&no_room, &policy, 0),
+        Level::Mandatory
+    );
+}
+
+#[test]
+fn the_hard_input_cap_reserves_the_output_budget_up_to_half_the_window() {
+    let capabilities = |max_output_tokens| Capabilities {
+        context_window_tokens: 1000,
+        max_output_tokens,
+        context_safety_margin_tokens: 50,
+    };
+    assert_eq!(
+        context_pressure::hard_input_cap_tokens(&capabilities(100)),
+        850
+    );
+    assert_eq!(
+        context_pressure::hard_input_cap_tokens(&capabilities(800)),
+        450
+    );
+    assert_eq!(
+        context_pressure::hard_input_cap_tokens(&capabilities(-5)),
+        950
+    );
+    assert_eq!(
+        context_pressure::level(&capabilities(100), &resolve(&[]), 850),
         Level::Mandatory
     );
 }

@@ -13,7 +13,7 @@ test("transcript hydration and settlement do not fetch per-prompt accounting", a
     { id: "msg_first", type: "user", text: "First", files: [], agents: [], time: { created: 1, consumed: 2 } },
     { id: "msg_next", type: "user", text: "Next", files: [], agents: [], time: { created: 3, consumed: 4 } },
   ] } })
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }) })
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(id), handlers }) })
   try {
     await store.load()
     await waitFor(() => store.state().transport.kind === "open")
@@ -40,7 +40,7 @@ test("Team accounting refreshes despite retained diagnostics and qualifies a fai
     return "default"
   } })
   const clock = createRemoteStoreClock()
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }), schedule: clock.schedule, monotonicNow: clock.now })
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(id), handlers }), schedule: clock.schedule, monotonicNow: clock.now })
   const settle = async (expected: () => boolean) => { for (let attempt = 0; attempt < 200 && !expected(); attempt += 1) { await clock.advanceBy(100); await Bun.sleep(5) } }
   try {
     await store.load(); await waitFor(() => store.state().transport.kind === "open"); store.watchTeam(true); await store.selectSession("ses_a")
@@ -71,7 +71,7 @@ test("Team cost reads use frozen recursive task results while context/cache stay
     if (request.operation === "session.team.economics") return { ok: true, value: { data: [{ sessionID: "ses_child", cost: 999, tokens: task.total.tokens, cacheHitRatio: 0.75, contextTotal: 800, contextLimit: 2000 }] } }
     return "default"
   } })
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }) })
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(id), handlers }) })
   try {
     await store.load(); await waitFor(() => store.state().transport.kind === "open")
     store.watchTeam(true)
@@ -104,7 +104,7 @@ test("with more than 100 tasks and continuous events one task-cost read complete
     return "default"
   } })
   const clock = createRemoteStoreClock()
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }), schedule: clock.schedule, monotonicNow: clock.now })
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(id), handlers }), schedule: clock.schedule, monotonicNow: clock.now })
   const costReads = () => relay.requests.filter((request) => request.operation === "session.taskCosts").map((request) => (request.input as { sessionIDs: string[] }).sessionIDs.length)
   const burst = async (prefix: string) => {
     for (let index = 0; index < 20; index += 1) relay.pushEvent("ses_a", { id: `evt_${prefix}_${index}`, created: 10 + index, type: "session.usage.updated", data: { sessionID: "ses_a" } })
@@ -142,7 +142,7 @@ test("a connector without task costs shows the update state once and is not aske
     return "default"
   } })
   const clock = createRemoteStoreClock()
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }), schedule: clock.schedule, monotonicNow: clock.now })
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(id), handlers }), schedule: clock.schedule, monotonicNow: clock.now })
   try {
     await store.load(); await waitFor(() => store.state().transport.kind === "open"); store.watchTeam(true); await store.selectSession("ses_a")
     await waitFor(() => store.state().team?.accountingUnsupported === true)

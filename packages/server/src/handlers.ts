@@ -32,11 +32,11 @@ import { CredentialHandler } from "./handlers/credential"
 import { ProjectHandler } from "./handlers/project"
 import { ProjectCopyHandler } from "./handlers/project-copy"
 import { VcsHandler } from "./handlers/vcs"
-import { ProjectArtifactHandler } from "./handlers/project-artifact"
 import { EventFeed } from "./event-feed"
 import { BrowserHandler } from "./handlers/browser"
 import { InteractionHandler } from "./handlers/interaction"
 import { IsolatedBrowserHandler } from "./handlers/isolated-browser"
+import { AutonomyDefaultsHandler } from "./handlers/autonomy-defaults"
 import { KeepAwakeHandler } from "./handlers/keep-awake"
 import { RemoteHandler } from "./handlers/remote"
 import { CoordinationHandler } from "./handlers/coordination"
@@ -78,10 +78,10 @@ export const handlers = Layer.mergeAll(
   ReferenceHandler,
   ProjectCopyHandler,
   VcsHandler,
-  ProjectArtifactHandler,
   BrowserHandler,
   InteractionHandler,
   IsolatedBrowserHandler,
   RemoteHandler,
   KeepAwakeHandler,
+  AutonomyDefaultsHandler,
 )

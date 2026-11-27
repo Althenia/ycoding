@@ -29,7 +29,7 @@ Dependencies flow from Schema to Core and Protocol, then from Core and Protocol 
 
 - **packages/schema** owns browser-safe branded IDs, public domain records, durable event payloads, and shared validation.[^arch-doc]
 - **packages/protocol** owns the public Effect HttpApi operation groups, transport schemas, middleware declarations, and OpenAPI assembly inputs.[^arch-doc]
-- **packages/core** owns session execution, instructions, permissions, filesystem, providers, subagent orchestration, project-artifact storage, and database schema.[^arch-doc]
+- **packages/core** owns session execution, instructions, permissions, filesystem, providers, subagent orchestration, and database schema.[^arch-doc]
 - **packages/server** maps Protocol operations to Core services and owns process lifecycle.[^arch-doc]
 - **packages/client** consumes the assembled Protocol through generated and handwritten API clients.[^arch-doc]
 - **packages/cli** owns the ycoding executable, command parsing, local-service discovery, and TUI startup.[^arch-doc]
@@ -58,7 +58,6 @@ When sources disagree, the order is executable behavior and tests, Schema public
 - [Session Execution and Autonomy](./session.md)
 - [Session Guardrails](./session-guardrails.md)
 - [Durable Background Subagents](./subagents.md)
-- [Project Artifacts](./project-artifacts.md)
 - [Provider Integration and Cache](./provider-integration.md)
 - [Configuration Surfaces](./configuration.md)
 

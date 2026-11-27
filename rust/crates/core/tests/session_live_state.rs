@@ -168,11 +168,6 @@ fn renders_canonical_protected_state_and_returns_every_required_content_free_sou
             "orchestration"
         ]
     );
-    assert!(
-        protected
-            .iter()
-            .all(|entry| entry.source != ProtectedStateSource::ProjectArtifacts)
-    );
     let permissions = protected
         .iter()
         .find(|entry| entry.source == ProtectedStateSource::Permissions)

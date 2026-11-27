@@ -126,8 +126,7 @@ pub fn record(
             SessionLogItemValue2,
             v5::SessionLogItemValue2Data {
                 session_id: text(data, "sessionID")?,
-                agent: text(data, "agent")?,
-                artifact: data.opt("artifact").map(payload::artifact).transpose()?
+                agent: text(data, "agent")?
             }
         ),
         Some("session.model.selected") => item!(
@@ -148,15 +147,6 @@ pub fn record(
                     "daybreak",
                     &[("daybreak_blue", 1), ("daybreak_red", 2)]
                 )?
-            }
-        ),
-        Some("session.project-artifacts-ended") => item!(
-            Value5,
-            SessionLogItemValue5,
-            v5::SessionLogItemValue5Data {
-                session_id: text(data, "sessionID")?,
-                old_project_id: text(data, "oldProjectID")?,
-                new_project_id: text(data, "newProjectID")?
             }
         ),
         Some("session.moved") => item!(
@@ -372,8 +362,7 @@ pub fn record(
                 name: text(data, "name")?,
                 text: text(data, "text")?,
                 directory: opt_text(data, "directory")?,
-                conflicts: data.opt("conflicts").map(payload::conflicts).transpose()?,
-                artifact: data.opt("artifact").map(payload::artifact).transpose()?
+                conflicts: data.opt("conflicts").map(payload::conflicts).transpose()?
             }
         ),
         Some("session.skill.deactivated") => item!(
@@ -384,6 +373,95 @@ pub fn record(
                 id: text(data, "id")?,
                 activation_message_id: text(data, "activationMessageID")?,
                 reason: literal(data, "reason", &[("conflict_resolved", 1)])?
+            }
+        ),
+        Some("session.cue.detected") => item!(
+            Value76,
+            SessionLogItemValue76,
+            v5::SessionLogItemValue76Data {
+                session_id: text(data, "sessionID")?,
+                cue_id: text(data, "cueID")?,
+                kind: literal(data, "kind", payload::CUE_KIND)?,
+                subject: opt_text(data, "subject")?,
+                message_id: opt_text(data, "messageID")?,
+            }
+        ),
+        Some("session.recall.recorded") => item!(
+            Value77,
+            SessionLogItemValue77,
+            v5::SessionLogItemValue77Data {
+                session_id: text(data, "sessionID")?,
+                key: text(data, "key")?,
+                trigger: literal(data, "trigger", payload::RECALL_TRIGGER)?,
+                cue_id: opt_text(data, "cueID")?,
+                methods: payload::recall_methods(data.field("methods")?)?,
+                outcome: literal(data, "outcome", payload::RECALL_OUTCOME)?,
+                abstention: opt_literal(data, "abstention", payload::RECALL_ABSTENTION)?,
+                items: payload::recall_items(data.field("items")?)?,
+                elapsed_ms: count(data, "elapsedMs")?,
+                injected_tokens: count(data, "injectedTokens")?,
+                budget_tokens: opt_count(data, "budgetTokens")?,
+            }
+        ),
+        Some("session.lifecycle.recorded") => item!(
+            Value78,
+            SessionLogItemValue78,
+            v5::SessionLogItemValue78Data {
+                session_id: text(data, "sessionID")?,
+                step: count(data, "step")?,
+                decision: literal(data, "decision", payload::LIFECYCLE_DECISION)?,
+                basis: literal(data, "basis", payload::LIFECYCLE_BASIS)?,
+                recovery: data.field("recovery")?.boolean()?,
+                recalled: data.field("recalled")?.boolean()?,
+            }
+        ),
+        Some("session.harness.evaluated") => item!(
+            Value79,
+            SessionLogItemValue79,
+            v5::SessionLogItemValue79Data {
+                session_id: text(data, "sessionID")?,
+                stage: literal(data, "stage", payload::HARNESS_STAGE)?,
+                mode: literal(data, "mode", payload::HARNESS_MODE)?,
+                signals: count(data, "signals")?,
+                insufficient: data.field("insufficient")?.boolean()?,
+                skip_reason: opt_text(data, "skipReason")?,
+            }
+        ),
+        Some("session.harness.probed") => item!(
+            Value80,
+            SessionLogItemValue80,
+            v5::SessionLogItemValue80Data {
+                session_id: text(data, "sessionID")?,
+                candidate: text(data, "candidate")?,
+                outcome: text(data, "outcome")?,
+                tokens: count(data, "tokens")?,
+                latency_ms: count(data, "latencyMs")?,
+            }
+        ),
+        Some("session.harness.adopted") => item!(
+            Value81,
+            SessionLogItemValue81,
+            v5::SessionLogItemValue81Data {
+                session_id: text(data, "sessionID")?,
+                version: text(data, "version")?,
+                parent: text(data, "parent")?,
+            }
+        ),
+        Some("session.harness.rolled-back") => item!(
+            Value82,
+            SessionLogItemValue82,
+            v5::SessionLogItemValue82Data {
+                session_id: text(data, "sessionID")?,
+                from: text(data, "from")?,
+                to: text(data, "to")?,
+            }
+        ),
+        Some("session.harness.reflected") => item!(
+            Value83,
+            SessionLogItemValue83,
+            v5::SessionLogItemValue83Data {
+                session_id: text(data, "sessionID")?,
+                experiences: payload::harness_experiences(data.field("experiences")?)?,
             }
         ),
         Some("session.shell.started") => item!(

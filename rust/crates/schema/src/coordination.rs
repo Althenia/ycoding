@@ -58,6 +58,13 @@ crate::schema::literal_enum_type!(RequestKind, { Question => "question", Permiss
 crate::schema::literal_enum_type!(MemberState, { Idle => "idle", Running => "running", Waiting => "waiting", Failed => "failed" });
 crate::schema::literal_enum_type!(PausedReason, { Interrupted => "interrupted", Restart => "restart" });
 crate::schema::literal_enum_type!(ReleaseReason, { Completed => "completed", Released => "released" });
+crate::schema::literal_enum_type!(SubagentRequestBlockedReason, {
+    ConcurrencyCeiling => "concurrency-ceiling",
+    AgentMissing => "agent-missing",
+    PermissionDenied => "permission-denied",
+    ProjectPaused => "project-paused",
+    RouteUnavailable => "route-unavailable"
+});
 
 crate::schema::literal_enum_type!(BoardRole, { Master => "master", Supervisor => "supervisor", Member => "member", Subagent => "subagent" });
 crate::schema::literal_enum_type!(BoardNodeState, { Idle => "idle", Starting => "starting", Running => "running", Waiting => "waiting", Supervising => "supervising", Cancelling => "cancelling", Cancelled => "cancelled", Completed => "completed", Failed => "failed", Lost => "lost" });
@@ -508,6 +515,37 @@ crate::schema::record_type!(UpdatedData { group_id: GroupId => "groupID", revisi
 crate::schema::record_type!(OwnerChangedData { group_id: GroupId => "groupID", revision: Revision => "revision", session_id: SessionId => "sessionID" } { owner_session_id: SessionId => "ownerSessionID", reason: ReleaseReason => "reason" });
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct SubagentRequestBlockedData {
+    pub session_id: SessionId,
+    pub agent: LosslessString,
+    pub reason: SubagentRequestBlockedReason,
+    pub message: LosslessString,
+}
+
+impl DomainDecode for SubagentRequestBlockedData {
+    fn decode_at(value: &JsonValue, path: &JsonPath) -> Result<Self, DecodeError> {
+        let object = ObjectDecoder::new(value, path)?;
+        Ok(Self {
+            session_id: object.field("sessionID")?,
+            agent: bounded_string(&object.field("agent")?, 1, 256, &path.key("agent"))?,
+            reason: object.field("reason")?,
+            message: bounded_string(&object.field("message")?, 1, 4096, &path.key("message"))?,
+        })
+    }
+}
+
+impl DomainEncode for SubagentRequestBlockedData {
+    fn encode(&self) -> JsonValue {
+        ObjectEncoder::new()
+            .field("sessionID", &self.session_id)
+            .field("agent", &self.agent)
+            .field("reason", &self.reason)
+            .field("message", &self.message)
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Snapshot {
     pub group_id: GroupId,
     pub revision: Revision,
@@ -629,6 +667,16 @@ pub mod event {
     impl DurableEventType for OwnerChanged {
         const VERSION: i64 = 1;
         const AGGREGATE: &'static str = "groupID";
+    }
+
+    pub struct SubagentRequestBlocked;
+    impl EventType for SubagentRequestBlocked {
+        const TYPE: &'static str = "coordination.subagent.request.blocked";
+        type Data = super::SubagentRequestBlockedData;
+    }
+    impl DurableEventType for SubagentRequestBlocked {
+        const VERSION: i64 = 1;
+        const AGGREGATE: &'static str = "sessionID";
     }
 
     pub struct Updated;

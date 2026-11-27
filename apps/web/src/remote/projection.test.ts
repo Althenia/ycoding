@@ -31,6 +31,8 @@ import {
   visibleTranscriptMessages,
   appendShellOutputPage,
   applySessionEvent,
+  applyRecallEvent,
+  applyLifecycleEvent,
   contextWindowDisplay,
   generationSpeedDisplay,
   boundedText,
@@ -1838,4 +1840,67 @@ test("a guardrail review without a creation time keeps its identity, reason and 
   const retried = apply(timed, "guardrail.asked", { ...legacy, created: 1_000 }, 7)
   expect(retried.requests).toMatchObject([{ id: "grq_old", created: 1_000 }])
   expect(retried.messages).toEqual(timed.messages)
+})
+
+describe("recall events", () => {
+  const item = (stage: string) => ({ kind: "memory", id: "build/linker", stage, method: "bm25", reason: "matched", source: { id: "memory:repository/build/linker", revision: "sha256:aa" } })
+  const recorded = (id: string, created: number, stage = "injected", key = id) => ({
+    type: "session.recall.recorded",
+    id,
+    created,
+    data: { sessionID: "ses_a", key, trigger: "prompt", methods: ["bm25"], outcome: stage === "injected" ? "injected" : "abstained", items: [item(stage)], elapsedMs: 3, injectedTokens: 40 },
+  })
+  const base = (): SessionView => ({
+    ...createSessionView("ses_a"),
+    messages: [
+      { kind: "user", id: "u1", text: "Q", state: "consumed", created: 10 },
+      { kind: "assistant", id: "a1", created: 30, parts: [{ kind: "text", ordinal: 0, text: "A" }] },
+    ],
+  })
+
+  test("places a recall chronologically, replaces a repeated key, and routes through applySessionEvent", () => {
+    const placed = applyRecallEvent(base(), recorded("recall_1", 20))
+    expect(placed.messages.map((message) => message.id)).toEqual(["u1", "recall_1", "a1"])
+    const replaced = applyRecallEvent(placed, recorded("recall_2", 21, "injected", "recall_1"))
+    expect(replaced.messages.map((message) => message.id)).toEqual(["u1", "recall_2", "a1"])
+    expect(applySessionEvent(replaced, recorded("recall_3", 99), 1).messages.at(-1)?.id).toBe("recall_3")
+  })
+
+  test("a cue event attaches to the record that references it, malformed events change nothing, and abstentions stay out of the transcript", () => {
+    const cue = { type: "session.cue.detected", id: "evt_c", created: 15, data: { sessionID: "ses_a", cueID: "c1", kind: "command", subject: "cargo check" } }
+    const withCue = applyRecallEvent(applyRecallEvent(base(), cue), { ...recorded("recall_1", 20), data: { ...recorded("recall_1", 20).data, cueID: "c1" } })
+    expect(withCue.messages.find((message) => message.kind === "recall")).toMatchObject({ entry: { cue: { kind: "command", subject: "cargo check" } } })
+    expect(applyRecallEvent(base(), { type: "session.recall.recorded", id: "x", data: {} })).toEqual(base())
+    const abstained = applyRecallEvent(base(), recorded("recall_x", 20, "candidate"))
+    expect(visibleTranscriptMessages(abstained.messages).map((message) => message.id)).toEqual(["u1", "a1"])
+  })
+})
+
+describe("lifecycle events", () => {
+  const recorded = (id: string, created: number, decision = "recover", basis = "silent") => ({
+    type: "session.lifecycle.recorded",
+    id,
+    created,
+    data: { sessionID: "ses_a", step: 2, decision, basis, recovery: decision === "recover", recalled: false },
+  })
+  const base = (): SessionView => ({
+    ...createSessionView("ses_a"),
+    messages: [
+      { kind: "user", id: "u1", text: "Q", state: "consumed", created: 10 },
+      { kind: "assistant", id: "a1", created: 30, parts: [{ kind: "text", ordinal: 0, text: "A" }] },
+    ],
+  })
+
+  test("a live event lands at its chronological place and history load keeps the order", () => {
+    const live = applySessionEvent(base(), recorded("lc_1", 20), 1)
+    expect(live.messages.map((message) => message.id)).toEqual(["u1", "lc_1", "a1"])
+    const loaded = [recorded("lc_3", 99, "complete", "truncated"), recorded("lc_2", 25)].reduce(applyLifecycleEvent, base())
+    expect(visibleTranscriptMessages(loaded.messages).map((message) => message.id)).toEqual(["u1", "lc_2", "a1", "lc_3"])
+  })
+
+  test("malformed and invisible entries produce no row", () => {
+    expect(applyLifecycleEvent(base(), { type: "session.lifecycle.recorded", id: "x", data: {} })).toEqual(base())
+    const quiet = applyLifecycleEvent(applyLifecycleEvent(base(), recorded("lc_c", 20, "continue", "tool_results")), recorded("lc_a", 21, "complete", "answered"))
+    expect(visibleTranscriptMessages(quiet.messages).map((message) => message.id)).toEqual(["u1", "a1"])
+  })
 })

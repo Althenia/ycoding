@@ -360,12 +360,22 @@ fn escalation_reasons_enforce_count_text_and_javascript_whitespace_bounds() {
 }
 
 fn durable_event<E: event::DurableEventType>(kind: &str, version: i64, data: Value) {
+    durable_event_on::<E>(kind, version, "groupID", "cgrp_fixture", data);
+}
+
+fn durable_event_on<E: event::DurableEventType>(
+    kind: &str,
+    version: i64,
+    aggregate: &str,
+    aggregate_id: &str,
+    data: Value,
+) {
     assert_eq!(E::TYPE, kind);
     assert_eq!(E::VERSION, version);
-    assert_eq!(E::AGGREGATE, "groupID");
+    assert_eq!(E::AGGREGATE, aggregate);
     let mut input = json!({
         "id": "evt_fixture", "created": 0, "type": kind,
-        "durable": { "aggregateID": "cgrp_fixture", "seq": 0, "version": version },
+        "durable": { "aggregateID": aggregate_id, "seq": 0, "version": version },
         "data": data,
     });
     round_trip::<event::DurablePayload<E>>(input.clone());
@@ -412,12 +422,56 @@ fn group_event_payloads_preserve_current_versions_and_owner_transitions() {
 }
 
 #[test]
+fn blocked_subagent_request_is_a_durable_parent_session_fact() {
+    let data = |reason: &str| {
+        json!({
+            "sessionID": "ses_parent", "agent": "occam", "reason": reason,
+            "message": "Subagent limit reached: 3/3 subagents running.",
+        })
+    };
+    for reason in [
+        "concurrency-ceiling",
+        "agent-missing",
+        "permission-denied",
+        "project-paused",
+        "route-unavailable",
+    ] {
+        durable_event_on::<coordination::event::SubagentRequestBlocked>(
+            "coordination.subagent.request.blocked",
+            1,
+            "sessionID",
+            "ses_parent",
+            data(reason),
+        );
+    }
+    for patch in [
+        json!({ "reason": "busy" }),
+        json!({ "agent": "" }),
+        json!({ "agent": "x".repeat(257) }),
+        json!({ "message": "" }),
+        json!({ "message": "x".repeat(4097) }),
+        json!({ "sessionID": "msg_parent" }),
+    ] {
+        let mut value = data("concurrency-ceiling");
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        reject::<coordination::SubagentRequestBlockedData>(value);
+    }
+    let mut missing = data("agent-missing");
+    missing.as_object_mut().unwrap().remove("message");
+    reject::<coordination::SubagentRequestBlockedData>(missing);
+}
+
+#[test]
 fn current_coordination_events_are_public_and_group_versions_are_durable() {
     for (kind, version) in [
         ("coordination.group.created", Some(2)),
         ("coordination.group.changed", Some(1)),
         ("coordination.group.deleted", Some(1)),
         ("coordination.member.owner.changed", Some(1)),
+        ("coordination.subagent.request.blocked", Some(1)),
         ("coordination.updated", None),
         ("coordination.request.escalated", None),
     ] {
@@ -441,6 +495,7 @@ fn current_coordination_events_are_public_and_group_versions_are_durable() {
         "coordination.group.changed",
         "coordination.group.deleted",
         "coordination.member.owner.changed",
+        "coordination.subagent.request.blocked",
         "coordination.updated",
         "coordination.request.escalated",
     ];

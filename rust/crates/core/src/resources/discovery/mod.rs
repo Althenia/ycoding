@@ -77,6 +77,7 @@ pub enum Error {
     Decode(DecodeError),
     InvalidPath(PathBuf),
     Rejected(&'static str),
+    Invalid(String),
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -91,6 +92,7 @@ impl fmt::Display for Error {
                 write!(f, "Resource path is not valid Unicode: {}", path.display())
             }
             Self::Rejected(message) => f.write_str(message),
+            Self::Invalid(message) => f.write_str(message),
         }
     }
 }
@@ -99,7 +101,7 @@ impl std::error::Error for Error {
         match self {
             Self::Io { cause, .. } => Some(cause),
             Self::Decode(cause) => Some(cause),
-            Self::InvalidPath(_) | Self::Rejected(_) => None,
+            Self::InvalidPath(_) | Self::Rejected(_) | Self::Invalid(_) => None,
         }
     }
 }

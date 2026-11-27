@@ -36,7 +36,7 @@ impl PricingRef {
         )
     }
 }
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Pricing {
     pub provider: Vec<model::Cost>,
     pub router: Vec<model::Cost>,

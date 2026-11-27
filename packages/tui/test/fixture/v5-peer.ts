@@ -386,11 +386,6 @@ function scenario(dispatch: Dispatch) {
       }
       return `${root}/${sessionPaths[action] ?? action.replaceAll(".", "/")}`
     }
-    if (name.startsWith("artifact.")) {
-      const action = name.slice("artifact.".length)
-      if (action === "list") return "/api/artifact"
-      return `/api/artifact/${params.scope}/${params.kind}/${params.id}${["get", "remove"].includes(action) ? "" : `/${action.replaceAll(".", "/")}`}`
-    }
     if (name.startsWith("coordination.")) {
       const action = name.slice("coordination.".length)
       if (action === "settings") return "/api/coordination/settings"
@@ -505,7 +500,7 @@ export function scriptedTransport(run: Scenario, events: EventSource) {
       if (dispatch.operation.diagnosticName === "event.unsubscribe")
         return peer.result(dispatch, {
           typeName: dispatch.operation.resultType,
-          payload: encodeDomain(dispatch.operation.resultType, {}),
+          payload: encodeDomain(dispatch.operation.resultType, { data: {} }),
         })
       const { url, request } = scenario(dispatch)
       void Promise.resolve()

@@ -479,12 +479,6 @@ fn ycoding_managed_tool_operations_are_admitted_without_a_review_request() {
             "memoryAction",
             "delete",
         ),
-        operation(
-            "project_artifact_mutation",
-            "skill/example",
-            "operation",
-            "automatic_write",
-        ),
         operation("subagent", "build", "description", "task"),
         operation("mcp_execute", "server/tool", "operation", "call"),
         input(&root, "git worktree add -b feature .worktrees/feature"),

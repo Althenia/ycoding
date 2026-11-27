@@ -48,7 +48,7 @@ fn catalog() -> Catalog {
                 .iter()
                 .chain(session::TABLES)
                 .chain(resources::TABLES)
-                .chain(ycoding_store::artifacts::TABLES)
+                .chain(ycoding_store::database_format::TABLES)
                 .chain(ANALYTICS.tables())
                 .copied()
                 .collect::<Vec<_>>()

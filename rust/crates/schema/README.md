@@ -133,10 +133,9 @@ All paths below are relative to `packages/schema/src`.
 | `mcp-event.ts`                 | `mcp_event`: `ToolsChanged`, `ResourcesChanged`, `BrowserOpenFailed`, `StatusChanged`                                                                                                                 |
 | `browser.ts`                   | `browser`: `TabID`, `Generation`, `DocumentGeneration`, `Page`, `Tab`, `Status`, `Observation`, `Action`, `ActionInput`, `CaptureOutput`, `ActionResult`                                              |
 | `isolated-browser.ts`          | `isolated_browser`: `InstanceID`, `State`, `Status`, `StartInput`, `StartPayload`, `ObserveInput`, `ActionInput`, `Observation`, `ActionResult`                                                       |
-| `session-event.ts`             | `session_event`: event source, artifact provenance, event definition inventories and durable definitions                                                                                              |
+| `session-event.ts`             | `session_event`: event source, event definition inventories and durable definitions                                                                                              |
 | `durable-event-manifest.ts`    | `durable_event_manifest`: versioned durable Session event manifest                                                                                                                                    |
 | `session.ts`                   | `session`: `ID`, `Info`, `ListAnchor`, `ModelSwitchBlocked`, Session event and cache diagnostic contracts                                                                                             |
-| `project-artifact.ts`          | `project_artifact`: artifact IDs, bounded content, lifecycle and validation contracts                                                                                                                 |
 | `event-manifest.ts`            | `event_manifest`: Server and complete event type manifests                                                                                                                                            |
 
 ### Effect conformance corpus

@@ -21,7 +21,7 @@ import {
 } from "@ycoding-ai/protocol/v5"
 import { isHistoryPrunedError } from "../src/promise/index.js"
 import { encodeDomain } from "../src/v5/codec.js"
-import { make } from "../src/v5/index.js"
+import { make, resendUnsent } from "../src/v5/index.js"
 import { ScriptedPeer } from "./fixture/v5-peer.js"
 
 const endpoint = { url: "http://127.0.0.1:12345" }
@@ -916,6 +916,188 @@ test("REQ-WIRE-009 retrying an unsent prompt transmits the stable input ID once"
       { case: "utf8", value: "msg_stable" },
     )
     expect(client.transport.state).toBe("established")
+  } finally {
+    client.transport.close()
+  }
+})
+
+test("REQ-WIRE-009 an unsent request names what did not happen and is resendable only after a lost connection", async () => {
+  const peers = [new ScriptedPeer("connection-1")]
+  const sockets = sequence(peers, new Set())
+  const client = make({ discover: async () => endpoint, socket: sockets.socket })
+  try {
+    await sockets.constructed[0]
+    const controller = new AbortController()
+    controller.abort()
+    const cancelled = await client.session
+      .rename({ sessionID: "ses_owner", title: "never" }, { signal: controller.signal })
+      .catch((error: unknown) => error)
+    expect(cancelled).toMatchObject({ status: "unsent", resendable: false })
+    expect((cancelled as Error).message).toBe("Request session.rename was cancelled before it was sent.")
+    peers[0].socket.close()
+    const closed = await client.session.rename({ sessionID: "ses_owner", title: "late" }).catch((error: unknown) => error)
+    expect(closed).toMatchObject({ status: "unsent", operation: "session.rename", resendable: true })
+    expect((closed as Error).message).toBe(
+      "Request session.rename was not sent because the connection to the server was lost. Nothing changed; try again once it reconnects.",
+    )
+    const prompt = await client.session
+      .prompt({ sessionID: "ses_owner", text: "hello", id: "msg_closed" })
+      .catch((error: unknown) => error)
+    expect((prompt as Error).message).toStartWith("Your message was not sent")
+  } finally {
+    client.transport.close()
+  }
+})
+
+test("REQ-WIRE-009 resendUnsent sends a never-transmitted request once after the connection returns", async () => {
+  const peers = [new ScriptedPeer("connection-1"), new ScriptedPeer("connection-2")]
+  const sockets = sequence(peers, new Set([1]))
+  const client = make({ discover: async () => endpoint, socket: sockets.socket })
+  const resilient = resendUnsent(() => client, {
+    reconnected: () => client.transport.reconnect(),
+    revision: () => 0,
+    admit: () => true,
+  })
+  const input = { sessionID: "ses_owner", text: "exactly once", id: "msg_resent" }
+  try {
+    await sockets.constructed[0]
+    peers[0].socket.close()
+    peers[1].onRequest = (dispatch) => peers[1].reject(dispatch)
+    const outcome = await resilient.session.prompt(input).catch((error: unknown) => error)
+    expect(outcome).toEqual({ _tag: "InvalidRequestError", message: "Scripted rejection" })
+    expect(peers[0].requests).toHaveLength(0)
+    expect(peers[1].requests).toHaveLength(1)
+    expect(decodeStrict(session_prompt_RequestSchema, peers[1].requests[0].request.payload).payload?.id?.encoding).toEqual(
+      { case: "utf8", value: "msg_resent" },
+    )
+  } finally {
+    client.transport.close()
+  }
+})
+
+function fenced(admission: boolean, transmits = false) {
+  const peers = [new ScriptedPeer("connection-1", transmits ? {} : { normalWindowBytes: 1 }), new ScriptedPeer("connection-2")]
+  const sockets = sequence(peers, new Set([0, 1]))
+  const client = make({ discover: async () => endpoint, socket: sockets.socket })
+  const admitted: unknown[] = []
+  let reconnects = 0
+  const resilient = resendUnsent(() => client, {
+    reconnected: () => {
+      reconnects++
+      return client.transport.reconnect()
+    },
+    revision: () => 7,
+    admit: (request) => {
+      admitted.push(request)
+      return admission
+    },
+  })
+  peers[1].onRequest = (dispatch) => peers[1].reject(dispatch)
+  return { peers, client, resilient, admitted, reconnects: () => reconnects }
+}
+
+test("REQ-WIRE-009 a request proven never written is resent once when the fence admits it", async () => {
+  const { peers, client, resilient, admitted } = fenced(true)
+  const input = { sessionID: "ses_owner", title: "fenced once" }
+  try {
+    await client.transport.ready()
+    const outcome = resilient.session.rename(input).catch((error: unknown) => error)
+    await Promise.resolve()
+    await Promise.resolve()
+    peers[0].socket.close()
+    expect(await outcome).toEqual({ _tag: "InvalidRequestError", message: "Scripted rejection" })
+    expect(admitted).toHaveLength(1)
+    expect(admitted[0]).toMatchObject({ operation: "session.rename", args: [input], issuedRevision: 7 })
+    expect((admitted[0] as { issuedOn: unknown; target: unknown }).target).toBe(client)
+    expect((admitted[0] as { issuedOn: unknown }).issuedOn).toBe(client)
+    expect(peers[0].requests).toHaveLength(0)
+    expect(peers[1].requests).toHaveLength(1)
+  } finally {
+    client.transport.close()
+  }
+})
+
+test("REQ-WIRE-009 a request proven never written is not resent when the fence rejects it", async () => {
+  const { peers, client, resilient, admitted } = fenced(false)
+  try {
+    await client.transport.ready()
+    const outcome = await (async () => {
+      const pending = resilient.session.rename({ sessionID: "ses_owner", title: "fenced out" }).catch((error: unknown) => error)
+      await Promise.resolve()
+      await Promise.resolve()
+      peers[0].socket.close()
+      return pending
+    })()
+    expect(outcome).toMatchObject({ status: "unsent", operation: "session.rename", resendable: false })
+    expect((outcome as Error).message).toBe(
+      "Request session.rename was not sent again because the connection changed. Check the current state, then try again.",
+    )
+    expect(admitted).toHaveLength(1)
+    expect(peers[0].requests).toHaveLength(0)
+    expect(peers[1].requests).toHaveLength(0)
+  } finally {
+    client.transport.close()
+  }
+})
+
+test("REQ-WIRE-009 a request whose transmission is uncertain is never resent and names the changed connection", async () => {
+  const { peers, client, resilient, admitted, reconnects } = fenced(true, true)
+  try {
+    await client.transport.ready()
+    const arrived = peers[0].nextRequest()
+    const outcome = resilient.session
+      .prompt({ sessionID: "ses_owner", text: "uncertain", id: "msg_uncertain_fence" })
+      .catch((error: unknown) => error)
+    await arrived
+    peers[0].socket.close()
+    const error = await outcome
+    expect(error).toMatchObject({ status: "unknown", operation: "session.prompt", resendable: false })
+    expect((error as Error).message).toContain("connection changed")
+    expect((error as Error).message).toContain("Your message")
+    expect(admitted).toEqual([])
+    expect(reconnects()).toBe(0)
+    expect(peers[1].requests).toHaveLength(0)
+  } finally {
+    client.transport.close()
+  }
+})
+
+test("REQ-WIRE-009 resendUnsent never resends a cancelled request or a transmitted mutation", async () => {
+  const peers = [new ScriptedPeer("connection-1"), new ScriptedPeer("connection-2")]
+  const sockets = sequence(peers, new Set([0, 1]))
+  const client = make({ discover: async () => endpoint, socket: sockets.socket })
+  let reconnects = 0
+  const admitted: unknown[] = []
+  const resilient = resendUnsent(() => client, {
+    reconnected: () => {
+      reconnects++
+      return client.transport.reconnect()
+    },
+    revision: () => 7,
+    admit: (request) => {
+      admitted.push(request)
+      return true
+    },
+  })
+  try {
+    await client.transport.ready()
+    const controller = new AbortController()
+    controller.abort()
+    const cancelled = await resilient.session
+      .rename({ sessionID: "ses_owner", title: "never" }, { signal: controller.signal })
+      .catch((error: unknown) => error)
+    expect(cancelled).toMatchObject({ status: "unsent", resendable: false })
+    const arrived = peers[0].nextRequest()
+    const mutation = resilient.session
+      .prompt({ sessionID: "ses_owner", text: "uncertain", id: "msg_uncertain" })
+      .catch((error: unknown) => error)
+    await arrived
+    peers[0].socket.dispatchEvent(new Event("error"))
+    expect(await mutation).toMatchObject({ status: "unknown", operation: "session.prompt" })
+    expect(reconnects).toBe(0)
+    expect(admitted).toEqual([])
+    expect(peers[0].requests.map((request) => request.operation.diagnosticName)).toEqual(["session.prompt"])
+    expect(peers[1].requests).toHaveLength(0)
   } finally {
     client.transport.close()
   }

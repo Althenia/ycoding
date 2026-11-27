@@ -26,7 +26,7 @@ test("hydration, inventory updates, search and reconnect keep helpers out of ord
     return "default"
   } })
   const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }) })
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }) })
   const check = () => {
     expect(store.state().sessions.map(row => row.id).sort()).toEqual([fork.id, owner.id])
     expect(store.state().carouselSessions?.map(row => row.id).sort()).toEqual([fork.id, owner.id])
@@ -64,7 +64,7 @@ test("opening a side chat retains its parent while direct-open helpers never ent
     return "default"
   } })
   const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }) })
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers }) })
   try {
     await store.load()
     await waitFor(() => store.state().sessionListStatus === "ready")

@@ -81,11 +81,6 @@ const workflows = [
     calls: ["dots.set(", "dots.attach(", "dots.detach("],
   },
   {
-    name: "artifact details, metrics, history, trash and preview-confirm mutations go beyond enable and disable",
-    sources: ["component/dialog-project-artifacts.tsx"],
-    calls: ["projectArtifact.artifact.get(", "projectArtifact.artifact.metrics(", "projectArtifact.artifact.revert(", "projectArtifact.artifact.remove(", "projectArtifact.artifact.restore(", "projectArtifact.artifact.promotion.preview(", "projectArtifact.artifact.promotion.confirm(", "projectArtifact.artifact.fork.preview(", "projectArtifact.artifact.fork.confirm(", "projectArtifact.artifact.shadow.preview(", "projectArtifact.artifact.shadow.confirm("],
-  },
-  {
     name: "isolated browser pause and resume remain distinct from stopping its instance",
     sources: ["component/dialog-session-browser.tsx"],
     calls: ["isolatedBrowser.control("],

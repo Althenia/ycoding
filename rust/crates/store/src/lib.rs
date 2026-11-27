@@ -1,9 +1,9 @@
 pub mod analytics;
-pub mod artifacts;
 pub mod backup;
 pub mod bun_import;
 mod catalog;
 pub mod coordination;
+pub mod database_format;
 mod decimal;
 pub(crate) mod digest;
 mod engine;

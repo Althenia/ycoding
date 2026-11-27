@@ -6,7 +6,7 @@ import { browserScriptPermission } from "@ycoding-ai/client/tool-display"
 import { batch, createContext, createEffect, createMemo, createSignal, createUniqueId, For, on, onCleanup, onMount, Show, useContext, type JSX } from "solid-js"
 import { render } from "solid-js/web"
 import { ComposerToolbar, revealComposerControls } from "../../../apps/web/src/remote/ui/composer-toolbar"
-import type { ConnectionState, FormAnswer, FormRequest, Messages, PendingRequests, PermissionRequest, ComposerCatalog, PromptAgent, PromptFile, RequestReply, SessionItem, ModelSelection, ShellOutput, UsageRange, RevertInput, SetAutonomyInput, SettingsMutationInput, ProjectMutationInput, WorkspaceMutationInput, PinRequest } from "./contract"
+import type { ConnectionState, FormAnswer, FormRequest, Messages, PendingRequests, PermissionRequest, ComposerCatalog, AutonomyCategory, AutonomyDefaultsSnapshot, SetAutonomyDefaultsInput, PromptAgent, PromptFile, RequestReply, SessionItem, ModelSelection, ShellOutput, UsageRange, RevertInput, SetAutonomyInput, SettingsMutationInput, ProjectMutationInput, WorkspaceMutationInput, PinRequest } from "./contract"
 import { desktop as api } from "./bridge"
 import { createEventRefresh, eventSessionID } from "./event-refresh"
 import { createPromptVisibility } from "./prompt-visibility"
@@ -27,13 +27,17 @@ import { TerminalInspector } from "./terminal-inspector"
 import { createEditorContext, EditorContextControl, type EditorAdmission } from "./editor-context"
 import { PASTE_STORAGE_KEY, expandPastedPrompt, expandPastedText, livePasted, parsePasteMode, placePaste, type PasteMode } from "./paste"
 import { composerByteLimit, composerFileLimit, hasTransferFiles, inlineFileSize, transferredFiles } from "./composer-files"
-import type { DesktopAPI, DesktopSource, IntegrationMutationInput, IntegrationAttempt, McpMutationInput, SessionManageInput, SystemManageInput, DisplayValue, Selection, UpdateCheckResult, ArtifactInput, ArtifactMutationInput, ArtifactMutationResult, ArtifactPreviewKind, ArtifactScope, SessionSnapshot, MemoryScope } from "./contract"
+import type { DesktopAPI, DesktopSource, IntegrationMutationInput, IntegrationAttempt, McpMutationInput, SessionManageInput, SystemManageInput, DisplayValue, Selection, UpdateCheckResult, SessionSnapshot, MemoryScope } from "./contract"
 import { schemeStylesheet } from "../../../apps/web/src/theme/schemes"
 import { Icon as WebIcon, type IconName as WebIconName } from "../../../apps/web/src/ui/icon"
 import { PendingPreview } from "../../../apps/web/src/remote/ui/pending-preview"
 import { MessageDelete } from "../../../apps/web/src/remote/ui/message-delete"
 import { ordinarySession } from "./sessions"
 import { Markdown, MarkdownClipboard } from "../../../apps/web/src/remote/ui/markdown"
+import { LifecycleEntryView, RecallEntryView } from "../../../apps/web/src/remote/ui/recall-entry"
+import { recordPlacements, transcriptRecords, type TranscriptRecord } from "./recall"
+import { foldRecallEvents } from "@ycoding-ai/client/cue-recall"
+import { foldLifecycleEvents } from "@ycoding-ai/client/lifecycle"
 import { createInteractionControl, interactionControlVisible, interactionEventGeneration, readInteractionStatus, type InteractionView } from "../../../apps/web/src/remote/interaction-control"
 import { InteractionControl, InteractionPreview } from "../../../apps/web/src/remote/ui/interaction-control"
 import { McpApp } from "../../../apps/web/src/remote/ui/mcp-app"
@@ -740,10 +744,10 @@ function FolderExplorerDialog(props: { options: FolderOptions }) {
   </DesktopDialog>
 }
 
-type UtilityKind = "connect" | "mcp" | "diff" | "status" | "debug" | "agents" | "skills" | "browser" | "pair" | "remote" | "artifacts" | "plugins" | "dots" | "help" | "themes"
+type UtilityKind = "connect" | "mcp" | "diff" | "status" | "debug" | "agents" | "skills" | "browser" | "pair" | "remote" | "plugins" | "dots" | "help" | "themes"
 type UtilityOptions = { readonly kind: UtilityKind; readonly source?: DesktopSource; readonly sessionID?: string; readonly directory?: string; readonly diffMode?: "git" | "branch"; readonly insert?: (value: string) => void; readonly chooseAgent?: (agent: { readonly id: string; readonly name: string }) => void }
 const [utilityDialog, setUtilityDialog] = createSignal<UtilityOptions>()
-const utilityKinds: readonly string[] = ["connect", "mcp", "diff", "status", "debug", "agents", "skills", "browser", "pair", "remote", "artifacts", "plugins", "dots", "help"]
+const utilityKinds: readonly string[] = ["connect", "mcp", "diff", "status", "debug", "agents", "skills", "browser", "pair", "remote", "plugins", "dots", "help"]
 const [commandOwner, setCommandOwner] = createSignal<{ sessionID?: string; canSendToParent?: () => boolean; interactionActions?: () => readonly PaletteAction[]; run: (name: string, args: string) => Promise<boolean> }>()
 const sessionCommands = new Set(["compact", "autonomous", "goal", "daybreak", "rename", "fork", "move", "undo", "redo", "terminals", "session-actions", "processes", "background", "variants", "find", "timeline", "copy", "export", "archive", "unarchive", "delete", "share", "unshare", "parent", "next-child", "previous-child", "btw", "btw-send", "suggest", "cd", "sleep", "wake"])
 type StashOptions = { readonly draft: () => StashedPrompt; readonly update: (draft: StashedPrompt) => void; readonly directory?: string }
@@ -1160,21 +1164,15 @@ function UsageTools() {
   </section>
 }
 
-export function artifactReferenceOf(value: unknown, source?: DesktopSource): ArtifactInput | undefined {
-  const scope = field(value, "scope"), kind = field(value, "kind"), id = word(field(value, "id"))
-  if ((scope !== "project" && scope !== "global") || (kind !== "skill" && kind !== "command" && kind !== "agent" && kind !== "plugin") || !id) return undefined
-  return { scope, kind, id, ...(source === undefined ? {} : { source }) }
-}
-
 function SystemDialog(props: { options: UtilityOptions }) {
-  const tabs = ["Status & Debug", "Agents & Skills", "Browser", "Remote & Pairing", "Artifacts & Plugins", "Dots"] as const
-  const initial = props.options.kind === "agents" || props.options.kind === "skills" ? tabs[1] : props.options.kind === "browser" ? tabs[2] : props.options.kind === "remote" || props.options.kind === "pair" ? tabs[3] : props.options.kind === "artifacts" || props.options.kind === "plugins" ? tabs[4] : props.options.kind === "dots" ? tabs[5] : tabs[0]
+  const tabs = ["Status & Debug", "Agents & Skills", "Browser", "Remote & Pairing", "Plugins", "Dots"] as const
+  const initial = props.options.kind === "agents" || props.options.kind === "skills" ? tabs[1] : props.options.kind === "browser" ? tabs[2] : props.options.kind === "remote" || props.options.kind === "pair" ? tabs[3] : props.options.kind === "plugins" ? tabs[4] : props.options.kind === "dots" ? tabs[5] : tabs[0]
   const [tab, setTab] = createSignal<(typeof tabs)[number]>(initial)
   const [actionTab, setActionTab] = createSignal<(typeof tabs)[number]>()
   const noticeTabs: Record<string, (typeof tabs)[number]> = {
     Skills: tabs[1], "Session skills": tabs[1],
     Browser: tabs[2], "Browser tabs": tabs[2], "Isolated browser": tabs[2], "Isolated browser tabs": tabs[2],
-    Remote: tabs[3], Artifacts: tabs[4], Plugins: tabs[4], Dots: tabs[5],
+    Remote: tabs[3], Plugins: tabs[4], Dots: tabs[5],
   }
   const input = () => ({ sessionID: props.options.sessionID, directory: props.options.directory })
   const snapshot = observe(() => ({ queryKey: ["system", ...scope(), input()] as const, queryFn: () => api.systemSnapshot(input()), enabled: reading() }))
@@ -1228,7 +1226,7 @@ function SystemDialog(props: { options: UtilityOptions }) {
   return <DesktopDialog title="System and Session tools" kind={tab() === "Agents & Skills" ? "agents" : tab() === "Browser" ? "browser" : "system"} navigation={<div class="desktop-dialog__tabs" role="tablist" aria-label="System tools"><For each={tabs}>{(label, index) => <button type="button" role="tab" aria-selected={tab() === label} tabindex={tab() === label ? 0 : -1} onClick={() => setTab(label)} onKeyDown={(event) => { const next = event.key === "ArrowRight" ? (index() + 1) % tabs.length : event.key === "ArrowLeft" ? (index() + tabs.length - 1) % tabs.length : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : undefined; if (next !== undefined) { event.preventDefault(); setTab(tabs[next]!); event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="tab"]')[next]?.focus() } }}>{label}</button>}</For></div>} onClose={() => setUtilityDialog(undefined)}>
     <div class="desktop-dialog__toolbar"><button type="button" class="rl-btn" disabled={actions.busy()} onClick={() => { actions.reset(); setChanged(undefined); snapshot.refetch(); if (tab() === tabs[1]) catalog.refetch() }}><Icon name="refresh" />Refresh status</button></div>
     <Show when={tab() !== tabs[1] && snapshot.result().isPending}><p role="status">Reading status…</p></Show><Show when={tab() !== tabs[1] && snapshot.result().isError}><p role="alert">{failure(snapshot.result().error, "Status could not be read.")}</p></Show><Show when={actionTab() === tab() && actions.error()}><p role="alert">{actions.error()}</p></Show>
-    <For each={Object.entries(data()?.notices ?? {}).filter(([name]) => (noticeTabs[name] ?? tabs[0]) === tab() && name !== "Artifacts")}>{([, notice]) => <p role="status">{notice}</p>}</For>
+    <For each={Object.entries(data()?.notices ?? {}).filter(([name]) => (noticeTabs[name] ?? tabs[0]) === tab())}>{([, notice]) => <p role="status">{notice}</p>}</For>
     <section role="tabpanel" aria-label={tab()}><Show when={tab() === "Status & Debug"}><section class="st-section" aria-label="Backend connection"><h3>Backend connection</h3><dl class="rl-meta"><For each={Object.entries(data()?.connection ?? connection())}>{([name, value]) => <><dt>{name}</dt><dd>{String(value)}</dd></>}</For><dt>Session</dt><dd>{props.options.sessionID ?? "No Session"}</dd><dt>Directory</dt><dd>{data()?.directory ?? props.options.directory ?? "Standalone"}</dd></dl><For each={data()?.server?.urls ?? []}>{(url) => <p><code>{url}</code></p>}</For></section></Show>
     <Show when={tab() === "Status & Debug"}><section class="st-section"><h3>Configuration diagnostics</h3><DisplaySnapshot value={data()?.configDiagnostics} /></section><section class="st-section"><h3>Configured providers</h3><DisplaySnapshot value={data()?.providers} /></section><section class="st-section"><h3>References</h3><DisplaySnapshot value={data()?.references} /></section></Show>
     <Show when={tab() === "Agents & Skills"}>
@@ -1258,7 +1256,7 @@ function SystemDialog(props: { options: UtilityOptions }) {
       <section class="st-section" aria-label="Isolated browser"><h3>Isolated browser</h3><DisplaySnapshot value={data()?.isolatedBrowser} /><h4>Tabs</h4><DisplaySnapshot value={data()?.isolatedBrowserTabs} /><label class="rl-field"><span>Start URL</span><input type="url" value={url()} onInput={(event) => setURL(event.currentTarget.value)} /></label><div class="ws-row"><button type="button" class="rl-btn" disabled={actions.blocked() || !props.options.sessionID || !data()} onClick={() => void manage({ ...base(), kind: "isolated-browser-start", url: url() })}>Start isolated browser</button><button type="button" class="rl-btn" disabled={actions.blocked() || !props.options.sessionID || !data()} onClick={() => void manage({ ...base(), kind: "isolated-browser-stop" })}>Stop isolated browser</button></div></section>
     </div></Show>
     <Show when={tab() === "Remote & Pairing"}><section class="st-section" aria-label="Browser pairing"><h3>Pairing</h3><Show when={data()?.pairing} fallback={<p>No pairing secret has been issued in this dialog.</p>}>{(pairing) => <><code aria-label="Pairing secret">{pairingRevealed() ? pairing().secret : "••••••••••••••••"}</code><p>Expires {new Date(pairing().expiresAt).toLocaleString()}</p><div class="desktop-dialog__toolbar"><button type="button" class="rl-btn" aria-pressed={pairingRevealed()} onClick={() => setPairingRevealed(!pairingRevealed())}>{pairingRevealed() ? "Hide pairing secret" : "Reveal pairing secret"}</button><button type="button" class="rl-btn" onClick={() => { setPairingCopy(undefined); setPairingCopyError(undefined); void copyTextToClipboard(pairing().secret).then(() => setPairingCopy("Pairing secret copied"), cause => setPairingCopyError(failure(cause, "The pairing secret could not be copied."))) }}>Copy pairing secret</button></div><Show when={pairingCopy()}><p role="status">{pairingCopy()}</p></Show><Show when={pairingCopyError()}><p role="alert">{pairingCopyError()}</p></Show></>}</Show><button type="button" class="rl-btn" disabled={actions.blocked() || !props.options.sessionID || !data()} onClick={() => { setPairingRevealed(false); setPairingCopy(undefined); setPairingCopyError(undefined); void manage({ ...base(), kind: "browser-start" }) }}>Pair browser</button></section><section class="st-section" aria-label="Remote Session relay"><h3>Remote relay</h3><DisplaySnapshot value={data()?.remote} /><div class="desktop-dialog__toolbar"><For each={[true, false]}>{(enabled) => <button type="button" class="rl-btn" disabled={actions.blocked() || !data()} onClick={() => void manage({ ...base(), kind: "remote-set", enabled })}>{enabled ? "Enable remote access" : "Disable remote access"}</button>}</For></div></section></Show>
-    <Show when={tab() === "Artifacts & Plugins"}><ArtifactsPanel options={props.options} /><details class="st-section" aria-label="Plugins"><summary>Plugins</summary><DisplaySnapshot value={data()?.plugins} /><p>Plugin discovery is read-only. Configure plugin changes in ycoding.json and restart the backend.</p></details></Show>
+    <Show when={tab() === "Plugins"}><section class="st-section" aria-label="Plugins"><h3>Plugins</h3><DisplaySnapshot value={data()?.plugins} /><p>Plugin discovery is read-only. Configure plugin changes in ycoding.json and restart the backend.</p></section></Show>
     <Show when={tab() === "Browser"}><div class="desktop-dialog__actions"><button type="button" class="rl-btn" disabled={actions.blocked() || !props.options.sessionID || !data() || field(data()?.isolatedBrowser, "state") !== "ready"} onClick={() => void manage({ ...base(), kind: "isolated-browser-pause" })}>Pause isolated browser</button><button type="button" class="rl-btn" disabled={actions.blocked() || !props.options.sessionID || !data() || field(data()?.isolatedBrowser, "state") !== "paused"} onClick={() => void manage({ ...base(), kind: "isolated-browser-resume" })}>Resume isolated browser</button></div></Show>
     <Show when={tab() === "Dots"}>
       <section class="st-section" aria-label="Dots computer access"><h3>Dots computer access</h3><DisplaySnapshot value={data()?.dots} />
@@ -1270,72 +1268,6 @@ function SystemDialog(props: { options: UtilityOptions }) {
       </section>
     </Show></section>
   </DesktopDialog>
-}
-
-function ArtifactsPanel(props: { options: UtilityOptions }) {
-  const [artifactScope, setArtifactScope] = createSignal<ArtifactScope | "trash">("project")
-  const [selected, setSelected] = createSignal<ArtifactInput>()
-  const [version, setVersion] = createSignal("")
-  const [preview, setPreview] = createSignal<ArtifactMutationResult["preview"]>()
-  const [notice, setNotice] = createSignal<string>()
-  const actions = dialogActions()
-  const list = observe(() => ({ queryKey: ["artifacts", ...scope(), props.options.source, artifactScope()] as const, queryFn: () => api.artifacts({ source: props.options.source, scope: artifactScope() }), enabled: reading() }))
-  const detail = observe(() => ({ queryKey: ["artifact", ...scope(), selected()] as const, queryFn: () => api.artifact(selected()!), enabled: reading() && !!selected() }))
-  const listData = () => list.result().isError ? undefined : currentSnapshot(list.result().data, connection().revision)
-  const detailData = () => detail.result().isError ? undefined : currentSnapshot(detail.result().data, connection().revision)
-  createEffect(() => { void detailData()?.identity; setPreview(undefined); setVersion("") })
-  const reload = () => { actions.reset(); setPreview(undefined); list.refetch(); if (selected()) detail.refetch() }
-  const mutate = async (input: ArtifactMutationInput, prompt?: string) => {
-    const result = await actions.run(() => api.manageArtifact(input), prompt)
-    if (!result) return
-    if (result.preview) { setPreview(result.preview); return }
-    setPreview(undefined); setNotice("Artifact change confirmed."); list.refetch(); if (selected()) detail.refetch()
-  }
-  const previewChange = (kind: ArtifactPreviewKind) => {
-    const current = detailData()
-    if (current) void mutate({ kind: "preview", preview: kind, source: props.options.source, revision: current.revision, artifact: current.identity })
-  }
-  const confirmPreview = () => {
-    const current = detailData(), proposed = preview()
-    if (!current || !proposed || !proposed.confirmable || proposed.expiresAt <= Date.now()) { setPreview(undefined); setNotice("The preview is unavailable or expired. Preview this change again."); return }
-    void mutate({ kind: "confirm", preview: proposed.kind, source: props.options.source, revision: current.revision, artifact: current.identity, token: proposed.token }, `Apply the ${proposed.kind} preview for ${current.identity.scope}/${current.identity.kind}/${current.identity.id}?`)
-  }
-  const toggle = async (kind: "artifact-enable" | "artifact-disable") => {
-    const current = detailData()
-    if (!current) return
-    const result = await actions.run(() => api.manageSystem({ kind, revision: current.revision, sessionID: props.options.sessionID, directory: props.options.directory, artifact: current.identity }), `${kind === "artifact-enable" ? "Enable" : "Disable"} ${current.identity.scope}/${current.identity.kind}/${current.identity.id}?`)
-    if (result) { setNotice("Artifact state confirmed."); reload() }
-  }
-  return <section class="desktop-artifact-browser" aria-label="Managed artifacts"><section class="desktop-artifact-list" aria-label="Artifact list">
-    <h3>Managed artifacts</h3>
-    <SharedRadioGroup label="Artifact scope" value={artifactScope()} options={[{ value: "project", label: "Project" }, { value: "global", label: "Global" }, { value: "trash", label: "Trash" }]} disabled={actions.busy()} onChange={(value) => { if (value !== "project" && value !== "global" && value !== "trash") return; setArtifactScope(value); setSelected(undefined); setPreview(undefined); setNotice(undefined) }} />
-    <button type="button" class="rl-btn" disabled={actions.busy() || !reading()} onClick={reload}>Refresh artifacts</button>
-    <Show when={list.result().isPending}><SharedLoadingSkeleton kind="list" label="Reading managed artifacts…" /></Show>
-    <Show when={list.result().isError}><p role="alert">{failure(list.result().error, "Artifacts could not be read.")}</p></Show>
-    <Show when={actions.error()}><p role="alert">{actions.error()}</p></Show><Show when={notice()}><p role="status">{notice()}</p></Show>
-    <Show when={listData()}>{(current) => <For each={current().items} fallback={<p>No artifacts in this scope.</p>}>{(item) => {
-      const reference = artifactReferenceOf(item, props.options.source), deletionID = word(field(item, "deletionID"))
-      return <section class="st-section"><p>{word(field(item, "name")) ?? word(field(item, "id"))} · {word(field(item, "kind"))} · {word(field(item, "stage")) ?? word(field(item, "priorStage"))}</p>
-        <Show when={artifactScope() !== "trash" && reference}><button type="button" class="rl-btn" disabled={actions.blocked()} onClick={() => setSelected(reference)}>Details, metrics and history</button></Show>
-        <Show when={artifactScope() === "trash" && deletionID}><button type="button" class="rl-btn" disabled={actions.blocked()} onClick={() => void mutate({ kind: "restore", revision: current().revision, source: props.options.source, deletionID: deletionID! }, `Restore ${reference ? `${reference.scope}/${reference.kind}/${reference.id}` : deletionID} from trash?`)}>Restore artifact</button></Show>
-      </section>
-    }}</For>}</Show>
-    </section><div class="desktop-artifact-detail"><Show when={selected()} fallback={<p class="st-muted">Select an artifact to inspect its definition and reported history.</p>}>
-      <Show when={detail.result().isPending}><SharedLoadingSkeleton kind="list" label="Reading artifact details…" /></Show>
-      <Show when={detail.result().isError}><p role="alert">{failure(detail.result().error, "Artifact details could not be read.")}</p></Show>
-      <Show when={detailData()}>{(current) => <section class="st-section" aria-label="Artifact details">
-        <h3>{current().identity.scope}/{current().identity.kind}/{current().identity.id}</h3>
-        <p>{current().stage} · revision {current().identity.expectedRevision} · version {current().identity.expectedVersionID}</p>
-        <h4>Definition and history</h4><DisplaySnapshot value={current().details} /><h4>Metrics</h4><DisplaySnapshot value={current().metrics} />
-        <div class="desktop-dialog__actions"><button type="button" class="rl-btn" disabled={actions.blocked()} onClick={() => void toggle("artifact-enable")}>Enable</button><button type="button" class="rl-btn" disabled={actions.blocked()} onClick={() => void toggle("artifact-disable")}>Disable</button>
-          <button type="button" class="rl-btn" disabled={actions.blocked()} onClick={() => void mutate({ kind: "remove", source: props.options.source, revision: current().revision, artifact: current().identity }, `Move ${current().identity.scope}/${current().identity.kind}/${current().identity.id} to managed artifact trash?`)}>Move to trash</button></div>
-        <DesktopSelect label="Earlier artifact version" value={version()} options={[{ value: "", label: "Choose a version" }, ...current().versionIDs.filter((id) => id !== current().identity.expectedVersionID).map((id) => ({ value: id, label: id }))]} disabled={actions.blocked()} onChange={setVersion} />
-        <button type="button" class="rl-btn" disabled={actions.blocked() || !version()} onClick={() => void mutate({ kind: "revert", source: props.options.source, revision: current().revision, artifact: current().identity, targetVersionID: version() }, `Revert ${current().identity.id} to ${version()}?`)}>Revert version</button>
-        <div class="desktop-dialog__actions"><For each={current().identity.scope === "project" ? ["promotion", "shadow"] as const : ["fork"] as const}>{(kind) => <button type="button" class="rl-btn" disabled={actions.blocked()} onClick={() => previewChange(kind)}>Preview {kind === "shadow" ? "shadow removal" : kind}</button>}</For></div>
-        <Show when={preview()}>{(proposed) => <section class="st-section" aria-label="Artifact change preview"><h4>{proposed().kind} preview</h4><DisplaySnapshot value={proposed().details} /><p>Expires {new Date(proposed().expiresAt).toLocaleString()}.</p><Show when={!proposed().confirmable}><p role="alert">This preview cannot be applied. Resolve the reported conflict first.</p></Show><button type="button" class="rl-btn" disabled={actions.blocked() || !proposed().confirmable} onClick={confirmPreview}>Confirm preview</button></section>}</Show>
-      </section>}</Show>
-    </Show></div>
-  </section>
 }
 
 type SessionTool = "shell" | "editor" | "sidechat" | "steer-parent" | "assist" | "terminals"
@@ -1485,7 +1417,7 @@ function Palette() {
       run: () => applyThemePreference(theme.id) })),
     ...DESKTOP_BUILT_IN_SLASH_COMMANDS.filter((command) => command.name !== "new" && (!sessionCommands.has(command.name) || !!commandOwner()?.sessionID) && (!["models", "editor", "prompt", "stash"].includes(command.name) || !!commandOwner()) && (command.name !== "btw-send" || commandOwner()?.canSendToParent?.())).map((command): PaletteAction => ({
       id: `command-${command.name}`, group: ["models", "variants", "agents", "skills"].includes(command.name) ? "Model & Agent" : ["diff", "workspaces", "move"].includes(command.name) ? "Workspace & Git" : ["connect", "mcp"].includes(command.name) ? "Providers & MCP" : ["settings", "keep-awake"].includes(command.name) ? "Settings" : sessionCommands.has(command.name) ? "Session" : "System",
-      label: command.name === "connect" ? "Connect providers" : command.name === "diff" ? "Git working-tree diff" : command.description, detail: `/${command.name}`, icon: command.name === "mcp" ? "server" : command.name === "diff" ? "file" : command.name === "connect" ? "plug" : command.name === "models" || command.name === "variants" ? "cpu" : command.name === "agents" ? "user" : command.name === "skills" || command.name === "compact" || command.name === "toggle-thinking" ? "sparkles" : command.name === "autonomous" ? "shield" : command.name === "goal" ? "target" : command.name === "daybreak" ? "sun" : command.name === "timeline" ? "list" : command.name === "rename" ? "chat" : command.name === "fork" ? "git-fork" : command.name === "undo" ? "undo" : command.name === "redo" ? "redo" : command.name === "stash" ? "bookmark" : command.name === "find" ? "search" : command.name === "copy" ? "copy" : command.name === "export" ? "download" : command.name === "workspaces" || command.name === "move" ? "folder" : command.name === "projects" ? "team" : command.name === "sessions" ? "sessions" : command.name === "usage" || command.name === "status" ? "usage" : command.name === "settings" ? "settings" : command.name === "keep-awake" ? "zap" : command.name === "themes" ? "sun" : command.name === "browser" || command.name === "remote" ? "globe" : command.name === "artifacts" || command.name === "plugins" ? "package" : command.name === "pair" ? "devices" : command.name === "help" ? "help" : "terminal", keywords: `${command.name} ${command.aliases?.join(" ") ?? ""}`,
+      label: command.name === "connect" ? "Connect providers" : command.name === "diff" ? "Git working-tree diff" : command.description, detail: `/${command.name}`, icon: command.name === "mcp" ? "server" : command.name === "diff" ? "file" : command.name === "connect" ? "plug" : command.name === "models" || command.name === "variants" ? "cpu" : command.name === "agents" ? "user" : command.name === "skills" || command.name === "compact" || command.name === "toggle-thinking" ? "sparkles" : command.name === "autonomous" ? "shield" : command.name === "goal" ? "target" : command.name === "daybreak" ? "sun" : command.name === "timeline" ? "list" : command.name === "rename" ? "chat" : command.name === "fork" ? "git-fork" : command.name === "undo" ? "undo" : command.name === "redo" ? "redo" : command.name === "stash" ? "bookmark" : command.name === "find" ? "search" : command.name === "copy" ? "copy" : command.name === "export" ? "download" : command.name === "workspaces" || command.name === "move" ? "folder" : command.name === "projects" ? "team" : command.name === "sessions" ? "sessions" : command.name === "usage" || command.name === "status" ? "usage" : command.name === "settings" ? "settings" : command.name === "keep-awake" ? "zap" : command.name === "themes" ? "sun" : command.name === "browser" || command.name === "remote" ? "globe" : command.name === "plugins" ? "package" : command.name === "pair" ? "devices" : command.name === "help" ? "help" : "terminal", keywords: `${command.name} ${command.aliases?.join(" ") ?? ""}`,
       run: () => { const owner = commandOwner(); void (owner ? owner.run(command.name === "themes" ? "theme" : command.name, "") : commonCommand(command.name, "", {}, (to) => void navigate({ to }))).catch((cause) => setDesktopNotice(failure(cause, "The command was not confirmed."))) } })),
     { id: "branch-diff", group: "Workspace & Git", label: "Branch diff", icon: "git-branch", keywords: "git branch changes compare", run: () => { const owner = commandOwner(); void (owner ? owner.run("branch-diff", "") : commonCommand("branch-diff", "", {}, (to) => void navigate({ to }))).catch((cause) => setDesktopNotice(failure(cause, "Diff could not be opened."))) } },
     ...(commandOwner()?.sessionID ? (["archive", "unarchive", "delete"] as const).map((kind): PaletteAction => ({ id: `session-${kind}`, group: "Session", label: kind === "archive" ? "Archive Session" : kind === "unarchive" ? "Unarchive Session" : "Delete Session", icon: "sessions", keywords: kind, run: () => { void commandOwner()?.run(kind, "").catch((cause) => setDesktopNotice(failure(cause, "The Session change was not confirmed."))) } })) : []),
@@ -2245,9 +2177,25 @@ function NewChat() {
   </section>
 }
 
+const yoloRisk = "YOLO approves every request in each selected YOLO category, bypassing permission limits, hard policies and custom rules. Answers settle automatically. Actions can modify or delete data, send messages, spend money or affect real systems. You accept all resulting risks and assume full responsibility. Accept these risks and enable YOLO?"
+const autonomyDecisionLabels = { manual: "Manual", auto: "Auto", yolo: "YOLO" } as const
+const autonomyCategoryLabels = { permissions: "Permissions", guardrails: "Guardrails", answers: "Answers" } as const
+export const yoloDefaultAcceptLabel = "Accept risk & save YOLO default"
+
 export function autonomyPrompt(payload: SetAutonomyInput["payload"], prompt: string) {
   if (![payload.permissions, payload.guardrails, payload.answers].includes("yolo")) return prompt
-  return `${prompt} YOLO approves every request in each selected YOLO category, bypassing permission limits, hard policies and custom rules. Answers settle automatically. Actions can modify or delete data, send messages, spend money or affect real systems. You accept all resulting risks and assume full responsibility. Accept these risks and enable YOLO?`
+  return `${prompt} ${yoloRisk}`
+}
+
+export function autonomyDefaultLabel(defaults: AutonomyDefaultsSnapshot["defaults"] | undefined, category: AutonomyCategory) {
+  return defaults ? `Saved default: ${autonomyDecisionLabels[defaults[category]]}` : "Saved default: Unknown"
+}
+
+export async function changeAutonomyDefault(category: AutonomyCategory, mode: "manual" | "auto" | "yolo", revision: number, deps: { readonly confirm: (prompt: string, accept?: string) => Promise<boolean>; readonly set: (input: SetAutonomyDefaultsInput) => Promise<AutonomyDefaultsSnapshot> }) {
+  if (mode === "yolo" && !(await deps.confirm(`Save YOLO as the default ${autonomyCategoryLabels[category].toLowerCase()} mode for new Sessions? ${yoloRisk}`, yoloDefaultAcceptLabel))) return undefined
+  const result = await deps.set({ revision, payload: { [category]: mode, ...(mode === "yolo" ? { acceptYolo: true } : {}) } })
+  if (result.revision !== revision || result.defaults[category] !== mode) throw new Error("The autonomy default was not confirmed. Refresh the defaults before retrying.")
+  return result
 }
 
 export function autonomyLabels(view: { readonly goal?: { readonly text: string; readonly status: string } | null; readonly effective: { readonly permissions: string; readonly guardrails: string; readonly answers: string; readonly deferred: boolean } } | undefined) {
@@ -2282,18 +2230,18 @@ export function lastOpenedSessionOf<T extends { readonly id: string }>(items: re
   return sessionID ? items.find((item) => item.id === sessionID) : undefined
 }
 
-type ConfirmRequest = { readonly prompt: string; readonly resolve: (value: boolean) => void }
-let confirmOpener: ((prompt: string) => Promise<boolean>) | undefined
-export function confirmInPage(prompt: string): Promise<boolean> {
-  return confirmOpener ? confirmOpener(prompt) : Promise.resolve(false)
+type ConfirmRequest = { readonly prompt: string; readonly accept: string; readonly resolve: (value: boolean) => void }
+let confirmOpener: ((prompt: string, accept: string) => Promise<boolean>) | undefined
+export function confirmInPage(prompt: string, accept = "Confirm"): Promise<boolean> {
+  return confirmOpener ? confirmOpener(prompt, accept) : Promise.resolve(false)
 }
 
 function ConfirmDialog() {
   const [request, setRequest] = createSignal<ConfirmRequest>()
   let dialog: HTMLDialogElement | undefined
-  confirmOpener = (prompt) => new Promise<boolean>((resolve) => {
+  confirmOpener = (prompt, accept) => new Promise<boolean>((resolve) => {
     if (request() || !dialog) { resolve(false); return }
-    setRequest({ prompt, resolve })
+    setRequest({ prompt, accept, resolve })
     dialog.showModal()
   })
   const finish = (value: boolean) => {
@@ -2306,7 +2254,7 @@ function ConfirmDialog() {
   return <dialog ref={dialog} class="confirm" aria-labelledby="confirm-title" onClose={() => finish(false)} onCancel={(event) => { event.preventDefault(); finish(false) }}>
     <h2 id="confirm-title">Confirm</h2>
     <p>{request()?.prompt}</p>
-    <div class="confirm__actions"><button type="button" class="rl-btn" onClick={() => finish(false)}>Cancel</button><button type="button" class="rl-btn" data-primary="true" onClick={() => finish(true)}>Confirm</button></div>
+    <div class="confirm__actions"><button type="button" class="rl-btn" onClick={() => finish(false)}>Cancel</button><button type="button" class="rl-btn" data-primary="true" onClick={() => finish(true)}>{request()?.accept ?? "Confirm"}</button></div>
   </dialog>
 }
 
@@ -2539,6 +2487,11 @@ function intermediateAssistant(message: Messages[number] | undefined): message i
   if (message?.type !== "assistant" || message.error || message.retry || message.content.length === 0) return false
   if (message.finish === "stop" || message.finish === "length" || message.finish === "content-filter" || message.finish === "error") return false
   return !message.content.some(part => part.type === "text" && part.text.length > 0)
+}
+
+function RecallTurn(props: { record: TranscriptRecord }) {
+  const view = () => { const record = props.record; return record.kind === "recall" ? <RecallEntryView entry={record.entry} /> : <LifecycleEntryView entry={record.entry} /> }
+  return <li class="transcript__turn rl-sys" data-speaker="recall" data-layout="block"><SharedMessageTurn kind="recall" recall={view()} /></li>
 }
 
 function TurnView(props: { sessionID: string; message: Messages[number]; continuation?: boolean; delivery?: keyof typeof deliveryLabels; onDelete: (id: string) => Promise<string | undefined>; onOpenApp?: (app: OpenMcpApp) => void }) {
@@ -3079,6 +3032,26 @@ function Conversation(props: { sessionID: string }) {
     else if (result.status === "unconfirmed") { setPolicyUncertain(true); setPolicyError(failure(result.error, "The autonomy change was not confirmed. Reopen the Session and review its state.")); autonomyRead.refetch() }
     setPolicyBusy(false)
   }
+  const defaultsRead = observe(() => ({ queryKey: ["autonomyDefaults", ...scope()] as const, queryFn: () => api.autonomyDefaults(), enabled: reading() && typeof api.autonomyDefaults === "function" }))
+  const autonomyDefaults = () => defaultsRead.result().isError || defaultsRead.result().data?.revision !== connection().revision ? undefined : defaultsRead.result().data?.defaults
+  const [defaultsBusy, setDefaultsBusy] = createSignal(false)
+  const saveDefault = async (category: AutonomyCategory, mode: "manual" | "auto" | "yolo") => {
+    const revision = connection().revision
+    if (revision === undefined || !reading() || defaultsBusy() || typeof api.setAutonomyDefaults !== "function") return
+    setDefaultsBusy(true); setPolicyError(undefined)
+    try { if (await changeAutonomyDefault(category, mode, revision, { confirm: confirmInPage, set: api.setAutonomyDefaults })) defaultsRead.refetch() }
+    catch (cause) { setPolicyError(failure(cause, "The autonomy default could not be saved.")); defaultsRead.refetch() }
+    setDefaultsBusy(false)
+  }
+  const defaultRow = (category: AutonomyCategory, title: string, value: () => "manual" | "auto" | "yolo", change: (mode: "manual" | "auto" | "yolo") => void) => <>
+    <p class="model-popover__label">{title}</p>
+    <SharedRadioGroup label={title} options={decisionModes} value={value()} disabled={policyBusy() || policyUncertain()} onChange={(mode) => change(mode as "manual" | "auto" | "yolo")} />
+    <div class="rl-policy-default" data-part={`autonomy-default-${category}`}>
+      <span class="st-muted">{autonomyDefaultLabel(autonomyDefaults(), category)}</span>
+      <button type="button" class="rl-btn" disabled={defaultsBusy() || !reading() || !autonomy() || typeof api.setAutonomyDefaults !== "function"} onClick={() => void saveDefault(category, autonomy()![category])} aria-label={`Save ${title} as default`}>Save as default</button>
+      <button type="button" class="rl-btn" disabled={defaultsBusy() || !reading() || typeof api.setAutonomyDefaults !== "function"} onClick={() => void saveDefault(category, "manual")} aria-label={`Reset ${title} default`}>Reset default</button>
+    </div>
+  </>
   const policyButtons = () => <><button type="button" onClick={openPolicy}>{policyLabels().goal}</button><button type="button" onClick={openPolicy}>{policyLabels().autonomy}</button></>
   const [selectedTurn, setSelectedTurn] = createSignal<string>()
   const [linkNote, setLinkNote] = createSignal<string>()
@@ -3192,6 +3165,9 @@ function Conversation(props: { sessionID: string }) {
   const editPlacements = createMemo(() => turnEditPlacements(visibleDesktopMessages(history()?.messages ?? []), changeData()?.turns))
   const visibleHistory = () => visibleDesktopMessages(history()?.messages ?? []).filter((message) => !activeRevert() || message.id < activeRevert()!.messageID)
   const turns = () => visibleHistory().filter((message) => !findQuery().trim() || transcriptText(message).toLowerCase().includes(findQuery().trim().toLowerCase()))
+  const recallRead = observe(() => ({ queryKey: ["sessionRecall", ...scope(), props.sessionID] as const, queryFn: () => api.sessionRecall(props.sessionID), enabled: reading() }))
+  const recalls = () => { const data = recallRead.result().isError ? undefined : currentSnapshot(recallRead.result().data, connection().revision, props.sessionID); return data ? transcriptRecords(foldRecallEvents(data.events).entries, foldLifecycleEvents(data.events).entries) : [] }
+  const recallRows = createMemo(() => recordPlacements(turns(), findQuery().trim() ? [] : recalls()))
   const continuations = createMemo(() => {
     const ids = new Set<string>()
     let previous: Messages[number] | undefined
@@ -3678,8 +3654,9 @@ function Conversation(props: { sessionID: string }) {
       <Show when={historyError()}><p role="alert">{historyError()}</p></Show>
       <Show when={!messages.result().isPending} fallback={<SharedLoadingSkeleton kind="conversation" label="Loading the transcript…" />}><Show when={!messages.result().isError} fallback={<div role="alert" class="desktop__error"><p>{failure(messages.result().error, "The transcript could not be read. Check the connection and refresh.")}</p><button type="button" onClick={messages.refetch} disabled={!reading()}>Refresh transcript</button></div>}>
         <Show when={turns().length} fallback={<div class="desktop-empty-transcript" role="status" aria-label="Empty transcript"><Icon name="chat" /><p>No messages in this Session yet.</p></div>}><ol class="transcript rl-thread" aria-label="Transcript"><Keyed each={turns()} by={(item) => item.id}>{(item) => <>
+          <For each={recallRows().before.get(item().id) ?? []}>{(record) => <RecallTurn record={record} />}</For>
           <TurnView sessionID={props.sessionID} message={item()} continuation={!findQuery().trim() && continuations().has(item().id)} delivery={deliveries().get(item().id)} onDelete={deleteMessage} onOpenApp={openCompanionApp} />
-          <Show when={editPlacements().get(item().id)}>{(edit) => <li class="transcript__turn transcript__edits"><SharedEditedFilesCard files={edit().files} onViewChanges={(path) => { setSelectedTurn(edit().turnID); openChanges(path) }} onUndo={() => { setSelectedTurn(edit().turnID); openChanges(); void doRevert("stage") }} undoDisabled={revertBusy() || revertUncertain() || running()} footerNote={activeRevert() ? "Staged revert · preview and confirmation required" : undefined} /></li>}</Show></>}</Keyed></ol></Show>
+          <Show when={editPlacements().get(item().id)}>{(edit) => <li class="transcript__turn transcript__edits"><SharedEditedFilesCard files={edit().files} onViewChanges={(path) => { setSelectedTurn(edit().turnID); openChanges(path) }} onUndo={() => { setSelectedTurn(edit().turnID); openChanges(); void doRevert("stage") }} undoDisabled={revertBusy() || revertUncertain() || running()} footerNote={activeRevert() ? "Staged revert · preview and confirmation required" : undefined} /></li>}</Show></>}</Keyed><For each={recallRows().tail}>{(record) => <RecallTurn record={record} />}</For></ol></Show>
       </Show></Show>
       <Show when={requests.result().isError}><div role="alert" class="desktop__error"><p>Pending requests could not be read. Refresh to retry.</p><button type="button" onClick={requests.refetch} disabled={!reading()}>Refresh requests</button></div></Show>
       <Show when={requests.result().data && !pendingRequests()}><p role="status">Refreshing requests after a connection change…</p></Show>
@@ -3709,7 +3686,7 @@ function Conversation(props: { sessionID: string }) {
       <Show when={(unsure() && !sending()) || (pending() && !sending() && !unsure()) || stopNote()}><div class="desktop__actions">
         <Show when={unsure() && !sending()}><button type="button" onClick={() => { update(pending()?.text ?? text()); hold(undefined); promptGuard.reset(); unconfirmed.delete(props.sessionID); setUnsure(false); setRevertUncertain(false); setError(undefined); sessionRead.refetch() }}>I reviewed the Session</button></Show><Show when={pending() && !sending() && !unsure()}><button type="button" onClick={() => { update(pending()?.text ?? ""); hold(undefined); setError(undefined) }}>Edit as a new message</button></Show>
         <Show when={stopNote()}>{(note) => <span role="status" class="desktop__muted">{note()}</span>}</Show></div></Show></>} />
-    <Show when={policyOpen()}><ResponsiveLayer class="desktop-popover rl-policy-panel" role="dialog" label="Goal and autonomy" onClose={() => closePolicy(true)} onKeyDown={(event) => { if (event.key === "Escape" && !event.defaultPrevented && !event.isComposing && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); closePolicy(true) } }}><div class="rl-pane-section-heading"><strong>Goal and autonomy</strong><button type="button" class="rl-btn" onClick={() => closePolicy(true)}>Close</button></div><Show when={!autonomy()}><p role="status">Goal and autonomy are unavailable until the Session state is read.</p><Show when={autonomyRead.result().isError}><button type="button" class="rl-btn" onClick={autonomyRead.refetch}>Refresh</button></Show></Show><Show when={autonomy()}><p class="model-popover__label">Permissions</p><SharedRadioGroup label="Permissions" options={decisionModes} value={permissions()} disabled={policyBusy() || policyUncertain()} onChange={(value) => setPermissions(value as "manual" | "auto" | "yolo")} /><p class="model-popover__label">Guardrails</p><SharedRadioGroup label="Guardrails" options={decisionModes} value={guardrails()} disabled={policyBusy() || policyUncertain()} onChange={(value) => setGuardrails(value as "manual" | "auto" | "yolo")} /><p class="model-popover__label">Answers</p><SharedRadioGroup label="Answers" options={decisionModes} value={answers()} disabled={policyBusy() || policyUncertain()} onChange={(value) => setAnswers(value as "manual" | "auto" | "yolo")} /><div class="rl-policy-actions"><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading()} onClick={() => void setPolicy({ permissions: permissions(), guardrails: guardrails(), answers: answers() }, `Change autonomy decisions to ${permissions()}/${guardrails()}/${answers()}?`)}>Apply autonomy</button><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading()} aria-pressed={!!autonomy()?.effective.deferred} onClick={() => void setPolicy({ defer: !autonomy()?.effective.deferred }, autonomy()?.effective.deferred ? "Disable deferral of unresolved decisions?" : "Enable persistent deferral of unresolved decisions?")}>{autonomy()?.effective.deferred ? "Defer on" : "Defer off"}</button></div><label class="desktop__field">Goal<textarea value={policyGoal()} disabled={policyBusy() || policyUncertain()} onInput={(event) => setPolicyGoal(event.currentTarget.value)} /></label><div class="rl-policy-actions"><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading() || !policyGoal().trim()} onClick={() => void setPolicy({ goal: policyGoal().trim() }, "Replace the Session goal with this text?")}>Set goal</button><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading() || (!autonomy()?.goal || autonomy()?.goal?.status === "stopped")} onClick={() => void setPolicy({ goal: null }, "Stop the Session goal? Its text will be retained.")}>Stop goal</button></div></Show><Show when={policyError()}>{(error) => <p role="alert">{error()}</p>}</Show></ResponsiveLayer></Show></div></div>
+    <Show when={policyOpen()}><ResponsiveLayer class="desktop-popover rl-policy-panel" role="dialog" label="Goal and autonomy" onClose={() => closePolicy(true)} onKeyDown={(event) => { if (event.key === "Escape" && !event.defaultPrevented && !event.isComposing && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); closePolicy(true) } }}><div class="rl-pane-section-heading"><strong>Goal and autonomy</strong><button type="button" class="rl-btn" onClick={() => closePolicy(true)}>Close</button></div><Show when={!autonomy()}><p role="status">Goal and autonomy are unavailable until the Session state is read.</p><Show when={autonomyRead.result().isError}><button type="button" class="rl-btn" onClick={autonomyRead.refetch}>Refresh</button></Show></Show><Show when={autonomy()}>{defaultRow("permissions", "Permissions", permissions, setPermissions)}{defaultRow("guardrails", "Guardrails", guardrails, setGuardrails)}{defaultRow("answers", "Answers", answers, setAnswers)}<div class="rl-policy-actions"><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading()} onClick={() => void setPolicy({ permissions: permissions(), guardrails: guardrails(), answers: answers() }, `Change autonomy decisions to ${permissions()}/${guardrails()}/${answers()}?`)}>Apply autonomy</button><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading()} aria-pressed={!!autonomy()?.effective.deferred} onClick={() => void setPolicy({ defer: !autonomy()?.effective.deferred }, autonomy()?.effective.deferred ? "Disable deferral of unresolved decisions?" : "Enable persistent deferral of unresolved decisions?")}>{autonomy()?.effective.deferred ? "Defer on" : "Defer off"}</button></div><label class="desktop__field">Goal<textarea value={policyGoal()} disabled={policyBusy() || policyUncertain()} onInput={(event) => setPolicyGoal(event.currentTarget.value)} /></label><div class="rl-policy-actions"><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading() || !policyGoal().trim()} onClick={() => void setPolicy({ goal: policyGoal().trim() }, "Replace the Session goal with this text?")}>Set goal</button><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading() || (!autonomy()?.goal || autonomy()?.goal?.status === "stopped")} onClick={() => void setPolicy({ goal: null }, "Stop the Session goal? Its text will be retained.")}>Stop goal</button></div></Show><Show when={policyError()}>{(error) => <p role="alert">{error()}</p>}</Show></ResponsiveLayer></Show></div></div>
     <Show when={companionOpen()}><aside class="rl-companion" aria-label="Session companion" data-full={fullChangesOpen() && companionTab() === "Changes" ? "true" : undefined}>
       <DesktopCompanion
         runningContent={<RunningActivity sessionID={props.sessionID} data={activityView()} loading={activityRead.result().isPending} error={activityRead.result().isError ? failure(activityRead.result().error, "Running work could not be read.") : undefined} onRefresh={activityRead.refetch} onMore={() => void loadMoreSubagents()} loadingMore={activityMoreBusy()} moreError={activityMoreError()} onOpen={(id) => void navigate({ to: "/sessions/$sessionID", params: { sessionID: id } })} onShell={(id) => { setCompanionTab("Activity"); selectShell(id) }} />}

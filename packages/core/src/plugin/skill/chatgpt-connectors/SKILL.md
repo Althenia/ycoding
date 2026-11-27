@@ -3,6 +3,12 @@ name: chatgpt-connectors
 description: "Use when a YCoding Session needs ChatGPT account connector tools (tools.chatgpt.*): finding which connectors are available, calling them in Code Mode, handling their permissions and failures, or moving files through ChatGPT Library. Do not use for ChatGPT tasks that operate YCoding or for local YCoding operations."
 metadata:
   display-name: "ChatGPT connectors"
+  purpose: "Call connector tools from a ChatGPT account and move files through ChatGPT Library."
+  applicability: "A Session whose account exposes tools.chatgpt.* connectors; not for ChatGPT tasks that operate YCoding or for local work."
+  triggers: "chatgpt connector, tools.chatgpt, ChatGPT Library file transfer, Code Mode connector call"
+  capabilities: "connector discovery, connector tool calls, Library file upload and download"
+  prerequisites: "ChatGPT account sign-in with installed connectors, Code Mode enabled"
+  related: "browser-use"
 ---
 # ChatGPT connectors
 

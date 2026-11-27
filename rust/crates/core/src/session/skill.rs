@@ -73,64 +73,134 @@ fn activation(metadata: &JsonObject) -> Option<Activation> {
     })
 }
 
-pub(crate) fn ranked_implicit(items: &[(&skill::Info, &JsonObject)], query: &str) -> Vec<usize> {
-    use crate::resources::{
-        memory::format::tokens,
-        recall::lexical::{self, Document},
+pub(crate) fn ranked_implicit(
+    items: &[(&skill::Info, &JsonObject)],
+    query: &str,
+) -> Vec<(usize, f64)> {
+    use crate::resources::recall::{
+        candidate::{Method, Query},
+        document::{Activation, Document, Fields, Kind, Lifecycle, Scope, Source},
+        hybrid::{Calibration, Retriever},
+        index::Entry,
     };
-    if items.is_empty() || items.len() > 1000 || query.len() > 65536 {
+    use std::{
+        collections::HashMap,
+        sync::{Arc, LazyLock},
+        time::{Duration, Instant},
+    };
+    static CATALOGS: LazyLock<std::sync::Mutex<HashMap<String, Arc<Retriever>>>> =
+        LazyLock::new(Default::default);
+    if items.is_empty() || items.len() > 1000 || query.len() > 65536 || query.trim().is_empty() {
         return Vec::new();
     }
-    let Ok(words) = tokens(query) else {
-        return Vec::new();
-    };
-    if words.is_empty() || words.len() > 1024 {
-        return Vec::new();
-    }
-    let terms = words.iter().cloned().collect();
-    let docs: Vec<_> = items
+    let documents: Vec<Document> = items
         .iter()
         .map(|(info, metadata)| {
             let keywords = activation(metadata).map(|a| a.keywords).unwrap_or_default();
+            let id = info.id.as_str().unwrap_or_default().to_owned();
+            let name = info.name.to_utf8().unwrap_or_default();
+            let description = info
+                .description
+                .as_ref()
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_owned();
+            let hash = ring::digest::digest(
+                &ring::digest::SHA256,
+                format!("{id}\0{name}\0{description}\0{}", keywords.join("\0")).as_bytes(),
+            )
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
             Document {
-                id: info.id.as_str().unwrap_or_default(),
-                title: info.name.to_utf8().unwrap_or_default(),
-                metadata: format!(
-                    "{} {}",
-                    info.description
-                        .as_ref()
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default(),
-                    keywords.join(" ")
-                ),
-                tags: keywords,
-                body: "",
+                source: Source {
+                    path: id.clone(),
+                    revision: hash.clone(),
+                    content_hash: hash,
+                },
+                id,
+                kind: Kind::Skill,
+                scope: Scope::Workspace,
+                fields: Fields {
+                    title: name,
+                    description,
+                    keywords,
+                    ..Fields::default()
+                },
+                lifecycle: Lifecycle {
+                    activation: Some(Activation::Auto),
+                    ..Lifecycle::default()
+                },
             }
         })
         .collect();
-    if docs
+    let by_id: HashMap<&str, &Document> = documents.iter().map(|d| (d.id.as_str(), d)).collect();
+    let manifest: Vec<Entry> = documents
         .iter()
-        .any(|d| d.title.len() + d.metadata.len() > 65536)
-        || docs
+        .map(|d| Entry {
+            scope: d.scope,
+            kind: d.kind,
+            id: d.id.clone(),
+            hash: d.source.content_hash.clone(),
+        })
+        .collect();
+    let catalog = ring::digest::digest(
+        &ring::digest::SHA256,
+        manifest
             .iter()
-            .map(|d| d.title.len() + d.metadata.len())
-            .sum::<usize>()
-            > 8 * 1024 * 1024
+            .map(|e| e.hash.as_str())
+            .collect::<Vec<_>>()
+            .join("\0")
+            .as_bytes(),
+    )
+    .as_ref()
+    .iter()
+    .map(|b| format!("{b:02x}"))
+    .collect::<String>();
+    let retriever = {
+        let Ok(mut catalogs) = CATALOGS.lock() else {
+            return Vec::new();
+        };
+        if catalogs.len() >= 8 && !catalogs.contains_key(&catalog) {
+            catalogs.clear();
+        }
+        catalogs
+            .entry(catalog)
+            .or_insert_with(|| Arc::new(Retriever::open(None, None, Calibration::default())))
+            .clone()
+    };
+    if retriever
+        .sync(
+            &manifest,
+            |entry| by_id.get(entry.id.as_str()).map(|d| (*d).clone()),
+            Instant::now() + Duration::from_secs(60),
+        )
+        .is_err()
     {
         return Vec::new();
     }
-    let Ok(scores) = lexical::bm25_scores(&docs, &terms) else {
-        return Vec::new();
-    };
-    let rows = docs
+    let ids: HashMap<&str, usize> = documents
         .iter()
-        .zip(scores)
         .enumerate()
-        .filter(|(_, (_, score))| *score >= 3.583519)
-        .map(|(i, (doc, score))| (i, doc.id, score));
-    crate::resources::recall::ranking::rank(rows, docs.len())
-        .into_iter()
-        .map(|(index, _)| index)
+        .map(|(i, d)| (d.id.as_str(), i))
+        .collect();
+    retriever
+        .search(&Query {
+            text: query.to_owned(),
+            kinds: vec![Kind::Skill],
+            implicit: true,
+            limit: documents.len(),
+            ..Query::default()
+        })
+        .candidates
+        .iter()
+        .filter_map(|c| {
+            Some((
+                ids.get(c.id.as_str()).copied()?,
+                c.score(Method::Bm25)?.score,
+            ))
+        })
         .collect()
 }
 
@@ -156,7 +226,10 @@ mod relevance_tests {
             ranked_implicit(
                 &items,
                 "cobalt birch alder willow maple oak pine cedar elm amber quartz violet"
-            ),
+            )
+            .into_iter()
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>(),
             vec![1, 0]
         );
     }
@@ -299,7 +372,7 @@ fn automatic_prefix(session_id: &ycoding_schema::session::Id) -> String {
 pub(crate) struct LifecycleCue {
     key: LosslessString,
     pub(crate) event: &'static str,
-    identity: LosslessString,
+    pub(crate) identity: LosslessString,
     pub(crate) explicit: Vec<skill::Id>,
 }
 
@@ -485,10 +558,6 @@ pub(crate) async fn activate_with_origin(
         type_: "session.skill.activated.1".into(),
         data: JsonValue::Object(data),
     };
-    if let Some(source) = store.artifact_source() {
-        source.publish_skill_activation(event, automatic).await?;
-        return Ok(());
-    }
     store
         .client
         .submit(move |tx| {

@@ -87,6 +87,29 @@ impl Service {
         result
     }
 
+    pub fn location_changed(&self, location: &location::Ref) {
+        let cached = self
+            .prices
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|(reference, _)| {
+                reference.directory == *location.directory.as_lossless()
+                    && reference.workspace_id.as_ref()
+                        == location.workspace_id.as_ref().map(|id| id.as_lossless())
+            })
+            .map(|(reference, (_, value))| (reference.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        let unchanged = self.pricing.as_ref().is_some_and(|reader| {
+            cached
+                .iter()
+                .all(|(reference, value)| reader(reference).is_ok_and(|current| current == *value))
+        });
+        if !unchanged {
+            self.catalog_changed(Some(location), || {});
+        }
+    }
+
     pub fn epoch(&self) -> u64 {
         *self.epoch.lock().unwrap_or_else(PoisonError::into_inner)
     }

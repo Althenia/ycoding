@@ -8,7 +8,7 @@ use std::ops::Bound;
 use ycoding_schema::{DomainEncode, JsonObject, JsonValue, session, session_message};
 use ycoding_store::{
     Error, IndexOrder, IndexQuery, KeyPart, Snapshot,
-    session::{ContextStateTable, EventTable, ExclusionTable, ManifestTable, MessageTable},
+    session::{ContextStateTable, ExclusionTable, ManifestTable, MessageTable},
     tuple_key,
 };
 
@@ -114,7 +114,6 @@ pub fn select(snapshot: &Snapshot, id: &session::Id) -> Result<Vec<Entry>, Error
 }
 
 pub(crate) struct Plan {
-    boundary: Option<i64>,
     summary: Option<Summary>,
     exclusions: Option<Exclusions>,
 }
@@ -150,13 +149,10 @@ impl Plan {
             }),
             None => None,
         };
-        let mut plan = Self {
-            boundary: None,
+        Ok(Self {
             summary,
             exclusions,
-        };
-        plan.boundary = boundary(snapshot, id, plan.floor())?;
-        Ok(plan)
+        })
     }
 
     pub(crate) fn floor(&self) -> Option<i64> {
@@ -164,15 +160,6 @@ impl Plan {
     }
 
     pub(crate) fn visible(&self, mut entries: Vec<Entry>) -> Vec<Entry> {
-        if let Some(boundary) = self.boundary {
-            entries.retain(|entry| {
-                if entry.seq >= boundary {
-                    !artifact_boundary(&entry.message)
-                } else {
-                    !project_artifact(&entry.message)
-                }
-            });
-        }
         if let Some(summary) = &self.summary {
             entries.retain(|entry| entry.seq > summary.sequence);
         }
@@ -243,61 +230,6 @@ impl Plan {
             );
         }
         Ok(filtered)
-    }
-}
-
-fn boundary(
-    snapshot: &Snapshot,
-    id: &session::Id,
-    floor: Option<i64>,
-) -> Result<Option<i64>, Error> {
-    let prefix = tuple_key(&[
-        KeyPart::String(id.as_lossless()),
-        KeyPart::String(&"session.project-artifacts-ended.1".into()),
-    ]);
-    let event = snapshot
-        .index_range::<EventTable>(
-            "event_aggregate_type_seq_idx",
-            IndexQuery {
-                lower: Bound::Unbounded,
-                upper: Bound::Unbounded,
-                prefix: Some(&prefix),
-                order: IndexOrder::Descending,
-                after: None,
-                limit: 1,
-            },
-        )?
-        .first()
-        .map(|row| row.record.seq);
-    if event.is_some() {
-        return Ok(event);
-    }
-    let lower = history::lower_bound(snapshot, id, floor)?;
-    let mut after = None;
-    loop {
-        let rows = history::type_rows(
-            snapshot,
-            id,
-            "synthetic",
-            lower,
-            Bound::Unbounded,
-            IndexOrder::Descending,
-            after.as_ref(),
-            128,
-        )?;
-        if let Some(row) = rows.iter().find(|row| {
-            matches!(
-                field(&row.record.data, "metadata")
-                    .and_then(|metadata| field(metadata, "projectArtifactsEnded")),
-                Some(JsonValue::Object(_))
-            )
-        }) {
-            return Ok(Some(row.record.seq));
-        }
-        if rows.is_empty() {
-            return Ok(None);
-        }
-        after = rows.last().map(|row| row.cursor.clone());
     }
 }
 
@@ -427,32 +359,4 @@ pub fn checkpoint_entry(
             },
         }),
     })
-}
-fn artifact_boundary(message: &session_message::Info) -> bool {
-    let encoded = message.encode();
-    field(&encoded, "type") == Some(&JsonValue::String("synthetic".into()))
-        && matches!(
-            field(&encoded, "metadata")
-                .and_then(|metadata| field(metadata, "projectArtifactsEnded")),
-            Some(JsonValue::Object(_))
-        )
-}
-fn project_artifact(message: &session_message::Info) -> bool {
-    let encoded = message.encode();
-    match field(&encoded, "type")
-        .and_then(text)
-        .and_then(|text| text.as_str())
-    {
-        Some("skill" | "agent-switched") => {
-            field(&encoded, "artifact").and_then(|artifact| field(artifact, "sourceScope"))
-                == Some(&JsonValue::String("project".into()))
-        }
-        Some("user") => {
-            field(&encoded, "metadata")
-                .and_then(|metadata| field(metadata, "projectArtifact"))
-                .and_then(|artifact| field(artifact, "sourceScope"))
-                == Some(&JsonValue::String("project".into()))
-        }
-        _ => false,
-    }
 }

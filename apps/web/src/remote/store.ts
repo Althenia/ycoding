@@ -38,6 +38,8 @@ import {
   readAggregateID,
   readAutonomy,
   readCompactionHistory,
+  applyRecallEvent,
+  applyLifecycleEvent,
   readCapturedChangesPage,
   readEventSequence,
   readModelRef,
@@ -74,6 +76,7 @@ import { assertRemoteRequestSize, uploadAttachments } from "./attachment-upload"
 import type {
   RemoteRequestOutcome,
   RemoteTransport,
+  RemoteTransportFence,
   RemoteTransportHandlers,
   RemoteTransportStatus,
 } from "./transport"
@@ -266,7 +269,7 @@ export type NoticeSyncState = {
 export type RemoteStoreOptions = {
   readonly http: RemoteHttp
   readonly fetch?: (input: string, init?: RequestInit) => Promise<Response>
-  readonly createTransport: (deviceID: string, handlers: RemoteTransportHandlers) => RemoteTransport
+  readonly createTransport: (deviceID: string, handlers: RemoteTransportHandlers, fence: RemoteTransportFence) => RemoteTransport
   readonly schedule?: (callback: () => void, ms: number) => () => void
   readonly now?: () => number
   readonly monotonicNow?: () => number
@@ -793,6 +796,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (scope === undefined) return
     void queryClient.invalidateQueries({ queryKey: remoteKeys.usage(scope) }, { cancelRefetch: false })
     void queryClient.invalidateQueries({ queryKey: remoteKeys.keepAwake(scope) }, { cancelRefetch: false })
+    void queryClient.invalidateQueries({ queryKey: remoteKeys.autonomyDefaults(scope) }, { cancelRefetch: false })
     void queryClient.invalidateQueries({ queryKey: remoteKeys.dots(scope) }, { cancelRefetch: false })
   }
 
@@ -2153,6 +2157,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           latency.recordClient("transcript.load", monotonicNow() - transcriptStarted)
       }))
       void loadCompactionHistory(sessionID, token)
+      if (transport !== undefined) void loadRecall(transport, sessionID, token)
       view.messages.filter((message) => message.kind === "oversized" && message.state === "pending").forEach((message) => { void loadOversizedMessage(message.id) })
       const owner = transport
       if (teamWatching && owner !== undefined && container.state.team !== undefined) void loadTeam(owner, token, container.state.team.rootID, undefined, true)
@@ -2726,6 +2731,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const watermark = view.watermark
     if (watermark !== undefined && logged.every((event) => event.seq < watermark)) return
     setState({ view: applySessionEvent(view, newest.event, now()) })
+  }
+
+  const loadRecall = async (owner: RemoteTransport, sessionID: string, token: number) => {
+    const outcome = await owner.request("session.log", { sessionID, input: { after: 0, follow: false } })
+    if (outcome.status !== "ok" || token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID) return
+    const recall = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "recall") : undefined
+    const lifecycle = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "lifecycle") : undefined
+    const view = container.state.view
+    if (view?.id !== sessionID) return
+    const recalled = Array.isArray(recall) ? recall.reduce<SessionView>((next, event) => applyRecallEvent(next, event), view) : view
+    const folded = Array.isArray(lifecycle) ? lifecycle.reduce<SessionView>((next, event) => applyLifecycleEvent(next, event), recalled) : recalled
+    if (folded !== view) setState({ view: folded })
   }
 
   const reconcileLogAfter = async (owner: RemoteTransport, sessionID: string, token: number, after: number) => {
@@ -3415,6 +3432,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         onReconnect: () => {
           if (!isCurrentConnection(created)) return
           void reloadAfterReconnect(created)
+        },
+      }, {
+        revision: () => ({ deviceID: container.state.activeDeviceID, generation: container.state.generation, sessionID: container.state.activeSessionID }),
+        admit: (request) => {
+          const issued = request.issuedRevision as { readonly deviceID?: string; readonly generation: number; readonly sessionID?: string }
+          return isCurrentConnection(created) && created.status().kind === "open" && container.state.activeDeviceID === issued.deviceID &&
+            container.state.generation === issued.generation && container.state.activeSessionID === issued.sessionID
         },
       })
       transport = created

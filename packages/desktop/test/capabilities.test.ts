@@ -239,66 +239,6 @@ test("transcript export returns structured JSON or a full Markdown transcript", 
   } finally { await owned.close() }
 })
 
-test("artifact details, history and trash mutations re-read identity and confirm only issued previews once", async () => {
-  const digest = "a".repeat(64)
-  let details = { artifact: { id: "review", kind: "skill", revision: 3, stage: "active", name: "review", secret: hidden }, definition: { content: "Body" }, currentVersion: { id: "ver_3", contentDigest: digest }, versions: [{ id: "ver_3" }, { id: "ver_2" }], diagnostics: [] }
-  let collision: unknown
-  const owned = await syntheticDesktop((call) => {
-    if (call.method === "GET" && call.route === "/api/artifact/project/skill/review") return { data: details }
-    if (call.method === "GET" && call.route === "/api/artifact/global/skill/shared") return { data: { ...details, artifact: { ...details.artifact, id: "shared" } } }
-    if (call.route.endsWith("/metrics")) return { data: { score: 1, confidence: "low", rewardUnits: 1, penaltyUnits: 0 } }
-    if (call.method === "GET" && call.route === "/api/artifact") return { data: call.query.get("scope") === "trash" ? [{ deletionID: "del_1", scope: "project", kind: "skill", id: "old", priorStage: "active", priorVersionID: "ver_1", deletedAt: 1, purgeAfter: 2 }] : [{ scope: "project", kind: "skill", id: "review", stage: "active", revision: 3 }] }
-    if (call.method === "DELETE") return { data: { deletionID: "del_2", scope: "project", kind: "skill", id: "review", priorStage: "active", priorVersionID: "ver_3", deletedAt: 1, purgeAfter: 2 } }
-    if (call.route.endsWith("/promotion")) return { data: { token: "tok_promo", expiresAt: Date.now() + 60_000, renderedContent: "Body", risk: "declarative", ...(collision ? { collision } : {}) } }
-    if (call.route.endsWith("/fork")) return { data: { token: "tok_fork", expiresAt: Date.now() + 60_000 } }
-    if (call.route.endsWith("/confirm")) return { data: { result: "created", id: "review" } }
-    return undefined
-  })
-  const source = { directory: owned.resources }
-  try {
-    const listed = await owned.controller.artifacts({ scope: "trash" })
-    expect(listed.items).toEqual([{ deletionID: "del_1", scope: "project", kind: "skill", id: "old", priorStage: "active", priorVersionID: "ver_1", deletedAt: 1, purgeAfter: 2 }])
-    const detail = await owned.controller.artifact({ scope: "project", kind: "skill", id: "review" })
-    expect(detail.identity).toEqual({ scope: "project", kind: "skill", id: "review", expectedRevision: 3, expectedVersionID: "ver_3", expectedDigest: digest })
-    expect(detail.versionIDs).toEqual(["ver_3", "ver_2"])
-    expect(detail.metrics).toMatchObject({ score: 1 })
-    const artifact = detail.identity
-    const revision = owned.revision
-
-    await owned.controller.manageArtifact({ kind: "revert", revision, artifact, targetVersionID: "ver_2" })
-    expect(owned.calls.at(-1)).toMatchObject({ method: "POST", route: "/api/artifact/project/skill/review/revert", body: { expectedRevision: 3, expectedVersionID: "ver_3", expectedDigest: digest, targetVersionID: "ver_2" } })
-    expect(await message(owned.controller.manageArtifact({ kind: "revert", revision, artifact, targetVersionID: "ver_3" }))).toContain("earlier version")
-    expect((await owned.controller.manageArtifact({ kind: "remove", revision, artifact })).result).toMatchObject({ deletionID: "del_2" })
-
-    const preview = await owned.controller.manageArtifact({ kind: "preview", preview: "promotion", revision, artifact })
-    expect(preview.preview).toMatchObject({ kind: "promotion", token: "tok_promo", confirmable: true })
-    expect(await message(owned.controller.manageArtifact({ kind: "confirm", preview: "shadow", revision, artifact, token: "tok_promo" }))).toContain("Preview this change again")
-    expect(await message(owned.controller.manageArtifact({ kind: "confirm", preview: "promotion", revision, artifact, token: "tok_other" }))).toContain("Preview this change again")
-    await owned.controller.manageArtifact({ kind: "confirm", preview: "promotion", revision, artifact, token: "tok_promo" })
-    expect(owned.calls.at(-1)).toMatchObject({ method: "POST", route: "/api/artifact/project/skill/review/promotion/tok_promo/confirm" })
-    expect(await message(owned.controller.manageArtifact({ kind: "confirm", preview: "promotion", revision, artifact, token: "tok_promo" }))).toContain("Preview this change again")
-    collision = { kind: "skill", id: "review" }
-    expect((await owned.controller.manageArtifact({ kind: "preview", preview: "promotion", revision, artifact })).preview?.confirmable).toBe(false)
-    expect(await message(owned.controller.manageArtifact({ kind: "confirm", preview: "promotion", revision, artifact, token: "tok_promo" }))).toContain("collides")
-
-    const shared = { ...artifact, scope: "global" as const, id: "shared" }
-    expect((await owned.controller.manageArtifact({ kind: "preview", preview: "fork", revision, artifact: shared })).preview?.token).toBe("tok_fork")
-    await expect(owned.controller.manageArtifact({ kind: "preview", preview: "fork", revision, artifact })).rejects.toThrow("Only global artifacts")
-    await expect(owned.controller.manageArtifact({ kind: "preview", preview: "shadow", revision, artifact: shared })).rejects.toThrow("Only project artifacts")
-
-    await owned.controller.manageArtifact({ kind: "restore", revision, deletionID: "del_1", source })
-    expect(owned.calls.at(-1)).toMatchObject({ method: "POST", route: "/api/artifact/trash/del_1/restore" })
-    expect(await message(owned.controller.manageArtifact({ kind: "restore", revision, deletionID: "del_gone" }))).toContain("no longer in trash")
-
-    const before = writes(owned.calls).length
-    details = { ...details, artifact: { ...details.artifact, revision: 4 } }
-    expect(await message(owned.controller.manageArtifact({ kind: "remove", revision, artifact }))).toContain("artifact changed")
-    expect(await message(owned.controller.manageArtifact({ kind: "remove", revision: revision + 1, artifact }))).toContain("connection changed")
-    expect(writes(owned.calls).length - before).toBe(0)
-    expect(JSON.stringify(detail)).not.toContain(hidden)
-  } finally { await owned.close() }
-})
-
 test("subagent answers retain parent, child and current question identity", async () => {
   const task = (sessionID: string, question?: string) => ({ sessionID, parentID: parent, description: "Task", agent: "build", model: { id: "model", providerID: "provider" }, background: true, state: question ? "waiting" : "running", revision: 1, time: { created: 1, updated: 2 }, ...(question ? { question: { id: question, text: "Which?", time: 1 } } : {}) })
   const owned = await syntheticDesktop((call) => {
@@ -431,17 +371,17 @@ test("Project members are created and deleted against the current coordination r
 
 test("every capability operation crosses RPC and both bridge surfaces with its exact input", async () => {
   const inputs: Record<string, unknown> = {
-    sessionSnapshot: { sessionID: parent }, pendingInputs: parent, sessionInsights: { sessionID: parent, taskSessionIDs: [child] },
+    sessionSnapshot: { sessionID: parent }, pendingInputs: parent, sessionRecall: parent, sessionInsights: { sessionID: parent, taskSessionIDs: [child] },
     switchAgent: { sessionID: parent, revision: 1, agent: "plan" }, activateSkill: { sessionID: parent, revision: 1, promptID: "msg_a", skill: "garm" },
     runShell: { sessionID: parent, revision: 1, command: "ls" }, sendEditorContext: { sessionID: parent, revision: 1, promptID: "msg_b", text: "x" },
     openSideChat: { parentID: parent, sessionID: side, revision: 1 }, steerParent: { sessionID: side, revision: 1, promptID: "msg_c", text: "y" },
     prediction: { sessionID: parent, memory: [] }, promptGenerate: { sessionID: parent, mode: "start", intent: "z", memory: [] },
     terminals: { sessionID: parent }, terminal: { sessionID: parent, ptyID: "pty_a" }, exportSession: { sessionID: parent, format: "json" },
-    artifacts: { scope: "trash" }, artifact: { scope: "project", kind: "skill", id: "review" }, manageArtifact: { kind: "restore", revision: 1, deletionID: "del_1" },
     usageDashboard: { refresh: true }, incidents: { kind: "report", group: "model" }, manageIncident: { revision: 1, kind: "guidance-clear", provider: "openai", model: "gpt" },
     appendTelemetry: { samples: [{ kind: "long-task", at: "2026-11-15T00:00:00.000Z", durationMs: 60 }] }, requests: { scope: "global", directory: "/synthetic/repo" },
+    setAutonomyDefaults: { revision: 1, payload: { answers: "yolo", acceptYolo: true } },
   }
-  const bare = ["telemetryConsent"]
+  const bare = ["telemetryConsent", "autonomyDefaults"]
   const { createDesktopRPC } = await import("../src/rpc")
   const calls: unknown[][] = []
   const controller = new Proxy({}, { get: (_target, key) => (...args: unknown[]) => { calls.push([key, ...args]); return Promise.resolve(undefined) } })

@@ -116,6 +116,10 @@ export function createEventStream(options: { ready?: boolean; end?: boolean; sou
     subscriptions() {
       return streams.size
     },
+    overflow() {
+      for (const [peer, id] of streams)
+        peer.events(id, [{ typeName: "ycoding.v5.PublicEvent", payload: new Uint8Array(300_000) }])
+    },
     ready() {
       ready = true
       for (const open of openings) open()

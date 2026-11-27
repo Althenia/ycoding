@@ -103,8 +103,6 @@ pub struct Composed {
     pub(crate) generation: u64,
     tasks: Mutex<Vec<JoinHandle<()>>>,
     watch_stop: watch::Sender<bool>,
-    governor:
-        tokio::sync::Mutex<Option<ycoding_core::resources::project_artifact::source::Governor>>,
     mcp_tools: tokio::sync::Mutex<Option<ycoding_core::tools::builtin::mcp::McpTools>>,
     mcp_owner: Arc<mcp_owner::Owner>,
     pending: crate::locations::Pending,
@@ -118,8 +116,6 @@ pub(crate) struct Prepared {
     pub configuration: Configuration,
     disk: Arc<config::Configuration>,
     models: Arc<model::Resolver>,
-    source: ycoding_core::resources::project_artifact::source::Service,
-    standard: ycoding_core::resources::project_artifact::source::Catalogs,
     builtin_agents: agent::Service,
     skills: Arc<tokio::sync::Mutex<skill::Service>>,
     refresh: reference::Refresh,
@@ -453,6 +449,15 @@ impl Core {
         global.project = false;
         let global =
             Arc::new(config::Configuration::load(global).map_err(global_configuration_error)?);
+        let global_writer = Arc::new((*global).clone().with_mutation_policy(
+            config::MutationPolicy(Arc::new(|mutation| {
+                matches!(
+                    mutation,
+                    config::Mutation::Configuration(target)
+                        if target.scope == config::Scope::Global
+                )
+            })),
+        ));
         let configuration = factory.configuration(&global)?;
         let sessions = Service::new(client.clone());
         reconcile(&sessions, &client).await?;
@@ -517,6 +522,12 @@ impl Core {
         .with_reviews(policy::Reviews {
             service: reviews.clone(),
             limit: review_limit,
+        })
+        .with_launch_gate({
+            let coordination = factory.globals.coordination.clone();
+            Arc::new(move |session| {
+                ycoding_core::coordination::runtime::subagent_launch_block(&coordination, session)
+            })
         });
         let decision_locations = locations.downgrade();
         let orchestration = orchestration.with_question_policy(Arc::new(move |child| {
@@ -562,7 +573,6 @@ impl Core {
         let credentials = factory.credentials.clone();
         let resolver_locations = locations.clone();
         let catalog_roots = factory.options.roots.clone();
-        let move_artifacts = factory.globals.artifacts.clone();
         let catalog_globals = factory.globals.clone();
         let catalog_refresh = factory.catalog_refresh;
         let catalogs = Arc::new(move |info: &location::Info| {
@@ -612,7 +622,6 @@ impl Core {
             });
             let resolve_locations = resolver_locations.clone();
             let invalidate_locations = resolver_locations.clone();
-            let artifacts = move_artifacts.clone();
             Ok(crate::services::CatalogServices {
                 session: Some(crate::services::SessionServices {
                     runner: composed.runner.clone(),
@@ -620,10 +629,9 @@ impl Core {
                     destination: Some(crate::services::DestinationServices {
                         resolve: Arc::new(move |reference| {
                             let locations = resolve_locations.clone();
-                            let artifacts = artifacts.clone();
                             Box::pin(async move {
                                 let resolved = locations.clone();
-                                let (info, previous) = tokio::task::spawn_blocking(move || {
+                                let (info, _) = tokio::task::spawn_blocking(move || {
                                     resolved.resolve_move(&reference)
                                 })
                                 .await
@@ -632,18 +640,6 @@ impl Core {
                                 locations.record(&info, false).await.map_err(|_| {
                                     "Destination Project recording failed".to_owned()
                                 })?;
-                                if let Some(previous) = previous.filter(|id| id != &info.project.id)
-                                {
-                                    artifacts
-                                        .adopt_project_committed(&previous, &info.project.id)
-                                        .await
-                                        .map_err(|error| {
-                                            format!(
-                                                "Destination artifact adoption failed: {:?}",
-                                                error.code
-                                            )
-                                        })?;
-                                }
                                 Ok(info)
                             })
                         }),
@@ -769,27 +765,6 @@ impl Core {
                 generation,
             })
         });
-        let artifacts = factory.globals.artifacts.clone();
-        let artifact_locations = locations.clone();
-        let artifacts = Arc::new(move |info: &location::Info| {
-            let held = artifact_locations
-                .location(
-                    info.directory.as_lossless(),
-                    info.workspace_id.as_ref().map(|id| id.as_lossless()),
-                )
-                .ok()?;
-            let locations = artifact_locations.clone();
-            let info = info.clone();
-            Some(crate::services::ArtifactServices {
-                store: artifacts.clone(),
-                refresh: Arc::new(move || {
-                    let _held = &held;
-                    if locations.reload(&info).is_err() {
-                        tracing::error!("project artifact Location refresh failed");
-                    }
-                }),
-            })
-        });
         let browser = factory.globals.browser.clone();
         let remote_started = Instant::now();
         let remote = crate::connector::Control::open(&factory.options.roots.state)
@@ -835,27 +810,8 @@ impl Core {
             let factory = native_factory.clone();
             Box::pin(async move {
                 let unavailable = || ycoding_core::dots::access::Error::Unavailable;
-                let project_key = ycoding_core::ycoding_store::tuple_key(&[
-                    ycoding_core::ycoding_store::KeyPart::String(session.project_id.as_lossless()),
-                ]);
-                let project = factory
-                    .client
-                    .snapshot()
-                    .map_err(|_| unavailable())?
-                    .get::<ycoding_core::ycoding_store::project::ProjectTable>(&project_key)
-                    .map_err(|_| unavailable())?
-                    .ok_or_else(unavailable)?;
                 let prepared = factory
-                    .prepare(
-                        session.location.directory.as_lossless(),
-                        session
-                            .location
-                            .workspace_id
-                            .as_ref()
-                            .map(|id| id.as_lossless()),
-                        session.project_id.as_lossless(),
-                        &project.worktree,
-                    )
+                    .prepare(session.location.directory.as_lossless())
                     .map_err(|_| unavailable())?;
                 let catalog = prepared.models.catalog();
                 let mut result = crate::dots::Catalog {
@@ -985,7 +941,6 @@ impl Core {
             integrations: Some(integrations),
             mcp: Some(mcp),
             catalogs: Some(catalogs),
-            artifacts: Some(artifacts),
             remote: Some(remote),
             dots: Some(dots),
             publisher,
@@ -1019,6 +974,7 @@ impl Core {
                 })
             }),
             roots: Some(factory.options.roots.clone()),
+            global_configuration: Some(global_writer),
             attachments: Some(Arc::new(
                 attachment_store::Store::new(factory.options.roots.data.clone())
                     .map_err(|_| unavailable("managed attachments"))?,
@@ -1378,34 +1334,18 @@ impl Factory {
         ))
     }
 
-    pub(crate) fn prepare(
-        &self,
-        directory: &LosslessString,
-        workspace: Option<&LosslessString>,
-        project_id: &LosslessString,
-        project_directory: &LosslessString,
-    ) -> Result<Prepared, Failure> {
-        self.prepare_refresh(directory, workspace, project_id, project_directory, false)
+    pub(crate) fn prepare(&self, directory: &LosslessString) -> Result<Prepared, Failure> {
+        self.prepare_refresh(directory, false)
     }
 
     pub(crate) fn prepare_refresh(
         &self,
         directory: &LosslessString,
-        workspace: Option<&LosslessString>,
-        project_id: &LosslessString,
-        project_directory: &LosslessString,
         force: bool,
     ) -> Result<Prepared, Failure> {
         let models_updated = self.globals.catalog.refreshed();
         let wellknown_updated = self.globals.wellknown.updated();
         let disk = self.read_configuration(directory)?;
-        let reference = location::Ref::decode(
-            &ycoding_core::ycoding_schema::ObjectEncoder::new()
-                .field("directory", directory)
-                .optional("workspaceID", &workspace.cloned())
-                .finish(),
-        )
-        .map_err(|_| unavailable("Location identity"))?;
         let mut catalog = self.globals.composition.run(async {
             let mut accounts = self.globals.accounts.lock().await;
             catalog::Catalog::compose_current(
@@ -1445,7 +1385,7 @@ impl Factory {
                     .insert("apiKey".into(), JsonValue::String(key.as_str().into()));
             }
         }
-        let mut configuration = self.configuration(&disk)?;
+        let configuration = self.configuration(&disk)?;
         let path = |text: &LosslessString| {
             text.to_utf8()
                 .map(std::path::PathBuf::from)
@@ -1453,12 +1393,6 @@ impl Factory {
         };
         let location_directory = path(directory)?;
         let roots = &self.options.roots;
-        let commands = command::Service::from_project_entries(
-            &disk.entries,
-            &path(project_directory)?,
-            &mut vec![],
-        )
-        .map_err(|_| unavailable("command catalog"))?;
         let skills = skill::Service::from_entries(
             &disk.entries,
             &location_directory,
@@ -1466,41 +1400,12 @@ impl Factory {
             &roots.cache,
         )
         .map_err(|_| unavailable("skill catalog"))?;
-        let standard = ycoding_core::resources::project_artifact::source::Catalogs {
-            agents: (*configuration.agents).clone(),
-            commands,
-            skills,
-        };
-        let source = ycoding_core::resources::project_artifact::source::Service::new(
-            ycoding_core::resources::project_artifact::source::Options {
-                client: self.client.clone(),
-                store: self.globals.artifacts.clone(),
-                accounting: self.globals.accounting.clone(),
-                registry: self.globals.sources.clone(),
-                location: reference,
-                project_id: ycoding_core::ycoding_schema::project::Id::new(project_id.clone())
-                    .map_err(|_| unavailable("Project identity"))?,
-                project_directory: path(project_directory)?,
-                data_root: roots.data.clone(),
-            },
-            standard.clone(),
-        );
-        let catalogs = self.globals.composition.run(async {
-            source
-                .set_capabilities(&disk.capabilities)
-                .await
-                .map_err(|_| unavailable("project artifact capability policy"))?;
-            Ok(source.catalogs().await)
-        })?;
-        configuration.agents = Arc::new(catalogs.agents);
         Ok(Prepared {
             configuration,
             disk,
             models: Arc::new(model::Resolver::new(catalog)),
-            source,
-            standard,
             builtin_agents: agent::Service::new(self.builtin_agents()?),
-            skills: Arc::new(tokio::sync::Mutex::new(catalogs.skills)),
+            skills: Arc::new(tokio::sync::Mutex::new(skills)),
             refresh: if force {
                 reference::Refresh::Fetch
             } else {
@@ -1823,7 +1728,6 @@ impl Factory {
                     interaction: &self.globals.interaction,
                     skills: skills.clone(),
                     mcp: &mcp,
-                    artifacts: prepared.source.clone(),
                 },
             )?;
             let clock = self.globals.clock.clone();
@@ -1850,7 +1754,6 @@ impl Factory {
                 prepared.disk.capabilities.clone(),
             ));
             instructions.push(memory::instructions::source());
-            instructions.push(ycoding_core::resources::project_artifact::instructions::source());
             let cursor_host = || {
                 self.cursor
                     .as_ref()
@@ -1891,6 +1794,8 @@ impl Factory {
                 .map(compaction_policy::Info::decode)
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|_| unavailable("compaction configuration"))?;
+            let harness = ycoding_core::session::harness_config::resolve(prepared.disk.values("harness"))
+                .map_err(|_| unavailable("harness configuration"))?;
             let attachments = Arc::new(
                 attachment_store::Store::new(roots.data.clone())
                     .map_err(|_| unavailable("managed attachments"))?,
@@ -1979,10 +1884,6 @@ impl Factory {
             };
             let (watch_stop, stopped) = watch::channel(false);
             let watcher = self.watch(&prepared, generation, services.info.clone(), stopped)?;
-            let governor = prepared
-                .source
-                .start(&self.events)
-                .map_err(|_| unavailable("project artifact governor"))?;
             let leaf = Arc::new(ycoding_core::tools::context::policy::LeafPolicy {
                 permissions: services.permissions.clone(),
                 guardrails: services.guardrails.clone(),
@@ -2128,23 +2029,13 @@ impl Factory {
                 home: roots.home.clone(),
                 directory: directory.clone(),
                 references: (*references).clone(),
-                artifacts: prepared.source.clone(),
-                standard: tokio::sync::Mutex::new(prepared.standard.clone()),
             });
-            let configured = ycoding_core::resources::project_artifact::source::Catalogs {
-                agents: post.agents(&resources.agents)?,
-                commands: post.commands(&resources.commands)?,
-                skills: post.skills(&resources.skills)?,
-            };
-            let catalogs = post
-                .artifacts(|standard| *standard = configured)
-                .await;
             let agents = services.agents.clone();
-            agents.publish(catalogs.agents);
-            let commands = DomainState::new(catalogs.commands);
+            agents.publish(post.agents(&resources.agents)?);
+            let commands = DomainState::new(post.commands(&resources.commands)?);
             let references =
                 DomainState::new(post.references(&resources.references)?);
-            *skills.lock().await = catalogs.skills;
+            *skills.lock().await = post.skills(&resources.skills)?;
             self.globals
                 .replace_models(&reference,&prepared.models, configured_catalog(
                     resources.catalog.clone(),
@@ -2191,7 +2082,7 @@ impl Factory {
                             let (source, event) = match stage {
                                 TransformStage::Agents => {
                                     let configured = post.agents(&next.agents).map_err(|_| Error::ExecutionFailed)?;
-                                    let mut configured = post.artifacts(|standard| standard.agents = configured).await.agents;
+                                    let mut configured = configured;
                                     configured.event_source = next.agents.event_source.clone();
                                     let source = configured.event_source.clone();
                                     agents.publish(configured);
@@ -2199,7 +2090,7 @@ impl Factory {
                                 }
                                 TransformStage::Commands => {
                                     let configured = post.commands(&next.commands).map_err(|_| Error::ExecutionFailed)?;
-                                    let mut configured = post.artifacts(|standard| standard.commands = configured).await.commands;
+                                    let mut configured = configured;
                                     configured.event_source = next.commands.event_source.clone();
                                     let source = configured.event_source.clone();
                                     commands.publish(configured);
@@ -2213,7 +2104,7 @@ impl Factory {
                                 }
                                 TransformStage::Skills => {
                                     let configured = post.skills(&next.skills).map_err(|_| Error::ExecutionFailed)?;
-                                    let mut configured = post.artifacts(|standard| standard.skills = configured).await.skills;
+                                    let mut configured = configured;
                                     configured.event_source = next.skills.event_source.clone();
                                     let source = configured.event_source.clone();
                                     *skills.lock().await = configured;
@@ -2279,7 +2170,7 @@ impl Factory {
             let scope_view = Arc::new(refresh::ScopeView::new(reference.clone(), generation));
             let refresh = self.refresh(services.info.clone(), &scope_view);
             let title = Arc::new(ycoding_core::session::title::Service::new(
-                Service::new(self.client.clone()).with_artifact_source(prepared.source.clone()),
+                Service::new(self.client.clone()),
                 agents.clone(),
                 helper_models.clone(),
                 self.executor.clone(),
@@ -2287,8 +2178,7 @@ impl Factory {
                 self.globals.clock.clone(),
             ));
             let session_generate = Arc::new(ycoding_core::session::generate::Service {
-                store: Service::new(self.client.clone())
-                    .with_artifact_source(prepared.source.clone()),
+                store: Service::new(self.client.clone()),
                 location: reference.clone(),
                 agents: agents.clone(),
                 models: helper_models,
@@ -2301,8 +2191,7 @@ impl Factory {
             });
             let runner = runner::Local::new(runner::Services {
                 snapshots: Some(snapshots),
-                store: Service::new(self.client.clone())
-                    .with_artifact_source(prepared.source.clone()),
+                store: Service::new(self.client.clone()),
                 events: self.events.clone(),
                 location: location::Ref {
                     directory: services.info.directory.clone(),
@@ -2340,6 +2229,47 @@ impl Factory {
                 Some(refresh) => runner.with_refresh(refresh),
                 None => runner,
             };
+            if let Some(harness) = harness {
+                let store = Service::new(self.client.clone());
+                let dependencies = ycoding_core::session::helper_generation::Dependencies {
+                    store: store.clone(),
+                    agents: agents.clone(),
+                    generate: Arc::new(runner.clone()),
+                    memory: memory.clone(),
+                    permissions: services.permissions.clone(),
+                    feed: self.events.clone(),
+                    location: reference.clone(),
+                };
+                let engine = Arc::new(ycoding_core::harness::Engine::new(
+                    harness.settings,
+                    ycoding_core::harness::Parts {
+                        proposer: Arc::new(ycoding_core::session::harness_proposer::Service::new(
+                            dependencies.clone(),
+                        )),
+                        prober: Arc::new(ycoding_core::session::harness_probe::Service::new(
+                            dependencies,
+                            self.globals.clock.clone(),
+                        )),
+                        versions: Arc::new(ycoding_core::harness::FileVersions::new(
+                            roots.data.join("harness"),
+                        )),
+                        experiences: Arc::new(ycoding_core::harness::MemoryExperiences::new(
+                            memory.clone(),
+                            ycoding_core::resources::memory::Scope::Repository,
+                        )),
+                        events: Arc::new(ycoding_core::session::harness_events::Emitter::spawn(
+                            store,
+                            self.globals.clock.clone(),
+                        )),
+                    },
+                ));
+                runner.install_harness(
+                    ycoding_core::session::runner::harness_hooks::Hooks {
+                        controller: engine,
+                        ceiling: harness.ceiling,
+                    },
+                );
+            }
             let generate = Arc::new(generate::Service {
                 models: prepared.models.clone(),
                 credentials: self.credentials.clone(),
@@ -2382,7 +2312,6 @@ impl Factory {
                 generation,
                 tasks: Mutex::new(reload_tasks),
                 watch_stop,
-                governor: tokio::sync::Mutex::new(Some(governor)),
                 mcp_tools: tokio::sync::Mutex::new(Some(mcp_tools)),
                 mcp_owner,
                 pending,
@@ -2460,19 +2389,16 @@ impl Factory {
                     ) => result.unwrap_or(Err(ycoding_core::extension::Error::Timeout)),
                     () = composed.launch.cancellation.cancelled() => Err(ycoding_core::extension::Error::Cancelled),
                 }.map_err(|error| Failure::Unavailable(format!("plugin domain materialization: {error}")))?;
-                let configured = ycoding_core::resources::project_artifact::source::Catalogs {
-                    agents: post.agents(&materialized.agents)?,
-                    commands: post.commands(&materialized.commands)?,
-                    skills: post.skills(&materialized.skills)?,
-                };
-                let mut catalogs = post.artifacts(|standard| *standard = configured).await;
-                catalogs.agents.event_source = materialized.agents.event_source.clone();
-                catalogs.commands.event_source = materialized.commands.event_source.clone();
-                catalogs.skills.event_source = materialized.skills.event_source.clone();
-                composed.agents.publish(catalogs.agents);
-                composed.commands.publish(catalogs.commands);
+                let mut agents = post.agents(&materialized.agents)?;
+                let mut commands = post.commands(&materialized.commands)?;
+                let mut skills = post.skills(&materialized.skills)?;
+                agents.event_source = materialized.agents.event_source.clone();
+                commands.event_source = materialized.commands.event_source.clone();
+                skills.event_source = materialized.skills.event_source.clone();
+                composed.agents.publish(agents);
+                composed.commands.publish(commands);
                 composed.references.publish(post.references(&materialized.references)?);
-                *composed.skills.lock().await = catalogs.skills;
+                *composed.skills.lock().await = skills;
                 let builtins = composed.activation.builtins().await;
                 self.globals.replace_models(&reference,&composed.models, configured_catalog(
                     materialized.catalog,
@@ -2814,8 +2740,7 @@ impl Factory {
             .get()?
             .clone()
             .with_review_limit(prepared.configuration.guardrails.limits.reviews as usize);
-        let store = Service::new(self.client.clone()).with_artifact_source(prepared.source.clone());
-        let source = prepared.source.clone();
+        let store = Service::new(self.client.clone());
         let feed = self.events.clone();
         let location = location::Ref {
             directory: services.info.directory.clone(),
@@ -2840,23 +2765,6 @@ impl Factory {
                 agents: agents.clone(),
                 config: prepared.disk.clone(),
                 collator: Arc::new(ycoding_core::platform::filesystem::collation::compare),
-                activate: Arc::new(move |context, agent| {
-                    let source = source.clone();
-                    Box::pin(async move {
-                        if source.activate(ycoding_core::resources::project_artifact::source::ActivationInput {
-                            kind: ycoding_core::ycoding_schema::project_artifact::Kind::decode(&JsonValue::String("agent".into())).expect("fixed artifact kind"),
-                            id: agent.clone(),
-                            session_id: context.session_id,
-                            agent_id: Some(agent),
-                            source: ycoding_core::resources::project_artifact::source::ActivationSource::SubagentLaunch {
-                                message_id: context.message_id.as_lossless().clone(),
-                                call_id: Some(context.call_id),
-                            },
-                        }).is_err() {
-                            source.record_activation_failure();
-                        }
-                    })
-                }),
             },
             forms: services.forms.clone(),
             decisions: Arc::new(ycoding_core::resources::decision::Service {
@@ -3654,13 +3562,6 @@ impl Composed {
         {
             tracing::error!(?error, "MCP tool watcher ended with an error");
         }
-        let governor = match self.governor.lock().await.take() {
-            Some(governor) => governor
-                .close()
-                .await
-                .map_err(|_| unavailable("project artifact governor")),
-            None => Ok(()),
-        };
         let last = self
             .mcp_owner
             .generations
@@ -3706,7 +3607,6 @@ impl Composed {
             Ok(())
         };
         tasks
-            .and(governor)
             .and(isolated)
             .and(computer)
             .and(mcp)
@@ -3808,8 +3708,6 @@ struct ConfigurationStage {
     home: std::path::PathBuf,
     directory: std::path::PathBuf,
     references: reference::Service,
-    artifacts: ycoding_core::resources::project_artifact::source::Service,
-    standard: tokio::sync::Mutex<ycoding_core::resources::project_artifact::source::Catalogs>,
 }
 
 impl ConfigurationStage {
@@ -3867,16 +3765,6 @@ impl ConfigurationStage {
             .map_err(|_| unavailable("reference configuration"))?;
         configured.event_source = transformed.event_source.clone();
         Ok(configured)
-    }
-
-    async fn artifacts(
-        &self,
-        update: impl FnOnce(&mut ycoding_core::resources::project_artifact::source::Catalogs),
-    ) -> ycoding_core::resources::project_artifact::source::Catalogs {
-        let mut standard = self.standard.lock().await;
-        update(&mut standard);
-        self.artifacts.replace_standard(standard.clone()).await;
-        self.artifacts.catalogs().await
     }
 }
 

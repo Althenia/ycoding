@@ -61,6 +61,8 @@ export const platformIDs = {
   "vcs.branch": 3050,
   "vcs.diff": 3051,
   "vcs.status": 3052,
+  "autonomyDefaults.get": 3056,
+  "autonomyDefaults.set": 3057,
 } as const
 
 export const platformResultNames = {
@@ -78,6 +80,7 @@ export function platformSourceIdentity(ast: SchemaAST.AST, hint: string): string
     Browser: "browser",
     IsolatedBrowser: "isolated-browser",
     KeepAwake: "keep-awake",
+    AutonomyDefaults: "autonomy-defaults",
     FileSystem: "filesystem",
     Vcs: "vcs",
     FileDiff: "file-diff",
@@ -115,6 +118,7 @@ export function platformSourceIdentity(ast: SchemaAST.AST, hint: string): string
     health: "HealthGroup",
     debug: "DebugGroup",
     keepAwake: "KeepAwakeGroup",
+    autonomyDefaults: "AutonomyDefaultsGroup",
     remote: "RemoteGroup",
     projectCopy: "ProjectCopyGroup",
   }
@@ -152,6 +156,7 @@ export function platformPolicy(name: string, method: string) {
     name.startsWith("server.") ||
     name.startsWith("telemetry.") ||
     name.startsWith("keepAwake.") ||
+    name.startsWith("autonomyDefaults.") ||
     name.startsWith("remote.") ||
     name === "debug.location"
   return {
@@ -244,7 +249,7 @@ export function platformProto(
   }
   return (
     (
-      'syntax = "proto2";\npackage ycoding.v5;\nimport "ycoding/v5/foundation.proto";\nimport "ycoding/v5/operations.proto";\nimport "ycoding/v5/shared.proto";\n\noption (ycoding.v5.operation_range) = { first: 3000 last: 3052 };\n\n' +
+      'syntax = "proto2";\npackage ycoding.v5;\nimport "ycoding/v5/foundation.proto";\nimport "ycoding/v5/operations.proto";\nimport "ycoding/v5/shared.proto";\n\noption (ycoding.v5.operation_range) = { first: 3000 last: 3057 };\n\n' +
       platformDeclarations(
         contract,
         new Set([...contract.enums.keys(), ...contract.messages.keys()].filter((name) => !shared.has(name))),

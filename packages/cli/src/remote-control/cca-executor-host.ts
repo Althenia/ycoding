@@ -47,7 +47,7 @@ import type { CcaProofJournalRecordInput } from "./cca-proof-journal"
 import { answerCcaTaskWorkspace, type CcaTaskWorkspaceHost } from "./cca-task-workspace"
 import { defaultDotsLabel } from "./label"
 import { accountHash } from "./state"
-import { ensureYcodingOperatorSkill } from "./ycoding-operator-skill"
+import { ensureSessionOperatorSkill } from "./session-operator-skill"
 
 export const ccaExecutorHostDiagnostics = [
   "credential-unavailable",
@@ -778,7 +778,7 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
   return {
     durable: () => durable,
     start: async () => {
-      await ensureYcodingOperatorSkill(deps.dataDirectory)
+      await ensureSessionOperatorSkill(deps.dataDirectory)
       unsubscribe ??= deps.native.subscribeConfiguration(() => void reconcile())
       await reconcile()
     },

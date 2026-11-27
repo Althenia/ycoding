@@ -241,6 +241,29 @@ test("manual compaction uses only the backend's verified Session Location and st
   expect(fixture.calls.filter((call) => call.method === "compact")).toHaveLength(1)
 })
 
+test("machine autonomy defaults forward global backend controls without a caller Location or Session", async () => {
+  const saved = { permissions: "manual", guardrails: "auto", answers: "yolo", yoloAcceptedAt: { answers: 1_700_000_000_000 } }
+  const fixture = await harness({
+    sessions: [],
+    results: { autonomyDefaultsGet: saved, autonomyDefaultsSet: saved },
+  })
+  const run = (operation: RemoteRequest["operation"], input?: Record<string, unknown>, sessionID?: string) => executeRemoteOperation({
+    request: { ...request(operation, input), ...(sessionID === undefined ? {} : { sessionID }) }, local: fixture.local,
+    sessions: fixture.registry, subscriptions: fixture.subscriptions,
+  })
+  expect(valueOf(await run("machine.autonomyDefaults.get"))).toEqual({ data: saved })
+  expect(valueOf(await run("machine.autonomyDefaults.set", { answers: "yolo", guardrails: "auto", acceptYolo: true }))).toEqual({ data: saved })
+  expect(fixture.calls).toEqual([
+    { method: "autonomyDefaultsGet", args: [] },
+    { method: "autonomyDefaultsSet", args: [{ guardrails: "auto", answers: "yolo", acceptYolo: true }] },
+  ])
+  for (const input of [undefined, {}, { acceptYolo: true }, { permissions: "sleep" }, { permissions: "yolo", acceptYolo: "true" }, { permissions: "manual", directory: "/private" }])
+    expect(errorOf(await run("machine.autonomyDefaults.set", input)).code).toBe("invalid_message")
+  expect(errorOf(await run("machine.autonomyDefaults.get", undefined, "ses_1")).code).toBe("invalid_message")
+  expect(errorOf(await run("machine.autonomyDefaults.get", {})).code).toBe("invalid_message")
+  expect(fixture.calls).toHaveLength(2)
+})
+
 test("machine keep-awake forwards global backend controls without a caller Location or Session", async () => {
   const fixture = await harness({
     sessions: [],

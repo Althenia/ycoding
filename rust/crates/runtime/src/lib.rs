@@ -1,5 +1,5 @@
-mod artifact;
 mod auth;
+mod autonomy_defaults;
 mod browser;
 mod browser_convert;
 mod browser_stream;
@@ -87,10 +87,9 @@ pub use production::owner::{Handle, Joined, OwnerFailure, ProductionOwner, Repor
 pub use production::{Composed, Cursor, Production};
 pub use server::{Server, serve, serve_with};
 pub use services::{
-    ArtifactProvider, ArtifactServices, CatalogProvider, CatalogServices, CatalogTask, Core,
-    DestinationServices, Environment, Identity, IsolatedBrowserResolver, PlatformResolver,
-    PlatformServices, ProviderUsageResolver, ProviderUsageServices, Services, SessionServices,
-    Subscriptions,
+    CatalogProvider, CatalogServices, CatalogTask, Core, DestinationServices, Environment,
+    Identity, IsolatedBrowserResolver, PlatformResolver, PlatformServices, ProviderUsageResolver,
+    ProviderUsageServices, Services, SessionServices, Subscriptions,
 };
 pub use services::{IntegrationResolver, IntegrationServices, McpResolver};
 pub use session_attachment_upload::{Appended, Clock, Piece, Staging};

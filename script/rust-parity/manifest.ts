@@ -28,11 +28,11 @@ const sessionRules = [
   ...sessionAutonomyPrefixes.map((prefix) => ({ prefix, owner: "WP-008" })),
 ]
 const groups: Record<string, string> = {
-  "project-artifact": "projectArtifact",
   "project-copy": "projectCopy",
   "provider-usage": "providerUsage",
   "isolated-browser": "isolatedBrowser",
   "keep-awake": "keepAwake",
+  "autonomy-defaults": "autonomyDefaults",
 }
 const connectorRules = [
   { prefix: "provider.auth.", owner: "WP-005" },
@@ -47,6 +47,7 @@ const connectorRules = [
   { prefix: "dots.", owner: "WP-008" },
   { prefix: "incident.", owner: "WP-004" },
   { prefix: "keepAwake.", owner: "WP-010" },
+  { prefix: "autonomyDefaults.", owner: "WP-008" },
   { prefix: "mcp.app.view", owner: "WP-010" },
   { prefix: "telemetry.", owner: "WP-004" },
   { prefix: "shell.output", owner: "WP-009" },
@@ -73,7 +74,7 @@ const connectorRules = [
 
 export const ownerRules: readonly OwnerRule[] = [
   ...[
-    ["agent", "command", "reference", "skill", "project-artifact"].map((group) => ({ group, owner: "WP-013" })),
+    ["agent", "command", "reference", "skill"].map((group) => ({ group, owner: "WP-013" })),
     ["config", "credential", "integration", "model", "provider"].map((group) => ({ group, owner: "WP-005" })),
     ["provider-usage", "generate"].map((group) => ({ group, owner: "WP-006" })),
     ["debug", "event", "location", "message"].map((group) => ({ group, owner: "WP-007" })),
@@ -100,6 +101,7 @@ export const ownerRules: readonly OwnerRule[] = [
       { group: "incident", owner: "WP-004" },
       { group: "coordination", owner: "WP-008" },
       { group: "dots", owner: "WP-008" },
+      { group: "autonomy-defaults", owner: "WP-008" },
     ],
   ]
     .flat()

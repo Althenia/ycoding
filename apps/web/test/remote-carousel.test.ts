@@ -17,7 +17,7 @@ test("a failed Waiting read leaves Running and recent available and reports Wait
     if (request.input?.status === "waiting") return { ok: false, code: "internal_error", message: "Waiting inventory unavailable" }
     return { ok: true, value: { data: [root(request.input?.status === "running" ? "running" : "recent", 1)] } }
   } })
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }) })
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(id), handlers }) })
   try {
     await store.load()
     await waitFor(() => store.state().carouselStatus === "error")
@@ -37,7 +37,7 @@ test("carousel ranks every running family before recent roots regardless of pin 
     return "default"
   } })
   const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }) })
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }) })
   try {
     await store.load()
     await waitFor(() => (store.state().carouselSessions?.length ?? 0) > 0)
@@ -61,7 +61,7 @@ test("carousel limits twelve running roots to the ten most recently active", asy
     return "default"
   } })
   const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }) })
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }) })
   try {
     await store.load()
     await waitFor(() => (store.state().carouselSessions?.length ?? 0) > 0)
@@ -81,7 +81,7 @@ test("finished selected run advances carousel activity without changing list ord
     return "default"
   } })
   const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }) })
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }) })
   try {
     await store.load()
     await waitFor(() => store.state().carouselSessions?.length === 2)
@@ -118,7 +118,7 @@ test("carousel refreshes recent idle roots at the cooldown boundary", async () =
   } })
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }),
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }),
     schedule: clock.schedule,
     monotonicNow: clock.now,
   })
@@ -152,7 +152,7 @@ test("a failed recent read keeps known running cards visible and reports the fai
     return "default"
   } })
   const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }) })
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }) })
   try {
     await store.load()
     await waitFor(() => store.state().notice?.includes("Recent list unavailable") === true)
@@ -183,7 +183,7 @@ test("a superseded running read does not issue a stale idle query", async () => 
   } })
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }),
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }),
     schedule: clock.schedule,
     monotonicNow: clock.now,
   })
@@ -235,7 +235,7 @@ test("a superseded idle read cannot publish stale carousel rows", async () => {
   } })
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }),
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }),
     schedule: clock.schedule,
     monotonicNow: clock.now,
   })

@@ -37,7 +37,6 @@ const gettingStarted: DocPage = {
             ["Permission", "Ordered rules that allow, deny, or ask about one tool action on one resource."],
             ["Guardrail", "A session-family review of high-impact actions, independent of tool permissions."],
             ["Skill", "Reusable instructions you load into a session, from the repository or a shared source."],
-            ["Project artifact", "Managed, versioned customization such as a skill, command, agent, or plugin."],
           ],
         },
       ],

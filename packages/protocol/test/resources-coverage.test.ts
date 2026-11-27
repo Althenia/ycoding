@@ -14,9 +14,9 @@ import { Schema, SchemaAST } from "effect"
 import { operations, Paging, PeerRole } from "../src/generated/v5/index.js"
 import { frontendBoundaryBaseline, frontendBoundaryBaselineFields } from "./frontend-boundary-baseline.js"
 
-test("resource RPC membership equals the live 82-operation Protocol slice", async () => {
+test("resource RPC membership equals the live 64-operation Protocol slice", async () => {
   const sources = resourceSources()
-  expect(sources).toHaveLength(82)
+  expect(sources).toHaveLength(64)
   const proto = await Bun.file(path.resolve(import.meta.dir, "../../../protocol/ycoding/v5/resources.proto")).text()
   const names = Array.from(frontendBoundaryBaseline(proto).matchAll(/rpc (\w+)\(/g), (match) => match[1])
   expect(names.sort()).toEqual(sources.map((source) => source.name.replace(/[^a-zA-Z0-9]/g, "_")).sort())
@@ -132,7 +132,7 @@ test("every request, result and typed error matches the live Effect field types 
     contract.operations.flatMap((operation) => [operation.request, operation.result, ...operation.errors]),
   )
   expect(reachable.size >= 120).toBe(true)
-  expect(new Set(contract.operations.map((operation) => operation.id)).size).toBe(82)
+  expect(new Set(contract.operations.map((operation) => operation.id)).size).toBe(64)
   expect(contract.operations.every((operation) => operation.id >= 2000 && operation.id <= 2999)).toBe(true)
 })
 

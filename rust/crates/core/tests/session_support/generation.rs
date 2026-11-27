@@ -641,6 +641,7 @@ async fn memory_service(directory: &std::path::Path, mode: Memory) -> memory::Se
                         "x".repeat(900)
                     ),
                     None,
+                    false,
                 )
                 .await
                 .unwrap();

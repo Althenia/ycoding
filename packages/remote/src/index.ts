@@ -114,6 +114,8 @@ export const remoteOperations = [
   "coordination.board",
   "machine.keepAwake.get",
   "machine.keepAwake.set",
+  "machine.autonomyDefaults.get",
+  "machine.autonomyDefaults.set",
   "machine.telemetry.consent.get",
   "machine.telemetry.consent.set",
   "machine.latency.append",
@@ -400,6 +402,8 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "coordination.board": "read",
   "machine.keepAwake.get": "read",
   "machine.keepAwake.set": "mutation",
+  "machine.autonomyDefaults.get": "read",
+  "machine.autonomyDefaults.set": "mutation",
   "machine.telemetry.consent.get": "read",
   "machine.telemetry.consent.set": "mutation",
   "machine.latency.append": "mutation",
@@ -958,6 +962,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
     operation === "usage.providers" || operation === "usage.summary" || operation === "usage.report" || operation === "usage.dashboard" ||
     operation === "incident.report" || operation === "incident.recent" ||
     operation === "machine.keepAwake.get" || operation === "machine.keepAwake.set" ||
+    operation === "machine.autonomyDefaults.get" || operation === "machine.autonomyDefaults.set" ||
     operation === "machine.telemetry.consent.get" || operation === "machine.telemetry.consent.set" ||
     operation === "machine.latency.append" || operation === "machine.latency.list") && frame.sessionID !== undefined)
     return failRequest("invalid_message", "Global operation does not accept a session")
@@ -1030,6 +1035,12 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
     (input.before === undefined || typeof input.before === "string" && input.before.length > 0 && input.before.length <= 256)
   if (operation === "machine.keepAwake.get") return input === undefined
   if (operation === "machine.keepAwake.set") return isRecord(input) && typeof input.enabled === "boolean" && Object.keys(input).length === 1
+  if (operation === "machine.autonomyDefaults.get") return input === undefined
+  if (operation === "machine.autonomyDefaults.set") return isRecord(input) &&
+    Object.keys(input).every((key) => ["permissions", "guardrails", "answers", "acceptYolo"].includes(key)) &&
+    ["permissions", "guardrails", "answers"].some((key) => input[key] !== undefined) &&
+    ["permissions", "guardrails", "answers"].every((key) => input[key] === undefined || ["manual", "auto", "yolo"].includes(input[key] as string)) &&
+    (input.acceptYolo === undefined || typeof input.acceptYolo === "boolean")
   if (operation === "machine.telemetry.consent.get") return input === undefined
   if (operation === "machine.telemetry.consent.set") return isRecord(input) && typeof input.enabled === "boolean" && input.noticeVersion === 1 && Object.keys(input).length === 2
   if (operation === "session.capturedChanges.list") return input === undefined || isRecord(input) && typeof input.cursor === "string" && input.cursor.length > 0 && input.cursor.length <= 256 && Object.keys(input).length === 1

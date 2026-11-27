@@ -11,7 +11,7 @@ import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { Location } from "@ycoding-ai/core/location"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { SkillPlugin } from "@ycoding-ai/core/plugin/skill"
 import { MCP } from "@ycoding-ai/core/mcp/index"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
@@ -23,7 +23,7 @@ import { host } from "./host"
 
 const it = testEffect(AppNodeBuilder.build(Skill.node, [[MCP.node, emptyMcpLayer], [Location.node, tempLocationLayer]]))
 
-const registeredSkills = Effect.fn("registeredSkills")(function* () {
+const registered = Effect.fn("registered")(function* <A>(read: (skill: Skill.Interface) => Effect.Effect<A>) {
   const skill = yield* Skill.Service
   yield* SkillPlugin.Plugin.effect(
     host({
@@ -45,8 +45,10 @@ const registeredSkills = Effect.fn("registeredSkills")(function* () {
     Effect.provide(AppNodeBuilder.build(FSUtil.node)),
     Effect.provide(NodeFileSystem.layer),
   )
-  return yield* skill.list()
+  return yield* read(skill)
 })
+
+const registeredSkills = () => registered((skill) => skill.list())
 
 const libraryPaths = () => {
   const registration = AccountConnectorLibrary.make({
@@ -60,6 +62,14 @@ const libraryPaths = () => {
 }
 
 describe("SkillPlugin.Plugin", () => {
+  it.effect("registers built-in sources the plugin host accepts under its strict Source schema", () =>
+    Effect.gen(function* () {
+      const sources = yield* registered((skill) => skill.sources())
+      expect(sources.length).toBeGreaterThan(0)
+      for (const source of sources) expect(() => Schema.decodeUnknownSync(Skill.Source)(source)).not.toThrow()
+    }),
+  )
+
   it.effect("registers built-in skills", () =>
     Effect.gen(function* () {
       const skills = yield* registeredSkills()

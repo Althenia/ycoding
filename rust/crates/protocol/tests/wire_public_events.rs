@@ -22,14 +22,14 @@ fn vector(name: &str) -> Vec<u8> {
 
 #[test]
 fn public_event_membership_and_durability_are_closed() {
-    assert_eq!(PUBLIC_EVENTS.len(), 140);
-    assert_eq!(PUBLIC_EVENTS.iter().filter(|event| event.1).count(), 76);
+    assert_eq!(PUBLIC_EVENTS.len(), 149);
+    assert_eq!(PUBLIC_EVENTS.iter().filter(|event| event.1).count(), 85);
     assert_eq!(
         PUBLIC_EVENTS
             .iter()
             .filter(|event| event.0.starts_with("session."))
             .count(),
-        83
+        91
     );
     for (name, payload) in [
         (
@@ -76,6 +76,10 @@ fn public_event_membership_and_durability_are_closed() {
             (
                 "coordination.member.owner.changed",
                 "ycoding.v5.PublicEvent_coordination_member_owner_changed"
+            ),
+            (
+                "coordination.subagent.request.blocked",
+                "ycoding.v5.PublicEvent_coordination_subagent_request_blocked"
             ),
         ]
     );

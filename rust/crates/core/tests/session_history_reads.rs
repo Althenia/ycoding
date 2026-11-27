@@ -422,69 +422,6 @@ async fn observation_state_selects_the_newest_trusted_text_per_source_in_chronol
 }
 
 #[tokio::test]
-async fn observation_state_rejects_corruption_in_selected_observations_and_omits_project_artifact_boundary_notices()
- {
-    let store = support::store();
-    let service = Service::new(store.client());
-    store
-        .submit(|tx| {
-            ycoding_store::session::reserve_sequence(tx, &"ses_one".into(), 5)?;
-            EventTable::insert(
-                tx,
-                &ycoding_store::session::Event {
-                    id: "evt_boundary".into(),
-                    aggregate_id: "ses_one".into(),
-                    seq: 5,
-                    created: 1,
-                    type_: "session.project-artifacts-ended.1".into(),
-                    data: parse_json(
-                        r#"{"sessionID":"ses_one","oldProjectID":"prj_a","newProjectID":"prj_b"}"#,
-                    )
-                    .unwrap(),
-                },
-            )
-        })
-        .unwrap()
-        .wait()
-        .unwrap();
-    insert(
-        &store,
-        vec![row(
-            "msg_corrupt_observation",
-            "system",
-            10,
-            r#"{"text":1,"metadata":{"contextSource":"session-state"},"time":{"created":1}}"#,
-        )],
-    );
-    assert!(service.observation_state(&id()).is_err());
-    store
-        .submit(|tx| {
-            MessageTable::put(
-                tx,
-                &row(
-                    "msg_corrupt_observation",
-                    "synthetic",
-                    10,
-                    r#"{"text":"Project boundary","description":"TeamView update","metadata":{"contextSource":"team-view","projectArtifactsEnded":{}},"time":{"created":1}}"#,
-                ),
-            )
-        })
-        .unwrap()
-        .wait()
-        .unwrap();
-    assert!(service.observation_state(&id()).unwrap().present.is_empty());
-    assert!(
-        !ids(&service
-            .model_history(&id())
-            .unwrap()
-            .into_iter()
-            .map(|entry| entry.message)
-            .collect::<Vec<_>>())
-        .contains(&"msg_corrupt_observation".to_string())
-    );
-}
-
-#[tokio::test]
 async fn observation_state_pages_past_untrusted_rows_to_find_older_trusted_observations() {
     let store = support::store();
     let service = Service::new(store.client());

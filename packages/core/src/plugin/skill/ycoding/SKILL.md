@@ -3,6 +3,12 @@ name: ycoding
 description: "Use this skill for questions about YCoding behavior, configuration, troubleshooting, plugins, hooks, Clients, Server, API, agents, commands, skills, tools, permissions, MCP, providers, models, themes, keymaps, the CLI, the TUI, and contributing to this repository."
 metadata:
   display-name: "YCoding"
+  purpose: "Answer questions about YCoding behavior, configuration and contribution from the repository's own documents."
+  applicability: "Questions about YCoding itself; not for unrelated coding tasks."
+  triggers: "ycoding configuration, ycoding troubleshooting, plugins and hooks, permissions, providers and models, contributing"
+  capabilities: "locate the owning document, explain configuration, diagnose runtime behavior"
+  prerequisites: "repository documents readable from the Session"
+  related: "report"
 ---
 # YCoding
 
@@ -25,7 +31,7 @@ Use Bun releases only as comparison baselines for runtime behavior. Identify the
 
 Use `ycoding.json` or `ycoding.jsonc`. Global configuration lives in the platform configuration directory under `ycoding`; project configuration can also live under `.ycoding/`. Check the native configuration resolver for precedence, scope, and supported fields. Preserve unrelated settings. Do not add a `$schema` URL without verifying the endpoint.
 
-Inspect the native catalog and saved profile binding before diagnosing provider availability. Keep credentials out of commands and diagnostic output. Verify extension activation, capabilities, and permission checks in `rust/crates/core/src/extension` before documenting a plugin or hook. Verify discovery and activation for agents, commands, skills, MCP, and Project artifacts against their native owners. Do not infer support from a Bun plugin entrypoint.
+Inspect the native catalog and saved profile binding before diagnosing provider availability. Keep credentials out of commands and diagnostic output. Verify extension activation, capabilities, and permission checks in `rust/crates/core/src/extension` before documenting a plugin or hook. Verify discovery and activation for agents, commands, skills, and MCP against their native owners. Do not infer support from a Bun plugin entrypoint.
 
 Use `YCoding` in prose, `ycoding` in commands and configuration, and `YCODING_*` for environment variables. Preserve protocol names such as `x-ycoding-directory` and `x-ycoding-workspace`.
 

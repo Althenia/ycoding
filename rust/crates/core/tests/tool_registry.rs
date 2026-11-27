@@ -291,28 +291,18 @@ async fn execute_allowlist_exception_and_unknown_hidden_call() {
 }
 
 #[test]
-fn skill_and_project_artifact_master_switches_hide_tools() {
+fn skill_master_switch_hides_the_skill_tool() {
     for codemode in [false, true] {
         for (capabilities, expected) in [
-            (
-                r#"{"skills":{"enabled":false},"project_artifacts":false}"#,
-                vec!["read"],
-            ),
-            (
-                r#"{"skills":{"allow":[]}}"#,
-                vec!["project_artifact", "read", "skill"],
-            ),
-            (
-                r#"{"tools":{"deny":["skill"]}}"#,
-                vec!["project_artifact", "read"],
-            ),
+            (r#"{"skills":{"enabled":false}}"#, vec!["read"]),
+            (r#"{"skills":{"allow":[]}}"#, vec!["read", "skill"]),
+            (r#"{"tools":{"deny":["skill"]}}"#, vec!["read"]),
         ] {
             let registry = configured_registry(capabilities);
             let _scope = registry
                 .register(
                     vec![
                         ("skill".into(), tool("skill")),
-                        ("project_artifact".into(), tool("artifact")),
                         ("read".into(), tool("read")),
                     ],
                     Options {

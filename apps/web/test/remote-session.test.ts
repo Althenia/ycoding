@@ -5,6 +5,7 @@ import { createRemoteHttp } from "../src/remote/http"
 import { latestPromptProcessing, pendingTrayItems, promptReceipt } from "../src/remote/view-model"
 import { createRemoteStore, readSessionInfo, type RemoteStore } from "../src/remote/store"
 import { createRemoteTransport, type RemoteRequestTiming, type RemoteTransport, type RemoteTransportStatus } from "../src/remote/transport"
+import { noResend } from "./transport-fence"
 import { startRelayDouble, waitFor, type RelayDouble, type RelayHandlerOutcome, type RelayHandlerResult } from "./relay-double"
 
 test("daily usage table provides a fallback for unreported spend", async () => {
@@ -83,7 +84,7 @@ async function harness(options: {
     http: createRemoteHttp({ baseURL: relay.httpURL }),
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
     createTransport: (deviceID, handlers) =>
-      createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule, createSocket: relay.createSocket,
+      createRemoteTransport({ ...noResend, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule, createSocket: relay.createSocket,
         ...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs }) }),
     schedule,
     batchMs: 20,
@@ -1235,7 +1236,7 @@ describe("remote store integration", () => {
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: relay.httpURL }),
       createTransport: (deviceID, handlers) =>
-        createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }),
+        createRemoteTransport({ ...noResend, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }),
     })
     try {
       await store.load()
@@ -1289,7 +1290,7 @@ describe("remote store integration", () => {
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: relay.httpURL }),
       createTransport: (deviceID, handlers) => {
-        const transport = createRemoteTransport({ url: relay.wsURL(deviceID), handlers })
+        const transport = createRemoteTransport({ ...noResend, url: relay.wsURL(deviceID), handlers })
         return { ...transport, request: async (operation, input) => {
           const outcome = await transport.request(operation, input)
           if (operation === "session.list" && input?.input?.workspace !== undefined) settledPages++
@@ -1613,7 +1614,7 @@ describe("remote store integration", () => {
     })
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: relay.httpURL }),
-      createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }),
+      createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers }),
     })
     try {
       await store.load()
@@ -1633,7 +1634,7 @@ describe("remote store integration", () => {
     })
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: relay.httpURL }),
-      createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }),
+      createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers }),
     })
     try {
       await store.load()
@@ -1662,7 +1663,7 @@ describe("remote store integration", () => {
     })
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: relay.httpURL }),
-      createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }),
+      createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers }),
     })
     try {
       await store.load()
@@ -1688,7 +1689,7 @@ describe("remote store integration", () => {
     })
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: relay.httpURL }),
-      createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }),
+      createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers }),
     })
     try {
       await store.load()
@@ -1711,7 +1712,7 @@ describe("remote store integration", () => {
     })
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: relay.httpURL }),
-      createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }),
+      createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers }),
     })
     try {
       await store.load()
@@ -1734,7 +1735,7 @@ describe("remote store integration", () => {
     })
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: relay.httpURL }),
-      createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }),
+      createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers }),
     })
     try {
       await store.load()
@@ -1782,7 +1783,7 @@ describe("remote store integration", () => {
     const relay = await startRelayDouble({ me: "<!doctype html><html><body>app shell</body></html>", meStatus: 200 })
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: relay.httpURL }),
-      createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }),
+      createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers }),
     })
     try {
       await store.load()

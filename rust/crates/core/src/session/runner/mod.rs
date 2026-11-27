@@ -1,23 +1,27 @@
 mod auth_refresh;
 mod compaction;
 mod diagnostics;
+pub mod harness_hooks;
 mod helper;
 mod ingress;
 mod max_steps;
 pub(crate) mod messages;
 mod notifier;
 mod publisher;
+pub mod react;
 mod stall;
 mod title;
 pub mod unfinished_ending;
 
+use crate::resources::recall::candidate::{Method as RecallMethod, Reason as RecallReason};
 pub use ingress::{CommandInput, IngressError, ShellInput};
 pub use notifier::mcp_notifier;
 pub use ycoding_ai::route::Executor;
+use ycoding_schema::recall as recall_schema;
 
 use super::{
-    cache_diagnostics, compaction_gate, continuation, execution, history, live_state,
-    orchestration, projector, prompt_cache, provider_request,
+    cache_diagnostics, compaction_gate, context_pressure, continuation, execution, history,
+    live_state, orchestration, projector, prompt_cache, provider_request,
     run_coordinator::{Drain, DrainRequest, Error, Outcome, RunFuture},
     skill,
     store::Service,
@@ -234,6 +238,7 @@ struct Inner {
     refresh: Option<Refresh>,
     instructions: Option<super::instruction_assembly::Context>,
     recall: Option<super::recall::Context>,
+    harness: std::sync::OnceLock<harness_hooks::Hooks>,
     title: Option<Arc<super::title::Service>>,
     titles: Mutex<BTreeMap<session::Id, TitleTask>>,
     providers: Result<Option<model::ProviderContext>, model::Error>,
@@ -432,6 +437,7 @@ impl Local {
             refresh: None,
             instructions: None,
             recall: None,
+            harness: std::sync::OnceLock::new(),
             title: None,
             titles: Mutex::new(BTreeMap::new()),
             providers: providers.map(Some),
@@ -452,6 +458,7 @@ impl Local {
             refresh: None,
             instructions: None,
             recall: None,
+            harness: std::sync::OnceLock::new(),
             title: None,
             titles: Mutex::new(BTreeMap::new()),
             providers: Ok(None),
@@ -471,6 +478,10 @@ impl Local {
     pub fn with_recall(mut self, context: super::recall::Context) -> Self {
         Arc::get_mut(&mut self.0).expect("unshared runner").recall = Some(context);
         self
+    }
+
+    pub fn install_harness(&self, hooks: harness_hooks::Hooks) -> bool {
+        self.0.harness.set(hooks).is_ok()
     }
 
     pub fn with_title(mut self, title: Arc<super::title::Service>) -> Self {
@@ -724,6 +735,7 @@ impl Local {
         ceiling: &super::instruction_assembly::Ceiling,
         inputs: &[ycoding_store::session::Pending],
         lifecycle: &[skill::LifecycleCue],
+        trace: &mut super::activation::Trace,
     ) -> Result<Vec<(skill_schema::Info, ycoding_schema::LosslessString, bool)>, Error> {
         let services = &self.0.services;
         let mut requested = Vec::new();
@@ -803,50 +815,7 @@ impl Local {
                 if !skill::valid_automatic(&metadata) {
                     continue;
                 }
-                let matched = lifecycle
-                    .iter()
-                    .any(|cue| skill::triggered(&metadata, cue.event, None))
-                    || inputs.iter().any(|input| {
-                        if input.type_.as_str() != Some("user") {
-                            return false;
-                        }
-                        let Ok(message) = session_message::Id::new(input.id.clone()) else {
-                            return false;
-                        };
-                        let cues = command_cues().lock().unwrap_or_else(|e| e.into_inner());
-                        let cue = cues.get(&(
-                            session.id.clone(),
-                            message,
-                            input.admitted_seq,
-                            input.time_created,
-                        ));
-                        let command = cue.and_then(|cue| cue.command.as_ref());
-                        let path = cue.is_some_and(|cue| {
-                            cue.paths
-                                .iter()
-                                .filter_map(|path| {
-                                    path.relative(std::path::Path::new(
-                                        session
-                                            .location
-                                            .directory
-                                            .as_lossless()
-                                            .as_str()
-                                            .unwrap_or_default(),
-                                    ))
-                                })
-                                .any(|path| skill::path_triggered(&metadata, &path))
-                        });
-                        path || skill::triggered(
-                            &metadata,
-                            "session.input.promoted",
-                            command.map(|cue| cue.0.as_slice()),
-                        ) || command.is_some()
-                            && skill::triggered(
-                                &metadata,
-                                "command.invoked",
-                                command.map(|cue| cue.0.as_slice()),
-                            )
-                    });
+                let matched = cue_match(session, inputs, lifecycle, &metadata);
                 candidates.push((info, metadata, matched));
             }
             let query = inputs
@@ -864,47 +833,64 @@ impl Local {
                 .iter()
                 .map(|(info, metadata, _)| (*info, metadata))
                 .collect::<Vec<_>>();
-            let mut ordered = candidates
-                .iter()
-                .enumerate()
-                .filter_map(|(index, (_, _, matched))| matched.then_some(index))
-                .collect::<Vec<_>>();
-            for index in skill::ranked_implicit(&implicit, &query) {
-                if !ordered.contains(&index) {
-                    ordered.push(index);
+            let mut ordered = Vec::new();
+            for (index, (info, _, matched)) in candidates.iter().enumerate() {
+                if let Some((reason, kind, subject)) = matched {
+                    trace.cue(*kind, subject.clone());
+                    ordered.push((
+                        super::activation::candidate(
+                            info.id.as_str().unwrap_or_default(),
+                            RecallMethod::Cue,
+                            *reason,
+                            1.0,
+                            &info.content.to_utf8().unwrap_or_default(),
+                        ),
+                        index,
+                    ));
                 }
             }
-            for index in ordered {
-                let info = candidates[index].0;
-                if active.iter().any(|status| {
-                    status.id == info.id
-                        && status.state == ycoding_schema::session_skill_status::State::Active
-                }) {
-                    continue;
+            for (index, score) in skill::ranked_implicit(&implicit, &query) {
+                if !ordered.iter().any(|(_, existing)| *existing == index) {
+                    ordered.push((
+                        super::activation::candidate(
+                            candidates[index].0.id.as_str().unwrap_or_default(),
+                            RecallMethod::Bm25,
+                            RecallReason::Lexical,
+                            score,
+                            &candidates[index].0.content.to_utf8().unwrap_or_default(),
+                        ),
+                        index,
+                    ));
                 }
-                if info.conflicts.as_ref().is_some_and(|conflicts| {
+            }
+            super::activation::order(&mut ordered);
+            for (candidate, index) in ordered {
+                let info = candidates[index].0;
+                let text = info.content.to_utf8().unwrap_or_default();
+                let source = super::activation::source(&candidate.id, &text);
+                let tokens = super::context_pressure::estimate(&text);
+                let is_active = |id: &skill_schema::Id| {
+                    active.iter().any(|status| {
+                        status.id == *id
+                            && status.state == ycoding_schema::session_skill_status::State::Active
+                    })
+                };
+                let mut rejection = if is_active(&info.id) {
+                    Some(recall_schema::Rejection::Duplicate)
+                } else if info.conflicts.as_ref().is_some_and(|conflicts| {
                     !conflicts.instructions.is_empty()
                         || conflicts.skills.iter().any(|id| {
-                            active.iter().any(|status| {
-                                status.id == *id
-                                    && status.state
-                                        == ycoding_schema::session_skill_status::State::Active
-                            }) || automatic.iter().any(
-                                |(other, _, _): &(skill_schema::Info, LosslessString, bool)| {
-                                    other.id == *id
-                                },
-                            )
+                            is_active(id)
+                                || automatic.iter().any(
+                                    |(other, _, _): &(skill_schema::Info, LosslessString, bool)| {
+                                        other.id == *id
+                                    },
+                                )
                         })
-                }) {
-                    continue;
-                }
-                if active.iter().any(|status| {
+                }) || active.iter().any(|status| {
                     status.state == ycoding_schema::session_skill_status::State::Active
                         && status.declarations.skills.contains(&info.id)
-                }) {
-                    continue;
-                }
-                if automatic.iter().any(
+                }) || automatic.iter().any(
                     |(other, _, _): &(skill_schema::Info, LosslessString, bool)| {
                         other
                             .conflicts
@@ -912,20 +898,32 @@ impl Local {
                             .is_some_and(|conflicts| conflicts.skills.contains(&info.id))
                     },
                 ) {
-                    continue;
+                    Some(recall_schema::Rejection::Conflict)
+                } else {
+                    None
+                };
+                let mut loaded = None;
+                if rejection.is_none() {
+                    let content = resolver.instructions(info).await.map_err(|_| {
+                        error(
+                            "skill.unavailable",
+                            "Skill instructions could not be loaded",
+                        )
+                    })?;
+                    let size = content.to_utf8().map_or(usize::MAX, |text| text.len());
+                    if automatic_bytes.saturating_add(size) > 2048 {
+                        rejection = Some(recall_schema::Rejection::OverBudget);
+                    } else {
+                        automatic_bytes += size;
+                        loaded = Some(content);
+                    }
                 }
-                let content = resolver.instructions(info).await.map_err(|_| {
-                    error(
-                        "skill.unavailable",
-                        "Skill instructions could not be loaded",
-                    )
-                })?;
-                let size = content.to_utf8().map_or(usize::MAX, |text| text.len());
-                if automatic_bytes.saturating_add(size) > 2048 {
-                    continue;
+                trace.items.push(super::activation::item(
+                    &candidate, source, rejection, tokens,
+                ));
+                if let Some(content) = loaded {
+                    automatic.push((info.clone(), content, true));
                 }
-                automatic_bytes += size;
-                automatic.push((info.clone(), content, true));
             }
             return Ok(automatic);
         }
@@ -975,6 +973,23 @@ impl Local {
                     "Skill instructions could not be loaded",
                 )
             })?;
+            let text = info.content.to_utf8().unwrap_or_default();
+            trace.cue(
+                recall_schema::CueKind::Explicit,
+                id.to_utf8().ok().map(|id| id.to_string()),
+            );
+            trace.items.push(super::activation::item(
+                &super::activation::candidate(
+                    info.id.as_str().unwrap_or_default(),
+                    RecallMethod::Explicit,
+                    RecallReason::ExplicitId,
+                    1.0,
+                    &text,
+                ),
+                super::activation::source(info.id.as_str().unwrap_or_default(), &text),
+                None,
+                super::context_pressure::estimate(&text),
+            ));
             resolved.push((info.clone(), content, false));
         }
         Ok(resolved)
@@ -1049,6 +1064,55 @@ impl Local {
     }
 
     async fn run(&self, request: DrainRequest) -> Outcome {
+        let Some(hooks) = self.0.harness.get().cloned() else {
+            return self.run_steps(request, &mut None).await;
+        };
+        let task = match self.0.services.store.get(&request.session_id) {
+            Ok(Some(session)) => Some(harness_hooks::task(
+                &session.id,
+                session
+                    .agent
+                    .as_ref()
+                    .and_then(|agent| agent.as_str())
+                    .unwrap_or(""),
+                &self.pending_text(&request.session_id),
+            )),
+            _ => None,
+        };
+        let mut run = match task.clone() {
+            Some(task) => harness_hooks::prepare(&hooks, task).await,
+            None => None,
+        };
+        let outcome = self.run_steps(request, &mut run).await;
+        if let (Some(task), Some(run)) = (task, run) {
+            let result = match &outcome {
+                Ok(()) => crate::harness::Outcome::Completed,
+                Err(error) => crate::harness::Outcome::Failed(error.to_string()),
+            };
+            harness_hooks::reflect(&hooks, task, run, result).await;
+        }
+        outcome
+    }
+
+    fn pending_text(&self, id: &session::Id) -> String {
+        self.0
+            .services
+            .store
+            .pending_list(id)
+            .unwrap_or_default()
+            .iter()
+            .filter(|input| input.type_.as_str() == Some("user"))
+            .filter_map(|input| session_pending::UserData::decode(&input.data).ok())
+            .filter_map(|data| data.text.as_str().map(str::to_owned))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    async fn run_steps(
+        &self,
+        request: DrainRequest,
+        harness: &mut Option<harness_hooks::Run>,
+    ) -> Outcome {
         let mut step = 1u64;
         let mut force = request.force;
         let mut recovery = false;
@@ -1323,6 +1387,7 @@ impl Local {
                     }
                     let lifecycle =
                         skill::lifecycle_cues(&services.store.client.snapshot()?, &session.id)?;
+                    let mut trace = super::activation::Trace::new();
                     let prepared = local
                         .resolve_requested_skills(
                             &session,
@@ -1330,6 +1395,7 @@ impl Local {
                             &ceiling,
                             std::slice::from_ref(&input),
                             &lifecycle,
+                            &mut trace,
                         )
                         .await?;
                     match services
@@ -1371,6 +1437,15 @@ impl Local {
                     }
                     promoted_skills.extend(prepared.clone());
                     local.activate_skills(&session, &assembly, prepared).await?;
+                    super::activation::publish(
+                        &services.store,
+                        &session.id,
+                        &format!("skill:{}", input.id.as_str().unwrap_or_default()),
+                        session_message::Id::new(input.id.clone()).ok().as_ref(),
+                        trace,
+                        services.clock.now(),
+                    )
+                    .await?;
                     services
                         .store
                         .client
@@ -1407,10 +1482,32 @@ impl Local {
                 let lifecycle =
                     skill::lifecycle_cues(&services.store.client.snapshot()?, &session.id)?;
                 if !lifecycle.is_empty() {
+                    let mut trace = super::activation::Trace::new();
                     let prepared = local
-                        .resolve_requested_skills(&session, agent, &ceiling, &[], &lifecycle)
+                        .resolve_requested_skills(
+                            &session,
+                            agent,
+                            &ceiling,
+                            &[],
+                            &lifecycle,
+                            &mut trace,
+                        )
                         .await?;
                     local.activate_skills(&session, &assembly, prepared).await?;
+                    let identity = lifecycle
+                        .iter()
+                        .map(|cue| cue.identity.as_str().unwrap_or_default())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    super::activation::publish(
+                        &services.store,
+                        &session.id,
+                        &format!("skill-lifecycle:{identity}"),
+                        None,
+                        trace,
+                        services.clock.now(),
+                    )
+                    .await?;
                     services
                         .store
                         .client
@@ -1932,6 +2029,9 @@ impl Local {
                 prepared.tools.clear();
                 prepared.tool_choice = Some(llm::ToolChoice::None);
             }
+            if let Some(run) = harness.as_ref() {
+                prepared.system = harness_hooks::apply(&prepared.system, &run.version);
+            }
             prepared.system = cursor::system::system(&prepared.model, &prepared.system);
             prepared.generation.max_tokens = prepared
                 .generation
@@ -1940,7 +2040,8 @@ impl Local {
             let context_window = resolved.info.limit.context.get();
             let recalled = match &local.0.recall {
                 Some(recall) => {
-                    recall
+                    let started = std::time::Instant::now();
+                    let appended = recall
                         .append(
                             &session.id,
                             &agent.id,
@@ -1949,14 +2050,47 @@ impl Local {
                             context_window - services.compaction.context_safety_margin_tokens,
                             automatic_budget,
                         )
-                        .await
+                        .await;
+                    let user = loaded.iter().rev().find_map(|message| match message {
+                        session_message::Info::User(user) => Some(user.id.clone()),
+                        _ => None,
+                    });
+                    if let (Some(user), false) = (user, appended.items.is_empty()) {
+                        super::activation::record(
+                            &services.store,
+                            super::activation::Recording {
+                                session: &session.id,
+                                identity: &format!(
+                                    "memory:{}",
+                                    user.as_lossless().as_str().unwrap_or_default()
+                                ),
+                                trigger: recall_schema::Trigger::Prompt,
+                                cue: None,
+                                items: appended.items,
+                                elapsed_ms: started.elapsed().as_millis() as i64,
+                                budget: Some(automatic_budget),
+                            },
+                            services.clock.now(),
+                        )
+                        .await?;
+                    }
+                    appended.injected
                 }
                 None => false,
             };
-            if route.current.is_some() {
-                if let Some(next) = &next
-                    && compaction_gate::estimated_provider_input_tokens(&prepared)
-                        >= context_window - services.compaction.context_safety_margin_tokens
+            let input_cap =
+                context_pressure::hard_input_cap_tokens(&context_pressure::Capabilities {
+                    context_window_tokens: context_window,
+                    max_output_tokens: prepared
+                        .generation
+                        .max_tokens
+                        .map_or(resolved.info.limit.output.get(), |tokens| tokens as i64),
+                    context_safety_margin_tokens: services.compaction.context_safety_margin_tokens,
+                });
+            {
+                if route.current.is_some()
+                    && let Some(next) = &next
+                    && compaction_gate::estimated_provider_input_tokens(&prepared) >= input_cap
                 {
                     let assistant = match restart.take() {
                         Some(restart) => restart.assistant,
@@ -1993,7 +2127,6 @@ impl Local {
                     force = true;
                     continue;
                 }
-            } else {
                 let gate = local
                     .ensure_within_limit(compaction::GateInput {
                         agent: &agent.id,
@@ -2007,10 +2140,31 @@ impl Local {
                         admissions: &mut gate_admissions,
                     })
                     .await?;
-                if matches!(gate, compaction::Gate::Restart) {
-                    gate_rounds += 1;
-                    force = true;
-                    continue;
+                match gate {
+                    compaction::Gate::Proceed => (),
+                    compaction::Gate::Restart => {
+                        gate_rounds += 1;
+                        force = true;
+                        continue;
+                    }
+                    compaction::Gate::Exceeded(failure) => {
+                        if restart.take().is_none() {
+                            self.start_step(local, &session.id, &agent.id, &selection)
+                                .await?;
+                        }
+                        let work = self
+                            .0
+                            .active
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .get(&session.id)
+                            .cloned();
+                        if let Some(work) = work {
+                            local.fail(&session.id, &work, &failure).await?;
+                        }
+                        self.remove(&session.id);
+                        return Err(failure);
+                    }
                 }
             }
             if overflow == Some(Overflow::Pending) {
@@ -2327,7 +2481,6 @@ impl Local {
                     .finish(),
                 );
             }
-            let terminal_silence;
             match result {
                 Err(failure) => {
                     let mut failure = failure;
@@ -2365,7 +2518,6 @@ impl Local {
                     let overflowed = work.overflow.load(std::sync::atomic::Ordering::Relaxed);
                     if overflowed
                         && overflow.is_none()
-                        && route.current.is_none()
                         && compaction_gate::can_reduce(
                             &prepared,
                             &loaded,
@@ -2470,16 +2622,12 @@ impl Local {
                                     &prepared.model.route.id,
                                 )
                                 .await;
-                            terminal_silence = !recovery && !needs_continuation;
                             if recovery && needs_continuation {
                                 self.remove(&session.id);
                                 return Err(failure);
                             }
                         }
                         Some(settlement) => {
-                            terminal_silence = settlement.reason != llm::FinishReason::Length
-                                && !publisher.assistant_text
-                                && !needs_continuation;
                             let explicit_silent = settlement.reason == llm::FinishReason::Stop
                                 && !publisher.evidence
                                 && !publisher.output_content
@@ -2596,15 +2744,46 @@ impl Local {
             gate_rounds = 0;
             overflow = None;
             auth_refreshed = false;
-            force = publisher.continuation;
-            if terminal_silence && !force && !recovery_used {
-                recovery_used = true;
-                recovery = true;
-                force = true;
-            } else {
-                recovery = false;
+            let verdict = react::evaluate(
+                &react::Observation {
+                    finish: publisher
+                        .settlement
+                        .as_ref()
+                        .map(|settlement| settlement.reason),
+                    assistant_text: publisher.assistant_text,
+                    continuation: publisher.continuation,
+                    recovering: recovery,
+                },
+                recovery_used,
+            );
+            let decision = verdict.decision;
+            if let Some(run) = harness.as_mut() {
+                run.observe(
+                    publisher
+                        .settlement
+                        .as_ref()
+                        .and_then(|settlement| settlement.usage.as_ref())
+                        .and_then(|usage| usage.total_tokens),
+                );
             }
-            continuation = publisher.continuation || recovery;
+            if local.0.standalone.is_none() {
+                react::record(
+                    &services.store,
+                    react::Step {
+                        session: &session.id,
+                        number: step as i64 - 1,
+                        verdict,
+                        recovery,
+                        recalled,
+                    },
+                    services.clock.now(),
+                )
+                .await?;
+            }
+            force = decision != react::Decision::Complete;
+            recovery = decision == react::Decision::Recover;
+            recovery_used |= recovery;
+            continuation = force;
         }
     }
 
@@ -3990,6 +4169,72 @@ pub(crate) async fn publish(
     Ok(())
 }
 
+fn cue_match(
+    session: &session::Info,
+    inputs: &[ycoding_store::session::Pending],
+    lifecycle: &[skill::LifecycleCue],
+    metadata: &JsonObject,
+) -> Option<(RecallReason, recall_schema::CueKind, Option<String>)> {
+    if let Some(cue) = lifecycle
+        .iter()
+        .find(|cue| skill::triggered(metadata, cue.event, None))
+    {
+        let kind = if cue.event == "session.compacted" {
+            recall_schema::CueKind::Compaction
+        } else {
+            recall_schema::CueKind::Recovery
+        };
+        return Some((RecallReason::Event, kind, Some(cue.event.to_string())));
+    }
+    let directory = std::path::Path::new(
+        session
+            .location
+            .directory
+            .as_lossless()
+            .as_str()
+            .unwrap_or_default(),
+    );
+    for input in inputs
+        .iter()
+        .filter(|input| input.type_.as_str() == Some("user"))
+    {
+        let Ok(message) = session_message::Id::new(input.id.clone()) else {
+            continue;
+        };
+        let cues = command_cues().lock().unwrap_or_else(|e| e.into_inner());
+        let cue = cues.get(&(
+            session.id.clone(),
+            message,
+            input.admitted_seq,
+            input.time_created,
+        ));
+        let command = cue.and_then(|cue| cue.command.as_ref());
+        let words = command.map(|cue| cue.0.as_slice());
+        if let Some(path) = cue.and_then(|cue| {
+            cue.paths
+                .iter()
+                .filter_map(|path| path.relative(directory))
+                .find(|path| skill::path_triggered(metadata, path))
+        }) {
+            return Some((RecallReason::Path, recall_schema::CueKind::Path, Some(path)));
+        }
+        if command.is_some() && skill::triggered(metadata, "command.invoked", words) {
+            return Some((
+                RecallReason::Command,
+                recall_schema::CueKind::Command,
+                words.map(|words| words.join(" ")),
+            ));
+        }
+        if skill::triggered(metadata, "session.input.promoted", words) {
+            return Some((
+                RecallReason::Event,
+                recall_schema::CueKind::Lifecycle,
+                Some("session.input.promoted".to_string()),
+            ));
+        }
+    }
+    None
+}
 fn event(
     id: &session::Id,
     assistant: Option<&session_message::Id>,

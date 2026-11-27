@@ -19,7 +19,6 @@ import { makeLocationNode } from "../effect/app-node"
 import { InstructionDiscovery } from "../instruction-discovery"
 import { Instructions } from "../instructions/index"
 import { InstructionBuiltIns } from "../instructions/builtins"
-import { ProjectArtifactInstructions } from "../project-artifact/instructions"
 import { Location } from "../location"
 import { McpInstructions } from "../mcp/instructions"
 import { ModelGuidanceInstructions } from "../model-incident/instructions"
@@ -123,7 +122,6 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
     const location = yield* Location.Service
     const liveState = yield* SessionLiveState.Service
     const source = yield* sourceEffect
-    const projectArtifactInstructions = ProjectArtifactInstructions.make()
     const memoryInstructions = MemoryInstructions.make()
     const store = yield* SessionStore.Service
     const registry = yield* ToolRegistry.Service
@@ -194,12 +192,6 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
             Instructions.when(
               source.scope === "bound" && (access !== undefined || session.parentID === undefined),
               CoordinationInstructions.make(coordinationRole),
-            ),
-          ),
-          Effect.succeed(
-            Instructions.when(
-              InstructionBuiltIns.enabled("project-artifact-authoring", { capabilities, tools }),
-              projectArtifactInstructions,
             ),
           ),
           Effect.succeed(

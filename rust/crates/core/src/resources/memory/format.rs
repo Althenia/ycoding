@@ -1,4 +1,7 @@
-use super::Error;
+use super::{
+    Error,
+    okf::{self, Diagnostic, Doc, Meta, Parsed, Signals},
+};
 use crate::{
     regexp::{Budget, RegExp},
     resources::discovery::{trim, whitespace},
@@ -20,6 +23,8 @@ pub struct Summary {
     pub description: Option<ycoding_schema::LosslessString>,
     pub tags: Option<Vec<ycoding_schema::LosslessString>>,
     pub digest: String,
+    pub meta: Meta,
+    pub signals: Signals,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Concept {
@@ -27,6 +32,7 @@ pub struct Concept {
     pub content: String,
     pub body: String,
     pub links: Vec<String>,
+    pub doc: Doc,
 }
 
 pub fn sha256(bytes: impl AsRef<[u8]>) -> String {
@@ -36,10 +42,13 @@ pub fn sha256(bytes: impl AsRef<[u8]>) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
+fn segment_is_reserved(part: &str) -> bool {
+    matches!(part, "index" | "log")
+}
 pub fn require_id(id: &str) -> Result<(), Error> {
     if id.is_empty()
         || id.split('/').any(|part| {
-            matches!(part, "index" | "log" | "trash")
+            segment_is_reserved(part)
                 || part.is_empty()
                 || !part.as_bytes()[0].is_ascii_lowercase() && !part.as_bytes()[0].is_ascii_digit()
                 || !part.bytes().all(|b| {
@@ -51,110 +60,86 @@ pub fn require_id(id: &str) -> Result<(), Error> {
     }
     Ok(())
 }
-pub fn parse(id: &str, content: &str) -> Result<Concept, Error> {
-    require_id(id)?;
-    let (block, body) = super::frontmatter::split(content)?;
-    let body = body.ok_or(Error::UnterminatedFrontmatter)?;
-    let data = super::frontmatter::mapping(block)?;
-    let summary = metadata(id, content, &data)?;
-    let mut declared = BTreeSet::new();
-    if let Some(sources) = items(&data["sources"]) {
-        for source in sources {
-            if source.as_hash().is_none()
-                || source["resource"]
-                    .as_str()
-                    .is_none_or(|s| trim(s).is_empty())
-            {
-                return Err(Error::InvalidConcept);
-            }
-            if !source["id"].is_badvalue() {
-                let id = source["id"].as_str().ok_or(Error::InvalidConcept)?;
-                if id.is_empty()
-                    || !id
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
-                    || !declared.insert(id.to_owned())
-                {
-                    return Err(Error::InvalidConcept);
-                }
-            }
-        }
+pub fn require_readable_id(id: &str) -> Result<(), Error> {
+    if id.is_empty()
+        || id.split('/').any(|part| {
+            segment_is_reserved(part)
+                || part.is_empty()
+                || part.starts_with('.')
+                || part.chars().any(|c| c.is_control() || c == '\\')
+        })
+    {
+        return Err(Error::UnsafePath);
     }
-    let (links, unresolved) = markdown_links(body)?;
-    for reference in matches(&unresolved, r"\[\^([A-Za-z0-9_-]+)\]", "g")? {
-        if !declared.contains(&reference[1]) {
-            return Err(Error::InvalidConcept);
-        }
-    }
+    Ok(())
+}
+pub fn parse(
+    id: &str,
+    content: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Concept, Error> {
+    require_readable_id(id)?;
+    let doc = match okf::parse(content) {
+        Parsed::Concept(doc) => *doc,
+        Parsed::NotConcept(_) => return Err(Error::InvalidConcept),
+        Parsed::Unterminated(_) => return Err(Error::UnterminatedFrontmatter),
+        Parsed::Invalid(_) => return Err(Error::InvalidYaml),
+    };
+    let (links, _) = markdown_links(&doc.body)?;
+    let lossless = |key: &str| match &doc.yaml {
+        Yaml::Hash(map) => map
+            .get(&Yaml::String(key.into()))
+            .and_then(okf::scalar)
+            .filter(|text| !text.is_empty())
+            .map(ycoding_schema::LosslessString::from),
+        _ => None,
+    };
+    let tags = match &doc.yaml {
+        Yaml::Hash(map) => map
+            .get(&Yaml::String("tags".into()))
+            .filter(|value| !okf::blank(value))
+            .map(|value| {
+                okf::items(value)
+                    .into_iter()
+                    .filter_map(okf::scalar)
+                    .filter(|tag| !tag.trim().is_empty())
+                    .map(ycoding_schema::LosslessString::from)
+                    .collect()
+            }),
+        _ => None,
+    };
+    let summary = Summary {
+        id: id.into(),
+        type_: doc.meta.type_.as_str().into(),
+        title: lossless("title"),
+        description: lossless("description"),
+        tags,
+        digest: sha256(content),
+        meta: doc.meta.clone(),
+        signals: okf::signals(&doc, None, now),
+    };
     Ok(Concept {
         summary,
         content: content.into(),
-        body: body.into(),
+        body: doc.body.clone(),
         links,
+        doc,
     })
 }
-pub(super) fn stored(id: &str, content: &str) -> Result<(Concept, Option<Warning>), Error> {
-    let (block, body) = super::frontmatter::split(content)?;
-    if body.is_some() {
-        return parse(id, content).map(|concept| (concept, None));
-    }
-    require_id(id)?;
-    let summary = super::frontmatter::mapping(block)
-        .and_then(|data| metadata(id, content, &data))
-        .unwrap_or_else(|_| Summary {
-            id: id.into(),
-            type_: "Unclassified".into(),
-            title: None,
-            description: None,
-            tags: None,
-            digest: sha256(content),
-        });
-    Ok((
-        Concept {
-            summary,
-            body: content.into(),
-            content: content.into(),
-            links: Vec::new(),
-        },
-        Some(Warning {
-            id: id.into(),
-            code: "unterminated-frontmatter".into(),
-        }),
-    ))
-}
-fn items(value: &Yaml) -> Option<&[Yaml]> {
-    match value {
-        Yaml::BadValue => None,
-        Yaml::Array(items) => Some(items),
-        item => Some(std::slice::from_ref(item)),
-    }
-}
-fn metadata(id: &str, content: &str, data: &Yaml) -> Result<Summary, Error> {
-    let text = |key: &str| {
-        if data[key].is_badvalue() {
-            Ok(None)
-        } else {
-            data[key]
-                .as_str()
-                .map(|s| Some(s.into()))
-                .ok_or(Error::InvalidConcept)
+impl Concept {
+    pub fn without_legacy_timestamp(&mut self, now: chrono::DateTime<chrono::Utc>) {
+        if self.summary.meta.legacy_timestamp.is_none() {
+            return;
         }
-    };
-    Ok(Summary {
-        id: id.into(),
-        type_: data["type"].as_str().ok_or(Error::InvalidConcept)?.into(),
-        title: text("title")?,
-        description: text("description")?,
-        tags: items(&data["tags"])
-            .map(|tags| {
-                tags.iter()
-                    .map(|tag| tag.as_str().map(Into::into).ok_or(Error::InvalidConcept))
-                    .collect::<Result<_, _>>()
-            })
-            .transpose()?,
-        digest: sha256(content),
-    })
+        self.summary.meta.legacy_timestamp = None;
+        self.doc.meta.legacy_timestamp = None;
+        self.summary.signals = okf::signals(&self.doc, None, now);
+    }
 }
+pub fn diagnostics(concept: &Concept) -> &[Diagnostic] {
+    &concept.doc.diagnostics
+}
+
 pub fn tokens(value: &str) -> Result<Vec<String>, Error> {
     let lowered = value.to_lowercase();
     let normalized = icu_normalizer::ComposingNormalizerBorrowed::new_nfc().normalize(&lowered);
@@ -328,7 +313,7 @@ fn markdown_links(body: &str) -> Result<(Vec<String>, String), Error> {
         }
         if indent <= 3 {
             let found = matches(stripped, r"^\[([^\]]+)\]:\s*(?:<([^>]+)>|(\S+))", "g")?;
-            if let Some(value) = found.first() {
+            if let Some(value) = found.first().filter(|value| !value[1].starts_with('^')) {
                 definitions.entry(label(&value[1])).or_insert_with(|| {
                     if value[2].is_empty() {
                         value[3].clone()

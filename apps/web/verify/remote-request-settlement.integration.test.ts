@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { RemoteLimits, parseRelayToAgentMessage, type RemoteRequest } from "@ycoding-ai/remote"
 import { createRelay } from "../../../infra/cloudflare/src/relay/core"
 import { createRemoteTransport } from "../src/remote/transport"
+import { noResend } from "../test/transport-fence"
 
 test("timed-out browser reads release the actual relay pending budget and never replay a mutation", async () => {
   let now = 0
@@ -35,7 +36,7 @@ test("timed-out browser reads release the actual relay pending budget and never 
     authorizeClientCommand: async () => ({ ok: true }), authorizeAgentCommand: async () => ({ ok: true }), authorityTtlMs: 5_000,
     notices: { append: () => ({ notices: [], total: 0 }), repeat: () => [], complete: () => ({ notices: [], total: 0 }), page: () => ({ notices: [], total: 0 }), remove: () => ({ ids: [], total: 0 }), clear: () => {}, unavailable: () => false, markUnavailable: () => {} },
   })
-  const transport = createRemoteTransport({ url: "ws://127.0.0.1", createSocket: () => socket as unknown as WebSocket,
+  const transport = createRemoteTransport({ ...noResend, url: "ws://127.0.0.1", createSocket: () => socket as unknown as WebSocket,
     now: () => now, pingIntervalMs: 600_000,
     schedule: (callback, ms) => { const task = { at: now + ms, callback, cancelled: false }; tasks.push(task); return () => { task.cancelled = true } },
   })

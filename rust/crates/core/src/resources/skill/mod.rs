@@ -13,7 +13,9 @@ use ycoding_schema::{
 };
 pub mod builtin;
 pub mod discovery;
+pub mod document;
 pub mod instructions;
+pub mod spec;
 #[derive(Clone)]
 pub struct Service {
     pub event_source: crate::event_feed::EventSource,
@@ -23,7 +25,14 @@ pub struct Service {
     pulled: BTreeMap<LosslessString, Vec<PathBuf>>,
     diagnostics: Vec<Diagnostic>,
     capabilities: super::config::capabilities::ConfigCapabilities,
-    activation: BTreeMap<LosslessString, (Info, ycoding_schema::JsonObject)>,
+    records: BTreeMap<LosslessString, Record>,
+    bundled: BTreeMap<LosslessString, ycoding_schema::JsonObject>,
+}
+#[derive(Clone)]
+struct Record {
+    info: Info,
+    metadata: ycoding_schema::JsonObject,
+    hash: String,
 }
 impl Service {
     pub fn new(cache: &Path) -> Self {
@@ -35,7 +44,8 @@ impl Service {
             pulled: BTreeMap::new(),
             diagnostics: Vec::new(),
             capabilities: Default::default(),
-            activation: BTreeMap::new(),
+            records: BTreeMap::new(),
+            bundled: BTreeMap::new(),
         }
     }
     pub fn from_entries(
@@ -118,6 +128,7 @@ impl Service {
         let bundled = builtin::sources(entries, directory, |key| {
             std::env::var_os(key).map(|value| value.to_string_lossy().into_owned())
         })?;
+        self.bundled = builtin::metadata()?;
         let before = self.sources.len();
         self.sources.retain(|source| {
             !bundled.iter().any(|item| match (item, source) {
@@ -185,12 +196,30 @@ impl Service {
     }
     pub async fn list(&mut self) -> Result<Vec<Info>, Error> {
         self.diagnostics.clear();
-        self.activation.clear();
+        self.records.clear();
         let mut skills: Vec<Info> = Vec::new();
         for source in &self.sources {
             let directories = match source {
                 Source::Embedded(s) => {
-                    self.activation.remove(&s.skill.id);
+                    self.records.remove(&s.skill.id);
+                    if s.skill
+                        .location
+                        .as_lossless()
+                        .as_str()
+                        .is_some_and(|location| location.starts_with("/builtin/"))
+                        && let Some(metadata) = self.bundled.get(&s.skill.id)
+                    {
+                        self.records.insert(
+                            s.skill.id.clone(),
+                            Record {
+                                info: s.skill.clone(),
+                                metadata: metadata.clone(),
+                                hash: document::sha256_hex(
+                                    &s.skill.content.to_utf8().unwrap_or_default(),
+                                ),
+                            },
+                        );
+                    }
                     insert_skill(&mut skills, s.skill.clone());
                     continue;
                 }
@@ -231,88 +260,17 @@ impl Service {
                     }
                 };
                 for file in files {
-                    let loaded =
-                        || -> Result<Option<(Info, Option<ycoding_schema::JsonObject>)>, String> {
-                            let Some(content) = read_text(&file)
-                                .map_err(|e| e.to_string())?
-                                .filter(|s| !s.is_empty())
-                            else {
-                                return Ok(None);
-                            };
-                            let parsed = markdown::parse(&content).map_err(|e| e.to_string())?;
-                            if matches!(
-                                parsed.data,
-                                markdown::Value::Array(_)
-                                    | markdown::Value::String(_)
-                                    | markdown::Value::Null
-                                    | markdown::Value::Bool(_)
-                                    | markdown::Value::Number(_)
-                            ) {
-                                return Err("Skill frontmatter must be an object".into());
-                            }
-                            let mut data = parsed
-                                .data
-                                .fields(&["name", "description", "slash"])
-                                .map_err(|e| e.to_string())?;
-                            if let Some(metadata) = parsed.data.get("metadata")
-                                && let markdown::Value::Object(_) = metadata
-                            {
-                                let mut values = ycoding_schema::JsonObject::new();
-                                for key in [
-                                    "ycoding/slash",
-                                    "ycoding/autoinvoke",
-                                    "activation",
-                                    "keywords",
-                                    "events",
-                                    "commands",
-                                    "paths",
-                                    "version",
-                                ] {
-                                    if let Some(value) = metadata.get(key) {
-                                        values.insert(
-                                            key.into(),
-                                            value.json().unwrap_or(JsonValue::Null),
-                                        );
-                                    }
-                                }
-                                if let Some(conflicts) = metadata.get("ycoding/conflicts") {
-                                    let value = match conflicts {
-                                        markdown::Value::Timestamp(_)
-                                        | markdown::Value::Binary(_)
-                                        | markdown::Value::Cycle => {
-                                            JsonValue::Object(Default::default())
-                                        }
-                                        markdown::Value::Object(_) => JsonValue::Object(
-                                            conflicts
-                                                .fields(&["skills", "instructions"])
-                                                .map_err(|e| e.to_string())?,
-                                        ),
-                                        _ => conflicts.json().map_err(|e| e.to_string())?,
-                                    };
-                                    values.insert("ycoding/conflicts".into(), value);
-                                }
-                                data.insert("metadata".into(), JsonValue::Object(values));
-                            }
-                            let metadata = match data.get(&"metadata".into()) {
-                                Some(JsonValue::Object(metadata)) => Some(metadata.clone()),
-                                _ => None,
-                            };
-                            from_frontmatter(
-                                &file,
-                                &directory,
-                                &JsonValue::Object(data),
-                                &parsed.content,
-                            )
-                            .map(|info| Some((info, metadata)))
-                            .map_err(|e| e.to_string())
-                        };
+                    let loaded = || load(&file);
                     match loaded() {
-                        Ok(Some((skill, metadata))) => {
-                            self.activation.remove(&skill.id);
-                            if let Some(metadata) = metadata {
-                                self.activation
-                                    .insert(skill.id.clone(), (skill.clone(), metadata));
-                            }
+                        Ok(Some((skill, metadata, hash))) => {
+                            self.records.insert(
+                                skill.id.clone(),
+                                Record {
+                                    info: skill.clone(),
+                                    metadata,
+                                    hash,
+                                },
+                            );
                             insert_skill(&mut skills, skill);
                         }
                         Ok(None) => {}
@@ -332,11 +290,33 @@ impl Service {
         self.capabilities.skills.allows(id)
     }
     pub fn activation_metadata(&self, info: &Info) -> Option<ycoding_schema::JsonObject> {
-        self.activation
+        self.records
             .get(&info.id)
-            .and_then(|(current, metadata)| {
-                (current == info && self.allows(&info.id)).then(|| metadata.clone())
+            .filter(|record| record.info == *info && self.allows(&info.id))
+            .map(|record| activation_view(&record.metadata))
+            .filter(|view| !view.is_empty())
+    }
+    pub fn documents(
+        &self,
+        skills: &[Info],
+        origin: impl Fn(&Info) -> document::Origin,
+    ) -> Vec<crate::resources::recall::document::Document> {
+        skills
+            .iter()
+            .filter(|info| self.allows(&info.id))
+            .map(|info| {
+                let record = self
+                    .records
+                    .get(&info.id)
+                    .filter(|record| record.info == *info);
+                document::build(
+                    info,
+                    record.map(|record| &record.metadata),
+                    record.map(|record| record.hash.as_str()),
+                    origin(info),
+                )
             })
+            .collect()
     }
     pub fn mcp(
         &self,
@@ -415,101 +395,164 @@ pub fn available<'a>(skills: &'a [Info], agent: &ycoding_schema::agent::Info) ->
         .collect()
 }
 
-pub fn from_frontmatter(
-    filepath: &Path,
-    directory: &Path,
-    data: &JsonValue,
-    content: &str,
-) -> Result<Info, Error> {
-    let data = object(data)?;
-    let id = if filepath.parent() == Some(directory) {
-        filepath.file_stem()
-    } else {
-        filepath.parent().and_then(Path::file_name)
+const ACTIVATION_KEYS: [&str; 6] = [
+    "activation",
+    "version",
+    "keywords",
+    "events",
+    "commands",
+    "paths",
+];
+const METADATA_KEYS: [&str; 16] = [
+    "activation",
+    "version",
+    "keywords",
+    "events",
+    "commands",
+    "paths",
+    "display-name",
+    "slash",
+    "conflicts",
+    "tags",
+    "purpose",
+    "applicability",
+    "triggers",
+    "capabilities",
+    "prerequisites",
+    "related",
+];
+const FRONTMATTER_KEYS: [&str; 5] = [
+    "name",
+    "description",
+    "license",
+    "compatibility",
+    "allowed-tools",
+];
+
+fn load(file: &Path) -> Result<Option<(Info, ycoding_schema::JsonObject, String)>, String> {
+    let Some(content) = read_text(file)
+        .map_err(|e| e.to_string())?
+        .filter(|s| !s.is_empty())
+    else {
+        return Ok(None);
+    };
+    let parsed = markdown::parse(&content).map_err(|e| e.to_string())?;
+    if !matches!(parsed.data, markdown::Value::Object(_)) {
+        return Err("Skill frontmatter must be an object".into());
     }
-    .and_then(|s| s.to_str())
-    .ok_or_else(|| Error::InvalidPath(filepath.into()))?;
+    let mut data = parsed
+        .data
+        .fields(&FRONTMATTER_KEYS)
+        .map_err(|e| e.to_string())?;
+    if let Some(metadata) = parsed.data.get("metadata") {
+        match metadata {
+            markdown::Value::Object(_) => {
+                data.insert(
+                    "metadata".into(),
+                    JsonValue::Object(metadata_projection(metadata)),
+                );
+            }
+            _ => {
+                data.insert("metadata".into(), JsonValue::Null);
+            }
+        }
+    }
+    let metadata = match data.get(&"metadata".into()) {
+        Some(JsonValue::Object(metadata)) => metadata.clone(),
+        _ => ycoding_schema::JsonObject::new(),
+    };
+    let hash = document::sha256_hex(&content);
+    from_frontmatter(file, &JsonValue::Object(data), &parsed.content)
+        .map(|info| Some((info, metadata, hash)))
+        .map_err(|e| e.to_string())
+}
+
+fn metadata_projection(metadata: &markdown::Value) -> ycoding_schema::JsonObject {
+    let mut values = ycoding_schema::JsonObject::new();
+    for key in METADATA_KEYS.into_iter().chain(["instruction-conflicts"]) {
+        if let Some(value) = metadata.get(key) {
+            values.insert(key.into(), value.json().unwrap_or(JsonValue::Null));
+        }
+    }
+    values
+}
+
+fn activation_view(metadata: &ycoding_schema::JsonObject) -> ycoding_schema::JsonObject {
+    let mut view = ycoding_schema::JsonObject::new();
+    for key in ACTIVATION_KEYS {
+        if let Some(value) = metadata.get(&key.into()) {
+            view.insert(key.into(), value.clone());
+        }
+    }
+    view
+}
+
+pub fn from_frontmatter(filepath: &Path, data: &JsonValue, content: &str) -> Result<Info, Error> {
+    let data = object(data)?;
+    let id = filepath
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| Error::InvalidPath(filepath.into()))?;
+    if let Some(message) = spec::violation(id, data) {
+        return Err(Error::Invalid(message));
+    }
     let metadata = data.get(&"metadata".into()).and_then(|v| match v {
         JsonValue::Object(o) => Some(o),
         _ => None,
     });
-    let slash = data.get(&"slash".into()).map(bool::decode).transpose()?;
-    let flag = |key: &str| {
+    let text = |key: &str| {
         metadata
             .and_then(|m| m.get(&key.into()))
             .and_then(|v| match v {
-                JsonValue::Bool(v) => Some(*v),
-                JsonValue::String(v) => match trim(v.as_str()?).to_lowercase().as_str() {
-                    "true" => Some(true),
-                    "false" => Some(false),
-                    _ => None,
-                },
+                JsonValue::String(v) => v.as_str().map(trim),
                 _ => None,
             })
     };
-    let conflicts = metadata
-        .and_then(|m| m.get(&"ycoding/conflicts".into()))
-        .map(|value| {
-            let o = object(value)?;
-            let normalize = |key: &str| -> Result<Vec<LosslessString>, Error> {
-                let Some(value) = o.get(&key.into()) else {
-                    return Ok(Vec::new());
-                };
-                let mut result = Vec::new();
-                for value in Vec::<LosslessString>::decode(value)? {
-                    let units = value.code_units().collect::<Vec<_>>();
-                    let whitespace = |u: &u16| {
-                        char::from_u32(u32::from(*u))
-                            .is_some_and(crate::resources::discovery::whitespace)
-                    };
-                    let start = units
-                        .iter()
-                        .position(|u| !whitespace(u))
-                        .unwrap_or(units.len());
-                    let end = units
-                        .iter()
-                        .rposition(|u| !whitespace(u))
-                        .map_or(start, |i| i + 1);
-                    if start == end {
-                        return Err(ycoding_schema::JsonPath::default()
-                            .key(key)
-                            .error(ycoding_schema::DecodeErrorKind::Expected("nonempty string"))
-                            .into());
-                    }
-                    let value = LosslessString::from_utf16(units[start..end].to_vec());
-                    if !result.contains(&value) {
-                        result.push(value);
-                    }
-                }
-                Ok(result)
-            };
-            Ok::<_, Error>(Conflicts {
-                skills: normalize("skills")?,
-                instructions: normalize("instructions")?
-                    .iter()
-                    .map(|v| instruction::Key::decode(&JsonValue::String(v.clone())))
-                    .collect::<Result<Vec<_>, _>>()?,
-            })
+    let slash = metadata
+        .and_then(|m| m.get(&"slash".into()))
+        .and_then(|v| match v {
+            JsonValue::Bool(v) => Some(*v),
+            JsonValue::String(v) => match trim(v.as_str()?).to_lowercase().as_str() {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            },
+            _ => None,
+        });
+    let skills = conflict_list(metadata, "conflicts")?;
+    let instructions = conflict_list(metadata, "instruction-conflicts")?;
+    let conflicts = if skills.is_none() && instructions.is_none() {
+        None
+    } else {
+        Some(Conflicts {
+            skills: skills.unwrap_or_default(),
+            instructions: instructions
+                .unwrap_or_default()
+                .iter()
+                .map(|v| instruction::Key::decode(&JsonValue::String(v.clone())))
+                .collect::<Result<Vec<_>, _>>()?,
         })
-        .transpose()?;
+    };
+    let name = LosslessString::decode(data.get(&"name".into()).expect("validated name"))?;
     Ok(Info {
         id: id.into(),
-        name: data
-            .get(&"name".into())
-            .map(LosslessString::decode)
-            .transpose()?
-            .unwrap_or_else(|| id.into()),
+        name: text("display-name")
+            .filter(|v| !v.is_empty())
+            .map_or(name, LosslessString::from),
         description: data
             .get(&"description".into())
             .map(LosslessString::decode)
             .transpose()?,
-        slash: flag("ycoding/slash").or(slash),
+        slash,
         autoinvoke: match metadata.and_then(|m| m.get(&"activation".into())) {
-            Some(JsonValue::String(mode)) if mode.as_str() == Some("auto") => Some(
-                metadata.is_some_and(valid_activation) && flag("ycoding/autoinvoke") != Some(false),
-            ),
+            Some(JsonValue::String(mode)) if mode.as_str() == Some("auto") => {
+                Some(crate::session::skill::valid_automatic(&activation_view(
+                    metadata.expect("activation lives in metadata"),
+                )))
+            }
             Some(_) => Some(false),
-            None => flag("ycoding/autoinvoke"),
+            None => None,
         },
         conflicts,
         location: absolute_path(filepath)?,
@@ -517,28 +560,30 @@ pub fn from_frontmatter(
     })
 }
 
-fn valid_activation(metadata: &ycoding_schema::JsonObject) -> bool {
-    ["version", "keywords", "events", "commands", "paths"]
-        .into_iter()
-        .all(|key| {
-            let Some(value) = metadata.get(&key.into()) else {
-                return true;
-            };
-            let JsonValue::String(value) = value else {
-                return false;
-            };
-            let Some(value) = value.as_str() else {
-                return false;
-            };
-            if key == "version" {
-                return !value.trim().is_empty();
-            }
-            value.split(',').map(str::trim).all(|item| {
-                !item.is_empty()
-                    && (key != "events" || !item.chars().any(char::is_whitespace))
-                    && (key != "paths"
-                        || !item.contains(['\\', ':'])
-                            && item.split('/').all(|part| !matches!(part, "" | "." | "..")))
-            })
-        })
+fn conflict_list(
+    metadata: Option<&ycoding_schema::JsonObject>,
+    key: &str,
+) -> Result<Option<Vec<LosslessString>>, Error> {
+    let Some(value) = metadata.and_then(|m| m.get(&key.into())) else {
+        return Ok(None);
+    };
+    let JsonValue::String(value) = value else {
+        return Err(Error::Invalid(format!("Metadata '{key}' must be a string")));
+    };
+    let value = value
+        .to_utf8()
+        .map_err(|_| Error::Invalid(format!("Metadata '{key}' must be valid Unicode")))?;
+    let mut result: Vec<LosslessString> = Vec::new();
+    for item in value.split(',').map(trim) {
+        if item.is_empty() {
+            return Err(Error::Invalid(format!(
+                "Metadata '{key}' must list nonempty comma-separated items"
+            )));
+        }
+        let item = LosslessString::from(item);
+        if !result.contains(&item) {
+            result.push(item);
+        }
+    }
+    Ok(Some(result))
 }

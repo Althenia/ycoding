@@ -21,13 +21,6 @@ const opaque = { "": null, "\ud800": { text: lossless, empty: [], zero: 0, no: f
 const model = { providerID: "openai", id: "fixture" }
 const tokens = { input: 0, output: 1, reasoning: 2, cache: { read: 3, write: 4 } }
 const error = { type: "fixture.error", message: lossless }
-const artifact = {
-  scopeID: "pas_fixture",
-  versionID: "pav_fixture",
-  kind: "skill",
-  id: "fixture",
-  sourceScope: "project",
-}
 const shell = {
   id: "sh_fixture",
   status: "running",
@@ -49,7 +42,7 @@ const variants = [
   "agent.selected",
   "model.selected",
   "daybreak.set",
-  "project-artifacts-ended",
+  undefined,
   "moved",
   "renamed",
   "deleted",
@@ -119,6 +112,15 @@ const variants = [
   "dots.decision.settled",
   "input.withdrawn",
   "input.steered",
+  "input.deleted",
+  "cue.detected",
+  "recall.recorded",
+  "lifecycle.recorded",
+  "harness.evaluated",
+  "harness.probed",
+  "harness.adopted",
+  "harness.rolled-back",
+  "harness.reflected",
 ]
 const itemID = "rvw_fixture"
 const fingerprint = "a".repeat(64)
@@ -140,7 +142,7 @@ const minimal: (Record<string, unknown> | undefined)[] = [
   { ...base, agent: "build" },
   { ...base, model },
   { ...base },
-  { ...base, oldProjectID: "prj_old", newProjectID: "prj_new" },
+  undefined,
   { ...base, location: { directory: "/project" } },
   { ...base, title: lossless },
   { ...base },
@@ -220,7 +222,6 @@ const extra: Record<number, Record<string, unknown>> = {
     subpath: "src",
     origin: "dots-executor",
   },
-  2: { artifact },
   3: { model: { ...model, variant: lossless, profile: "fixture" } },
   4: { daybreak: "daybreak_blue" },
   6: { location: { directory: "/project", workspaceID: "wrk_fixture" }, projectID: "prj_fixture", subpath: "src" },
@@ -230,7 +231,7 @@ const extra: Record<number, Record<string, unknown>> = {
     causedBy: { sessionID: `ses_${lossless}`, inputID: messageID },
   },
   25: { description: "", metadata: opaque },
-  26: { conflicts: { skills: [], instructions: [] }, artifact },
+  26: { conflicts: { skills: [], instructions: [] } },
   28: {
     shell: {
       ...shell,
@@ -314,6 +315,37 @@ const extra: Record<number, Record<string, unknown>> = {
       { name: "sha256:5555555555555555", type: "refusal", confidence: 0 },
     ],
   },
+  76: { subject: lossless, messageID },
+  77: {
+    cueID: "cue_fixture",
+    methods: ["explicit", "cue", "exact", "bm25", "semantic", "rrf"],
+    abstention: "no_match",
+    budgetTokens: 2048,
+    items: [
+      {
+        kind: "memory",
+        id: "decisions/cobalt",
+        stage: "injected",
+        method: "rrf",
+        scores: { bm25: 1.5, semantic: 0.25, rrf: 0.0325, rank: 0 },
+        reason: lossless,
+        rejection: "stale",
+        source: { id: "memory:repository/decisions/cobalt", revision: "sha256:fixture" },
+        okf: { type: "Decision", trust: "trusted", freshness: "fresh", lifecycle: "active" },
+        tokens: 120,
+      },
+      {
+        kind: "skill",
+        id: "rust-build",
+        stage: "restored",
+        method: "explicit",
+        reason: "",
+        source: { id: "skill:rust-build", revision: "sha256:fixture" },
+      },
+    ],
+  },
+  79: { skipReason: lossless },
+  83: { experiences: ["exp_fixture"] },
   62: {
     outcome: "escalate",
     via: "yolo",
@@ -910,6 +942,23 @@ add(1, "standalone", {
 })
 add(73, "absent", { ...base, inputID: messageID })
 add(74, "absent", { ...base, inputID: messageID })
+for (const [variant, data] of [
+  [75, { ...base, inputID: messageID }],
+  [76, { ...base, cueID: "cue_fixture", kind: "command" }],
+  [
+    77,
+    { ...base, key: "rcl_fixture", trigger: "prompt", methods: [], outcome: "abstained", items: [], elapsedMs: 0, injectedTokens: 0 },
+  ],
+  [78, { ...base, step: 3, decision: "recover", basis: "silent", recovery: false, recalled: true }],
+  [79, { ...base, stage: "baseline", mode: "adaptive", signals: 0, insufficient: false }],
+  [80, { ...base, candidate: "cand_fixture", outcome: "completed", tokens: 0, latencyMs: 0 }],
+  [81, { ...base, version: "hv_fixture", parent: "hv_parent" }],
+  [82, { ...base, from: "hv_fixture", to: "hv_parent" }],
+  [83, { ...base, experiences: [] }],
+] as const) {
+  add(variant, "absent", data)
+  add(variant, "present", { ...data, ...extra[variant] }, true)
+}
 const mapping = variants.flatMap((name, index) =>
   name === undefined
     ? []

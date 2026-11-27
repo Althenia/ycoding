@@ -37,11 +37,11 @@ import { connectorRoles } from "./connector-source.js"
 import { descriptorSet } from "./descriptor-set.js"
 import { frontendBoundaryBaseline, frontendBoundaryBaselineFields } from "./frontend-boundary-baseline.js"
 
-test("platform slice exactly matches all 55 baseline and live endpoint declarations", async () => {
+test("platform slice exactly matches all 57 baseline and live endpoint declarations", async () => {
   const live = platformEndpoints().map(({ endpoint }) => endpoint.identifier)
-  expect(live).toHaveLength(55)
+  expect(live).toHaveLength(57)
   const manifest = await generateManifest(path.resolve(import.meta.dir, "../../.."))
-  expect(manifest.counts).toEqual({ endpoint: 245, connector: 102, notice: 4 })
+  expect(manifest.counts).toEqual({ endpoint: 230, connector: 105, notice: 4 })
   expect(manifest.members.filter((member) => member.kind === "endpoint").map((member) => member.name)).toEqual(
     expect.arrayContaining(["decision.list", "dots.attach", "integration.accountSkills.read"]),
   )
@@ -55,8 +55,8 @@ test("platform slice exactly matches all 55 baseline and live endpoint declarati
   ).toEqual(["browser.connect", "pty.connect"])
   expect(Object.keys(platformExclusions).sort()).toEqual(["browser.connect", "pty.connect"])
   expect(baseline.find((member) => member.name === "fs.read")?.disposition).toBe("STREAM")
-  const actual = operations.filter((operation) => operation.operationId >= 3000 && operation.operationId <= 3052)
-  expect(actual).toHaveLength(53)
+  const actual = operations.filter((operation) => operation.operationId >= 3000 && (operation.operationId <= 3052 || (operation.operationId >= 3056 && operation.operationId <= 3057)))
+  expect(actual).toHaveLength(55)
   expect(actual.map((operation) => operation.diagnosticName).sort()).toEqual(
     platformRpcEndpoints()
       .map(({ endpoint }) => endpoint.identifier)
@@ -65,7 +65,7 @@ test("platform slice exactly matches all 55 baseline and live endpoint declarati
   expect(actual.map((operation) => operation.operationId)).toEqual(Object.values(platformIDs))
   expect(
     new Set([...actual.map((operation) => operation.diagnosticName), ...Object.keys(platformExclusions)]).size,
-  ).toBe(55)
+  ).toBe(57)
 })
 
 test("every platform field, presence, enum and typed error matches the live Effect contract", async () => {

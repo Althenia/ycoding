@@ -1,212 +1,545 @@
-use serde_json::{Value, json};
-use std::{env, fs, path::PathBuf, time::Instant};
-use ycoding_core::resources::memory::{Limits, Options, Scope, Search, Service};
-use ycoding_core::session::skill::triggered;
-use ycoding_schema::{JsonValue, parse_json};
-
+#[path = "recall/corpus.rs"]
+mod corpus;
+#[path = "recall/metrics.rs"]
+mod metrics;
 #[path = "../tests/policy_fixture.rs"]
 mod policy_fixture;
+
+use corpus::{Corpus, Query as Labelled};
+use serde_json::{Value, json};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use ycoding_core::resources::recall::{
+    candidate::{Method, Query},
+    document::{Activation, Document, Fields, Kind, Lifecycle, Scope, Source},
+    hybrid::{Calibration, Retriever},
+    index::Entry,
+    semantic::{Config, Semantic, Status},
+};
 
 struct Scratch(PathBuf);
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).expect("remove synthetic corpus");
+        let _ = fs::remove_dir_all(&self.0);
     }
+}
+
+fn digest(text: &str) -> String {
+    ring::digest::digest(&ring::digest::SHA256, text.as_bytes())
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn documents(corpus: &Corpus) -> Vec<Document> {
+    let concepts = corpus.concepts.iter().map(|c| {
+        let hash = digest(&format!("{}{}{}{}", c.id, c.title, c.description, c.body));
+        (
+            Kind::Concept,
+            c.id.clone(),
+            Fields {
+                title: c.title.clone(),
+                description: c.description.clone(),
+                body: c.body.clone(),
+                tags: c.tags.clone(),
+                identifiers: c.identifiers.clone(),
+                ..Fields::default()
+            },
+            None,
+            hash,
+        )
+    });
+    let skills = corpus.skills.iter().map(|s| {
+        let hash = digest(&format!("{}{}{}", s.id, s.description, s.keywords));
+        (
+            Kind::Skill,
+            s.id.clone(),
+            Fields {
+                title: s.name.clone(),
+                description: s.description.clone(),
+                keywords: s.keywords.split(',').map(|k| k.trim().to_owned()).collect(),
+                ..Fields::default()
+            },
+            Some(if s.auto {
+                Activation::Auto
+            } else {
+                Activation::Manual
+            }),
+            hash,
+        )
+    });
+    concepts
+        .chain(skills)
+        .map(|(kind, id, fields, activation, hash)| Document {
+            source: Source {
+                path: format!("{id}.md"),
+                revision: "1".into(),
+                content_hash: hash,
+            },
+            id,
+            kind,
+            scope: Scope::Knowledge,
+            fields,
+            lifecycle: Lifecycle {
+                activation,
+                ..Lifecycle::default()
+            },
+        })
+        .collect()
+}
+
+fn manifest(docs: &[Document]) -> Vec<Entry> {
+    docs.iter()
+        .map(|d| Entry {
+            scope: d.scope,
+            kind: d.kind,
+            id: d.id.clone(),
+            hash: d.source.content_hash.clone(),
+        })
+        .collect()
+}
+
+fn sync(retriever: &Retriever, docs: &[Document]) -> u128 {
+    let started = Instant::now();
+    retriever
+        .sync(
+            &manifest(docs),
+            |entry| {
+                docs.iter()
+                    .find(|d| d.id == entry.id && d.kind == entry.kind)
+                    .cloned()
+            },
+            Instant::now() + Duration::from_secs(600),
+        )
+        .unwrap();
+    started.elapsed().as_micros()
+}
+
+fn query_for(item: &Labelled, limit: usize) -> Query {
+    Query {
+        text: item.text.clone(),
+        kinds: vec![if item.skill {
+            Kind::Skill
+        } else {
+            Kind::Concept
+        }],
+        implicit: item.skill,
+        limit,
+        ..Query::default()
+    }
+}
+
+fn ids(retriever: &Retriever, item: &Labelled) -> Vec<String> {
+    retriever
+        .search(&query_for(item, 10))
+        .candidates
+        .into_iter()
+        .map(|c| c.id)
+        .collect()
+}
+
+fn wait_ready(semantic: &Semantic, limit: Duration) -> bool {
+    let deadline = Instant::now() + limit;
+    while Instant::now() < deadline {
+        match semantic.status() {
+            Status::Ready => return true,
+            Status::Failed => return false,
+            _ => std::thread::sleep(Duration::from_millis(20)),
+        }
+    }
+    false
+}
+
+fn wait_embedded(semantic: &Semantic, limit: Duration) {
+    let deadline = Instant::now() + limit;
+    while semantic.pending() > 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn content_tokens(corpus: &Corpus, ids: &[String], skill: bool, take: usize) -> usize {
+    ids.iter()
+        .take(take)
+        .map(|id| {
+            if skill {
+                corpus
+                    .skills
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .map_or(0, |s| s.description.len() + s.name.len())
+            } else {
+                corpus
+                    .concepts
+                    .iter()
+                    .find(|c| &c.id == id)
+                    .map_or(0, |c| c.title.len() + c.body.len())
+            }
+        })
+        .sum::<usize>()
+        .div_ceil(4)
+}
+
+type Views = (Vec<String>, Vec<String>);
+
+struct Run<'a> {
+    corpus: &'a Corpus,
+    results: Vec<Views>,
+}
+
+impl Run<'_> {
+    fn report(&self) -> Value {
+        let rows = |pick: fn(&Views) -> &Vec<String>| {
+            metrics::summarize(
+                self.corpus
+                    .queries
+                    .iter()
+                    .zip(self.results.iter().map(pick)),
+            )
+        };
+        let (mut tokens, mut wasted) = (0, 0);
+        for (query, (_, auto)) in self.corpus.queries.iter().zip(&self.results) {
+            let used = content_tokens(self.corpus, auto, query.skill, 3);
+            let relevant: Vec<String> = auto
+                .iter()
+                .filter(|id| query.relevant.contains_key(*id))
+                .cloned()
+                .collect();
+            tokens += used;
+            wasted += used - content_tokens(self.corpus, &relevant, query.skill, 3).min(used);
+        }
+        json!({
+            "ranked": rows(|r| &r.0),
+            "auto": rows(|r| &r.1),
+            "injected_tokens": tokens,
+            "wasted_injected_tokens": wasted,
+        })
+    }
+}
+
+fn ranked_calibration() -> Calibration {
+    Calibration {
+        bm25_floor: 0.0,
+        cosine_floor: -1.0,
+        lexical_sufficient: f64::MAX,
+        ..Calibration::default()
+    }
+}
+
+fn passes(corpus: &Corpus, mut search: impl FnMut(&Labelled) -> Vec<String>) -> (Vec<u128>, u128) {
+    let mut samples = Vec::new();
+    let first = Instant::now();
+    for item in &corpus.queries {
+        search(item);
+    }
+    let cold = first.elapsed().as_micros();
+    for _ in 0..5 {
+        for item in &corpus.queries {
+            let started = Instant::now();
+            search(item);
+            samples.push(started.elapsed().as_micros());
+        }
+    }
+    samples.sort_unstable();
+    (samples, cold)
+}
+
+fn latency(samples: &[u128]) -> Value {
+    json!({"samples": samples.len(), "p50_us": metrics::percentile(samples, 50), "p95_us": metrics::percentile(samples, 95)})
+}
+
+fn semantic_for(root: &Path, models: &Path) -> Arc<Semantic> {
+    Semantic::new(Config::new(
+        models.to_owned(),
+        Some(root.join("vectors.bin")),
+    ))
+}
+
+fn dump(corpus: &Corpus, ranked: &Retriever) -> Value {
+    Value::Array(
+        corpus
+            .queries
+            .iter()
+            .map(|q| {
+                let result = ranked.search(&query_for(q, 50));
+                json!({
+                    "id": q.id, "skill": q.skill, "category": q.category, "holdout": q.holdout,
+                    "relevant": q.relevant, "terms": result.signals.query_terms,
+                    "matched": result.signals.matched_terms, "top_bm25": result.signals.top_bm25,
+                    "second_bm25": result.signals.second_bm25,
+                    "candidates": result.candidates.iter().map(|c| json!({
+                        "id": c.id, "method": c.method.as_str(),
+                        "bm25": c.score(Method::Bm25).map(|s| s.score),
+                        "cosine": c.score(Method::Semantic).map(|s| s.score),
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect(),
+    )
+}
+
+fn variant_bm25(corpus: &Corpus, root: &Path) -> Value {
+    let docs = documents(corpus);
+    let index = root.join("bm25");
+    let auto = Retriever::open(Some(index.clone()), None, Calibration::default());
+    let build_us = sync(&auto, &docs);
+    let ranked = Retriever::open(Some(index.clone()), None, ranked_calibration());
+    let reopen_us = sync(
+        &Retriever::open(Some(index.clone()), None, Calibration::default()),
+        &docs,
+    );
+    let results: Vec<_> = corpus
+        .queries
+        .iter()
+        .map(|q| (ids(&ranked, q), ids(&auto, q)))
+        .collect();
+    let (samples, cold) = passes(corpus, |q| ids(&auto, q));
+    json!({
+        "variant": "bm25", "index_build_us": build_us, "reopen_sync_us": reopen_us, "first_pass_us": cold,
+        "latency": latency(&samples), "index_disk_bytes": metrics::directory_bytes(&index),
+        "quality": Run { corpus, results }.report(), "dump": dump(corpus, &ranked),
+    })
+}
+
+fn dense(semantic: &Semantic, retriever: &Retriever, item: &Labelled, floor: f32) -> Vec<String> {
+    let Some(vector) = semantic.query_vector(&item.text) else {
+        return Vec::new();
+    };
+    let kind = if item.skill {
+        Kind::Skill
+    } else {
+        Kind::Concept
+    };
+    let metas = retriever.engine().metas();
+    let candidates = metas
+        .iter()
+        .filter(|(_, m)| m.kind == kind && !(item.skill && m.manual))
+        .map(|(k, m)| (k.as_str(), m.hash.as_str()));
+    semantic
+        .nearest(&vector, candidates, floor, 10)
+        .into_iter()
+        .filter_map(|(key, _)| {
+            metas
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, m)| m.id.clone())
+        })
+        .collect()
+}
+
+fn prepared_semantic(
+    corpus: &Corpus,
+    root: &Path,
+    models: &Path,
+) -> (Arc<Semantic>, Retriever, Value) {
+    let docs = documents(corpus);
+    let semantic = semantic_for(root, models);
+    let started = Instant::now();
+    semantic.warm();
+    let ready = wait_ready(&semantic, Duration::from_secs(900));
+    let load_ms = started.elapsed().as_millis();
+    assert!(ready, "embedding model unavailable");
+    let retriever = Retriever::open(
+        Some(root.join("hybrid")),
+        Some(semantic.clone()),
+        Calibration::default(),
+    );
+    let build_us = sync(&retriever, &docs);
+    let embed_started = Instant::now();
+    wait_embedded(&semantic, Duration::from_secs(900));
+    let embed_ms = embed_started.elapsed().as_millis();
+    let _ = semantic.cache().persist();
+    let mut query_us: Vec<u128> = corpus
+        .queries
+        .iter()
+        .map(|q| {
+            let t = Instant::now();
+            semantic.query_vector(&q.text).unwrap();
+            t.elapsed().as_micros()
+        })
+        .collect();
+    query_us.sort_unstable();
+    let info = json!({
+        "provision_and_load_ms": load_ms, "lexical_sync_us": build_us, "document_embedding_ms": embed_ms,
+        "documents_embedded": semantic.cache().len(), "vector_cache_bytes": fs::metadata(root.join("vectors.bin")).map_or(0, |m| m.len()),
+        "query_embedding": latency(&query_us),
+    });
+    (semantic, retriever, info)
+}
+
+fn variant_bge(corpus: &Corpus, root: &Path, models: &Path) -> Value {
+    let (semantic, retriever, overhead) = prepared_semantic(corpus, root, models);
+    let floor = Calibration::default().cosine_floor;
+    let results: Vec<_> = corpus
+        .queries
+        .iter()
+        .map(|q| {
+            (
+                dense(&semantic, &retriever, q, -1.0),
+                dense(&semantic, &retriever, q, floor),
+            )
+        })
+        .collect();
+    let (samples, cold) = passes(corpus, |q| dense(&semantic, &retriever, q, floor));
+    json!({"variant": "bge", "overhead": overhead, "first_pass_us": cold, "latency": latency(&samples),
+           "quality": Run { corpus, results }.report()})
+}
+
+fn variant_hybrid(corpus: &Corpus, root: &Path, models: &Path) -> Value {
+    let (semantic, auto, overhead) = prepared_semantic(corpus, root, models);
+    let ranked = Retriever::open(
+        Some(root.join("hybrid")),
+        Some(semantic.clone()),
+        Calibration {
+            bm25_floor: Calibration::default().bm25_floor,
+            ..ranked_calibration()
+        },
+    );
+    sync(&ranked, &documents(corpus));
+    let results: Vec<_> = corpus
+        .queries
+        .iter()
+        .map(|q| (ids(&ranked, q), ids(&auto, q)))
+        .collect();
+    let skipped = corpus
+        .queries
+        .iter()
+        .filter(|q| {
+            auto.search(&query_for(q, 10)).signals.semantic
+                == ycoding_core::resources::recall::candidate::Semantic::NotNeeded
+        })
+        .count();
+    let (samples, cold) = passes(corpus, |q| ids(&auto, q));
+    json!({"variant": "hybrid", "overhead": overhead, "queries_without_inference": [skipped, corpus.queries.len()],
+           "first_pass_us": cold, "latency": latency(&samples),
+           "index_disk_bytes": metrics::directory_bytes(&root.join("hybrid")),
+           "quality": Run { corpus, results }.report(), "dump": dump(corpus, &ranked)})
+}
+
+fn variant_scale(root: &Path, count: usize) -> Value {
+    let corpus = corpus::load();
+    let sentences: Vec<String> = corpus
+        .concepts
+        .iter()
+        .flat_map(|c| c.body.split(". ").map(str::to_owned).collect::<Vec<_>>())
+        .collect();
+    let mut seed = 0x2545F491u64;
+    let mut next = || {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (seed >> 33) as usize
+    };
+    let docs: Vec<Document> = (0..count)
+        .map(|i| {
+            let mut body = String::new();
+            while body.len() < 8_000 {
+                body.push_str(&sentences[next() % sentences.len()]);
+                body.push_str(". ");
+            }
+            let id = format!("scale/doc-{i:05}");
+            Document {
+                source: Source {
+                    path: format!("{id}.md"),
+                    revision: "1".into(),
+                    content_hash: digest(&body),
+                },
+                id,
+                kind: Kind::Concept,
+                scope: Scope::Knowledge,
+                fields: Fields {
+                    title: format!("note {i}"),
+                    body,
+                    ..Fields::default()
+                },
+                lifecycle: Lifecycle::default(),
+            }
+        })
+        .collect();
+    let index = root.join("scale");
+    let retriever = Retriever::open(Some(index.clone()), None, Calibration::default());
+    let build_us = sync(&retriever, &docs);
+    let disk = metrics::directory_bytes(&index);
+    let queries: Vec<String> = (0..100)
+        .map(|_| {
+            let s = &sentences[next() % sentences.len()];
+            s.split_whitespace().take(5).collect::<Vec<_>>().join(" ")
+        })
+        .collect();
+    let mut samples: Vec<u128> = queries
+        .iter()
+        .map(|q| {
+            let t = Instant::now();
+            retriever.search(&Query {
+                text: q.clone(),
+                limit: 5,
+                ..Query::default()
+            });
+            t.elapsed().as_micros()
+        })
+        .collect();
+    samples.sort_unstable();
+    let mut changed = docs.clone();
+    changed[0].fields.body.push_str(" additional note");
+    changed[0].source.content_hash = digest(&changed[0].fields.body);
+    let update_us = sync(&retriever, &changed);
+    let reopened = Retriever::open(Some(index), None, Calibration::default());
+    let reopen_us = sync(&reopened, &changed);
+    json!({"variant": "scale", "documents": count, "input_bytes": docs.iter().map(|d| d.fields.body.len()).sum::<usize>(),
+           "index_build_us": build_us, "index_disk_bytes": disk, "query_latency": latency(&samples),
+           "single_document_update_us": update_us, "cold_reopen_sync_us": reopen_us})
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let parent = env::args_os()
-        .skip(1)
-        .find(|arg| arg != "--bench")
-        .expect("supply a private scratch directory");
-    let path = fs::canonicalize(parent)
-        .unwrap()
-        .join(format!("cue-recall-bench-{}", std::process::id()));
-    fs::create_dir(&path).expect("create a fresh fixture directory");
-    let root = Scratch(path);
-    let store = Service::new(Options {
-        directory: root.0.clone(),
-        data: root.0.clone(),
-        home: root.0.clone(),
-        repository: None,
-        limits: Limits::default(),
-    })
-    .unwrap();
-    let corpus: Value = serde_json::from_str(include_str!("cue-recall-corpus.json")).unwrap();
-    let setup = Instant::now();
-    for concept in corpus["concepts"].as_array().unwrap() {
-        store
-            .write(
-                Scope::Knowledge,
-                concept["id"].as_str().unwrap(),
-                &format!(
-                    "---\ntype: Reference\ntitle: {}\ntags: {}\n---\n{}\n",
-                    concept["title"],
-                    concept["tags"],
-                    concept["body"].as_str().unwrap()
-                ),
-                None,
-            )
-            .await
-            .unwrap();
-    }
-    let setup_us = setup.elapsed().as_micros();
-    let queries: Vec<_> = corpus["queries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|query| query["split"] == "holdout")
-        .collect();
-    let mut latency = Vec::new();
-    let mut recall = 0;
-    let mut relevant = 0;
-    let mut answered = 0;
-    let mut first_us = None;
-    let mut query_bytes = 0;
-    let mut returned_content_bytes = 0;
-    let mut query_results = Vec::new();
-    for pass in 0..4 {
-        for query in &queries {
-            let start = Instant::now();
-            let hits = store
-                .search(
-                    Scope::Knowledge,
-                    Search {
-                        query: query["query"].as_str().unwrap(),
-                        limit: Some(5),
-                        type_: None,
-                        tag: None,
-                    },
-                )
-                .unwrap()
-                .hits;
-            let elapsed = start.elapsed().as_micros();
-            first_us.get_or_insert(elapsed);
-            if pass != 0 {
-                latency.push(elapsed);
-                continue;
-            }
-            query_bytes += query["query"].as_str().unwrap().len();
-            let mut first_content = None;
-            for hit in &hits {
-                let content = store
-                    .read(Scope::Knowledge, &hit.summary.id)
-                    .unwrap()
-                    .content;
-                returned_content_bytes += content.len();
-                if first_content.is_none() {
-                    first_content = Some(content);
-                }
-            }
-            for id in query["relevant"].as_array().unwrap() {
-                relevant += 1;
-                recall += usize::from(hits.iter().any(|hit| id == &hit.summary.id));
-            }
-            let answer = first_content.as_ref().map(|content| {
-                content
-                    .split_once("Diagnostic code: ")
-                    .unwrap()
-                    .1
-                    .trim_end()
-                    .trim_end_matches('.')
-                    .to_owned()
-            });
-            answered += usize::from(answer.as_deref() == query["answer"].as_str());
-            query_results.push(json!({"query":query["query"],"expected":query["answer"],"observed":answer,"latency_us":elapsed,"hits":hits.iter().map(|hit| &hit.summary.id).collect::<Vec<_>>() }));
-        }
-    }
-    let index_bytes = directory_bytes(&root.0.join("recall/index"));
-    let before = store.read(Scope::Knowledge, "build/linker").unwrap();
-    let update = Instant::now();
-    store
-        .write(
-            Scope::Knowledge,
-            "build/linker",
-            &format!("{}\nAdditional synthetic note.\n", before.content),
-            Some(&before.digest),
-        )
-        .await
-        .unwrap();
-    let write_update_us = update.elapsed().as_micros();
-    let update_index = Instant::now();
-    store
-        .search(
-            Scope::Knowledge,
-            Search {
-                query: "build/linker",
-                limit: Some(5),
-                type_: None,
-                tag: None,
-            },
-        )
-        .unwrap();
-    let update_search_us = update_index.elapsed().as_micros();
-    let index_bytes_after = directory_bytes(&root.0.join("recall/index"));
-    let prefix = prefix_metrics(&root.0).await;
-    let fixtures = [
-        (
-            r#"{"activation":"auto","commands":"cargo check"}"#,
-            vec!["cargo", "check"],
-            true,
-        ),
-        (
-            r#"{"activation":"auto","commands":"cargo check"}"#,
-            vec!["cargo", "checker"],
-            false,
-        ),
-        (
-            r#"{"activation":"manual","commands":"cargo check"}"#,
-            vec!["cargo", "check"],
-            false,
-        ),
-        (
-            r#"{"activation":"auto","commands":"cargo check"}"#,
-            vec!["cargo", "check", "--workspace"],
-            true,
-        ),
-    ];
-    let mut skill_selected = 0;
-    let mut skill_correct = 0;
-    let mut skill_negative = 0;
-    let mut skill_abstain = 0;
-    for (metadata, argv, expected) in fixtures {
-        let JsonValue::Object(metadata) = parse_json(metadata).unwrap() else {
-            panic!()
-        };
-        let argv: Vec<String> = argv.into_iter().map(str::to_owned).collect();
-        let selected = triggered(&metadata, "command.invoked", Some(&argv));
-        skill_selected += usize::from(selected);
-        skill_correct += usize::from(selected && expected);
-        skill_negative += usize::from(!expected);
-        skill_abstain += usize::from(!selected && !expected);
-    }
-    latency.sort_unstable();
-    println!(
-        "{}",
-        json!({
-            "corpus_version": corpus["version"], "queries": queries.len(), "recall_at_5": [recall, relevant],
-            "diagnostic_answer_correct": [answered, queries.len()], "write_setup_us": setup_us, "first_query_us": first_us,
-            "warm_samples": latency.len(), "warm_p50_us": latency[latency.len().div_ceil(2)-1],
-            "warm_p95_us": latency[(latency.len()*95).div_ceil(100)-1],
-            "query_utf8_bytes":query_bytes,"retrieved_content_utf8_bytes":returned_content_bytes,
-            "query_results":query_results,"persistent_index_bytes":index_bytes,"persistent_index_bytes_after_update":index_bytes_after,
-            "source_update_us":write_update_us,"post_update_search_us":update_search_us,
-            "native_skill_command_cue_precision":[skill_correct,skill_selected],"native_skill_negative_abstention":[skill_abstain,skill_negative],
-            "request_prefix":prefix
-        })
+    let args: Vec<String> = env::args().skip(1).filter(|a| a != "--bench").collect();
+    let flag = |name: &str| {
+        args.iter()
+            .position(|a| a == name)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+    };
+    let parent = flag("--scratch").expect("--scratch <dir>");
+    let variant = flag("--variant").expect("--variant bm25|bge|hybrid|scale|prefix");
+    let root = Scratch(
+        fs::canonicalize(parent)
+            .unwrap()
+            .join(format!("cue-recall-{variant}-{}", std::process::id())),
     );
+    fs::create_dir_all(&root.0).unwrap();
+    let models = flag("--models").map(PathBuf::from);
+    let corpus = corpus::load();
+    let mut report = match variant.as_str() {
+        "bm25" => variant_bm25(&corpus, &root.0),
+        "bge" => variant_bge(&corpus, &root.0, models.as_deref().expect("--models <dir>")),
+        "hybrid" => variant_hybrid(&corpus, &root.0, models.as_deref().expect("--models <dir>")),
+        "scale" => variant_scale(
+            &root.0,
+            flag("--documents").map_or(1000, |n| n.parse().unwrap()),
+        ),
+        "prefix" => prefix_metrics(&root.0).await,
+        other => panic!("unknown variant {other}"),
+    };
+    let usage = metrics::usage();
+    report["process"] = json!({"cpu_ms": usage.cpu_ms, "peak_rss_bytes": usage.peak_rss_bytes});
+    println!("{}", serde_json::to_string_pretty(&report).unwrap());
 }
 
 async fn prefix_metrics(root: &std::path::Path) -> Value {
     use std::sync::Arc;
     use ycoding_ai::{llm, openai_chat, route::Route};
     use ycoding_core::{
-        resources::memory::Repository,
+        resources::memory::{Limits, Options, Repository, Scope, Service},
         session::{compaction_gate, recall::Context},
     };
-    use ycoding_schema::{DomainDecode, permission, provider, session_message, stringify_json};
+    use ycoding_schema::{
+        DomainDecode, parse_json, permission, provider, session_message, stringify_json,
+    };
 
     let repo = root.join("prefix-repository");
     let git = repo.join(".git");
@@ -231,6 +564,7 @@ async fn prefix_metrics(root: &std::path::Path) -> Value {
             "fixture/cobalt",
             "---\ntype: Decision\n---\ncobalt canary details.\n",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -240,6 +574,7 @@ async fn prefix_metrics(root: &std::path::Path) -> Value {
             "fixture/amber",
             "---\ntype: Decision\n---\namber heron details.\n",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -287,22 +622,4 @@ async fn prefix_metrics(root: &std::path::Path) -> Value {
     assert_eq!(wires[0], wires[1]);
     assert_ne!(wires[0], wires[2]);
     json!({"wire_bytes":wires.iter().map(String::len).collect::<Vec<_>>(),"identical_equal":wires[0] == wires[1],"identical_common_prefix_bytes":shared(&wires[0],&wires[1]),"changed_suffix_common_prefix_bytes":shared(&wires[0],&wires[2]),"changed_suffix_distinct":wires[0] != wires[2],"added_messages":added,"estimated_input_tokens":estimates})
-}
-
-fn directory_bytes(path: &std::path::Path) -> u64 {
-    match fs::read_dir(path) {
-        Ok(entries) => entries
-            .map(|entry| {
-                let entry = entry.unwrap();
-                let metadata = entry.metadata().unwrap();
-                if metadata.is_dir() {
-                    directory_bytes(&entry.path())
-                } else {
-                    metadata.len()
-                }
-            })
-            .sum(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
-        Err(error) => panic!("read index size: {error}"),
-    }
 }

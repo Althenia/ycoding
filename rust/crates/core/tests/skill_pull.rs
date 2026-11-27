@@ -190,7 +190,7 @@ async fn skill_service_memoizes_only_url_pull_and_rereads_downloaded_files() {
         r#"{"skills":[{"name":"deploy","files":["SKILL.md"]}]}"#,
         &[(
             "/catalog/deploy/SKILL.md",
-            "---\ndescription: First\n---\nBody",
+            "---\nname: deploy\ndescription: First\n---\nBody",
         )],
     )
     .await;
@@ -203,7 +203,7 @@ async fn skill_service_memoizes_only_url_pull_and_rereads_downloaded_files() {
     let first = service.list().await.unwrap();
     assert_eq!(first[0].description, Some("First".into()));
     let file = first[0].location.as_lossless().as_str().unwrap();
-    fs::write(file, "---\ndescription: Edited\n---\nNew").unwrap();
+    fs::write(file, "---\nname: deploy\ndescription: Edited\n---\nNew").unwrap();
     assert_eq!(
         service.list().await.unwrap()[0].description,
         Some("Edited".into())

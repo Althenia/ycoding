@@ -25,7 +25,7 @@ const http: RemoteHttp = {
   removeRevokedDevices: async () => ({ ok: true, value: undefined }),
   logout: async () => ({ ok: true, value: undefined }),
 }
-const store = createRemoteStore({ http, createTransport: (_id, handlers) => createRemoteTransport({ url: relay.href, handlers }) })
+const store = createRemoteStore({ http, createTransport: (_id, handlers, fence) => createRemoteTransport({ ...fence, url: relay.href, handlers }) })
 Object.assign(window, { guardrailStore: store })
 function Fixture() {
   const remote = useRemote()

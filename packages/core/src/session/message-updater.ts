@@ -287,6 +287,14 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
       "session.guardrail.decided": () => Effect.void,
       "session.decision.audited": () => Effect.void,
       "session.permission.assessed": () => Effect.void,
+      "session.cue.detected": () => Effect.void,
+      "session.recall.recorded": () => Effect.void,
+      "session.lifecycle.recorded": () => Effect.void,
+      "session.harness.evaluated": () => Effect.void,
+      "session.harness.probed": () => Effect.void,
+      "session.harness.adopted": () => Effect.void,
+      "session.harness.rolled-back": () => Effect.void,
+      "session.harness.reflected": () => Effect.void,
       "session.review.deferred": () => Effect.void,
       "session.review.decided": () => Effect.void,
       "session.review.withdrawn": (event) => adapter.appendMessage(SessionMessage.System.make({
@@ -311,7 +319,6 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
             type: "agent-switched",
             metadata: event.metadata,
             agent: event.data.agent,
-            artifact: event.data.artifact,
             time: { created: event.created },
           }),
         )
@@ -332,21 +339,6 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
         })
       },
       "session.daybreak.set": () => Effect.void,
-      "session.project-artifacts-ended": (event) =>
-        adapter.appendMessage(
-          SessionMessage.Synthetic.make({
-            id: SessionMessage.ID.fromEvent(event.id),
-            type: "synthetic",
-            text: "",
-            metadata: {
-              projectArtifactsEnded: {
-                oldProjectID: event.data.oldProjectID,
-                newProjectID: event.data.newProjectID,
-              },
-            },
-            time: { created: event.created },
-          }),
-        ),
       "session.moved": () => Effect.void,
       "session.renamed": () => Effect.void,
       "session.deleted": () => Effect.void,
@@ -422,7 +414,6 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
             text: event.data.text,
             directory: event.data.directory,
             conflicts: event.data.conflicts ?? { skills: [], instructions: [] },
-            artifact: event.data.artifact,
             metadata: event.metadata,
             time: { created: event.created },
           }),

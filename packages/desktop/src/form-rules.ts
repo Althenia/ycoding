@@ -469,7 +469,6 @@ export function isDotSteerSynthetic(message: SyntheticSteerInput): boolean {
     metadata.review !== undefined ||
     metadata.instruction !== undefined ||
     metadata.compactionCheckpoint !== undefined ||
-    metadata.projectArtifactsEnded !== undefined ||
     metadata.decisionInputID !== undefined
   )) return false
   const stripped = stripSteerTransportMarkup(message.text)
@@ -648,7 +647,6 @@ const builtInSlashCommands = [
   { name: "processes", description: "Manage Session shells and subagents" },
   { name: "background", description: "Run the current Session in the background" },
   { name: "browser", aliases: ["chrome"], description: "Open the browser panel" },
-  { name: "artifacts", description: "Browse artifacts" },
   { name: "plugins", description: "Manage plugins" },
   { name: "pair", description: "Pair another device" },
   { name: "remote", description: "Manage remote access" },

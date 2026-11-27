@@ -22,8 +22,6 @@ import { EventTable } from "../../event/sql"
 import { Permission } from "../../permission"
 import { Skill } from "../../skill"
 import { FSUtil } from "../../fs-util"
-import { ProjectArtifactAccounting } from "../../project-artifact/accounting"
-import { ProjectArtifactSource } from "../../project-artifact/source"
 import { SessionSkill } from "../skill"
 import { ToolOutputStore } from "../../tool-output-store"
 import { ConfigGoal } from "../../config/goal"
@@ -149,8 +147,6 @@ const boundSource = Effect.gen(function* () {
       skills: yield* Skill.Service,
       fs: yield* FSUtil.Service,
       permission: yield* Permission.Service,
-      accounting: yield* ProjectArtifactAccounting.Service,
-      artifactSource: yield* ProjectArtifactSource.Service,
       integrations: yield* Integration.Service,
     },
   }
@@ -247,13 +243,7 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
       yield* Effect.forEach(
         resolved,
         (skill) =>
-          Effect.gen(function* () {
-            const provenance = yield* host.artifactSource.provenance("skill", skill.id)
-            yield* SessionSkill.activate(
-              { events, store, accounting: host.accounting, fs: host.fs },
-              { session: selected.session, skill, provenance },
-            ).pipe(Effect.orDie)
-          }),
+          SessionSkill.activate({ events, store, fs: host.fs }, { session: selected.session, skill }).pipe(Effect.orDie),
         { discard: true },
       )
     })
@@ -1633,8 +1623,6 @@ export const node = makeLocationNode({
     Skill.node,
     FSUtil.node,
     Permission.node,
-    ProjectArtifactAccounting.node,
-    ProjectArtifactSource.node,
     Integration.node,
     SessionAutonomy.node,
   ],

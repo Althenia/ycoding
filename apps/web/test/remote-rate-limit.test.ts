@@ -4,6 +4,7 @@ import { createRelay } from "../../../infra/cloudflare/src/relay/core"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
+import { noResend } from "./transport-fence"
 import { loadWorkspaces } from "./remote-queries"
 import { waitFor } from "./relay-double"
 import { createRemoteStoreClock } from "./remote-store-clock"
@@ -144,7 +145,7 @@ describe("remote request budget integration", () => {
     const fixture = await harness(100, status.promise)
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: `http://127.0.0.1:${fixture.server.port}` }),
-      createTransport: (_deviceID, handlers) => createRemoteTransport({ url: `ws://127.0.0.1:${fixture.server.port}`, handlers }),
+      createTransport: (_deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: `ws://127.0.0.1:${fixture.server.port}`, handlers }),
     })
     try {
       await store.load()
@@ -169,7 +170,7 @@ describe("remote request budget integration", () => {
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: `http://127.0.0.1:${fixture.server.port}` }),
       createTransport: (_deviceID, handlers) => {
-        const transport = createRemoteTransport({ url: `ws://127.0.0.1:${fixture.server.port}`, handlers })
+        const transport = createRemoteTransport({ ...noResend, url: `ws://127.0.0.1:${fixture.server.port}`, handlers })
         return { ...transport, request: (operation, input) => operation === "session.status"
           ? Promise.reject(new Error("Synthetic status transport failure token=secret")) : transport.request(operation, input) }
       },
@@ -189,7 +190,7 @@ describe("remote request budget integration", () => {
     const fixture = await harness(10, status.promise)
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: `http://127.0.0.1:${fixture.server.port}` }),
-      createTransport: (_deviceID, handlers) => createRemoteTransport({
+      createTransport: (_deviceID, handlers, fence) => createRemoteTransport({ ...fence,
         url: `ws://127.0.0.1:${fixture.server.port}`, handlers, resetDelayMs: 10, random: () => 0.5,
       }),
     })
@@ -213,7 +214,7 @@ describe("remote request budget integration", () => {
     const clock = createRemoteStoreClock()
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: `http://127.0.0.1:${fixture.server.port}` }),
-      createTransport: (_deviceID, handlers) => createRemoteTransport({
+      createTransport: (_deviceID, handlers, fence) => createRemoteTransport({ ...fence,
         url: `ws://127.0.0.1:${fixture.server.port}`,
         handlers,
         resetDelayMs: 10,
@@ -240,7 +241,7 @@ describe("remote request budget integration", () => {
     const fixture = await harness(200)
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: `http://127.0.0.1:${fixture.server.port}` }),
-      createTransport: (_deviceID, handlers) => createRemoteTransport({ url: `ws://127.0.0.1:${fixture.server.port}`, handlers }),
+      createTransport: (_deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: `ws://127.0.0.1:${fixture.server.port}`, handlers }),
     })
     try {
       await store.load()
@@ -269,7 +270,7 @@ describe("remote request budget integration", () => {
     const fixture = await harness(count)
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: `http://127.0.0.1:${fixture.server.port}` }),
-      createTransport: (_deviceID, handlers) => createRemoteTransport({
+      createTransport: (_deviceID, handlers, fence) => createRemoteTransport({ ...fence,
         url: `ws://127.0.0.1:${fixture.server.port}`,
         handlers,
       }),
@@ -316,7 +317,7 @@ describe("remote request budget integration", () => {
   test("bounds delayed requests, cancels unsent mutations on a drop, and never replays them", async () => {
     const pacedBudget = RemoteLimits.maxClientRequestsPerWindow - 3
     const fixture = await harness(0)
-    const transport = createRemoteTransport({
+    const transport = createRemoteTransport({ ...noResend,
       url: `ws://127.0.0.1:${fixture.server.port}`,
       resetDelayMs: 10,
       random: () => 1,
@@ -346,7 +347,7 @@ describe("remote request budget integration", () => {
       expect(fixture.requests).toHaveLength(pacedBudget - 1)
       fixture.drop()
       expect((await sent).status).toBe("unknown")
-      expect(await Promise.all(delayed)).toEqual(Array.from({ length: 31 }, () => ({ status: "unavailable", reason: "not-connected" })))
+      expect(await Promise.all(delayed)).toEqual(Array.from({ length: 31 }, () => ({ status: "unavailable", reason: "connection-changed" })))
       await waitFor(() => transport.status().kind === "open")
       expect((await transport.request("session.active")).status).toBe("ok")
       expect(fixture.requests.filter((request) => request.operation === "session.prompt")).toEqual([])

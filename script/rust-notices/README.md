@@ -33,7 +33,9 @@ Generation fails on any of these conditions:
   packaged license text, or fails its digest or marker check.
 - The DuckDB archive's `third_party` directories differ from `native.duckdb.licenses`, or the SQLite source lacks its
   public-domain dedication.
-- A repository-owned license file listed in `embedded` or the models.dev license digest is missing or changed.
+- `ort-sys` is in the closure without matching `native.onnxruntime` evidence (crate, version), or its
+  `build/download/dist.tsv` points at a runtime version other than the pinned one.
+- A repository-owned license file listed in `embedded`, the models.dev license digest, or the embedding model license digest is missing or changed.
 
 ## Data (`sources.json`, `texts/`)
 
@@ -45,9 +47,10 @@ Generation fails on any of these conditions:
 | `elections` | Owner-approved election of one offered license for a crate version whose package and upstream publish no text. The canonical Apache-2.0 text is pinned by SHA-256; the package must still contain the stated grant. `caveats` records unresolved upstream matters and is printed with the election. |
 | `corrections` | Owner-approved evidence that a crate version's declared SPDX metadata is wrong, pinned to the declared value. |
 | `headers` | Source-header notices reproduced from a crate file between two marker strings. |
-| `native` | DuckDB `third_party` licenses and the SQLite dedication. |
+| `native` | DuckDB `third_party` licenses, the SQLite dedication, and the license and third-party notices of the statically linked ONNX Runtime. |
 | `embedded` | License files kept in this repository for ported code. |
 | `models` | License of the bundled models.dev snapshot. |
+| `embeddingModel` | License of the BGE embedding model that retrieval downloads on request. |
 
 Entries exist only for evidence that was read and hashed. When a crate version changes, the pinned entries fail
 until their evidence is re-read; update `sources.json` and `texts/` together with the version, then regenerate.

@@ -34,7 +34,7 @@ Within one custom source layer, matching rules sort by descending numeric priori
 
 ## Mediation Scope
 
-Guardrails mediate direct Session shell, tool shell, edit, write, patch, subagent launch, mutation-capable MCP tools, and project-artifact mutation at the side-effect boundary.[^runtime-doc]
+Guardrails mediate direct Session shell, tool shell, edit, write, patch, subagent launch, and mutation-capable MCP tools at the side-effect boundary.[^runtime-doc]
 
 Recognized catastrophic shell commands are denied before process creation, while recognized high-impact shell and mutation actions create a distinct human review.[^runtime-doc]
 

@@ -1,3 +1,4 @@
+pub(crate) mod artifact_removal;
 mod decimal;
 
 use crate::{
@@ -32,6 +33,7 @@ pub enum Predecessor {
     BeforeSessionScope,
     BeforeUsageDecimal,
     BeforeNonnegativeUsageCost,
+    BeforeArtifactRemoval,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -301,8 +303,11 @@ impl Predecessor {
         if manifest == native::catalog(DatabaseKind::Core).manifest() {
             return Some(Self::BeforeNonnegativeUsageCost);
         }
-        if manifest == Catalog::new(4, native::catalog(DatabaseKind::Core).tables()).manifest() {
+        if manifest == Catalog::new(4, with_artifacts()).manifest() {
             return Some(Self::BeforeUsageDecimal);
+        }
+        if manifest == Catalog::new(5, with_artifacts()).manifest() {
+            return Some(Self::BeforeArtifactRemoval);
         }
         let mut digest = Digest::new();
         digest.update(manifest);
@@ -327,6 +332,7 @@ impl Predecessor {
         static BEFORE_USAGE_DECIMAL_TABLES: OnceLock<Vec<TableDeclaration>> = OnceLock::new();
         static BEFORE_NONNEGATIVE_USAGE_COST_TABLES: OnceLock<Vec<TableDeclaration>> =
             OnceLock::new();
+        static BEFORE_ARTIFACT_REMOVAL_TABLES: OnceLock<Vec<TableDeclaration>> = OnceLock::new();
         const MCP_EVENTS: &[&str] = &["mcp_event_subscription", "mcp_event_outbox"];
         const INCIDENTS: &[&str] = &[
             "model_incident",
@@ -352,7 +358,9 @@ impl Predecessor {
             Self::BeforeNonnegativeUsageCost => {
                 (&BEFORE_NONNEGATIVE_USAGE_COST_TABLES, &[] as &[&str], 5)
             }
+            Self::BeforeArtifactRemoval => (&BEFORE_ARTIFACT_REMOVAL_TABLES, &[] as &[&str], 5),
         };
+        let artifacts = self != Self::BeforeNonnegativeUsageCost;
         let catalog = Catalog::new(
             version,
             tables.get_or_init(|| {
@@ -360,6 +368,15 @@ impl Predecessor {
                     .tables()
                     .iter()
                     .copied()
+                    .chain(
+                        if artifacts {
+                            artifact_removal::TABLES
+                        } else {
+                            &[]
+                        }
+                        .iter()
+                        .copied(),
+                    )
                     .filter(|table| {
                         !removed.contains(&table.name)
                             && (version >= 2 || !ADDED_SINCE_USAGE.contains(&table.name))
@@ -377,7 +394,12 @@ impl Predecessor {
 
     fn converter(self, table: &str) -> Option<Convert> {
         match (self, table) {
-            (Self::BeforeUsageDecimal | Self::BeforeNonnegativeUsageCost, _) => None,
+            (
+                Self::BeforeUsageDecimal
+                | Self::BeforeNonnegativeUsageCost
+                | Self::BeforeArtifactRemoval,
+                _,
+            ) => None,
             (Self::BeforeAnalytics, "session") => Some(session),
             (Self::BeforeAnalytics, "session_task") => Some(task),
             (Self::BeforeAnalytics, "session_compaction_job") => Some(job),
@@ -391,9 +413,24 @@ impl Predecessor {
     fn backfills_origins(self) -> bool {
         !matches!(
             self,
-            Self::BeforeSessionScope | Self::BeforeUsageDecimal | Self::BeforeNonnegativeUsageCost
+            Self::BeforeSessionScope
+                | Self::BeforeUsageDecimal
+                | Self::BeforeNonnegativeUsageCost
+                | Self::BeforeArtifactRemoval
         )
     }
+}
+
+fn with_artifacts() -> &'static [TableDeclaration] {
+    static TABLES: OnceLock<Vec<TableDeclaration>> = OnceLock::new();
+    TABLES.get_or_init(|| {
+        native::catalog(DatabaseKind::Core)
+            .tables()
+            .iter()
+            .chain(artifact_removal::TABLES)
+            .copied()
+            .collect()
+    })
 }
 
 fn migrate(
@@ -401,7 +438,8 @@ fn migrate(
     predecessor: Predecessor,
     decimals: Option<decimal::Plan>,
 ) -> Result<(), Error> {
-    let previous = predecessor.catalog()?.names();
+    let catalog = predecessor.catalog()?;
+    let previous = catalog.names();
     let target = native::catalog(DatabaseKind::Core);
     let mut write = database.begin_write()?;
     write.set_durability(Durability::Immediate)?;
@@ -416,6 +454,7 @@ fn migrate(
             rewrite(&write, name, convert)?;
         }
     }
+    artifact_removal::apply(&write, catalog)?;
     if predecessor.backfills_origins() {
         backfill_origins(&write)?;
     }
@@ -691,8 +730,11 @@ fn migrated_rows(
     predecessor: Predecessor,
     budget: &mut decimal::Budget,
 ) -> Result<(), Error> {
-    let previous = predecessor.catalog()?.names();
+    let catalog = predecessor.catalog()?;
+    let previous = catalog.names();
     let mapped = executors(&original.open_table(definition(KvTable::NAME))?)?;
+    let scrub = artifact_removal::Expected::new(original, catalog)?;
+    scrub.removed(upgraded, catalog)?;
     for name in native::catalog(DatabaseKind::Core).names() {
         if decimal::changed(name) && previous.contains(&name) {
             continue;
@@ -714,21 +756,28 @@ fn migrated_rows(
         let mut source = source.iter()?;
         let convert = predecessor.converter(name);
         loop {
-            match (source.next().transpose()?, rows.next().transpose()?) {
+            let mut next = None;
+            while let Some((key, value)) = source.next().transpose()? {
+                if let Some(value) = scrub.row(name, value.value())? {
+                    next = Some((key.value().to_vec(), value));
+                    break;
+                }
+            }
+            match (next, rows.next().transpose()?) {
                 (None, None) => break,
                 (Some((key, value)), Some((upgraded_key, upgraded_value)))
-                    if key.value() == upgraded_key.value() =>
+                    if key == upgraded_key.value() =>
                 {
                     let mut expected = match convert {
-                        Some(convert) => convert(value.value())?,
-                        None => value.value().to_vec(),
+                        Some(convert) => convert(&value)?,
+                        None => value,
                     };
                     if name == SessionTable::NAME && predecessor.backfills_origins() {
                         expected = tagged(&expected, &mapped)?;
                     }
                     let same = expected == upgraded_value.value()
                         || (name == "storage_metadata"
-                            && [MANIFEST, b"catalog_version"].contains(&key.value()));
+                            && [MANIFEST, b"catalog_version"].contains(&key.as_slice()));
                     if !same {
                         return Err(mismatch());
                     }
@@ -740,7 +789,7 @@ fn migrated_rows(
     if !previous.contains(FACTS) {
         backfilled_rows(original, upgraded)?;
     }
-    decimal::verify(original, upgraded, predecessor.catalog()?, budget)?;
+    decimal::verify(original, upgraded, catalog, budget)?;
     Ok(())
 }
 
@@ -908,6 +957,7 @@ mod mcp_events_tests {
                 target()
                     .tables()
                     .iter()
+                    .chain(super::artifact_removal::TABLES)
                     .copied()
                     .filter(|table| {
                         !ADDED.contains(&table.name)
@@ -1124,7 +1174,17 @@ mod mcp_events_tests {
         );
         assert_eq!(rows(&backup::upgrade_path(&path)), before);
         let after = rows(&path);
+        let removed = super::artifact_removal::TABLES
+            .iter()
+            .flat_map(|table| {
+                std::iter::once(table.name).chain(table.indexes.iter().map(|index| index.name))
+            })
+            .collect::<Vec<_>>();
         for (name, records) in &before {
+            if removed.contains(&name.as_str()) {
+                assert!(!after.contains_key(name), "{name}");
+                continue;
+            }
             if name == "storage_metadata" {
                 assert_eq!(
                     records
@@ -1160,7 +1220,7 @@ mod mcp_events_tests {
             .copied()
             .chain(added_since_usage())
             .collect::<Vec<_>>();
-        assert_eq!(after.len(), before.len() + added.len());
+        assert_eq!(after.len(), before.len() + added.len() - removed.len());
         for name in added {
             assert!(after[name].is_empty(), "{name}");
         }

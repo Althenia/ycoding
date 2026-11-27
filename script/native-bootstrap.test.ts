@@ -211,14 +211,19 @@ test("source verification selects native wire and autonomy contracts", () => {
 
 test("native contract runtime is built and verified before test feature unification", () => {
   const workflow = Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8")) as {
-    jobs: { "verify-source": { steps: { name: string; run?: string }[] } }
+    jobs: { "verify-source": { steps: { name: string; if?: string; run?: string }[] } }
   }
   const steps = workflow.jobs["verify-source"].steps
-  const receipt = steps.findIndex((step) => step.name === "Build and verify native runtime receipt")
+  const build = steps.findIndex((step) => step.name === "Build native runtime")
+  const receipt = steps.findIndex((step) => step.name === "Verify native runtime receipt")
   const contracts = steps.findIndex((step) => step.name === "Verify native contract boundaries")
-  expect(receipt).toBeGreaterThanOrEqual(0)
+  const subagent = steps.findIndex((step) => step.name === "Verify subagent model selection boundaries")
+  expect(build).toBeGreaterThanOrEqual(0)
+  expect(build).toBeLessThan(receipt)
   expect(receipt).toBeLessThan(contracts)
-  expect(steps[receipt]?.run).toContain("cargo build --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --bin ycoding-runtime")
+  expect(build).toBeLessThan(subagent)
+  expect(steps[build]?.if).toBe("matrix.suite == 'tui-runtime' || matrix.suite == 'tui-project'")
+  expect(steps[build]?.run).toContain("cargo build --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --bin ycoding-runtime")
   expect(steps[receipt]?.run).toContain("script/runtime-receipt.sh write")
   expect(steps[receipt]?.run).toContain("script/runtime-receipt.sh verify")
 })

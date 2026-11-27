@@ -3,6 +3,7 @@ import { createStore } from "solid-js/store"
 import { useTheme } from "../context/theme"
 import { TextAttributes } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
+import { V5ClientError } from "@ycoding-ai/client/v5"
 import { errorMessage } from "../util/error"
 export type ToastOptions = {
   title?: string
@@ -11,6 +12,13 @@ export type ToastOptions = {
   duration: number
 }
 type ToastInput = Omit<ToastOptions, "duration"> & { duration?: number }
+
+export function errorToast(error: unknown): ToastInput {
+  const message = errorMessage(error)
+  return error instanceof V5ClientError && error.status === "unsent" && error.resendable
+    ? { variant: "warning", title: "Connection", message, duration: 4000 }
+    : { variant: "error", message }
+}
 
 export function Toast() {
   const toast = useToast()
@@ -83,11 +91,7 @@ function init() {
         setStore("currentToast", null)
       }, toastOptions.duration).unref()
     },
-    error: (err: unknown) =>
-      toast.show({
-        variant: "error",
-        message: errorMessage(err),
-      }),
+    error: (err: unknown) => toast.show(errorToast(err)),
     get currentToast(): ToastOptions | null {
       return store.currentToast
     },

@@ -90,7 +90,6 @@ const CAPABILITIES: Shape = Shape::Object(&[
     optional("tools", CAPABILITY_SELECTION),
     optional("mcp", CAPABILITY_SELECTION),
     optional("plugins", CAPABILITY_SELECTION),
-    optional("project_artifacts", Shape::Bool),
     optional("home_roots", Shape::Bool),
     optional("websearch_provider", Shape::Enum(&["exa", "parallel"])),
 ]);
@@ -292,6 +291,23 @@ const COORDINATION: Shape = Shape::Object(&[optional(
         optional("expires_at", NONNEGATIVE),
     ]),
 )]);
+const AUTONOMY_MODE: Shape = Shape::Enum(&["manual", "auto", "yolo"]);
+const AUTONOMY: Shape = Shape::Object(&[optional(
+    "defaults",
+    Shape::Object(&[
+        optional("permissions", AUTONOMY_MODE),
+        optional("guardrails", AUTONOMY_MODE),
+        optional("answers", AUTONOMY_MODE),
+        optional(
+            "yolo_accepted_at",
+            Shape::Object(&[
+                optional("permissions", NONNEGATIVE),
+                optional("guardrails", NONNEGATIVE),
+                optional("answers", NONNEGATIVE),
+            ]),
+        ),
+    ]),
+)]);
 const PLUGIN: Shape = Shape::Union(&[
     Shape::Nonempty,
     Shape::Object(&[
@@ -329,6 +345,7 @@ const ROOT: Shape = Shape::Object(&[
     optional("dots", Shape::Dots),
     optional("account_connectors", ACCOUNT_CONNECTORS),
     optional("coordination", COORDINATION),
+    optional("autonomy", AUTONOMY),
     optional("watcher", Shape::Object(&[optional("ignore", STRINGS)])),
     optional(
         "formatter",
@@ -395,6 +412,33 @@ const ROOT: Shape = Shape::Object(&[
             optional("max_manifest_bytes", NONNEGATIVE),
             optional("max_internal_passes", NONNEGATIVE),
             optional("advisory", Shape::Advisory),
+        ]),
+    ),
+    optional(
+        "harness",
+        Shape::Object(&[
+            optional(
+                "mode",
+                Shape::Enum(&["adaptive", "parallel", "sequential", "disabled"]),
+            ),
+            optional("steps", POSITIVE),
+            optional("max_concurrency", POSITIVE),
+            optional("max_depth", Shape::Int(1.0, 255.0)),
+            optional("max_tokens", POSITIVE),
+            optional("max_latency_ms", POSITIVE),
+            optional("min_signals", NONNEGATIVE),
+            optional("recall_limit", NONNEGATIVE),
+            optional(
+                "ceiling",
+                Shape::Object(&[
+                    optional("skills", Shape::Array(&Shape::Nonblank)),
+                    optional("agents", Shape::Array(&Shape::Nonblank)),
+                    optional("plugins", Shape::Array(&Shape::Nonblank)),
+                    optional("scripts", Shape::Array(&Shape::Nonblank)),
+                    optional("max_item_bytes", POSITIVE),
+                    optional("max_items", POSITIVE),
+                ]),
+            ),
         ]),
     ),
     optional(

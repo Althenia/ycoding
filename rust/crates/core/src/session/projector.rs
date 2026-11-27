@@ -497,46 +497,6 @@ fn fold_decoded(
         Some("session.shell.started.1" | "session.shell.ended.1") => {
             super::shell::apply(tx, event, &decoded.0)?
         }
-        Some("session.project-artifacts-ended.1") => insert_message(
-            tx,
-            event,
-            &session_message::Info::Synthetic(session_message::Synthetic {
-                id: session_message::Id::from_event(&decoded.0.id),
-                metadata: Some(
-                    match ObjectEncoder::new()
-                        .field(
-                            "projectArtifactsEnded",
-                            &ObjectEncoder::new()
-                                .field(
-                                    "oldProjectID",
-                                    &object
-                                        .field::<LosslessString>("oldProjectID")
-                                        .map_err(record_error)?,
-                                )
-                                .field(
-                                    "newProjectID",
-                                    &object
-                                        .field::<LosslessString>("newProjectID")
-                                        .map_err(record_error)?,
-                                )
-                                .finish(),
-                        )
-                        .finish()
-                    {
-                        JsonValue::Object(metadata) => metadata,
-                        _ => unreachable!("object encoder"),
-                    },
-                ),
-                text: "".into(),
-                description: None,
-                time: session_message::BaseTime {
-                    created: ycoding_schema::schema::DateTimeUtcFromMillis::new(
-                        event.created as f64,
-                    )
-                    .map_err(record_error)?,
-                },
-            }),
-        )?,
         Some("session.provider.request.recorded.1") => {
             super::provider_request::apply(tx, &object, &event.aggregate_id)?
         }

@@ -38,6 +38,15 @@ export type RequestKind = typeof RequestKind.Type
 
 export const maxEscalationReasons = 4
 
+export const SubagentRequestBlockedReason = Schema.Literals([
+  "concurrency-ceiling",
+  "agent-missing",
+  "permission-denied",
+  "project-paused",
+  "route-unavailable",
+])
+export type SubagentRequestBlockedReason = typeof SubagentRequestBlockedReason.Type
+
 export interface EscalationReason extends Schema.Schema.Type<typeof EscalationReason> {}
 export const EscalationReason = Schema.Struct({
   sessionID: SessionID,
@@ -285,6 +294,25 @@ export namespace Event {
     },
   })
   export type OwnerChanged = typeof OwnerChanged.Type
+
+  export const SubagentRequestBlocked = durable({
+    type: "coordination.subagent.request.blocked",
+    identifier: "Coordination.Event.SubagentRequestBlocked",
+    durable: { aggregate: "sessionID", version: 1 },
+    schema: {
+      sessionID: SessionID,
+      agent: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+      reason: SubagentRequestBlockedReason,
+      message: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096)),
+    },
+  })
+  export type SubagentRequestBlocked = typeof SubagentRequestBlocked.Type
 }
 
-export const DurableDefinitions = inventory(Event.Created, Event.Changed, Event.Deleted, Event.OwnerChanged)
+export const DurableDefinitions = inventory(
+  Event.Created,
+  Event.Changed,
+  Event.Deleted,
+  Event.OwnerChanged,
+  Event.SubagentRequestBlocked,
+)

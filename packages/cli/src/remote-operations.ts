@@ -7,7 +7,7 @@ import { homedir, tmpdir } from "node:os"
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32, posix } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { Project } from "@ycoding-ai/schema/project"
-import type { FormAnswer, ReviewDecideInput, SessionInfo } from "@ycoding-ai/client/promise"
+import type { AutonomyDefaultsSetInput, FormAnswer, ReviewDecideInput, SessionInfo } from "@ycoding-ai/client/promise"
 import { capturedChildSessionIDs, summarizeCapturedChanges } from "@ycoding-ai/client/file-change-summary"
 import { FrontendPaths } from "./paths"
 import {
@@ -909,6 +909,8 @@ async function run(input: OperationInput) {
   if (validated.kind === "latency.list") return input.local.latencyList(validated.input)
   if (validated.kind === "keepAwake.get") return { data: await input.local.keepAwakeGet() }
   if (validated.kind === "keepAwake.set") return { data: await input.local.keepAwakeSet(validated.enabled) }
+  if (validated.kind === "autonomyDefaults.get") return { data: await input.local.autonomyDefaultsGet() }
+  if (validated.kind === "autonomyDefaults.set") return { data: await input.local.autonomyDefaultsSet(validated.input) }
   if (validated.kind === "telemetryConsent.get") return { data: await input.local.telemetryConsentGet() }
   if (validated.kind === "telemetryConsent.set") return { data: await input.local.telemetryConsentSet({ enabled: validated.enabled, noticeVersion: 1 }) }
   if (validated.kind === "coordination") {
@@ -1252,6 +1254,8 @@ type Validated =
   | { readonly kind: "latency.list"; readonly input: { readonly limit?: number; readonly before?: string } }
   | { readonly kind: "keepAwake.get" }
   | { readonly kind: "keepAwake.set"; readonly enabled: boolean }
+  | { readonly kind: "autonomyDefaults.get" }
+  | { readonly kind: "autonomyDefaults.set"; readonly input: AutonomyDefaultsSetInput }
   | { readonly kind: "telemetryConsent.get" }
   | { readonly kind: "telemetryConsent.set"; readonly enabled: boolean }
   | { readonly kind: "compact"; readonly id: string }
@@ -1532,6 +1536,23 @@ function validate(request: RemoteRequest): Validated {
     if (request.operation === "machine.keepAwake.set") return { kind: "keepAwake.set", enabled: requireBoolean(fields.enabled, "enabled") }
     if (request.input !== undefined) throw new OperationError("invalid_message", "Keep-awake status does not accept input")
     return { kind: "keepAwake.get" }
+  }
+  if (request.operation === "machine.autonomyDefaults.get" || request.operation === "machine.autonomyDefaults.set") {
+    if (request.sessionID !== undefined) throw new OperationError("invalid_message", "Machine controls do not accept a Session")
+    if (request.operation === "machine.autonomyDefaults.get") {
+      if (request.input !== undefined) throw new OperationError("invalid_message", "Autonomy defaults status does not accept input")
+      return { kind: "autonomyDefaults.get" }
+    }
+    const modes = Object.fromEntries(
+      (["permissions", "guardrails", "answers"] as const).flatMap((category) =>
+        fields[category] === undefined ? [] : [[category, requireAutonomyMode(fields[category], category)]],
+      ),
+    )
+    if (Object.keys(modes).length === 0) throw new OperationError("invalid_message", "Autonomy defaults require at least one category")
+    return {
+      kind: "autonomyDefaults.set",
+      input: { ...modes, ...(fields.acceptYolo === undefined ? {} : { acceptYolo: requireBoolean(fields.acceptYolo, "acceptYolo") }) },
+    }
   }
   if (request.operation === "machine.telemetry.consent.get" || request.operation === "machine.telemetry.consent.set") {
     if (request.sessionID !== undefined) throw new OperationError("invalid_message", "Machine telemetry consent does not accept a Session")
@@ -2327,6 +2348,8 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "machine.latency.list": ["limit", "before"],
   "machine.keepAwake.get": [],
   "machine.keepAwake.set": ["enabled"],
+  "machine.autonomyDefaults.get": [],
+  "machine.autonomyDefaults.set": ["permissions", "guardrails", "answers", "acceptYolo"],
   "machine.telemetry.consent.get": [],
   "machine.telemetry.consent.set": ["enabled", "noticeVersion"],
   "workspace.list": ["sessionsOnly"],
@@ -2442,6 +2465,7 @@ const mutations: ReadonlySet<string> = new Set([
   "machine.latency.append",
   "machine.telemetry.consent.set",
   "machine.keepAwake.set",
+  "machine.autonomyDefaults.set",
   "incident.guidance.clear",
   "coordination.create",
   "coordination.update",
@@ -2769,6 +2793,11 @@ function requireString(
 
 function requireBoolean(value: unknown, field: string) {
   if (typeof value !== "boolean") throw new OperationError("invalid_message", `Invalid ${field}`)
+  return value
+}
+
+function requireAutonomyMode(value: unknown, field: string) {
+  if (value !== "manual" && value !== "auto" && value !== "yolo") throw new OperationError("invalid_message", `Invalid ${field}`)
   return value
 }
 

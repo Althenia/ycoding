@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use ycoding_core::{
     event_feed::Feed,
     platform::{browser, computer, git, repository_cache, ripgrep_binary},
-    resources::{auth, catalog, credential, discovery, model, project_artifact},
+    resources::{auth, catalog, credential, discovery, model},
     session::{execution, store::Service},
     ycoding_schema::location,
     ycoding_store::Client,
@@ -29,9 +29,6 @@ pub(super) struct Globals {
     pub auth: auth::integration::Draft,
     pub repositories: Arc<repository_cache::Service>,
     pub ripgrep: Arc<ripgrep_binary::Service>,
-    pub artifacts: project_artifact::store::Service,
-    pub accounting: project_artifact::accounting::Service,
-    pub sources: Arc<Mutex<project_artifact::source_registry::Registry>>,
     pub browser: Arc<browser::service::Service>,
     pub interaction: Arc<ycoding_core::platform::interaction::Authority>,
     pub isolated_executor: Arc<dyn browser::isolated::Executor>,
@@ -130,25 +127,6 @@ impl Globals {
             roots,
             &composition,
         )?;
-        // Like the TypeScript accounting layer, cohort buckets use a fresh secret per process.
-        let secret = (0..2)
-            .map(|_| ycoding_core::meeting::store::uuid().map(|uuid| uuid.replace('-', "")))
-            .collect::<Result<String, _>>()
-            .map_err(|_| unavailable("artifact accounting secret"))?;
-        let accounting = project_artifact::accounting::Service::new(client.clone(), secret);
-        let sources = Arc::new(Mutex::new(
-            project_artifact::source_registry::Registry::default(),
-        ));
-        let artifacts = project_artifact::store::Service::new(
-            client.clone(),
-            project_artifact::store::Paths {
-                data: roots.data.clone(),
-                home: roots.home.clone(),
-                config: roots.config.clone(),
-            },
-            sources.clone(),
-        )
-        .with_accounting(accounting.clone());
         let admission = Arc::new(browser::admission::Admission::default());
         let store = Service::new(client.clone());
         let sessions: browser::bridge::SessionCheck = Arc::new(move |id| {
@@ -268,9 +246,6 @@ impl Globals {
             auth,
             repositories,
             ripgrep,
-            artifacts,
-            accounting,
-            sources,
             browser,
             interaction,
             isolated_executor,
@@ -317,7 +292,10 @@ impl Globals {
         {
             return;
         }
-        self.usage_views.catalog_changed(location, || {});
+        match location {
+            Some(location) => self.usage_views.location_changed(location),
+            None => self.usage_views.invalidate(),
+        }
         self.composition.wake().notify();
     }
 

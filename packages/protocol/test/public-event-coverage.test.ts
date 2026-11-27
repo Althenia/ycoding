@@ -11,8 +11,8 @@ test("REQ-WIRE-001/005 public EventBatch membership equals ServerDefinitions, no
   expect(publicEvents.map((event) => [event.name, event.durable]).sort()).toEqual(
     EventManifest.ServerDefinitions.map((event) => [event.type, event.durability === "durable"]).sort(),
   )
-  expect(publicEvents).toHaveLength(141)
-  expect(publicEvents.filter((event) => event.durable)).toHaveLength(77)
+  expect(publicEvents).toHaveLength(149)
+  expect(publicEvents.filter((event) => event.durable)).toHaveLength(85)
   for (const name of [
     "server.connected",
     "log.synced",
@@ -40,7 +40,7 @@ test("REQ-WIRE-001/005 public EventBatch membership equals ServerDefinitions, no
 
 test("REQ-WIRE-005 public durable Session branches reuse exact SessionLogItem shapes; ephemerals cannot carry durable positions", () => {
   const log = messages["ycoding.v5.SessionLogItem"].fields
-  expect(log).toHaveLength(74)
+  expect(log).toHaveLength(81)
   for (const event of publicEvents) {
     const envelope = messages[event.type as keyof typeof messages]
     expect(envelope, event.name).toBeDefined()
@@ -57,7 +57,7 @@ test("REQ-WIRE-005 public durable Session branches reuse exact SessionLogItem sh
   expect(publicEventContract().messages.get("PublicEvent")!.fields).toHaveLength(EventManifest.ServerDefinitions.length)
   expect(
     publicEvents.filter((event) => SessionEvent.Definitions.some((definition) => definition.type === event.name)),
-  ).toHaveLength(81)
+  ).toHaveLength(88)
 })
 
 test("REQ-WIRE-005 every public event field retains its source type, tag and presence", () => {

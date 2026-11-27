@@ -29,7 +29,6 @@ import { it } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
 import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
-import { ProjectArtifactSource } from "@ycoding-ai/core/project-artifact/source"
 import { LocationMutation } from "@ycoding-ai/core/location-mutation"
 import { ReadToolFileSystem } from "@ycoding-ai/core/tool/read-filesystem"
 import { toolIdentity, executeTool, registerToolPlugin, settleTool, toolDefinitions } from "./lib/tool"
@@ -45,7 +44,6 @@ const skillToolNode = makeLocationNode({
     MCP.node,
     Permission.node,
     PluginRuntime.node,
-    ProjectArtifactSource.node,
     LocationMutation.node,
     ReadToolFileSystem.node,
   ],
@@ -106,7 +104,6 @@ describe("SkillTool", () => {
               Effect.sync(() => [new Config.Document({ type: "document", info: new Config.Info({ capabilities }) })]),
           })
           const assertions: Permission.AssertInput[] = []
-          const sourceActivations: Parameters<ProjectArtifactSource.Interface["activate"]>[0][] = []
           let permissionFailure: "denied" | "corrected" | "cancelled" | undefined
           let deniedAction: string | undefined
           const authorize = (input: Permission.AssertInput): Effect.Effect<void, Permission.Error> => {
@@ -157,14 +154,6 @@ describe("SkillTool", () => {
               mcp: () => Effect.succeed([]),
             }),
           )
-          const source = Layer.mock(ProjectArtifactSource.Service, {
-            refresh: () => Effect.void,
-            provenance: () => Effect.succeed(undefined),
-            activate: (input) =>
-              Effect.sync(() => {
-                if (input.id === "effect") sourceActivations.push(input)
-              }),
-          })
           const unavailable = () => Effect.die(new Error("unused PluginRuntime operation"))
           const runtime = Layer.succeed(
             PluginRuntime.Service,
@@ -275,7 +264,6 @@ describe("SkillTool", () => {
                 ),
               ],
               [PluginRuntime.node, runtime],
-              [ProjectArtifactSource.node, source],
               [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
               [Image.node, imagePassthrough],
             ],
@@ -722,7 +710,6 @@ describe("SkillTool", () => {
                 call: { type: "tool-call", id: "call-denied-skill", name: "skill", input: { id: "effect" } },
               }),
             ).toEqual({ type: "error", value: "Unable to load skill effect" })
-            expect(sourceActivations).toHaveLength(2)
             permissionFailure = "corrected"
             expect(
               yield* executeTool(registry, {
@@ -731,7 +718,6 @@ describe("SkillTool", () => {
                 call: { type: "tool-call", id: "call-corrected-skill", name: "skill", input: { id: "effect" } },
               }),
             ).toEqual({ type: "error", value: "Unable to load skill effect" })
-            expect(sourceActivations).toHaveLength(2)
             permissionFailure = "cancelled"
             expect(
               (yield* settleTool(registry, {
@@ -740,7 +726,6 @@ describe("SkillTool", () => {
                 call: { type: "tool-call", id: "call-cancelled-skill", name: "skill", input: { id: "effect" } },
               }).pipe(Effect.exit))._tag,
             ).toBe("Failure")
-            expect(sourceActivations).toHaveLength(2)
             permissionFailure = undefined
             const flat = Skill.Info.make({
               id: Skill.ID.make("public"),

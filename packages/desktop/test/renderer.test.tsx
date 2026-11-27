@@ -122,7 +122,7 @@ test("composer routes every built-in command and alias before backend commands",
 
 test("provider, MCP, VCS and system dialogs expose only typed supported operations", async () => {
   const source = await read("src/renderer.tsx")
-  for (const name of ["connect-key", "oauth-start", "oauth-status", "oauth-complete", "oauth-cancel", "command-start", "command-status", "command-cancel", "wellknown-add", "credential-activate", "credential-rename", "credential-remove", "browser-start", "browser-forget", "isolated-browser-start", "isolated-browser-stop", "artifact-enable", "artifact-disable", "remote-set", "resolve-skill-conflict"]) expect(source).toContain(`"${name}"`)
+  for (const name of ["connect-key", "oauth-start", "oauth-status", "oauth-complete", "oauth-cancel", "command-start", "command-status", "command-cancel", "wellknown-add", "credential-activate", "credential-rename", "credential-remove", "browser-start", "browser-forget", "isolated-browser-start", "isolated-browser-stop", "remote-set", "resolve-skill-conflict"]) expect(source).toContain(`"${name}"`)
   expect(source).toContain('type="password" autocomplete="off"')
   expect(source).toContain('const secret = key()[item.id] ?? ""; setKey((previous) => ({ ...previous, [item.id]: "" }))')
   expect(source).toContain('const authorizationCode = code(); setCode("")')
@@ -136,7 +136,7 @@ test("provider, MCP, VCS and system dialogs expose only typed supported operatio
   expect(source).toContain("Plugin discovery is read-only. Configure plugin changes in ycoding.json")
   expect(source).not.toContain('kind: "plugin-add"')
   for (const group of ["Session", "Model & Agent", "Workspace & Git", "Providers & MCP", "Navigation", "Customize", "Settings", "System"]) expect(source).toContain(`"${group}"`)
-  for (const title of ["Status & Debug", "Agents & Skills", "Browser", "Remote & Pairing", "Artifacts & Plugins", "Dots"]) expect(source).toContain(`"${title}"`)
+  for (const title of ["Status & Debug", "Agents & Skills", "Browser", "Remote & Pairing", "Plugins", "Dots"]) expect(source).toContain(`"${title}"`)
 })
 
 test("request attention counts canonical review item identities alongside other waiting requests", async () => {
@@ -158,16 +158,6 @@ test("workspace attachments preserve mentioned file ranges and remove duplicate 
   expect(promptFilesFor(attached, [mention])).toEqual([attached[0]!, mention])
   expect(attached).toHaveLength(2)
   expect(promptFilesFor([], [])).toEqual([])
-})
-
-test("artifact references retain their source and identity before authoritative detail reads", async () => {
-  const { artifactReferenceOf } = await import("../src/renderer")
-  const artifact = { scope: "project", kind: "skill", id: "synthetic-skill", name: "Synthetic skill" }
-  expect(artifactReferenceOf(artifact, "ses_synthetic")).toEqual({ scope: "project", kind: "skill", id: "synthetic-skill", source: "ses_synthetic" })
-  expect(artifactReferenceOf(artifact)).toEqual({ scope: "project", kind: "skill", id: "synthetic-skill" })
-  for (const missing of ["scope", "kind", "id"]) expect(artifactReferenceOf({ ...artifact, [missing]: undefined })).toBeUndefined()
-  expect(artifactReferenceOf({ ...artifact, kind: "unknown" })).toBeUndefined()
-  expect(artifactReferenceOf({ ...artifact, scope: "trash" })).toBeUndefined()
 })
 
 test("find uses visible assistant prose and transcript copy and export use canonical full-history reads", async () => {
@@ -355,6 +345,46 @@ test("YOLO consent names its risks and cancellation sends no autonomy update", a
   expect(writes).toBe(1)
   expect(autonomyPrompt({ permissions: "manual", answers: "auto" }, "Change autonomy?")).toBe("Change autonomy?")
   expect(autonomyPrompt({ defer: true }, "Enable defer?")).toBe("Enable defer?")
+})
+
+test("autonomy defaults show per category and save only the chosen category", async () => {
+  const { autonomyDefaultLabel, changeAutonomyDefault, yoloDefaultAcceptLabel } = await import("../src/renderer")
+  const defaults = { permissions: "manual", guardrails: "auto", answers: "yolo" } as const
+  expect(autonomyDefaultLabel(defaults, "permissions")).toBe("Saved default: Manual")
+  expect(autonomyDefaultLabel(defaults, "guardrails")).toBe("Saved default: Auto")
+  expect(autonomyDefaultLabel(defaults, "answers")).toBe("Saved default: YOLO")
+  expect(autonomyDefaultLabel(undefined, "answers")).toBe("Saved default: Unknown")
+  const sent: unknown[] = []
+  const prompts: unknown[][] = []
+  const harness = (accept: boolean, mutate: (value: typeof defaults) => typeof defaults = (value) => value) => ({
+    confirm: async (...prompt: unknown[]) => { prompts.push(prompt); return accept },
+    set: async (input: { revision: number; payload: Record<string, unknown> }) => { sent.push(input); return { revision: input.revision, defaults: mutate({ ...defaults, ...input.payload } as typeof defaults) } },
+  })
+  expect((await changeAutonomyDefault("guardrails", "auto", 4, harness(false)))?.defaults.guardrails).toBe("auto")
+  expect((await changeAutonomyDefault("permissions", "manual", 4, harness(false)))?.defaults.permissions).toBe("manual")
+  expect(sent).toEqual([{ revision: 4, payload: { guardrails: "auto" } }, { revision: 4, payload: { permissions: "manual" } }])
+  expect(prompts).toEqual([])
+  sent.length = 0
+  expect(await changeAutonomyDefault("answers", "yolo", 4, harness(false))).toBeUndefined()
+  expect(sent).toEqual([])
+  expect(prompts).toHaveLength(1)
+  expect(String(prompts[0]![0])).toContain("full responsibility")
+  expect(String(prompts[0]![0])).toContain("answers mode for new Sessions")
+  expect(prompts[0]![1]).toBe("Accept risk & save YOLO default")
+  expect(yoloDefaultAcceptLabel).toBe("Accept risk & save YOLO default")
+  expect((await changeAutonomyDefault("answers", "yolo", 4, harness(true)))?.defaults.answers).toBe("yolo")
+  expect(sent).toEqual([{ revision: 4, payload: { answers: "yolo", acceptYolo: true } }])
+  await expect(changeAutonomyDefault("permissions", "auto", 4, harness(true, (value) => ({ ...value, permissions: "manual" })))).rejects.toThrow("not confirmed")
+  await expect(changeAutonomyDefault("permissions", "auto", 4, { confirm: async () => true, set: async () => { throw new Error("Backend refused") } })).rejects.toThrow("Backend refused")
+})
+
+test("autonomy default controls sit on every category row and report failures through the policy error", async () => {
+  const source = await read("src/renderer.tsx")
+  expect(source).toContain('{defaultRow("permissions", "Permissions", permissions, setPermissions)}{defaultRow("guardrails", "Guardrails", guardrails, setGuardrails)}{defaultRow("answers", "Answers", answers, setAnswers)}')
+  expect(source).toContain("void saveDefault(category, autonomy()![category])")
+  expect(source).toContain('void saveDefault(category, "manual")')
+  expect(source).toContain("setPolicyError(failure(cause, \"The autonomy default could not be saved.\"))")
+  expect(source).toContain("defaultsRead.refetch()")
 })
 
 test("autonomy acknowledgements must match the submitted goal and modes", async () => {

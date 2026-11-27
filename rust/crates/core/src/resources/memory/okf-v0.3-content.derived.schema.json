@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:okf-knowledge-bundle:okf-v0.3-content-derived",
+  "title": "OKF v0.3 parsed frontmatter content (derived, unofficial)",
+  "description": "Describes the parsed YAML frontmatter of a concept and of a bundle-root index.md. Derived by the okf-knowledge-bundle skill from SPEC.md and skills/okf-generate/scripts/validate.py at the pinned upstream commit. The upstream project publishes no machine-readable bundle schema at that commit, so this file is not an official OKF artifact and has no authority beyond the cited spec sections. It cannot express link resolution, path fields, bundle confinement, trust tiers, computation locators or the reserved-file rules; okf_helper.py validate applies those separately. Validate a concept against #/$defs/concept and a bundle-root index against #/$defs/bundleIndex. Content is first reduced to the SPEC.md section 11.2 normal form: a null, empty-string or empty-list value is an absent key, and a property marked x-okf-list holds a list even when written as one item. Every object accepts unknown keys (SPEC.md section 4.1).",
+  "x-okf-derived-from": {
+    "repository": "open-knowledge-format/open-knowledge-format",
+    "commit": "527e81aff55992be21507e97004286789126f88c",
+    "documents": ["SPEC.md", "skills/okf-generate/scripts/validate.py"],
+    "spec_version": "0.3",
+    "official": false
+  },
+  "x-okf-severity-keyword": "Unmarked violations are errors (REQUIRED keys, defined value forms and types). x-okf-severity: warning marks a defined vocabulary: validate reports a warning and write-concept refuses it. x-okf-severity: advisory marks a SHOULD-level convention: always a warning.",
+  "$ref": "#/$defs/concept",
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "x-okf-format": "okf-timestamp",
+      "x-okf-spec": "§5",
+      "x-okf-expect": "an RFC 3339 date-time with an offset, or a date written YYYY-MM-DD"
+    },
+    "actor": {
+      "allOf": [
+        { "type": "string", "x-okf-expect": "an actor string" },
+        {
+          "pattern": "^([^\\s/:]+/\\S+|[A-Za-z][A-Za-z0-9+.-]*:\\S+)$",
+          "x-okf-severity": "advisory",
+          "x-okf-expect": "an actor: <producer>/<version> or <scheme>:<id>"
+        }
+      ],
+      "x-okf-spec": "§7"
+    },
+    "text": { "type": "string", "x-okf-expect": "a string" },
+    "usageWindow": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "from": { "$ref": "#/$defs/timestamp" },
+        "to": { "$ref": "#/$defs/timestamp" }
+      },
+      "x-okf-spec": "§5.1",
+      "x-okf-expect": "a mapping with from and to timestamps"
+    },
+    "source": {
+      "type": "object",
+      "required": ["resource"],
+      "properties": {
+        "resource": { "$ref": "#/$defs/text" },
+        "id": { "type": "string", "x-okf-severity": "advisory", "x-okf-expect": "a quoted string" },
+        "title": { "$ref": "#/$defs/text" },
+        "author": { "$ref": "#/$defs/actor" },
+        "usage_count": { "type": "number", "minimum": 0, "x-okf-severity": "advisory", "x-okf-expect": "a non-negative number" },
+        "last_modified": { "$ref": "#/$defs/timestamp" },
+        "usage_window": { "$ref": "#/$defs/usageWindow" }
+      },
+      "x-okf-spec": "§5.1",
+      "x-okf-expect": "a mapping with a resource"
+    },
+    "generated": {
+      "type": "object",
+      "required": ["by"],
+      "properties": {
+        "by": { "$ref": "#/$defs/actor" },
+        "at": { "$ref": "#/$defs/timestamp" }
+      },
+      "x-okf-spec": "§5.2",
+      "x-okf-expect": "a mapping with a by actor"
+    },
+    "verifiedEvent": {
+      "type": "object",
+      "required": ["by", "at"],
+      "properties": {
+        "by": { "$ref": "#/$defs/actor" },
+        "at": { "$ref": "#/$defs/timestamp" }
+      },
+      "x-okf-spec": "§5.2",
+      "x-okf-expect": "a mapping with by and at"
+    },
+    "parameter": {
+      "type": "object",
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "$ref": "#/$defs/text" },
+        "type": { "$ref": "#/$defs/text" },
+        "required": { "type": "boolean", "x-okf-severity": "advisory", "x-okf-expect": "a boolean" }
+      },
+      "x-okf-spec": "§10.2",
+      "x-okf-expect": "a mapping with name and type"
+    },
+    "executor": {
+      "type": "object",
+      "required": ["resource"],
+      "properties": {
+        "resource": { "$ref": "#/$defs/text" },
+        "receipt": {
+          "type": "array",
+          "x-okf-list": true,
+          "items": { "$ref": "#/$defs/text" },
+          "x-okf-expect": "a list of field names"
+        }
+      },
+      "x-okf-spec": "§10.2",
+      "x-okf-expect": "a mapping with a resource"
+    },
+    "attester": {
+      "type": "object",
+      "required": ["resource"],
+      "properties": { "resource": { "$ref": "#/$defs/text" } },
+      "x-okf-spec": "§10.2",
+      "x-okf-expect": "a mapping with a resource"
+    },
+    "concept": {
+      "type": "object",
+      "x-okf-expect": "a mapping",
+      "required": ["type"],
+      "properties": {
+        "type": { "$ref": "#/$defs/text", "x-okf-spec": "§4.1" },
+        "title": { "$ref": "#/$defs/text", "x-okf-spec": "§4.1" },
+        "description": { "$ref": "#/$defs/text", "x-okf-spec": "§4.1" },
+        "resource": { "$ref": "#/$defs/text", "x-okf-spec": "§4.1" },
+        "tags": {
+          "type": "array",
+          "x-okf-list": true,
+          "items": { "$ref": "#/$defs/text" },
+          "x-okf-spec": "§4.1",
+          "x-okf-expect": "a list of strings"
+        },
+        "sources": {
+          "type": "array",
+          "x-okf-list": true,
+          "items": { "$ref": "#/$defs/source" },
+          "x-okf-spec": "§5.1",
+          "x-okf-expect": "a list of source mappings"
+        },
+        "usage_window": { "$ref": "#/$defs/usageWindow" },
+        "generated": { "$ref": "#/$defs/generated" },
+        "verified": {
+          "type": "array",
+          "x-okf-list": true,
+          "items": { "$ref": "#/$defs/verifiedEvent" },
+          "x-okf-spec": "§5.2",
+          "x-okf-expect": "a list of verification events"
+        },
+        "status": {
+          "allOf": [
+            { "$ref": "#/$defs/text" },
+            {
+              "enum": ["draft", "stable", "deprecated"],
+              "x-okf-severity": "warning",
+              "x-okf-expect": "one of draft, stable, deprecated"
+            }
+          ],
+          "x-okf-spec": "§5.4"
+        },
+        "superseded_by": { "$ref": "#/$defs/text", "x-okf-spec": "§5.4" },
+        "stale_after": { "$ref": "#/$defs/timestamp", "x-okf-spec": "§5.5" },
+        "timestamp": { "$ref": "#/$defs/timestamp", "x-okf-spec": "Appendix B.1 (v0.1 compatibility)" },
+        "runtime": { "$ref": "#/$defs/text", "x-okf-spec": "§10.2" },
+        "parameters": {
+          "type": "array",
+          "x-okf-list": true,
+          "items": { "$ref": "#/$defs/parameter" },
+          "x-okf-spec": "§10.2",
+          "x-okf-expect": "a list of parameter mappings"
+        },
+        "computation": { "$ref": "#/$defs/text", "x-okf-spec": "§10.2" },
+        "executor": { "$ref": "#/$defs/executor" },
+        "attester": { "$ref": "#/$defs/attester" }
+      },
+      "if": {
+        "properties": { "type": { "const": "Attested Computation" } },
+        "required": ["type"]
+      },
+      "then": {
+        "required": ["runtime"],
+        "x-okf-spec": "§10.2"
+      },
+      "additionalProperties": true
+    },
+    "bundleIndex": {
+      "type": "object",
+      "x-okf-expect": "a mapping",
+      "properties": {
+        "okf_version": {
+          "allOf": [
+            { "type": "string", "x-okf-expect": "a quoted string such as \"0.3\"" },
+            {
+              "pattern": "^[0-9]+\\.[0-9]+$",
+              "x-okf-severity": "advisory",
+              "x-okf-expect": "a <major>.<minor> version"
+            }
+          ],
+          "x-okf-spec": "§8.1"
+        },
+        "title": { "$ref": "#/$defs/text", "x-okf-spec": "§8.1" },
+        "description": { "$ref": "#/$defs/text", "x-okf-spec": "§8.1" },
+        "license": { "$ref": "#/$defs/text", "x-okf-spec": "§8.1" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

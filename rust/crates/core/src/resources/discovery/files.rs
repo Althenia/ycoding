@@ -20,16 +20,10 @@ pub fn scan(directory: &Path, kind: Kind) -> Result<Vec<PathBuf>, Error> {
                 ["command", "commands"]
             };
             for name in names {
-                walk(
-                    &directory.join(name),
-                    &directory,
-                    kind,
-                    &mut Vec::new(),
-                    &mut files,
-                )?;
+                walk(&directory.join(name), kind, &mut Vec::new(), &mut files)?;
             }
         }
-        Kind::Skill => walk(&directory, &directory, kind, &mut Vec::new(), &mut files)?,
+        Kind::Skill => walk(&directory, kind, &mut Vec::new(), &mut files)?,
     }
     files.sort_by(|a, b| {
         a.as_os_str()
@@ -41,7 +35,6 @@ pub fn scan(directory: &Path, kind: Kind) -> Result<Vec<PathBuf>, Error> {
 }
 fn walk(
     directory: &Path,
-    root: &Path,
     kind: Kind,
     ancestors: &mut Vec<PathBuf>,
     files: &mut Vec<PathBuf>,
@@ -56,6 +49,7 @@ fn walk(
         return Ok(());
     }
     ancestors.push(canonical);
+    let mut children = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|e| io(directory, e))?;
         let path = entry.path();
@@ -64,15 +58,26 @@ fn walk(
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => return Err(io(&path, e)),
         };
+        children.push((path, metadata));
+    }
+    if kind == Kind::Skill {
+        let manifest = directory.join(crate::resources::skill::spec::FILE);
+        if children
+            .iter()
+            .any(|(path, metadata)| metadata.is_file() && path == &manifest)
+        {
+            files.push(manifest);
+            ancestors.pop();
+            return Ok(());
+        }
+    }
+    for (path, metadata) in children {
         if metadata.is_dir() {
-            walk(&path, root, kind, ancestors, files)?;
+            walk(&path, kind, ancestors, files)?;
             continue;
         }
-        let matched = path.extension().is_some_and(|e| e == "md")
-            && (kind != Kind::Skill
-                || path.parent() == Some(root)
-                || path.file_name().is_some_and(|s| s == "SKILL.md"));
-        if metadata.is_file() && matched {
+        if metadata.is_file() && kind != Kind::Skill && path.extension().is_some_and(|e| e == "md")
+        {
             files.push(path);
         }
     }

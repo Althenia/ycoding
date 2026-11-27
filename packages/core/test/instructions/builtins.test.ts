@@ -1,5 +1,5 @@
 import path from "path"
-import { describe, expect, test } from "bun:test"
+import { describe, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
 import { ConfigCapabilities } from "@ycoding-ai/core/config/capabilities"
 import * as TestClock from "effect/testing/TestClock"
@@ -11,7 +11,6 @@ import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { InstructionBuiltIns } from "@ycoding-ai/core/instructions/builtins"
 import { Instructions } from "@ycoding-ai/core/instructions/index"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
-import { ProjectArtifactInstructions } from "../../src/project-artifact/instructions"
 import { location } from "../fixture/location"
 import { testEffect } from "../lib/effect"
 import { readInitial, readUpdate } from "../lib/instructions"
@@ -32,7 +31,7 @@ const decisionInput =
   "Resolve routine choices, minor ambiguities, and recoverable obstacles yourself from evidence first; call question only when progress genuinely needs underivable user input. Offer concise choices with a recommended default for decisions and empty options for free text, and continue immediately after its answer. Keep permission and guardrail approvals on their native paths. Answers YOLO handles every question, including explicit-decision and open questions, with a valid automatic answer or deterministic valid fallback instead of asking or deferring. Outside YOLO, unresolved requests wait for the user or defer to the review box while defer is active. Do not re-ask, retry or guess deferred manual decisions. /defer remains active across prompts until explicitly toggled off; review decisions do not change it. Call task_complete only after all work is verified."
 const decisionUse =
   'Use decision for bounded judgments from the hidden helper. Confidence is self-reported and uncalibrated. Prefer tests, grep, typechecks and inventory for facts. Supply authorized evidence, neutral questions, observable criteria, distinct choices including keep-current, and adjacent score levels. Batch independent questions; separate dependent judgments. Grade mode (`grade: true`) returns every choice once with confidence in [0,1] and bounded evidence, without a pick. Example: {"provider":"agent","request":{"state":{},"questions":[{"type":"choice","name":"route","instructions":"Grade both routes","grade":true,"choices":[{"value":"keep-current"},{"value":"change"}]}]}} Treat refusal, invalid output and conflicting evidence as uncertainty. Set thresholds by mistake cost; preserve owner choices and applicable guardrails. Reuse unchanged judgments. Judgments grant no authority or completion proof. /autonomous controls independent categories: Manual requires an explicit decision; Auto applies deterministic rules with no model fallback; YOLO removes every blocker in its category, including hard, catastrophic and destructive guardrails, permission denies and ceilings, and all questions. Answers YOLO uses a deterministic valid fallback when evaluation fails. Project coordinator separation remains enforced. Enabling YOLO in controls requires explicit risk acceptance. /defer persists across prompts and moves unresolved manual decisions to the review box.'
-const allTools = new Set(["subagent", "shell", "project_artifact", "question", "decision", "task_complete", "memory"])
+const allTools = new Set(["subagent", "shell", "question", "decision", "task_complete", "memory"])
 const input = (id: SessionSchema.ID, overrides: Partial<Omit<InstructionBuiltIns.Input, "sessionID">> = {}) => ({
   sessionID: id,
   capabilities: {},
@@ -73,12 +72,6 @@ describe("InstructionBuiltIns", () => {
     const { Schema } = yield* Effect.promise(() => import("effect"))
     expect(Schema.is(Decision.Input)(JSON.parse(example![1]))).toBe(true)
   }))
-  test("guides reusable artifact learning without recording one-off failures", () => {
-    expect(ProjectArtifactInstructions.content).toBe(
-      "At a safe boundary after the primary task is complete and validated, create or update at most one Project Artifact for each newly learned reusable insight. The insight must be repeated, durable, repository-specific, and useful in future work. When correcting the immediate task, identify any validated repeated mistake, failed approach, or repository gotcha and the safer reusable rule it establishes; do not treat artifacts as punishment or record one-off failures. Never persist transient task state, current todos, user preferences, prompts, logs, secrets, credentials, private paths or URLs, customer data, or speculation. Search existing artifacts first and update the owned project version rather than duplicating it. Prefer a skill; use a command only for an invokable instruction-only template; use a least-privilege agent only for a genuine reusable role. Workflows are not a first-class artifact. Never create or enable a plugin automatically. Do not interrupt the primary task to author an artifact.",
-    )
-  })
-
   it.effect("loads location-scoped environment and host-local date instructions", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(timestamp)
@@ -101,8 +94,6 @@ describe("InstructionBuiltIns", () => {
           "Before launching a subagent, inspect the current direct child TeamView. Reuse a relevant direct terminal child with subagent_control send when its agent, domain, model, and retained context fit; send only incremental context. Launch a new child when role, model, location, permission, or task context does not fit. Use resume only for durable pending work.",
           "",
           "Shell commands accept memory_limit_mb to constrain memory used by the command process tree. A finite limit supplies matching Go and Node runtime hints and terminates the process tree if sampled aggregate resident memory still exceeds the limit. Leave commands uncapped unless the project or user explicitly configures a limit; never impose unrequested resource limits.",
-          "",
-          "At a safe boundary after the primary task is complete and validated, create or update at most one Project Artifact for each newly learned reusable insight. The insight must be repeated, durable, repository-specific, and useful in future work. Never persist transient task state, current todos, user preferences, prompts, logs, secrets, credentials, private paths/URLs, customer data, or speculation. Search existing artifacts first and update the owned project version rather than duplicating it. Prefer a skill; use a command only for an invokable instruction-only template; use a least-privilege agent only for a genuine reusable role. Workflows are not a first-class artifact. Never create or enable a plugin automatically. Do not interrupt the primary task to author an artifact.",
           "",
           `When working with a Git worktree, create it at \`${worktrees}/<repo-key>/<name>\`, where \`<repo-key>\` is \`repo_\` followed by the SHA-256 hex digest of the real path of the repository's Git common directory. Give every worktree a named branch identical to its worktree name, for example \`git worktree add -b <name> ${worktrees}/<repo-key>/<name>\`; never create a detached HEAD worktree. During authorized integration, use \`git diff --name-only\` between the previous and latest target heads to compare intermediate target changes against lane files. Automatically rebase linearly onto the latest target head when files are disjoint; ask only for overlapping file conflicts or failing checks. Complete consolidated checks, a single commit, linear rebase onto the latest target head, \`git merge --ff-only --autostash <name>\` from the target branch checkout, and safe non-force worktree removal in one continuous pass without ceremony, handoffs, or slots. Preserve unrelated work, existing Git identity, and permission boundaries; never create a merge commit. Prune stale registrations after verified worktree removal. Never stage, commit, integrate, or remove a worktree without authorization; this policy grants none.`,
           "",
@@ -226,7 +217,6 @@ describe("InstructionBuiltIns", () => {
       expect(Object.keys(initialized.values)).toEqual([
         "core/subagent-reuse",
         "core/shell-memory",
-        "core/project-artifact-authoring",
         "core/git-attribution",
         "core/decision-input",
         "core/task-completion",

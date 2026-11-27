@@ -72,7 +72,7 @@ The public build includes only curated `apps/web` content and the installer/conf
 
 ### `packages/schema`
 
-Owns branded IDs, public domain records, durable event payloads, session and orchestration shapes, project-artifact contracts, and validation shared across process boundaries.
+Owns branded IDs, public domain records, durable event payloads, session and orchestration shapes, and validation shared across process boundaries.
 
 A Schema change is a public-contract change unless proven otherwise.
 
@@ -85,7 +85,6 @@ Owns:
 - models, providers, credentials, and configuration;
 - durable subagent orchestration and autonomy;
 - skill discovery, activation, and session status;
-- project-artifact storage, validation, packaging, lifecycle, and accounting;
 - Location-scoped on-demand Markdown knowledge storage and derived offline graph export;
 - machine-scoped, seven-day Web latency sample retention in local SQLite;
 - database schema, migrations, event history, and projections;
@@ -152,7 +151,7 @@ Owns:
 - the YCoding wordmark, terminal title, startup and exit presentation;
 - transcript rendering and windowed resident transcript loading;
 - prompt, autocomplete, commands, keymaps, dialogs, themes, and notifications;
-- session, subagent, shell, permission, form, skill, and project-artifact interaction;
+- session, subagent, shell, permission, form, and skill interaction;
 - cache and context diagnostics;
 - plugin slots and feature plugins.
 
@@ -227,8 +226,6 @@ The TUI applies events to a Solid store and reconciles canonical Client reads. A
 | Process-global durable              | model incidents and per-model guidance clear watermarks                                                    | Core `ModelIncident` service            |
 | Location                            | models, providers, provider usage, tools, plugins, permissions, guardrail policy, filesystem, instructions | Core Location services                  |
 | Session durable                     | messages, pending prompts, autonomy, orchestration, compaction                                             | Core database and event history         |
-| Project durable                     | project artifacts and project configuration                                                                | Core project-artifact store             |
-| Global durable                      | global project artifacts and shared artifact state                                                         | Core project-artifact store             |
 | Process-local Session-family safety | pending guardrail reviews and running shell/subagent/review reservations                                   | Core `SessionGuardrail` service         |
 | UI resident                         | complete projected messages for each resident Session, guardrail/provider snapshots, dialogs, scroll state | TUI only                                |
 
@@ -248,7 +245,6 @@ The TUI applies events to a Solid store and reconciles canonical Client reads. A
 - Public HTTP contracts come from Protocol and Schema, not handler-local types.
 - Durable state remains replayable, except message rows and message-only events below a valid local compaction checkpoint and message-only events of settled executions, which history pruning deletes; projected messages are the record for pruned history, and caches remain rebuildable.
 - TUI Session eviction releases resident transcript windows; a newest-window snapshot read rebuilds them.
-- Project artifacts use their validated lifecycle instead of writing directly into source directories.
 - Agent permissions and Session guardrails are separate mediation layers; neither approval widens the other layer.
 - Provider usage failures remain isolated from Session startup and model execution.
 

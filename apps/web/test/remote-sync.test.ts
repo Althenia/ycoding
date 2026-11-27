@@ -60,7 +60,7 @@ async function harness(options: {
   }
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID),
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID),
       handlers: options.onRequestTiming === undefined ? handlers : { ...handlers, onRequestTiming: (timing) => {
         handlers.onRequestTiming?.(timing)
         options.onRequestTiming?.(timing)

@@ -23,10 +23,12 @@ A plan, deleted package, or stale generated file does not override current code.
 | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`product-direction.md`](./product-direction.md)                         | Terminal-first product scope, priorities, and compatibility policy.                                                                          |
 | [`architecture.md`](./architecture.md)                                   | Active package graph, ownership, runtime flow, and constraints.                                                                              |
-| [`runtime.md`](./runtime.md)                                             | Session, autonomy, subagent, skill, artifact, cache, guardrail, provider-usage, and transcript behavior.                                     |
+| [`runtime.md`](./runtime.md)                                             | Session, autonomy, subagent, skill, cache, guardrail, provider-usage, and transcript behavior.                                     |
 | [`browser-extension.md`](./browser-extension.md)                         | Chrome pairing, profile and agent-owned tab control, installation, ownership, operations, and mutation limits.                               |
 | [`computer-use.md`](./computer-use.md)                                   | Native macOS iTerm, Finder, and desktop control, permissions, helper development, and packaging.                                             |
 | [`memory.md`](./memory.md)                                               | On-demand workspace knowledge, Markdown concepts, permissions, conflict-safe updates, and offline graph export.                              |
+| [`cue-retrieval.md`](./cue-retrieval.md) | Recall retrieval: Tantivy BM25, BGE embeddings, rank fusion, abstention thresholds, model provisioning, and benchmarks. |
+| [`harness.md`](./harness.md) | Recursive harness adaptation: versions, modes, probing rounds, authorization ceiling, experiences and events. |
 | [`meeting-intelligence.md`](./meeting-intelligence.md)                   | Opt-in local speech capture, model management, bounded meeting analysis, and approval-gated MCP reconciliation. |
 | [`tui-redesign-backlog.md`](./tui-redesign-backlog.md)                   | Proposed post-rebuild design baseline, blocked-contract, diagnostics, provider-reproduction, and scoring backlog.                            |
 | [`windows-runtime-backlog.md`](./windows-runtime-backlog.md) | Deferred Windows process ownership, private storage, and guardrail contracts with Rust-first reuse. |
@@ -68,7 +70,7 @@ Open `http://127.0.0.1:4174/`. Stop the preview with Ctrl-C. Use another free po
 | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
 | Product scope or release surface                                                                       | `product-direction.md` and root `README.md`                |
 | Package ownership or dependency direction                                                              | `architecture.md` and root `AGENTS.md`                     |
-| Session, autonomy, subagent, skill, artifact, cache, guardrail, provider-usage, or transcript behavior | `runtime.md`                                               |
+| Session, autonomy, subagent, skill, cache, guardrail, provider-usage, or transcript behavior | `runtime.md`                                               |
 | Provider request amplification, cache/continuation capability, diagnostics, or efficiency measurement  | `provider-efficiency.md` and `runtime.md`                  |
 | Public HTTP operation or Schema                                                                        | relevant `specs` contract and regenerated Client output |
 | Runtime, CLI/TUI, service, provider, MCP, permission, or environment configuration                     | `configuration.md`                                         |

@@ -17,8 +17,9 @@ use crate::{
         registry::{Failure, Tool, ToolFuture},
     },
 };
-use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use ycoding_ai::llm::ToolDefinition;
+use ycoding_schema::coordination::SubagentRequestBlockedReason;
 use ycoding_schema::{
     JsonValue, LosslessString, ObjectEncoder, model, schema::PositiveInt, session, session_message,
 };
@@ -45,8 +46,6 @@ impl Execution for &'static execution::Execution {
         execution::Execution::request_interrupt(self, id)
     }
 }
-pub type Activation =
-    Arc<dyn Fn(Context, LosslessString) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 pub struct Subagent {
     pub store: store::Service,
     pub orchestration: Arc<orchestration::Service>,
@@ -57,7 +56,6 @@ pub struct Subagent {
     pub agents: DomainState<agent::Service>,
     pub config: Arc<Configuration>,
     pub collator: Arc<crate::tools::code_mode::Collation>,
-    pub activate: Activation,
 }
 impl Subagent {
     pub fn available_agents(
@@ -89,6 +87,39 @@ impl Subagent {
             )
         });
         Ok(available)
+    }
+    async fn refuse(&self, context: &Context, agent: &str, error: orchestration::Error) -> Failure {
+        let blocked = match &error {
+            orchestration::Error::Blocked(blocked) => Some(blocked.clone()),
+            orchestration::Error::DepthLimit(_) => Some(orchestration::Blocked {
+                reason: SubagentRequestBlockedReason::ConcurrencyCeiling,
+                message: error.to_string(),
+            }),
+            _ => None,
+        };
+        if let Some(blocked) = blocked
+            && !context.cancellation.is_cancelled()
+        {
+            let message_id = context
+                .message_id
+                .as_lossless()
+                .to_utf8()
+                .unwrap_or_default();
+            let call_id = context.invocation_id().to_utf8().unwrap_or_default();
+            let _ = self
+                .orchestration
+                .record_blocked(
+                    &context.session_id,
+                    &orchestration::BlockedRequest {
+                        agent,
+                        message_id: &message_id,
+                        call_id: &call_id,
+                    },
+                    &blocked,
+                )
+                .await;
+        }
+        failure(error)
     }
     pub fn description_for(&self, context: &Context) -> Result<LosslessString, Failure> {
         let base = self.definition("subagent").description;
@@ -195,41 +226,63 @@ impl Tool for Subagent {
                     .unwrap_or(1),
                 _ => 1,
             };
+            let requested = agent.to_utf8().unwrap_or_default();
             if self
                 .orchestration
                 .depth(&context.session_id)
                 .map_err(failure)?
                 >= limit
             {
-                return Err(Failure::message(format!(
-                    "Subagent depth limit reached ({limit}). Increase \"experimental.subagent_depth\" to allow nested subagents."
-                )));
+                return Err(self
+                    .refuse(
+                        &context,
+                        &requested,
+                        orchestration::Blocked::error(
+                            SubagentRequestBlockedReason::ConcurrencyCeiling,
+                            format!(
+                                "Subagent depth limit reached ({limit}). Increase \"experimental.subagent_depth\" to allow nested subagents."
+                            ),
+                        ),
+                    )
+                    .await);
             }
-            let prepared = self
-                .preflight
-                .prepare(
-                    &context.session_id,
-                    &orchestration::PreflightRequest {
-                        agent: agent.clone(),
-                        model: selected,
-                        caller: Some(context.agent.clone()),
-                    },
-                )
-                .map_err(failure)?;
+            if let Err(error) = self.orchestration.check_launch_gate(&context.session_id) {
+                return Err(self.refuse(&context, &requested, error).await);
+            }
+            let prepared = match self.preflight.prepare(
+                &context.session_id,
+                &orchestration::PreflightRequest {
+                    agent: agent.clone(),
+                    model: selected,
+                    caller: Some(context.agent.clone()),
+                },
+            ) {
+                Ok(prepared) => prepared,
+                Err(error) => return Err(self.refuse(&context, &requested, error).await),
+            };
             let target = prepared.agent.to_utf8().unwrap_or_default();
-            permit(
-                &self.policy,
-                &context,
-                "subagent",
-                &target,
-                true,
-                &format!("Subagent denied: {target}"),
-            )
-            .await?;
+            let denied = format!("Subagent denied: {target}");
+            if let Err(failure) =
+                permit(&self.policy, &context, "subagent", &target, true, &denied).await
+            {
+                if matches!(failure, Failure::Cancelled | Failure::Defect(_)) {
+                    return Err(failure);
+                }
+                return Err(self
+                    .refuse(
+                        &context,
+                        &requested,
+                        orchestration::Blocked::error(
+                            SubagentRequestBlockedReason::PermissionDenied,
+                            denied,
+                        ),
+                    )
+                    .await);
+            }
             if context.cancellation.is_cancelled() {
                 return Err(Failure::Cancelled);
             }
-            let child = self
+            let launched = self
                 .orchestration
                 .launch_attributed_with_context(
                     orchestration::LaunchInput {
@@ -246,8 +299,11 @@ impl Tool for Subagent {
                     &context.attribution,
                     shared_context.as_ref(),
                 )
-                .await
-                .map_err(failure)?;
+                .await;
+            let child = match launched {
+                Ok(child) => child,
+                Err(error) => return Err(self.refuse(&context, &requested, error).await),
+            };
             if context.cancellation.is_cancelled() {
                 self.orchestration
                     .cancel(&context.session_id, &child.session_id)
@@ -255,31 +311,6 @@ impl Tool for Subagent {
                     .map_err(failure)?;
                 return Err(Failure::Cancelled);
             }
-            if let Some(source) = self.store.artifact_source() {
-                use crate::resources::project_artifact::source::{
-                    ActivationInput, ActivationSource,
-                };
-                use ycoding_schema::DomainDecode;
-                if source
-                    .activate(ActivationInput {
-                        kind: ycoding_schema::project_artifact::Kind::decode(&JsonValue::String(
-                            "agent".into(),
-                        ))
-                        .expect("fixed kind"),
-                        id: agent.clone(),
-                        session_id: context.session_id.clone(),
-                        agent_id: Some(agent.clone()),
-                        source: ActivationSource::SubagentLaunch {
-                            message_id: context.message_id.as_lossless().clone(),
-                            call_id: Some(context.call_id.clone()),
-                        },
-                    })
-                    .is_err()
-                {
-                    source.record_activation_failure();
-                }
-            }
-            (self.activate)(context.clone(), agent).await;
             let JsonValue::Object(structured) = ObjectEncoder::new()
                 .field("sessionID", &child.session_id)
                 .field("status", "running")

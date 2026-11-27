@@ -6,7 +6,6 @@ import { Auth, LLMClient } from "@ycoding-ai/ai/route"
 import { BrowserTool } from "@ycoding-ai/core/tool/browser"
 import { ComputerTool } from "@ycoding-ai/core/tool/computer"
 import { MemoryTool } from "@ycoding-ai/core/tool/memory"
-import { ProjectArtifactTool } from "@ycoding-ai/core/tool/project-artifact"
 import { SubagentControlTool } from "@ycoding-ai/core/tool/subagent-control"
 import { SubagentReportTool } from "@ycoding-ai/core/tool/subagent-report"
 import { Tool } from "@ycoding-ai/core/tool/tool"
@@ -47,22 +46,6 @@ const cases = [
   { tool: "computer", input: ComputerTool.Input, parameter: "modifiers", types: ["array"], sample: { action: "desktop.key", ...calculator, key: "a", modifiers: ["control", "command"] }, value: ["control", "command"] },
   { tool: "computer", input: ComputerTool.Input, parameter: "newline", types: ["boolean"], sample: { action: "iterm.send_text", platform: "macos", window_id: 1, tab_index: 1, session_id: "s", expected_revision: "r1", text: "ls", newline: true }, value: true },
   { tool: "computer", input: ComputerTool.Input, parameter: "remote_debugging", types: ["boolean"], sample: { action: "desktop.launch", platform: "macos", bundle_id: "com.apple.calculator", remote_debugging: true }, value: true },
-  {
-    tool: "project_artifact",
-    input: ProjectArtifactTool.Input,
-    parameter: "permissions",
-    types: ["array"],
-    sample: {
-      kind: "agent",
-      id: "reviewer",
-      insight_key: "k",
-      name: "Reviewer",
-      description: "Reviews.",
-      system: "Review.",
-      permissions: [{ action: "read", resource: "*", effect: "allow" }],
-    },
-    value: [{ action: "read", resource: "*", effect: "allow" }],
-  },
 ] as const
 
 const definition = (tool: (typeof cases)[number]["tool"], input: (typeof cases)[number]["input"]) =>

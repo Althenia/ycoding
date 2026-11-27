@@ -789,7 +789,18 @@ mod tests {
     }
 
     fn previous() -> Catalog {
-        Catalog::new(4, native::catalog(DatabaseKind::Core).tables())
+        Catalog::new(
+            4,
+            Box::leak(
+                native::catalog(DatabaseKind::Core)
+                    .tables()
+                    .iter()
+                    .chain(crate::upgrade::artifact_removal::TABLES)
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            ),
+        )
     }
 
     fn encoded(row: &impl Field) -> Vec<u8> {

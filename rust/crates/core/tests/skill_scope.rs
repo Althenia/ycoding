@@ -1,11 +1,10 @@
 use std::{collections::BTreeMap, fs, path::Path};
 use ycoding_core::resources::{
     config::{Entry, Roots},
-    project_artifact::adapter,
     skill::{self, Scope},
 };
 use ycoding_schema::{
-    DomainDecode, JsonValue, parse_json, project_artifact,
+    DomainDecode, parse_json,
     skill::{EmbeddedSource, Info, Source},
 };
 
@@ -14,36 +13,6 @@ fn write_skill(directory: &Path, id: &str) {
     fs::write(
         directory.join(id).join("SKILL.md"),
         format!("---\nname: {id}\ndescription: fixture\n---\nBody of {id}."),
-    )
-    .unwrap();
-}
-
-fn activate_artifact(skills: &mut skill::Service, root: &Path, id: &str) {
-    let definition = project_artifact::Definition::decode(
-        &parse_json(&format!(
-            r#"{{"kind":"skill","name":"{id}","description":"Artifact skill","content":"Artifact body."}}"#
-        ))
-        .unwrap(),
-    )
-    .unwrap();
-    let path = adapter::project_path(&adapter::kind(&definition), root, id);
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(&path, adapter::render(&definition).to_utf8().unwrap()).unwrap();
-    adapter::activate(
-        &adapter::VersionIndex {
-            scope_id: project_artifact::ScopeId::decode(&JsonValue::String("pas_scope".into()))
-                .unwrap(),
-            version_id: project_artifact::VersionId::decode(&JsonValue::String("pav_scope".into()))
-                .unwrap(),
-            id: project_artifact::Id::decode(&JsonValue::String(id.into())).unwrap(),
-            content_path: path,
-            definition,
-        },
-        adapter::RuntimeDraft {
-            skill: Some(skills),
-            command: None,
-            agent: None,
-        },
     )
     .unwrap();
 }
@@ -134,16 +103,6 @@ async fn skill_scope_follows_project_then_global_root_containment_of_the_skill_l
         )
         .unwrap(),
     }));
-    activate_artifact(
-        &mut service,
-        &project.join(".artifacts"),
-        "artifact-in-project",
-    );
-    activate_artifact(
-        &mut service,
-        &roots.data.join("artifacts"),
-        "artifact-outside",
-    );
     let scopes = service
         .list()
         .await
@@ -160,6 +119,9 @@ async fn skill_scope_follows_project_then_global_root_containment_of_the_skill_l
         scopes,
         BTreeMap::from([
             ("ycoding".into(), None),
+            ("chatgpt-connectors".into(), None),
+            ("browser-use".into(), None),
+            ("computer-use".into(), None),
             ("report".into(), None),
             ("project-claude".into(), Some(Scope::Project)),
             ("nested-agents".into(), Some(Scope::Project)),
@@ -171,8 +133,6 @@ async fn skill_scope_follows_project_then_global_root_containment_of_the_skill_l
             ("config-singular".into(), None),
             ("embedded".into(), None),
             ("embedded-in-project".into(), Some(Scope::Project)),
-            ("artifact-in-project".into(), Some(Scope::Project)),
-            ("artifact-outside".into(), None),
         ])
     );
     fs::remove_dir_all(base).unwrap();

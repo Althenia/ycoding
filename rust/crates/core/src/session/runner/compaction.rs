@@ -35,6 +35,7 @@ pub(super) struct Helper {
 pub(super) enum Gate {
     Proceed,
     Restart,
+    Exceeded(Error),
 }
 
 pub(super) struct GateInput<'a> {
@@ -60,12 +61,16 @@ impl Local {
         let policy = &services.compaction;
         let capabilities = Capabilities {
             context_window_tokens: input.context_window,
-            max_output_tokens: input.output_limit,
+            max_output_tokens: input
+                .request
+                .generation
+                .max_tokens
+                .map_or(input.output_limit, |tokens| tokens as i64),
             context_safety_margin_tokens: policy.context_safety_margin_tokens,
         };
         let cap = context_pressure::hard_input_cap_tokens(&capabilities);
         if cap <= 0 {
-            return Ok(Gate::Proceed);
+            return Ok(Gate::Exceeded(budget_error(0, cap)));
         }
         let estimate = compaction_gate::estimated_provider_input_tokens(input.request);
         let raw = context_pressure::estimated_input_tokens(Usage {
@@ -78,11 +83,17 @@ impl Local {
         } else {
             latest_provider_totals(input.history)
         };
-        if !input.force
-            && estimate < cap
-            && provider_input.is_none_or(|total| total < cap)
-            && provider_total.is_none_or(|total| total < cap)
-        {
+        let pressure = estimate
+            .max(provider_input.unwrap_or(0))
+            .max(provider_total.unwrap_or(0));
+        let blocked = || {
+            Ok(if pressure < cap {
+                Gate::Proceed
+            } else {
+                Gate::Exceeded(budget_error(pressure, cap))
+            })
+        };
+        if !input.force && pressure < cap {
             if let Some(tools) = &services.session_tools {
                 let admitted = tools
                     .conversation_compact
@@ -151,10 +162,10 @@ impl Local {
             return Ok(Gate::Proceed);
         }
         if *input.admissions >= MAXIMUM_GATE_ADMISSIONS {
-            return Ok(Gate::Proceed);
+            return blocked();
         }
         let Some((boundary, seq)) = self.latest_complete_boundary(&input.session.id)? else {
-            return Ok(Gate::Proceed);
+            return blocked();
         };
         let Some(revision) = services
             .store
@@ -163,20 +174,17 @@ impl Local {
             .get::<ContextStateTable>(&crate::session::key(input.session.id.as_lossless()))?
             .map(|state| state.revision)
         else {
-            return Ok(Gate::Proceed);
+            return blocked();
         };
         let pending = services.store.compaction_pending(&input.session.id).await?;
         if let Some(existing) = pending.first() {
             self.settle(&input, existing).await?;
             return Ok(Gate::Restart);
         }
-        let target = compaction_gate::target_input_tokens(input.context_window, policy);
+        let target = compaction_gate::target_input_tokens(input.context_window, policy).min(cap);
         if !compaction_gate::can_reduce(input.request, input.history, target) {
-            return Ok(Gate::Proceed);
+            return blocked();
         }
-        let pressure = estimate
-            .max(provider_input.unwrap_or(0))
-            .max(provider_total.unwrap_or(0));
         let admission = || compaction_job::AdmitInput {
             id: None,
             session: input.session.id.clone(),
@@ -197,12 +205,12 @@ impl Local {
             .compaction_has_unchanged_deterministic_failure(admission())
             .await?
         {
-            return Ok(Gate::Proceed);
+            return blocked();
         }
         let admitted = match services.store.compaction_admit(admission(), now).await {
             Ok(job) => job,
             Err(compaction_job::CompactionError::Store(failure)) => return Err(failure.into()),
-            Err(_) => return Ok(Gate::Proceed),
+            Err(_) => return blocked(),
         };
         *input.admissions += 1;
         self.settle(&input, &admitted).await?;
@@ -518,6 +526,13 @@ fn latest_provider_totals(history: &[session_message::Info]) -> (Option<i64>, Op
     (
         Some(input as i64),
         Some((input + tokens.output.get() + tokens.reasoning.get()) as i64),
+    )
+}
+
+fn budget_error(pressure: i64, cap: i64) -> Error {
+    error(
+        "context.limit",
+        &format!("The request exceeds the input budget of {pressure}/{cap} tokens"),
     )
 }
 

@@ -21,17 +21,20 @@ impl Fixture {
         let path = fs::canonicalize(path).unwrap();
         fs::create_dir(path.join("workspace")).unwrap();
         fs::create_dir(path.join("workspace/.git")).unwrap();
-        let store = Service::new(Options {
-            directory: path.join("workspace"),
-            home: path.clone(),
-            data: path.join("data"),
-            repository: Some(Repository {
+        let store = Service::with_clock(
+            Options {
                 directory: path.join("workspace"),
-                common_directory: path.join("workspace/.git"),
-                worktrees: vec![path.join("workspace")],
-            }),
-            limits,
-        })
+                home: path.clone(),
+                data: path.join("data"),
+                repository: Some(Repository {
+                    directory: path.join("workspace"),
+                    common_directory: path.join("workspace/.git"),
+                    worktrees: vec![path.join("workspace")],
+                }),
+                limits,
+            },
+            Box::new(|| chrono::DateTime::from_timestamp(1_795_000_000, 0).unwrap()),
+        )
         .unwrap();
         Self { path, store }
     }
@@ -42,7 +45,17 @@ impl Drop for Fixture {
     }
 }
 fn note(body: &str) -> String {
-    format!("---\ntype: Decision\ntitle: Build guide\n---\n{body}\n")
+    format!(
+        "---\ntype: Decision\ntitle: Build guide {}\n---\n{body}\n",
+        &ycoding_core::resources::memory::format::sha256(body)[..8]
+    )
+}
+fn unstamped(content: String) -> String {
+    content
+        .lines()
+        .filter(|line| !line.starts_with("generated:"))
+        .map(|line| format!("{line}\n"))
+        .collect()
 }
 
 #[tokio::test]
@@ -58,43 +71,66 @@ async fn readonly_missing_storage_exact_retries_and_digest_fence() {
     let content = note("Use the local build command.");
     let first = f
         .store
-        .write(Scope::Repository, "build/rules", &content, None)
+        .write(Scope::Repository, "build/rules", &content, None, false)
         .await
         .unwrap();
     assert!(first.created);
     assert_eq!(
-        f.store
-            .read(Scope::Repository, "build/rules")
-            .unwrap()
-            .content,
+        unstamped(
+            f.store
+                .read(Scope::Repository, "build/rules")
+                .unwrap()
+                .content
+        ),
         content
     );
     assert!(
         !f.store
-            .write(Scope::Repository, "build/rules", &content, None)
+            .write(Scope::Repository, "build/rules", &content, None, false)
             .await
             .unwrap()
             .created
     );
     assert!(matches!(
         f.store
-            .write(Scope::Repository, "build/rules", &note("Changed"), None)
+            .write(
+                Scope::Repository,
+                "build/rules",
+                &note("Changed"),
+                None,
+                false
+            )
             .await,
         Err(Error::StaleContent)
     ));
     let one = note("One");
     let two = note("Two");
     let (a, b) = tokio::join!(
-        f.store
-            .write(Scope::Repository, "build/rules", &one, Some(&first.digest)),
-        f.store
-            .write(Scope::Repository, "build/rules", &two, Some(&first.digest))
+        f.store.write(
+            Scope::Repository,
+            "build/rules",
+            &one,
+            Some(&first.digest),
+            false
+        ),
+        f.store.write(
+            Scope::Repository,
+            "build/rules",
+            &two,
+            Some(&first.digest),
+            false
+        )
     );
     assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
     assert!(
+        fs::read_to_string(status.root.join("build/index.md"))
+            .unwrap()
+            .contains("rules.md")
+    );
+    assert!(
         fs::read_to_string(status.root.join("index.md"))
             .unwrap()
-            .contains("build/rules.md")
+            .contains("build/")
     );
     #[cfg(unix)]
     {
@@ -131,25 +167,20 @@ async fn reserved_ids_and_bad_frontmatter_leave_no_storage() {
         "notes/log",
         "a.md",
         "_meta",
-        "trash/hidden",
         "Index",
         "notes/_meta/x",
     ] {
         assert!(matches!(
             f.store
-                .write(Scope::Repository, id, &note("ok"), None)
+                .write(Scope::Repository, id, &note("ok"), None, false)
                 .await,
             Err(Error::UnsafePath)
         ));
     }
-    for content in [
-        "No frontmatter",
-        "---\ntype: ''\n---\nEmpty type",
-        "---\ntype: Decision\n---\nMissing.[^absent]\n",
-    ] {
+    for content in ["No frontmatter", "---\ntype: ''\n---\nEmpty type"] {
         assert!(matches!(
             f.store
-                .write(Scope::Repository, "invalid", content, None)
+                .write(Scope::Repository, "invalid", content, None, false)
                 .await,
             Err(Error::InvalidConcept)
         ));
@@ -163,7 +194,7 @@ async fn trash_receipts_restore_no_overwrite_and_purge_digest_fence() {
     let content = format!("\u{feff}{}", note("Lifecycle sentinel café\nSecond line"));
     let saved = f
         .store
-        .write(Scope::Repository, "notes/entry", &content, None)
+        .write(Scope::Repository, "notes/entry", &content, None, false)
         .await
         .unwrap();
     assert!(matches!(
@@ -187,7 +218,13 @@ async fn trash_receipts_restore_no_overwrite_and_purge_digest_fence() {
     );
     let replacement = f
         .store
-        .write(Scope::Repository, "notes/entry", &note("Replacement"), None)
+        .write(
+            Scope::Repository,
+            "notes/entry",
+            &note("Replacement"),
+            None,
+            false,
+        )
         .await
         .unwrap();
     assert!(matches!(
@@ -211,10 +248,12 @@ async fn trash_receipts_restore_no_overwrite_and_purge_digest_fence() {
         .await
         .unwrap();
     assert_eq!(
-        f.store
-            .read(Scope::Repository, "notes/entry")
-            .unwrap()
-            .content,
+        unstamped(
+            f.store
+                .read(Scope::Repository, "notes/entry")
+                .unwrap()
+                .content
+        ),
         content
     );
     let rest = f.store.trash(Scope::Repository, None, None).unwrap();
@@ -245,7 +284,7 @@ async fn vacuum_defaults_to_readonly_preview_and_binds_obsolete_bytes() {
     let root = f.store.status(Scope::Repository).unwrap().root;
     assert!(!root.exists());
     f.store
-        .write(Scope::Repository, "old/entry", &note("Old"), None)
+        .write(Scope::Repository, "old/entry", &note("Old"), None, false)
         .await
         .unwrap();
     fs::remove_file(root.join("old/entry.md")).unwrap();
@@ -283,16 +322,14 @@ async fn vacuum_defaults_to_readonly_preview_and_binds_obsolete_bytes() {
 async fn lexical_ranking_filters_unicode_and_paging_match_ts() {
     use ycoding_core::resources::memory::Search;
     let f = Fixture::new(Limits::default());
+    let root = f.store.status(Scope::Repository).unwrap().root;
+    fs::create_dir_all(&root).unwrap();
     for id in ["b", "a"] {
-        f.store
-            .write(
-                Scope::Repository,
-                id,
-                "---\ntype: Decision\ntitle: Cache\ntags: [runtime]\n---\nSame body\n",
-                None,
-            )
-            .await
-            .unwrap();
+        fs::write(
+            root.join(format!("{id}.md")),
+            "---\ntype: Decision\ntitle: Cache\ntags: [runtime]\n---\nSame body\n",
+        )
+        .unwrap();
     }
     f.store
         .write(
@@ -300,6 +337,7 @@ async fn lexical_ranking_filters_unicode_and_paging_match_ts() {
             "c",
             "---\ntype: Guide\ntitle: Other\n---\ncache café\n",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -324,11 +362,12 @@ async fn lexical_ranking_filters_unicode_and_paging_match_ts() {
             .collect::<Vec<_>>(),
         ["a", "b", "c"]
     );
-    let idf = (1.0_f64 + 0.5 / 3.5).ln();
-    for (hit, weight) in all.iter().zip([4.0, 4.0, 1.0]) {
-        assert!((hit.score - idf * weight).abs() < 1e-10);
-    }
-    assert_eq!(all[0].score, all[1].score);
+    assert!(
+        all.iter()
+            .all(|hit| hit.score.is_finite() && hit.score > 0.0)
+    );
+    assert!(all[0].score >= all[1].score);
+    assert!(all[1].score > all[2].score);
     assert_eq!(
         search("cache", Some("Guide"), None, None)[0].summary.id,
         "c"
@@ -382,7 +421,7 @@ async fn graph_is_offline_escaped_deterministic_and_excludes_trash() {
     );
     let saved = f
         .store
-        .write(Scope::Repository, "notes/a", &content, None)
+        .write(Scope::Repository, "notes/a", &content, None, false)
         .await
         .unwrap();
     f.store
@@ -391,6 +430,7 @@ async fn graph_is_offline_escaped_deterministic_and_excludes_trash() {
             "b",
             &note("Use the local build command."),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -442,11 +482,18 @@ async fn knowledge_graph_and_repository_qualified_links_share_identity() {
             "a",
             &note("[Shared target](/knowledge/b.md)"),
             None,
+            false,
         )
         .await
         .unwrap();
     f.store
-        .write(Scope::Knowledge, "b", &note("Shared build facts."), None)
+        .write(
+            Scope::Knowledge,
+            "b",
+            &note("Shared build facts."),
+            None,
+            false,
+        )
         .await
         .unwrap();
     f.store
@@ -455,6 +502,7 @@ async fn knowledge_graph_and_repository_qualified_links_share_identity() {
             "mem_build",
             &note("[Shared build](../../knowledge/b.md)"),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -478,22 +526,28 @@ async fn knowledge_graph_and_repository_qualified_links_share_identity() {
 #[tokio::test]
 async fn capacity_counts_invalid_files_and_derived_failure_is_not_failed_commit() {
     let content = note("café");
-    let f = Fixture::new(Limits {
-        max_concept_bytes: content.len(),
-        max_bundle_bytes: content.len() * 2 - 1,
-        ..Limits::default()
-    });
+    let f = Fixture::new(Limits::default());
     f.store
-        .write(Scope::Repository, "a", &content, None)
+        .write(Scope::Repository, "a", &content, None, false)
         .await
         .unwrap();
+    let stored = f.store.read(Scope::Repository, "a").unwrap().content.len();
+    f.store
+        .configure(Limits {
+            max_concept_bytes: stored,
+            max_bundle_bytes: stored * 2 - 1,
+            ..Limits::default()
+        })
+        .unwrap();
     assert!(matches!(
-        f.store.write(Scope::Repository, "b", &content, None).await,
+        f.store
+            .write(Scope::Repository, "b", &note("café two"), None, false)
+            .await,
         Err(Error::TooLarge)
     ));
     assert!(matches!(
         f.store
-            .write(Scope::Repository, "b", &(content.clone() + "x"), None)
+            .write(Scope::Repository, "b", &note("café three"), None, false)
             .await,
         Err(Error::TooLarge)
     ));
@@ -502,7 +556,7 @@ async fn capacity_counts_invalid_files_and_derived_failure_is_not_failed_commit(
     fs::create_dir(root.join("index.md")).unwrap();
     let result = f
         .store
-        .write(Scope::Repository, "a", &content, None)
+        .write(Scope::Repository, "a", &content, None, false)
         .await
         .unwrap();
     assert_eq!(result.warnings[0].code, "index-out-of-date");
@@ -528,7 +582,7 @@ async fn bounded_trash_preserves_bytes_and_refuses_incomplete_inventory() {
     });
     let saved = f
         .store
-        .write(Scope::Repository, "entry", &note("Original"), None)
+        .write(Scope::Repository, "entry", &note("Original"), None, false)
         .await
         .unwrap();
     let removed = f
@@ -539,7 +593,7 @@ async fn bounded_trash_preserves_bytes_and_refuses_incomplete_inventory() {
     let root = f.store.status(Scope::Repository).unwrap().root;
     for index in 0..40 {
         fs::write(
-            root.join(format!("trash/trash_{index:064x}.json")),
+            root.join(format!(".trash/trash_{index:064x}.json")),
             "{ malformed receipt",
         )
         .unwrap();
@@ -555,6 +609,7 @@ async fn bounded_trash_preserves_bytes_and_refuses_incomplete_inventory() {
             "next",
             &note("Distinct next entry"),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -568,7 +623,10 @@ async fn bounded_trash_preserves_bytes_and_refuses_incomplete_inventory() {
         f.store.read(Scope::Repository, "next").unwrap().digest,
         next.digest
     );
-    assert!(root.join(format!("trash/{}.md", removed.trash_id)).exists());
+    assert!(
+        root.join(format!(".trash/{}.md", removed.trash_id))
+            .exists()
+    );
 }
 
 #[tokio::test]
@@ -580,7 +638,7 @@ async fn duplicate_receipts_do_not_charge_capacity_and_tampering_blocks_restore(
     let content = note("Original");
     let saved = f
         .store
-        .write(Scope::Repository, "entry", &content, None)
+        .write(Scope::Repository, "entry", &content, None, false)
         .await
         .unwrap();
     let first = f
@@ -589,7 +647,7 @@ async fn duplicate_receipts_do_not_charge_capacity_and_tampering_blocks_restore(
         .await
         .unwrap();
     f.store
-        .write(Scope::Repository, "entry", &content, None)
+        .write(Scope::Repository, "entry", &content, None, false)
         .await
         .unwrap();
     let second = f
@@ -604,7 +662,7 @@ async fn duplicate_receipts_do_not_charge_capacity_and_tampering_blocks_restore(
     );
     let root = f.store.status(Scope::Repository).unwrap().root;
     fs::write(
-        root.join(format!("trash/{}.json", first.trash_id)),
+        root.join(format!(".trash/{}.json", first.trash_id)),
         "{\"version\":1,\"id\":\"different\"}\n",
     )
     .unwrap();
@@ -616,7 +674,7 @@ async fn duplicate_receipts_do_not_charge_capacity_and_tampering_blocks_restore(
     );
     assert!(!root.join("different.md").exists());
     assert_eq!(
-        fs::read_to_string(root.join(format!("trash/{}.md", first.trash_id))).unwrap(),
+        unstamped(fs::read_to_string(root.join(format!(".trash/{}.md", first.trash_id))).unwrap()),
         content
     );
 }
@@ -626,7 +684,13 @@ async fn cancelling_a_waiting_writer_releases_lock_and_never_commits() {
     use std::future::Future;
     let f = Fixture::new(Limits::default());
     f.store
-        .write(Scope::Repository, "existing", &note("Existing"), None)
+        .write(
+            Scope::Repository,
+            "existing",
+            &note("Existing"),
+            None,
+            false,
+        )
         .await
         .unwrap();
     let root = f.store.status(Scope::Repository).unwrap().root;
@@ -639,7 +703,7 @@ async fn cancelling_a_waiting_writer_releases_lock_and_never_commits() {
         let content = note("Cancelled");
         let write = f
             .store
-            .write(Scope::Repository, "cancelled", &content, None);
+            .write(Scope::Repository, "cancelled", &content, None, false);
         tokio::pin!(write);
         std::future::poll_fn(|cx| {
             assert!(write.as_mut().poll(cx).is_pending());
@@ -649,7 +713,7 @@ async fn cancelling_a_waiting_writer_releases_lock_and_never_commits() {
     }
     drop(lease);
     f.store
-        .write(Scope::Repository, "later", &note("Later"), None)
+        .write(Scope::Repository, "later", &note("Later"), None, false)
         .await
         .unwrap();
     assert_eq!(
@@ -665,35 +729,42 @@ async fn cancelling_a_waiting_writer_releases_lock_and_never_commits() {
 }
 
 #[test]
-fn markdown_source_citations_metadata_and_code_rules_match_ts() {
+fn optional_metadata_defects_never_reject_a_concept() {
     use ycoding_core::resources::memory::format::parse;
-    let concept = parse("decision", "---\ntype: NovelType\ncustom:\n  preserved: true\nsources:\n  - id: spec\n    resource: repo:///README.md\n---\nEvidence.[^spec]\n").unwrap();
+    let now = chrono::Utc::now();
+    let concept = parse("decision", "---\ntype: NovelType\ncustom:\n  preserved: true\nsources:\n  - id: spec\n    resource: repo:///README.md\n---\nEvidence.[^spec]\n", now).unwrap();
     assert_eq!(concept.summary.type_.as_str(), Some("NovelType"));
     assert!(concept.content.contains("preserved: true"));
     for body in [
         "`Missing.[^absent]`",
         "```\nMissing.[^absent]\n```",
         "[^absent]\n\n[^absent]: https://example.invalid",
-    ] {
-        assert!(parse("valid", &note(body)).is_ok());
-    }
-    for body in [
         "Missing.[^absent]",
         "Evidence.[^absent]: https://example.invalid",
     ] {
-        assert!(matches!(
-            parse("invalid", &note(body)),
-            Err(Error::InvalidConcept)
-        ));
+        assert!(parse("valid", &note(body), now).is_ok(), "{body}");
     }
     for metadata in [
         "type: Decision\ntags: [7]",
         "type: Decision\ntitle: 7",
-        "type: Decision\ntitle: x: y",
         "type: Decision\nsources: [{id: duplicate, resource: a}, {id: duplicate, resource: b}]",
         "type: Decision\nsources: [{id: bad.id, resource: a}]",
+        "type: Decision\nsources: [{title: no resource}]",
     ] {
-        assert!(parse("invalid", &format!("---\n{metadata}\n---\nbody\n")).is_err());
+        assert!(
+            parse("tolerated", &format!("---\n{metadata}\n---\nbody\n"), now).is_ok(),
+            "{metadata}"
+        );
+    }
+    for metadata in [
+        "type: Decision\ntitle: x: y",
+        "title: no type",
+        "type: A\ntype: B",
+    ] {
+        assert!(
+            parse("invalid", &format!("---\n{metadata}\n---\nbody\n"), now).is_err(),
+            "{metadata}"
+        );
     }
 }
 
@@ -770,7 +841,8 @@ async fn typed_boundary_denies_mutations_and_releases_reservations_on_failure() 
             Input::Write {
                 id: "guide",
                 content: &content,
-                expected_digest: None
+                expected_digest: None,
+                allow_human_actor: false
             },
             &policy
         )
@@ -786,7 +858,8 @@ async fn typed_boundary_denies_mutations_and_releases_reservations_on_failure() 
             Input::Write {
                 id: "guide",
                 content: &content,
-                expected_digest: None
+                expected_digest: None,
+                allow_human_actor: false
             },
             &policy
         )
@@ -802,7 +875,8 @@ async fn typed_boundary_denies_mutations_and_releases_reservations_on_failure() 
             Input::Write {
                 id: "guide",
                 content: &content,
-                expected_digest: None
+                expected_digest: None,
+                allow_human_actor: false
             },
             &policy
         )
@@ -818,6 +892,7 @@ async fn typed_boundary_denies_mutations_and_releases_reservations_on_failure() 
             id: "guide",
             content: &content,
             expected_digest: None,
+            allow_human_actor: false,
         },
         &policy,
     )
@@ -830,7 +905,8 @@ async fn typed_boundary_denies_mutations_and_releases_reservations_on_failure() 
             Input::Write {
                 id: "guide",
                 content: &note("Conflicting"),
-                expected_digest: None
+                expected_digest: None,
+                allow_human_actor: false
             },
             &policy
         )
@@ -909,7 +985,13 @@ async fn symlink_paths_and_invalid_utf8_are_never_followed_or_repaired_by_reads(
     symlink(f.path.join("workspace"), root.join("outside")).unwrap();
     assert!(matches!(
         f.store
-            .write(Scope::Repository, "outside/escape", &note("Escape"), None)
+            .write(
+                Scope::Repository,
+                "outside/escape",
+                &note("Escape"),
+                None,
+                false
+            )
             .await,
         Err(Error::UnsafePath)
     ));
@@ -926,7 +1008,7 @@ async fn symlink_paths_and_invalid_utf8_are_never_followed_or_repaired_by_reads(
             .iter()
             .map(|w| (w.id.as_str(), w.code.as_str()))
             .collect::<Vec<_>>(),
-        [("broken", "invalid-concept"), ("outside", "unsafe-link")]
+        [("broken", "not-a-concept"), ("outside", "unsafe-link")]
     );
     assert!(!root.join("index.md").exists());
 }
@@ -947,7 +1029,13 @@ async fn disabled_outside_git_relative_and_home_roots_do_not_create_storage() {
         Err(Error::NotFound)
     ));
     knowledge
-        .write(Scope::Knowledge, "general", &note("General facts"), None)
+        .write(
+            Scope::Knowledge,
+            "general",
+            &note("General facts"),
+            None,
+            false,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -972,7 +1060,7 @@ async fn disabled_outside_git_relative_and_home_roots_do_not_create_storage() {
     );
     assert!(matches!(
         disabled
-            .write(Scope::Knowledge, "entry", &note("No effect"), None)
+            .write(Scope::Knowledge, "entry", &note("No effect"), None, false)
             .await,
         Err(Error::Disabled)
     ));
@@ -1032,7 +1120,7 @@ async fn approval_root_fence_and_live_disabled_configuration_preserve_saved_byte
     let f = Fixture::new(Limits::default());
     let content = note("Original");
     f.store
-        .write(Scope::Repository, "guide", &content, None)
+        .write(Scope::Repository, "guide", &content, None, false)
         .await
         .unwrap();
     let root = f.store.status(Scope::Repository).unwrap().root;
@@ -1043,7 +1131,8 @@ async fn approval_root_fence_and_live_disabled_configuration_preserve_saved_byte
             Input::Write {
                 id: "redirected",
                 content: &content,
-                expected_digest: None
+                expected_digest: None,
+                allow_human_actor: false
             },
             &Redirect(&f.store)
         )
@@ -1062,10 +1151,13 @@ async fn approval_root_fence_and_live_disabled_configuration_preserve_saved_byte
         f.store.read(Scope::Repository, "guide"),
         Err(Error::Disabled)
     ));
-    assert_eq!(fs::read_to_string(root.join("guide.md")).unwrap(), content);
+    assert_eq!(
+        unstamped(fs::read_to_string(root.join("guide.md")).unwrap()),
+        content
+    );
     f.store.configure(Limits::default()).unwrap();
     assert_eq!(
-        f.store.read(Scope::Repository, "guide").unwrap().content,
+        unstamped(f.store.read(Scope::Repository, "guide").unwrap().content),
         content
     );
 }

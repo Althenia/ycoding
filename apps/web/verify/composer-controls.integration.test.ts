@@ -509,6 +509,49 @@ test("YOLO requires explicit risk acceptance and cancellation saves nothing", as
   } finally { await page.close() }
 }, 30_000)
 
+test("the Autonomous dialog saves a row's own mode as the new-Session default, confirms YOLO first, and resets to Manual", async () => {
+  const page = await browser!.openPage()
+  const click = (label: string) => page.evaluate(`document.querySelector('dialog.overlay--autonomous [aria-label="${label}"]').click()`)
+  const defaultRequests = () => page.evaluate(`window.composerDefaultRequests()`)
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    await wait(page, `document.querySelector('.mini-composer__mount .session-status__autonomous-trigger') !== null`)
+    await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__autonomous-trigger').click()`)
+    await wait(page, `document.querySelectorAll('dialog.overlay--autonomous .autonomous__source').length === 3`)
+    await page.evaluate(`document.querySelector('#autonomous-row-guardrails').click()`)
+    await click("Previous Guardrails mode")
+    await wait(page, `window.composerRequests().length === 1`)
+    await wait(page, `document.querySelector('[aria-label="Save as default for Guardrails"]:not([disabled])') !== null`)
+    await click("Save as default for Guardrails")
+    await wait(page, `document.querySelector('#autonomous-row-guardrails').textContent.includes('Default for new Sessions: Auto')`)
+    expect(await defaultRequests()).toEqual([{ guardrails: "auto" }])
+    expect(await page.evaluate(`document.querySelector('#autonomous-row-guardrails .autonomous__value').textContent`)).toBe("Auto")
+    await page.evaluate(`document.querySelector('#autonomous-row-answers').click()`)
+    await click("Next Answers mode")
+    await wait(page, `document.querySelector('dialog.overlay--autonomous [role="alert"]') !== null`)
+    await page.evaluate(`[...document.querySelectorAll('dialog.overlay--autonomous button')].find(button => button.textContent === 'Accept risk & enable YOLO').click()`)
+    await wait(page, `document.querySelector('[aria-label="Save as default for Answers"]:not([disabled])') !== null`)
+    await click("Save as default for Answers")
+    await wait(page, `document.querySelector('dialog.overlay--autonomous [role="alert"]') !== null`)
+    expect(await page.evaluate(`document.querySelector('dialog.overlay--autonomous [role="alert"]').textContent`)).toContain("catastrophic and destructive guardrails")
+    expect(await defaultRequests()).toHaveLength(1)
+    await page.evaluate(`[...document.querySelectorAll('dialog.overlay--autonomous button')].find(button => button.textContent === 'Cancel').click()`)
+    expect(await defaultRequests()).toHaveLength(1)
+    await wait(page, `document.querySelector('[aria-label="Save as default for Answers"]:not([disabled])') !== null`)
+    await click("Save as default for Answers")
+    await page.evaluate(`[...document.querySelectorAll('dialog.overlay--autonomous button')].find(button => button.textContent === 'Accept risk & save YOLO default').click()`)
+    await wait(page, `window.composerDefaultRequests().length === 2`)
+    expect(await defaultRequests()).toEqual([{ guardrails: "auto" }, { answers: "yolo", acceptYolo: true }])
+    await wait(page, `document.querySelector('#autonomous-row-answers').textContent.includes('Default for new Sessions: YOLO')`)
+    await page.evaluate(`document.querySelector('#autonomous-row-guardrails').click()`)
+    await click("Reset default for Guardrails")
+    await wait(page, `window.composerDefaultRequests().length === 3`)
+    expect((await defaultRequests() as unknown[]).at(-1)).toEqual({ guardrails: "manual" })
+    await wait(page, `document.querySelector('#autonomous-row-guardrails').textContent.includes('Default for new Sessions: Manual')`)
+    expect(await page.evaluate(`document.querySelector('dialog.overlay--autonomous [role="alert"]')`)).toBeNull()
+  } finally { await page.close() }
+}, 45_000)
+
 test("the defer command toggles reported Session state through the connector", async () => {
   const page = await browser!.openPage()
   try {
@@ -634,9 +677,9 @@ test("the Autonomous dialog shows inherited authority with its source and never 
     await wait(page, `document.querySelector('dialog.overlay--autonomous[open]') !== null`)
     const rows = await page.evaluate(`[...document.querySelectorAll('.autonomous__row')].map(row => row.getAttribute('aria-label') + '|' + row.querySelector('.autonomous__value').textContent + '|' + [...row.querySelectorAll('.autonomous__source')].map(item => item.textContent).join(';'))`)
     expect(rows).toEqual([
-      "Permissions: Auto, inherited from ses_parent|Auto|Inherited from ses_parent;This Session: Manual",
-      "Guardrails: Manual|Manual|",
-      "Answers: YOLO, inherited from ses_root|YOLO|Inherited from ses_root;This Session: Manual",
+      "Permissions: Auto, inherited from ses_parent, default Manual|Auto|Inherited from ses_parent;This Session: Manual;Default for new Sessions: Manual",
+      "Guardrails: Manual, default Manual|Manual|Default for new Sessions: Manual",
+      "Answers: YOLO, inherited from ses_root, default Manual|YOLO|Inherited from ses_root;This Session: Manual;Default for new Sessions: Manual",
     ])
     await press(page, keys.one)
     await wait(page, `document.querySelector('.autonomous [role="status"]')?.textContent === "This Session's categories set to Manual; in effect Permissions Auto (inherited from ses_parent), Answers YOLO (inherited from ses_root)"`)
@@ -652,8 +695,8 @@ test("the Autonomous dialog locks while a change is sending, keeps a failed or u
     await wait(page, `${trigger} !== null`)
     await page.evaluate(`${trigger}.click()`)
     await wait(page, `document.querySelector('dialog.overlay--autonomous[open]') !== null`)
-    const locked = `[...document.querySelectorAll('dialog.overlay--autonomous .autonomous button')].every(button => button.disabled)`
-    const unlocked = `[...document.querySelectorAll('dialog.overlay--autonomous .autonomous button')].every(button => !button.disabled)`
+    const locked = `[...document.querySelectorAll('dialog.overlay--autonomous .autonomous button')].filter(button => !button.closest('.autonomous__defaults')).every(button => button.disabled)`
+    const unlocked = `[...document.querySelectorAll('dialog.overlay--autonomous .autonomous button')].filter(button => !button.closest('.autonomous__defaults')).every(button => !button.disabled)`
     expect(await page.evaluate(unlocked)).toBe(true)
     await page.evaluate(`window.composerSetAutonomyMutation('sending')`)
     await wait(page, `document.querySelector('.autonomous').getAttribute('aria-busy') === 'true'`)
@@ -1285,7 +1328,7 @@ test("file suggestions show complete paths across the row and wrap without clipp
       expect(layout.rows.map((row) => row.text).toSorted()).toEqual([
         "@packages/core/src/config/plugin/agent.ts",
         "@packages/core/src/plugin/agent.ts",
-        "@packages/core/src/project-artifact/adapter/agent.ts",
+        "@packages/core/src/session/runner/agent.ts",
       ])
       for (const row of layout.rows) {
         expect(row.clipped).toBe(false)
@@ -1299,7 +1342,7 @@ test("file suggestions show complete paths across the row and wrap without clipp
       await type(page, input, "@agent.ts")
       await wait(page, `document.querySelectorAll('.mini-composer__mount [role="option"]').length === 3`)
       await page.evaluate(`document.querySelectorAll('.mini-composer__mount [role="option"]')[2].click()`)
-      expect(await page.evaluate(`document.querySelector(${JSON.stringify(input)}).value`)).toBe("@packages/core/src/project-artifact/adapter/agent.ts ")
+      expect(await page.evaluate(`document.querySelector(${JSON.stringify(input)}).value`)).toBe("@packages/core/src/session/runner/agent.ts ")
     } finally { await page.close() }
   }
 }, 120_000)

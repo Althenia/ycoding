@@ -118,7 +118,7 @@ for (const status of ["active", "quarantined"] as const) {
   )
 }
 
-it.effect("rejects corruption in selected observations and omits project-artifact boundary notices", () =>
+it.effect("rejects corruption in selected observations", () =>
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
     const fixture = yield* historyFixture(db)
@@ -126,38 +126,6 @@ it.effect("rejects corruption in selected observations and omits project-artifac
       sql`UPDATE session_message SET type = 'system', data = ${JSON.stringify({ text: 1, metadata: { contextSource: "session-state" }, time: { created: 1 } })} WHERE id = ${fixture.tail[0]}`,
     )
     expect(Exit.isFailure(yield* SessionHistory.observationState(db, fixture.sessionID).pipe(Effect.exit))).toBe(true)
-    yield* db
-      .update(SessionMessageTable)
-      .set({
-        type: "synthetic",
-        data: observationMessageData({
-          id: fixture.tail[0],
-          type: "synthetic",
-          text: "Project boundary",
-          description: "TeamView update",
-          metadata: { contextSource: "team-view", projectArtifactsEnded: {} },
-          time: { created: 1 },
-        }),
-      })
-      .where(eq(SessionMessageTable.id, fixture.tail[0]))
-      .run()
-    yield* db
-      .insert(EventTable)
-      .values({
-        id: EventRuntime.ID.make("evt_observation_project_boundary"),
-        aggregate_id: fixture.sessionID,
-        seq: fixture.summary.coveredThrough.seq + 1,
-        created: 1,
-        type: EventRuntime.versionedType(SessionEvent.ProjectArtifactsEnded.type, 1),
-        data: {},
-      })
-      .run()
-    expect([...(yield* SessionHistory.observationState(db, fixture.sessionID)).present]).toEqual([])
-    expect(
-      (yield* SessionHistory.entriesForRunner(db, fixture.sessionID, [])).entries
-        .slice(1)
-        .map((entry) => entry.message.id),
-    ).toEqual(fixture.tail.slice(1))
   }),
 )
 

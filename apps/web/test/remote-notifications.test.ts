@@ -14,6 +14,7 @@ import {
 } from "../src/remote/preferences"
 import { createRemoteStore, type RemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
+import { noResend } from "./transport-fence"
 import { startRelayDouble, waitFor, type RelayDouble, type RelayRequestHandler } from "./relay-double"
 
 type Harness = {
@@ -114,7 +115,7 @@ async function harness(options: {
     http: createRemoteHttp({ baseURL: relay.httpURL }),
     createTransport: (deviceID, handlers) => {
       transports.push(handlers)
-      return createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule, createSocket: relay.createSocket })
+      return createRemoteTransport({ ...noResend, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule, createSocket: relay.createSocket })
     },
     schedule,
     batchMs: 20,

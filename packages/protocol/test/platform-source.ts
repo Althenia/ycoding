@@ -8,6 +8,7 @@ export const platformGroups = new Set(
     "browser",
     "isolatedBrowser",
     "keepAwake",
+    "autonomyDefaults",
     "fs",
     "vcs",
     "projectCopy",

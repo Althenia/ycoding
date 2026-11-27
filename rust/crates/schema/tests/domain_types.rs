@@ -6,16 +6,15 @@ use ycoding_schema::{
     file_diff, filesystem, form, guardrail, identifier, installation_event, instruction,
     instruction_entry, integration, integration_id, interaction, isolated_browser, keep_awake, llm,
     location, lsp_event, mcp, mcp_event, mcp_skill, model, models_dev, money, parse_json,
-    permission, permission_saved, plugin, project, project_artifact, project_copy,
-    project_directories, project_id, prompt, prompt_input, provider, provider_request,
-    provider_usage, pty, pty_ticket, question, reference, remote, schema, server_event, session,
-    session_cache_diagnostics, session_captured_changes, session_compaction,
-    session_compaction_event, session_delivery, session_error, session_event, session_id,
-    session_message, session_message_id, session_orchestration, session_pending, session_revert,
-    session_review, session_skill_status, session_status_event, session_todo,
-    session_work_completion, shell, skill, snapshot, source_epoch, stringify_json, telemetry,
-    token_usage, tui_event, usage_forecast, vcs, vcs_event, workspace, workspace_event,
-    workspace_id, worktree_event,
+    permission, permission_saved, plugin, project, project_copy, project_directories, project_id,
+    prompt, prompt_input, provider, provider_request, provider_usage, pty, pty_ticket, question,
+    reference, remote, schema, server_event, session, session_cache_diagnostics,
+    session_captured_changes, session_compaction, session_compaction_event, session_delivery,
+    session_error, session_event, session_id, session_message, session_message_id,
+    session_orchestration, session_pending, session_revert, session_review, session_skill_status,
+    session_status_event, session_todo, session_work_completion, shell, skill, snapshot,
+    source_epoch, stringify_json, telemetry, token_usage, tui_event, usage_forecast, vcs,
+    vcs_event, workspace, workspace_event, workspace_id, worktree_event,
 };
 
 #[derive(Deserialize)]
@@ -264,6 +263,9 @@ fn check_domain_goldens(prefixes: &[&str]) {
             "Coordination.Event.OwnerChanged" => round_trip::<
                 event::DurablePayload<ycoding_schema::coordination::event::OwnerChanged>,
             >(&input),
+            "Coordination.Event.SubagentRequestBlocked" => round_trip::<
+                event::DurablePayload<ycoding_schema::coordination::event::SubagentRequestBlocked>,
+            >(&input),
             "Coordination.Event.Updated" => round_trip::<
                 event::EphemeralPayload<ycoding_schema::coordination::event::Updated>,
             >(&input),
@@ -305,9 +307,6 @@ fn check_domain_goldens(prefixes: &[&str]) {
             "SessionEvent.PublicDurable" => round_trip::<session_event::PublicDurableEvent>(&input),
             "SessionEvent.ProfileBinding" => round_trip::<session_event::ProfileBinding>(&input),
             "SessionEvent.Source" => round_trip::<session_event::Source>(&input),
-            "SessionEvent.ArtifactProvenance" => {
-                round_trip::<session_message::ArtifactProvenance>(&input)
-            }
             "Session.CacheMechanism" => round_trip::<session_cache_diagnostics::Mechanism>(&input),
             "Session.ProviderCacheDiagnostics" => {
                 round_trip::<session_cache_diagnostics::ProviderCache>(&input)
@@ -316,141 +315,6 @@ fn check_domain_goldens(prefixes: &[&str]) {
             "Session.Info" => round_trip::<session::Info>(&input),
             "Session.ListAnchor" => round_trip::<session::ListAnchor>(&input),
             "Session.ModelSwitchBlocked" => round_trip::<session::ModelSwitchBlocked>(&input),
-            "ProjectArtifact.ID" => round_trip::<project_artifact::Id>(&input),
-            "ProjectArtifact.ScopeID" => round_trip::<project_artifact::ScopeId>(&input),
-            "ProjectArtifact.VersionID" => round_trip::<project_artifact::VersionId>(&input),
-            "ProjectArtifact.DeletionID" => round_trip::<project_artifact::DeletionId>(&input),
-            "ProjectArtifact.ActivationID" => round_trip::<project_artifact::ActivationId>(&input),
-            "ProjectArtifact.ObservationID" => {
-                round_trip::<project_artifact::ObservationId>(&input)
-            }
-            "ProjectArtifact.Revision" => round_trip::<project_artifact::Revision>(&input),
-            "ProjectArtifact.TimestampMillis" => {
-                round_trip::<project_artifact::TimestampMillis>(&input)
-            }
-            "ProjectArtifact.Digest" => round_trip::<project_artifact::Digest>(&input),
-            "ProjectArtifact.StorageID" => round_trip::<project_artifact::StorageId>(&input),
-            "ProjectArtifact.DisplayName" => round_trip::<project_artifact::DisplayName>(&input),
-            "ProjectArtifact.Description" => round_trip::<project_artifact::Description>(&input),
-            "ProjectArtifact.SkillContent" => round_trip::<project_artifact::SkillContent>(&input),
-            "ProjectArtifact.CommandTemplate" => {
-                round_trip::<project_artifact::CommandTemplate>(&input)
-            }
-            "ProjectArtifact.AgentSystem" => round_trip::<project_artifact::AgentSystem>(&input),
-            "ProjectArtifact.PluginDraft" => round_trip::<project_artifact::PluginDraft>(&input),
-            "ProjectArtifact.ContentRelpath" => {
-                round_trip::<project_artifact::ContentRelpath>(&input)
-            }
-            "ProjectArtifact.ConfirmationToken" => {
-                round_trip::<project_artifact::ConfirmationToken>(&input)
-            }
-            "ProjectArtifact.RenderedContent" => {
-                round_trip::<project_artifact::RenderedContent>(&input)
-            }
-            "ProjectArtifact.ProjectScope" => round_trip::<project_artifact::ProjectScope>(&input),
-            "ProjectArtifact.GlobalScope" => round_trip::<project_artifact::GlobalScope>(&input),
-            "ProjectArtifact.Scope" => round_trip::<project_artifact::Scope>(&input),
-            "ProjectArtifact.ProjectScopeSelector" => {
-                round_trip::<project_artifact::ProjectScopeSelector>(&input)
-            }
-            "ProjectArtifact.GlobalScopeSelector" => {
-                round_trip::<project_artifact::GlobalScopeSelector>(&input)
-            }
-            "ProjectArtifact.ScopeSelector" => {
-                round_trip::<project_artifact::ScopeSelector>(&input)
-            }
-            "ProjectArtifact.Provenance" => round_trip::<project_artifact::Provenance>(&input),
-            "ProjectArtifact.Version" => round_trip::<project_artifact::Version>(&input),
-            "ProjectArtifact.Artifact" => round_trip::<project_artifact::Artifact>(&input),
-            "ProjectArtifact.ArtifactSummary" => {
-                round_trip::<project_artifact::ArtifactSummary>(&input)
-            }
-            "ProjectArtifact.CollisionDiagnostic" => {
-                round_trip::<project_artifact::CollisionDiagnostic>(&input)
-            }
-            "ProjectArtifact.ArtifactDetails" => {
-                round_trip::<project_artifact::ArtifactDetails>(&input)
-            }
-            "ProjectArtifact.Metrics" => round_trip::<project_artifact::Metrics>(&input),
-            "ProjectArtifact.Trash" => round_trip::<project_artifact::Trash>(&input),
-            "ProjectArtifact.Activation" => round_trip::<project_artifact::Activation>(&input),
-            "ProjectArtifact.Observation" => round_trip::<project_artifact::Observation>(&input),
-            "ProjectArtifact.Feedback" => round_trip::<project_artifact::Feedback>(&input),
-            "ProjectArtifact.AutomaticWrite" => {
-                round_trip::<project_artifact::AutomaticWrite>(&input)
-            }
-            "ProjectArtifact.CreateRequest" => {
-                round_trip::<project_artifact::CreateRequest>(&input)
-            }
-            "ProjectArtifact.UpdateRequest" => {
-                round_trip::<project_artifact::UpdateRequest>(&input)
-            }
-            "ProjectArtifact.DeleteRequest" => {
-                round_trip::<project_artifact::DeleteRequest>(&input)
-            }
-            "ProjectArtifact.RestoreRequest" => {
-                round_trip::<project_artifact::RestoreRequest>(&input)
-            }
-            "ProjectArtifact.ListRequest" => round_trip::<project_artifact::ListRequest>(&input),
-            "ProjectArtifact.PromotionPreviewRequest" => {
-                round_trip::<project_artifact::PromotionPreviewRequest>(&input)
-            }
-            "ProjectArtifact.PromotionConfirmRequest" => {
-                round_trip::<project_artifact::PromotionConfirmRequest>(&input)
-            }
-            "ProjectArtifact.PromotionPreview" => {
-                round_trip::<project_artifact::PromotionPreview>(&input)
-            }
-            "ProjectArtifact.ValidationError" => {
-                round_trip::<project_artifact::ValidationError>(&input)
-            }
-            "ProjectArtifact.UnsupportedKindError" => {
-                round_trip::<project_artifact::UnsupportedKindError>(&input)
-            }
-            "ProjectArtifact.SkillDefinition" => round_trip::<project_artifact::Definition>(&input),
-            "ProjectArtifact.CommandDefinition" => {
-                round_trip::<project_artifact::Definition>(&input)
-            }
-            "ProjectArtifact.AgentDefinition" => round_trip::<project_artifact::Definition>(&input),
-            "ProjectArtifact.PluginDefinition" => {
-                round_trip::<project_artifact::Definition>(&input)
-            }
-            "ProjectArtifact.Definition" => round_trip::<project_artifact::Definition>(&input),
-            "ProjectArtifact.ArtifactKey" => round_trip::<project_artifact::ArtifactKey>(&input),
-            "ProjectArtifact.ProjectArtifactKey" => {
-                round_trip::<project_artifact::ProjectArtifactKey>(&input)
-            }
-            "ProjectArtifact.ArtifactIdentity" => {
-                round_trip::<project_artifact::ArtifactIdentity>(&input)
-            }
-            "ProjectArtifact.ArtifactVersionIdentity" => {
-                round_trip::<project_artifact::ArtifactVersionIdentity>(&input)
-            }
-            "ProjectArtifact.Kind" => round_trip::<project_artifact::Kind>(&input),
-            "ProjectArtifact.Stage" => round_trip::<project_artifact::Stage>(&input),
-            "ProjectArtifact.Source" => round_trip::<project_artifact::Source>(&input),
-            "ProjectArtifact.VersionState" => round_trip::<project_artifact::VersionState>(&input),
-            "ProjectArtifact.ActivationSource" => {
-                round_trip::<project_artifact::ActivationSource>(&input)
-            }
-            "ProjectArtifact.TerminalOutcome" => {
-                round_trip::<project_artifact::TerminalOutcome>(&input)
-            }
-            "ProjectArtifact.GoalStatus" => round_trip::<project_artifact::GoalStatus>(&input),
-            "ProjectArtifact.FeedbackAction" => {
-                round_trip::<project_artifact::FeedbackAction>(&input)
-            }
-            "ProjectArtifact.FeedbackActor" => {
-                round_trip::<project_artifact::FeedbackActor>(&input)
-            }
-            "ProjectArtifact.AutomaticWriteOperation" => {
-                round_trip::<project_artifact::AutomaticWriteOperation>(&input)
-            }
-            "ProjectArtifact.AutomaticWriteResult" => {
-                round_trip::<project_artifact::AutomaticWriteResult>(&input)
-            }
-            "ProjectArtifact.ErrorCode" => round_trip::<project_artifact::ErrorCode>(&input),
-            "ProjectArtifact.Confidence" => round_trip::<project_artifact::Confidence>(&input),
             "SessionEvent.session.created" => round_trip::<session_event::Created>(&input),
             "SessionEvent.session.agent.selected" => {
                 round_trip::<session_event::AgentSelected>(&input)
@@ -465,9 +329,6 @@ fn check_domain_goldens(prefixes: &[&str]) {
                 round_trip::<session_event::GuardrailApproved>(&input)
             }
             "SessionEvent.session.daybreak.set" => round_trip::<session_event::DaybreakSet>(&input),
-            "SessionEvent.session.project-artifacts-ended" => {
-                round_trip::<session_event::ProjectArtifactsEnded>(&input)
-            }
             "SessionEvent.session.moved" => round_trip::<session_event::Moved>(&input),
             "SessionEvent.session.renamed" => round_trip::<session_event::Renamed>(&input),
             "SessionEvent.session.usage.recorded" => {
@@ -602,6 +463,28 @@ fn check_domain_goldens(prefixes: &[&str]) {
             }
             "SessionEvent.session.skill.deactivated" => {
                 round_trip::<session_event::SkillDeactivated>(&input)
+            }
+            "SessionEvent.session.cue.detected" => round_trip::<session_event::CueDetected>(&input),
+            "SessionEvent.session.recall.recorded" => {
+                round_trip::<session_event::RecallRecorded>(&input)
+            }
+            "SessionEvent.session.lifecycle.recorded" => {
+                round_trip::<session_event::LifecycleRecorded>(&input)
+            }
+            "SessionEvent.session.harness.evaluated" => {
+                round_trip::<session_event::HarnessEvaluated>(&input)
+            }
+            "SessionEvent.session.harness.probed" => {
+                round_trip::<session_event::HarnessProbed>(&input)
+            }
+            "SessionEvent.session.harness.adopted" => {
+                round_trip::<session_event::HarnessAdopted>(&input)
+            }
+            "SessionEvent.session.harness.rolled-back" => {
+                round_trip::<session_event::HarnessRolledBack>(&input)
+            }
+            "SessionEvent.session.harness.reflected" => {
+                round_trip::<session_event::HarnessReflected>(&input)
             }
             "SessionEvent.session.shell.started" => {
                 round_trip::<session_event::ShellStarted>(&input)
@@ -957,9 +840,6 @@ fn check_domain_goldens(prefixes: &[&str]) {
             }
             "SessionMessage.ToolState" => round_trip::<session_message::ToolState>(&input),
             "SessionMessage.Compaction" => round_trip::<session_message::Compaction>(&input),
-            "SessionMessage.ArtifactProvenance" => {
-                round_trip::<session_message::ArtifactProvenance>(&input)
-            }
             "SessionMessage.ProviderState" => round_trip::<session_message::ProviderState>(&input),
             "SessionMessage.AssistantRetry" => {
                 round_trip::<session_message::AssistantRetry>(&input)

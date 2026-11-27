@@ -2217,40 +2217,6 @@ async fn obsolete_javascript_configuration_is_rejected_and_the_running_generatio
     fixture.cleanup();
 }
 
-// TEST-044: managed plugin drafts remain drafts; the adapter refuses to activate them.
-#[test]
-fn managed_plugin_drafts_have_no_activation_path() {
-    use ycoding_core::resources::project_artifact::adapter;
-    use ycoding_schema::{JsonValue, project_artifact};
-    let kind =
-        |name: &str| project_artifact::Kind::decode(&JsonValue::String(name.into())).unwrap();
-    let unsupported = adapter::list()
-        .iter()
-        .filter(|entry| entry.phase == "unsupported")
-        .map(|entry| entry.kind.clone())
-        .collect::<Vec<_>>();
-    assert_eq!(unsupported, [kind("plugin")]);
-    assert_eq!(adapter::get(&kind("plugin")).phase, "unsupported");
-    let definition = adapter::parse(&kind("plugin"), "export default {}").unwrap();
-    assert!(matches!(
-        definition,
-        project_artifact::Definition::Plugin(_)
-    ));
-    let version = adapter::VersionIndex {
-        scope_id: project_artifact::ScopeId::decode(&JsonValue::String("pas_scope".into()))
-            .unwrap(),
-        version_id: project_artifact::VersionId::decode(&JsonValue::String("pav_draft".into()))
-            .unwrap(),
-        id: project_artifact::Id::decode(&JsonValue::String("draft".into())).unwrap(),
-        content_path: "/draft".into(),
-        definition,
-    };
-    assert!(matches!(
-        adapter::activate(&version, adapter::RuntimeDraft::default()),
-        Err(adapter::Error::UnsupportedPlugin)
-    ));
-}
-
 // TEST-044 bundled contributions: the bundled tool capability ids are exactly the plan's
 // active built-in tool inventory (execute is Code Mode's own contribution, not a registration).
 #[test]
@@ -2266,7 +2232,6 @@ fn bundled_capability_ids_cover_exactly_the_planned_builtin_tool_inventory() {
         "grep",
         "memory",
         "patch",
-        "project-artifact",
         "question",
         "read",
         "shell",

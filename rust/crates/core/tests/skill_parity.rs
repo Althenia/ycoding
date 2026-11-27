@@ -107,17 +107,11 @@ fn skill_sources_keep_bundled_then_ecosystem_then_ycoding_then_configured_order_
 }
 
 #[test]
-fn skill_decoded_frontmatter_normalizes_metadata_conflicts_and_retains_content() {
-    let data = parse_json(r#"{"name":"display","description":"desc","slash":false,"metadata":{"ycoding/slash":" TRUE ","ycoding/autoinvoke":false,"ycoding/conflicts":{"skills":[" other ","other"],"instructions":[" core/instructions ","core/instructions"]}}}"#).unwrap();
-    let info = skill::from_frontmatter(
-        Path::new("/skills/z.md"),
-        Path::new("/skills"),
-        &data,
-        "Body\n",
-    )
-    .unwrap();
+fn skill_decoded_frontmatter_reads_unprefixed_string_metadata_and_retains_content() {
+    let data = parse_json(r#"{"name":"z","description":"desc","metadata":{"display-name":"Display","slash":" TRUE ","activation":"manual","conflicts":" other , other","instruction-conflicts":" core/instructions "}}"#).unwrap();
+    let info = skill::from_frontmatter(Path::new("/skills/z/SKILL.md"), &data, "Body\n").unwrap();
     assert_eq!(info.id, "z".into());
-    assert_eq!(info.name, "display".into());
+    assert_eq!(info.name, "Display".into());
     assert_eq!(info.slash, Some(true));
     assert_eq!(info.autoinvoke, Some(false));
     assert_eq!(info.content, "Body\n".into());
@@ -128,42 +122,32 @@ fn skill_decoded_frontmatter_normalizes_metadata_conflicts_and_retains_content()
     assert_eq!(info.conflicts.as_ref().unwrap().instructions.len(), 1);
     let plain = skill::from_frontmatter(
         Path::new("/skills/team/SKILL.md"),
-        Path::new("/skills"),
-        &parse_json("{}").unwrap(),
+        &parse_json(r#"{"name":"team","description":"Does work. Use when needed."}"#).unwrap(),
         "",
     )
     .unwrap();
     assert_eq!(plain.id, "team".into());
     assert_eq!(plain.name, "team".into());
-    assert_eq!(plain.description, None);
     assert_eq!(plain.conflicts, None);
-    assert_eq!(
-        skill::from_frontmatter(
-            Path::new("/skills/SKILL.md"),
-            Path::new("/skills"),
-            &parse_json("{}").unwrap(),
-            ""
-        )
-        .unwrap()
-        .id,
-        "SKILL".into()
-    );
+    assert_eq!(plain.slash, None);
+    assert_eq!(plain.autoinvoke, None);
 }
 
 #[test]
-fn skill_decoded_frontmatter_rejects_malformed_required_conflict_shapes_and_invalid_flags() {
+fn skill_decoded_frontmatter_rejects_specification_violations_and_malformed_extensions() {
     for input in [
-        r#"{"slash":"true"}"#,
-        r#"{"name":null}"#,
-        r#"{"metadata":{"ycoding/conflicts":[]}}"#,
-        r#"{"metadata":{"ycoding/conflicts":{"skills":[" "]}}}"#,
-        r#"{"metadata":{"ycoding/conflicts":{"instructions":["Bad"]}}}"#,
-        r#"{"metadata":{"ycoding/conflicts":{"skills":[1]}}}"#,
+        r#"{}"#,
+        r#"{"name":"x"}"#,
+        r#"{"name":null,"description":"d"}"#,
+        r#"{"name":"other","description":"d"}"#,
+        r#"{"name":"x","description":"d","metadata":"plain"}"#,
+        r#"{"name":"x","description":"d","metadata":{"conflicts":" "}}"#,
+        r#"{"name":"x","description":"d","metadata":{"conflicts":["a"]}}"#,
+        r#"{"name":"x","description":"d","metadata":{"instruction-conflicts":"Bad"}}"#,
     ] {
         assert!(
             skill::from_frontmatter(
-                Path::new("/skills/x.md"),
-                Path::new("/skills"),
+                Path::new("/skills/x/SKILL.md"),
                 &parse_json(input).unwrap(),
                 "Body"
             )
@@ -171,46 +155,19 @@ fn skill_decoded_frontmatter_rejects_malformed_required_conflict_shapes_and_inva
             "{input}"
         );
     }
-    let data =
-        parse_json(r#"{"metadata":{"ycoding/slash":"maybe","ycoding/conflicts":{"extra":1}}}"#)
-            .unwrap();
-    let info = skill::from_frontmatter(
-        Path::new("/skills/x.md"),
-        Path::new("/skills"),
-        &data,
-        "Body",
-    )
-    .unwrap();
+    let data = parse_json(r#"{"name":"x","description":"d","metadata":{"slash":"maybe","ycoding/conflicts":{"extra":1}}}"#).unwrap();
+    let info = skill::from_frontmatter(Path::new("/skills/x/SKILL.md"), &data, "Body").unwrap();
     assert_eq!(info.slash, None);
-    assert_eq!(info.conflicts.as_ref().unwrap().skills.len(), 0);
-    let source = ycoding_schema::skill::Source::decode(&parse_json(r#"{"type":"embedded","skill":{"id":"one","name":"One","location":"/builtin/one.md","content":"body"}}"#).unwrap()).unwrap();
+    assert_eq!(info.conflicts, None);
+    let source = ycoding_schema::skill::Source::decode(&parse_json(r#"{"type":"embedded","skill":{"id":"one","name":"One","location":"/builtin/one/SKILL.md","content":"body"}}"#).unwrap()).unwrap();
     let mut service = Service::new(Path::new("/fixture/cache"));
     service.source(source.clone());
     service.source(source);
     assert_eq!(service.sources().len(), 1);
     assert_eq!(service.embedded().len(), 1);
     assert_eq!(service.embedded()[0].content, "body".into());
-    assert!(!service.changed(Path::new("/builtin/one.md")));
+    assert!(!service.changed(Path::new("/builtin/one/SKILL.md")));
     assert_eq!(service.revision(), 0);
-}
-
-#[test]
-fn skill_conflict_ids_preserve_utf16_and_trim_ecmascript_whitespace() {
-    let data = parse_json(
-        r#"{"metadata":{"ycoding/conflicts":{"skills":["\ufeff\ud800\ufeff","\ud800"]}}}"#,
-    )
-    .unwrap();
-    let info = skill::from_frontmatter(
-        Path::new("/skills/x.md"),
-        Path::new("/skills"),
-        &data,
-        "Body",
-    )
-    .unwrap();
-    assert_eq!(
-        info.conflicts.unwrap().skills,
-        vec![ycoding_schema::LosslessString::from_utf16(vec![0xd800])]
-    );
 }
 
 #[tokio::test]
@@ -220,13 +177,13 @@ async fn bundled_skills_lead_the_catalog_with_reference_metadata_and_content() {
             "browser-use",
             "Browser use",
             BROWSER_USE,
-            "/builtin/browser-use.md",
+            "/builtin/browser-use/SKILL.md",
         ),
         (
             "computer-use",
             "Computer use",
             COMPUTER_USE,
-            "/builtin/computer-use.md",
+            "/builtin/computer-use/SKILL.md",
         ),
     ];
     let mut service = Service::from_entries(
@@ -247,7 +204,7 @@ async fn bundled_skills_lead_the_catalog_with_reference_metadata_and_content() {
             slash: None,
             autoinvoke: None,
             conflicts: None,
-            location: AbsolutePath::new("/builtin/ycoding.md").unwrap(),
+            location: AbsolutePath::new("/builtin/ycoding/SKILL.md").unwrap(),
             content: body(YCODING).into(),
         }
     );
@@ -278,7 +235,7 @@ async fn bundled_skills_lead_the_catalog_with_reference_metadata_and_content() {
             slash: Some(true),
             autoinvoke: None,
             conflicts: None,
-            location: AbsolutePath::new("/builtin/report.md").unwrap(),
+            location: AbsolutePath::new("/builtin/report/SKILL.md").unwrap(),
             content: "".into(),
         }
     );
@@ -312,7 +269,7 @@ async fn bundled_skills_lead_the_catalog_with_reference_metadata_and_content() {
             slash: None,
             autoinvoke: None,
             conflicts: None,
-            location: AbsolutePath::new("/builtin/chatgpt-connectors.md").unwrap(),
+            location: AbsolutePath::new("/builtin/chatgpt-connectors/SKILL.md").unwrap(),
             content: body(CHATGPT_CONNECTORS).into(),
         }
     );
@@ -365,10 +322,15 @@ async fn configured_skills_replace_bundled_skills_in_their_catalog_position() {
     fs::create_dir_all(root.join("skills/ycoding")).unwrap();
     let root = fs::canonicalize(root).unwrap();
     let guide = root.join("skills/ycoding/SKILL.md");
-    fs::write(&guide, "---\nname: Project YCoding\n---\nProject guide").unwrap();
     fs::write(
-        root.join("skills/report.md"),
-        "---\ndescription: Local report\n---\nLocal report body",
+        &guide,
+        "---\nname: ycoding\ndescription: Project guide. Use when working here.\nmetadata:\n  display-name: Project YCoding\n---\nProject guide",
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("skills/report")).unwrap();
+    fs::write(
+        root.join("skills/report/SKILL.md"),
+        "---\nname: report\ndescription: Local report\n---\nLocal report body",
     )
     .unwrap();
     let mut service = Service::from_entries(

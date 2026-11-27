@@ -18,7 +18,7 @@ test("a pin refresh supersedes an older in-flight Session list", async () => {
     return "default"
   } })
   const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }), batchMs: 0 })
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers }), batchMs: 0 })
   try {
     await store.load()
     await waitFor(() => store.state().sessions.some((session) => session.id === "ses_a"))
@@ -38,7 +38,7 @@ test("a connection closed during pinning reports an unknown outcome without chan
   const held = Promise.withResolvers<RelayHandlerOutcome>()
   const relay = await startRelayDouble({ handler: (request) => request.operation === "session.pin" ? held.promise : "default" })
   const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }), batchMs: 0 })
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers }), batchMs: 0 })
   try {
     await store.load()
     await waitFor(() => store.state().sessions.some((session) => session.id === "ses_a"))

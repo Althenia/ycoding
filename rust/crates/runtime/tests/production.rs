@@ -505,10 +505,6 @@ async fn production_flow(host: &production_owner::Host) {
         "production quota must resolve"
     );
     assert!(core.mcp.is_some(), "production MCP must resolve");
-    assert!(
-        core.artifacts.is_some(),
-        "production artifacts must resolve"
-    );
     assert!(core.browser.is_some(), "production browser must resolve");
     assert!(
         core.isolated_browser.is_some(),
@@ -555,7 +551,6 @@ async fn production_flow(host: &production_owner::Host) {
             .iter()
             .any(|provider| provider.id.0.as_str() == Some("openai"))
     );
-    let artifacts = (core.artifacts.as_ref().unwrap())(&info).unwrap();
     let unrecorded = location::Info::decode(
         &parse_json(&format!(
             r#"{{"directory":"{0}","project":{{"id":"prj_unrecorded","directory":"{0}"}}}}"#,
@@ -575,7 +570,6 @@ async fn production_flow(host: &production_owner::Host) {
     assert!((core.integrations.as_ref().unwrap())(&unrecorded).is_err());
     assert!((core.mcp.as_ref().unwrap())(&unrecorded).is_err());
     assert!((core.provider_usage.as_ref().unwrap())(&unrecorded).is_err());
-    assert!((core.artifacts.as_ref().unwrap())(&unrecorded).is_none());
     assert!((core.platform.as_ref().unwrap())(&unrecorded_reference).is_err());
     assert!((core.isolated_browser.as_ref().unwrap())(&unrecorded_reference).is_err());
     std::fs::create_dir_all(root.join("unrecorded")).unwrap();
@@ -696,14 +690,6 @@ async fn production_flow(host: &production_owner::Host) {
             .unwrap()
             .quota
     ));
-    let other_artifacts = (core.artifacts.as_ref().unwrap())(&other_info).unwrap();
-    assert!(
-        std::ptr::eq(
-            artifacts.store.accounting().unwrap(),
-            other_artifacts.store.accounting().unwrap()
-        ),
-        "every Location must use the same artifact accounting instance"
-    );
     assert_eq!(
         other
             .agents
@@ -869,10 +855,6 @@ async fn production_flow(host: &production_owner::Host) {
         "production composes an opted-out remote control"
     );
     assert!(remote.data.device.is_none());
-    assert!(
-        artifacts.store.accounting().is_some(),
-        "Session movement can use the shared artifact accounting owner"
-    );
     assert_eq!(
         store
             .snapshot()
@@ -1006,46 +988,6 @@ async fn production_flow(host: &production_owner::Host) {
         .record_project(previous_project, None)
         .await
         .unwrap();
-    let definition = ycoding_core::ycoding_schema::project_artifact::Definition::decode(&parse_json(
-        r#"{"kind":"skill","name":"Move review","description":"Adopted project review","content":"Review project changes."}"#,
-    ).unwrap()).unwrap();
-    let adopted_artifact = artifacts
-        .store
-        .write_manual(
-            ycoding_core::resources::project_artifact::store::ManualWriteInput {
-                scope: ycoding_core::ycoding_schema::project_artifact::ScopeSelector::Project,
-                project_id: Some(
-                    ycoding_core::ycoding_schema::project::Id::new("prj_previous").unwrap(),
-                ),
-                id: "move-review",
-                definition: &definition,
-                expected: None,
-                now: 1,
-            },
-        )
-        .unwrap();
-    let before_adoption = artifacts
-        .store
-        .get(
-            &adopted_artifact.scope_id,
-            &adopted_artifact.kind,
-            &adopted_artifact.id,
-        )
-        .unwrap();
-    let ycoding_core::ycoding_schema::project_artifact::Scope::Project(previous_scope) =
-        &before_adoption.artifact.scope
-    else {
-        panic!("project scope")
-    };
-    std::fs::remove_file(
-        ycoding_core::resources::project_artifact::package::scope_marker_path(
-            &roots
-                .data
-                .join("project-artifacts")
-                .join(previous_scope.storage_id.as_lossless().as_str().unwrap()),
-        ),
-    )
-    .unwrap();
     let _: v5::SessionMoveResult = support::success(
         wire.call(
             "session.move",
@@ -1062,43 +1004,6 @@ async fn production_flow(host: &production_owner::Host) {
             .encode_to_vec(),
         )
         .await,
-    );
-    let after_adoption = artifacts
-        .store
-        .get(
-            &adopted_artifact.scope_id,
-            &adopted_artifact.kind,
-            &adopted_artifact.id,
-        )
-        .unwrap();
-    assert_eq!(
-        after_adoption.current_version,
-        before_adoption.current_version
-    );
-    assert_eq!(after_adoption.definition, before_adoption.definition);
-    let ycoding_core::ycoding_schema::project_artifact::Scope::Project(scope) =
-        after_adoption.artifact.scope
-    else {
-        panic!("project scope")
-    };
-    assert_eq!(
-        scope.project_id.as_lossless().as_str(),
-        Some(adopted_id.as_str())
-    );
-    let marker = ycoding_core::resources::project_artifact::package::scope_marker_path(
-        &roots
-            .data
-            .join("project-artifacts")
-            .join(scope.storage_id.as_lossless().as_str().unwrap()),
-    );
-    assert_eq!(
-        parse_json(&std::fs::read_to_string(marker).unwrap()).unwrap(),
-        ycoding_core::ycoding_schema::ObjectEncoder::new()
-            .field("schema", &1.0)
-            .field("scopeID", &scope.id)
-            .field("type", "project")
-            .field("storageID", &scope.storage_id)
-            .finish()
     );
     let adopted_session = core
         .sessions
@@ -1233,7 +1138,6 @@ async fn production_flow(host: &production_owner::Host) {
             "memory",
             "patch",
             "project",
-            "project_artifact",
             "question",
             "read",
             "shell",
@@ -1609,25 +1513,6 @@ async fn production_flow(host: &production_owner::Host) {
         assert!(events(&store, &invalid_id, "session.step.started.1").is_empty());
         assert!(events(&store, &invalid_id, "session.provider.request.recorded.1").is_empty());
     }
-    let definition = ycoding_core::ycoding_schema::project_artifact::Definition::decode(&parse_json(r#"{"kind":"skill","name":"Review","description":"Reusable review","content":"Review the current change."}"#).unwrap()).unwrap();
-    let preview = artifacts
-        .store
-        .preview_manual(
-            ycoding_core::resources::project_artifact::store::ManualPreviewInput {
-                id: "review",
-                definition: &definition,
-                expected: None,
-                now: now(),
-            },
-        )
-        .unwrap();
-    assert!(
-        other_artifacts
-            .store
-            .confirm_manual(&preview.token, now())
-            .is_ok(),
-        "every Location must share one artifact source and confirmation owner"
-    );
     core.locations.reload(&info).unwrap();
     assert_eq!(
         std::fs::read_to_string(meeting_directory.join("bridge.json")).unwrap(),

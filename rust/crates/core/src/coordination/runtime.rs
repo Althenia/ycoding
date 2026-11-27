@@ -55,6 +55,18 @@ pub const NOTICE: &str = "project_notification";
 pub const ESCALATION: &str = "project_escalation";
 pub const INACTIVE_MESSAGE: &str =
     "Project is inactive; send a message in the master chat to resume";
+
+pub fn subagent_launch_block(
+    coordination: &super::Service,
+    session_id: &session::Id,
+) -> Option<String> {
+    coordination
+        .access_of(session_id)
+        .ok()
+        .flatten()
+        .filter(|access| !access.scope.active)
+        .map(|_| INACTIVE_MESSAGE.to_owned())
+}
 const MEMBERSHIP_EVENTS: [&str; 2] = [
     "coordination.group.created.2",
     "coordination.group.changed.1",

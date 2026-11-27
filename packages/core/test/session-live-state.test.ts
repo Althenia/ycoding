@@ -388,8 +388,6 @@ it.effect("uses source-owned sequence fences across protected-state ABA transiti
       sequence: 5,
       digest: initial.sources.pending_work.digest,
     })
-
-    expect("project_artifacts" in (yield* service.load(sessionID)).sources).toBe(false)
   }),
 )
 

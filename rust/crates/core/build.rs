@@ -1,6 +1,24 @@
-use std::{env, fs, path::PathBuf};
+use std::{env, fs, path::PathBuf, process::Command};
+
+fn link_clang_runtime() -> Result<(), Box<dyn std::error::Error>> {
+    if env::var("CARGO_CFG_TARGET_OS")? != "macos" {
+        return Ok(());
+    }
+    let output = Command::new("cc").arg("--print-resource-dir").output()?;
+    if !output.status.success() {
+        return Err("cc --print-resource-dir failed".into());
+    }
+    let resource = String::from_utf8(output.stdout)?;
+    println!(
+        "cargo:rustc-link-search=native={}/lib/darwin",
+        resource.trim()
+    );
+    println!("cargo:rustc-link-lib=clang_rt.osx");
+    Ok(())
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    link_clang_runtime()?;
     let source = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?).join("../../../protocol");
     let file = source.join("ycoding/extension/v5/extension.proto");
     println!("cargo:rerun-if-changed={}", file.display());

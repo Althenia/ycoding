@@ -432,7 +432,7 @@ describe("quiet workspace", () => {
         await until(page, `document.querySelector('[aria-labelledby="app-settings"]') !== null`)
         const text = await page.evaluate(`document.querySelector('[aria-labelledby="app-settings"]').innerText`)
         expect(text).toContain("Closing this browser disconnects only this tab")
-        expect(text).toContain("Saved permissions, MCP servers, plugins and project artifacts")
+        expect(text).toContain("Saved permissions, MCP servers, plugins")
         expect(text).toContain("interactive terminals or Git working trees")
         expect(await page.evaluate(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`)).toBe(true)
       }

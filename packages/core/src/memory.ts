@@ -18,7 +18,7 @@ import { MemoryFormat } from "./memory/format"
 import { MemoryGraph } from "./memory/graph"
 import { MemoryError, memoryError } from "./memory/error"
 import { nativeResource } from "./native-resources"
-import { executeMutation, native } from "./project-artifact/filesystem"
+import { executeMutation, native } from "./filesystem-mutation"
 
 export { MemoryError } from "./memory/error"
 export type Scope = "repository" | "knowledge"

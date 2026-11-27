@@ -59,7 +59,6 @@ pub const PRE: &[&str] = &[
     "ycoding.tool.subagent-control",
     "ycoding.tool.subagent-report",
     "ycoding.tool.todowrite",
-    "ycoding.tool.project-artifact",
     "ycoding.tool.task-complete",
     "ycoding.tool.memory",
     "ycoding.tool.webfetch",
@@ -80,7 +79,6 @@ pub const POST: &[&str] = &[
     "ycoding.config.provider",
     "ycoding.variant",
     "ycoding.config.policy",
-    "ycoding.project-artifact.source",
 ];
 
 pub const DISABLEABLE: &[&str] = &[
@@ -105,7 +103,6 @@ pub const DISABLEABLE: &[&str] = &[
     "ycoding.tool.subagent-control",
     "ycoding.tool.subagent-report",
     "ycoding.tool.todowrite",
-    "ycoding.tool.project-artifact",
     "ycoding.tool.task-complete",
     "ycoding.tool.memory",
     "ycoding.tool.webfetch",
@@ -134,7 +131,6 @@ pub fn tool_name(id: &str) -> Option<&'static str> {
         "ycoding.tool.subagent-control" => "subagent_control",
         "ycoding.tool.subagent-report" => "subagent_report",
         "ycoding.tool.todowrite" => "todowrite",
-        "ycoding.tool.project-artifact" => "project_artifact",
         "ycoding.tool.task-complete" => "task_complete",
         "ycoding.tool.memory" => "memory",
         "ycoding.tool.webfetch" => "webfetch",

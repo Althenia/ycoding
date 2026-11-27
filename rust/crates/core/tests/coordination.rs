@@ -196,6 +196,34 @@ async fn defaults_replacement_cas_and_restart_are_observable_without_rewriting_r
     );
 }
 
+#[tokio::test]
+async fn subagent_launches_are_blocked_only_while_their_project_is_inactive() {
+    let (_store, service, _feed) = fixture();
+    let group = service
+        .create(input("ses_master", &["ses_member"]))
+        .await
+        .unwrap();
+    let block = |id: &str| {
+        coordination::runtime::subagent_launch_block(&service, &session::Id::new(id).unwrap())
+    };
+    for id in ["ses_master", "ses_member"] {
+        assert_eq!(
+            block(id).as_deref(),
+            Some(coordination::runtime::INACTIVE_MESSAGE)
+        );
+    }
+    assert_eq!(block("ses_outside"), None);
+    service.activate(&group.id).unwrap();
+    for id in ["ses_master", "ses_member", "ses_outside"] {
+        assert_eq!(block(id), None);
+    }
+    service.pause(&group.id).unwrap();
+    assert_eq!(
+        block("ses_member").as_deref(),
+        Some(coordination::runtime::INACTIVE_MESSAGE)
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pausing_by_session_requires_the_master_and_persists_without_a_run() {
     let (store, service, feed) = fixture();
@@ -457,22 +485,22 @@ async fn coordination_instruction_release_text_matches_every_role_and_revocation
         (
             Role::Master,
             false,
-            "b53045fc990c9ccea479c7fe978a965ed6fea8fdc2075eec2a191b8773ab88e0",
+            "345b73f73309a5acfa4fd493e2830d38f8f7def0247dea737463b1201e85d9b9",
         ),
         (
             Role::Master,
             true,
-            "b53045fc990c9ccea479c7fe978a965ed6fea8fdc2075eec2a191b8773ab88e0",
+            "345b73f73309a5acfa4fd493e2830d38f8f7def0247dea737463b1201e85d9b9",
         ),
         (
             Role::Supervisor,
             false,
-            "d1fce3602cc74069b7fb96fff7b708e9300b2fce8a5ec782b1957b7232e079a0",
+            "75097cc85780471a8fb598f646a68494b3583cca700a2d7ec5df20354c7abbf5",
         ),
         (
             Role::Supervisor,
             true,
-            "d1fce3602cc74069b7fb96fff7b708e9300b2fce8a5ec782b1957b7232e079a0",
+            "75097cc85780471a8fb598f646a68494b3583cca700a2d7ec5df20354c7abbf5",
         ),
         (
             Role::Executor,
@@ -1019,6 +1047,58 @@ fn coordinators_delegate_all_project_work_without_direct_master_defaults() {
                 .as_str()
                 .unwrap()
                 .contains(rule)
+        );
+    }
+}
+
+#[test]
+fn project_roles_inherit_the_base_swarm_rule_without_separate_coordination_text() {
+    use std::{collections::BTreeMap, path::Path};
+    use ycoding_core::resources::{agent, config::Roots};
+    let roots = Roots::runtime(
+        Path::new("/home/fixture"),
+        Path::new("/tmp"),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let catalog =
+        agent::builtin::catalog(&roots, ycoding_schema::session_scope::Scope::Bound).unwrap();
+    let system = |id: &str| {
+        catalog
+            .iter()
+            .find(|agent| agent.id == id.into())
+            .and_then(|agent| agent.system.as_ref())
+            .unwrap()
+            .to_utf8()
+            .unwrap()
+    };
+    let rule = "Drive assigned work as a swarm by default: swarm execution is the primary operating mode for every Session, whether Project Master, Project member or standalone, and single-lane execution is the exception for indivisible or tightly coupled work.";
+    let sessions = [
+        ("normal", "god", None),
+        ("master", "god", Some(Role::Master)),
+        ("member", "zeus", Some(Role::Executor)),
+    ];
+    for (name, id, role) in sessions {
+        let mut text = system(id);
+        if let Some(role) = role {
+            let injected = coordination::instructions::initial(role, false);
+            let injected = injected.as_str().unwrap();
+            for separate in [
+                "swarm",
+                "Launch every ready",
+                "never launch filler",
+                "native subagents and run them concurrently",
+                "coordination.subagent.request.blocked",
+            ] {
+                assert!(!injected.contains(separate), "{name}: {separate}");
+            }
+            text.push_str("\n\n");
+            text.push_str(injected);
+        }
+        assert_eq!(text.matches(rule).count(), 1, "{name}");
+        assert!(
+            text.find(rule).unwrap() < text.find("Work agentically.").unwrap(),
+            "{name}"
         );
     }
 }

@@ -437,7 +437,6 @@ pub enum ProtectedStateSource {
     Autonomy,
     Permissions,
     Guardrails,
-    ProjectArtifacts,
     PendingWork,
     Orchestration,
 }
@@ -451,7 +450,6 @@ impl ProtectedStateSource {
             Self::Autonomy => "autonomy",
             Self::Permissions => "permissions",
             Self::Guardrails => "guardrails",
-            Self::ProjectArtifacts => "project_artifacts",
             Self::PendingWork => "pending_work",
             Self::Orchestration => "orchestration",
         }
@@ -468,7 +466,6 @@ impl DomainDecode for ProtectedStateSource {
             Some("autonomy") => Ok(Self::Autonomy),
             Some("permissions") => Ok(Self::Permissions),
             Some("guardrails") => Ok(Self::Guardrails),
-            Some("project_artifacts") => Ok(Self::ProjectArtifacts),
             Some("pending_work") => Ok(Self::PendingWork),
             Some("orchestration") => Ok(Self::Orchestration),
             _ => Err(path.error(DecodeErrorKind::Expected("protected-state source"))),
@@ -1640,13 +1637,7 @@ fn validate_superseded_authority(check: &PredicateEvidence, issues: &mut Vec<Iss
     let declared = match target_fact.and_then(|fact| fact.tool.as_deref()) {
         None => matches!(
             check.name,
-            "instructions"
-                | "todos"
-                | "goals"
-                | "autonomy"
-                | "permissions"
-                | "guardrails"
-                | "project_artifacts"
+            "instructions" | "todos" | "goals" | "autonomy" | "permissions" | "guardrails"
         ),
         Some(tool) => check
             .evidence

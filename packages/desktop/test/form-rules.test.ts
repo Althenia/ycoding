@@ -686,7 +686,7 @@ test("desktopSlashCommand recognizes every built-in command and alias case-insen
     ["/status", "status"], ["/debug", "debug"], ["/models", "models"], ["/mo", "models"], ["/variants", "variants"], ["/variant", "variants"],
     ["/agents", "agents"], ["/agent", "agents"], ["/skills", "skills"], ["/skill", "skills"], ["/themes", "themes"], ["/theme", "themes"],
     ["/autonomous", "autonomous"], ["/fork", "fork"], ["/move", "move"], ["/undo", "undo"], ["/redo", "redo"], ["/diff", "diff"],
-    ["/terminals", "terminals"], ["/terminal", "terminals"], ["/browser", "browser"], ["/chrome", "browser"], ["/artifacts", "artifacts"],
+    ["/terminals", "terminals"], ["/terminal", "terminals"], ["/browser", "browser"], ["/chrome", "browser"],
     ["/plugins", "plugins"], ["/pair", "pair"], ["/remote", "remote"], ["/dots", "dots"], ["/keep-awake", "keep-awake"], ["/stash", "stash"],
     ["/timeline", "timeline"], ["/copy", "copy"], ["/export", "export"], ["/help", "help"], ["/shortcuts", "help"], ["/keys", "help"],
     ["/workspaces", "workspaces"], ["/projects", "projects"], ["/project-settings", "projects"], ["/sessions", "sessions"], ["/resume", "sessions"],

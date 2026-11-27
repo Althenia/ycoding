@@ -138,9 +138,6 @@ pub fn select_sources(
             let key = instructions::key(&source.key);
             let name = match key.as_str() {
                 Some(crate::resources::memory::instructions::KEY) => Some("memory"),
-                Some(crate::resources::project_artifact::instructions::KEY) => {
-                    Some("project-artifact-authoring")
-                }
                 Some(key) => key.strip_prefix("core/").filter(|name| {
                     crate::resources::config::capabilities::BUILTIN_INSTRUCTIONS.contains(name)
                 }),

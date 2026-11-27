@@ -5,7 +5,7 @@ import ts from "typescript"
 import pkg from "../package.json"
 
 const remoteControl = "src/remote-control/"
-const operatorSkill = "src/remote-control/ycoding-operator-skill.ts"
+const operatorSkill = "src/remote-control/session-operator-skill.ts"
 const remoteHost = "src/remote-host.ts"
 
 function specifiers(file: string, source: string) {
@@ -37,7 +37,7 @@ function importsRemoteControl(file: string, source: string) {
     return (
       (target === "src/remote-host" || target.startsWith("src/remote-control")) &&
       target !== operatorSkill.replace(/\.ts$/, "") &&
-      !(file === operatorSkill && target === "src/remote-control/ycoding-operator.md")
+      !(file === operatorSkill && target === "src/remote-control/session-operator.md")
     )
   })
 }
@@ -88,7 +88,7 @@ test("CLI source and manifest keep execution behind the client boundary", async 
 test("frontend files may import only the operator skill from remote-control", () => {
   expect(importsRemoteControl("src/index.ts", `import "./remote-control/backend"`)).toBe(true)
   expect(importsRemoteControl("src/a/b.ts", `import("../remote-control/cca-relay.js")`)).toBe(true)
-  expect(importsRemoteControl("src/index.ts", `import "./remote-control/ycoding-operator-skill"`)).toBe(false)
+  expect(importsRemoteControl("src/index.ts", `import "./remote-control/session-operator-skill"`)).toBe(false)
   expect(importsRemoteControl("src/index.ts", `import "./other"`)).toBe(false)
   expect(importsRemoteControl("src/index.ts", `import "./remote-host"`)).toBe(true)
   expect(importsRemoteControl("src/a/b.ts", `import("../remote-host.js")`)).toBe(true)

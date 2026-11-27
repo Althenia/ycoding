@@ -3,6 +3,7 @@ import { create, decodeRemoteResult, RemoteLimits, remotePayloadCodecs, TypedPay
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
+import { noResend } from "./transport-fence"
 import { startRelayDouble, waitFor, type RelayHandlerOutcome, type RelayRequestHandler } from "./relay-double"
 
 function gate() {
@@ -15,7 +16,7 @@ async function harness(handler: RelayRequestHandler, now?: () => number, determi
   let transport: ReturnType<typeof createRemoteTransport> | undefined
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => (transport = createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20 })),
+    createTransport: (deviceID, handlers) => (transport = createRemoteTransport({ ...noResend, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20 })),
     ...(deterministicIDs ? { createMessageID: () => `msg_send_${++ids}` } : {}),
     now,
     batchMs: 0,

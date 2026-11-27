@@ -176,7 +176,6 @@ pub(crate) fn fold(
                 &session_message::Info::AgentSelected(session_message::AgentSelected {
                     id,
                     agent,
-                    artifact: object.optional("artifact").map_err(record_error)?,
                     metadata: decoded.metadata.clone(),
                     time: session_message::BaseTime { created: time },
                 }),
@@ -310,6 +309,14 @@ pub(crate) fn fold(
             | "session.guardrail.decided"
             | "session.decision.audited"
             | "session.permission.assessed"
+            | "session.cue.detected"
+            | "session.recall.recorded"
+            | "session.lifecycle.recorded"
+            | "session.harness.evaluated"
+            | "session.harness.probed"
+            | "session.harness.adopted"
+            | "session.harness.rolled-back"
+            | "session.harness.reflected"
             | "session.guardrail.dismissed"
             | "session.review.deferred"
             | "session.review.decided"

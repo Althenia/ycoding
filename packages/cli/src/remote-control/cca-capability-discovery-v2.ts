@@ -14,7 +14,7 @@ import {
 } from "./cca-capability-discovery"
 import { ccaSystemConfigPath, type CcaEnvironmentConfigOptions } from "./cca-environment-config"
 import { CcaRpcError, type CcaRpcHandlerContext } from "./cca-executor-rpc"
-import { ycodingDotsSkillsRoot } from "./ycoding-operator-skill"
+import { ycodingDotsSkillsRoot } from "./session-operator-skill"
 
 export interface CcaDiscoverV2CapabilitiesParams {
   readonly cwd: string

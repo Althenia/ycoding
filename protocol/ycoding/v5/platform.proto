@@ -4,7 +4,13 @@ import "ycoding/v5/foundation.proto";
 import "ycoding/v5/operations.proto";
 import "ycoding/v5/shared.proto";
 
-option (ycoding.v5.operation_range) = { first: 3000 last: 3055 };
+option (ycoding.v5.operation_range) = { first: 3000 last: 3057 };
+
+enum AutonomyDefaults_Mode {
+  AUTONOMYDEFAULTS_MODE_MANUAL = 1 [(ycoding.v5.domain_label) = "manual"];
+  AUTONOMYDEFAULTS_MODE_YOLO = 2 [(ycoding.v5.domain_label) = "yolo"];
+  AUTONOMYDEFAULTS_MODE_AUTO = 3 [(ycoding.v5.domain_label) = "auto"];
+}
 
 enum browser_action_Request_payload_actionValue1_type {
   BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE1_TYPE_NAVIGATE = 1 [(ycoding.v5.domain_label) = "navigate"];
@@ -553,6 +559,8 @@ enum Telemetry_RequestSample_operation {
   TELEMETRY_REQUESTSAMPLE_OPERATION_INCIDENT_GUIDANCE_CLEAR = 77 [(ycoding.v5.domain_label) = "incident.guidance.clear"];
   TELEMETRY_REQUESTSAMPLE_OPERATION_MACHINE_KEEPAWAKE_GET = 65 [(ycoding.v5.domain_label) = "machine.keepAwake.get"];
   TELEMETRY_REQUESTSAMPLE_OPERATION_MACHINE_KEEPAWAKE_SET = 66 [(ycoding.v5.domain_label) = "machine.keepAwake.set"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_MACHINE_AUTONOMYDEFAULTS_GET = 126 [(ycoding.v5.domain_label) = "machine.autonomyDefaults.get"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_MACHINE_AUTONOMYDEFAULTS_SET = 127 [(ycoding.v5.domain_label) = "machine.autonomyDefaults.set"];
   reserved 78, 79, 80, 81, 82, 83, 84, 85, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104;
   reserved "TELEMETRY_REQUESTSAMPLE_OPERATION_ARTIFACT_DEMO_PREVIEW", "TELEMETRY_REQUESTSAMPLE_OPERATION_LOCAL_APP_REGISTER", "TELEMETRY_REQUESTSAMPLE_OPERATION_LOCAL_APP_LIST", "TELEMETRY_REQUESTSAMPLE_OPERATION_LOCAL_APP_REVOKE", "TELEMETRY_REQUESTSAMPLE_OPERATION_LOCAL_APP_OPEN", "TELEMETRY_REQUESTSAMPLE_OPERATION_LOCAL_APP_STATUS", "TELEMETRY_REQUESTSAMPLE_OPERATION_LOCAL_APP_HTTP", "TELEMETRY_REQUESTSAMPLE_OPERATION_ARTIFACT_DEMO_EXPORT", "TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_DOTS_TARGETS", "TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_DOTS_STATUS", "TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_DOTS_BIND", "TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_DOTS_UNBIND", "TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_DOTS_SEND", "TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_DOTS_PAUSE", "TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_DOTS_RESUME", "TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_DOTS_EXCHANGE_CREATE", "TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_DOTS_EXCHANGE_READ", "TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_DOTS_DELEGATION_STATUS", "TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_DOTS_DELEGATION_CREATE", "TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_DOTS_DELEGATION_REVOKE";
 }
@@ -603,6 +611,42 @@ enum Vcs_FileStatus_status {
   VCS_FILESTATUS_STATUS_ADDED = 1 [(ycoding.v5.domain_label) = "added"];
   VCS_FILESTATUS_STATUS_DELETED = 2 [(ycoding.v5.domain_label) = "deleted"];
   VCS_FILESTATUS_STATUS_MODIFIED = 3 [(ycoding.v5.domain_label) = "modified"];
+}
+
+message autonomyDefaults_get_Request {
+
+}
+
+message autonomyDefaults_get_Result {
+  required AutonomyDefaults_Info data = 1;
+}
+
+message AutonomyDefaults_Info {
+  required AutonomyDefaults_Mode permissions = 1;
+  required AutonomyDefaults_Mode guardrails = 2;
+  required AutonomyDefaults_Mode answers = 3;
+  optional AutonomyDefaults_YoloAcceptedAt yoloAcceptedAt = 4;
+}
+
+message AutonomyDefaults_YoloAcceptedAt {
+  optional uint64 permissions = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/autonomy-defaults.ts#AutonomyDefaults.YoloAcceptedAt" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 guardrails = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/autonomy-defaults.ts#AutonomyDefaults.YoloAcceptedAt" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 answers = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/autonomy-defaults.ts#AutonomyDefaults.YoloAcceptedAt" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message autonomyDefaults_set_Request_payload {
+  optional AutonomyDefaults_Mode permissions = 1;
+  optional AutonomyDefaults_Mode guardrails = 2;
+  optional AutonomyDefaults_Mode answers = 3;
+  optional bool acceptYolo = 4;
+}
+
+message autonomyDefaults_set_Request {
+  required autonomyDefaults_set_Request_payload payload = 1;
+}
+
+message autonomyDefaults_set_Result {
+  required AutonomyDefaults_Info data = 1;
 }
 
 message browser_action_Request_params {
@@ -2353,6 +2397,43 @@ message Vcs_FileStatus {
   required uint64 additions = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/vcs.ts#Vcs.FileStatus" integer_min: "0" integer_max: "9007199254740991" }];
   required uint64 deletions = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/vcs.ts#Vcs.FileStatus" integer_min: "0" integer_max: "9007199254740991" }];
   required Vcs_FileStatus_status status = 4;
+}
+
+service server_autonomyDefaults {
+  rpc autonomyDefaults_get(autonomyDefaults_get_Request) returns (autonomyDefaults_get_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3056
+      diagnostic_name: "autonomyDefaults.get"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc autonomyDefaults_set(autonomyDefaults_set_Request) returns (autonomyDefaults_set_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3057
+      diagnostic_name: "autonomyDefaults.set"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
 }
 
 service server_browser {

@@ -21,6 +21,7 @@ import { PluginGroup } from "./groups/plugin.js"
 import { HealthGroup } from "./groups/health.js"
 import { ServerGroup } from "./groups/server.js"
 import { UsageGroup } from "./groups/usage.js"
+import { AutonomyDefaultsGroup } from "./groups/autonomy-defaults.js"
 import { KeepAwakeGroup } from "./groups/keep-awake.js"
 import { RemoteGroup } from "./groups/remote.js"
 import { DebugGroup } from "./groups/debug.js"
@@ -37,7 +38,6 @@ import { CredentialGroup } from "./groups/credential.js"
 import { makeProjectGroup } from "./groups/project.js"
 import { ProjectCopyGroup } from "./groups/project-copy.js"
 import { VcsGroup } from "./groups/vcs.js"
-import { ProjectArtifactGroup } from "./groups/project-artifact.js"
 import { makeIncidentGroup } from "./groups/incident.js"
 import { makeBrowserGroup } from "./groups/browser.js"
 import { makeIsolatedBrowserGroup } from "./groups/isolated-browser.js"
@@ -61,7 +61,6 @@ type LocationGroups<LocationId extends HttpApiMiddleware.AnyId> =
   | HttpApiGroup.AddMiddleware<typeof ReferenceGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof ProjectCopyGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof VcsGroup, LocationId>
-  | HttpApiGroup.AddMiddleware<typeof ProjectArtifactGroup, LocationId>
 
 type SessionGroups<SessionLocationId extends HttpApiMiddleware.AnyId, SessionLocationService> =
   | ReturnType<typeof makeSessionGroup<SessionLocationId, SessionLocationService>>
@@ -120,6 +119,7 @@ type ApiGroups<
   | typeof UsageGroup
   | typeof RemoteGroup
   | typeof KeepAwakeGroup
+  | typeof AutonomyDefaultsGroup
   | typeof DebugGroup
   | typeof LocationGroup
   | typeof ConfigGroup
@@ -232,7 +232,6 @@ const makeApiFromGroup = <
     .add(ReferenceGroup.middleware(locationMiddleware))
     .add(ProjectCopyGroup.middleware(locationMiddleware))
     .add(VcsGroup.middleware(locationMiddleware))
-    .add(ProjectArtifactGroup.middleware(locationMiddleware))
     .add(DebugGroup)
     .add(makeBrowserGroup(sessionLocationMiddleware))
     .add(makeIsolatedBrowserGroup(sessionLocationMiddleware))
@@ -240,6 +239,7 @@ const makeApiFromGroup = <
     .add(makeIncidentGroup(locationMiddleware))
     .add(RemoteGroup)
     .add(KeepAwakeGroup)
+    .add(AutonomyDefaultsGroup)
     .add(ConfigGroup)
     .add(makeReviewGroup(sessionLocationMiddleware))
     .add(CoordinationGroup)

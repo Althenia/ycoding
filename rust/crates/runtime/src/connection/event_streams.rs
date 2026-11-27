@@ -29,7 +29,6 @@ fn public_event(item: v5::SessionLogItem) -> Result<v5::PublicEvent, ProtocolErr
         Kind::Value2(event) => v5::public_event::Kind::SessionAgentSelected(event),
         Kind::Value3(event) => v5::public_event::Kind::SessionModelSelected(event),
         Kind::Value4(event) => v5::public_event::Kind::SessionDaybreakSet(event),
-        Kind::Value5(event) => v5::public_event::Kind::SessionProjectArtifactsEnded(event),
         Kind::Value6(event) => v5::public_event::Kind::SessionMoved(event),
         Kind::Value7(event) => v5::public_event::Kind::SessionRenamed(event),
         Kind::Value8(event) => v5::public_event::Kind::SessionDeleted(event),
@@ -99,6 +98,14 @@ fn public_event(item: v5::SessionLogItem) -> Result<v5::PublicEvent, ProtocolErr
         Kind::Value73(event) => v5::public_event::Kind::SessionInputWithdrawn(event),
         Kind::Value74(event) => v5::public_event::Kind::SessionInputSteered(event),
         Kind::Value75(event) => v5::public_event::Kind::SessionInputDeleted(event),
+        Kind::Value76(event) => v5::public_event::Kind::SessionCueDetected(event),
+        Kind::Value77(event) => v5::public_event::Kind::SessionRecallRecorded(event),
+        Kind::Value78(event) => v5::public_event::Kind::SessionLifecycleRecorded(event),
+        Kind::Value79(event) => v5::public_event::Kind::SessionHarnessEvaluated(event),
+        Kind::Value80(event) => v5::public_event::Kind::SessionHarnessProbed(event),
+        Kind::Value81(event) => v5::public_event::Kind::SessionHarnessAdopted(event),
+        Kind::Value82(event) => v5::public_event::Kind::SessionHarnessRolledBack(event),
+        Kind::Value83(event) => v5::public_event::Kind::SessionHarnessReflected(event),
     };
     Ok(v5::PublicEvent { kind: Some(kind) })
 }

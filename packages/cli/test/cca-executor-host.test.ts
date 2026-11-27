@@ -242,7 +242,7 @@ describe("CCA executor reconnect delay (remote/reconnect_backoff.rs)", () => {
 describe("CCA executor host lifecycle", () => {
   test("host start fails before subscribing or advertising when skill installation fails", async () => {
     const harness = await fixture({ configuration: enabled() })
-    await mkdir(path.join(path.dirname(harness.statePath), "dots", "skills", "ycoding-operator", "SKILL.md"), { recursive: true })
+    await mkdir(path.join(path.dirname(harness.statePath), "dots", "skills", "session-operator", "SKILL.md"), { recursive: true })
     await expect(harness.create().start()).rejects.toThrow()
     expect(harness.listeners.size).toBe(0)
     expect(harness.flora).toEqual([])
@@ -250,12 +250,12 @@ describe("CCA executor host lifecycle", () => {
 
   test("host start installs the operator skill before advertising its root", async () => {
     const harness = await fixture({ configuration: enabled() })
-    const file = path.join(path.dirname(harness.statePath), "dots", "skills", "ycoding-operator", "SKILL.md")
+    const file = path.join(path.dirname(harness.statePath), "dots", "skills", "session-operator", "SKILL.md")
     const host = harness.create()
     await host.start()
     await harness.until("socket")
-    const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
-    expect(await readFile(file, "utf8")).toBe(ycodingOperatorSkill)
+    const { sessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
+    expect(await readFile(file, "utf8")).toBe(sessionOperatorSkill)
     expect(harness.flora[0]!.body.selected_capability_roots).toEqual(harness.roots)
     expect(harness.roots[1]).toEqual({ id: "ycoding-dots-skills", path: path.join(path.dirname(harness.statePath), "dots", "skills") })
   })

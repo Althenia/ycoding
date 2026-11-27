@@ -1,14 +1,10 @@
 export * as SessionSkill from "./skill"
 
-import { randomUUID } from "node:crypto"
 import path from "path"
 import { Effect } from "effect"
-import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { KeyedMutex } from "../effect/keyed-mutex"
 import { EventRuntime } from "../event"
 import type { FSUtil } from "../fs-util"
-import { ProjectArtifactAccounting } from "../project-artifact/accounting"
-import type { ProjectArtifactSource } from "../project-artifact/source"
 import { Skill } from "../skill"
 import { SkillTool } from "../tool/skill"
 import { SessionEvent } from "./event"
@@ -44,14 +40,12 @@ export const activate = Effect.fn("SessionSkill.activate")(function* (
   services: {
     events: EventRuntime.Interface
     store: SessionStore.Interface
-    accounting: ProjectArtifactAccounting.Interface
     fs: FSUtil.Interface
   },
   input: {
     session: SessionSchema.Info
     skill: Skill.Info
     id?: SessionMessage.ID
-    provenance?: ProjectArtifactSource.Provenance
   },
 ) {
   return yield* locks.withLock(input.session.id)(
@@ -61,7 +55,6 @@ export const activate = Effect.fn("SessionSkill.activate")(function* (
       )
       if (active) return
       const text = yield* SkillTool.instructions(services.fs, input.skill)
-      const provenance = input.provenance
       yield* services.events.publish(
         SessionEvent.Skill.Activated,
         {
@@ -71,41 +64,9 @@ export const activate = Effect.fn("SessionSkill.activate")(function* (
           text,
           directory: path.dirname(input.skill.location),
           conflicts: input.skill.conflicts,
-          artifact: provenance
-            ? {
-                scopeID: provenance.scopeID,
-                versionID: provenance.versionID,
-                kind: provenance.kind,
-                id: provenance.id,
-                sourceScope: provenance.scope,
-              }
-            : undefined,
         },
         {
           id: input.id ? EventRuntime.ID.make(input.id.replace(/^msg_/, "evt_")) : undefined,
-          commit: provenance
-            ? (seq) =>
-                services.accounting
-                  .activate(
-                    ProjectArtifact.Activation.make({
-                      id: ProjectArtifact.ActivationID.make(`paa_${randomUUID()}`),
-                      artifact: {
-                        scopeID: provenance.scopeID,
-                        kind: provenance.kind,
-                        id: provenance.id,
-                        versionID: provenance.versionID,
-                      },
-                      projectID: input.session.projectID,
-                      sessionID: input.session.id,
-                      agentID: input.session.agent,
-                      source: "session-skill",
-                      messageID: input.id,
-                      boundarySeq: ProjectArtifact.Revision.make(seq),
-                      activatedAt: ProjectArtifact.TimestampMillis.make(Date.now()),
-                    }),
-                  )
-                  .pipe(Effect.asVoid, Effect.orDie)
-            : undefined,
         },
       )
     }),

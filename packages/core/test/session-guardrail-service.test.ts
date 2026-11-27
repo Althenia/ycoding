@@ -428,7 +428,6 @@ exact.it.effect("admits YCoding-managed tool operations without a review request
     { action: "file_mutation", resources: [`${dataDir}/worktrees/repo_abc/feature`], metadata: { operation: "create_git_worktree" } },
     { action: "file_mutation", resources: [`${dataDir}/memory/repo_abc`], metadata: { operation: "write", memoryAction: "write" } },
     { action: "file_mutation", resources: [`${dataDir}/memory/knowledge`], metadata: { operation: "remove", memoryAction: "delete" } },
-    { action: "project_artifact_mutation", resources: ["skill/example"], metadata: { operation: "automatic_write" } },
     { action: "subagent", resources: ["build"], metadata: { description: "task" } },
     { action: "mcp_execute", resources: ["server/tool"], metadata: { arguments: [] } },
     { action: "shell", resources: [`git worktree add -b feature ${dataDir}/worktrees/repo_abc/feature`] },

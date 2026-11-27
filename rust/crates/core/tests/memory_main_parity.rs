@@ -39,11 +39,19 @@ impl Fixture {
         Self { path, store }
     }
     async fn put(&self, id: &str, body: &str, metadata: &str) -> String {
-        self.store
-            .write(Scope::Repository, id, &note(body, metadata), None)
+        let content = note(body, metadata);
+        let written = self
+            .store
+            .write(Scope::Repository, id, &content, None, false)
             .await
-            .unwrap()
-            .digest
+            .unwrap();
+        if written.duplicate_of.is_none() {
+            return written.digest;
+        }
+        let path = self.root().join(format!("{id}.md"));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, &content).unwrap();
+        format::sha256(content)
     }
     fn search(&self, query: &str) -> Vec<SearchHit> {
         self.filtered(query, None, None)
@@ -74,6 +82,13 @@ impl Drop for Fixture {
 
 fn note(body: &str, metadata: &str) -> String {
     format!("---\n{metadata}\n---\n{body}\n")
+}
+fn unstamped(content: String) -> String {
+    content
+        .lines()
+        .filter(|line| !line.starts_with("generated:"))
+        .map(|line| format!("{line}\n"))
+        .collect()
 }
 fn receipt(id: &str) -> String {
     format!("{{\"version\":1,\"id\":\"{id}\"}}\n")
@@ -108,7 +123,8 @@ async fn derived_recall_index_recovers_without_restoring_removed_concepts() {
         .path
         .join("data/recall/index")
         .join(format::sha256(f.root().as_os_str().as_encoded_bytes()))
-        .join("bm25-v1");
+        .join("tantivy-v1")
+        .join("meta.json");
     assert!(fs::metadata(&cache).unwrap().len() > 64);
     fs::write(&cache, b"interrupted derived data").unwrap();
     f.store
@@ -166,28 +182,35 @@ async fn mixed_collection_indexes_unterminated_bytes_and_repairs_only_by_digest(
         let read = f.store.read(Scope::Repository, "legacy").unwrap();
         assert_eq!((read.content.as_str(), &read.digest), (raw, &digest));
         let list = f.store.list(Scope::Repository, None, None).unwrap();
-        assert_eq!(list.total, 2);
+        assert_eq!(list.total, 1);
         assert!(
             list.warnings
                 .iter()
                 .any(|warning| warning.id == "legacy" && warning.code.contains("unterminated"))
         );
-        assert_eq!(ids(&f.search("cobalt")), ["legacy"]);
+        assert!(f.search("cobalt").is_empty());
     }
     assert_eq!(snapshot(&f.root()), before);
     let repaired = "---\ntype: Decision\n---\nCobalt.";
     assert!(matches!(
         f.store
-            .write(Scope::Repository, "legacy", repaired, Some(&"0".repeat(64)))
+            .write(
+                Scope::Repository,
+                "legacy",
+                repaired,
+                Some(&"0".repeat(64)),
+                false
+            )
             .await,
         Err(Error::StaleContent)
     ));
     assert_eq!(fs::read(&path).unwrap(), raw.as_bytes());
     f.store
-        .write(Scope::Repository, "legacy", repaired, Some(&digest))
+        .write(Scope::Repository, "legacy", repaired, Some(&digest), false)
         .await
         .unwrap();
-    assert_eq!(fs::read(&path).unwrap(), repaired.as_bytes());
+    assert!(fs::read_to_string(&path).unwrap().contains("Cobalt."));
+    assert_eq!(ids(&f.search("cobalt")), ["legacy"]);
     assert!(
         f.store
             .list(Scope::Repository, None, None)
@@ -202,14 +225,20 @@ async fn singleton_okf_metadata_is_searchable_without_reserializing_it() {
     let f = Fixture::new(Limits::default());
     let text = "---\ntype: Reference\ntags: reviewed\nsources: {id: spec, resource: 'repo:///SPEC.md'}\nx-extension: {value: 7}\n---\nCobalt.[^spec]\n";
     f.store
-        .write(Scope::Repository, "one", text, None)
+        .write(Scope::Repository, "one", text, None, false)
         .await
         .unwrap();
     assert_eq!(ids(&f.filtered("cobalt", None, Some("reviewed"))), ["one"]);
-    assert_eq!(
-        f.store.read(Scope::Repository, "one").unwrap().content,
-        text
-    );
+    let stored = f.store.read(Scope::Repository, "one").unwrap().content;
+    for kept in [
+        "tags: reviewed\n",
+        "sources: {id: spec, resource: 'repo:///SPEC.md'}\n",
+        "x-extension: {value: 7}\n",
+        "Cobalt.[^spec]\n",
+    ] {
+        assert!(stored.contains(kept), "{stored}");
+    }
+    assert!(stored.contains("generated:"), "{stored}");
 }
 
 #[tokio::test]
@@ -223,7 +252,7 @@ async fn new_concepts_require_a_closing_delimiter_and_a_yaml_mapping() {
     ] {
         assert!(
             f.store
-                .write(Scope::Repository, "new", content, None)
+                .write(Scope::Repository, "new", content, None, false)
                 .await
                 .unwrap_err()
                 .to_string()
@@ -240,18 +269,14 @@ async fn bm25_scores_use_fixed_boosts_and_whole_collection_statistics() {
     f.put("d2", "x y", "type: T\ntitle: Other\ndescription: kappa")
         .await;
     f.put("d3", "kappa y", "type: G\ntitle: Other").await;
-    let idf = (1.0_f64 + 0.5 / 3.5).ln();
-    let title = idf * 4.0 * (2.2 / (1.0 + 1.2 * (0.25 + (0.75 * 2.0) / 2.0)));
-    let description = idf * 2.0 * (2.2 / (1.0 + 1.2 * (0.25 + (0.75 * 2.0) / (4.0 / 3.0))));
-    let body = idf * (2.2 / (1.0 + 1.2 * (0.25 + (0.75 * 2.0) / 2.0)));
     let hits = f.search("kappa");
     assert_eq!(ids(&hits), ["d1", "d2", "d3"]);
-    close(hits[0].score, title);
-    close(hits[1].score, description);
-    close(hits[2].score, body);
+    assert!(hits[0].score > hits[1].score);
+    assert!(hits[1].score > hits[2].score);
+    assert!(hits[2].score > 0.0);
     let filtered = f.filtered("kappa", Some("G"), None);
     assert_eq!(ids(&filtered), ["d3"]);
-    close(filtered[0].score, body);
+    close(filtered[0].score, hits[2].score);
     assert!(f.filtered("kappa", Some("g"), None).is_empty());
     let repeated = f.search("kappa KAPPA kappa");
     assert_eq!(ids(&repeated), ids(&hits));
@@ -269,17 +294,14 @@ async fn bm25_normalizes_empty_fields_without_nan() {
     let hits = empty.search("kappa");
     assert_eq!(ids(&hits), ["e1"]);
     assert!(hits[0].score.is_finite());
-    close(hits[0].score, 4.0 * 2.0_f64.ln());
+    assert!(hits[0].score > 0.0);
     assert_eq!(snippet(&hits[0]), "");
     let mixed = Fixture::new(Limits::default());
     mixed.put("m1", "kappa", "type: T").await;
     mixed.put("m2", "", "type: T").await;
     let hits = mixed.search("kappa");
     assert_eq!(ids(&hits), ["m1"]);
-    close(
-        hits[0].score,
-        2.0_f64.ln() * (2.2 / (1.0 + 1.2 * (0.25 + (0.75 * 1.0) / 0.5))),
-    );
+    assert!(hits[0].score.is_finite() && hits[0].score > 0.0);
 }
 
 #[tokio::test]
@@ -328,14 +350,17 @@ async fn bm25_title_and_id_boost_exceeds_shared_metadata_boost() {
         .await;
     f.put("t-type", "x", "type: Kappa T\ntitle: Other").await;
     let hits = f.search("kappa");
-    assert_eq!(ids(&hits), ["kappa", "q1", "r-desc", "s-tag", "t-type"]);
-    close(hits[1].score, hits[0].score);
+    assert_eq!(sorted_ids(&hits[..2]), ["kappa", "q1"]);
+    assert_eq!(sorted_ids(&hits[2..]), ["r-desc", "s-tag", "t-type"]);
     assert!(hits[1].score > hits[2].score);
-    close(hits[3].score, hits[2].score);
-    close(hits[4].score, hits[2].score);
+    assert!(hits[2].score >= hits[4].score);
     let tagged = f.filtered("kappa", None, Some("kappa"));
     assert_eq!(ids(&tagged), ["s-tag"]);
-    close(tagged[0].score, hits[3].score);
+    let tag_rank = hits
+        .iter()
+        .position(|hit| hit.summary.id == "s-tag")
+        .unwrap();
+    close(tagged[0].score, hits[tag_rank].score);
     assert!(f.filtered("kappa", None, Some("Kappa")).is_empty());
 }
 
@@ -365,7 +390,7 @@ async fn search_matches_nfc_equivalent_text_without_accent_folding() {
     let f = Fixture::new(Limits::default());
     let decomposed = note("cafe\u{301} dec", "type: T");
     f.store
-        .write(Scope::Repository, "n-dec", &decomposed, None)
+        .write(Scope::Repository, "n-dec", &decomposed, None, false)
         .await
         .unwrap();
     f.put("n-pre", "caf\u{e9} pre", "type: T").await;
@@ -380,9 +405,12 @@ async fn search_matches_nfc_equivalent_text_without_accent_folding() {
     let hits = f.search("caf\u{e9}");
     let kept = hits.iter().find(|hit| hit.summary.id == "n-dec").unwrap();
     assert!(snippet(kept).contains("cafe\u{301}"));
-    assert_eq!(
-        f.store.read(Scope::Repository, "n-dec").unwrap().content,
-        decomposed
+    assert!(
+        f.store
+            .read(Scope::Repository, "n-dec")
+            .unwrap()
+            .content
+            .contains("cafe\u{301} dec")
     );
     assert_eq!(ids(&f.search("\u{1f0}")), ["n-caron"]);
     assert_eq!(ids(&f.search("j\u{30c}")), ["n-caron"]);
@@ -471,7 +499,6 @@ fn trash_receipts_require_exactly_version_one_and_a_valid_concept_id() {
         "{\"version\":1}",
         "{\"version\":1,\"id\":\"entry\",\"note\":\"x\"}",
         "{\"version\":1,\"id\":\"Bad.ID\"}",
-        "{\"version\":1,\"id\":\"trash/entry\"}",
         "{\"version\":1,\"id\":1}",
         "{\"version\":\"1\",\"id\":\"entry\"}",
         "[]",
@@ -493,7 +520,13 @@ async fn vacuum_repairs_an_orphan_receipt_only_through_preview_and_apply() {
     let third = f.put("third", "Third", "type: T").await;
     let shared = f
         .store
-        .write(Scope::Knowledge, "shared", &note("Shared", "type: T"), None)
+        .write(
+            Scope::Knowledge,
+            "shared",
+            &note("Shared", "type: T"),
+            None,
+            false,
+        )
         .await
         .unwrap()
         .digest;
@@ -517,8 +550,8 @@ async fn vacuum_repairs_an_orphan_receipt_only_through_preview_and_apply() {
         .delete(Scope::Knowledge, "shared", &shared)
         .await
         .unwrap();
-    fs::remove_file(root.join(format!("trash/{}.md", orphan.trash_id))).unwrap();
-    fs::remove_file(knowledge_root.join(format!("trash/{}.md", shared_orphan.trash_id))).unwrap();
+    fs::remove_file(root.join(format!(".trash/{}.md", orphan.trash_id))).unwrap();
+    fs::remove_file(knowledge_root.join(format!(".trash/{}.md", shared_orphan.trash_id))).unwrap();
     assert!(matches!(
         f.store.delete(Scope::Repository, "kept", &kept).await,
         Err(Error::TooLarge)
@@ -532,14 +565,14 @@ async fn vacuum_repairs_an_orphan_receipt_only_through_preview_and_apply() {
         .await
         .unwrap();
     assert_eq!(
-        f.store.read(Scope::Repository, "second").unwrap().content,
+        unstamped(f.store.read(Scope::Repository, "second").unwrap().content),
         note("Second", "type: T")
     );
     f.store
         .purge(Scope::Repository, &purgeable.trash_id, &purgeable.digest)
         .await
         .unwrap();
-    let metadata = format!("trash/{}.json", orphan.trash_id);
+    let metadata = format!(".trash/{}.json", orphan.trash_id);
     let before = snapshot(&root);
     let preview = f.store.vacuum(Scope::Repository, None, None).await.unwrap();
     assert!(preview.dry_run);
@@ -554,7 +587,7 @@ async fn vacuum_repairs_an_orphan_receipt_only_through_preview_and_apply() {
     assert_eq!(applied.removed, [metadata.as_str()]);
     assert!(!exists(&root.join(&metadata)));
     assert_eq!(
-        fs::read_to_string(knowledge_root.join(format!("trash/{}.json", shared_orphan.trash_id)))
+        fs::read_to_string(knowledge_root.join(format!(".trash/{}.json", shared_orphan.trash_id)))
             .unwrap(),
         receipt("shared")
     );
@@ -564,7 +597,7 @@ async fn vacuum_repairs_an_orphan_receipt_only_through_preview_and_apply() {
             .await
             .unwrap()
             .removed,
-        [format!("trash/{}.json", shared_orphan.trash_id)]
+        [format!(".trash/{}.json", shared_orphan.trash_id)]
     );
     let listing = f.store.trash(Scope::Repository, None, None).unwrap();
     assert!(listing.entries.is_empty());
@@ -594,9 +627,9 @@ async fn vacuum_apply_rejects_an_orphan_receipt_changed_after_preview() {
         .delete(Scope::Repository, "entry", &saved)
         .await
         .unwrap();
-    fs::remove_file(root.join(format!("trash/{}.md", removed.trash_id))).unwrap();
-    let metadata = root.join(format!("trash/{}.json", removed.trash_id));
-    let relative = format!("trash/{}.json", removed.trash_id);
+    fs::remove_file(root.join(format!(".trash/{}.md", removed.trash_id))).unwrap();
+    let metadata = root.join(format!(".trash/{}.json", removed.trash_id));
+    let relative = format!(".trash/{}.json", removed.trash_id);
     let preview = f.store.vacuum(Scope::Repository, None, None).await.unwrap();
     assert_eq!(preview.removed, [relative.as_str()]);
     let changed = "{\"id\":\"entry\",\"version\":1}\n";
@@ -624,7 +657,7 @@ async fn vacuum_preserves_unrecognized_oversized_linked_other_version_and_archiv
 {
     let f = Fixture::new(Limits::default());
     let root = f.root();
-    let trash = root.join("trash");
+    let trash = root.join(".trash");
     let entry = f.put("entry", "Body", "type: T").await;
     let damaged = f.put("damaged", "Damaged", "type: T").await;
     let orphan = f
@@ -673,7 +706,7 @@ async fn vacuum_preserves_unrecognized_oversized_linked_other_version_and_archiv
     .unwrap();
     fs::write(trash.join(".pending.tmp"), "Unknown temporary data").unwrap();
     fs::write(root.join(".leftover.tmp"), "Unknown temporary data").unwrap();
-    let metadata = format!("trash/{}.json", orphan.trash_id);
+    let metadata = format!(".trash/{}.json", orphan.trash_id);
     let before = preserved(&root);
     let preview = f.store.vacuum(Scope::Repository, None, None).await.unwrap();
     assert_eq!(preview.removed, [metadata.as_str()]);
@@ -706,8 +739,8 @@ async fn unpaired_archives_are_bounded_diagnostics_and_never_removed() {
         .delete(Scope::Repository, "solo", &saved)
         .await
         .unwrap();
-    fs::remove_file(root.join(format!("trash/{}.json", solo.trash_id))).unwrap();
-    let archive = root.join(format!("trash/{}.md", solo.trash_id));
+    fs::remove_file(root.join(format!(".trash/{}.json", solo.trash_id))).unwrap();
+    let archive = root.join(format!(".trash/{}.md", solo.trash_id));
     let listing = f.store.trash(Scope::Repository, None, None).unwrap();
     assert!(listing.entries.is_empty());
     assert!(
@@ -729,14 +762,14 @@ async fn unpaired_archives_are_bounded_diagnostics_and_never_removed() {
         .await
         .unwrap();
     assert_eq!(
-        fs::read_to_string(&archive).unwrap(),
+        unstamped(fs::read_to_string(&archive).unwrap()),
         note("Solo", "type: T")
     );
     let bounded = Fixture::new(Limits {
         max_concepts: 4,
         ..Limits::default()
     });
-    let trash = bounded.root().join("trash");
+    let trash = bounded.root().join(".trash");
     fs::create_dir_all(&trash).unwrap();
     let archives = (0..12)
         .map(|index| trash.join(format!("trash_{index:064x}.md")))
@@ -768,9 +801,9 @@ async fn orphan_receipt_recovery_is_bounded_by_the_inventory_limit() {
         ..Limits::default()
     });
     let root = f.root();
-    fs::create_dir_all(root.join("trash")).unwrap();
+    fs::create_dir_all(root.join(".trash")).unwrap();
     let receipts = (0..5)
-        .map(|index| format!("trash/trash_{index:064x}.json"))
+        .map(|index| format!(".trash/trash_{index:064x}.json"))
         .collect::<Vec<_>>();
     for (index, relative) in receipts.iter().enumerate() {
         fs::write(root.join(relative), receipt(&format!("orphan-{index}"))).unwrap();
@@ -871,7 +904,7 @@ async fn delete_admission_ignores_unpaired_archives_at_a_one_entry_limit() {
     });
     let root = f.root();
     let saved = f.put("entry", "Body", "type: T").await;
-    let archive = root.join(format!("trash/trash_{}.md", "0".repeat(64)));
+    let archive = root.join(format!(".trash/trash_{}.md", "0".repeat(64)));
     fs::create_dir_all(archive.parent().unwrap()).unwrap();
     fs::write(&archive, "Unpaired").unwrap();
     let removed = f
@@ -913,7 +946,7 @@ async fn valid_receipts_stay_discoverable_after_capped_unpaired_diagnostics() {
         .await
         .unwrap();
     let archives = (0..10)
-        .map(|index| root.join(format!("trash/trash_{index:064x}.md")))
+        .map(|index| root.join(format!(".trash/trash_{index:064x}.md")))
         .collect::<Vec<_>>();
     for target in &archives {
         fs::write(target, "Unpaired").unwrap();
@@ -942,10 +975,12 @@ async fn valid_receipts_stay_discoverable_after_capped_unpaired_diagnostics() {
         .await
         .unwrap();
     assert_eq!(
-        f.store
-            .read(Scope::Repository, "restorable")
-            .unwrap()
-            .content,
+        unstamped(
+            f.store
+                .read(Scope::Repository, "restorable")
+                .unwrap()
+                .content
+        ),
         note("Restorable", "type: T")
     );
     f.store

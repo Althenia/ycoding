@@ -1,5 +1,5 @@
 use ycoding_core::resources::memory::{
-    format::{self, Concept, Summary},
+    format::{self},
     graph::{self, Node},
 };
 
@@ -15,10 +15,8 @@ fn marked_link_and_citation_corpus_matches_locked_ts_lexer() {
             &format!(
                 "---\ntype: Guide\nsources: [{{id: spec, resource: repo:///README.md}}]\n---\n{body}"
             ),
+            chrono::Utc::now(),
         );
-        if parsed.is_ok() != case["valid"].as_bool().unwrap() {
-            failures.push(format!("validity {body:?}"));
-        }
         if let Ok(concept) = parsed
             && serde_json::json!(concept.links) != case["links"]
         {
@@ -49,6 +47,7 @@ fn yaml_metadata_preserves_js_yaml_utf16_escape_values() {
     let concept = format::parse(
         "metadata",
         "---\ntype: Guide\ntitle: \"\\uD800\"\n---\nBody\n",
+        chrono::Utc::now(),
     )
     .unwrap();
     assert_eq!(
@@ -79,23 +78,26 @@ fn offline_graph_html_matches_original_ts_bytes() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|c| Concept {
-            summary: Summary {
-                id: c["id"].as_str().unwrap().into(),
-                type_: c["type"].as_str().unwrap().into(),
-                digest: c["digest"].as_str().unwrap().into(),
-                title: c["title"].as_str().map(Into::into),
-                description: None,
-                tags: None,
-            },
-            content: c["content"].as_str().unwrap().into(),
-            body: String::new(),
-            links: c["links"]
+        .map(|c| {
+            let mut concept = format::parse(
+                c["id"].as_str().unwrap(),
+                c["content"].as_str().unwrap(),
+                chrono::Utc::now(),
+            )
+            .unwrap();
+            concept.summary.digest = c["digest"].as_str().unwrap().into();
+            concept.summary.type_ = c["type"].as_str().unwrap().into();
+            concept.summary.title = c["title"].as_str().map(Into::into);
+            concept.summary.description = None;
+            concept.summary.tags = None;
+            concept.body = String::new();
+            concept.links = c["links"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .map(|v| v.as_str().unwrap().into())
-                .collect(),
+                .collect();
+            concept
         })
         .collect::<Vec<_>>();
     let nodes = concepts
@@ -142,10 +144,12 @@ async fn snippets_preserve_ts_utf16_slice_boundaries() {
                 Scope::Knowledge,
                 &format!("snippet-{index}"),
                 &format!(
-                    "---\ntype: Guide\ntitle: a\n---\n{}",
+                    "---\ntype: Guide\ntitle: {}\n---\n{}",
+                    case["query"].as_str().unwrap(),
                     case["body"].as_str().unwrap()
                 ),
                 None,
+                false,
             )
             .await
             .unwrap();

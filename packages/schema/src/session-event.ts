@@ -39,6 +39,9 @@ import { DecisionFailure } from "./decision-failure.js"
 import { Dots } from "./dots.js"
 import { Form } from "./form.js"
 import { ToolInvocation } from "./tool-invocation.js"
+import { Recall } from "./recall.js"
+import { Lifecycle } from "./lifecycle.js"
+import { Harness } from "./harness.js"
 
 export { FileAttachment }
 
@@ -54,11 +57,6 @@ export interface Source extends Schema.Schema.Type<typeof Source> {}
 const Base = {
   sessionID: SessionID,
 }
-
-export const ArtifactProvenance = SessionMessage.ArtifactProvenance.annotate({
-  identifier: "Session.Event.ArtifactProvenance",
-})
-export type ArtifactProvenance = typeof ArtifactProvenance.Type
 
 export const Created = Event.durable({
   type: "session.created",
@@ -95,7 +93,6 @@ export const AgentSelected = Event.durable({
   schema: {
     ...Base,
     agent: Agent.ID,
-    artifact: ArtifactProvenance.pipe(optional),
   },
 })
 export type AgentSelected = typeof AgentSelected.Type
@@ -280,17 +277,6 @@ export const DaybreakSet = Event.durable({
   },
 })
 export type DaybreakSet = typeof DaybreakSet.Type
-
-export const ProjectArtifactsEnded = Event.durable({
-  type: "session.project-artifacts-ended",
-  ...options,
-  schema: {
-    ...Base,
-    oldProjectID: Project.ID,
-    newProjectID: Project.ID,
-  },
-})
-export type ProjectArtifactsEnded = typeof ProjectArtifactsEnded.Type
 
 export const Moved = Event.durable({
   type: "session.moved",
@@ -612,8 +598,7 @@ export namespace Skill {
       text: Schema.String,
       directory: Schema.String.pipe(optional),
       conflicts: SkillSchema.Conflicts.pipe(optional),
-      artifact: ArtifactProvenance.pipe(optional),
-    },
+      },
   })
   export type Activated = typeof Activated.Type
 
@@ -1076,13 +1061,117 @@ export namespace RevertEvent {
   })
 }
 
+export const CueDetected = Event.durable({
+  type: "session.cue.detected",
+  ...options,
+  schema: {
+    ...Base,
+    cueID: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(128)),
+    kind: Recall.CueKind,
+    subject: Schema.String.check(Schema.isMaxLength(512)).pipe(optional),
+    messageID: SessionMessage.ID.pipe(optional),
+  },
+})
+export type CueDetected = typeof CueDetected.Type
+
+export const RecallRecorded = Event.durable({
+  type: "session.recall.recorded",
+  ...options,
+  schema: {
+    ...Base,
+    key: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(128)),
+    trigger: Recall.Trigger,
+    cueID: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(128)).pipe(optional),
+    methods: Schema.Array(Recall.Method).check(Schema.isMaxLength(6)),
+    outcome: Recall.Outcome,
+    abstention: Recall.Abstention.pipe(optional),
+    items: Recall.Items,
+    elapsedMs: NonNegativeInt,
+    injectedTokens: NonNegativeInt,
+    budgetTokens: NonNegativeInt.pipe(optional),
+  },
+})
+export type RecallRecorded = typeof RecallRecorded.Type
+
+export const LifecycleRecorded = Event.durable({
+  type: "session.lifecycle.recorded",
+  ...options,
+  schema: {
+    ...Base,
+    step: NonNegativeInt,
+    decision: Lifecycle.Decision,
+    basis: Lifecycle.Basis,
+    recovery: Schema.Boolean,
+    recalled: Schema.Boolean,
+  },
+})
+export type LifecycleRecorded = typeof LifecycleRecorded.Type
+
+export const HarnessEvaluated = Event.durable({
+  type: "session.harness.evaluated",
+  ...options,
+  schema: {
+    ...Base,
+    stage: Harness.Stage,
+    mode: Harness.Mode,
+    signals: NonNegativeInt,
+    insufficient: Schema.Boolean,
+    skipReason: Schema.String.check(Schema.isMaxLength(200)).pipe(optional),
+  },
+})
+export type HarnessEvaluated = typeof HarnessEvaluated.Type
+
+export const HarnessProbed = Event.durable({
+  type: "session.harness.probed",
+  ...options,
+  schema: {
+    ...Base,
+    candidate: Harness.CandidateID,
+    outcome: Harness.Outcome,
+    tokens: NonNegativeInt,
+    latencyMs: NonNegativeInt,
+  },
+})
+export type HarnessProbed = typeof HarnessProbed.Type
+
+export const HarnessAdopted = Event.durable({
+  type: "session.harness.adopted",
+  ...options,
+  schema: {
+    ...Base,
+    version: Harness.VersionID,
+    parent: Harness.VersionID,
+  },
+})
+export type HarnessAdopted = typeof HarnessAdopted.Type
+
+export const HarnessRolledBack = Event.durable({
+  type: "session.harness.rolled-back",
+  ...options,
+  schema: {
+    ...Base,
+    from: Harness.VersionID,
+    to: Harness.VersionID,
+  },
+})
+export type HarnessRolledBack = typeof HarnessRolledBack.Type
+
+export const HarnessReflected = Event.durable({
+  type: "session.harness.reflected",
+  ...options,
+  schema: {
+    ...Base,
+    experiences: Harness.Experiences,
+  },
+})
+export type HarnessReflected = typeof HarnessReflected.Type
+
 export const Definitions = Event.inventory(
   Created,
   DotsAccessChanged,
   AgentSelected,
   ModelSelected,
   DaybreakSet,
-  ProjectArtifactsEnded,
   GuardrailDismissed,
   GuardrailEscalated,
   GuardrailDecided,
@@ -1128,6 +1217,14 @@ export const Definitions = Event.inventory(
   Synthetic,
   Skill.Activated,
   Skill.Deactivated,
+  CueDetected,
+  RecallRecorded,
+  LifecycleRecorded,
+  HarnessEvaluated,
+  HarnessProbed,
+  HarnessAdopted,
+  HarnessRolledBack,
+  HarnessReflected,
   Shell.Started,
   Shell.Ended,
   Step.Started,

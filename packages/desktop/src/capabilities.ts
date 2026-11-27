@@ -1,4 +1,4 @@
-import { DesktopError, utf8Length, type TerminalConnectInput, type TerminalControlInput, type TerminalResizeInput, type TerminalWriteInput, type AgentSwitch, type ArtifactIdentity, type ArtifactInput, type ArtifactMutationInput, type ArtifactsInput, type DotsTarget, type EditorContextInput, type ModelSelection, type ParentSteerInput, type PendingInput, type PredictionInput, type PromptGenerateInput, type SessionInsightsInput, type SessionSnapshotInput, type SessionTodo, type ShellCommandInput, type SideChatInput, type SkillActivation, type TranscriptExportInput, type GlobalRequestsInput, type UsageDashboardInput, type UsageReportQuery, type IncidentsInput, type IncidentMutationInput } from "./contract"
+import { DesktopError, utf8Length, type TerminalConnectInput, type TerminalControlInput, type TerminalResizeInput, type TerminalWriteInput, type AgentSwitch, type DotsTarget, type EditorContextInput, type ModelSelection, type ParentSteerInput, type PendingInput, type PredictionInput, type PromptGenerateInput, type SessionInsightsInput, type SessionSnapshotInput, type SessionTodo, type ShellCommandInput, type SideChatInput, type SkillActivation, type TranscriptExportInput, type GlobalRequestsInput, type UsageDashboardInput, type UsageReportQuery, type IncidentsInput, type IncidentMutationInput } from "./contract"
 import { isRevision, isSessionID } from "./requests"
 
 type Check = (value: unknown) => boolean
@@ -13,9 +13,6 @@ const messageID: Check = (value) => typeof value === "string" && /^msg_[A-Za-z0-
 const digest: Check = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value)
 const memory: Check = (value) => Array.isArray(value) && value.length <= 2 && new Set(value).size === value.length && value.every(literal(["repository", "knowledge"]))
 const jsonValue: Check = (value) => { const encoded = JSON.stringify(value); return encoded !== undefined && utf8Length(encoded) <= 8192 }
-const artifactScopes = ["project", "global"] as const
-const artifactKinds = ["skill", "command", "agent", "plugin"] as const
-const artifactStages = ["trial", "active", "degraded", "disabled", "quarantine"] as const
 
 function shape(value: unknown, checks: Readonly<Record<string, Check>>, message: string): Record<string, unknown> {
   if (!record(value) || Object.keys(value).some((key) => !Object.hasOwn(checks, key)) || !Object.entries(checks).every(([key, check]) => check(value[key]))) throw new DesktopError(message)
@@ -172,43 +169,6 @@ export function incidentMutationInput(value: unknown): IncidentMutationInput {
 }
 
 const numbers = (input: Record<string, unknown>, keys: readonly string[]) => Object.fromEntries(keys.filter((key) => input[key] !== undefined).map((key) => [key, Number(input[key])]))
-
-export function artifactsInput(value: unknown): ArtifactsInput {
-  const input = shape(value, { source: () => true, scope: literal([...artifactScopes, "trash"]), stage: maybe(literal(artifactStages)) }, "Invalid artifact list request.")
-  if (input.scope === "trash" && input.stage !== undefined) throw new DesktopError("Invalid artifact list request.")
-  return { ...(input.source === undefined ? {} : { source: input.source as ArtifactsInput["source"] }), scope: input.scope as ArtifactsInput["scope"], ...(input.stage === undefined ? {} : { stage: input.stage as ArtifactsInput["stage"] }) }
-}
-
-export function artifactInput(value: unknown): ArtifactInput {
-  const input = shape(value, { source: () => true, scope: literal(artifactScopes), kind: literal(artifactKinds), id: identifier }, "Choose an artifact.")
-  return { ...(input.source === undefined ? {} : { source: input.source as ArtifactInput["source"] }), scope: input.scope as ArtifactInput["scope"], kind: input.kind as ArtifactInput["kind"], id: String(input.id) }
-}
-
-const identityCheck: Check = (value) => {
-  try { shape(value, { scope: literal(artifactScopes), kind: literal(artifactKinds), id: identifier, expectedRevision: isRevision, expectedVersionID: identifier, expectedDigest: digest }, ""); return true } catch { return false }
-}
-
-export function artifactMutationInput(value: unknown): ArtifactMutationInput {
-  if (!record(value)) throw new DesktopError("Invalid artifact change.")
-  const common = { revision: isRevision, source: () => true }
-  const preview = literal(["promotion", "fork", "shadow"])
-  const shapes: Readonly<Record<string, Readonly<Record<string, Check>>>> = {
-    revert: { artifact: identityCheck, targetVersionID: identifier },
-    remove: { artifact: identityCheck },
-    preview: { artifact: identityCheck, preview },
-    confirm: { artifact: identityCheck, preview, token: bounded(1024) },
-    restore: { deletionID: identifier },
-  }
-  const kind = typeof value.kind === "string" && Object.hasOwn(shapes, value.kind) ? value.kind : undefined
-  if (kind === undefined) throw new DesktopError("Invalid artifact change.")
-  shape(value, { kind: () => true, ...common, ...shapes[kind] }, "Invalid artifact change.")
-  const request = value as ArtifactMutationInput
-  if ((request.kind === "preview" || request.kind === "confirm") && request.artifact.scope !== (request.preview === "fork" ? "global" : "project"))
-    throw new DesktopError(request.preview === "fork" ? "Only global artifacts can be forked into the project." : "Only project artifacts can be promoted or shadowed.")
-  return request
-}
-
-export const sameIdentity = (left: ArtifactIdentity, right: ArtifactIdentity) => left.scope === right.scope && left.kind === right.kind && left.id === right.id && left.expectedRevision === right.expectedRevision && left.expectedVersionID === right.expectedVersionID && left.expectedDigest === right.expectedDigest
 
 const targetCheck: Check = (value) => {
   try { shape(value, { dotID: bounded(256), threadID: bounded(256), environmentID: bounded(256), revision: digest }, ""); return true } catch { return false }

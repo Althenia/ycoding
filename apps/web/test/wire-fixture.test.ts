@@ -13,6 +13,7 @@ import { REMOTE_SCENARIOS } from "../verify/remote-scenarios"
 import { startRelayDouble, waitFor } from "./relay-double"
 import { typedFixtureOutcome } from "./wire-fixture"
 import { BinarySocket, transportFixture } from "./wire-peer"
+import { noResend } from "./transport-fence"
 
 const scenarios = [...new Map(REMOTE_SCENARIOS.map((scenario) => [scenario.name, scenario])).values()].filter(
   (scenario) => scenario.sessions.length > 0,
@@ -180,7 +181,7 @@ test.each(["session.log", "notice.list"] as const)(
       },
       noticeHandler: () => settle.promise,
     })
-    const transport = createRemoteTransport({ url: relay.wsURL("dev_1") })
+    const transport = createRemoteTransport({ ...noResend, url: relay.wsURL("dev_1") })
     const unhandled: unknown[] = []
     const record = (reason: unknown) => unhandled.push(reason)
     process.on("unhandledRejection", record)

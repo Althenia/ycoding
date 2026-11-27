@@ -11,7 +11,7 @@ const slashGroups = {
   history: ["share", "rename", "timeline", "fork", "undo", "redo", "thinking", "copy", "export", "unshare"],
   execution: ["compact", "daybreak", "goal", "autonomous", "sleep", "wake"],
   composition: ["editor", "skills", "btw", "suggest", "prompt", "btw-send", "move", "cd"],
-  resources: ["project-settings", "artifacts", "diff"],
+  resources: ["project-settings", "diff"],
 }
 
 test("inventory: every literal TUI slash command has a named parity boundary", async () => {
@@ -39,7 +39,7 @@ const dialogGroups = {
   history: ["routes/session/dialog-fork.tsx", "routes/session/dialog-message.tsx", "routes/session/dialog-timeline.tsx", "ui/dialog-export-options.tsx", "ui/dialog-export-result.tsx"],
   decisions: ["component/dialog-autonomous.tsx", "component/dialog-session-goal.tsx", "routes/session/dialog-subagent.tsx"],
   services: ["component/dialog-integration.tsx", "component/dialog-custom-endpoint.tsx", "component/dialog-mcp.tsx", "component/dialog-pair.tsx", "component/dialog-dots-connection.tsx", "component/dialog-session-browser.tsx"],
-  resources: ["component/dialog-project-artifacts.tsx", "component/dialog-session-skills.tsx", "component/dialog-workspace-file-changes.tsx"],
+  resources: ["component/dialog-session-skills.tsx", "component/dialog-workspace-file-changes.tsx"],
   settings: ["component/dialog-config.tsx", "component/dialog-telemetry-consent.tsx"],
   diagnostics: ["component/dialog-debug.tsx", "component/dialog-status.tsx", "component/dialog-session-terminals.tsx"],
   primitives: ["ui/dialog-alert.tsx", "ui/dialog-confirm.tsx", "ui/dialog-help.tsx", "ui/dialog-prompt.tsx", "ui/dialog-select.tsx"],

@@ -3,8 +3,8 @@ mod provenance;
 pub use provenance::{IMPORTER_VERSION, ProvenanceTable, Report, TableSummary};
 
 use crate::{
-    Catalog, TableDeclaration, analytics, artifacts, coordination, mcp_events, model_incident,
-    project, resources, session,
+    Catalog, TableDeclaration, analytics, coordination, database_format, mcp_events,
+    model_incident, project, resources, session,
 };
 use std::sync::OnceLock;
 
@@ -21,8 +21,8 @@ pub fn catalog(kind: DatabaseKind) -> Catalog {
     }
     static CORE: OnceLock<Vec<TableDeclaration>> = OnceLock::new();
     const BOOTSTRAP: &[TableDeclaration] = &[
-        TableDeclaration::of::<artifacts::MigrationTable>(),
-        TableDeclaration::of::<artifacts::DatabaseFormatTable>(),
+        TableDeclaration::of::<database_format::MigrationTable>(),
+        TableDeclaration::of::<database_format::DatabaseFormatTable>(),
         TableDeclaration::of::<ProvenanceTable>(),
     ];
     if kind == DatabaseKind::Bootstrap {
@@ -36,7 +36,7 @@ pub fn catalog(kind: DatabaseKind) -> Catalog {
                 .chain(session::TABLES)
                 .chain(coordination::TABLES)
                 .chain(crate::usage_cells::TABLES)
-                .chain(artifacts::TABLES)
+                .chain(database_format::TABLES)
                 .chain(resources::TABLES)
                 .chain(model_incident::TABLES)
                 .chain(mcp_events::TABLES)

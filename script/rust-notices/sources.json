@@ -327,6 +327,29 @@
     }
   ],
   "native": {
+    "onnxruntime": {
+      "crate": "ort-sys",
+      "version": "2.0.0-rc.15",
+      "runtime": "1.31.0",
+      "distribution": "build/download/dist.tsv",
+      "source": "https://pypi.org/project/onnxruntime/1.31.0/",
+      "archive": {
+        "file": "onnxruntime-1.31.0-cp311-cp311-macosx_14_0_arm64.whl",
+        "sha256": "cbf1a7f6470ddfe9dbc781966af8ce4a10e1858d75a93f93cc6b9367c9587870"
+      },
+      "licenses": [
+        {
+          "path": "onnxruntime/LICENSE",
+          "file": "texts/onnxruntime/LICENSE.txt",
+          "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+        },
+        {
+          "path": "onnxruntime/ThirdPartyNotices.txt",
+          "file": "texts/onnxruntime/ThirdPartyNotices.txt",
+          "sha256": "143764b952fdb1a7c69ce653bfba74a7744d6a8a573bfb73e235fba356c83de3"
+        }
+      ]
+    },
     "sqlite": {
       "crate": "libsqlite3-sys",
       "version": "0.38.2",
@@ -562,6 +585,12 @@
     "url": "https://raw.githubusercontent.com/anomalyco/models.dev/cfdcac88ddf30ba5217fd3e20df4b660759b1b68/LICENSE",
     "file": "texts/models-dev-LICENSE.txt",
     "sha256": "dc2dc41c9fea2fd3c41c21c6f484844cab367800b88ff24781f980ad3a9d160a"
+  },
+  "embeddingModel": {
+    "component": "BAAI/bge-small-en-v1.5 embedding model (MIT per its model card; ONNX export Xenova/bge-small-en-v1.5 downloaded on request)",
+    "url": "https://raw.githubusercontent.com/FlagOpen/FlagEmbedding/897baa67c0ffddbfccf4e6776ff55310d67809d4/LICENSE",
+    "file": "texts/flagembedding-LICENSE.txt",
+    "sha256": "587a673933425dbc36ec61268d3b954051b2d3ef3c9b322ede357976055ffdd5"
   },
   "elections": [
     {

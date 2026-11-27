@@ -541,217 +541,6 @@ async fn ingress_compact_refuses_a_session_without_a_completed_boundary() {
 }
 
 #[tokio::test]
-async fn ingress_agent_selection_and_explicit_skill_load_record_managed_artifact_activations() {
-    use ycoding_core::resources::{
-        command,
-        project_artifact::{accounting, source, source_registry, store},
-    };
-    use ycoding_schema::{ObjectEncoder, project, project_artifact};
-    let db = ycoding_store::Store::disposable(
-        ycoding_store::Options::core(),
-        ycoding_store::native::catalog(ycoding_store::native::DatabaseKind::Core),
-        ycoding_store::Metadata::new([9; 16], 1),
-    )
-    .unwrap();
-    db.submit(|tx| {
-        ycoding_store::project::ProjectTable::insert(
-            tx,
-            &ycoding_store::project::Project {
-                id: "prj_one".into(),
-                worktree: "/project".into(),
-                vcs: None,
-                name: None,
-                icon_url: None,
-                icon_url_override: None,
-                icon_color: None,
-                time_created: 1,
-                time_updated: 1,
-                time_initialized: None,
-                sandboxes: vec![],
-                commands: None,
-            },
-        )?;
-        ycoding_store::session::SessionTable::insert(tx, &support::record("ses_one"))
-    })
-    .unwrap()
-    .wait()
-    .unwrap();
-    let root =
-        std::env::temp_dir().join(format!("ycoding-ingress-artifacts-{}", std::process::id()));
-    let client = db.client();
-    let registry = Arc::new(std::sync::Mutex::new(source_registry::Registry::default()));
-    let accounting = accounting::Service::new(client.clone(), "test-bucket-secret".into());
-    let artifacts = store::Service::new(
-        client.clone(),
-        store::Paths {
-            data: root.join("data"),
-            home: root.join("home"),
-            config: root.join("config"),
-        },
-        registry.clone(),
-    )
-    .with_accounting(accounting.clone());
-    let project_id = project::Id::new("prj_one").unwrap();
-    let write = |kind: &str, id: &str, field: &str| {
-        let definition = project_artifact::Definition::decode(
-            &ObjectEncoder::new()
-                .field("kind", kind)
-                .field("name", id)
-                .field("description", "Managed")
-                .field("subtask", &false)
-                .field("mode", "subagent")
-                .field("permissions", &JsonValue::Array(vec![]))
-                .field(field, "Managed body")
-                .finish(),
-        )
-        .unwrap();
-        artifacts
-            .write_manual(store::ManualWriteInput {
-                scope: project_artifact::ScopeSelector::Project,
-                project_id: Some(project_id.clone()),
-                id,
-                definition: &definition,
-                expected: None,
-                now: 100,
-            })
-            .unwrap()
-    };
-    let agent_version = write("agent", "explore", "system");
-    let skill_version = write("skill", "audit", "content");
-    let source = source::Service::new(
-        source::Options {
-            client: client.clone(),
-            store: artifacts.clone(),
-            accounting,
-            registry,
-            location: ycoding_schema::location::Ref::decode(
-                &parse_json(r#"{"directory":"/project"}"#).unwrap(),
-            )
-            .unwrap(),
-            project_id,
-            project_directory: "/project".into(),
-            data_root: root.join("data"),
-        },
-        source::Catalogs {
-            agents: agent::Service::new(vec![agent::empty("build".into())]),
-            commands: command::Service::default(),
-            skills: ycoding_core::resources::skill::Service::new(&root.join("cache")),
-        },
-    );
-    source.refresh().await;
-    let skill = skill::Info::decode(&parse_json(r#"{"id":"audit","name":"Audit","location":"/project/audit/SKILL.md","content":"Audit guidance"}"#).unwrap()).unwrap();
-    let mut services = services(
-        &db,
-        "http://127.0.0.1:1",
-        Default::default(),
-        Some(Arc::new(SkillFixture(skill))),
-    );
-    services.store = services.store.with_artifact_source(source.clone());
-    let runner = Local::new(services);
-    let id = session::Id::new("ses_one").unwrap();
-    assert!(
-        runner
-            .load_skill(
-                &id,
-                Some(session_message::Id::new("msg_skill_explicit").unwrap()),
-                &"audit".into()
-            )
-            .await
-            .unwrap()
-    );
-    runner.switch_agent(&id, &"explore".into()).await.unwrap();
-    let recorded = events(&db);
-    let selected = recorded
-        .iter()
-        .position(|(kind, _)| kind == "session.agent.selected.1")
-        .unwrap();
-    let activated = recorded
-        .iter()
-        .position(|(kind, _)| kind == "session.skill.activated.1")
-        .unwrap();
-    for index in [selected, activated] {
-        assert!(
-            text_of(recorded[index].1.clone()).contains("\"artifact\":{"),
-            "{:?}",
-            recorded[index]
-        );
-    }
-    let prefix = ycoding_store::tuple_key(&[ycoding_store::KeyPart::String(&"ses_one".into())]);
-    let stored = db
-        .snapshot()
-        .unwrap()
-        .index_range::<ycoding_store::session::EventTable>(
-            "event_aggregate_seq_idx",
-            ycoding_store::IndexQuery {
-                lower: std::ops::Bound::Unbounded,
-                upper: std::ops::Bound::Unbounded,
-                prefix: Some(&prefix),
-                order: ycoding_store::IndexOrder::Ascending,
-                after: None,
-                limit: 1000,
-            },
-        )
-        .unwrap();
-    let seq_of = |kind: &str| {
-        stored
-            .iter()
-            .find(|event| event.record.type_.as_str() == Some(kind))
-            .unwrap()
-            .record
-            .clone()
-    };
-    let skill_event = seq_of("session.skill.activated.1");
-    assert_eq!(skill_event.id.as_str(), Some("evt_skill_explicit"));
-    let rows = db
-        .snapshot()
-        .unwrap()
-        .scan::<ycoding_store::artifacts::ActivationTable>(
-            std::ops::Bound::Unbounded,
-            std::ops::Bound::Unbounded,
-            10,
-        )
-        .unwrap();
-    let row = |source: &str| {
-        rows.iter()
-            .find(|row| row.source.as_str() == Some(source))
-            .unwrap_or_else(|| panic!("missing {source} activation in {rows:?}"))
-    };
-    assert_eq!(rows.len(), 2);
-    let agent_row = row("agent-selected");
-    assert_eq!(
-        agent_row.version_id,
-        *agent_version.version_id.as_lossless()
-    );
-    assert_eq!(
-        agent_row.agent_id.as_ref().and_then(|agent| agent.as_str()),
-        Some("explore")
-    );
-    assert_eq!(
-        agent_row.boundary_seq,
-        seq_of("session.agent.selected.1").seq
-    );
-    let skill_row = row("session-skill");
-    assert_eq!(
-        skill_row.version_id,
-        *skill_version.version_id.as_lossless()
-    );
-    assert_eq!(
-        skill_row
-            .message_id
-            .as_ref()
-            .and_then(|message| message.as_str()),
-        Some("msg_skill_explicit")
-    );
-    assert_eq!(skill_row.boundary_seq, skill_event.seq);
-    assert!(
-        source.diagnostics().is_empty(),
-        "{:?}",
-        source.diagnostics()
-    );
-    std::fs::remove_dir_all(root).unwrap();
-}
-
-#[tokio::test]
 async fn ingress_skill_duplicate_load_and_agent_switch_preserve_one_activation_and_reason() {
     let store = support::store();
     let service = Service::new(store.client());
@@ -818,7 +607,11 @@ fn services(
 ) -> Services {
     let models =
         include_str!("../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json")
-            .replacen("\"context\": 128000", "\"context\": 6000", 1)
+            .replacen(
+                "\"limit\": { \"context\": 128000, \"output\": 8192 }",
+                "\"limit\": { \"context\": 6000, \"output\": 100 }",
+                1,
+            )
             .replacen(
                 "\"models\": {\n      \"gpt-reasoning\": {",
                 "\"models\": {\n      \"gpt-tiny\": {\"id\":\"gpt-tiny\",\"name\":\"GPT Tiny\",\"release_date\":\"2026-01-01\",\"attachment\":false,\"reasoning\":false,\"temperature\":true,\"tool_call\":true,\"limit\":{\"context\":900,\"output\":100}},\n      \"gpt-helper\": {\"id\":\"gpt-helper\",\"name\":\"GPT Helper\",\"release_date\":\"2026-01-01\",\"attachment\":false,\"reasoning\":false,\"temperature\":true,\"tool_call\":true,\"limit\":{\"context\":20000,\"output\":2000}},\n      \"gpt-reasoning\": {",
@@ -1477,21 +1270,48 @@ async fn an_unresolvable_compaction_model_falls_back_to_the_deterministic_summar
 }
 
 #[tokio::test]
-async fn a_request_with_no_reducible_history_is_not_compacted() {
+async fn a_request_with_no_reducible_history_fails_the_step_before_any_provider_request() {
     let store = support::store();
     let service = Service::new(store.client());
     seed_context(&store);
     admit(&service, &"unreducible current request. ".repeat(1_000)).await;
-    let (endpoint, mut requests, server) = server(vec![sse("Answer")]).await;
+    let (endpoint, mut requests, server) = server(vec![]).await;
     let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
-    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
-        .await
-        .unwrap();
-    within(requests.recv()).await.unwrap();
+    let outcome = within(coordinator.run(&session::Id::new("ses_one").unwrap())).await;
+    assert!(outcome.is_err());
     within(server).await.unwrap();
-    let recorded = events(&store);
-    assert_eq!(count(&recorded, "session.compaction.admitted.2"), 0);
-    assert_eq!(count(&recorded, "session.step.ended.1"), 1);
+    assert!(requests.try_recv().is_err());
+    assert_context_limit_failure(&store);
+    assert_eq!(count(&events(&store), "session.compaction.admitted.2"), 0);
+    coordinator.shutdown().await.unwrap();
+}
+
+fn assert_context_limit_failure(store: &ycoding_store::Store) {
+    let recorded = events(store);
+    assert_eq!(count(&recorded, "session.step.started.1"), 1);
+    assert_eq!(count(&recorded, "session.step.ended.1"), 0);
+    assert_eq!(count(&recorded, "session.step.failed.1"), 1);
+    let failed = recorded
+        .iter()
+        .find(|(name, _)| name == "session.step.failed.1")
+        .map(|(_, data)| text_of(data.clone()))
+        .unwrap();
+    assert!(failed.contains("\"type\":\"context.limit\""), "{failed}");
+    assert!(failed.contains("input budget"), "{failed}");
+}
+
+#[tokio::test]
+async fn an_over_cap_request_without_context_state_fails_the_step_before_any_provider_request() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service, &"unreducible current request. ".repeat(1_000)).await;
+    let (endpoint, mut requests, server) = server(vec![]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
+    let outcome = within(coordinator.run(&session::Id::new("ses_one").unwrap())).await;
+    assert!(outcome.is_err());
+    within(server).await.unwrap();
+    assert!(requests.try_recv().is_err());
+    assert_context_limit_failure(&store);
     coordinator.shutdown().await.unwrap();
 }
 
@@ -1945,7 +1765,7 @@ fn tiny_helper() -> helper::Settings {
 }
 
 #[tokio::test]
-async fn w48_r1_an_unchanged_deterministic_failure_is_not_readmitted_by_the_next_gate_pass() {
+async fn w48_r1_an_unchanged_deterministic_failure_is_not_readmitted_and_fails_the_over_cap_step() {
     let store = support::store();
     let service = Service::new(store.client());
     seed_context(&store);
@@ -1957,20 +1777,17 @@ async fn w48_r1_an_unchanged_deterministic_failure_is_not_readmitted_by_the_next
         ),
     );
     admit(&service, "Answer the prompt").await;
-    let (endpoint, mut requests, server) = server(vec![sse("Answer")]).await;
+    let (endpoint, mut requests, server) = server(vec![]).await;
     let coordinator = Coordinator::new(Arc::new(local_with(&store, &endpoint, tiny_helper())));
-    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
-        .await
-        .unwrap();
-    let step = text_of(within(requests.recv()).await.unwrap());
+    let outcome = within(coordinator.run(&session::Id::new("ses_one").unwrap())).await;
+    assert!(outcome.is_err());
     within(server).await.unwrap();
     assert!(requests.try_recv().is_err());
-    assert!(!step.contains("<conversation-checkpoint>"));
     let recorded = events(&store);
     assert_eq!(count(&recorded, "session.compaction.admitted.2"), 1);
     assert_eq!(count(&recorded, "session.compaction.failed.2"), 1);
     assert_eq!(count(&recorded, "session.compaction.ended.2"), 0);
-    assert_eq!(count(&recorded, "session.step.ended.1"), 1);
+    assert_context_limit_failure(&store);
     coordinator.shutdown().await.unwrap();
 }
 
@@ -1988,13 +1805,13 @@ async fn w48_r2_a_new_complete_message_after_a_deterministic_failure_admits_exac
     );
     fail_deterministically(&service, "msg_old_assistant", 2).await;
     admit(&service, "Answer the prompt").await;
-    let (endpoint, mut requests, server) = server(vec![sse("Answer")]).await;
+    let (endpoint, mut requests, server) = server(vec![]).await;
     let coordinator = Coordinator::new(Arc::new(local_with(&store, &endpoint, tiny_helper())));
-    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
-        .await
-        .unwrap();
-    within(requests.recv()).await.unwrap();
+    let outcome = within(coordinator.run(&session::Id::new("ses_one").unwrap())).await;
+    assert!(outcome.is_err());
     within(server).await.unwrap();
+    assert!(requests.try_recv().is_err());
+    assert_context_limit_failure(&store);
     let boundaries = admitted_boundaries(&store, &service);
     assert_eq!(boundaries.len(), 2, "{boundaries:?}");
     assert_eq!(boundaries[0], ("msg_old_assistant".to_string(), 2));

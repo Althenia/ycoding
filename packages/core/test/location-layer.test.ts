@@ -681,7 +681,6 @@ describe("LocationServiceMap", () => {
                 "memory",
                 "patch",
                 "project",
-                "project_artifact",
                 "question",
                 "read",
                 "shell",

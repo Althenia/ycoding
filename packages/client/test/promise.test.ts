@@ -85,6 +85,27 @@ test("outstanding reports lost shell notices through the generated Session clien
   ])
 })
 
+test("autonomy defaults methods use the local-runtime HTTP contract without a Session or Location", async () => {
+  const requests: Request[] = []
+  const saved = { permissions: "manual", guardrails: "auto", answers: "yolo", yoloAcceptedAt: { answers: 1_700_000_000_000 } }
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push(request)
+      return Response.json({ data: saved })
+    },
+  })
+  expect(await client.autonomyDefaults.get()).toEqual(saved)
+  expect(await client.autonomyDefaults.set({ answers: "yolo", acceptYolo: true })).toEqual(saved)
+  expect(requests.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
+    ["GET", "/api/autonomy-defaults"],
+    ["PUT", "/api/autonomy-defaults"],
+  ])
+  expect(await requests[1]!.json()).toEqual({ answers: "yolo", acceptYolo: true })
+  expect(requests.every((request) => !request.headers.has("x-ycoding-directory"))).toBe(true)
+})
+
 test("keep-awake methods use the local-runtime HTTP contract without a Session or Location", async () => {
   const requests: Request[] = []
   const client = YCoding.make({
@@ -177,7 +198,6 @@ test("exposes every standard HTTP API group", () => {
     "reference",
     "projectCopy",
     "vcs",
-    "projectArtifact",
     "debug",
     "browser",
     "isolatedBrowser",
@@ -185,6 +205,7 @@ test("exposes every standard HTTP API group", () => {
     "incident",
     "remote",
     "keepAwake",
+    "autonomyDefaults",
     "config",
     "review",
     "coordination",
@@ -195,6 +216,7 @@ test("exposes every standard HTTP API group", () => {
   expect(Object.keys(client.coordination)).toEqual(["settings", "list", "create", "get", "update", "delete", "attach", "detach"])
   expect(Object.keys(client.dots)).toEqual(["get", "set", "attach", "detach", "remove", "threads", "task", "thread", "resume"])
   expect(Object.keys(client.keepAwake)).toEqual(["get", "set"])
+  expect(Object.keys(client.autonomyDefaults)).toEqual(["get", "set"])
   expect(Object.keys(client.incident)).toEqual(["report", "recent", "guidance"])
   expect(Object.keys(client.incident.guidance)).toEqual(["get", "clear"])
   expect(Object.keys(client.debug)).toEqual(["location"])
@@ -799,25 +821,6 @@ test("session.get returns the wire projection", async () => {
   const result = await client.session.get({ sessionID: "ses_test" })
 
   expect(result.time.created).toBe(1_717_171_717_000)
-})
-
-test("project artifact list uses the public HTTP contract", async () => {
-  const client = YCoding.make({
-    baseUrl: "http://localhost:3000",
-    fetch: async (input) => {
-      expect(typeof input === "string" ? input : input instanceof URL ? input.href : input.url).toBe(
-        "http://localhost:3000/api/artifact?location%5Bdirectory%5D=%2Ftmp%2Fproject&scope=project",
-      )
-      return Response.json({ data: [] })
-    },
-  })
-
-  const result = await client.projectArtifact.artifact.list({
-    location: { directory: "/tmp/project" },
-    scope: "project",
-  })
-
-  expect(result).toEqual([])
 })
 
 test("session instructions methods use the public HTTP contract", async () => {

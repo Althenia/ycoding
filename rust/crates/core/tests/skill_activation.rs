@@ -10,16 +10,12 @@ fn malformed_event_identifiers_cannot_enable_automatic_activation() {
         "command.invoked,,path.selected",
     ] {
         let data = parse_json(&format!(
-            r#"{{"name":"test","metadata":{{"activation":"auto","events":"{events}"}}}}"#
+            r#"{{"name":"test","description":"d","metadata":{{"activation":"auto","events":"{events}"}}}}"#
         ))
         .unwrap();
-        let info = skill::from_frontmatter(
-            Path::new("/fixture/skills/test/SKILL.md"),
-            Path::new("/fixture/skills"),
-            &data,
-            "body",
-        )
-        .unwrap();
+        let info =
+            skill::from_frontmatter(Path::new("/fixture/skills/test/SKILL.md"), &data, "body")
+                .unwrap();
         assert_eq!(info.autoinvoke, Some(false), "{events}");
     }
 }
@@ -133,7 +129,7 @@ async fn catalog_discards_superseded_metadata_when_embedded_source_wins() {
     fs::create_dir_all(root.join("sample")).unwrap();
     fs::write(
         root.join("sample/SKILL.md"),
-        "---\nname: sample\nmetadata: {activation: auto, events: command.invoked}\n---\nbody",
+        "---\nname: sample\ndescription: sample skill\nmetadata: {activation: auto, events: command.invoked}\n---\nbody",
     )
     .unwrap();
     let mut service = skill::Service::new(&root);

@@ -106,6 +106,8 @@ export async function runDesktopWorker(options: {
             case "session": data = await controller.session(input); break
             case "autonomy": data = await controller.autonomy(input); break
             case "setAutonomy": data = await controller.setAutonomy(input); break
+            case "autonomyDefaults": data = await controller.autonomyDefaults(); break
+            case "setAutonomyDefaults": data = await controller.setAutonomyDefaults(input); break
             case "file-changes": data = await controller.fileChanges(input); break
             case "activity": data = await controller.activity(input); break
             case "shellOutput": data = await controller.shellOutput(input); break
@@ -138,6 +140,7 @@ export async function runDesktopWorker(options: {
             case "find-files": data = await controller.findFiles(input); break
             case "sessionSnapshot": data = await controller.sessionSnapshot(input); break
             case "pendingInputs": data = await controller.pendingInputs(input); break
+            case "sessionRecall": data = await controller.sessionRecall(input); break
             case "removePending": data = await controller.removePending(input); break
             case "steerPending": data = await controller.steerPending(input); break
             case "deleteMessage": data = await controller.deleteMessage(input); break
@@ -160,9 +163,6 @@ export async function runDesktopWorker(options: {
             case "terminalControl": data = await controller.terminalControl(input); break
             case "terminalResize": data = await controller.terminalResize(input); break
             case "exportSession": data = await controller.exportSession(input); break
-            case "artifacts": data = await controller.artifacts(input); break
-            case "artifact": data = await controller.artifact(input); break
-            case "manageArtifact": data = await controller.manageArtifact(input); break
             case "saveExportSession": throw new DesktopError("Saving exports to a folder is unavailable in this runtime. Copy the export instead.")
             default: throw new DesktopError("Unsupported native desktop operation.")
           }

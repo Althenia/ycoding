@@ -24,12 +24,12 @@ filter for capabilities and wholly denied permission actions. Available names
 include CodeMode tools only when `execute` is reachable; the wrapper itself is
 not an available leaf name. Hidden direct calls return `tool.unknown`, and hidden
 CodeMode tools are absent from discovery and invocation. Disabling skills hides
-the `skill` tool; disabling project artifacts hides `project_artifact`.
+the `skill` tool.
 
 `home_roots: false` excludes the exact absolute `~/.claude` and `~/.agents`
 ecosystem roots, including copies discovered by upward traversal. Project
 descendants with those names and the ordinary global YCoding configuration stay
-eligible. `project_artifacts` is a boolean selector; `websearch_provider` accepts
+eligible. `websearch_provider` accepts
 `exa` or `parallel`. The `plugins` selector applies to configured runtime
 plugins: `extension::Activation::reload` loads none when it is disabled and
 matches `allow`/`deny` against each plugin's declared ID after import and before
@@ -74,24 +74,12 @@ tool selection and effective permissions. A server contributes guidance only
 when `execute` is usable and one of its tool names passes both checks; the tool
 allow list does not independently exclude the `execute` wrapper.
 
-`project_artifact::source::Service::set_capabilities` replaces managed catalogs
-with their current standard catalogs while disabled. Refresh and standard-source
-replacement preserve this selection; re-enabling can apply the same stored
-versions. Suppression changes neither artifact rows/lifecycle nor managed files.
-The source keeps its generation-owned registry registration and clears active
-managed provenance rather than deleting or disabling stored artifacts.
-The global Project exposes standard catalogs without reading or creating managed
-artifact scopes, independently of the capability toggle.
-An unrecorded filesystem Project has no project-scoped artifacts to resolve;
-catalog reads keep standard sources available without creating its Project row.
-
 `instruction_assembly::select_sources` selects per-Session instruction sources
 from the selected agent, Session permission ceiling, current configuration and
 tool registry. Effective tool permissions append the ceiling, then subagent
 nesting denies. Builtin dependencies use actual registry availability, including
 CodeMode reachability; environment, date and Git blocks have no tool dependency.
-Memory guidance additionally requires `memory.enabled`. Domain memory and
-project-artifact guidance share their builtin gates. `instructions::when` keeps
+Memory guidance additionally requires `memory.enabled`. `instructions::when` keeps
 source keys and observes disabled values as Removed, allowing durable removal
 and later re-enable without an unavailable or omitted source. Sources without
 a specialized removal renderer receive an explicit key-named removal notice;
@@ -124,19 +112,11 @@ and Off mode does not rename. Reopen and wake do not separately invoke it.
 
 ## Session movement
 
-Session movement adopts a destination Project's previous artifact scope in its
-own transaction and writes the scope marker only after commit, before interrupting
-execution. A failed adoption transaction leaves scope ownership and files intact;
-a marker failure reports an error with the adoption already committed.
-
-Cross-Project movement records `session.project-artifacts-ended` and closes only
-the Session's open activations in the old Project in one transaction. Activation
-rows receive that event's sequence and the sampled millisecond timestamp. A
-project-scoped current agent selects the destination's default, even if its ID is
-still available; standard and global agents retain their selection. Agent selection
-and `session.moved` are separate subsequent publications. Movement projects the
-new Location, Project and subpath and clears the instruction epoch. Same-Project
-moves publish only movement; an unchanged Location is a no-op.
+`move_to` returns without effect when the destination equals the Session's
+Location. Otherwise it interrupts active execution, waits for idle, derives the
+subpath relative to the destination Project, and publishes `session.moved`.
+Movement projects the new Location, Project and subpath and clears the
+instruction epoch. The selected agent is unchanged.
 
 ## Retained canonical history
 
@@ -407,15 +387,14 @@ extensions, post. Paths in this table are relative to `rust/crates/core/src`.
 | `opencode.provider.opencode`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | `resources/auth/opencode.rs::Console` implements console authorization, credential enrichment and refresh with the stable plugin ID.                                                                                                                                                                                                                                                                                          |
 | `ycoding.provider.cursor`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `resources/cursor` and `resources/auth/cursor.rs` supply the native account, catalog, and provider integration.                                                                                                                                                                                                                                                                                                          |
 | `ycoding.provider.dynamic` | `resources/model/language.rs::ProviderContext::language_model` rejects unclaimed packages without a native provider route. |
-| `ycoding.tool.patch`, `ycoding.tool.edit`, `ycoding.tool.glob`, `ycoding.tool.grep`, `ycoding.tool.read`, `ycoding.tool.shell`, `ycoding.tool.project-artifact`, `ycoding.tool.memory`, `ycoding.tool.webfetch`, `ycoding.tool.websearch`, `ycoding.tool.write`, `ycoding.tool.worktree`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Corresponding implementations in `tools/builtin`; `search.rs` provides glob and grep.                                                                                                                                                                                                                                                                                                                                         |
-| `ycoding.tool.skill`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `tools/builtin/skill.rs::SkillTool` is the model-callable `skill` tool (direct definition only, permission `skill`): it loads local, embedded, managed-artifact, and URL/directory skills through `load_local`, loads MCP-served skills under a manifest-bound approval, reads supporting files of active skills, and reports an already-active skill with `alreadyActive`.                                                   |
+| `ycoding.tool.patch`, `ycoding.tool.edit`, `ycoding.tool.glob`, `ycoding.tool.grep`, `ycoding.tool.read`, `ycoding.tool.shell`, `ycoding.tool.memory`, `ycoding.tool.webfetch`, `ycoding.tool.websearch`, `ycoding.tool.write`, `ycoding.tool.worktree`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Corresponding implementations in `tools/builtin`; `search.rs` provides glob and grep.                                                                                                                                                                                                                                                                                                                                         |
+| `ycoding.tool.skill`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `tools/builtin/skill.rs::SkillTool` is the model-callable `skill` tool (direct definition only, permission `skill`): it loads local, embedded, and URL/directory skills through `load_local`, loads MCP-served skills under a manifest-bound approval, reads supporting files of active skills, and reports an already-active skill with `alreadyActive`.                                                   |
 | `ycoding.tool.question`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `tools/policy/questions.rs::Questions` supplies admission, answers, rejection, and pending reads.                                                                                                                                                                                                                                                                                                                             |
 | `ycoding.tool.subagent`, `ycoding.tool.subagent-control`, `ycoding.tool.subagent-report`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | `session/orchestration/service.rs::Service` supplies launch, send, answer, cancel, resume, progress, and child questions.                                                                                                                                                                                                                                                                                                     |
 | `ycoding.tool.todowrite`, `ycoding.tool.task-complete`, `ycoding.tool.goal`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `session/todo.rs::update_todos`, `session/completion.rs::complete`, and `session/autonomy/service.rs` implement durable native controls.                                                                                                                                                                                                                                                                                      |
 | `ycoding.tool.decision`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `resources/decision` evaluates bounded predicate, choice, and score judgments through the Decision helper model; composition binds it with the other `SessionTools`.                                                                                                                                                                                                                                                          |
 | `ycoding.config.reference`, `ycoding.config.agent`, `ycoding.config.command`, `ycoding.config.skill`, `ycoding.config.provider`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `resources/{reference,agent,command,skill}` consume configuration entries; `resources/catalog/mod.rs::configure` applies provider/model configuration.                                                                                                                                                                                                                                                                        |
 | `ycoding.variant`, `ycoding.config.policy`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | `resources/catalog/variants.rs::generate` adds the OpenAI-compatible GLM-5.2 `high` and `max` variants after configured providers; `resources/catalog/variants.rs`, `resources/model/mod.rs::with_variant`, `resources/config/validation.rs`, `tools/policy`, and `process/guardrails` supply variant and fail-closed policy behavior.                                                                                        |
-| `ycoding.project-artifact.source`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | `resources/project_artifact/source/service.rs::Service` refreshes managed project overlays and records provenance, activations, and terminal accounting through its `Governor`.                                                                                                                                                                                                                                               |
 
 Native Session controls are implemented as Core services; their model-tool
 bindings are supplied by composition through `tools/context/consumers.rs::SessionTools`.
@@ -1202,7 +1181,7 @@ it has a staged revert. The `Jobs` instance placed in the MCP `Background` is
 the one the composition root also gives the shell tool; the runner holds no
 Jobs of its own.
 
-`Service::model_history` applies legacy checkpoints, project-artifact boundaries,
+`Service::model_history` applies legacy checkpoints,
 digest-verified local rolling summaries, and current digest-aware message/part
 exclusions. `first_user_message_if_only` reads at most two indexed user rows.
 Named model profiles resolve the uniquely named credential independently from
@@ -1534,7 +1513,7 @@ compaction protects. All reads are pure functions of Store state.
 - `protected_state(&Sources)` returns the compaction protected-state entries in
   order `instructions`, `todos`, `goal`, `autonomy`, `permissions`, `guardrails`,
   `pending_work`, `orchestration`. `database_protected_state(&DatabaseSources)`
-  omits `guardrails`. `project_artifacts` is never reported.
+  omits `guardrails`.
 
 Each `Source` is `{ sequence, digest }` and contains no state content. Instruction
 sequence is the newest `session.instructions.updated.2`,
@@ -2359,7 +2338,7 @@ boundaries; this configuration module performs no such operations.
 `resources::{agent,command,reference,skill,discovery,instruction_discovery}` operate
 on explicit configuration entries and filesystem roots. They do not discover the
 process home, assemble Session epochs, maintain Session skill activation, load MCP
-skills, register extension transforms, or access project artifacts.
+skills, or register extension transforms.
 
 ### Definitions and precedence
 
@@ -2615,8 +2594,8 @@ are not targets. A heredoc body is skipped only when `cat`, `tee`, `git`, `gh`,
 `node`, `bun`, `deno`, `python`, `python3`, `ruby`, or `perl` consumes it on an
 unpiped line, its closing delimiter is present, and the body is quoted or
 contains no `$(` or backtick; otherwise, including shell-fed heredocs, its lines
-are classified as commands. Non-file actions (`subagent`, `mcp_execute`,
-`project_artifact_mutation`) have no outside targets, so YCoding-managed
+are classified as commands. Non-file actions (`subagent` and
+`mcp_execute`) have no outside targets, so YCoding-managed
 operations on global-root resources need no ordinary review while custom rules,
 invalid configuration, denies, and counters still apply.
 
@@ -2805,7 +2784,7 @@ generation options (including temperature, seed, and stop) through `llm::Generat
 and overlays remaining body fields while preserving unrelated model defaults.
 Invalid headers and generation option types fail before a Step starts.
 The registered direct leaves are read, write, edit, patch, glob, grep, shell,
-webfetch, websearch, worktree, memory, and project_artifact. The shell opens on
+webfetch, websearch, worktree, and memory. The shell opens on
 first execution and uses `Execution::job_shells()` rather than separate Jobs.
 Built-in and ambient instruction sources and compaction/helper settings feed
 the runner. Prediction and prompt generation use that runner through
@@ -3226,250 +3205,6 @@ is the caller's responsibility. The Session runner must call `system::system` an
 `route::model`, and startup composition must register `auth::cursor::register`,
 supply `route::Host`, and drive `catalog::load` on connection events and a
 60-second reconcile.
-
-## Project artifacts
-
-`resources::project_artifact` reuses Schema artifact identities, definitions,
-permission rules, revisions, stages, provenance, and digests. `validation`
-applies the automatic-authoring text policy through Core's ECMAScript RegExp
-engine, including UTF-16 validation, NFKC/case collision detection, byte limits,
-and the complete JSX pragma exception. Automatic definitions accept skills,
-instruction-only commands, and subagents; plugin activation is unsupported.
-
-`adapter` renders lossless standard Markdown and parses it through resource
-frontmatter discovery. Activation registers Skill directories and updates the
-real Command and Agent services. Managed commands clear agent/model selection;
-managed agents clear model/request overrides and append explicit permissions to
-the fixed least-privilege rules. Rendering and activation do not write files.
-
-`package` owns SHA-256 markers, journaled commit and state transactions, archived
-and disabled versions, multi-layout trash manifests, restoration, expiry-gated
-purging, and reconciliation. `CommitInput.standard` and
-`StateMutationInput.standard` select validated standard discovery targets without
-duplicating transaction paths. `TransactionHooks<Metadata, Error>` holds the
-cross-process reconciliation and artifact locks across reservation, availability,
-and finalization, preserves hook errors, and compensates failed finalization.
-Successful finalization retains available bytes if journal cleanup fails;
-transaction enumeration and cleanup expose the retained finalization journals.
-Filesystem-phase recovery resumes the retained journal at `Available` after
-activating content and its marker; only compensated, removed stages prepare
-again. Store finalization preserves the original version, digest, provenance,
-revision transition, and automatic-write identity across repeated reconciliation.
-Callers supply an existing scope marker and retain responsibility for durable
-artifact revisions, lifecycle decisions, quota accounting, and confirmations.
-
-Filesystem mutations validate root containment, reject symlinks, and compare
-device/inode/mode identities immediately before the native operation. Native
-identity verification supports Unix; other platforms reject mutations. Package
-operations and hooks are blocking. Compose them on an owned blocking executor,
-not a Tokio runtime worker. `TransactionHooks.cancellation` observes explicit
-cancellation at reservation, availability, finalization admission, and settlement.
-Cancellation after successful finalization settles as `Interrupted` without
-compensating committed bytes. Blocking callbacks and individual filesystem
-operations must return before cancellation is observed. `can_compensate` fences
-compensation when a durable writer outcome cannot be determined.
-
-`accounting::Service` uses the real redb artifact graph for activation identity
-retries, terminal attribution, observation deduplication, feedback, metrics,
-project-move deactivation, rolling matched cohorts, and persisted governor
-decisions. Actionable decisions require the caller's owning transaction.
-Global cohort buckets use HMAC-SHA-256 rather than exposing project identities.
-
-`store::Service` resolves project/global scopes, restores missing scope markers,
-adopts project membership without moving storage, and performs journaled manual
-project writes and five-minute single-use global manual confirmations. Updates
-require exact revision, version, and digest expectations. Automatic writes use
-deterministic operation/version fingerprints, normalized insight identities,
-three writes per Session, ten daily project writes, 32 live artifacts, per-kind
-caps of 24 Skills/eight Commands/four Agents, 16 retained versions, an 8 MiB owned
-byte budget, and a one-hour update cooldown. Reconciliation does not consume a
-write allowance. Session locks precede Scope locks; durable reservations and
-retained owned bytes participate in quotas. Unrelated files do not consume the
-owned-byte budget. Write identity rows expire after 30 days.
-
-Project disable, enable, and revert coordinate Package state journals, exact
-Store expectations, version states, revision changes, and deduplicated feedback.
-Promotion previews include persisted accounting metrics; confirmation rechecks
-the source and destination, copies literal bytes to an independent global
-snapshot, records provenance and source shadow identity, and consumes its
-five-minute token once. Promotion acquires both Scope locks in identity order.
-`sql` projects existing redb rows into Schema values; it defines no replacement
-tables or key encodings.
-
-Store recovery validates shared journal identities before finalizing committed
-bytes and rows, rejects unowned and available-orphan journals, aborts preparing
-orphans, rechecks markers under target locks, rebuilds project/global ownership,
-quarantines plugin drafts, and disables missing active bytes without user
-feedback. Retained trash manifests recover deletion rows; restored manifests
-recover restore feedback and remove the deletion index. Project removal retains
-every owned layout, restoration expires at the exact 30-day boundary, and the
-bounded expiry purge validates owned manifests before deleting filesystem bytes
-and graph rows. Global remove/restore recovery uses the authoritative standard
-content and marker paths. Active global removal requires exact managed sources;
-disabled removal and global restoration reject occupied standard destinations.
-Ordinary lists exclude retained trash.
-
-Fork previews capture exact global bytes, revision, version and digest and reject
-project or standard-source collisions. Single-use confirmation expires at the
-exact five-minute boundary, acquires both Scope locks in identity order, rechecks
-both sources and the destination, and journals an independent project snapshot
-with fork provenance and global shadow identity. Shadow confirmation retargets
-origin metadata without rewriting bytes, preserves version identity, and avoids
-incrementing the revision for an already matching link. The Store origin
-constraint permits origin metadata only for promotion/fork versions; shadowing a
-user, agent or restore version returns `ReconciliationRequired` without partial
-graph writes. Failed confirmations consume their token.
-
-`Service.with_accounting` supplies the configured accounting service for governor
-evaluation and governor-context recovery. No bucket secret is synthesized.
-Qualification-only evaluation persists its governor state; activation changes
-artifact/version state in the same redb transaction. Degradation reevaluates in
-the Package finalization transaction, preserves a durable fallback when present,
-and records deduplicated automatic-governor feedback. Recovery uses the journal's
-model, agent, goal-mode and evaluation-time context.
-The Location owner constructs the source service and binds its catalogs,
-invocation consumers, refresh triggers, and execution subscription. The tool
-registry supplies the artifact-authoring tool.
-
-`legacy_cleanup::run` removes only direct legacy children with the exact
-lowercase basename suffix and positive `.ycoding-generated.json` ownership
-marker. Its `Service` targets only `config/generated`. Each call scans one to
-256 entries in UTF-16 lexical order, uses that same order for its cursor, and
-retains the failed entry for retry. Cleanup validates root, parent, child and
-marker identities plus unchanged marker bytes, then quarantines the child in its
-parent before recursive removal. Removal failure attempts to restore the child
-and returns a partial report. Unix metadata supplies identity checks; unsupported
-native identity platforms return a failed report without mutation. The existing
-`LegacyCleanupTable` is unchanged; the filesystem-only cleanup service does not
-create table-backed progress or automatic startup cleanup.
-
-`source_registry::Registry` maintains replaceable, insertion-ordered Location
-snapshots with project isolation and managed-identity deduplication.
-`source::Service` owns one replaceable managed overlay per Location. `refresh`
-validates trial/active project candidates against marker identities, content
-digests, and parsed definitions, excludes plugins and inactive stages, and
-registers accepted candidates through the existing Skill, Command, and Agent
-adapters. Invalid, replaced, and removed candidates leave no retained overlay.
-Collisions require exact global shadow scope, origin version, and evidence
-digest. `replace_standard(Catalogs)` replaces the unmanaged discovery snapshot
-and refreshes the managed overlay; `catalogs()` returns the complete current
-services. Failed refreshes preserve the preceding published catalogs and
-provenance. Bounded `diagnostics()` categories expose collisions, refresh,
-activation, terminal-observation, stale-provenance, and governor failures without
-persisting payloads or paths.
-
-`provenance(kind, id)` returns source scope, scope/version identity, artifact
-kind/ID, expected revision, and expected digest. Global attribution requires
-an exact standard marker and matching current Store version. The TypeScript
-source's precedence is preserved: an accepted project overlay can supply the
-catalog definition while a matching global standard source supplies provenance.
-Refresh observes the currently published catalogs; when an overlay hides the
-global path, a subsequent refresh attributes that visible project source.
-An authored user/agent version cannot acquire origin fields through
-`confirm_shadow`: both backends' origin constraint requires fork/promotion
-provenance. A confirmed fork supplies valid shadow evidence.
-
-`activate(ActivationInput)` accepts `AgentSelected`, `Command`, `SkillTool`, and
-`SubagentLaunch` sources. Agent selection supplies its committed sequence and
-activation time. Commands resolve the original durable input-admission event,
-including after promotion; tools resolve the exact assistant-message/call-ID
-`session.tool.called` event. Managed invocations without that boundary fail with
-`Managed activation requires a durable invocation`; unmanaged IDs are no-ops.
-Activation IDs use the TypeScript SHA-256 identity, and exact retries retain the
-original sequence and timestamp. `session-skill` publications use fresh UUID
-activation IDs. `session::store::Service::with_artifact_source(source)` binds
-runner Skill references and subagent launch accounting. Pass the same source to
-`builtin::skill::load_local(info, policy, context, Some(&source))` for skill-tool
-accounting; resource reads do not create activations. Tool accounting failures
-remain best effort and observable through diagnostics.
-
-`start(&event_feed::Feed)` subscribes to only execution started, succeeded,
-failed, and interrupted facts before they enter the bounded subscriber queue.
-The owned `Governor` serializes terminal submissions on blocking workers, checks
-the Session's directory and workspace identity, captures goal mode/start time,
-and reads the latest assistant plus markers at or above the completed compaction
-floor. It attributes managed tool calls from captured activations, counts
-standard invocations and completed/failed tools, records tokens and clamped
-latency, and evaluates each observed version once through
-`store::Service::evaluate_governor` with exact provenance expectations. No
-lifecycle rules are duplicated. Terminal identity is the latest assistant ID or
-the durable boundary when no assistant exists. Duplicate identities are skipped
-after successful accounting; conflicting persisted facts are rejected.
-
-`Governor::flush()` waits for accepted execution facts through the current feed
-watermark; `close().await` drains that boundary, joins in-flight submissions,
-unsubscribes, and removes the Location registry snapshot. Feed overflow or worker
-failure is an explicit close/flush error, not successful accounting. Like the
-TypeScript source, a newly constructed service does not replay historical
-execution facts or restore process-local start times, terminal identities, or
-managed-tool classifications. Accounting still reads durable open activations;
-conflicting repeated terminal observations cannot insert a second record.
-
-### Location composition handoff
-
-- Share the Core Store client, one accounting service, and one standard-source
-  registry. Construct `store::Service::new(client, Paths, registry)` with
-  `with_accounting(accounting)`, then one `source::Service::new(Options, Catalogs)`
-  for each Location. Supply its exact Location reference, project identity/root,
-  and managed data root.
-- Bind `source.start(&Core.events)` before admitting or resuming execution, retain
-  the returned Governor, and await initial refresh before exposing catalogs.
-  Feed the returned Agent/Command/Skill services to catalog readers, runner
-  resolution, Skill discovery, and subagent preflight. Catalogs are snapshots:
-  existing immutable Arcs do not change when the service publishes a replacement.
-- After configuration reload, rediscover standard resources and await
-  `replace_standard`. After each committed artifact mutation, await refresh and
-  publish the resulting catalogs; global authoring/promotion also requires
-  standard-file rediscovery. Bind these operations to `ArtifactServices.refresh`.
-  Its current synchronous `Fn()` callback cannot await an async refresh itself;
-  the composition adapter must own and join refresh work and fence subsequent
-  catalog reads, or provide an awaited callback in the runtime handler layer.
-  Refresh uses blocking Store/Package operations; execute it on an owned blocking
-  worker with the Tokio handle driving its asynchronous discovery.
-- On Location eviction or process shutdown, stop new invocations/refreshes,
-  drain/interrupt owned Session execution, await pending refreshes, then await
-  Governor close while Store, accounting, and feed are alive. Release catalogs,
-  source, and finally the shared Store/feed. Do not abort or discard the Governor
-  handle as a substitute for close.
-
-### Session operation attribution
-
-`session::runner::Local` attributes managed artifacts through the source bound
-to its `runner::Services.store` with `with_artifact_source`:
-
-- `command` captures `provenance("command", name)` after evaluation and any
-  agent or model switch, admits the input with user metadata `projectArtifact`,
-  then calls `activate` with `ActivationSource::Command { message_id, call_id:
-None }` and the Session's agent before the command switch. A failed activation
-  is recorded through `record_activation_failure`; the admitted input stands.
-  A reused message ID returns the admitted input without attribution.
-  A context-blocked model switch retains the prior model and admits the evaluated
-  command without a switch-blocked notice; compaction lifecycle events remain
-  independent. Model resolution errors refuse admission with the resolver's
-  message. Variant and unsupported-package failures retain distinct
-  `model.variant` and `model.unsupported` runner categories.
-- `switch_agent` publishes `session.agent.selected.1` through
-  `publish_activation`, committing provenance and the `agent-selected` row with
-  the event.
-- `load_skill` without a message ID publishes through `publish_activation`. With
-  a message ID it uses that `msg_` to `evt_` event identity and, for a managed
-  Skill, appends the event, projection and `session-skill` row with
-  `activation.message_id` in one Store transaction.
-- `session.subagent.launch` records no activation; the `subagent` tool's launch
-  remains the attributed invocation.
-
-`move_to` publishes `session.project-artifacts-ended.1` across Projects without
-the accounting service's project deactivation, prior-Project artifact
-adoption, or project-agent reselection.
-
-`instructions::KEY` and `CONTENT` supply artifact-authoring guidance without a
-second persistence authority.
-
-Run the focused real-filesystem checks from `rust`:
-
-```sh
-CARGO_BUILD_JOBS=3 ~/.cache/ycoding/cargo-gate.sh cargo test --locked -p ycoding-core --test 'project_artifact_*'
-```
 
 ## Jobs
 
@@ -3965,7 +3700,7 @@ discarding UTF-16 string content. Nested calls run the captured registry's befor
 and after hooks without separate generic output retention. Directly exposed tools
 are also available through Code Mode unless capability filtering excludes them.
 
-`builtin::{read,read_filesystem,write,edit,patch,search,webfetch,websearch,http_body,worktree,memory,project_artifact}`
+`builtin::{read,read_filesystem,write,edit,patch,search,webfetch,websearch,http_body,worktree,memory}`
 expose real filesystem, mutation, search, Git worktree, and HTTP adapters. Leaves receive captured
 `context::policy::LeafPolicy` services; catalog visibility never substitutes for
 execution permission or guardrail admission. Read pages stop decoding after the
@@ -3989,10 +3724,7 @@ edit permission plus a file-mutation guardrail reservation before sequentially
 applying its prepared changes.
 Memory delegates Markdown validation, digest fences, trash, graph export, and
 vacuum to `resources::memory::Service`; reads and vacuum previews remain read-only,
-while mutations reserve the `file_mutation` guardrail. Project-artifact automatic writes
-delegate lifecycle, quotas, validation, and persistence to
-`resources::project_artifact::store::Service`, reject unstable project identity,
-and reserve `project_artifact_mutation` before creating a trial artifact.
+while mutations reserve the `file_mutation` guardrail.
 
 `builtin::skill` renders local skill instructions, samples supporting files, and
 reads a supporting resource against an explicit held activation. It does not fold

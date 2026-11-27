@@ -113,6 +113,8 @@ export type TelemetryRequestSample = {
     | "incident.guidance.clear"
     | "machine.keepAwake.get"
     | "machine.keepAwake.set"
+    | "machine.autonomyDefaults.get"
+    | "machine.autonomyDefaults.set"
   outcome: "ok" | "failed" | "unknown" | "unavailable"
   reason?: "not-connected" | "in-flight-limit" | "request-limit" | "cancelled"
   queueMs: number
@@ -176,12 +178,12 @@ export type SessionWorkCompletionReceipt = {
   assistantMessageID: string
 }
 
-export type SessionMessageArtifactProvenance = {
-  scopeID: string
-  versionID: string
-  kind: "skill" | "command" | "agent" | "plugin"
+export type SessionMessageAgentSelected = {
   id: string
-  sourceScope: "project" | "global"
+  metadata?: { [x: string]: JsonValue }
+  time: { created: number }
+  type: "agent-switched"
+  agent: string
 }
 
 export type PromptAttachmentDigest = string
@@ -368,14 +370,6 @@ export type SessionPredictionResponse = { data: { status: "suggested"; text: str
 
 export type SessionPromptGenerateResponse = { data: { status: "generated"; text: string } | { status: "unavailable" } }
 
-export type SessionEventArtifactProvenance = {
-  scopeID: string
-  versionID: string
-  kind: "skill" | "command" | "agent" | "plugin"
-  id: string
-  sourceScope: "project" | "global"
-}
-
 export type GuardrailSource = { messageID: string; callID: string }
 
 export type GuardrailAuthority = "baseline" | "yolo"
@@ -503,6 +497,72 @@ export type SessionOrchestrationQuestion1 = {
   time: number
   deferred?: boolean
 }
+
+export type RecallCueKind =
+  | "explicit"
+  | "command"
+  | "path"
+  | "symbol"
+  | "tool_call"
+  | "tool_result"
+  | "tool_error"
+  | "workspace"
+  | "lifecycle"
+  | "compaction"
+  | "recovery"
+  | "memory_revision"
+  | "skill_revision"
+
+export type RecallTrigger = "prompt" | "cue" | "explicit" | "compaction" | "recovery" | "delegation"
+
+export type RecallMethod = "explicit" | "cue" | "exact" | "bm25" | "semantic" | "rrf"
+
+export type RecallOutcome = "injected" | "abstained" | "restored"
+
+export type RecallAbstention = "no_match" | "below_threshold" | "explicit_unavailable" | "out_of_budget" | "offline"
+
+export type RecallKind = "memory" | "skill"
+
+export type RecallStage = "candidate" | "rejected" | "selected" | "injected" | "restored"
+
+export type RecallScores = { bm25?: number; semantic?: number; rrf?: number; rank?: number }
+
+export type RecallRejection =
+  | "denied"
+  | "disabled"
+  | "stale"
+  | "out_of_scope"
+  | "over_budget"
+  | "duplicate"
+  | "conflict"
+  | "below_threshold"
+  | "manual_only"
+  | "missing"
+  | "untrusted"
+
+export type RecallSource = { id: string; revision: string }
+
+export type RecallTrust = "trusted" | "unverified"
+
+export type RecallFreshness = "fresh" | "stale" | "unknown"
+
+export type RecallLifecycle = "active" | "draft" | "deprecated" | "superseded" | "archived" | "unknown"
+
+export type LifecycleDecision = "continue" | "recover" | "complete"
+
+export type LifecycleBasis = "tool_results" | "answered" | "truncated" | "silent" | "unsettled"
+
+export type HarnessStage = "baseline" | "propose" | "probe" | "compose" | "adopt"
+
+export type HarnessMode = "adaptive" | "parallel" | "sequential" | "disabled"
+
+export type HarnessCandidateID = string
+
+export type HarnessOutcome = string
+
+export type HarnessVersionID = string
+
+export type HarnessExperienceID = string
 
 export type ShellInfo = {
   id: string
@@ -813,48 +873,6 @@ export type VcsFileStatus = {
 
 export type VcsBranch = { current?: string; default?: string }
 
-export type ProjectArtifactProjectScope = { type: "project"; id: string; projectID: string; storageID: string }
-
-export type ProjectArtifactGlobalScope = { type: "global"; id: string; storageID: string }
-
-export type ProjectArtifactKind = "skill" | "command" | "agent" | "plugin"
-
-export type ProjectArtifactDisplayName = string
-
-export type ProjectArtifactDescription = string
-
-export type ProjectArtifactStage = "trial" | "active" | "degraded" | "disabled" | "quarantine"
-
-export type ProjectArtifactRevision = number
-
-export type ProjectArtifactTimestampMillis = number
-
-export type ProjectArtifactSkillContent = string
-
-export type ProjectArtifactCommandTemplate = string
-
-export type ProjectArtifactAgentSystem = string
-
-export type ProjectArtifactPluginDraft = string
-
-export type ProjectArtifactVersionState = "trial" | "active" | "degraded" | "disabled" | "quarantine" | "superseded"
-
-export type ProjectArtifactContentRelpath = string
-
-export type ProjectArtifactSource = "agent" | "user" | "promotion" | "fork" | "restore"
-
-export type ProjectArtifactAutomaticWriteResult = "created" | "updated" | "reconciled"
-
-export type ProjectArtifactConfirmationToken = string
-
-export type ProjectArtifactConfidence = {
-  sampleCount: number
-  successCount: number
-  lowerBound: number
-  upperBound: number
-  eligible: boolean
-}
-
 export type BrowserStatus = {
   state: "unavailable" | "pairing" | "connected" | "paused"
   paired?: boolean
@@ -920,6 +938,10 @@ export type ModelIncidentDecidedBy = "decision-model" | "client"
 export type ModelIncidentGuidance = { text?: string; clearedAt?: number; enabled: boolean }
 
 export type KeepAwakeState = "off" | "on" | "unsupported" | "error"
+
+export type AutonomyDefaultsMode = "manual" | "yolo" | "auto"
+
+export type AutonomyDefaultsYoloAcceptedAt = { permissions?: number; guardrails?: number; answers?: number }
 
 export type ConfigDiagnosticReason = "invalid-json" | "invalid-values" | "removed-keys"
 
@@ -1135,6 +1157,17 @@ export type SessionDotsAccessChanged = {
   data: { sessionID: string; enabled: boolean; revision: number }
 }
 
+export type SessionAgentSelected = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.agent.selected"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; agent: string }
+}
+
 export type SessionDaybreakSet = {
   id: string
   created: number
@@ -1144,17 +1177,6 @@ export type SessionDaybreakSet = {
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
   data: { sessionID: string; daybreak?: ModelDaybreak }
-}
-
-export type SessionProjectArtifactsEnded = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "session.project-artifacts-ended"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: { sessionID: string; oldProjectID: string; newProjectID: string }
 }
 
 export type SessionMoved = {
@@ -1532,6 +1554,22 @@ export type SessionRevertCommitted = {
   data: { sessionID: string; to: string }
 }
 
+export type CoordinationEventSubagentRequestBlocked = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "coordination.subagent.request.blocked"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    agent: string
+    reason: "concurrency-ceiling" | "agent-missing" | "permission-denied" | "project-paused" | "route-unavailable"
+    message: string
+  }
+}
+
 export type FilesystemChanged = {
   id: string
   created: number
@@ -1840,15 +1878,6 @@ export type SessionRevert = { messageID: string; snapshot?: string; files?: Arra
 
 export type SessionWorkCompletionPage = { data: Array<SessionWorkCompletionReceipt>; next?: string }
 
-export type SessionMessageAgentSelected = {
-  id: string
-  metadata?: { [x: string]: JsonValue }
-  time: { created: number }
-  type: "agent-switched"
-  agent: string
-  artifact?: SessionMessageArtifactProvenance
-}
-
 export type PromptManagedAttachmentContent = {
   type: "managed"
   digest: PromptAttachmentDigest
@@ -1869,6 +1898,17 @@ export type SkillInfo = {
   content: string
 }
 
+export type SessionSkillActivated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.skill.activated"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; id: string; name: string; text: string; directory?: string; conflicts?: SkillConflicts }
+}
+
 export type SessionMessageSkill = {
   id: string
   metadata?: { [x: string]: JsonValue }
@@ -1880,7 +1920,6 @@ export type SessionMessageSkill = {
   directory?: string
   conflicts?: SkillConflicts
   skillDeactivations?: Array<SessionMessageSkillDeactivation>
-  artifact?: SessionMessageArtifactProvenance
 }
 
 export type SessionMessageAssistantText = {
@@ -2262,36 +2301,6 @@ export type SessionFileChangeRecorded = {
 
 export type InstructionEntryInfo = { key: InstructionEntryKey; value: JsonValue }
 
-export type SessionAgentSelected = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "session.agent.selected"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: { sessionID: string; agent: string; artifact?: SessionEventArtifactProvenance }
-}
-
-export type SessionSkillActivated = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "session.skill.activated"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: {
-    sessionID: string
-    id: string
-    name: string
-    text: string
-    directory?: string
-    conflicts?: SkillConflicts
-    artifact?: SessionEventArtifactProvenance
-  }
-}
-
 export type SessionGuardrailDismissed = {
   id: string
   created: number
@@ -2502,6 +2511,90 @@ export type SessionDotsReportRecorded = {
     callID: string
   }
 }
+
+export type SessionCueDetected = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.cue.detected"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; cueID: string; kind: RecallCueKind; subject?: string; messageID?: string }
+}
+
+export type RecallOkf = { type: string; trust: RecallTrust; freshness: RecallFreshness; lifecycle: RecallLifecycle }
+
+export type SessionLifecycleRecorded = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.lifecycle.recorded"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    step: number
+    decision: LifecycleDecision
+    basis: LifecycleBasis
+    recovery: boolean
+    recalled: boolean
+  }
+}
+
+export type SessionHarnessEvaluated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.harness.evaluated"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    stage: HarnessStage
+    mode: HarnessMode
+    signals: number
+    insufficient: boolean
+    skipReason?: string
+  }
+}
+
+export type SessionHarnessProbed = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.harness.probed"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; candidate: HarnessCandidateID; outcome: HarnessOutcome; tokens: number; latencyMs: number }
+}
+
+export type SessionHarnessAdopted = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.harness.adopted"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; version: HarnessVersionID; parent: HarnessVersionID }
+}
+
+export type SessionHarnessRolledBack = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.harness.rolled-back"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; from: HarnessVersionID; to: HarnessVersionID }
+}
+
+export type HarnessExperiences = Array<HarnessExperienceID>
 
 export type SessionShellStarted = {
   id: string
@@ -2842,86 +2935,6 @@ export type SessionStatus2 = {
 
 export type ReferenceSource = ReferenceLocalSource | ReferenceGitSource
 
-export type ProjectArtifactScope = ProjectArtifactProjectScope | ProjectArtifactGlobalScope
-
-export type ProjectArtifactCollisionDiagnostic = {
-  type: "existing-source" | "cross-scope" | "project-over-global-shadow"
-  kind: ProjectArtifactKind
-  id: string
-  scopeID?: string
-  message: ProjectArtifactDescription
-}
-
-export type ProjectArtifactMetrics = {
-  score: number | "Infinity" | "-Infinity" | "NaN"
-  confidence: {
-    sampleCount: number
-    successCount: number
-    lowerBound: number | "Infinity" | "-Infinity" | "NaN"
-    upperBound: number | "Infinity" | "-Infinity" | "NaN"
-    eligible: boolean
-  }
-  rewardUnits: number | "Infinity" | "-Infinity" | "NaN"
-  penaltyUnits: number | "Infinity" | "-Infinity" | "NaN"
-  lastUsedAt?: ProjectArtifactTimestampMillis
-}
-
-export type ProjectArtifactSkillDefinition = {
-  kind: "skill"
-  name: ProjectArtifactDisplayName
-  description: ProjectArtifactDescription
-  content: ProjectArtifactSkillContent
-}
-
-export type ProjectArtifactCommandDefinition = {
-  kind: "command"
-  name: ProjectArtifactDisplayName
-  description: ProjectArtifactDescription
-  template: ProjectArtifactCommandTemplate
-  subtask: false
-}
-
-export type ProjectArtifactPluginDefinition = {
-  kind: "plugin"
-  name: ProjectArtifactDisplayName
-  description: ProjectArtifactDescription
-  draft: ProjectArtifactPluginDraft
-}
-
-export type ProjectArtifactProvenance = {
-  source: ProjectArtifactSource
-  creatorAgentID?: string
-  creatorSessionID?: string
-  insightDigest?: string
-  originScopeID?: string
-  originVersionID?: string
-  originEvidenceDigest?: string
-}
-
-export type ProjectArtifactApiMutationResult = {
-  result: ProjectArtifactAutomaticWriteResult
-  scopeID: string
-  kind: ProjectArtifactKind
-  id: string
-  versionID: string
-  contentDigest: string
-  stage: "trial"
-  remaining: { session: number; projectDaily: number; projectArtifacts: number; versions: number; bytes: number }
-}
-
-export type ProjectArtifactApiConfirmationPreview = {
-  token: ProjectArtifactConfirmationToken
-  expiresAt: ProjectArtifactTimestampMillis
-}
-
-export type ProjectArtifactApiMetrics = {
-  score: number
-  confidence: ProjectArtifactConfidence
-  rewardUnits: number
-  penaltyUnits: number
-  lastUsedAt?: ProjectArtifactTimestampMillis | undefined
-}
-
 export type BrowserTab = {
   id: string
   sessionID: string
@@ -2980,6 +2993,13 @@ export type KeepAwakeStatus = {
   system?: "off" | "on" | "held" | "setup" | "unsupported" | "error"
   deferHold?: boolean
   message?: string
+}
+
+export type AutonomyDefaultsInfo = {
+  permissions: AutonomyDefaultsMode
+  guardrails: AutonomyDefaultsMode
+  answers: AutonomyDefaultsMode
+  yoloAcceptedAt?: AutonomyDefaultsYoloAcceptedAt
 }
 
 export type ConfigDiagnostic = {
@@ -3619,6 +3639,30 @@ export type SessionDotsDeviceDelegationCreated = {
   data: { sessionID: string; exchangeID: string; fingerprint: string; grant: DotsDeviceDelegationInfo }
 }
 
+export type RecallItem = {
+  kind: RecallKind
+  id: string
+  stage: RecallStage
+  method: RecallMethod
+  scores?: RecallScores
+  reason: string
+  rejection?: RecallRejection
+  source: RecallSource
+  okf?: RecallOkf
+  tokens?: number
+}
+
+export type SessionHarnessReflected = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.harness.reflected"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; experiences: HarnessExperiences }
+}
+
 export type ModelInfo = {
   id: string
   modelID: string
@@ -3729,56 +3773,6 @@ export type ReferenceInfo = {
   description?: string
   hidden?: boolean
   source: ReferenceSource
-}
-
-export type ProjectArtifactArtifactSummary = {
-  scope: ProjectArtifactScope
-  kind: ProjectArtifactKind
-  id: string
-  name: ProjectArtifactDisplayName
-  description: ProjectArtifactDescription
-  stage: ProjectArtifactStage
-  revision: ProjectArtifactRevision
-  currentVersionID: string
-  currentDigest: string
-  lastUsedAt?: ProjectArtifactTimestampMillis
-  timeUpdated: ProjectArtifactTimestampMillis
-}
-
-export type ProjectArtifactArtifact = {
-  scope: ProjectArtifactScope
-  kind: ProjectArtifactKind
-  id: string
-  revision: ProjectArtifactRevision
-  stage: ProjectArtifactStage
-  currentVersionID: string
-  fallbackVersionID?: string
-  shadowedScopeID?: string
-  lastUsedAt?: ProjectArtifactTimestampMillis
-  timeCreated: ProjectArtifactTimestampMillis
-  timeUpdated: ProjectArtifactTimestampMillis
-}
-
-export type ProjectArtifactTrash = {
-  deletionID: string
-  scope: ProjectArtifactScope
-  kind: ProjectArtifactKind
-  id: string
-  priorStage: ProjectArtifactStage
-  priorVersionID: string
-  deletedAt: ProjectArtifactTimestampMillis
-  purgeAfter: ProjectArtifactTimestampMillis
-}
-
-export type ProjectArtifactVersion = {
-  id: string
-  parentVersionID?: string
-  state: ProjectArtifactVersionState
-  contentDigest: string
-  contentRelpath: ProjectArtifactContentRelpath
-  provenance: ProjectArtifactProvenance
-  timeCreated: ProjectArtifactTimestampMillis
-  timeStateChanged: ProjectArtifactTimestampMillis
 }
 
 export type IsolatedBrowserStatus = {
@@ -3953,15 +3947,6 @@ export type SessionCreated = {
   }
 }
 
-export type ProjectArtifactAgentDefinition = {
-  kind: "agent"
-  name: ProjectArtifactDisplayName
-  description: ProjectArtifactDescription
-  system: ProjectArtifactAgentSystem
-  mode: "subagent"
-  permissions: PermissionRuleset
-}
-
 export type UsageAccountingPromptCosts = {
   units: Array<UsageAccountingPromptCost>
   unattributed: UsageAccountingBreakdown
@@ -4130,6 +4115,29 @@ export type SessionReviewDecided = {
   data: { sessionID: string; itemID: SessionReviewID; decision: SessionReviewDecision; source?: FormClientReplySource }
 }
 
+export type SessionRecallRecorded = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.recall.recorded"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    key: string
+    trigger: RecallTrigger
+    cueID?: string
+    methods: Array<RecallMethod>
+    outcome: RecallOutcome
+    abstention?: RecallAbstention
+    items: Array<RecallItem>
+    elapsedMs: number
+    injectedTokens: number
+    budgetTokens?: number
+  }
+}
+
 export type UsageDashboardQuotaReady = {
   status: "ready"
   providers: Array<{
@@ -4265,17 +4273,6 @@ export type CoordinationBoard = {
   reviews: Array<CoordinationBoardReview>
 }
 
-export type ProjectArtifactPromotionPreview = {
-  artifact: ProjectArtifactArtifactSummary
-  metrics: ProjectArtifactMetrics
-  destination: ProjectArtifactGlobalScope
-  risk: "declarative" | "executable"
-  renderedContent: string
-  collision?: ProjectArtifactCollisionDiagnostic
-  token: ProjectArtifactConfirmationToken
-  expiresAt: ProjectArtifactTimestampMillis
-}
-
 export type SessionCacheDiagnostics = {
   model: ModelRef
   contextBreakdown?: SessionContextBreakdown
@@ -4296,12 +4293,6 @@ export type SessionCacheDiagnostics = {
 }
 
 export type SessionsResponse = { data: Array<SessionInfo>; cursor: { previous?: string | null; next?: string | null } }
-
-export type ProjectArtifactDefinition =
-  | ProjectArtifactSkillDefinition
-  | ProjectArtifactCommandDefinition
-  | ProjectArtifactAgentDefinition
-  | ProjectArtifactPluginDefinition
 
 export type SessionPendingUser = {
   admittedSeq: number
@@ -4451,28 +4442,6 @@ export type SessionDiagnosticsUpdated = {
   type: "session.diagnostics.updated"
   location?: LocationRef
   data: { sessionID: string; diagnostics: SessionCacheDiagnostics }
-}
-
-export type ProjectArtifactApiTrashSummary = {
-  deletionID: string
-  scope: ProjectArtifactScope
-  kind: ProjectArtifactKind
-  id: string
-  priorStage: ProjectArtifactStage
-  priorVersionID: string
-  deletedAt: ProjectArtifactTimestampMillis
-  purgeAfter: ProjectArtifactTimestampMillis
-  name: ProjectArtifactDisplayName
-  description: ProjectArtifactDescription
-  definition: ProjectArtifactDefinition
-}
-
-export type ProjectArtifactArtifactDetails = {
-  artifact: ProjectArtifactArtifact
-  definition: ProjectArtifactDefinition
-  currentVersion: ProjectArtifactVersion
-  versions: Array<ProjectArtifactVersion>
-  diagnostics: Array<ProjectArtifactCollisionDiagnostic>
 }
 
 export type SessionPendingInfo = SessionPendingUser | SessionPendingSynthetic
@@ -4817,8 +4786,6 @@ export type UsageDashboardReady = {
   }
 }
 
-export type ProjectArtifactApiListItem = ProjectArtifactArtifactSummary | ProjectArtifactApiTrashSummary
-
 export type SessionInputAdmitted = {
   id: string
   created: number
@@ -4915,7 +4882,7 @@ export type SessionLogItem =
       type: "session.agent.selected"
       durable: { aggregateID: string; seq: number; version: 1 }
       location?: LocationRef
-      data: { sessionID: string; agent: string; artifact?: SessionEventArtifactProvenance }
+      data: { sessionID: string; agent: string }
     }
   | {
       id: string
@@ -4936,16 +4903,6 @@ export type SessionLogItem =
       durable: { aggregateID: string; seq: number; version: 1 }
       location?: LocationRef
       data: { sessionID: string; daybreak?: ModelDaybreak }
-    }
-  | {
-      id: string
-      created: number
-      metadata?: { [x: string]: any }
-      sourceEpoch: string
-      type: "session.project-artifacts-ended"
-      durable: { aggregateID: string; seq: number; version: 1 }
-      location?: LocationRef
-      data: { sessionID: string; oldProjectID: string; newProjectID: string }
     }
   | {
       id: string
@@ -5518,7 +5475,6 @@ export type SessionLogItem =
         text: string
         directory?: string
         conflicts?: SkillConflicts
-        artifact?: SessionEventArtifactProvenance
       }
     }
   | {
@@ -5530,6 +5486,118 @@ export type SessionLogItem =
       durable: { aggregateID: string; seq: number; version: 1 }
       location?: LocationRef
       data: { sessionID: string; id: string; activationMessageID: string; reason: "conflict_resolved" }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.cue.detected"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: { sessionID: string; cueID: string; kind: RecallCueKind; subject?: string; messageID?: string }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.recall.recorded"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: {
+        sessionID: string
+        key: string
+        trigger: RecallTrigger
+        cueID?: string
+        methods: Array<RecallMethod>
+        outcome: RecallOutcome
+        abstention?: RecallAbstention
+        items: Array<RecallItem>
+        elapsedMs: number
+        injectedTokens: number
+        budgetTokens?: number
+      }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.lifecycle.recorded"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: {
+        sessionID: string
+        step: number
+        decision: LifecycleDecision
+        basis: LifecycleBasis
+        recovery: boolean
+        recalled: boolean
+      }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.harness.evaluated"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: {
+        sessionID: string
+        stage: HarnessStage
+        mode: HarnessMode
+        signals: number
+        insufficient: boolean
+        skipReason?: string
+      }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.harness.probed"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: {
+        sessionID: string
+        candidate: HarnessCandidateID
+        outcome: HarnessOutcome
+        tokens: number
+        latencyMs: number
+      }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.harness.adopted"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: { sessionID: string; version: HarnessVersionID; parent: HarnessVersionID }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.harness.rolled-back"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: { sessionID: string; from: HarnessVersionID; to: HarnessVersionID }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.harness.reflected"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: { sessionID: string; experiences: HarnessExperiences }
     }
   | {
       id: string
@@ -5899,7 +5967,6 @@ export type ServerEvent =
   | SessionAgentSelected
   | SessionModelSelected
   | SessionDaybreakSet
-  | SessionProjectArtifactsEnded
   | SessionGuardrailDismissed
   | SessionGuardrailEscalated
   | SessionGuardrailDecided
@@ -5945,6 +6012,14 @@ export type ServerEvent =
   | SessionSynthetic
   | SessionSkillActivated
   | SessionSkillDeactivated
+  | SessionCueDetected
+  | SessionRecallRecorded
+  | SessionLifecycleRecorded
+  | SessionHarnessEvaluated
+  | SessionHarnessProbed
+  | SessionHarnessAdopted
+  | SessionHarnessRolledBack
+  | SessionHarnessReflected
   | SessionShellStarted
   | SessionShellEnded
   | SessionStepStarted
@@ -5979,6 +6054,7 @@ export type ServerEvent =
   | CoordinationEventChanged
   | CoordinationEventDeleted
   | CoordinationEventOwnerChanged
+  | CoordinationEventSubagentRequestBlocked
   | CoordinationEventUpdated
   | CoordinationEventRequestEscalated
   | FilesystemChanged
@@ -6296,58 +6372,6 @@ export type ProjectCopyError = {
 export const isProjectCopyError = (value: unknown): value is ProjectCopyError =>
   typeof value === "object" && value !== null && "name" in value && value["name"] === "ProjectCopyError"
 
-export type ArtifactBadRequest = {
-  readonly _tag: "ArtifactBadRequest"
-  readonly code: "ProjectIdentityUnavailable" | "InvalidArtifact" | "UnsafeContent" | "UnsupportedKind" | "InvalidScope"
-}
-export const isArtifactBadRequest = (value: unknown): value is ArtifactBadRequest =>
-  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ArtifactBadRequest"
-
-export type ArtifactNotFound = {
-  readonly _tag: "ArtifactNotFound"
-  readonly code: "ArtifactNotFound" | "VersionNotFound" | "DeletionNotFound"
-}
-export const isArtifactNotFound = (value: unknown): value is ArtifactNotFound =>
-  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ArtifactNotFound"
-
-export type ArtifactConflict = {
-  readonly _tag: "ArtifactConflict"
-  readonly code:
-    | "ArtifactCollision"
-    | "ScopeCollision"
-    | "VersionConflict"
-    | "OwnershipMismatch"
-    | "DestinationExists"
-    | "ProjectAdoptionConflict"
-}
-export const isArtifactConflict = (value: unknown): value is ArtifactConflict =>
-  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ArtifactConflict"
-
-export type ArtifactGone = { readonly _tag: "ArtifactGone"; readonly code: "ConfirmationExpired" | "TrashExpired" }
-export const isArtifactGone = (value: unknown): value is ArtifactGone =>
-  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ArtifactGone"
-
-export type ArtifactTooLarge = {
-  readonly _tag: "ArtifactTooLarge"
-  readonly code: "ContentTooLarge" | "ScopeQuotaExceeded"
-}
-export const isArtifactTooLarge = (value: unknown): value is ArtifactTooLarge =>
-  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ArtifactTooLarge"
-
-export type ArtifactRateLimited = {
-  readonly _tag: "ArtifactRateLimited"
-  readonly code: "WriteRateExceeded" | "ArtifactCooldown"
-}
-export const isArtifactRateLimited = (value: unknown): value is ArtifactRateLimited =>
-  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ArtifactRateLimited"
-
-export type ArtifactUnavailable = {
-  readonly _tag: "ArtifactUnavailable"
-  readonly code: "StorageUnavailable" | "LockTimeout" | "ReconciliationRequired"
-}
-export const isArtifactUnavailable = (value: unknown): value is ArtifactUnavailable =>
-  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ArtifactUnavailable"
-
 export type ReviewItemNotFoundError = {
   readonly _tag: "ReviewItemNotFoundError"
   readonly itemID: string
@@ -6484,6 +6508,8 @@ export type ServerTelemetryAppendInput = {
             | "incident.guidance.clear"
             | "machine.keepAwake.get"
             | "machine.keepAwake.set"
+            | "machine.autonomyDefaults.get"
+            | "machine.autonomyDefaults.set"
           readonly outcome: "ok" | "failed" | "unknown" | "unavailable"
           readonly reason?: "not-connected" | "in-flight-limit" | "request-limit" | "cancelled"
           readonly queueMs: number
@@ -10621,633 +10647,6 @@ export type VcsDiffOutput = {
   data: Array<FileDiffInfo>
 }
 
-export type ProjectArtifactArtifactListInput = {
-  readonly location?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-    readonly scope: "project" | "global" | "trash"
-    readonly kind?: ("skill" | "command" | "agent" | "plugin") | undefined
-    readonly stage?: ("trial" | "active" | "degraded" | "disabled" | "quarantine") | undefined
-  }["location"]
-  readonly scope: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-    readonly scope: "project" | "global" | "trash"
-    readonly kind?: ("skill" | "command" | "agent" | "plugin") | undefined
-    readonly stage?: ("trial" | "active" | "degraded" | "disabled" | "quarantine") | undefined
-  }["scope"]
-  readonly kind?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-    readonly scope: "project" | "global" | "trash"
-    readonly kind?: ("skill" | "command" | "agent" | "plugin") | undefined
-    readonly stage?: ("trial" | "active" | "degraded" | "disabled" | "quarantine") | undefined
-  }["kind"]
-  readonly stage?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-    readonly scope: "project" | "global" | "trash"
-    readonly kind?: ("skill" | "command" | "agent" | "plugin") | undefined
-    readonly stage?: ("trial" | "active" | "degraded" | "disabled" | "quarantine") | undefined
-  }["stage"]
-}
-
-export type ProjectArtifactArtifactListOutput = { data: Array<ProjectArtifactApiListItem> }["data"]
-
-export type ProjectArtifactArtifactGetInput = {
-  readonly scope: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["scope"]
-  readonly kind: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["kind"]
-  readonly id: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["id"]
-  readonly location?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-  }["location"]
-}
-
-export type ProjectArtifactArtifactGetOutput = { data: ProjectArtifactArtifactDetails }["data"]
-
-export type ProjectArtifactArtifactCreateInput = {
-  readonly location?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-  }["location"]
-  readonly scope: {
-    readonly scope: "project" | "global"
-    readonly id: string
-    readonly definition:
-      | { readonly kind: "skill"; readonly name: string; readonly description: string; readonly content: string }
-      | {
-          readonly kind: "command"
-          readonly name: string
-          readonly description: string
-          readonly template: string
-          readonly subtask: false
-        }
-      | {
-          readonly kind: "agent"
-          readonly name: string
-          readonly description: string
-          readonly system: string
-          readonly mode: "subagent"
-          readonly permissions: ReadonlyArray<{
-            readonly action: string
-            readonly resource: string
-            readonly effect: "allow" | "deny" | "ask"
-          }>
-        }
-      | { readonly kind: "plugin"; readonly name: string; readonly description: string; readonly draft: string }
-  }["scope"]
-  readonly id: {
-    readonly scope: "project" | "global"
-    readonly id: string
-    readonly definition:
-      | { readonly kind: "skill"; readonly name: string; readonly description: string; readonly content: string }
-      | {
-          readonly kind: "command"
-          readonly name: string
-          readonly description: string
-          readonly template: string
-          readonly subtask: false
-        }
-      | {
-          readonly kind: "agent"
-          readonly name: string
-          readonly description: string
-          readonly system: string
-          readonly mode: "subagent"
-          readonly permissions: ReadonlyArray<{
-            readonly action: string
-            readonly resource: string
-            readonly effect: "allow" | "deny" | "ask"
-          }>
-        }
-      | { readonly kind: "plugin"; readonly name: string; readonly description: string; readonly draft: string }
-  }["id"]
-  readonly definition: {
-    readonly scope: "project" | "global"
-    readonly id: string
-    readonly definition:
-      | { readonly kind: "skill"; readonly name: string; readonly description: string; readonly content: string }
-      | {
-          readonly kind: "command"
-          readonly name: string
-          readonly description: string
-          readonly template: string
-          readonly subtask: false
-        }
-      | {
-          readonly kind: "agent"
-          readonly name: string
-          readonly description: string
-          readonly system: string
-          readonly mode: "subagent"
-          readonly permissions: ReadonlyArray<{
-            readonly action: string
-            readonly resource: string
-            readonly effect: "allow" | "deny" | "ask"
-          }>
-        }
-      | { readonly kind: "plugin"; readonly name: string; readonly description: string; readonly draft: string }
-  }["definition"]
-}
-
-export type ProjectArtifactArtifactCreateOutput = {
-  data: ProjectArtifactApiMutationResult | ProjectArtifactApiConfirmationPreview
-}["data"]
-
-export type ProjectArtifactArtifactUpdateInput = {
-  readonly scope: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["scope"]
-  readonly kind: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["kind"]
-  readonly id: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["id"]
-  readonly location?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-  }["location"]
-  readonly definition: {
-    readonly definition:
-      | { readonly kind: "skill"; readonly name: string; readonly description: string; readonly content: string }
-      | {
-          readonly kind: "command"
-          readonly name: string
-          readonly description: string
-          readonly template: string
-          readonly subtask: false
-        }
-      | {
-          readonly kind: "agent"
-          readonly name: string
-          readonly description: string
-          readonly system: string
-          readonly mode: "subagent"
-          readonly permissions: ReadonlyArray<{
-            readonly action: string
-            readonly resource: string
-            readonly effect: "allow" | "deny" | "ask"
-          }>
-        }
-      | { readonly kind: "plugin"; readonly name: string; readonly description: string; readonly draft: string }
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["definition"]
-  readonly expectedRevision: {
-    readonly definition:
-      | { readonly kind: "skill"; readonly name: string; readonly description: string; readonly content: string }
-      | {
-          readonly kind: "command"
-          readonly name: string
-          readonly description: string
-          readonly template: string
-          readonly subtask: false
-        }
-      | {
-          readonly kind: "agent"
-          readonly name: string
-          readonly description: string
-          readonly system: string
-          readonly mode: "subagent"
-          readonly permissions: ReadonlyArray<{
-            readonly action: string
-            readonly resource: string
-            readonly effect: "allow" | "deny" | "ask"
-          }>
-        }
-      | { readonly kind: "plugin"; readonly name: string; readonly description: string; readonly draft: string }
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedRevision"]
-  readonly expectedVersionID: {
-    readonly definition:
-      | { readonly kind: "skill"; readonly name: string; readonly description: string; readonly content: string }
-      | {
-          readonly kind: "command"
-          readonly name: string
-          readonly description: string
-          readonly template: string
-          readonly subtask: false
-        }
-      | {
-          readonly kind: "agent"
-          readonly name: string
-          readonly description: string
-          readonly system: string
-          readonly mode: "subagent"
-          readonly permissions: ReadonlyArray<{
-            readonly action: string
-            readonly resource: string
-            readonly effect: "allow" | "deny" | "ask"
-          }>
-        }
-      | { readonly kind: "plugin"; readonly name: string; readonly description: string; readonly draft: string }
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedVersionID"]
-  readonly expectedDigest: {
-    readonly definition:
-      | { readonly kind: "skill"; readonly name: string; readonly description: string; readonly content: string }
-      | {
-          readonly kind: "command"
-          readonly name: string
-          readonly description: string
-          readonly template: string
-          readonly subtask: false
-        }
-      | {
-          readonly kind: "agent"
-          readonly name: string
-          readonly description: string
-          readonly system: string
-          readonly mode: "subagent"
-          readonly permissions: ReadonlyArray<{
-            readonly action: string
-            readonly resource: string
-            readonly effect: "allow" | "deny" | "ask"
-          }>
-        }
-      | { readonly kind: "plugin"; readonly name: string; readonly description: string; readonly draft: string }
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedDigest"]
-}
-
-export type ProjectArtifactArtifactUpdateOutput = {
-  data: ProjectArtifactApiMutationResult | ProjectArtifactApiConfirmationPreview
-}["data"]
-
-export type ProjectArtifactArtifactGlobalConfirmInput = {
-  readonly location?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-  }["location"]
-  readonly token: { readonly token: string }["token"]
-}
-
-export type ProjectArtifactArtifactGlobalConfirmOutput = { data: ProjectArtifactApiMutationResult }["data"]
-
-export type ProjectArtifactArtifactDisableInput = {
-  readonly scope: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["scope"]
-  readonly kind: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["kind"]
-  readonly id: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["id"]
-  readonly location?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-  }["location"]
-  readonly expectedRevision: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedRevision"]
-  readonly expectedVersionID: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedVersionID"]
-  readonly expectedDigest: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedDigest"]
-}
-
-export type ProjectArtifactArtifactDisableOutput = void
-
-export type ProjectArtifactArtifactEnableInput = {
-  readonly scope: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["scope"]
-  readonly kind: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["kind"]
-  readonly id: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["id"]
-  readonly location?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-  }["location"]
-  readonly expectedRevision: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedRevision"]
-  readonly expectedVersionID: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedVersionID"]
-  readonly expectedDigest: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedDigest"]
-}
-
-export type ProjectArtifactArtifactEnableOutput = void
-
-export type ProjectArtifactArtifactRemoveInput = {
-  readonly scope: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["scope"]
-  readonly kind: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["kind"]
-  readonly id: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["id"]
-  readonly location?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-  }["location"]
-  readonly expectedRevision: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedRevision"]
-  readonly expectedVersionID: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedVersionID"]
-  readonly expectedDigest: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedDigest"]
-}
-
-export type ProjectArtifactArtifactRemoveOutput = { data: ProjectArtifactTrash }["data"]
-
-export type ProjectArtifactArtifactRestoreInput = {
-  readonly deletionID: { readonly deletionID: string }["deletionID"]
-  readonly location?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-  }["location"]
-}
-
-export type ProjectArtifactArtifactRestoreOutput = void
-
-export type ProjectArtifactArtifactRevertInput = {
-  readonly scope: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["scope"]
-  readonly kind: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["kind"]
-  readonly id: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["id"]
-  readonly location?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-  }["location"]
-  readonly expectedRevision: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-    readonly targetVersionID: string
-  }["expectedRevision"]
-  readonly expectedVersionID: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-    readonly targetVersionID: string
-  }["expectedVersionID"]
-  readonly expectedDigest: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-    readonly targetVersionID: string
-  }["expectedDigest"]
-  readonly targetVersionID: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-    readonly targetVersionID: string
-  }["targetVersionID"]
-}
-
-export type ProjectArtifactArtifactRevertOutput = void
-
-export type ProjectArtifactArtifactMetricsInput = {
-  readonly scope: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["scope"]
-  readonly kind: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["kind"]
-  readonly id: {
-    readonly scope: "project" | "global"
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-  }["id"]
-  readonly location?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-  }["location"]
-}
-
-export type ProjectArtifactArtifactMetricsOutput = { data: ProjectArtifactApiMetrics }["data"]
-
-export type ProjectArtifactArtifactPromotionPreviewInput = {
-  readonly kind: { readonly kind: "skill" | "command" | "agent" | "plugin"; readonly id: string }["kind"]
-  readonly id: { readonly kind: "skill" | "command" | "agent" | "plugin"; readonly id: string }["id"]
-  readonly location?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-  }["location"]
-  readonly expectedRevision: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedRevision"]
-  readonly expectedVersionID: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedVersionID"]
-  readonly expectedDigest: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedDigest"]
-}
-
-export type ProjectArtifactArtifactPromotionPreviewOutput = { data: ProjectArtifactPromotionPreview }["data"]
-
-export type ProjectArtifactArtifactPromotionConfirmInput = {
-  readonly kind: {
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-    readonly token: string
-  }["kind"]
-  readonly id: {
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-    readonly token: string
-  }["id"]
-  readonly token: {
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-    readonly token: string
-  }["token"]
-  readonly location?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-  }["location"]
-}
-
-export type ProjectArtifactArtifactPromotionConfirmOutput = { data: ProjectArtifactApiMutationResult }["data"]
-
-export type ProjectArtifactArtifactForkPreviewInput = {
-  readonly kind: { readonly kind: "skill" | "command" | "agent" | "plugin"; readonly id: string }["kind"]
-  readonly id: { readonly kind: "skill" | "command" | "agent" | "plugin"; readonly id: string }["id"]
-  readonly location?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-  }["location"]
-  readonly expectedRevision: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedRevision"]
-  readonly expectedVersionID: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedVersionID"]
-  readonly expectedDigest: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedDigest"]
-}
-
-export type ProjectArtifactArtifactForkPreviewOutput = { data: ProjectArtifactApiConfirmationPreview }["data"]
-
-export type ProjectArtifactArtifactForkConfirmInput = {
-  readonly kind: {
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-    readonly token: string
-  }["kind"]
-  readonly id: {
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-    readonly token: string
-  }["id"]
-  readonly token: {
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-    readonly token: string
-  }["token"]
-  readonly location?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-  }["location"]
-}
-
-export type ProjectArtifactArtifactForkConfirmOutput = { data: ProjectArtifactApiMutationResult }["data"]
-
-export type ProjectArtifactArtifactShadowPreviewInput = {
-  readonly kind: { readonly kind: "skill" | "command" | "agent" | "plugin"; readonly id: string }["kind"]
-  readonly id: { readonly kind: "skill" | "command" | "agent" | "plugin"; readonly id: string }["id"]
-  readonly location?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-  }["location"]
-  readonly expectedRevision: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedRevision"]
-  readonly expectedVersionID: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedVersionID"]
-  readonly expectedDigest: {
-    readonly expectedRevision: number
-    readonly expectedVersionID: string
-    readonly expectedDigest: string
-  }["expectedDigest"]
-}
-
-export type ProjectArtifactArtifactShadowPreviewOutput = { data: ProjectArtifactApiConfirmationPreview }["data"]
-
-export type ProjectArtifactArtifactShadowConfirmInput = {
-  readonly kind: {
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-    readonly token: string
-  }["kind"]
-  readonly id: {
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-    readonly token: string
-  }["id"]
-  readonly token: {
-    readonly kind: "skill" | "command" | "agent" | "plugin"
-    readonly id: string
-    readonly token: string
-  }["token"]
-  readonly location?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-  }["location"]
-}
-
-export type ProjectArtifactArtifactShadowConfirmOutput = void
-
-export type ProjectArtifactArtifactPurgeInput = {
-  readonly location?: {
-    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
-  }["location"]
-}
-
-export type ProjectArtifactArtifactPurgeOutput = { data: { count: number } }["data"]
-
 export type DebugLocationListOutput = Array<LocationRef>
 
 export type DebugLocationEvictInput = {
@@ -13361,6 +12760,37 @@ export type KeepAwakeGetOutput = { data: KeepAwakeStatus }["data"]
 export type KeepAwakeSetInput = { readonly enabled: { readonly enabled: boolean }["enabled"] }
 
 export type KeepAwakeSetOutput = { data: KeepAwakeStatus }["data"]
+
+export type AutonomyDefaultsGetOutput = { data: AutonomyDefaultsInfo }["data"]
+
+export type AutonomyDefaultsSetInput = {
+  readonly permissions?: {
+    readonly permissions?: "manual" | "yolo" | "auto"
+    readonly guardrails?: "manual" | "yolo" | "auto"
+    readonly answers?: "manual" | "yolo" | "auto"
+    readonly acceptYolo?: boolean
+  }["permissions"]
+  readonly guardrails?: {
+    readonly permissions?: "manual" | "yolo" | "auto"
+    readonly guardrails?: "manual" | "yolo" | "auto"
+    readonly answers?: "manual" | "yolo" | "auto"
+    readonly acceptYolo?: boolean
+  }["guardrails"]
+  readonly answers?: {
+    readonly permissions?: "manual" | "yolo" | "auto"
+    readonly guardrails?: "manual" | "yolo" | "auto"
+    readonly answers?: "manual" | "yolo" | "auto"
+    readonly acceptYolo?: boolean
+  }["answers"]
+  readonly acceptYolo?: {
+    readonly permissions?: "manual" | "yolo" | "auto"
+    readonly guardrails?: "manual" | "yolo" | "auto"
+    readonly answers?: "manual" | "yolo" | "auto"
+    readonly acceptYolo?: boolean
+  }["acceptYolo"]
+}
+
+export type AutonomyDefaultsSetOutput = { data: AutonomyDefaultsInfo }["data"]
 
 export type ConfigDiagnosticsInput = {
   readonly location?: {

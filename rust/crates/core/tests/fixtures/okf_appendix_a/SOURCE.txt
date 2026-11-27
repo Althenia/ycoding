@@ -1,0 +1,4 @@
+Source: SPEC.md, Appendix A (Worked example, an income statement), of open-knowledge-format/open-knowledge-format at 527e81aff55992be21507e97004286789126f88c.
+Spec-derived files, copied verbatim from the Appendix A code blocks: bundle/index.md, bundle/metrics/income-statement.md, bundle/computations/revenue.md, bundle/computations/profit.md.
+Authored for this fixture, inert, not part of the spec text: the four files under bundle/references/. The Appendix names them in its layout but gives no content.
+The fields, actors and license in these files belong to this fixture only. Real bundles and defaults never require or copy them.

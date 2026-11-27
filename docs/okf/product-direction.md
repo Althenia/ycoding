@@ -31,7 +31,7 @@ Autonomous exposes independent permissions, guardrails, and answers modes: Manua
 
 Subagents are durable background child sessions with explicit agent selection, bounded nesting, permission ceilings, and parent-child ownership.[^product-dir]
 
-Customization covers agents, commands, skills, hooks, plugins, TUI slots, MCP servers and tools, artifacts, providers, guardrails, and provider-usage sources.[^product-dir]
+Customization covers agents, commands, skills, hooks, plugins, TUI slots, MCP servers and tools, providers, guardrails, and provider-usage sources.[^product-dir]
 
 ## Compatibility and Completeness
 

@@ -1,8 +1,8 @@
-use crate::session_message;
 use crate::{
     DecodeError, DecodeErrorKind, DomainDecode, DomainEncode, JsonPath, JsonValue, LosslessString,
     ObjectDecoder, ObjectEncoder,
 };
+use crate::{harness, lifecycle, recall};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Data(pub crate::JsonObject);
@@ -20,7 +20,6 @@ impl DomainEncode for Data {
         JsonValue::Object(self.0.clone())
     }
 }
-pub type ArtifactProvenance = session_message::ArtifactProvenance;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Source {
     pub start: crate::schema::NonNegativeInt,
@@ -68,7 +67,6 @@ pub fn definitions() -> Vec<crate::event::Definition> {
         durable("session.dots.access.changed", 1),
         durable("session.model.selected", 1),
         durable("session.daybreak.set", 1),
-        durable("session.project-artifacts-ended", 1),
         durable("session.guardrail.dismissed", 1),
         durable("session.guardrail.escalated", 1),
         durable("session.guardrail.decided", 1),
@@ -114,6 +112,14 @@ pub fn definitions() -> Vec<crate::event::Definition> {
         durable("session.synthetic", 1),
         durable("session.skill.activated", 1),
         durable("session.skill.deactivated", 1),
+        durable("session.cue.detected", 1),
+        durable("session.recall.recorded", 1),
+        durable("session.lifecycle.recorded", 1),
+        durable("session.harness.evaluated", 1),
+        durable("session.harness.probed", 1),
+        durable("session.harness.adopted", 1),
+        durable("session.harness.rolled-back", 1),
+        durable("session.harness.reflected", 1),
         durable("session.shell.started", 1),
         durable("session.shell.ended", 1),
         durable("session.step.started", 1),
@@ -577,6 +583,49 @@ fn canonical_field(
             crate::domain::branded_string(value, "standard.review.", path)
                 .map(|id| Some(id.encode()))
         }
+        ("session.cue.detected", "cueID") | ("session.recall.recorded", "cueID") => {
+            recall::bounded(value, 1, 128, path).map(|text| Some(text.encode()))
+        }
+        ("session.recall.recorded", "key") => {
+            recall::bounded(value, 1, 128, path).map(|text| Some(text.encode()))
+        }
+        ("session.cue.detected", "subject") => {
+            recall::bounded(value, 0, 512, path).map(|text| Some(text.encode()))
+        }
+        ("session.cue.detected", "kind") => canonical::<recall::CueKind>(value, path),
+        ("session.recall.recorded", "trigger") => canonical::<recall::Trigger>(value, path),
+        ("session.recall.recorded", "methods") => canonical::<recall::Methods>(value, path),
+        ("session.recall.recorded", "outcome") => canonical::<recall::Outcome>(value, path),
+        ("session.recall.recorded", "abstention") => canonical::<recall::Abstention>(value, path),
+        ("session.recall.recorded", "items") => canonical::<recall::Items>(value, path),
+        ("session.harness.evaluated", "stage") => canonical::<harness::Stage>(value, path),
+        ("session.harness.evaluated", "mode") => canonical::<harness::Mode>(value, path),
+        ("session.harness.probed", "outcome") => {
+            harness::outcome(value, path).map(|text| Some(text.encode()))
+        }
+        ("session.harness.evaluated", "signals")
+        | ("session.harness.probed", "tokens" | "latencyMs") => {
+            canonical::<crate::schema::NonNegativeInt>(value, path)
+        }
+        ("session.harness.evaluated", "skipReason") => {
+            crate::domain::bounded_string(value, 0, 200, path).map(|text| Some(text.encode()))
+        }
+        ("session.harness.probed", "candidate")
+        | ("session.harness.adopted", "version" | "parent")
+        | ("session.harness.rolled-back", "from" | "to") => {
+            harness::identifier(value, path).map(|text| Some(text.encode()))
+        }
+        ("session.harness.reflected", "experiences") => {
+            canonical::<harness::Experiences>(value, path)
+        }
+        ("session.lifecycle.recorded", "decision") => canonical::<lifecycle::Decision>(value, path),
+        ("session.lifecycle.recorded", "basis") => canonical::<lifecycle::Basis>(value, path),
+        ("session.lifecycle.recorded", "step") => {
+            canonical::<crate::schema::NonNegativeInt>(value, path)
+        }
+        ("session.recall.recorded", "elapsedMs" | "injectedTokens" | "budgetTokens") => {
+            canonical::<crate::schema::NonNegativeInt>(value, path)
+        }
         ("session.guardrail.dismissed", "confidence") => {
             crate::domain::number_range(value, 0.9, 1.0, path)
                 .map(|number| Some(JsonValue::Number(number)))
@@ -601,16 +650,11 @@ fn fields_for(event_type: &str, version: Option<i64>) -> Option<&'static [(&'sta
             ("origin", true),
             ("created", false),
         ],
-        "session.agent.selected" => &[("sessionID", false), ("agent", false), ("artifact", true)],
+        "session.agent.selected" => &[("sessionID", false), ("agent", false)],
         "session.model.selected" => &[("sessionID", false), ("model", false)],
         "session.profile.bound" => &[("sessionID", false), ("binding", true)],
         "session.guardrail.approved" => &[("sessionID", false), ("directories", false)],
         "session.daybreak.set" => &[("sessionID", false), ("daybreak", true)],
-        "session.project-artifacts-ended" => &[
-            ("sessionID", false),
-            ("oldProjectID", false),
-            ("newProjectID", false),
-        ],
         "session.moved" => &[
             ("sessionID", false),
             ("location", false),
@@ -771,7 +815,6 @@ fn fields_for(event_type: &str, version: Option<i64>) -> Option<&'static [(&'sta
             ("text", false),
             ("directory", true),
             ("conflicts", true),
-            ("artifact", true),
         ],
         "session.skill.deactivated" => &[
             ("sessionID", false),
@@ -779,6 +822,52 @@ fn fields_for(event_type: &str, version: Option<i64>) -> Option<&'static [(&'sta
             ("activationMessageID", false),
             ("reason", false),
         ],
+        "session.cue.detected" => &[
+            ("sessionID", false),
+            ("cueID", false),
+            ("kind", false),
+            ("subject", true),
+            ("messageID", true),
+        ],
+        "session.recall.recorded" => &[
+            ("sessionID", false),
+            ("key", false),
+            ("trigger", false),
+            ("cueID", true),
+            ("methods", false),
+            ("outcome", false),
+            ("abstention", true),
+            ("items", false),
+            ("elapsedMs", false),
+            ("injectedTokens", false),
+            ("budgetTokens", true),
+        ],
+        "session.lifecycle.recorded" => &[
+            ("sessionID", false),
+            ("step", false),
+            ("decision", false),
+            ("basis", false),
+            ("recovery", false),
+            ("recalled", false),
+        ],
+        "session.harness.evaluated" => &[
+            ("sessionID", false),
+            ("stage", false),
+            ("mode", false),
+            ("signals", false),
+            ("insufficient", false),
+            ("skipReason", true),
+        ],
+        "session.harness.probed" => &[
+            ("sessionID", false),
+            ("candidate", false),
+            ("outcome", false),
+            ("tokens", false),
+            ("latencyMs", false),
+        ],
+        "session.harness.adopted" => &[("sessionID", false), ("version", false), ("parent", false)],
+        "session.harness.rolled-back" => &[("sessionID", false), ("from", false), ("to", false)],
+        "session.harness.reflected" => &[("sessionID", false), ("experiences", false)],
         "session.shell.started" => &[("sessionID", false), ("shell", false)],
         "session.shell.ended" => &[("sessionID", false), ("shell", false), ("output", false)],
         "session.step.started" => &[
@@ -1238,9 +1327,6 @@ fn validate_event_field(
             validate_as::<crate::permission::Ruleset>(value, path)
         }
         ("session.created", "created") => validate_as::<crate::schema::NonNegativeInt>(value, path),
-        ("session.agent.selected", "artifact") | ("session.skill.activated", "artifact") => {
-            validate_as::<ArtifactProvenance>(value, path)
-        }
         ("session.daybreak.set", "daybreak") => validate_as::<crate::model::Daybreak>(value, path),
         ("session.usage.recorded" | "session.usage.updated", "cost") => {
             validate_as::<crate::money::Usd>(value, path)
@@ -1264,6 +1350,7 @@ fn validate_event_field(
             | "sourceMessageID"
             | "activationMessageID"
             | "summaryMessageID"
+            | "messageID"
             | "to"
             | "from",
         ) => validate_as::<crate::session_message_id::Id>(value, path),
@@ -1359,6 +1446,8 @@ fn validate_event_field(
         ("session.tool.called" | "session.tool.success" | "session.tool.failed", "executed") => {
             validate_as::<bool>(value, path)
         }
+        ("session.lifecycle.recorded", "recovery" | "recalled")
+        | ("session.harness.evaluated", "insufficient") => validate_as::<bool>(value, path),
         ("session.file-change.recorded", "change") => validate_as::<FileChangeInfo>(value, path),
         ("session.retry.scheduled", "attempt") => {
             validate_as::<crate::schema::PositiveInt>(value, path)
@@ -1445,11 +1534,6 @@ event_data_type!(ModelSelected, "session.model.selected", Some(1));
 event_data_type!(ProfileBound, "session.profile.bound", Some(1));
 event_data_type!(GuardrailApproved, "session.guardrail.approved", Some(1));
 event_data_type!(DaybreakSet, "session.daybreak.set", Some(1));
-event_data_type!(
-    ProjectArtifactsEnded,
-    "session.project-artifacts-ended",
-    Some(1)
-);
 event_data_type!(Moved, "session.moved", Some(1));
 event_data_type!(Renamed, "session.renamed", Some(1));
 event_data_type!(UsageRecorded, "session.usage.recorded", Some(1));
@@ -1522,6 +1606,14 @@ event_data_type!(TaskUpdated, "session.task.updated", Some(1));
 event_data_type!(Synthetic, "session.synthetic", Some(1));
 event_data_type!(SkillActivated, "session.skill.activated", Some(1));
 event_data_type!(SkillDeactivated, "session.skill.deactivated", Some(1));
+event_data_type!(CueDetected, "session.cue.detected", Some(1));
+event_data_type!(RecallRecorded, "session.recall.recorded", Some(1));
+event_data_type!(LifecycleRecorded, "session.lifecycle.recorded", Some(1));
+event_data_type!(HarnessEvaluated, "session.harness.evaluated", Some(1));
+event_data_type!(HarnessProbed, "session.harness.probed", Some(1));
+event_data_type!(HarnessAdopted, "session.harness.adopted", Some(1));
+event_data_type!(HarnessRolledBack, "session.harness.rolled-back", Some(1));
+event_data_type!(HarnessReflected, "session.harness.reflected", Some(1));
 event_data_type!(ShellStarted, "session.shell.started", Some(1));
 event_data_type!(ShellEnded, "session.shell.ended", Some(1));
 event_data_type!(StepStarted, "session.step.started", Some(1));

@@ -10,7 +10,7 @@ const snapshot = { providerID: "openai", label: "Codex", status: "available", so
 const dayReport = { group: "day" as const, limit: 30 }
 
 async function connected(relay: Awaited<ReturnType<typeof startRelayDouble>>, requestTimeoutMs?: number) {
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers, ...(requestTimeoutMs === undefined ? {} : { requestTimeoutMs }) }) })
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(id), handlers, ...(requestTimeoutMs === undefined ? {} : { requestTimeoutMs }) }) })
   await store.load()
   await waitFor(() => store.state().transport.kind === "open")
   return { store, ...queriesOf(store) }

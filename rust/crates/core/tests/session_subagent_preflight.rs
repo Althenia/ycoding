@@ -169,6 +169,7 @@ fn parent() -> session::Id {
 fn message(error: Error) -> String {
     match error {
         Error::InvalidRequest(text) => text,
+        Error::Blocked(blocked) => blocked.message,
         other => panic!("unexpected {other:?}"),
     }
 }

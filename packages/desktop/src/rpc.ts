@@ -243,6 +243,8 @@ export function createDesktopRPC(controller: BackendController, preferences: {
     session: (input: Parameters<DesktopAPI["session"]>[0]) => controller.session(input),
     autonomy: (input: Parameters<DesktopAPI["autonomy"]>[0]) => controller.autonomy(input),
     setAutonomy: (input: Parameters<DesktopAPI["setAutonomy"]>[0]) => controller.setAutonomy(input),
+    autonomyDefaults: () => controller.autonomyDefaults(),
+    setAutonomyDefaults: (input: Parameters<DesktopAPI["setAutonomyDefaults"]>[0]) => controller.setAutonomyDefaults(input),
     fileChanges: (input: Parameters<DesktopAPI["fileChanges"]>[0]) => controller.fileChanges(input),
     activity: (input: Parameters<DesktopAPI["activity"]>[0]) => controller.activity(input),
     shellOutput: (input: Parameters<DesktopAPI["shellOutput"]>[0]) => controller.shellOutput(input),
@@ -275,6 +277,7 @@ export function createDesktopRPC(controller: BackendController, preferences: {
     switchModel: async (input: Parameters<DesktopAPI["switchModel"]>[0]) => { await controller.switchModel(input) },
     sessionSnapshot: (input: Parameters<DesktopAPI["sessionSnapshot"]>[0]) => controller.sessionSnapshot(input),
     pendingInputs: (input: Parameters<DesktopAPI["pendingInputs"]>[0]) => controller.pendingInputs(input),
+    sessionRecall: (input: Parameters<DesktopAPI["sessionRecall"]>[0]) => controller.sessionRecall(input),
     removePending: async (input: Parameters<DesktopAPI["removePending"]>[0]) => { await controller.removePending(input) },
     steerPending: async (input: Parameters<DesktopAPI["steerPending"]>[0]) => { await controller.steerPending(input) },
     deleteMessage: async (input: Parameters<DesktopAPI["deleteMessage"]>[0]) => { await controller.deleteMessage(input) },
@@ -306,9 +309,6 @@ export function createDesktopRPC(controller: BackendController, preferences: {
       const current = () => { const state = controller.state(); return state.status === "connected" && state.generation === started.generation && state.revision === exported.revision }
       return host.saveExport(exported, current)
     },
-    artifacts: (input: Parameters<DesktopAPI["artifacts"]>[0]) => controller.artifacts(input),
-    artifact: (input: Parameters<DesktopAPI["artifact"]>[0]) => controller.artifact(input),
-    manageArtifact: (input: Parameters<DesktopAPI["manageArtifact"]>[0]) => controller.manageArtifact(input),
   }
   return new Proxy(handlers, {
     get(target, key, receiver) {

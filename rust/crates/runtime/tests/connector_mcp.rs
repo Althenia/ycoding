@@ -134,6 +134,8 @@ const EXCLUDED: &[&str] = &[
     "provider.auth.refresh",
     "session.remove",
     "usage.dashboard",
+    "autonomyDefaults.get",
+    "autonomyDefaults.set",
 ];
 
 fn peer() -> Peer {

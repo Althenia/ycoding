@@ -3,12 +3,7 @@ use crate::{
     instructions,
     platform::shell::Shell,
     process::guardrails,
-    resources::{
-        command,
-        config::Configuration,
-        model,
-        project_artifact::source::{ActivationInput, ActivationSource},
-    },
+    resources::{command, config::Configuration, model},
     session::{
         compaction_job, compaction_policy, model_switch, pending, projector,
         run_coordinator::{Coordinator, Error, InterruptReason},
@@ -19,10 +14,9 @@ use std::{
     sync::{Arc, PoisonError},
 };
 use ycoding_schema::{
-    DomainDecode, DomainEncode, JsonObject, JsonValue, LosslessString, ObjectEncoder, event,
-    instruction, location, model as model_schema, project_artifact, project_artifact::NonEmptyText,
-    schema::RelativePath, session, session_compaction, session_message, session_pending,
-    session_skill_status, shell, skill,
+    DomainDecode, JsonObject, JsonValue, LosslessString, ObjectEncoder, event, instruction,
+    location, model as model_schema, schema::RelativePath, session, session_compaction,
+    session_message, session_pending, session_skill_status, shell, skill,
 };
 use ycoding_store::session::{ContextStateTable, Job, NewEvent, Pending};
 
@@ -269,7 +263,7 @@ impl Local {
             .transpose()
             .map_err(|error| IngressError::Invalid(error.to_string()))?
             .unwrap_or(projector::random_event_id()?);
-        let mut event = NewEvent {
+        let event = NewEvent {
             id: id.as_lossless().clone(),
             aggregate_id: session.id.as_lossless().clone(),
             created: self.0.services.clock.now(),
@@ -282,46 +276,7 @@ impl Local {
                 .optional("conflicts", &info.conflicts)
                 .finish(),
         };
-        let store = &self.0.services.store;
-        let Some(source) = store.artifact_source() else {
-            store.publish(event).await?;
-            return Ok(());
-        };
-        let provenance = info
-            .id
-            .as_str()
-            .and_then(|id| source.provenance(&artifact_kind("skill"), id));
-        let (Some(message), Some(provenance)) = (message, provenance) else {
-            source.publish_activation(event).await?;
-            return Ok(());
-        };
-        if let JsonValue::Object(data) = &mut event.data {
-            data.insert("artifact".into(), provenance.message().encode());
-        }
-        let message = NonEmptyText::decode(&JsonValue::String(message.as_lossless().clone()))
-            .map_err(|error| IngressError::Invalid(error.to_string()))?;
-        let (source, session_id, agent) =
-            (source.clone(), session.id.clone(), session.agent.clone());
-        store
-            .client
-            .submit(move |tx| {
-                let event = projector::append(tx, &event)?;
-                let mut activation = source
-                    .activation_at(
-                        &provenance,
-                        &session_id,
-                        agent,
-                        "session-skill",
-                        event.seq,
-                        event.created,
-                    )
-                    .map_err(|error| tx.reject(error))?;
-                activation.message_id = Some(message);
-                source
-                    .activate_in_transaction(tx, &activation)
-                    .map_err(|error| tx.reject(error))
-            })?
-            .await?;
+        self.0.services.store.publish(event).await?;
         Ok(())
     }
     pub async fn resolve_skill_conflict(
@@ -388,10 +343,7 @@ impl Local {
                 .field("agent", agent)
                 .finish(),
         };
-        match store.artifact_source() {
-            Some(source) => source.publish_activation(event).await?,
-            None => store.publish(event).await?,
-        };
+        store.publish(event).await?;
         Ok(())
     }
     pub async fn switch_model(
@@ -906,15 +858,6 @@ impl Local {
             return Err(IngressError::Invalid("Command requires user input".into()));
         };
         user.data.text = text;
-        let source = self.0.services.store.artifact_source();
-        let provenance = source
-            .zip(input.name.as_str())
-            .and_then(|(source, name)| source.provenance(&artifact_kind("command"), name));
-        user.data.metadata = provenance.as_ref().map(|provenance| {
-            let mut metadata = JsonObject::new();
-            metadata.insert("projectArtifact".into(), provenance.message().encode());
-            metadata
-        });
         let cue = if let (Some(name), Some(arguments)) =
             (input.name.as_str(), input.arguments.as_str())
             && !name
@@ -933,22 +876,6 @@ impl Local {
         let admitted = execution
             .prompt_command(request, input.resume, origin, cue, paths)
             .await?;
-        if let Some(source) = source.filter(|_| provenance.is_some())
-            && source
-                .activate(ActivationInput {
-                    kind: artifact_kind("command"),
-                    id: input.name.clone(),
-                    session_id: current.id.clone(),
-                    agent_id: current.agent.clone(),
-                    source: ActivationSource::Command {
-                        message_id: admitted.id.clone(),
-                        call_id: None,
-                    },
-                })
-                .is_err()
-        {
-            source.record_activation_failure();
-        }
         Ok(admitted)
     }
     pub async fn shell(
@@ -1120,8 +1047,6 @@ impl Local {
         coordinator: &Coordinator,
         id: &session::Id,
         destination: &location::Info,
-        accounting: Option<&crate::resources::project_artifact::accounting::Service>,
-        destination_agent: Option<&ycoding_schema::agent::Id>,
     ) -> Result<(), IngressError> {
         let current = self.require_session(id)?;
         let target = location::Ref {
@@ -1134,62 +1059,6 @@ impl Local {
         if coordinator.active().contains(id) {
             coordinator.interrupt(id, InterruptReason::User).await?;
             coordinator.await_idle(id).await;
-        }
-        if current.project_id != destination.project.id {
-            let accounting = accounting
-                .ok_or_else(|| error("artifact.accounting", "Artifact accounting unavailable"))?
-                .clone();
-            let old_agent = current.agent.as_ref().and_then(|agent| {
-                self.0
-                    .services
-                    .store
-                    .artifact_source()?
-                    .provenance(&artifact_kind("agent"), agent.as_str()?)
-            });
-            let deactivated_at = self.0.services.clock.now();
-            let ended = super::event(
-                id,
-                None,
-                "session.project-artifacts-ended",
-                ObjectEncoder::new()
-                    .field("oldProjectID", &current.project_id)
-                    .field("newProjectID", &destination.project.id)
-                    .finish(),
-                deactivated_at,
-            )?;
-            let session_id = id.as_lossless().clone();
-            let project_id = current.project_id.as_lossless().clone();
-            self.0
-                .services
-                .store
-                .client
-                .submit(move |tx| {
-                    let event = projector::append(tx, &ended)?;
-                    accounting
-                        .deactivate_project_in_transaction(
-                            tx,
-                            &session_id,
-                            &project_id,
-                            event.seq,
-                            deactivated_at,
-                        )
-                        .map_err(|error| tx.reject(error))?;
-                    Ok(())
-                })?
-                .await?;
-            if old_agent.is_some_and(|agent| agent.scope == "project")
-                && let Some(agent) = destination_agent
-            {
-                publish(
-                    &self.0.services.store,
-                    id,
-                    None,
-                    "session.agent.selected",
-                    ObjectEncoder::new().field("agent", agent).finish(),
-                    self.0.services.clock.now(),
-                )
-                .await?;
-            }
         }
         let directory = Path::new(
             destination
@@ -1245,8 +1114,4 @@ impl Local {
         .await?;
         Ok(())
     }
-}
-
-fn artifact_kind(kind: &str) -> project_artifact::Kind {
-    project_artifact::Kind::decode(&JsonValue::String(kind.into())).expect("fixed artifact kind")
 }
