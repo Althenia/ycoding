@@ -27,7 +27,7 @@ import { TerminalInspector } from "./terminal-inspector"
 import { createEditorContext, EditorContextControl, type EditorAdmission } from "./editor-context"
 import { PASTE_STORAGE_KEY, expandPastedPrompt, expandPastedText, livePasted, parsePasteMode, placePaste, type PasteMode } from "./paste"
 import { composerByteLimit, composerFileLimit, hasTransferFiles, inlineFileSize, transferredFiles } from "./composer-files"
-import type { DesktopAPI, DesktopSource, IntegrationMutationInput, IntegrationAttempt, McpMutationInput, SessionManageInput, SystemManageInput, DisplayValue, Selection, UpdateCheckResult, ArtifactInput, ArtifactMutationInput, ArtifactMutationResult, ArtifactPreviewKind, ArtifactScope, SessionSnapshot, MemoryScope } from "./contract"
+import type { DesktopAPI, DesktopSource, IntegrationMutationInput, IntegrationAttempt, McpMutationInput, SessionManageInput, SystemManageInput, DisplayValue, Selection, UpdateCheckResult, SessionSnapshot, MemoryScope } from "./contract"
 import { schemeStylesheet } from "../../../apps/web/src/theme/schemes"
 import { Icon as WebIcon, type IconName as WebIconName } from "../../../apps/web/src/ui/icon"
 import { PendingPreview } from "../../../apps/web/src/remote/ui/pending-preview"
@@ -743,10 +743,10 @@ function FolderExplorerDialog(props: { options: FolderOptions }) {
   </DesktopDialog>
 }
 
-type UtilityKind = "connect" | "mcp" | "diff" | "status" | "debug" | "agents" | "skills" | "browser" | "pair" | "remote" | "artifacts" | "plugins" | "dots" | "help" | "themes"
+type UtilityKind = "connect" | "mcp" | "diff" | "status" | "debug" | "agents" | "skills" | "browser" | "pair" | "remote" | "plugins" | "dots" | "help" | "themes"
 type UtilityOptions = { readonly kind: UtilityKind; readonly source?: DesktopSource; readonly sessionID?: string; readonly directory?: string; readonly diffMode?: "git" | "branch"; readonly insert?: (value: string) => void; readonly chooseAgent?: (agent: { readonly id: string; readonly name: string }) => void }
 const [utilityDialog, setUtilityDialog] = createSignal<UtilityOptions>()
-const utilityKinds: readonly string[] = ["connect", "mcp", "diff", "status", "debug", "agents", "skills", "browser", "pair", "remote", "artifacts", "plugins", "dots", "help"]
+const utilityKinds: readonly string[] = ["connect", "mcp", "diff", "status", "debug", "agents", "skills", "browser", "pair", "remote", "plugins", "dots", "help"]
 const [commandOwner, setCommandOwner] = createSignal<{ sessionID?: string; canSendToParent?: () => boolean; interactionActions?: () => readonly PaletteAction[]; run: (name: string, args: string) => Promise<boolean> }>()
 const sessionCommands = new Set(["compact", "autonomous", "goal", "daybreak", "rename", "fork", "move", "undo", "redo", "terminals", "session-actions", "processes", "background", "variants", "find", "timeline", "copy", "export", "archive", "unarchive", "delete", "share", "unshare", "parent", "next-child", "previous-child", "btw", "btw-send", "suggest", "cd", "sleep", "wake"])
 type StashOptions = { readonly draft: () => StashedPrompt; readonly update: (draft: StashedPrompt) => void; readonly directory?: string }
@@ -1163,21 +1163,15 @@ function UsageTools() {
   </section>
 }
 
-export function artifactReferenceOf(value: unknown, source?: DesktopSource): ArtifactInput | undefined {
-  const scope = field(value, "scope"), kind = field(value, "kind"), id = word(field(value, "id"))
-  if ((scope !== "project" && scope !== "global") || (kind !== "skill" && kind !== "command" && kind !== "agent" && kind !== "plugin") || !id) return undefined
-  return { scope, kind, id, ...(source === undefined ? {} : { source }) }
-}
-
 function SystemDialog(props: { options: UtilityOptions }) {
-  const tabs = ["Status & Debug", "Agents & Skills", "Browser", "Remote & Pairing", "Artifacts & Plugins", "Dots"] as const
-  const initial = props.options.kind === "agents" || props.options.kind === "skills" ? tabs[1] : props.options.kind === "browser" ? tabs[2] : props.options.kind === "remote" || props.options.kind === "pair" ? tabs[3] : props.options.kind === "artifacts" || props.options.kind === "plugins" ? tabs[4] : props.options.kind === "dots" ? tabs[5] : tabs[0]
+  const tabs = ["Status & Debug", "Agents & Skills", "Browser", "Remote & Pairing", "Plugins", "Dots"] as const
+  const initial = props.options.kind === "agents" || props.options.kind === "skills" ? tabs[1] : props.options.kind === "browser" ? tabs[2] : props.options.kind === "remote" || props.options.kind === "pair" ? tabs[3] : props.options.kind === "plugins" ? tabs[4] : props.options.kind === "dots" ? tabs[5] : tabs[0]
   const [tab, setTab] = createSignal<(typeof tabs)[number]>(initial)
   const [actionTab, setActionTab] = createSignal<(typeof tabs)[number]>()
   const noticeTabs: Record<string, (typeof tabs)[number]> = {
     Skills: tabs[1], "Session skills": tabs[1],
     Browser: tabs[2], "Browser tabs": tabs[2], "Isolated browser": tabs[2], "Isolated browser tabs": tabs[2],
-    Remote: tabs[3], Artifacts: tabs[4], Plugins: tabs[4], Dots: tabs[5],
+    Remote: tabs[3], Plugins: tabs[4], Dots: tabs[5],
   }
   const input = () => ({ sessionID: props.options.sessionID, directory: props.options.directory })
   const snapshot = observe(() => ({ queryKey: ["system", ...scope(), input()] as const, queryFn: () => api.systemSnapshot(input()), enabled: reading() }))
@@ -1231,7 +1225,7 @@ function SystemDialog(props: { options: UtilityOptions }) {
   return <DesktopDialog title="System and Session tools" kind={tab() === "Agents & Skills" ? "agents" : tab() === "Browser" ? "browser" : "system"} navigation={<div class="desktop-dialog__tabs" role="tablist" aria-label="System tools"><For each={tabs}>{(label, index) => <button type="button" role="tab" aria-selected={tab() === label} tabindex={tab() === label ? 0 : -1} onClick={() => setTab(label)} onKeyDown={(event) => { const next = event.key === "ArrowRight" ? (index() + 1) % tabs.length : event.key === "ArrowLeft" ? (index() + tabs.length - 1) % tabs.length : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : undefined; if (next !== undefined) { event.preventDefault(); setTab(tabs[next]!); event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="tab"]')[next]?.focus() } }}>{label}</button>}</For></div>} onClose={() => setUtilityDialog(undefined)}>
     <div class="desktop-dialog__toolbar"><button type="button" class="rl-btn" disabled={actions.busy()} onClick={() => { actions.reset(); setChanged(undefined); snapshot.refetch(); if (tab() === tabs[1]) catalog.refetch() }}><Icon name="refresh" />Refresh status</button></div>
     <Show when={tab() !== tabs[1] && snapshot.result().isPending}><p role="status">Reading status…</p></Show><Show when={tab() !== tabs[1] && snapshot.result().isError}><p role="alert">{failure(snapshot.result().error, "Status could not be read.")}</p></Show><Show when={actionTab() === tab() && actions.error()}><p role="alert">{actions.error()}</p></Show>
-    <For each={Object.entries(data()?.notices ?? {}).filter(([name]) => (noticeTabs[name] ?? tabs[0]) === tab() && name !== "Artifacts")}>{([, notice]) => <p role="status">{notice}</p>}</For>
+    <For each={Object.entries(data()?.notices ?? {}).filter(([name]) => (noticeTabs[name] ?? tabs[0]) === tab())}>{([, notice]) => <p role="status">{notice}</p>}</For>
     <section role="tabpanel" aria-label={tab()}><Show when={tab() === "Status & Debug"}><section class="st-section" aria-label="Backend connection"><h3>Backend connection</h3><dl class="rl-meta"><For each={Object.entries(data()?.connection ?? connection())}>{([name, value]) => <><dt>{name}</dt><dd>{String(value)}</dd></>}</For><dt>Session</dt><dd>{props.options.sessionID ?? "No Session"}</dd><dt>Directory</dt><dd>{data()?.directory ?? props.options.directory ?? "Standalone"}</dd></dl><For each={data()?.server?.urls ?? []}>{(url) => <p><code>{url}</code></p>}</For></section></Show>
     <Show when={tab() === "Status & Debug"}><section class="st-section"><h3>Configuration diagnostics</h3><DisplaySnapshot value={data()?.configDiagnostics} /></section><section class="st-section"><h3>Configured providers</h3><DisplaySnapshot value={data()?.providers} /></section><section class="st-section"><h3>References</h3><DisplaySnapshot value={data()?.references} /></section></Show>
     <Show when={tab() === "Agents & Skills"}>
@@ -1261,7 +1255,7 @@ function SystemDialog(props: { options: UtilityOptions }) {
       <section class="st-section" aria-label="Isolated browser"><h3>Isolated browser</h3><DisplaySnapshot value={data()?.isolatedBrowser} /><h4>Tabs</h4><DisplaySnapshot value={data()?.isolatedBrowserTabs} /><label class="rl-field"><span>Start URL</span><input type="url" value={url()} onInput={(event) => setURL(event.currentTarget.value)} /></label><div class="ws-row"><button type="button" class="rl-btn" disabled={actions.blocked() || !props.options.sessionID || !data()} onClick={() => void manage({ ...base(), kind: "isolated-browser-start", url: url() })}>Start isolated browser</button><button type="button" class="rl-btn" disabled={actions.blocked() || !props.options.sessionID || !data()} onClick={() => void manage({ ...base(), kind: "isolated-browser-stop" })}>Stop isolated browser</button></div></section>
     </div></Show>
     <Show when={tab() === "Remote & Pairing"}><section class="st-section" aria-label="Browser pairing"><h3>Pairing</h3><Show when={data()?.pairing} fallback={<p>No pairing secret has been issued in this dialog.</p>}>{(pairing) => <><code aria-label="Pairing secret">{pairingRevealed() ? pairing().secret : "••••••••••••••••"}</code><p>Expires {new Date(pairing().expiresAt).toLocaleString()}</p><div class="desktop-dialog__toolbar"><button type="button" class="rl-btn" aria-pressed={pairingRevealed()} onClick={() => setPairingRevealed(!pairingRevealed())}>{pairingRevealed() ? "Hide pairing secret" : "Reveal pairing secret"}</button><button type="button" class="rl-btn" onClick={() => { setPairingCopy(undefined); setPairingCopyError(undefined); void copyTextToClipboard(pairing().secret).then(() => setPairingCopy("Pairing secret copied"), cause => setPairingCopyError(failure(cause, "The pairing secret could not be copied."))) }}>Copy pairing secret</button></div><Show when={pairingCopy()}><p role="status">{pairingCopy()}</p></Show><Show when={pairingCopyError()}><p role="alert">{pairingCopyError()}</p></Show></>}</Show><button type="button" class="rl-btn" disabled={actions.blocked() || !props.options.sessionID || !data()} onClick={() => { setPairingRevealed(false); setPairingCopy(undefined); setPairingCopyError(undefined); void manage({ ...base(), kind: "browser-start" }) }}>Pair browser</button></section><section class="st-section" aria-label="Remote Session relay"><h3>Remote relay</h3><DisplaySnapshot value={data()?.remote} /><div class="desktop-dialog__toolbar"><For each={[true, false]}>{(enabled) => <button type="button" class="rl-btn" disabled={actions.blocked() || !data()} onClick={() => void manage({ ...base(), kind: "remote-set", enabled })}>{enabled ? "Enable remote access" : "Disable remote access"}</button>}</For></div></section></Show>
-    <Show when={tab() === "Artifacts & Plugins"}><ArtifactsPanel options={props.options} /><details class="st-section" aria-label="Plugins"><summary>Plugins</summary><DisplaySnapshot value={data()?.plugins} /><p>Plugin discovery is read-only. Configure plugin changes in ycoding.json and restart the backend.</p></details></Show>
+    <Show when={tab() === "Plugins"}><section class="st-section" aria-label="Plugins"><h3>Plugins</h3><DisplaySnapshot value={data()?.plugins} /><p>Plugin discovery is read-only. Configure plugin changes in ycoding.json and restart the backend.</p></section></Show>
     <Show when={tab() === "Browser"}><div class="desktop-dialog__actions"><button type="button" class="rl-btn" disabled={actions.blocked() || !props.options.sessionID || !data() || field(data()?.isolatedBrowser, "state") !== "ready"} onClick={() => void manage({ ...base(), kind: "isolated-browser-pause" })}>Pause isolated browser</button><button type="button" class="rl-btn" disabled={actions.blocked() || !props.options.sessionID || !data() || field(data()?.isolatedBrowser, "state") !== "paused"} onClick={() => void manage({ ...base(), kind: "isolated-browser-resume" })}>Resume isolated browser</button></div></Show>
     <Show when={tab() === "Dots"}>
       <section class="st-section" aria-label="Dots computer access"><h3>Dots computer access</h3><DisplaySnapshot value={data()?.dots} />
@@ -1273,72 +1267,6 @@ function SystemDialog(props: { options: UtilityOptions }) {
       </section>
     </Show></section>
   </DesktopDialog>
-}
-
-function ArtifactsPanel(props: { options: UtilityOptions }) {
-  const [artifactScope, setArtifactScope] = createSignal<ArtifactScope | "trash">("project")
-  const [selected, setSelected] = createSignal<ArtifactInput>()
-  const [version, setVersion] = createSignal("")
-  const [preview, setPreview] = createSignal<ArtifactMutationResult["preview"]>()
-  const [notice, setNotice] = createSignal<string>()
-  const actions = dialogActions()
-  const list = observe(() => ({ queryKey: ["artifacts", ...scope(), props.options.source, artifactScope()] as const, queryFn: () => api.artifacts({ source: props.options.source, scope: artifactScope() }), enabled: reading() }))
-  const detail = observe(() => ({ queryKey: ["artifact", ...scope(), selected()] as const, queryFn: () => api.artifact(selected()!), enabled: reading() && !!selected() }))
-  const listData = () => list.result().isError ? undefined : currentSnapshot(list.result().data, connection().revision)
-  const detailData = () => detail.result().isError ? undefined : currentSnapshot(detail.result().data, connection().revision)
-  createEffect(() => { void detailData()?.identity; setPreview(undefined); setVersion("") })
-  const reload = () => { actions.reset(); setPreview(undefined); list.refetch(); if (selected()) detail.refetch() }
-  const mutate = async (input: ArtifactMutationInput, prompt?: string) => {
-    const result = await actions.run(() => api.manageArtifact(input), prompt)
-    if (!result) return
-    if (result.preview) { setPreview(result.preview); return }
-    setPreview(undefined); setNotice("Artifact change confirmed."); list.refetch(); if (selected()) detail.refetch()
-  }
-  const previewChange = (kind: ArtifactPreviewKind) => {
-    const current = detailData()
-    if (current) void mutate({ kind: "preview", preview: kind, source: props.options.source, revision: current.revision, artifact: current.identity })
-  }
-  const confirmPreview = () => {
-    const current = detailData(), proposed = preview()
-    if (!current || !proposed || !proposed.confirmable || proposed.expiresAt <= Date.now()) { setPreview(undefined); setNotice("The preview is unavailable or expired. Preview this change again."); return }
-    void mutate({ kind: "confirm", preview: proposed.kind, source: props.options.source, revision: current.revision, artifact: current.identity, token: proposed.token }, `Apply the ${proposed.kind} preview for ${current.identity.scope}/${current.identity.kind}/${current.identity.id}?`)
-  }
-  const toggle = async (kind: "artifact-enable" | "artifact-disable") => {
-    const current = detailData()
-    if (!current) return
-    const result = await actions.run(() => api.manageSystem({ kind, revision: current.revision, sessionID: props.options.sessionID, directory: props.options.directory, artifact: current.identity }), `${kind === "artifact-enable" ? "Enable" : "Disable"} ${current.identity.scope}/${current.identity.kind}/${current.identity.id}?`)
-    if (result) { setNotice("Artifact state confirmed."); reload() }
-  }
-  return <section class="desktop-artifact-browser" aria-label="Managed artifacts"><section class="desktop-artifact-list" aria-label="Artifact list">
-    <h3>Managed artifacts</h3>
-    <SharedRadioGroup label="Artifact scope" value={artifactScope()} options={[{ value: "project", label: "Project" }, { value: "global", label: "Global" }, { value: "trash", label: "Trash" }]} disabled={actions.busy()} onChange={(value) => { if (value !== "project" && value !== "global" && value !== "trash") return; setArtifactScope(value); setSelected(undefined); setPreview(undefined); setNotice(undefined) }} />
-    <button type="button" class="rl-btn" disabled={actions.busy() || !reading()} onClick={reload}>Refresh artifacts</button>
-    <Show when={list.result().isPending}><SharedLoadingSkeleton kind="list" label="Reading managed artifacts…" /></Show>
-    <Show when={list.result().isError}><p role="alert">{failure(list.result().error, "Artifacts could not be read.")}</p></Show>
-    <Show when={actions.error()}><p role="alert">{actions.error()}</p></Show><Show when={notice()}><p role="status">{notice()}</p></Show>
-    <Show when={listData()}>{(current) => <For each={current().items} fallback={<p>No artifacts in this scope.</p>}>{(item) => {
-      const reference = artifactReferenceOf(item, props.options.source), deletionID = word(field(item, "deletionID"))
-      return <section class="st-section"><p>{word(field(item, "name")) ?? word(field(item, "id"))} · {word(field(item, "kind"))} · {word(field(item, "stage")) ?? word(field(item, "priorStage"))}</p>
-        <Show when={artifactScope() !== "trash" && reference}><button type="button" class="rl-btn" disabled={actions.blocked()} onClick={() => setSelected(reference)}>Details, metrics and history</button></Show>
-        <Show when={artifactScope() === "trash" && deletionID}><button type="button" class="rl-btn" disabled={actions.blocked()} onClick={() => void mutate({ kind: "restore", revision: current().revision, source: props.options.source, deletionID: deletionID! }, `Restore ${reference ? `${reference.scope}/${reference.kind}/${reference.id}` : deletionID} from trash?`)}>Restore artifact</button></Show>
-      </section>
-    }}</For>}</Show>
-    </section><div class="desktop-artifact-detail"><Show when={selected()} fallback={<p class="st-muted">Select an artifact to inspect its definition and reported history.</p>}>
-      <Show when={detail.result().isPending}><SharedLoadingSkeleton kind="list" label="Reading artifact details…" /></Show>
-      <Show when={detail.result().isError}><p role="alert">{failure(detail.result().error, "Artifact details could not be read.")}</p></Show>
-      <Show when={detailData()}>{(current) => <section class="st-section" aria-label="Artifact details">
-        <h3>{current().identity.scope}/{current().identity.kind}/{current().identity.id}</h3>
-        <p>{current().stage} · revision {current().identity.expectedRevision} · version {current().identity.expectedVersionID}</p>
-        <h4>Definition and history</h4><DisplaySnapshot value={current().details} /><h4>Metrics</h4><DisplaySnapshot value={current().metrics} />
-        <div class="desktop-dialog__actions"><button type="button" class="rl-btn" disabled={actions.blocked()} onClick={() => void toggle("artifact-enable")}>Enable</button><button type="button" class="rl-btn" disabled={actions.blocked()} onClick={() => void toggle("artifact-disable")}>Disable</button>
-          <button type="button" class="rl-btn" disabled={actions.blocked()} onClick={() => void mutate({ kind: "remove", source: props.options.source, revision: current().revision, artifact: current().identity }, `Move ${current().identity.scope}/${current().identity.kind}/${current().identity.id} to managed artifact trash?`)}>Move to trash</button></div>
-        <DesktopSelect label="Earlier artifact version" value={version()} options={[{ value: "", label: "Choose a version" }, ...current().versionIDs.filter((id) => id !== current().identity.expectedVersionID).map((id) => ({ value: id, label: id }))]} disabled={actions.blocked()} onChange={setVersion} />
-        <button type="button" class="rl-btn" disabled={actions.blocked() || !version()} onClick={() => void mutate({ kind: "revert", source: props.options.source, revision: current().revision, artifact: current().identity, targetVersionID: version() }, `Revert ${current().identity.id} to ${version()}?`)}>Revert version</button>
-        <div class="desktop-dialog__actions"><For each={current().identity.scope === "project" ? ["promotion", "shadow"] as const : ["fork"] as const}>{(kind) => <button type="button" class="rl-btn" disabled={actions.blocked()} onClick={() => previewChange(kind)}>Preview {kind === "shadow" ? "shadow removal" : kind}</button>}</For></div>
-        <Show when={preview()}>{(proposed) => <section class="st-section" aria-label="Artifact change preview"><h4>{proposed().kind} preview</h4><DisplaySnapshot value={proposed().details} /><p>Expires {new Date(proposed().expiresAt).toLocaleString()}.</p><Show when={!proposed().confirmable}><p role="alert">This preview cannot be applied. Resolve the reported conflict first.</p></Show><button type="button" class="rl-btn" disabled={actions.blocked() || !proposed().confirmable} onClick={confirmPreview}>Confirm preview</button></section>}</Show>
-      </section>}</Show>
-    </Show></div>
-  </section>
 }
 
 type SessionTool = "shell" | "editor" | "sidechat" | "steer-parent" | "assist" | "terminals"
@@ -1488,7 +1416,7 @@ function Palette() {
       run: () => applyThemePreference(theme.id) })),
     ...DESKTOP_BUILT_IN_SLASH_COMMANDS.filter((command) => command.name !== "new" && (!sessionCommands.has(command.name) || !!commandOwner()?.sessionID) && (!["models", "editor", "prompt", "stash"].includes(command.name) || !!commandOwner()) && (command.name !== "btw-send" || commandOwner()?.canSendToParent?.())).map((command): PaletteAction => ({
       id: `command-${command.name}`, group: ["models", "variants", "agents", "skills"].includes(command.name) ? "Model & Agent" : ["diff", "workspaces", "move"].includes(command.name) ? "Workspace & Git" : ["connect", "mcp"].includes(command.name) ? "Providers & MCP" : ["settings", "keep-awake"].includes(command.name) ? "Settings" : sessionCommands.has(command.name) ? "Session" : "System",
-      label: command.name === "connect" ? "Connect providers" : command.name === "diff" ? "Git working-tree diff" : command.description, detail: `/${command.name}`, icon: command.name === "mcp" ? "server" : command.name === "diff" ? "file" : command.name === "connect" ? "plug" : command.name === "models" || command.name === "variants" ? "cpu" : command.name === "agents" ? "user" : command.name === "skills" || command.name === "compact" || command.name === "toggle-thinking" ? "sparkles" : command.name === "autonomous" ? "shield" : command.name === "goal" ? "target" : command.name === "daybreak" ? "sun" : command.name === "timeline" ? "list" : command.name === "rename" ? "chat" : command.name === "fork" ? "git-fork" : command.name === "undo" ? "undo" : command.name === "redo" ? "redo" : command.name === "stash" ? "bookmark" : command.name === "find" ? "search" : command.name === "copy" ? "copy" : command.name === "export" ? "download" : command.name === "workspaces" || command.name === "move" ? "folder" : command.name === "projects" ? "team" : command.name === "sessions" ? "sessions" : command.name === "usage" || command.name === "status" ? "usage" : command.name === "settings" ? "settings" : command.name === "keep-awake" ? "zap" : command.name === "themes" ? "sun" : command.name === "browser" || command.name === "remote" ? "globe" : command.name === "artifacts" || command.name === "plugins" ? "package" : command.name === "pair" ? "devices" : command.name === "help" ? "help" : "terminal", keywords: `${command.name} ${command.aliases?.join(" ") ?? ""}`,
+      label: command.name === "connect" ? "Connect providers" : command.name === "diff" ? "Git working-tree diff" : command.description, detail: `/${command.name}`, icon: command.name === "mcp" ? "server" : command.name === "diff" ? "file" : command.name === "connect" ? "plug" : command.name === "models" || command.name === "variants" ? "cpu" : command.name === "agents" ? "user" : command.name === "skills" || command.name === "compact" || command.name === "toggle-thinking" ? "sparkles" : command.name === "autonomous" ? "shield" : command.name === "goal" ? "target" : command.name === "daybreak" ? "sun" : command.name === "timeline" ? "list" : command.name === "rename" ? "chat" : command.name === "fork" ? "git-fork" : command.name === "undo" ? "undo" : command.name === "redo" ? "redo" : command.name === "stash" ? "bookmark" : command.name === "find" ? "search" : command.name === "copy" ? "copy" : command.name === "export" ? "download" : command.name === "workspaces" || command.name === "move" ? "folder" : command.name === "projects" ? "team" : command.name === "sessions" ? "sessions" : command.name === "usage" || command.name === "status" ? "usage" : command.name === "settings" ? "settings" : command.name === "keep-awake" ? "zap" : command.name === "themes" ? "sun" : command.name === "browser" || command.name === "remote" ? "globe" : command.name === "plugins" ? "package" : command.name === "pair" ? "devices" : command.name === "help" ? "help" : "terminal", keywords: `${command.name} ${command.aliases?.join(" ") ?? ""}`,
       run: () => { const owner = commandOwner(); void (owner ? owner.run(command.name === "themes" ? "theme" : command.name, "") : commonCommand(command.name, "", {}, (to) => void navigate({ to }))).catch((cause) => setDesktopNotice(failure(cause, "The command was not confirmed."))) } })),
     { id: "branch-diff", group: "Workspace & Git", label: "Branch diff", icon: "git-branch", keywords: "git branch changes compare", run: () => { const owner = commandOwner(); void (owner ? owner.run("branch-diff", "") : commonCommand("branch-diff", "", {}, (to) => void navigate({ to }))).catch((cause) => setDesktopNotice(failure(cause, "Diff could not be opened."))) } },
     ...(commandOwner()?.sessionID ? (["archive", "unarchive", "delete"] as const).map((kind): PaletteAction => ({ id: `session-${kind}`, group: "Session", label: kind === "archive" ? "Archive Session" : kind === "unarchive" ? "Unarchive Session" : "Delete Session", icon: "sessions", keywords: kind, run: () => { void commandOwner()?.run(kind, "").catch((cause) => setDesktopNotice(failure(cause, "The Session change was not confirmed."))) } })) : []),

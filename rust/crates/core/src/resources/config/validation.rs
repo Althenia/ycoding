@@ -90,7 +90,6 @@ const CAPABILITIES: Shape = Shape::Object(&[
     optional("tools", CAPABILITY_SELECTION),
     optional("mcp", CAPABILITY_SELECTION),
     optional("plugins", CAPABILITY_SELECTION),
-    optional("project_artifacts", Shape::Bool),
     optional("home_roots", Shape::Bool),
     optional("websearch_provider", Shape::Enum(&["exa", "parallel"])),
 ]);

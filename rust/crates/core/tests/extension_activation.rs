@@ -678,7 +678,6 @@ async fn plugin_list_places_native_pre_capabilities_then_extensions_then_native_
             "ycoding.tool.subagent-control",
             "ycoding.tool.subagent-report",
             "ycoding.tool.todowrite",
-            "ycoding.tool.project-artifact",
             "ycoding.tool.task-complete",
             "ycoding.tool.memory",
             "ycoding.tool.webfetch",
@@ -698,7 +697,6 @@ async fn plugin_list_places_native_pre_capabilities_then_extensions_then_native_
             "ycoding.config.provider",
             "ycoding.variant",
             "ycoding.config.policy",
-            "ycoding.project-artifact.source",
         ]
     );
     owner.close().await;

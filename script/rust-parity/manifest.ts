@@ -28,7 +28,6 @@ const sessionRules = [
   ...sessionAutonomyPrefixes.map((prefix) => ({ prefix, owner: "WP-008" })),
 ]
 const groups: Record<string, string> = {
-  "project-artifact": "projectArtifact",
   "project-copy": "projectCopy",
   "provider-usage": "providerUsage",
   "isolated-browser": "isolatedBrowser",
@@ -73,7 +72,7 @@ const connectorRules = [
 
 export const ownerRules: readonly OwnerRule[] = [
   ...[
-    ["agent", "command", "reference", "skill", "project-artifact"].map((group) => ({ group, owner: "WP-013" })),
+    ["agent", "command", "reference", "skill"].map((group) => ({ group, owner: "WP-013" })),
     ["config", "credential", "integration", "model", "provider"].map((group) => ({ group, owner: "WP-005" })),
     ["provider-usage", "generate"].map((group) => ({ group, owner: "WP-006" })),
     ["debug", "event", "location", "message"].map((group) => ({ group, owner: "WP-007" })),

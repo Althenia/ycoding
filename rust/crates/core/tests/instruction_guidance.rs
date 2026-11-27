@@ -26,7 +26,7 @@ async fn builtin_tool_dependencies_follow_agent_ceiling_and_codemode() {
     use std::sync::Arc;
     use ycoding_core::{
         instructions::{self, Observation, builtins},
-        resources::{memory, project_artifact, tool_output_store},
+        resources::{memory, tool_output_store},
         session::instruction_assembly,
         tools::registry::{DynamicTool, Options, Registry},
     };
@@ -47,7 +47,6 @@ async fn builtin_tool_dependencies_follow_agent_ceiling_and_codemode() {
                 "core/decision-use",
                 "core/task-completion",
                 "core/decision-input",
-                "ycoding/project-artifact-authoring",
                 "ycoding/workspace-memory",
             ],
         ),
@@ -72,14 +71,10 @@ async fn builtin_tool_dependencies_follow_agent_ceiling_and_codemode() {
             ],
         ),
         (
-            r#"{"capabilities":{"builtin_instructions":{"deny":["date","decision-use"]},"project_artifacts":false}}"#,
+            r#"{"capabilities":{"builtin_instructions":{"deny":["date","decision-use"]}}}"#,
             false,
             false,
-            vec![
-                "core/date",
-                "core/decision-use",
-                "ycoding/project-artifact-authoring",
-            ],
+            vec!["core/date", "core/decision-use"],
         ),
     ] {
         let config = configuration(content);
@@ -97,7 +92,6 @@ async fn builtin_tool_dependencies_follow_agent_ceiling_and_codemode() {
                     "question",
                     "decision",
                     "task_complete",
-                    "project_artifact",
                     "memory",
                 ]
                 .iter()
@@ -153,7 +147,6 @@ async fn builtin_tool_dependencies_follow_agent_ceiling_and_codemode() {
             ycoding_schema::session_scope::Scope::Bound,
         );
         sources.push(memory::instructions::source());
-        sources.push(project_artifact::instructions::source());
         let selected = instruction_assembly::select_sources(
             &sources,
             &agent,

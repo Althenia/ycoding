@@ -21,20 +21,6 @@ pub(super) fn location(json: J) -> R<v5::LocationRef> {
     })
 }
 
-pub(super) fn artifact(json: J) -> R<v5::SessionEventArtifactProvenance> {
-    Ok(v5::SessionEventArtifactProvenance {
-        scope_id: text(json, "scopeID")?,
-        version_id: text(json, "versionID")?,
-        kind: literal(
-            json,
-            "kind",
-            &[("skill", 1), ("command", 2), ("agent", 3), ("plugin", 4)],
-        )?,
-        id: text(json, "id")?,
-        source_scope: literal(json, "sourceScope", &[("project", 1), ("global", 2)])?,
-    })
-}
-
 pub(super) fn rules(json: J) -> R<v5::PermissionRuleset> {
     Ok(v5::PermissionRuleset {
         items: json
@@ -1263,7 +1249,6 @@ pub(super) fn recall_items(json: J) -> R<v5::RecallItems> {
                         })
                     })
                     .transpose()?,
-                artifact: item.opt("artifact").map(message::artifact).transpose()?,
                 tokens: opt_count(item, "tokens")?,
             })
         })

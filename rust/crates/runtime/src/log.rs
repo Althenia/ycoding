@@ -126,8 +126,7 @@ pub fn record(
             SessionLogItemValue2,
             v5::SessionLogItemValue2Data {
                 session_id: text(data, "sessionID")?,
-                agent: text(data, "agent")?,
-                artifact: data.opt("artifact").map(payload::artifact).transpose()?
+                agent: text(data, "agent")?
             }
         ),
         Some("session.model.selected") => item!(
@@ -148,15 +147,6 @@ pub fn record(
                     "daybreak",
                     &[("daybreak_blue", 1), ("daybreak_red", 2)]
                 )?
-            }
-        ),
-        Some("session.project-artifacts-ended") => item!(
-            Value5,
-            SessionLogItemValue5,
-            v5::SessionLogItemValue5Data {
-                session_id: text(data, "sessionID")?,
-                old_project_id: text(data, "oldProjectID")?,
-                new_project_id: text(data, "newProjectID")?
             }
         ),
         Some("session.moved") => item!(
@@ -372,8 +362,7 @@ pub fn record(
                 name: text(data, "name")?,
                 text: text(data, "text")?,
                 directory: opt_text(data, "directory")?,
-                conflicts: data.opt("conflicts").map(payload::conflicts).transpose()?,
-                artifact: data.opt("artifact").map(payload::artifact).transpose()?
+                conflicts: data.opt("conflicts").map(payload::conflicts).transpose()?
             }
         ),
         Some("session.skill.deactivated") => item!(

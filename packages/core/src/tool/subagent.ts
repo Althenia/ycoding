@@ -15,7 +15,6 @@ import { SessionMessage } from "../session/message"
 import { CatalogModel } from "../model"
 import { SessionOrchestration } from "../session/orchestration"
 import { SessionRunnerModel } from "../session/runner/model"
-import { ProjectArtifactSource } from "../project-artifact/source"
 import { Tool } from "./tool"
 import { Hash } from "../util/hash"
 import { SessionSharedContext } from "../session/shared-context"
@@ -96,7 +95,6 @@ export const make = Effect.fn("SubagentTool.make")(function* () {
   const guardrail = yield* SessionGuardrail.Service
   const models = yield* SessionRunnerModel.Service
   const orchestration = runtime.orchestration
-  const projectArtifactSource = yield* ProjectArtifactSource.Service
 
   const latestAssistantText = Effect.fn("SubagentTool.latestAssistantText")(function* (sessionID: SessionSchema.ID) {
     const messages = yield* runtime.session.messages({ sessionID, order: "desc", limit: 20 })
@@ -174,12 +172,6 @@ export const make = Effect.fn("SubagentTool.make")(function* () {
       const abortLaunchedTask = (cause: Cause.Cause<unknown>) =>
         runtime.session.interrupt(child.sessionID).pipe(Effect.exit, Effect.andThen(settleFailure(cause)))
 
-      yield* projectArtifactSource.activate({
-        kind: "agent", id: input.agent, sessionID: context.sessionID, agentID: Agent.ID.make(input.agent),
-        source: "subagent-launch", messageID: context.messageID, callID: context.callID,
-      }).pipe(Effect.catchCause((cause) => Effect.logWarning("project artifact subagent activation failed", {
-        cause, sessionID: context.sessionID,
-      })))
       yield* context.progress({ structured: { sessionID: child.sessionID, status: "running" } }).pipe(
         Effect.tapCause(abortLaunchedTask), Effect.onError(() => reservation.release),
       )

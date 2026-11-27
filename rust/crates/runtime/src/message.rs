@@ -156,20 +156,6 @@ pub fn message(info: &session_message::Info) -> R<v5::SessionMessageInfo> {
     Ok(v5::SessionMessageInfo { kind: Some(kind) })
 }
 
-pub(crate) fn artifact(json: J) -> R<v5::SessionMessageArtifactProvenance> {
-    Ok(v5::SessionMessageArtifactProvenance {
-        scope_id: text(json, "scopeID")?,
-        version_id: text(json, "versionID")?,
-        kind: literal(
-            json,
-            "kind",
-            &[("skill", 1), ("command", 2), ("agent", 3), ("plugin", 4)],
-        )?,
-        id: text(json, "id")?,
-        source_scope: literal(json, "sourceScope", &[("project", 1), ("global", 2)])?,
-    })
-}
-
 pub(crate) fn model_ref(json: J) -> R<v5::ModelRef> {
     Ok(v5::ModelRef {
         id: text(json, "id")?,
@@ -269,7 +255,6 @@ fn agent_selected(json: J) -> R<v5::SessionMessageAgentSelected> {
         },
         r#type: 1,
         agent: text(json, "agent")?,
-        artifact: json.opt("artifact").map(artifact).transpose()?,
     })
 }
 
@@ -397,7 +382,6 @@ fn skill(json: J) -> R<v5::SessionMessageSkill> {
             .map(skill_deactivations)
             .transpose()?
             .map(|items| v5::SessionMessageSkillSkillDeactivations { items }),
-        artifact: json.opt("artifact").map(artifact).transpose()?,
     })
 }
 

@@ -2081,11 +2081,9 @@ async fn test017_skill_loads_compiled_request_and_instruction_epochs() {
     }
 }
 
-// TEST-018: durable restart/rollback for compaction and artifact lifecycle tokens.
+// TEST-018: durable restart/rollback for compaction.
 #[tokio::test]
-async fn test018_compaction_restart_and_artifact_lifecycle_tokens() {
-    use ycoding_core::resources::project_artifact::{source_registry::Registry, store as artifact};
-    use ycoding_schema::{DomainDecode as _, DomainEncode as _, project_artifact};
+async fn test018_compaction_restart() {
     // Compaction job survives a file restart; a stale admission conflicts without writes.
     let root = Root::new();
     let store = file_store(&root);
@@ -2153,110 +2151,6 @@ async fn test018_compaction_restart_and_artifact_lifecycle_tokens() {
             .unwrap()
             .len(),
         1
-    );
-    reopened.shutdown().unwrap();
-    // Artifact lifecycle across project and global scopes with stale-token rejection.
-    let root = Root::new();
-    let store = file_store(&root);
-    let sources = Arc::new(std::sync::Mutex::new(Registry::default()));
-    let paths = artifact::Paths {
-        data: root.0.join("data"),
-        home: root.0.join("home"),
-        config: root.0.join("config"),
-    };
-    let service = artifact::Service::new(store.client(), paths.clone(), sources.clone());
-    let definition = project_artifact::Definition::decode(
-        &parse_json(
-            r#"{"kind":"skill","name":"Review","description":"Reusable review","content":"Review the current change."}"#,
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    let manual = artifact::ManualWriteInput {
-        scope: project_artifact::ScopeSelector::Project,
-        project_id: Some(
-            ycoding_schema::project::Id::decode(&JsonValue::String("prj_one".into())).unwrap(),
-        ),
-        id: "review",
-        definition: &definition,
-        expected: None,
-        now: 1000,
-    };
-    let first = service.write_manual(manual).unwrap();
-    // Global-scope preview token is single-use.
-    let preview = service
-        .preview_manual(artifact::ManualPreviewInput {
-            id: "global-review",
-            definition: &definition,
-            expected: None,
-            now: 2000,
-        })
-        .unwrap();
-    let global = service.confirm_manual(&preview.token, 2001).unwrap();
-    assert!(service.confirm_manual(&preview.token, 2002).is_err());
-    store.shutdown().unwrap();
-    let reopened = reopen(&root);
-    let service = artifact::Service::new(reopened.client(), paths, sources);
-    // Both scopes survive the restart; a stale lifecycle expectation rejects with no write.
-    let got = service
-        .get(&first.scope_id, &first.kind, &first.id)
-        .unwrap();
-    assert_eq!(got.artifact.id, first.id);
-    assert!(
-        service
-            .get(&global.scope_id, &global.kind, &global.id)
-            .is_ok()
-    );
-    let stale = project_artifact::MutationExpectation {
-        expected_revision: ycoding_schema::project_artifact::Revision::decode(&JsonValue::Number(
-            99.0,
-        ))
-        .unwrap(),
-        expected_version_id: got.current_version.id.clone(),
-        expected_digest: got.current_version.content_digest.clone(),
-    };
-    let before = service
-        .get(&first.scope_id, &first.kind, &first.id)
-        .unwrap();
-    assert!(
-        service
-            .disable(artifact::LifecycleInput {
-                scope_id: &first.scope_id,
-                kind: &first.kind,
-                id: &first.id,
-                expected: &stale,
-                now: 3000,
-            })
-            .is_err()
-    );
-    assert_eq!(
-        service
-            .get(&first.scope_id, &first.kind, &first.id)
-            .unwrap(),
-        before
-    );
-    let expected = project_artifact::MutationExpectation {
-        expected_revision: before.artifact.revision,
-        expected_version_id: before.current_version.id.clone(),
-        expected_digest: before.current_version.content_digest.clone(),
-    };
-    service
-        .disable(artifact::LifecycleInput {
-            scope_id: &first.scope_id,
-            kind: &first.kind,
-            id: &first.id,
-            expected: &expected,
-            now: 3001,
-        })
-        .unwrap();
-    assert_eq!(
-        service
-            .get(&first.scope_id, &first.kind, &first.id)
-            .unwrap()
-            .artifact
-            .stage
-            .encode(),
-        JsonValue::String("disabled".into())
     );
     reopened.shutdown().unwrap();
 }

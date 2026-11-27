@@ -115,10 +115,6 @@ function sceneResponse(call: SyntheticCall) {
   if (call.route === "/api/config/diagnostics") return envelope([{ path: "/synthetic/repo/ycoding.json", reason: "invalid-values", jsonPath: "$.model", message: "Synthetic model configuration requires review", failClosed: true }])
   if (call.route === "/api/provider") return envelope([{ id: "synthetic", name: "Synthetic provider", package: "@synthetic/provider", integrationID: "synthetic" }])
   if (call.route === "/api/reference") return envelope([{ name: "Synthetic docs", path: "/synthetic/docs", source: { type: "local", path: "/synthetic/docs" } }])
-  if (call.route === "/api/artifact") return { data: [{ scope: "project", kind: "skill", id: "synthetic-review", name: "Synthetic review", stage: "active", revision: 1, currentVersionID: "pav_scene", currentDigest: "a".repeat(64) }] }
-  if (call.route === "/api/artifact/project/skill/synthetic-review") return { data: { artifact: { id: "synthetic-review", kind: "skill", revision: 1, stage: "active", name: "Synthetic review" }, definition: { content: "Inspect the synthetic change." }, currentVersion: { id: "pav_scene", contentDigest: "a".repeat(64) }, versions: [{ id: "pav_scene" }], diagnostics: [] } }
-  if (call.route === "/api/artifact/project/skill/synthetic-review/metrics") return { data: { score: 1, confidence: "low", rewardUnits: 1, penaltyUnits: 0 } }
-  if (call.route === "/api/artifact/project/skill/synthetic-review/promotion" && call.method === "POST") return { data: { token: "synthetic-preview", expiresAt: 4102444800000, renderedContent: "Inspect the synthetic change.", risk: "declarative" } }
   if (call.route === "/api/incident/report") return { data: { rows: [{ providerID: "synthetic", modelID: "synthetic", fallbacks: 2, escalated: 1, rejected: 0, last: 1 }], groups: 1 } }
   if (call.route === "/api/usage/dashboard") return { data: { status: "preparing" } }
   if (call.route === "/api/incident/recent") return { data: { items: [] } }
@@ -695,22 +691,22 @@ test("Desktop provider cards switch the default credential through the existing 
   } finally { await page.close() }
 }, 30_000)
 
-test("Desktop tools keep an Artifacts read failure in its tab and expose semantic Dots state", async () => {
+test("Desktop tools keep a Plugins read failure in its tab and expose semantic Dots state", async () => {
   prepareImplementedSurface()
   sceneRead = call => {
-    if (call.route === "/api/artifact") return new Response(JSON.stringify({ message: "Synthetic artifact read refused" }), { status: 500, headers: { "content-type": "application/json" } })
+    if (call.route === "/api/plugin") return new Response(JSON.stringify({ message: "Synthetic plugin read refused" }), { status: 500, headers: { "content-type": "application/json" } })
     return undefined
   }
   const page = await openReference()
   try {
     await command(page, "/status")
-    for (const [index, label] of ["Status & Debug", "Agents & Skills", "Browser", "Remote & Pairing", "Artifacts & Plugins", "Dots"].entries()) {
+    for (const [index, label] of ["Status & Debug", "Agents & Skills", "Browser", "Remote & Pairing", "Plugins", "Dots"].entries()) {
       await page.evaluate(`[...document.querySelectorAll('dialog[open] [role="tab"]')].find(tab => tab.textContent.trim() === ${JSON.stringify(label)}).focus()`)
       await page.pressKey("Enter", "Enter", 13, "\r")
       const panel = `document.querySelector('dialog[open] [role="tabpanel"]')`
       await wait(page, `${panel}?.getAttribute('aria-label') === ${JSON.stringify(label)} && !document.querySelector('dialog[open]').textContent.includes('Reading status…')`)
-      if (label === "Artifacts & Plugins") await wait(page, `${panel}?.querySelector('[role="alert"]')?.textContent.includes('Artifacts could not be read')`)
-      else expect(await page.evaluate(`!document.querySelector('dialog[open]').textContent.includes('Artifacts could not be read')`, decodeBoolean)).toBe(true)
+      if (label === "Plugins") await wait(page, `${panel}?.parentElement?.querySelector('[role="status"]')?.textContent.includes('Plugins could not be read')`)
+      else expect(await page.evaluate(`!document.querySelector('dialog[open]').textContent.includes('Plugins could not be read')`, decodeBoolean)).toBe(true)
       if (label === "Dots") expect(await page.evaluate(`(() => { const text = document.querySelector('dialog[open] section[aria-label="Dots computer access"]').innerText.split(/\\s+/); return text.includes('Disabled') && !text.includes('true') && !text.includes('false'); })()`, decodeBoolean)).toBe(true)
       if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, `system-tab-${index + 1}.png`), Buffer.from(await page.screenshot(), "base64"))
     }
@@ -1066,7 +1062,6 @@ async function captureReference(page: Page, id: string, expected: string, writes
   await page.evaluate(`Promise.allSettled(document.getAnimations().filter(animation => animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished))`)
   const correctedOwners: Readonly<Record<string, string>> = {
     "37f03514": `(() => { const agents = document.querySelector('.desktop-agent-list'), skills = document.querySelector('.desktop-skill-list'), inspector = document.querySelector('[aria-label="Catalog item details"]'); return !!inspector && agents.getBoundingClientRect().right <= skills.getBoundingClientRect().left && skills.getBoundingClientRect().right <= inspector.getBoundingClientRect().left && inspector.getBoundingClientRect().width > 300; })()`,
-    "072ae46f": `(() => { const list = document.querySelector('[aria-label="Artifact list"]'), detail = document.querySelector('[aria-label="Artifact details"]'); return !!list && !!detail && list.getBoundingClientRect().right <= detail.getBoundingClientRect().left && list.getBoundingClientRect().height > 100; })()`,
     "6fc8e392": `!!document.querySelector('[aria-label="Backend connection"] dl') && !!document.querySelector('[aria-label="Backend connection"] code')`,
     "abd33e8b": `!!document.querySelector('[aria-label="Browser pairing"] h3') && !!document.querySelector('[aria-label="Remote Session relay"] button')`,
     "c3668f0e": `!!document.querySelector('section[aria-label="Dots computer access"] h3') && !!document.querySelector('section[aria-label="Dots computer access"] button')`,
@@ -1294,12 +1289,6 @@ const referenceCases: readonly ReferenceCase[] = [
     show: async page => { await command(page, action) },
     expected: `document.querySelector('dialog[open]')?.textContent.includes(${JSON.stringify(text)})${action === "/agents" ? ` && document.querySelector('dialog[open]')?.textContent.includes('Synthetic reviewer') && !document.querySelector('dialog[open]')?.textContent.includes('could not be read')` : ""}`,
   })),
-  {
-    id: "072ae46f74714289a7e13cb9bec036ac", label: "artifact identity, definition and metrics",
-    show: async page => { await command(page, "/artifacts"); await clickText(page, 'dialog[open] button', "Details, metrics and history"); await clickText(page, 'dialog[open] button', "Preview promotion"); await wait(page, `document.querySelector('dialog[open]')?.textContent.includes('Confirm preview')`); await page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find(button => button.textContent.trim() === 'Confirm preview').scrollIntoView({ block: 'end' })`) },
-    expected: `document.querySelector('dialog[open]')?.textContent.includes('Inspect the synthetic change.') && document.querySelector('dialog[open]')?.textContent.includes('Confirm preview')`,
-    writes: ["POST /api/artifact/project/skill/synthetic-review/promotion"],
-  },
   {
     id: "b605fc0a1b6f4c55a645935747f4e948", label: "connected and failed MCP servers with resources",
     show: async page => { await command(page, "/mcp") },
@@ -1606,7 +1595,7 @@ const floorReviewScenes = new Set([
   "247859938ae742cea7c31d352e62ea80", "2ff9628be7764a1080d725abc44e8591", "fb201f4e896b4fe4be502d02228c6766",
   "309bc47fe0d642a2a9775391b92c1451", "936d17691f6241e3819c91d4870c9aa6", "2c66dd75095b4881a87b9a76eb7374b6",
   "9715087f99c9431a938a353cb05ca9a9", "70ca078090f64321b1f264ab4cdc88e2", "4bff4148cf26491587127a52f9570dcf",
-  "6fc8e392a42b4433a08a7a1564e4b7d3", "37f0351447f34e448556eb9d7b6276c9", "072ae46f74714289a7e13cb9bec036ac",
+  "6fc8e392a42b4433a08a7a1564e4b7d3", "37f0351447f34e448556eb9d7b6276c9",
   "35bf71933d5945eeb63ac9605785664d", "bf4de94bc265448a87ae20d91c0c5109", "fea2212a85a649968cdb4852537cec6d",
   "6ac6a9dd73b6451fa41dfa46d4d18b8b", "825f05dcc7724e0fb83ffb3667c0d627", "359f63a0638846f6b5f764c0a9e44c38",
 ])

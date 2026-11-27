@@ -21,7 +21,6 @@ import { MCP } from "@ycoding-ai/core/mcp/index"
 import { CatalogModel } from "@ycoding-ai/core/model"
 import { Permission } from "@ycoding-ai/core/permission"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
-import { ProjectArtifactSource } from "@ycoding-ai/core/project-artifact/source"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { Provider } from "@ycoding-ai/core/provider"
@@ -61,7 +60,6 @@ const skillPlugin = makeLocationNode({
     MCP.node,
     Permission.node,
     PluginRuntime.node,
-    ProjectArtifactSource.node,
     LocationMutation.node,
     ReadToolFileSystem.node,
   ],
@@ -131,14 +129,6 @@ it.effect("a real nested skill load permits the next resource read before execut
       [
         Location.node,
         Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(tmp.path) }))),
-      ],
-      [
-        ProjectArtifactSource.node,
-        Layer.mock(ProjectArtifactSource.Service, {
-          refresh: () => Effect.void,
-          provenance: () => Effect.succeed(undefined),
-          activate: () => Effect.void,
-        }),
       ],
       [PluginRuntime.node, runtimeLayer],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],

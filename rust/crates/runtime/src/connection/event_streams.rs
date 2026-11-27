@@ -29,7 +29,6 @@ fn public_event(item: v5::SessionLogItem) -> Result<v5::PublicEvent, ProtocolErr
         Kind::Value2(event) => v5::public_event::Kind::SessionAgentSelected(event),
         Kind::Value3(event) => v5::public_event::Kind::SessionModelSelected(event),
         Kind::Value4(event) => v5::public_event::Kind::SessionDaybreakSet(event),
-        Kind::Value5(event) => v5::public_event::Kind::SessionProjectArtifactsEnded(event),
         Kind::Value6(event) => v5::public_event::Kind::SessionMoved(event),
         Kind::Value7(event) => v5::public_event::Kind::SessionRenamed(event),
         Kind::Value8(event) => v5::public_event::Kind::SessionDeleted(event),

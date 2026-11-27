@@ -442,11 +442,9 @@ describe("SessionGuardrailMatch", () => {
     })).toMatchObject({ decision: "deny", ruleIDs: ["deny-temp"] })
   })
 
-  test("temp workdirs do not erase non-path subagent or artifact resources from evidence", () => {
+  test("temp workdirs do not erase non-path subagent resources from evidence", () => {
     const temporaryPaths = { ...paths, workdir: "/tmp/project" }
     expect(SessionGuardrailStandard.semanticResources("subagent", ["build"], temporaryPaths)).toEqual(["build"])
-    expect(SessionGuardrailStandard.semanticResources("project_artifact_mutation", ["skill/example"], temporaryPaths))
-      .toEqual(["skill/example"])
   })
 
   test.each(["/Users/other", "/home/other", "/Users/other/*"])("denies any user home %s", (target) => {

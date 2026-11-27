@@ -21,13 +21,6 @@ const opaque = { "": null, "\ud800": { text: lossless, empty: [], zero: 0, no: f
 const model = { providerID: "openai", id: "fixture" }
 const tokens = { input: 0, output: 1, reasoning: 2, cache: { read: 3, write: 4 } }
 const error = { type: "fixture.error", message: lossless }
-const artifact = {
-  scopeID: "pas_fixture",
-  versionID: "pav_fixture",
-  kind: "skill",
-  id: "fixture",
-  sourceScope: "project",
-}
 const shell = {
   id: "sh_fixture",
   status: "running",
@@ -49,7 +42,7 @@ const variants = [
   "agent.selected",
   "model.selected",
   "daybreak.set",
-  "project-artifacts-ended",
+  undefined,
   "moved",
   "renamed",
   "deleted",
@@ -143,7 +136,7 @@ const minimal: (Record<string, unknown> | undefined)[] = [
   { ...base, agent: "build" },
   { ...base, model },
   { ...base },
-  { ...base, oldProjectID: "prj_old", newProjectID: "prj_new" },
+  undefined,
   { ...base, location: { directory: "/project" } },
   { ...base, title: lossless },
   { ...base },
@@ -223,7 +216,6 @@ const extra: Record<number, Record<string, unknown>> = {
     subpath: "src",
     origin: "dots-executor",
   },
-  2: { artifact },
   3: { model: { ...model, variant: lossless, profile: "fixture" } },
   4: { daybreak: "daybreak_blue" },
   6: { location: { directory: "/project", workspaceID: "wrk_fixture" }, projectID: "prj_fixture", subpath: "src" },
@@ -233,7 +225,7 @@ const extra: Record<number, Record<string, unknown>> = {
     causedBy: { sessionID: `ses_${lossless}`, inputID: messageID },
   },
   25: { description: "", metadata: opaque },
-  26: { conflicts: { skills: [], instructions: [] }, artifact },
+  26: { conflicts: { skills: [], instructions: [] } },
   28: {
     shell: {
       ...shell,
@@ -334,7 +326,6 @@ const extra: Record<number, Record<string, unknown>> = {
         rejection: "stale",
         source: { id: "memory:repository/decisions/cobalt", revision: "sha256:fixture" },
         okf: { type: "Decision", trust: "trusted", freshness: "fresh", lifecycle: "active" },
-        artifact,
         tokens: 120,
       },
       {

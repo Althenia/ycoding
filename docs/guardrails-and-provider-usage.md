@@ -55,17 +55,6 @@ The same fields can be configured in `ycoding.json` or `ycoding.jsonc`:
 }
 ```
 
-Managed project-artifact agents preserve their stored permission rules. An empty managed-agent permission list resolves to these safe defaults:
-
-| Action | Default |
-| --- | --- |
-| `read`, `glob`, `grep` | allow |
-| `webfetch`, `websearch` | allow |
-| `edit`, `write`, `patch`, `shell` | ask |
-| `question` | allow |
-| `subagent` | deny |
-| all other actions | deny |
-
 A child Session also inherits deny rules from its parent permission ceiling. Child configuration cannot widen a parent denial.
 
 Child model requests materialize the same Location-registered tool catalog as primary requests, filtered by the child's ordered permissions and inherited ceiling. Subagents always receive final deny rules for `subagent` and `subagent_control`, so permissive child rules can enable shell and other registered tools without enabling nested orchestration.
@@ -119,7 +108,7 @@ The code-owned standard profile:
 - requires ordinary review, which the root family's awake guardrails `auto` mode auto-approves deterministically, only for work outside the repository: edits, writes, and patches outside it, and shell commands whose working directory, `cd` target, file operand, file-valued option, embedded file operation, or redirection resolves outside it (API routes, URLs, and other non-file argument values are not file operands); every checkout of this repository (the main checkout and every linked worktree sharing its Git common directory) and temporary roots count as inside, and recognized read-only shell commands and read tools are exempt. Paths under YCoding's global config, data, cache, state, temporary, bin, log, and repos directories, including descendants, are also inside. A path whose effective `external_directory` permission is `allow` for the calling Session is inside too, using the same directory-glob resource and `~` expansion as other path permissions from global and project `permissions` and from the agent; `ask` and `deny` do not exempt it. A shell command that also names a non-exempt outside path stays reviewed. Hard reviews and catastrophic denies are not exempted by these paths or by an `external_directory` allow;
 - has no standard rule for package publication, production deployment, security-policy changes, or MCP execution; tool permissions still govern them;
 - fails closed with a review for mutation actions when an enabled custom guardrail file is malformed;
-- evaluates shell, direct Session shell, edit, write, patch, subagent launch, mutation-capable MCP tools, and project-artifact mutation at their side-effect boundary.
+- evaluates shell, direct Session shell, edit, write, patch, subagent launch, and mutation-capable MCP tools at their side-effect boundary.
 
 The matcher is conservative rather than a complete shell-language interpreter. It tracks possible working directories across supported compound commands; `cd ... &&` establishes relocation only on success, while unconditional, fallback, pipeline and background execution cannot assume relocation succeeded. Aliases, functions, command substitution, `xargs`/`find` deletion, and symlink identity remain outside broad-deletion recognition. Approval does not make a denied agent permission valid, and a permission approval does not bypass a guardrail review.
 

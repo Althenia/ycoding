@@ -147,8 +147,8 @@ test("the exported operator skill equals the pinned shared Markdown bytes", asyn
   const markdown = await readFile(path.join(import.meta.dir, "..", "src", "remote-control", "session-operator.md"), "utf8")
   expect(sessionOperatorSkill).toBe(markdown)
   const bytes = new TextEncoder().encode(sessionOperatorSkill)
-  expect(bytes.byteLength).toBe(30_366)
-  expect(createHash("sha256").update(bytes).digest("hex")).toBe("241dae490283dd37951d7e415d290d2876bf3cf45b55004f4489b455ab2383b9")
+  expect(bytes.byteLength).toBe(29_937)
+  expect(createHash("sha256").update(bytes).digest("hex")).toBe("594b7e86dc02c51b4ae4f3577693e2f496928c2da56fad713023022750bb83b8")
   expect(sessionOperatorSkill.endsWith("\n")).toBe(true)
   const source = await readFile(path.join(import.meta.dir, "..", "src", "remote-control", "session-operator-skill.ts"), "utf8")
   expect(source).toContain('from "./session-operator.md" with { type: "text" }')
@@ -284,7 +284,7 @@ test("operator API operation ids and example bodies match the current Protocol",
     "providerUsage.list", "providerUsage.forecast", "incident.report", "incident.recent", "incident.guidance.get", "incident.guidance.clear",
     "config.diagnostics", "integration.list", "integration.get", "integration.connect.key", "integration.oauth.connect", "integration.oauth.status", "integration.oauth.complete", "integration.oauth.cancel",
     "credential.refresh", "credential.update", "credential.activate", "credential.remove", "provider.integrations", "provider.refresh",
-    "artifact.list", "artifact.get", "artifact.create", "artifact.update", "coordination.settings", "coordination.list", "coordination.get", "coordination.board", "coordination.create", "coordination.update", "coordination.delete", "coordination.attach", "coordination.detach",
+    "coordination.settings", "coordination.list", "coordination.get", "coordination.board", "coordination.create", "coordination.update", "coordination.delete", "coordination.attach", "coordination.detach",
     "shell.remove", "pty.create", "pty.update", "pty.remove", "pty.control", "pty.connect.token", "pty.connect",
     "dots.get", "dots.set", "dots.attach", "dots.detach", "dots.remove", "remote.get", "remote.set", "telemetry.list", "telemetry.consent.get", "telemetry.consent.set",
     "session.prediction", "session.promptGenerate", "session.compact", "session.compaction.list", "server.session.session.todo.list",

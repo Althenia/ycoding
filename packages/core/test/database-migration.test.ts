@@ -15,6 +15,7 @@ import { tmpdir } from "./fixture/tmpdir"
 import previousSchema from "./fixture/database-current-2026-07-25"
 import dropApplicationCache from "../src/database/migration/20260725062914_drop-application-cache"
 import dropSessionArchived from "../src/database/migration/20260801114207_drop-session-archived"
+import dropProjectArtifacts from "../src/database/migration/20261127053131_drop-project-artifacts"
 import retireSelfImprovement from "../src/database/migration/20260726182810_retire-self-improvement"
 import selectiveCompactionHarness from "../src/database/migration/20260804120956_selective-compaction-harness"
 import continuationGenerationFence from "../src/database/migration/20260804123002_continuation-generation-fence"
@@ -89,6 +90,7 @@ const currentMigrations = [
   { id: "20261030011808_session-origin" },
   { id: "20261103050046_session-scope" },
   { id: "20261117061015_review-pinned-indexes" },
+  { id: "20261127053131_drop-project-artifacts" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",
@@ -100,21 +102,6 @@ const selectiveCompactionTables = [
   "session_provider_state_blob",
   "session_provider_state_link",
   "session_todo_state",
-]
-const projectArtifactTables = [
-  "project_artifact",
-  "project_artifact_activation",
-  "project_artifact_feedback",
-  "project_artifact_global_scope",
-  "project_artifact_legacy_cleanup",
-  "project_artifact_observation",
-  "project_artifact_operation",
-  "project_artifact_project_scope",
-  "project_artifact_scope",
-  "project_artifact_terminal",
-  "project_artifact_trash",
-  "project_artifact_version",
-  "project_artifact_write",
 ]
 const legacySelfImprovementTables = [
   "self_improvement_approval",
@@ -530,7 +517,7 @@ describe("DatabaseMigration", () => {
             WHERE type = 'table' AND (name = 'project_artifact' OR name LIKE 'project_artifact_%')
             ORDER BY name
           `),
-        ).toEqual(projectArtifactTables.map((name) => ({ name })))
+        ).toEqual([])
         expect(
           yield* db.all<{ name: string }>(sql`
             SELECT name
@@ -1154,6 +1141,72 @@ describe("DatabaseMigration", () => {
           `),
         ).toEqual([])
         expect(yield* db.all(sql`PRAGMA foreign_key_check`)).toEqual([])
+      }),
+    )
+  })
+
+  test("drops project artifact storage and the ended-boundary history", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`PRAGMA foreign_keys = ON`)
+        yield* db.run(sql`CREATE TABLE project_artifact_scope (id TEXT PRIMARY KEY)`)
+        yield* db.run(
+          sql`CREATE TABLE project_artifact (id TEXT PRIMARY KEY, scope_id TEXT NOT NULL REFERENCES project_artifact_scope(id) ON DELETE RESTRICT, current_version_id TEXT)`,
+        )
+        yield* db.run(
+          sql`CREATE TABLE project_artifact_version (id TEXT PRIMARY KEY, artifact_id TEXT NOT NULL REFERENCES project_artifact(id))`,
+        )
+        yield* db.run(sql`CREATE INDEX project_artifact_version_scope_kind_id_created_idx ON project_artifact_version (artifact_id)`)
+        yield* Effect.forEach(
+          [
+            "project_artifact_activation",
+            "project_artifact_feedback",
+            "project_artifact_global_scope",
+            "project_artifact_legacy_cleanup",
+            "project_artifact_observation",
+            "project_artifact_operation",
+            "project_artifact_project_scope",
+            "project_artifact_terminal",
+            "project_artifact_trash",
+            "project_artifact_write",
+          ],
+          (name) =>
+            db.run(sql.raw(`CREATE TABLE ${name} (id TEXT PRIMARY KEY, version_id TEXT REFERENCES project_artifact_version(id))`)),
+        )
+        yield* db.run(sql`CREATE TABLE event (id TEXT PRIMARY KEY, type TEXT NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE session_message (id TEXT PRIMARY KEY, type TEXT NOT NULL, data TEXT NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE retained_current (id TEXT PRIMARY KEY)`)
+        yield* db.run(sql`INSERT INTO project_artifact_scope (id) VALUES ('scope')`)
+        yield* db.run(sql`INSERT INTO project_artifact (id, scope_id) VALUES ('artifact', 'scope')`)
+        yield* db.run(sql`INSERT INTO project_artifact_version (id, artifact_id) VALUES ('version', 'artifact')`)
+        yield* db.run(sql`INSERT INTO project_artifact_activation (id, version_id) VALUES ('activation', 'version')`)
+        yield* db.run(sql`UPDATE project_artifact SET current_version_id = 'version'`)
+        yield* db.run(
+          sql`INSERT INTO event (id, type) VALUES ('ended', 'session.project-artifacts-ended.1'), ('kept', 'session.moved.1')`,
+        )
+        yield* db.run(
+          sql`INSERT INTO session_message (id, type, data) VALUES
+            ('boundary', 'synthetic', '{"text":"","metadata":{"projectArtifactsEnded":{}}}'),
+            ('synthetic', 'synthetic', '{"text":"note","metadata":{"contextSource":"team-view"}}'),
+            ('user', 'user', '{"text":"hello"}')`,
+        )
+
+        yield* DatabaseMigration.applyOnly(db, [dropProjectArtifacts])
+        yield* DatabaseMigration.applyOnly(db, [dropProjectArtifacts])
+
+        expect(
+          yield* db.all<{ name: string }>(sql`
+            SELECT name FROM sqlite_master WHERE name = 'project_artifact' OR name LIKE 'project_artifact_%'
+          `),
+        ).toEqual([])
+        expect(yield* db.all(sql`SELECT id FROM event`)).toEqual([{ id: "kept" }])
+        expect(yield* db.all(sql`SELECT id FROM session_message ORDER BY id`)).toEqual([{ id: "synthetic" }, { id: "user" }])
+        expect(yield* db.get(sql`SELECT name FROM sqlite_master WHERE name = 'retained_current'`)).toEqual({
+          name: "retained_current",
+        })
+        expect(yield* db.all(sql`PRAGMA foreign_key_check`)).toEqual([])
+        expect(yield* db.all(sql`SELECT id FROM migration`)).toEqual([{ id: "20261127053131_drop-project-artifacts" }])
       }),
     )
   })

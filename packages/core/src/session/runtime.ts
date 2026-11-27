@@ -115,10 +115,6 @@ import type { Info as ShellInfo } from "@ycoding-ai/schema/shell"
 import { KeyedMutex } from "../effect/keyed-mutex"
 import { fileURLToPath } from "url"
 import { randomUUID } from "crypto"
-import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
-import { ProjectArtifactAccounting } from "../project-artifact/accounting"
-import { ProjectArtifactStore } from "../project-artifact"
-import { ProjectArtifactSource } from "../project-artifact/source"
 import { SessionModelSwitch } from "./model-switch"
 import { SessionHistory } from "./history"
 import { SessionContextBudget } from "./context-budget"
@@ -769,8 +765,6 @@ const layer = Layer.effect(
     })
     const attachments = yield* AttachmentStore.Service
     const jobs = yield* Job.Service
-    const projectArtifactAccounting = yield* ProjectArtifactAccounting.Service
-    const projectArtifactStore = yield* ProjectArtifactStore.Service
     const scope = yield* Scope.Scope
     yield* Effect.gen(function* () {
       const rows = yield* db
@@ -788,13 +782,6 @@ const layer = Layer.effect(
     const commandLocks = KeyedMutex.makeUnsafe<SessionMessage.ID>()
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Info)
     const isPublicDurableSessionEvent = Schema.is(SessionEvent.PublicDurable)
-    const projectArtifactSource = Effect.fnUntraced(function* (location: Location.Ref) {
-      return yield* ProjectArtifactSource.Service.pipe(
-        Effect.map((source): ProjectArtifactSource.Interface | undefined => source),
-        Effect.provide(locations.get(location, [LocationServiceMap.full])),
-        Effect.catchCause(() => Effect.succeed(undefined)),
-      )
-    })
     const sameModel = (current: CatalogModel.Ref | undefined, target: CatalogModel.Ref) =>
       current?.providerID === target.providerID &&
       current.id === target.id &&
@@ -2465,7 +2452,6 @@ const layer = Layer.effect(
             }
           }
           const commands = yield* Command.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
-          const source = yield* projectArtifactSource(session.location)
           const command = yield* commands.get(input.command)
           if (!command)
             return yield* new Command.NotFoundError({
@@ -2504,48 +2490,16 @@ const layer = Layer.effect(
                 (error) => new Command.EvaluationError({ command: input.command, message: error.message }),
               ),
             )
-          const provenance = source ? yield* source.provenance("command", input.command) : undefined
-
-          const admitted = yield* result.prompt({
+          return yield* result.prompt({
             id: input.id,
             sessionID: input.sessionID,
             text: evaluated.text,
             origin: input.origin,
             files: input.files,
             agents: input.agents,
-            metadata: provenance
-              ? {
-                  projectArtifact: {
-                    scopeID: provenance.scopeID,
-                    versionID: provenance.versionID,
-                    kind: provenance.kind,
-                    id: provenance.id,
-                    sourceScope: provenance.scope,
-                  },
-                }
-              : undefined,
             delivery: input.delivery,
             resume: input.resume,
           })
-          if (provenance && source)
-            yield* source
-              .activate({
-                kind: "command",
-                id: input.command,
-                sessionID: input.sessionID,
-                agentID: session.agent,
-                source: "command",
-                messageID: admitted.id,
-              })
-              .pipe(
-                Effect.catchCause((cause) =>
-                  Effect.logWarning("project artifact command activation failed", {
-                    cause,
-                    sessionID: input.sessionID,
-                  }),
-                ),
-              )
-          return admitted
         },
         (effect, input) => (input.id === undefined ? effect : commandLocks.withLock(input.id)(effect)),
       ),
@@ -2631,14 +2585,9 @@ const layer = Layer.effect(
         })
         if (access === "deny") return yield* new SkillNotFoundError({ skill: input.skill })
         const skills = yield* Skill.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
-        const source = yield* projectArtifactSource(session.location)
         const skill = (yield* skills.list()).find((item) => item.id === input.skill)
         if (!skill) return yield* new SkillNotFoundError({ skill: input.skill })
-        const provenance = source ? yield* source.provenance("skill", skill.id) : undefined
-        yield* SessionSkill.activate(
-          { events, store, accounting: projectArtifactAccounting, fs },
-          { session, skill, id: input.id, provenance },
-        ).pipe(Effect.orDie)
+        yield* SessionSkill.activate({ events, store, fs }, { session, skill, id: input.id }).pipe(Effect.orDie)
         if (input.resume !== false)
           yield* execution
             .resume(input.sessionID)
@@ -2662,45 +2611,10 @@ const layer = Layer.effect(
         })
       }),
       switchAgent: Effect.fn("Session.switchAgent")(function* (input) {
-        const session = yield* result.get(input.sessionID)
+        yield* result.get(input.sessionID)
         if (input.agent && decisionAgents.has(input.agent)) return yield* new AgentNotSelectableError({ agent: input.agent })
-        const source = yield* projectArtifactSource(session.location)
-        const provenance = source ? yield* source.provenance("agent", input.agent) : undefined
-        const activatedAt = ProjectArtifact.TimestampMillis.make(Date.now())
         return yield* events
-          .publish(
-            SessionEvent.AgentSelected,
-            {
-              sessionID: input.sessionID,
-              agent: input.agent,
-              artifact: provenance
-                ? {
-                    scopeID: provenance.scopeID,
-                    versionID: provenance.versionID,
-                    kind: provenance.kind,
-                    id: provenance.id,
-                    sourceScope: provenance.scope,
-                  }
-                : undefined,
-            },
-            {
-              commit:
-                provenance && source
-                  ? (seq) =>
-                      source
-                        .activate({
-                          kind: "agent",
-                          id: input.agent,
-                          sessionID: input.sessionID,
-                          agentID: input.agent,
-                          source: "agent-selected",
-                          boundarySeq: ProjectArtifact.Revision.make(seq),
-                          activatedAt,
-                        })
-                        .pipe(Effect.orDie)
-                  : undefined,
-            },
-          )
+          .publish(SessionEvent.AgentSelected, { sessionID: input.sessionID, agent: input.agent })
           .pipe(Effect.asVoid)
       }),
       selectModelAtBoundary: Effect.fn("Session.selectModelAtBoundary")(function* (input) {
@@ -2843,56 +2757,9 @@ const layer = Layer.effect(
           .onConflictDoNothing()
           .run()
           .pipe(Effect.orDie)
-        if (project.previous !== undefined && project.previous !== project.id) {
-          const adoption = yield* db
-            .transaction((tx) =>
-              projectArtifactStore
-                .adoptProject({ previousProjectID: project.previous!, projectID: project.id }, tx)
-                .pipe(Effect.orDie),
-            )
-            .pipe(Effect.orDie)
-          yield* adoption.postCommit.pipe(Effect.orDie)
-        }
         if ((yield* execution.active).has(input.sessionID)) {
           yield* execution.interrupt(input.sessionID)
           yield* execution.awaitIdle(input.sessionID)
-        }
-        if (current.projectID !== project.id) {
-          const destination = Location.Ref.make({ directory, workspaceID: input.workspaceID })
-          yield* locations.invalidate(destination)
-          const destinationServices = locations.get(destination, [LocationServiceMap.full])
-          const oldSource = yield* projectArtifactSource(current.location)
-          const oldAgent = current.agent && oldSource ? yield* oldSource.provenance("agent", current.agent) : undefined
-          const destinationAgent = yield* Agent.Service.pipe(
-            Effect.provide(destinationServices),
-            Effect.flatMap((agents) => agents.default()),
-          )
-          const deactivatedAt = ProjectArtifact.TimestampMillis.make(Date.now())
-          yield* events.publish(
-            SessionEvent.ProjectArtifactsEnded,
-            {
-              sessionID: input.sessionID,
-              oldProjectID: current.projectID,
-              newProjectID: project.id,
-            },
-            {
-              commit: (seq) =>
-                projectArtifactAccounting
-                  .deactivateProject({
-                    sessionID: input.sessionID,
-                    projectID: current.projectID,
-                    boundarySeq: ProjectArtifact.Revision.make(seq),
-                    deactivatedAt,
-                  })
-                  .pipe(Effect.asVoid),
-            },
-          )
-          if (oldAgent?.scope === "project" && oldAgent.scopeID && destinationAgent) {
-            yield* events.publish(SessionEvent.AgentSelected, {
-              sessionID: input.sessionID,
-              agent: destinationAgent.id,
-            })
-          }
         }
         yield* events.publish(SessionEvent.Moved, {
           sessionID: input.sessionID,
@@ -3552,8 +3419,6 @@ export const node = makeGlobalNode({
     SessionUsageCleanup.node,
     FSUtil.node,
     Global.node,
-    ProjectArtifactAccounting.node,
-    ProjectArtifactStore.node,
     AttachmentStore.node,
   ],
 })

@@ -315,7 +315,6 @@ pub enum Failure {
         service: Option<ycoding_core::ycoding_schema::LosslessString>,
     },
     TelemetryDisabled,
-    Artifact(ycoding_core::ycoding_schema::project_artifact::ErrorCode),
     RemoteEnrollment(v5::TypedPayload),
     Connector {
         code: i32,
@@ -1153,7 +1152,6 @@ impl Failure {
                 encoded(v5::TelemetryDisabled { tag: 1 })
             }
             Failure::TelemetryDisabled => invalid("Telemetry disabled", "disabled"),
-            Failure::Artifact(code) => crate::artifact::error_payload(&code),
             Failure::RemoteEnrollment(payload) => payload,
             Failure::Connector { code, message } => invalid(
                 message,

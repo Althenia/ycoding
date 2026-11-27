@@ -43,7 +43,6 @@ pub fn apply(
                             }),
                     ),
                     skill_deactivations: None,
-                    artifact: object.optional("artifact").map_err(record_error)?,
                 }),
             )
         }

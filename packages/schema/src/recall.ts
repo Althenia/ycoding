@@ -2,7 +2,6 @@ export * as Recall from "./recall.js"
 
 import { Schema } from "effect"
 import { NonNegativeInt, optional } from "./schema.js"
-import { SessionMessage } from "./session-message.js"
 
 export const CueKind = Schema.Literals([
   "explicit",
@@ -109,7 +108,6 @@ export const Item = Schema.Struct({
   rejection: Rejection.pipe(optional),
   source: Source,
   okf: Okf.pipe(optional),
-  artifact: SessionMessage.ArtifactProvenance.pipe(optional),
   tokens: NonNegativeInt.pipe(optional),
 }).annotate({ identifier: "Recall.Item" })
 export type Item = typeof Item.Type

@@ -122,7 +122,7 @@ test("composer routes every built-in command and alias before backend commands",
 
 test("provider, MCP, VCS and system dialogs expose only typed supported operations", async () => {
   const source = await read("src/renderer.tsx")
-  for (const name of ["connect-key", "oauth-start", "oauth-status", "oauth-complete", "oauth-cancel", "command-start", "command-status", "command-cancel", "wellknown-add", "credential-activate", "credential-rename", "credential-remove", "browser-start", "browser-forget", "isolated-browser-start", "isolated-browser-stop", "artifact-enable", "artifact-disable", "remote-set", "resolve-skill-conflict"]) expect(source).toContain(`"${name}"`)
+  for (const name of ["connect-key", "oauth-start", "oauth-status", "oauth-complete", "oauth-cancel", "command-start", "command-status", "command-cancel", "wellknown-add", "credential-activate", "credential-rename", "credential-remove", "browser-start", "browser-forget", "isolated-browser-start", "isolated-browser-stop", "remote-set", "resolve-skill-conflict"]) expect(source).toContain(`"${name}"`)
   expect(source).toContain('type="password" autocomplete="off"')
   expect(source).toContain('const secret = key()[item.id] ?? ""; setKey((previous) => ({ ...previous, [item.id]: "" }))')
   expect(source).toContain('const authorizationCode = code(); setCode("")')
@@ -136,7 +136,7 @@ test("provider, MCP, VCS and system dialogs expose only typed supported operatio
   expect(source).toContain("Plugin discovery is read-only. Configure plugin changes in ycoding.json")
   expect(source).not.toContain('kind: "plugin-add"')
   for (const group of ["Session", "Model & Agent", "Workspace & Git", "Providers & MCP", "Navigation", "Customize", "Settings", "System"]) expect(source).toContain(`"${group}"`)
-  for (const title of ["Status & Debug", "Agents & Skills", "Browser", "Remote & Pairing", "Artifacts & Plugins", "Dots"]) expect(source).toContain(`"${title}"`)
+  for (const title of ["Status & Debug", "Agents & Skills", "Browser", "Remote & Pairing", "Plugins", "Dots"]) expect(source).toContain(`"${title}"`)
 })
 
 test("request attention counts canonical review item identities alongside other waiting requests", async () => {
@@ -158,16 +158,6 @@ test("workspace attachments preserve mentioned file ranges and remove duplicate 
   expect(promptFilesFor(attached, [mention])).toEqual([attached[0]!, mention])
   expect(attached).toHaveLength(2)
   expect(promptFilesFor([], [])).toEqual([])
-})
-
-test("artifact references retain their source and identity before authoritative detail reads", async () => {
-  const { artifactReferenceOf } = await import("../src/renderer")
-  const artifact = { scope: "project", kind: "skill", id: "synthetic-skill", name: "Synthetic skill" }
-  expect(artifactReferenceOf(artifact, "ses_synthetic")).toEqual({ scope: "project", kind: "skill", id: "synthetic-skill", source: "ses_synthetic" })
-  expect(artifactReferenceOf(artifact)).toEqual({ scope: "project", kind: "skill", id: "synthetic-skill" })
-  for (const missing of ["scope", "kind", "id"]) expect(artifactReferenceOf({ ...artifact, [missing]: undefined })).toBeUndefined()
-  expect(artifactReferenceOf({ ...artifact, kind: "unknown" })).toBeUndefined()
-  expect(artifactReferenceOf({ ...artifact, scope: "trash" })).toBeUndefined()
 })
 
 test("find uses visible assistant prose and transcript copy and export use canonical full-history reads", async () => {

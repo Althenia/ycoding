@@ -1806,7 +1806,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               name: event.data.name,
               text: event.data.text,
               conflicts: event.data.conflicts ?? { skills: [], instructions: [] },
-              artifact: event.data.artifact,
               metadata: event.metadata,
               time: { created: event.created },
             })

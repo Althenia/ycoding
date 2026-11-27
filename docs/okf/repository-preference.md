@@ -49,7 +49,6 @@ Lint and pattern checks enforce no drizzle column names, no Effect die strings, 
 ## Related Concepts
 
 - [Package Architecture](./architecture.md)
-- [Project Artifacts](./project-artifacts.md)
 
 [^agents]: repo:///AGENTS.md
 [^ast-grep]: repo:///script/ast-grep/sgconfig.yml

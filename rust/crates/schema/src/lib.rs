@@ -23,7 +23,7 @@ pub mod models_dev;
 pub mod money;
 pub mod permission;
 pub mod permission_saved;
-pub mod project_artifact;
+
 pub mod project_id;
 pub mod prompt;
 pub mod prompt_input;

@@ -1,6 +1,6 @@
 # Repository memories and shared knowledge
 
-Memory stores durable knowledge as an [Open Knowledge Format](https://github.com/google/okf) (OKF) v0.3 bundle: UTF-8 Markdown concepts with YAML frontmatter, linked by relative paths, indexed by `index.md`, and journaled in `log.md`. Repository memories are shared by all worktrees of one local Git repository. Shared knowledge is a second bundle that spans repositories. Memory is not Session history, a prompt cache, or a project artifact, and the runtime never extracts concepts from transcripts.
+Memory stores durable knowledge as an [Open Knowledge Format](https://github.com/google/okf) (OKF) v0.3 bundle: UTF-8 Markdown concepts with YAML frontmatter, linked by relative paths, indexed by `index.md`, and journaled in `log.md`. Repository memories are shared by all worktrees of one local Git repository. Shared knowledge is a second bundle that spans repositories. Memory is not Session history, a prompt cache, and the runtime never extracts concepts from transcripts.
 
 The harness owns the lifecycle. Agents record knowledge from a canonical template through the `memory` tool; the harness stamps authorship, derives trust, rejects duplicates, tracks freshness, and keeps the indexes and log current.
 

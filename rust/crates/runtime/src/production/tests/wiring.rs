@@ -513,7 +513,7 @@ async fn next_step_reload_applies_capabilities_and_removes_old_guidance() {
     let mcp = composed.mcp.clone();
     let path = f.directory().join("ycoding.json");
     let changed = configured(
-        r#"{"instructions":{"project":false},"skills":{"enabled":false},"tools":{"deny":["read","memory","project_artifact","execute"]},"builtin_instructions":{"deny":["date"]}}"#,
+        r#"{"instructions":{"project":false},"skills":{"enabled":false},"tools":{"deny":["read","memory","execute"]},"builtin_instructions":{"deny":["date"]}}"#,
     );
     let generate = composed.session_generate.clone();
     let _hook = composed.tools.hooks.after(Arc::new(move |result| {
@@ -573,7 +573,7 @@ async fn next_step_reload_applies_capabilities_and_removes_old_guidance() {
         JsonValue::Object(value) => stringify_json(value.get(&"tools".into()).unwrap()),
         _ => panic!(),
     };
-    for name in ["read", "memory", "project_artifact", "skill", "execute"] {
+    for name in ["read", "memory", "skill", "execute"] {
         assert!(
             !tools.contains(&format!("\"name\":\"{name}\"")),
             "disabled tool {name}"
@@ -594,7 +594,6 @@ async fn next_step_reload_applies_capabilities_and_removes_old_guidance() {
         "core/date",
         "core/memory",
         "ycoding/workspace-memory",
-        "ycoding/project-artifact-authoring",
         "core/skill-guidance",
         "core/mcp-guidance",
     ] {

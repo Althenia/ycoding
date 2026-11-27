@@ -124,7 +124,7 @@ fn fallback_maps_reject_invalid_keys_self_references_and_duplicate_or_long_chain
 
 #[test]
 fn capability_schema_accepts_every_selector_and_retired_plugin_selection() {
-    let input = r#"{"capabilities":{"instructions":{"global":false,"project":true,"exclude":["*/AGENTS.md",""]},"builtin_instructions":{"enabled":true,"allow":["environment","date","subagent-reuse","shell-memory","project-artifact-authoring","git-worktree","git-attribution","decision-input","decision-use","task-completion","memory"],"deny":[]},"skills":{"enabled":false,"allow":[],"deny":["secret-*"]},"tools":{"enabled":true,"allow":["read"],"deny":["shell"]},"mcp":{"allow":["docs"],"deny":["private"]},"plugins":{"enabled":false,"allow":["plugin.*"],"deny":[]},"project_artifacts":false,"home_roots":false,"websearch_provider":"parallel"},"extensions":[]}"#;
+    let input = r#"{"capabilities":{"instructions":{"global":false,"project":true,"exclude":["*/AGENTS.md",""]},"builtin_instructions":{"enabled":true,"allow":["environment","date","subagent-reuse","shell-memory","git-worktree","git-attribution","decision-input","decision-use","task-completion","memory"],"deny":[]},"skills":{"enabled":false,"allow":[],"deny":["secret-*"]},"tools":{"enabled":true,"allow":["read"],"deny":["shell"]},"mcp":{"allow":["docs"],"deny":["private"]},"plugins":{"enabled":false,"allow":["plugin.*"],"deny":[]},"home_roots":false,"websearch_provider":"parallel"},"extensions":[]}"#;
     recover(input, input, &[]);
     recover(
         r#"{"capabilities":{"websearch_provider":"exa"}}"#,
@@ -150,7 +150,7 @@ fn capability_schema_accepts_every_selector_and_retired_plugin_selection() {
 #[test]
 fn capability_schema_recovers_invalid_leaves_with_precise_diagnostics() {
     recover(
-        r#"{"shell":"kept","capabilities":{"instructions":{"global":0,"project":false,"exclude":["kept",42]},"builtin_instructions":{"allow":["date","unknown","*"]},"skills":{"enabled":"off","deny":["kept",null]},"tools":{"allow":false},"mcp":false,"plugins":{"deny":[42]},"project_artifacts":"off","home_roots":0,"websearch_provider":"other","typo":true}}"#,
+        r#"{"shell":"kept","capabilities":{"instructions":{"global":0,"project":false,"exclude":["kept",42]},"builtin_instructions":{"allow":["date","unknown","*"]},"skills":{"enabled":"off","deny":["kept",null]},"tools":{"allow":false},"mcp":false,"plugins":{"deny":[42]},"home_roots":0,"websearch_provider":"other","typo":true}}"#,
         r#"{"shell":"kept","capabilities":{"instructions":{"project":false,"exclude":["kept"]},"builtin_instructions":{"allow":["date"]},"skills":{"deny":["kept"]},"tools":{},"plugins":{"deny":[]}}}"#,
         &[
             "$.capabilities.instructions.global",
@@ -162,7 +162,6 @@ fn capability_schema_recovers_invalid_leaves_with_precise_diagnostics() {
             "$.capabilities.tools.allow",
             "$.capabilities.mcp",
             "$.capabilities.plugins.deny[0]",
-            "$.capabilities.project_artifacts",
             "$.capabilities.home_roots",
             "$.capabilities.websearch_provider",
             "$.capabilities.typo",
@@ -231,7 +230,6 @@ fn capability_selection_deny_empty_allow_and_closed_builtins() {
         "date",
         "subagent-reuse",
         "shell-memory",
-        "project-artifact-authoring",
         "git-worktree",
         "git-attribution",
         "decision-input",
@@ -307,7 +305,6 @@ fn builtin_instruction_names_match_the_canonical_selector() {
             "date",
             "subagent-reuse",
             "shell-memory",
-            "project-artifact-authoring",
             "git-worktree",
             "git-attribution",
             "decision-input",

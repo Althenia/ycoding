@@ -1,7 +1,6 @@
 use crate::{
     DecodeError, DecodeErrorKind, DomainDecode, DomainEncode, JsonPath, JsonValue, LosslessString,
     ObjectDecoder, ObjectEncoder, domain, schema::NonNegativeInt,
-    session_message::ArtifactProvenance,
 };
 
 crate::schema::literal_enum_type!(CueKind,{Explicit=>"explicit",Command=>"command",Path=>"path",Symbol=>"symbol",ToolCall=>"tool_call",ToolResult=>"tool_result",ToolError=>"tool_error",Workspace=>"workspace",Lifecycle=>"lifecycle",Compaction=>"compaction",Recovery=>"recovery",MemoryRevision=>"memory_revision",SkillRevision=>"skill_revision"});
@@ -122,7 +121,6 @@ pub struct Item {
     pub rejection: Option<Rejection>,
     pub source: Source,
     pub okf: Option<Okf>,
-    pub artifact: Option<ArtifactProvenance>,
     pub tokens: Option<NonNegativeInt>,
 }
 impl DomainDecode for Item {
@@ -138,7 +136,6 @@ impl DomainDecode for Item {
             rejection: o.optional("rejection")?,
             source: o.field("source")?,
             okf: o.optional("okf")?,
-            artifact: o.optional("artifact")?,
             tokens: o.optional("tokens")?,
         })
     }
@@ -155,7 +152,6 @@ impl DomainEncode for Item {
             .optional("rejection", &self.rejection)
             .field("source", &self.source)
             .optional("okf", &self.okf)
-            .optional("artifact", &self.artifact)
             .optional("tokens", &self.tokens)
             .finish()
     }

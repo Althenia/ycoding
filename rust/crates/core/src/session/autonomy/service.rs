@@ -14,7 +14,7 @@ use std::{
 use tokio::sync::mpsc;
 use ycoding_schema::{JsonObject, JsonValue, session};
 use ycoding_store::{
-    Client, KeyPart, artifacts,
+    Client, KeyPart, database_format,
     resources::{Migration, MigrationTable},
     session::{SessionTable, TaskTable},
     tuple_key,
@@ -234,7 +234,7 @@ impl Service {
         let stable = self
             .client
             .snapshot()?
-            .get::<artifacts::MigrationTable>(&tuple_key(&[KeyPart::String(
+            .get::<database_format::MigrationTable>(&tuple_key(&[KeyPart::String(
                 &STABLE_MIGRATION.into(),
             )]))?
             .is_some();

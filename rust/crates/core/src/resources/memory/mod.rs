@@ -1,7 +1,7 @@
 use crate::resources::{
     config::Configuration,
     discovery,
-    project_artifact::filesystem::{self, Hooks, MutationRequest},
+    filesystem::{self, Hooks, MutationRequest},
 };
 use chrono::{DateTime, Utc};
 use std::{

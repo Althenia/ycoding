@@ -115,14 +115,12 @@ const renames: Record<string, string> = {
   "message.list": "session.messages",
   "message.capturedInputs": "session.capturedInputs",
   "pty.connect.token": "pty.connectToken",
-  "projectArtifact.artifact.global.confirm": "artifact.confirmGlobal",
   "session.file-change.list": "session.fileChange.list",
   "debug.location.list": "debug.location",
 }
 function operationName(method: string) {
   if (renames[method]) return renames[method]
   if (method.startsWith("server.telemetry.")) return method.slice("server.".length)
-  if (method.startsWith("projectArtifact.artifact.")) return method.slice("projectArtifact.".length)
   if (method.startsWith("file.")) return "fs." + method.slice("file.".length)
   if (
     [

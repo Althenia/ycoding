@@ -255,7 +255,7 @@ export const configurationPages: readonly DocPage[] = [
               ["`provider_usage.codex_app_server`", "object", "unset", "Optional local Codex app-server quota source, displayed separately with unknown account attribution rather than as a stored profile."],
               ["`efficiency`", "object", "runtime-derived", "Helper models, title policy, prompt caching, Responses continuation."],
               ["`image_analyzer`", "object", "unset", "Image-to-text fallback for text-only models."],
-              ["`capabilities`", "object", "unset", "Turn off `AGENTS.md` files, built-in instruction blocks, skills, tools, MCP servers, external plugins, project artifacts, or `~/.agents` and `~/.claude` roots, and pin the `websearch` provider. Each field is last-wins across layers."],
+              ["`capabilities`", "object", "unset", "Turn off `AGENTS.md` files, built-in instruction blocks, skills, tools, MCP servers, external plugins, or `~/.agents` and `~/.claude` roots, and pin the `websearch` provider. Each field is last-wins across layers."],
               ["`experimental.subagent_depth`", "integer ≥ 0", "`1`", "Maximum subagent nesting depth."],
               ["`experimental.policies`", "array", "unset", "Ordered configured-resource policies."],
             ],
@@ -1214,7 +1214,7 @@ ycoding mcp add docs --global -- bunx @example/docs-mcp`,
         blocks: [
           {
             kind: "paragraph",
-            text: "Guardrails review high-impact actions across a root Session and all of its subagents, independently of tool permissions. Shell commands, direct Session shell, edits, writes, patches, subagent launches, mutation-capable MCP tools, and project-artifact changes pass through the same service. A pending review blocks the whole Session family and appears in every Session view it blocks.",
+            text: "Guardrails review high-impact actions across a root Session and all of its subagents, independently of tool permissions. Shell commands, direct Session shell, edits, writes, patches, subagent launches, and mutation-capable MCP tools pass through the same service. A pending review blocks the whole Session family and appears in every Session view it blocks.",
           },
           {
             kind: "paragraph",

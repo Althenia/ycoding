@@ -200,7 +200,7 @@ The TUI Usage overview labels model rows with their recorded named profile selec
 
 ### Workspace knowledge is separate
 
-The built-in `memory` tool accesses explicit linked Markdown knowledge. Repository memories are keyed by the canonical Git common directory, so the main checkout, its subdirectories, symlink aliases, and every linked worktree share one repository collection; shared knowledge lives under `knowledge/` and remains available outside Git. The tool has no automatic transcript extraction or concept injection into prompts. Built-in `ycoding/workspace-memory` Session guidance directs agents to search memory before substantive work and to save newly verified durable facts after validated completion through the same tool. Reads, trash listing, and the vacuum preview require `memory_read`; writes, offline HTML graph export, delete, restore, purge, and applied vacuum require `memory_write` and also use the existing file-mutation guardrail. Deletion moves a concept to recoverable trash, maintenance is explicit, collection-local, and digest-checked, and nothing expires automatically. Concepts remain authoritative files, independent of durable Session events and managed project artifacts. See [Workspace knowledge memory](./memory.md) for the configuration, format, retrieval, and conflict contracts.
+The built-in `memory` tool accesses explicit linked Markdown knowledge. Repository memories are keyed by the canonical Git common directory, so the main checkout, its subdirectories, symlink aliases, and every linked worktree share one repository collection; shared knowledge lives under `knowledge/` and remains available outside Git. The tool has no automatic transcript extraction or concept injection into prompts. Built-in `ycoding/workspace-memory` Session guidance directs agents to search memory before substantive work and to save newly verified durable facts after validated completion through the same tool. Reads, trash listing, and the vacuum preview require `memory_read`; writes, offline HTML graph export, delete, restore, purge, and applied vacuum require `memory_write` and also use the existing file-mutation guardrail. Deletion moves a concept to recoverable trash, maintenance is explicit, collection-local, and digest-checked, and nothing expires automatically. Concepts remain authoritative files, independent of durable Session events. See [Workspace knowledge memory](./memory.md) for the configuration, format, retrieval, and conflict contracts.
 
 ### Durable admission
 
@@ -208,7 +208,7 @@ A prompt is durably admitted before execution is scheduled. The durable pending 
 
 TUI, web and Desktop share the client transcript-envelope visibility predicate. Session-state, TeamView, compaction checkpoints and decision-input context remain stored but do not appear as raw transcript prose. Internal system-update, instruction and orchestration envelopes, including guardrail-history sections with a family root, follow the same rule. User and assistant prose is not classified by these internal-envelope markers. User-facing synthetic descriptions, project and subagent cards, thoughts, tool calls, approvals and pending inputs retain their own presentations. Desktop's prompt-visibility observer separately tracks viewport intersections; it does not classify transcript content.
 
-TUI, web and Desktop render each Cue & Recall record as one collapsed transcript entry at its chronological position, from the native record alone; no client retrieves, ranks or generates recall text. The summary names the recalled memories and activated skills, the elapsed time and the estimated injected tokens, and reads `Restored` for entries whose outcome is restored after compaction, recovery or delegation. Expanding an entry shows the triggering cue, the retrieval methods (explicit, cue, exact, BM25, semantic, RRF), relevance, source scope, origin, revision and digest, Project Artifact provenance, and the OKF type, trust, freshness and lifecycle of each injected item. Candidates that were rejected, abstained or selected but not injected stay in a second collapsed section; an entry that injected or restored nothing produces no transcript row. Inspecting a concept or skill is offered only when the host can perform an authorized read for the recorded source identity and revision. Entries come from the durable `session.cue.detected` and `session.recall.recorded` Session events: clients fold the live events and read the Session log on load, so entries survive reconnect, restart and history views. A record whose outcome is abstained, or that injected nothing, produces no row.
+TUI, web and Desktop render each Cue & Recall record as one collapsed transcript entry at its chronological position, from the native record alone; no client retrieves, ranks or generates recall text. The summary names the recalled memories and activated skills, the elapsed time and the estimated injected tokens, and reads `Restored` for entries whose outcome is restored after compaction, recovery or delegation. Expanding an entry shows the triggering cue, the retrieval methods (explicit, cue, exact, BM25, semantic, RRF), relevance, source scope, origin, revision and digest, and the OKF type, trust, freshness and lifecycle of each injected item. Candidates that were rejected, abstained or selected but not injected stay in a second collapsed section; an entry that injected or restored nothing produces no transcript row. Inspecting a concept or skill is offered only when the host can perform an authorized read for the recorded source identity and revision. Entries come from the durable `session.cue.detected` and `session.recall.recorded` Session events: clients fold the live events and read the Session log on load, so entries survive reconnect, restart and history views. A record whose outcome is abstained, or that injected nothing, produces no row.
 
 The web transcript tail shows a transient three-dot activity wave with Thinking, Writing or the running tool name while execution is active, and Sending while a submission is in flight. Idle Sessions omit the row; queued inputs alone do not imply execution. Reduced motion keeps dots still. The composer has no bottom-left activity label. Provider quota cards omit typed unsupported snapshots, including unconfigured quota sources, and retain supported unauthorized and fetch errors even when the provider supplies no message.
 
@@ -278,7 +278,7 @@ For a settled execution, the projected messages are the record: the message-only
 
 The settle-time prune runs once for the Session one minute after each execution terminal event; the startup and hourly sweep visits every Session and also prunes Sessions settled while the server was stopped. A settled Session is skipped while it executes in this process, has a staged revert, has a pending or running compaction job, or has an active Codex remote manifest. Each batch transaction re-checks these conditions and that the execution is still settled.
 
-Settled pruning deletes only events at or before the latest terminal event, and only these types: tool input started and ended, tool called, invocation settled, success, and failed, reasoning started and ended, text started and ended, step started, ended, and failed, synthetic, shell started and ended, skill activated and deactivated, `retry.scheduled`, `input.consumed`, execution started, succeeded, failed, and interrupted, `provider.request.recorded`, and `file-change.recorded`. It keeps the latest event of each step and execution type, every `context.observed` event, a tool success that carries an image until the 24-hour idle interval, and every other event type: inputs admitted and promoted, instructions, compaction, revert, created, forked, moved, renamed, profile, agent and model selections, guardrail approvals, task, work completed, usage recorded, and project-artifacts-ended. Settled pruning keeps provider-request rows in `session_provider_request` and deletes only their duplicate events; those rows follow the separate global `session_retention.records_days` idle cleanup (default 7). Error events follow the same rules as every other event type.
+Settled pruning deletes only events at or before the latest terminal event, and only these types: tool input started and ended, tool called, invocation settled, success, and failed, reasoning started and ended, text started and ended, step started, ended, and failed, synthetic, shell started and ended, skill activated and deactivated, `retry.scheduled`, `input.consumed`, execution started, succeeded, failed, and interrupted, `provider.request.recorded`, and `file-change.recorded`. It keeps the latest event of each step and execution type, every `context.observed` event, a tool success that carries an image until the 24-hour idle interval, and every other event type: inputs admitted and promoted, instructions, compaction, revert, created, forked, moved, renamed, profile, agent and model selections, guardrail approvals, task, work completed, and usage recorded. Settled pruning keeps provider-request rows in `session_provider_request` and deletes only their duplicate events; those rows follow the separate global `session_retention.records_days` idle cleanup (default 7). Error events follow the same rules as every other event type.
 
 Stored `session.tool.progress` rows, written before tool progress became live-only, are deleted at or before each Session's newest execution terminal event in every Session, including Sessions that settled pruning skips, because no reader uses them; rows after that event belong to the running execution and are deleted after it settles.
 
@@ -298,7 +298,7 @@ Before the first pruning pass that would delete anything from a database file, t
 
 On Unix, the startup and hourly retention pass checks two private staging namespaces: `<cache>/.catalog-writes/stage-<pid>-<counter>` for model catalog downloads and `<data>/attachments/sha256/<two-hex-digit-shard>/.imports/stage-<pid>-<counter>` for managed attachment imports. It retains the exact seven-day modification-time boundary. Each pass examines at most 64 directory entries per namespace and resumes unfinished scans on the next pass. Writers create files exclusively and hold a file lock through publication or cleanup. The sweep requires a private, same-user regular file, a nonblocking exclusive lock, verified directory containment and the same file identity at unlink. Failed entries do not stop the pass; later passes revisit them. Other platforms leave staged files to the writer.
 
-The sweep never removes published attachment digests, even if the active database has no matching message. Pending inputs, admitted events, other databases and recoverable backups can refer to the same bytes, and an import can precede durable admission. Final catalogs, older unmarked writer files, tool caches, user files, logs, project-artifact trash and backup files are outside these namespaces.
+The sweep never removes published attachment digests, even if the active database has no matching message. Pending inputs, admitted events, other databases and recoverable backups can refer to the same bytes, and an import can precede durable admission. Final catalogs, older unmarked writer files, tool caches, user files, logs, and backup files are outside these namespaces.
 
 ### Pruning scope and limitations
 
@@ -808,7 +808,7 @@ Core limits an execution to 1,000 tool calls, 1,048,576 output bytes, and 60,000
 
 The host retains nested `execute.toolCalls` receipts with display path, status, input, and optional leaf identity and structured result. A durable `session.tool.invocation-settled` event is committed before the nested await returns, allowing later calls in the same program to use activated skills and resources. Its projector folds the receipt into the existing outer tool part; full tool progress remains ephemeral. Completed receipts and captured changes survive a later program failure or restart, and final settlement does not duplicate leaf facts. Receipt metadata grows with nested results; it is not silently truncated or reconstructed. The model sees the final return, logs, and collected media rather than intermediate structured receipts or additional provider tool parts. A nested completion declaration requires a completed `task_complete` receipt with `structured.recorded: true` in a successful outer `execute` settlement, plus the normal execution, final reply, and unfinished-work gates.
 
-A tool whose input schema is a top-level union (`memory`, `browser`, `computer`, `project_artifact`, `subagent_control`, `subagent_report`) reaches the OpenAI and Anthropic routes with each parameter's JSON type declared on a property of an object schema, so the model sees arrays, integers, numbers, booleans, and objects as typed parameters:
+A tool whose input schema is a top-level union (`memory`, `browser`, `computer`, `subagent_control`, `subagent_report`) reaches the OpenAI and Anthropic routes with each parameter's JSON type declared on a property of an object schema, so the model sees arrays, integers, numbers, booleans, and objects as typed parameters:
 
 - OpenAI Chat and Responses project the union into one object, preserving every distinct property alternative and requiring fields common to every branch.
 - Anthropic Messages, including the AI SDK routes for Claude models, keeps the union behind an object-root `$ref`. The referenced root definition carries the same properties and common required fields beside the union `anyOf`, together with any `properties` and `required` the union root declares itself; keywords placed beside the root `$ref` itself do not type arguments. Each property carries its own `type` when every alternative, after resolving `$ref` and `anyOf`, agrees on one type; alternatives with different types, such as an integer-or-string parameter, alternatives that declare no type or an array of types, and unresolvable references stay as alternatives.
@@ -1160,13 +1160,13 @@ Current behavior:
 - recognized catastrophic shell commands, including recursive deletion of a filesystem root, the configured home, any exact `/Users/<name>` or `/home/<name>`, or system directories under `/System`, `/Library`, `/usr`, `/etc`, `/bin`, `/sbin`, `/opt`, `/Applications`, or `/var`, are denied before process creation;
 - recursive deletion targets that resolve through symlinks at or under `/tmp`, `/private/tmp`, `/var/tmp`, `/private/var/tmp`, `/var/folders`, `/private/var/folders`, or the process `TMPDIR` are not system-directory deletions; project, ancestor, and home deletion rules still apply to them;
 - hard reviews cover destructive actions: recursive deletion of the project root, an ancestor, or a direct home child; destructive Git (`git reset --hard`, `git clean -f`, `git checkout -- .`, `git restore --worktree`, `git branch -D`); force push; and destructive database statements, which are not matched when the statement text appears only in a proven read-only command (such as `echo`, `grep`, or `git log`), in a shell comment, or in a read-only pipeline, and are still matched when the text can execute, including SQL clients, pipes, redirects, heredocs, command substitution, wrappers, and interpreters;
-- ordinary review is the outside-repository sandbox: an edit, write, or patch outside the repository, or a shell command whose working directory, `cd` target, operand, or redirection resolves outside it. The repository is the Location's version-control worktree root (or the Location directory without version control) and everything below it; every checkout of this repository (the main checkout and every linked worktree sharing its Git common directory), temporary roots, and YCoding's global config, data, cache, state, temporary, bin, log, and repos directories, including descendants, count as inside. A path whose effective `external_directory` permission is `allow` for the calling Session also counts as inside, using the same directory-glob resource and `~` expansion as other path permissions from global and project `permissions` and from the agent; `ask` and `deny` do not exempt it, and a shell command that also names a non-exempt outside path stays reviewed. These exemptions do not apply to hard reviews or catastrophic denies. Recognized read-only shell commands (including `cd`, `exit`, `ps`, `pgrep`, and `lsof`) and read tools are not reviewed even when they name outside paths, and in a compound shell command each read-only segment without an outside redirection contributes no outside working directory or operand; reading outside remains governed by the `external_directory` permission. The script argument of an interpreter (`sh`, `bash`, `zsh`, `node`, `bun`, `deno`, `python`, `python3`, `ruby`, `perl`) is executed code, like the executable itself, rather than an outside operand, and a heredoc body consumed by a non-shell interpreter is program text that is not parsed as shell; heredoc bodies fed to a shell are still parsed. Managed tool operations on YCoding-owned resources (worktree creation under the data directory, memory writes, project-artifact mutations, subagent launches, and MCP execution) have no ordinary review; custom rules, invalid guardrail configuration, deny decisions, and concurrency caps still apply;
+- ordinary review is the outside-repository sandbox: an edit, write, or patch outside the repository, or a shell command whose working directory, `cd` target, operand, or redirection resolves outside it. The repository is the Location's version-control worktree root (or the Location directory without version control) and everything below it; every checkout of this repository (the main checkout and every linked worktree sharing its Git common directory), temporary roots, and YCoding's global config, data, cache, state, temporary, bin, log, and repos directories, including descendants, count as inside. A path whose effective `external_directory` permission is `allow` for the calling Session also counts as inside, using the same directory-glob resource and `~` expansion as other path permissions from global and project `permissions` and from the agent; `ask` and `deny` do not exempt it, and a shell command that also names a non-exempt outside path stays reviewed. These exemptions do not apply to hard reviews or catastrophic denies. Recognized read-only shell commands (including `cd`, `exit`, `ps`, `pgrep`, and `lsof`) and read tools are not reviewed even when they name outside paths, and in a compound shell command each read-only segment without an outside redirection contributes no outside working directory or operand; reading outside remains governed by the `external_directory` permission. The script argument of an interpreter (`sh`, `bash`, `zsh`, `node`, `bun`, `deno`, `python`, `python3`, `ruby`, `perl`) is executed code, like the executable itself, rather than an outside operand, and a heredoc body consumed by a non-shell interpreter is program text that is not parsed as shell; heredoc bodies fed to a shell are still parsed. Managed tool operations on YCoding-owned resources (worktree creation under the data directory, memory writes, subagent launches, and MCP execution) have no ordinary review; custom rules, invalid guardrail configuration, deny decisions, and concurrency caps still apply;
 - package publication, production deployment, security-policy changes, and MCP execution have no standard guardrail rule; tool permissions still govern them;
 - Outside guardrails YOLO, standard catastrophic denies take precedence; hard reviews precede custom allows, and otherwise the first matching custom source layer decides. Guardrails YOLO admits all of these cases directly.
 - Guardrails Auto approves ordinary standard reviews only while defer is off; YOLO instead admits every action without a review.
 - Outside guardrails YOLO, hard reviews require typed approval and reject `always`. Guardrails YOLO immediately allows hard, catastrophic, destructive and custom-rule actions without assessment.
 - `computer` and `browser` tool calls are never reviewed: their ordinary and hard review decisions are admitted without a request, while deny decisions still block them;
-- direct Session shell, tool shell, edit, write, patch, subagent launch, mutation-capable MCP tools, and project-artifact mutation use the same service boundary;
+- direct Session shell, tool shell, edit, write, patch, subagent launch, and mutation-capable MCP tools use the same service boundary;
 - running shell, running subagent, and pending review caps are shared by the root Session family and release on settlement or interruption;
 - custom files are direct `guardrails/*.md` children of the global config directory and every discovered repository `Config.Directory`; nearer repository directories precede broader repositories, which precede the global directory;
 - within one custom source layer, matching rules sort by descending numeric priority and then deterministic lexical file-path/rule-ID order; enabled invalid configuration fails mutation actions closed with review while retaining its source-layer position;
@@ -1341,50 +1341,6 @@ Instruction state is Session-owned.
 
 There is no global instruction registry that owns Session history.
 
-## Project artifacts
-
-Project artifacts are the managed customization system for skills, commands, agents, and plugin drafts.
-
-### Kinds
-
-- `skill`
-- `command`
-- `agent`
-- `plugin`
-
-Agent artifacts currently define subagents. Command artifacts are non-subtask commands. Plugin artifacts store validated drafts rather than arbitrary executable mutation.
-
-### Scopes
-
-- **Project** — bound to one project scope.
-- **Global** — shared through the global artifact scope.
-
-Project artifacts can shadow global artifacts through the explicit lifecycle rather than file-order accidents.
-
-### Lifecycle
-
-Artifact stages are:
-
-- `trial`
-- `active`
-- `degraded`
-- `disabled`
-- `quarantine`
-
-Versions preserve content digests, provenance, parent versions, state transitions, and fallback identity. Manual destructive or cross-scope operations use preview/confirmation tokens. Trash, restore, revert, promotion, disable, shadow, and fork operations are explicit store operations.
-
-Automatic creation is governed by per-kind and accounting caps. Plugin automatic creation is currently disabled by a zero automatic cap.
-
-Artifact learning is non-punitive: after the primary task is complete and validated, an artifact may capture a safer reusable rule from a validated repeated mistake, failed approach, or repository gotcha. One-off failures and transient task state are not artifact material.
-
-Terminal artifact observations capture goal participation when an execution starts. Completing or stopping that goal before terminal accounting does not change its starting classification.
-
-### Integration
-
-Adapters expose active artifacts to the existing agent, command, skill, and plugin discovery paths. The TUI exposes a project-artifact dialog and project-artifact tools use the validated store instead of writing directly to source directories.
-
-Unmanaged resource names outside the managed-artifact ID grammar, including namespaced MCP commands, remain available through their owning registries and do not participate in managed-artifact collision lookup. Managed skill-tool and subagent-launch activations use the matching durable tool-call event's sequence and timestamp; command activations use the durable input-admission event. Distinct invocations have distinct activation identities, while exact retries retain the same identity and timestamp even after input promotion. Agent-selection activations use the sequence supplied by their event commit transaction.
-
 ## Transcript history
 
 The canonical transcript projection is durable and complete down to the latest valid local compaction checkpoint; older messages are pruned by the retention sweep. Transcript, `GET /api/session/:id/message`, `session.snapshot` (oldest page), and latest and recent reads return the checkpoint as a first synthetic message (`description: "Compaction checkpoint"`, `metadata.compactionCheckpoint { manifestDigest, through }`) followed by the messages after the boundary whenever a qualifying checkpoint exists. Fork and revert staging that target a message outside retained history fail with `HistoryPrunedError` (HTTP 410, fields `sessionID`, `messageID`, `message`) and change no state; a fork child stores a copy of the checkpoint message followed by the retained rows before the fork point, and a message of another Session still yields `MessageNotFoundError`. The TUI keeps a bounded resident projection and releases covered resident rows after completed selective compaction without changing canonical history.
@@ -1438,8 +1394,7 @@ Caching is split into distinct concerns:
 - stable model-visible prompt prefixes;
 - provider-native prompt caching;
 - normalized cache-usage telemetry;
-- TUI diagnostics;
-- project artifact reuse, which is not a provider prompt cache.
+- TUI diagnostics.
 
 The expanded TUI Context rail keeps a Cache row when diagnostics or provider cache-read telemetry are absent, displaying `unreported` in subdued ink. A reported zero ratio displays `0%`; reported ratios retain their percentage treatment. This status does not infer cache tokens, cost, or provider quota values.
 
@@ -1769,7 +1724,7 @@ The TUI is the only release surface and currently includes:
 - autonomous, defer, and goal controls;
 - subagent tabs, status, notifications, navigation, and sibling switcher;
 - child-session sibling switcher, economics surface, and blocked-answer composer;
-- session skills and project artifacts;
+- session skills;
 - distinct guardrail, permission, and form prompts;
 - MCP and provider connection flows;
 - prompt file, agent, command, skill, and reference autocomplete;

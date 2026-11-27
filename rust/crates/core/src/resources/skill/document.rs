@@ -1,8 +1,5 @@
-use crate::resources::{
-    project_artifact::source::Provenance,
-    recall::document::{
-        Activation, Document, Fields, Kind, Lifecycle, Scope, Source, Status, Trust,
-    },
+use crate::resources::recall::document::{
+    Activation, Document, Fields, Kind, Lifecycle, Scope, Source, Status, Trust,
 };
 use ring::digest;
 use std::path::Path;
@@ -29,19 +26,6 @@ pub fn location_origin(
         revision: None,
         content_hash: None,
         trust: Trust::Unverified,
-    }
-}
-
-pub fn artifact_origin(provenance: &Provenance) -> Origin {
-    Origin {
-        scope: if provenance.scope == "project" {
-            Scope::Project
-        } else {
-            Scope::Knowledge
-        },
-        revision: Some(text(provenance.version_id.as_lossless())),
-        content_hash: Some(text(provenance.expected_digest.as_lossless())),
-        trust: Trust::Verified,
     }
 }
 

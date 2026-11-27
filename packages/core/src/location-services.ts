@@ -47,7 +47,6 @@ import { StandaloneAgent } from "./plugin/standalone-agent"
 import { ProjectCopy } from "./project/copy"
 import { ProviderUsageRuntime } from "./provider-usage"
 import { UsageDashboardRuntime } from "./usage-dashboard"
-import { ProjectArtifactSource } from "./project-artifact/source"
 import { Pty } from "./pty"
 import { Question } from "./question"
 import { Shell } from "./shell"
@@ -129,7 +128,6 @@ const locationServiceNodes = [
   Pty.node,
   Shell.node,
   Skill.node,
-  ProjectArtifactSource.node,
   InstructionBuiltIns.node,
   InstructionDiscovery.node,
   LocationMutation.node,

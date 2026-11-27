@@ -105,7 +105,6 @@ pub fn item(
         rejection,
         source,
         okf: None,
-        artifact: None,
         tokens: NonNegativeInt::new(tokens.max(0)).ok(),
     }
 }
@@ -496,7 +495,6 @@ pub fn memory_item(
             revision: format!("sha256:{digest}").into(),
         },
         okf: None,
-        artifact: None,
         tokens: NonNegativeInt::new(super::context_pressure::estimate(content)).ok(),
     }
 }

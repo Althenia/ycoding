@@ -590,7 +590,7 @@ describe("ToolRegistry", () => {
     Effect.gen(function* () {
       const service = yield* ToolRegistry.Service
       yield* service.register(
-        { read: make(), shell: make(), skill: make(), project_artifact: make() },
+        { read: make(), shell: make(), skill: make() },
         { codemode: false },
       )
       yield* service.register({ search: make(), fetch: make() }, { namespace: "web" })
@@ -604,23 +604,23 @@ describe("ToolRegistry", () => {
         })
 
       expect(yield* visible({})).toEqual({
-        direct: ["project_artifact", "read", "shell", "skill", "execute"],
-        available: ["project_artifact", "read", "shell", "skill", "web_fetch", "web_search"],
+        direct: ["read", "shell", "skill", "execute"],
+        available: ["read", "shell", "skill", "web_fetch", "web_search"],
       })
       expect(yield* visible({ tools: { deny: ["shell", "web_*"] } })).toEqual({
-        direct: ["project_artifact", "read", "skill", "execute"],
-        available: ["project_artifact", "read", "skill"],
+        direct: ["read", "skill", "execute"],
+        available: ["read", "skill"],
       })
       expect(yield* visible({ tools: { allow: ["read", "web_search"] } })).toEqual({
         direct: ["read", "execute"],
         available: ["read", "web_search"],
       })
       expect(yield* visible({ tools: { deny: ["execute"] } })).toEqual({
-        direct: ["project_artifact", "read", "shell", "skill"],
-        available: ["project_artifact", "read", "shell", "skill"],
+        direct: ["read", "shell", "skill"],
+        available: ["read", "shell", "skill"],
       })
       expect(yield* visible({ tools: { enabled: false } })).toEqual({ direct: [], available: [] })
-      expect(yield* visible({ skills: { enabled: false }, project_artifacts: false })).toEqual({
+      expect(yield* visible({ skills: { enabled: false } })).toEqual({
         direct: ["read", "shell", "execute"],
         available: ["read", "shell", "web_fetch", "web_search"],
       })

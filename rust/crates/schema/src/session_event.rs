@@ -1,8 +1,8 @@
+use crate::recall;
 use crate::{
     DecodeError, DecodeErrorKind, DomainDecode, DomainEncode, JsonPath, JsonValue, LosslessString,
     ObjectDecoder, ObjectEncoder,
 };
-use crate::{recall, session_message};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Data(pub crate::JsonObject);
@@ -20,7 +20,6 @@ impl DomainEncode for Data {
         JsonValue::Object(self.0.clone())
     }
 }
-pub type ArtifactProvenance = session_message::ArtifactProvenance;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Source {
     pub start: crate::schema::NonNegativeInt,
@@ -68,7 +67,6 @@ pub fn definitions() -> Vec<crate::event::Definition> {
         durable("session.dots.access.changed", 1),
         durable("session.model.selected", 1),
         durable("session.daybreak.set", 1),
-        durable("session.project-artifacts-ended", 1),
         durable("session.guardrail.dismissed", 1),
         durable("session.guardrail.escalated", 1),
         durable("session.guardrail.decided", 1),
@@ -621,16 +619,11 @@ fn fields_for(event_type: &str, version: Option<i64>) -> Option<&'static [(&'sta
             ("origin", true),
             ("created", false),
         ],
-        "session.agent.selected" => &[("sessionID", false), ("agent", false), ("artifact", true)],
+        "session.agent.selected" => &[("sessionID", false), ("agent", false)],
         "session.model.selected" => &[("sessionID", false), ("model", false)],
         "session.profile.bound" => &[("sessionID", false), ("binding", true)],
         "session.guardrail.approved" => &[("sessionID", false), ("directories", false)],
         "session.daybreak.set" => &[("sessionID", false), ("daybreak", true)],
-        "session.project-artifacts-ended" => &[
-            ("sessionID", false),
-            ("oldProjectID", false),
-            ("newProjectID", false),
-        ],
         "session.moved" => &[
             ("sessionID", false),
             ("location", false),
@@ -791,7 +784,6 @@ fn fields_for(event_type: &str, version: Option<i64>) -> Option<&'static [(&'sta
             ("text", false),
             ("directory", true),
             ("conflicts", true),
-            ("artifact", true),
         ],
         "session.skill.deactivated" => &[
             ("sessionID", false),
@@ -1278,9 +1270,6 @@ fn validate_event_field(
             validate_as::<crate::permission::Ruleset>(value, path)
         }
         ("session.created", "created") => validate_as::<crate::schema::NonNegativeInt>(value, path),
-        ("session.agent.selected", "artifact") | ("session.skill.activated", "artifact") => {
-            validate_as::<ArtifactProvenance>(value, path)
-        }
         ("session.daybreak.set", "daybreak") => validate_as::<crate::model::Daybreak>(value, path),
         ("session.usage.recorded" | "session.usage.updated", "cost") => {
             validate_as::<crate::money::Usd>(value, path)
@@ -1486,11 +1475,6 @@ event_data_type!(ModelSelected, "session.model.selected", Some(1));
 event_data_type!(ProfileBound, "session.profile.bound", Some(1));
 event_data_type!(GuardrailApproved, "session.guardrail.approved", Some(1));
 event_data_type!(DaybreakSet, "session.daybreak.set", Some(1));
-event_data_type!(
-    ProjectArtifactsEnded,
-    "session.project-artifacts-ended",
-    Some(1)
-);
 event_data_type!(Moved, "session.moved", Some(1));
 event_data_type!(Renamed, "session.renamed", Some(1));
 event_data_type!(UsageRecorded, "session.usage.recorded", Some(1));

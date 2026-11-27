@@ -25,7 +25,6 @@ export interface Interface {
 const requiredTool: Partial<Record<ConfigCapabilities.BuiltinInstruction, string>> = {
   "subagent-reuse": "subagent",
   "shell-memory": "shell",
-  "project-artifact-authoring": "project_artifact",
   "decision-input": "question",
   "decision-use": "decision",
   "task-completion": "task_complete",
@@ -105,14 +104,6 @@ const layer = Layer.effect(
                 initial: (instruction) => instruction,
                 changed: (_previous, instruction) => instruction,
               },
-            }),
-            Instructions.make({
-              key: Instructions.Key.make("core/project-artifact-authoring"),
-              codec: Schema.toCodecJson(Schema.String),
-              read: Effect.succeed(
-                "At a safe boundary after the primary task is complete and validated, create or update at most one Project Artifact for each newly learned reusable insight. The insight must be repeated, durable, repository-specific, and useful in future work. Never persist transient task state, current todos, user preferences, prompts, logs, secrets, credentials, private paths/URLs, customer data, or speculation. Search existing artifacts first and update the owned project version rather than duplicating it. Prefer a skill; use a command only for an invokable instruction-only template; use a least-privilege agent only for a genuine reusable role. Workflows are not a first-class artifact. Never create or enable a plugin automatically. Do not interrupt the primary task to author an artifact.",
-              ),
-              render: { initial: (instruction) => instruction, changed: (_previous, instruction) => instruction },
             }),
             Instructions.make({
               key: Instructions.Key.make("core/git-worktree"),

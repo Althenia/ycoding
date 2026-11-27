@@ -53,8 +53,8 @@ use ycoding_core::{
     },
 };
 use ycoding_schema::{
-    DomainDecode, DomainEncode, JsonValue, LosslessString, ObjectEncoder, form, parse_json,
-    session, session_compaction, session_message, session_pending,
+    DomainDecode, DomainEncode, JsonValue, ObjectEncoder, form, parse_json, session,
+    session_compaction, session_message, session_pending,
 };
 use ycoding_store::{
     KeyPart,
@@ -276,7 +276,6 @@ struct Harness {
     jobs: job::Jobs,
     attachments: Arc<attachment_store::Store>,
     config: Arc<Configuration>,
-    activations: Arc<Mutex<Vec<LosslessString>>>,
 }
 impl Harness {
     async fn new(title_mode: TitleMode, config: &str) -> Self {
@@ -433,8 +432,6 @@ impl Harness {
         ));
         let jobs = job::Jobs::new();
         let forms = Forms::new(fixture.authority.authority(), fixture.authority.publisher());
-        let activations = Arc::new(Mutex::new(Vec::new()));
-        let activated = activations.clone();
         let tools = SessionTools::new(SessionDependencies {
             subagent: Subagent {
                 store: store.clone(),
@@ -446,10 +443,6 @@ impl Harness {
                 agents: agents.clone(),
                 config: config.clone(),
                 collator: Arc::new(|left, right| left.cmp(right)),
-                activate: Arc::new(move |_, agent| {
-                    activated.lock().unwrap().push(agent);
-                    Box::pin(async {})
-                }),
             },
             forms: forms.clone(),
             decisions: Arc::new(decision::Service {
@@ -495,14 +488,12 @@ impl Harness {
             jobs,
             attachments,
             config,
-            activations,
         }
     }
     fn context(&self) -> Context {
         self.fixture.context()
     }
     fn subagent(&self, policy: Arc<ycoding_core::tools::context::policy::LeafPolicy>) -> Subagent {
-        let activated = self.activations.clone();
         Subagent {
             store: self.store.clone(),
             orchestration: self.orchestration.clone(),
@@ -518,10 +509,6 @@ impl Harness {
             agents: self.agents.clone(),
             config: self.config.clone(),
             collator: Arc::new(|left, right| left.cmp(right)),
-            activate: Arc::new(move |_, agent| {
-                activated.lock().unwrap().push(agent);
-                Box::pin(async {})
-            }),
         }
     }
     async fn call(&self, name: &str, input: &str) -> Settlement {
@@ -1253,10 +1240,6 @@ async fn subagent_launch_is_background_runs_real_runner_and_records_child_ceilin
     let child = h.store.get(&id).unwrap().unwrap();
     assert_eq!(child.parent_id, Some(h.context().session_id));
     assert_eq!(child.agent.as_ref().unwrap().as_str(), Some("explore"));
-    assert_eq!(
-        h.activations.lock().unwrap().as_slice(),
-        &[LosslessString::from("explore")]
-    );
     assert!(
         child
             .permission_ceiling
@@ -1272,124 +1255,6 @@ async fn subagent_launch_is_background_runs_real_runner_and_records_child_ceilin
             && ycoding_schema::stringify_json(&event.data).contains("completed")
     ));
     assert!(!h.server.seen.lock().unwrap().is_empty());
-    h.close().await;
-}
-
-#[tokio::test]
-async fn managed_subagent_launch_records_source_provenance_at_the_parent_tool_call() {
-    use ycoding_core::resources::project_artifact::store::ManualWriteInput;
-    use ycoding_core::resources::{
-        command,
-        project_artifact::{accounting, source, source_registry, store::Paths},
-        skill,
-    };
-    use ycoding_core::tools::registry::Tool;
-    use ycoding_schema::{project, project_artifact};
-    let h = Harness::new(TitleMode::Local, "{}").await;
-    let client = h.fixture.authority.store.client();
-    let registry = Arc::new(Mutex::new(source_registry::Registry::default()));
-    let accounting = accounting::Service::new(client.clone(), "secret".into());
-    let artifacts = ycoding_core::resources::project_artifact::store::Service::new(
-        client.clone(),
-        Paths {
-            data: h.fixture.root.join("data"),
-            home: h.fixture.root.join("home"),
-            config: h.fixture.root.join("artifact-config"),
-        },
-        registry.clone(),
-    )
-    .with_accounting(accounting.clone());
-    let written = artifacts.write_manual(ManualWriteInput { scope: project_artifact::ScopeSelector::Project, project_id: Some(project::Id::decode(&JsonValue::String("project".into())).unwrap()), id: "explore", definition: &project_artifact::Definition::decode(&parse_json(r#"{"kind":"agent","name":"Explore","description":"Managed exploration","system":"Review safely.","mode":"subagent","permissions":[]}"#).unwrap()).unwrap(), expected: None, now: 100 }).unwrap();
-    let mut standard = (*h.agents.snapshot()).clone();
-    standard.remove(&"explore".into());
-    let source = source::Service::new(
-        source::Options {
-            client: client.clone(),
-            store: artifacts,
-            accounting,
-            registry,
-            location: h
-                .store
-                .get(&h.context().session_id)
-                .unwrap()
-                .unwrap()
-                .location,
-            project_id: project::Id::decode(&JsonValue::String("project".into())).unwrap(),
-            project_directory: "/workspace/project".into(),
-            data_root: h.fixture.root.join("data"),
-        },
-        source::Catalogs {
-            agents: standard,
-            commands: command::Service::default(),
-            skills: skill::Service::new(&h.fixture.root.join("cache")),
-        },
-    );
-    source.refresh().await;
-    let agents =
-        ycoding_core::resources::domain_state::DomainState::new(source.catalogs().await.agents);
-    let agents_snapshot = agents.snapshot();
-    assert_eq!(
-        agents_snapshot
-            .get(&"explore".into())
-            .unwrap()
-            .system
-            .as_ref()
-            .unwrap()
-            .as_str(),
-        Some("Review safely.")
-    );
-    let called = h
-        .store
-        .publish(ycoding_store::session::NewEvent {
-            id: "evt_managed_launch".into(),
-            aggregate_id: h.context().session_id.as_lossless().clone(),
-            created: 200,
-            type_: "session.tool.called.1".into(),
-            data: ObjectEncoder::new()
-                .field("sessionID", &h.context().session_id)
-                .field("assistantMessageID", &h.context().message_id)
-                .field("callID", &h.context().call_id)
-                .field("input", &JsonValue::Object(Default::default()))
-                .field("executed", &false)
-                .finish(),
-        })
-        .await
-        .unwrap();
-    let mut subagent = h.subagent(h.fixture.policy.clone());
-    subagent.store = subagent.store.with_artifact_source(source.clone());
-    subagent.agents = agents.clone();
-    subagent.preflight = Preflight::new(
-        subagent.store.clone(),
-        agents,
-        h.models.models.clone(),
-        h.models.credentials.clone(),
-    );
-    let output = within(subagent.settle(
-        parse_json(r#"{"agent":"explore","description":"Review","prompt":"Review this"}"#).unwrap(),
-        h.context(),
-    ))
-    .await
-    .unwrap();
-    assert_eq!(
-        get(&output.structured, "status"),
-        &JsonValue::String("running".into())
-    );
-    let rows = client
-        .snapshot()
-        .unwrap()
-        .scan::<ycoding_store::artifacts::ActivationTable>(Bound::Unbounded, Bound::Unbounded, 10)
-        .unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].source.as_str(), Some("subagent-launch"));
-    assert_eq!(
-        rows[0].session_id.as_ref(),
-        Some(h.context().session_id.as_lossless())
-    );
-    assert_eq!(rows[0].agent_id.as_ref().unwrap().as_str(), Some("explore"));
-    assert_eq!(rows[0].version_id, *written.version_id.as_lossless());
-    assert_eq!(rows[0].boundary_seq, called.seq);
-    assert_eq!(rows[0].activated_at, called.created);
-    assert!(source.diagnostics().is_empty());
     h.close().await;
 }
 
@@ -3092,7 +2957,6 @@ async fn subagent_custom_guardrail_deny_and_capacity_rejection_produce_no_child_
                 .is_empty()
         );
         assert!(h.jobs.list().is_empty());
-        assert!(h.activations.lock().unwrap().is_empty());
         assert!(h.server.seen.lock().unwrap().is_empty());
         drop(registration);
         h.close().await;
@@ -3170,7 +3034,6 @@ async fn cancelled_subagent_guardrail_review_releases_review_without_admitting_a
             .is_empty()
     );
     assert!(h.jobs.list().is_empty());
-    assert!(h.activations.lock().unwrap().is_empty());
     assert!(h.events().is_empty());
     assert!(h.server.seen.lock().unwrap().is_empty());
     drop(registration);
@@ -3272,7 +3135,6 @@ async fn cancelled_subagent_durable_admission_settles_before_cancelling_the_chil
     );
     assert!(h.store.get(&child).unwrap().is_some());
     assert!(h.jobs.list().is_empty());
-    assert!(h.activations.lock().unwrap().is_empty());
     drop(registration);
     h.close().await;
 }

@@ -11,7 +11,7 @@ import { BackendRestart, type RestartPorts } from "./restart"
 import { DesktopEditor, openDesktopEditor, type DraftEditorResult } from "./editor-integration"
 import type { YCodingEvent } from "@ycoding-ai/client"
 import { Coordination, Form, Integration, Interaction, KeepAwake, PermissionSaved, Project, ProjectCopy, Pty, Schema, Telemetry } from "@ycoding-ai/client/effect"
-import { terminalConnectInput, terminalControlInput, terminalResizeInput, terminalStreamInput, terminalWriteInput, agentSwitchInput, globalRequestsInput, usageDashboardInput, incidentsInput, incidentMutationInput, answerData, artifactInput, artifactMutationInput, artifactsInput, dotsTarget, editorInput, exportFilename, exportInput, insightsInput, pendingInput, predictionInput, promptGenerateInput, sameIdentity, sameTarget, sessionMarkdown, shellInput, sideChatContext, sideChatInput, skillInput, snapshotInput, steerInput, terminalInput, todoItems } from "./capabilities"
+import { terminalConnectInput, terminalControlInput, terminalResizeInput, terminalStreamInput, terminalWriteInput, agentSwitchInput, globalRequestsInput, usageDashboardInput, incidentsInput, incidentMutationInput, answerData, dotsTarget, editorInput, exportFilename, exportInput, insightsInput, pendingInput, predictionInput, promptGenerateInput, sameTarget, sessionMarkdown, shellInput, sideChatContext, sideChatInput, skillInput, snapshotInput, steerInput, terminalInput, todoItems } from "./capabilities"
 import { currentModel, modelSelection, modelSource, openedModelLocation, projectDefault, projectModels, running, sameModelLocation, sessionModelLocation, switchRequest, type ModelLocation } from "./models"
 import { resendUnsent, V5ClientError } from "@ycoding-ai/client/v5"
 import { connectNative } from "./native-client"
@@ -23,7 +23,7 @@ import { activityInput, attachmentRead, directoriesInput, pendingAction, isRevis
 import { bundledBackend } from "./resources"
 import { describeError, redactSecrets } from "./app-log"
 import { pinRequest, projectSessionRecord, projectSessions, sessionsQuery, sessionTarget } from "./sessions"
-import { DesktopError, utf8Length, type SessionAttachment, type ConnectionState, type Selection, type SessionFileChanges, type DirectoryListing, type OpenedDirectory, type IntegrationsSnapshot, type IntegrationMutationInput, type IntegrationMutationResult, type IntegrationAttempt, type McpResource, type McpMutationInput, type McpSnapshot, type SessionManageInput, type SessionManageResult, type VcsDiffSnapshot, type SystemInput, type SystemManageInput, type SystemSnapshot, type DisplayValue, type RequestReply, type SessionSnapshot, type PendingInput, type PendingInputs, type SessionRecall, type SessionInsights, type SideChat, type Prediction, type GeneratedPrompt, type SessionTerminals, type SessionTerminalRead, type TerminalFrames, type TerminalStream, type TranscriptExport, type ArtifactScope, type ArtifactKind, type ArtifactStage, type ArtifactIdentity, type ArtifactsSnapshot, type ArtifactDetail, type ArtifactMutationResult, type ArtifactPreviewKind, type DotsTarget, type Admission, type PendingRequests, type UsageDashboard, type Incidents, type ShellSummary, type ModelSelection, type TelemetryConsentSnapshot } from "./contract"
+import { DesktopError, utf8Length, type SessionAttachment, type ConnectionState, type Selection, type SessionFileChanges, type DirectoryListing, type OpenedDirectory, type IntegrationsSnapshot, type IntegrationMutationInput, type IntegrationMutationResult, type IntegrationAttempt, type McpResource, type McpMutationInput, type McpSnapshot, type SessionManageInput, type SessionManageResult, type VcsDiffSnapshot, type SystemInput, type SystemManageInput, type SystemSnapshot, type DisplayValue, type RequestReply, type SessionSnapshot, type PendingInput, type PendingInputs, type SessionRecall, type SessionInsights, type SideChat, type Prediction, type GeneratedPrompt, type SessionTerminals, type SessionTerminalRead, type TerminalFrames, type TerminalStream, type TranscriptExport, type DotsTarget, type Admission, type PendingRequests, type UsageDashboard, type Incidents, type ShellSummary, type ModelSelection, type TelemetryConsentSnapshot } from "./contract"
 
 type Native = Awaited<ReturnType<typeof connectNative>>
 type Control = ReturnType<typeof openControl>
@@ -541,7 +541,6 @@ export class BackendController {
   private generation = 0
   private revision = 0
   private pages?: Pages
-  private previews = new Map<string, { readonly connection: number; readonly preview: ArtifactPreviewKind; readonly identity: ArtifactIdentity; readonly expiresAt: number; readonly confirmable: boolean }>()
   private snapshot: ConnectionState = { generation: 0, status: "idle" }
   private readonly streams: TerminalRelay
   private readonly editor: Pick<DesktopEditor, "read" | "close">
@@ -1203,10 +1202,9 @@ export class BackendController {
         const source = row.source.type === "git" ? { ...fields(row.source, ["type", "branch"]), repository: credentialFree(row.source.repository) } : fields(row.source, ["type", "path"])
         return displayValue({ ...fields(row, ["name", "path", "description", "hidden"]), source })
       }
-      const [skills, sessionSkills, artifacts, plugins, remote, dots, server, browser, browserTabs, isolatedBrowser, isolatedBrowserTabs, configDiagnostics, providers, references] = await Promise.all([
+      const [skills, sessionSkills, plugins, remote, dots, server, browser, browserTabs, isolatedBrowser, isolatedBrowserTabs, configDiagnostics, providers, references] = await Promise.all([
         read("Skills", () => api.skill.list(query, { signal }), (result) => rows(catalogEnvelope(result, location, "skill"), ["id", "name", "description"])),
         requested.sessionID ? read("Session skills", () => api.session.skills({ sessionID: requested.sessionID! }, { signal }), (result) => rows(result, ["id", "name", "state", "inactiveReason", "activatedBy", "activationMessageID", "conflicts", "declarations"])) : undefined,
-        read("Artifacts", () => api.projectArtifact.artifact.list({ ...query, scope: "project" }, { signal }), (result) => rows(result, ["scope", "kind", "id", "name", "description", "stage", "revision", "currentVersionID", "currentDigest", "lastUsedAt", "timeUpdated"])),
         read("Plugins", () => api.plugin.list(query, { signal }), (result) => rows(catalogEnvelope(result, location, "plugin"), ["id"])),
         read("Remote", () => api.remote.get({ signal }), (result) => displayFields(result, ["state", "message"])),
         read("Dots", () => api.dots.get({ signal }), (result) => displayFields(result, ["access", "configuration", "connection", "computer"])),
@@ -1219,18 +1217,17 @@ export class BackendController {
         read("Providers", () => api.provider.list(query, { signal }), (result) => rows(catalogEnvelope(result, location, "provider"), ["id", "name", "integrationID", "disabled", "package"])),
         read("References", () => api.reference.list(query, { signal }), (result) => catalogEnvelope(result, location, "reference").map(reference)),
       ])
-      return { revision, connection: { ...this.state() }, ...(requested.sessionID ? { sessionID: requested.sessionID } : {}), ...(location?.directory ? { directory: location.directory } : {}), ...(skills === undefined ? {} : { skills }), ...(sessionSkills === undefined ? {} : { sessionSkills }), ...(artifacts === undefined ? {} : { artifacts }), ...(plugins === undefined ? {} : { plugins }), ...(remote === undefined ? {} : { remote }), ...(dots === undefined ? {} : { dots }), ...(server === undefined ? {} : { server: server as { urls: string[] } }), ...(browser === undefined ? {} : { browser }), ...(browserTabs === undefined ? {} : { browserTabs }), ...(isolatedBrowser === undefined ? {} : { isolatedBrowser }), ...(isolatedBrowserTabs === undefined ? {} : { isolatedBrowserTabs }), ...(configDiagnostics === undefined ? {} : { configDiagnostics }), ...(providers === undefined ? {} : { providers }), ...(references === undefined ? {} : { references }), notices }
+      return { revision, connection: { ...this.state() }, ...(requested.sessionID ? { sessionID: requested.sessionID } : {}), ...(location?.directory ? { directory: location.directory } : {}), ...(skills === undefined ? {} : { skills }), ...(sessionSkills === undefined ? {} : { sessionSkills }), ...(plugins === undefined ? {} : { plugins }), ...(remote === undefined ? {} : { remote }), ...(dots === undefined ? {} : { dots }), ...(server === undefined ? {} : { server: server as { urls: string[] } }), ...(browser === undefined ? {} : { browser }), ...(browserTabs === undefined ? {} : { browserTabs }), ...(isolatedBrowser === undefined ? {} : { isolatedBrowser }), ...(isolatedBrowserTabs === undefined ? {} : { isolatedBrowserTabs }), ...(configDiagnostics === undefined ? {} : { configDiagnostics }), ...(providers === undefined ? {} : { providers }), ...(references === undefined ? {} : { references }), notices }
     })
   }
 
   async manageSystem(input: unknown): Promise<SystemSnapshot> {
     const request = mutation<SystemManageInput>(input, {
       "browser-start": {}, "browser-forget": {}, "isolated-browser-start": { url: textInput }, "isolated-browser-stop": {},
-      "artifact-enable": { artifact: object }, "artifact-disable": { artifact: object }, "remote-set": { enabled: boolean },
+      "remote-set": { enabled: boolean },
       "isolated-browser-pause": {}, "isolated-browser-resume": {}, "dots-set": { enabled: boolean, expectedRevision: isRevision }, "dots-attach": { replaceOthers: boolean, expectedTarget: maybe(dotsTarget) }, "dots-detach": { expectedTarget: maybe(dotsTarget) },
     }, { sessionID: maybe((value) => { session(value); return true }), directory: maybe(directoryInput) })
     if ((request.kind.startsWith("browser-") || request.kind.startsWith("isolated-browser-")) && request.sessionID === undefined) throw new DesktopError("Choose a Session before managing a browser.")
-    if (request.kind === "artifact-enable" || request.kind === "artifact-disable") checkedObject(request.artifact, { scope: (value) => value === "project" || value === "global", kind: (value) => literal(value, ["skill", "command", "agent", "plugin"]), id: idInput, expectedRevision: isRevision, expectedVersionID: idInput, expectedDigest: (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value) })
     if (request.kind === "isolated-browser-start") safeURL(request.url, ["http:", "https:"])
     const changed = "The system change was not confirmed. Refresh status before retrying."
     return this.use(changed, async (api, signal, _revision, ensureCurrent) => {
@@ -1249,8 +1246,6 @@ export class BackendController {
         case "browser-forget": await api.browser.forget({ sessionID }, options); break
         case "isolated-browser-start": await api.isolatedBrowser.start({ sessionID, url: request.url }, options); break
         case "isolated-browser-stop": await api.isolatedBrowser.stop({ sessionID }, options); break
-        case "artifact-enable": await api.projectArtifact.artifact.enable({ ...(location ? { location } : {}), ...request.artifact }, options); break
-        case "artifact-disable": await api.projectArtifact.artifact.disable({ ...(location ? { location } : {}), ...request.artifact }, options); break
         case "remote-set": await api.remote.set({ enabled: request.enabled }, options); break
         case "isolated-browser-pause":
         case "isolated-browser-resume": {
@@ -1550,7 +1545,7 @@ export class BackendController {
       const { kind, ...query } = request
       const data = request.kind === "report" ? await api.incident.report(query as Omit<typeof request, "kind">, { signal })
         : request.kind === "recent" ? await api.incident.recent(query as Omit<typeof request, "kind">, { signal })
-        : await api.incident.guidance.get({ provider: request.provider, model: request.model, ...(await this.artifactLocation(api, signal, modelSource(request.source))) }, { signal })
+        : await api.incident.guidance.get({ provider: request.provider, model: request.model, ...(await this.sourceLocation(api, signal, modelSource(request.source))) }, { signal })
       if (!object(data)) throw new DesktopError("The backend returned invalid model incidents. Refresh to retry.")
       return { revision, kind, data: displayValue(data, reportHiddenFields) }
     })
@@ -1560,7 +1555,7 @@ export class BackendController {
     const request = incidentMutationInput(input)
     const changed = "The incident guidance change was not confirmed. Refresh incidents before retrying."
     return this.use(changed, async (api, signal, revision, ensureCurrent) => {
-      const location = await this.artifactLocation(api, signal, modelSource(request.source))
+      const location = await this.sourceLocation(api, signal, modelSource(request.source))
       ensureCurrent("The backend connection changed before the incident guidance was cleared. Refresh incidents and try again.")
       const data = await api.incident.guidance.clear({ provider: request.provider, model: request.model, ...location }, { signal })
       if (!object(data)) throw new DesktopError(changed)
@@ -2267,94 +2262,8 @@ export class BackendController {
     })
   }
 
-  private async artifactLocation(api: Native["api"], signal: AbortSignal, source: ReturnType<typeof modelSource>) {
+  private async sourceLocation(api: Native["api"], signal: AbortSignal, source: ReturnType<typeof modelSource>) {
     const location = await parityLocation(api, signal, source)
     return location ? { location } : {}
-  }
-
-  private async readArtifact(api: Native["api"], signal: AbortSignal, query: { readonly location?: ModelLocation }, scope: ArtifactScope, kind: ArtifactKind, id: string) {
-    const details = await api.projectArtifact.artifact.get({ ...query, scope, kind, id }, { signal })
-    if (!object(details) || !object(details.artifact) || details.artifact.id !== id || details.artifact.kind !== kind || !count(details.artifact.revision) || !literal(details.artifact.stage, ["trial", "active", "degraded", "disabled", "quarantine"]) ||
-      !object(details.currentVersion) || !nonempty(details.currentVersion.id) || !nonempty(details.currentVersion.contentDigest) || !Array.isArray(details.versions) || !details.versions.every((version) => object(version) && nonempty(version.id)))
-      throw new DesktopError("The backend returned an invalid artifact. Refresh to retry.")
-    const identity: ArtifactIdentity = { scope, kind, id, expectedRevision: details.artifact.revision, expectedVersionID: details.currentVersion.id, expectedDigest: details.currentVersion.contentDigest }
-    return { details, identity, stage: details.artifact.stage as ArtifactStage, versionIDs: details.versions.map((version) => version.id) }
-  }
-
-  async artifacts(input: unknown): Promise<ArtifactsSnapshot> {
-    const request = artifactsInput(input)
-    const source = modelSource(request.source)
-    return this.use("Artifacts could not be read. Refresh to retry.", async (api, signal, revision) => {
-      const query = await this.artifactLocation(api, signal, source)
-      const rows = await api.projectArtifact.artifact.list({ ...query, scope: request.scope, ...(request.stage === undefined ? {} : { stage: request.stage }) }, { signal })
-      if (!Array.isArray(rows)) throw new DesktopError("The backend returned an invalid artifact list. Refresh to retry.")
-      const keys = request.scope === "trash" ? ["deletionID", "scope", "kind", "id", "priorStage", "priorVersionID", "deletedAt", "purgeAfter"] : ["scope", "kind", "id", "name", "description", "stage", "revision", "currentVersionID", "currentDigest", "lastUsedAt", "timeUpdated"]
-      return { revision, source, scope: request.scope, items: rows.map((row) => displayFields(row, keys)) }
-    })
-  }
-
-  async artifact(input: unknown): Promise<ArtifactDetail> {
-    const request = artifactInput(input)
-    const source = modelSource(request.source)
-    return this.use("The artifact could not be read. Refresh to retry.", async (api, signal, revision) => {
-      const query = await this.artifactLocation(api, signal, source)
-      const [read, metrics] = await Promise.all([this.readArtifact(api, signal, query, request.scope, request.kind, request.id), api.projectArtifact.artifact.metrics({ ...query, scope: request.scope, kind: request.kind, id: request.id }, { signal })])
-      return { revision, source, identity: read.identity, stage: read.stage, versionIDs: read.versionIDs, details: displayValue(read.details), metrics: displayValue(metrics) }
-    })
-  }
-
-  async manageArtifact(input: unknown): Promise<ArtifactMutationResult> {
-    const request = artifactMutationInput(input)
-    const source = modelSource(request.source)
-    const changed = "The artifact change was not confirmed. Refresh artifacts before retrying."
-    const stale = "The artifact changed. Refresh it before retrying."
-    return this.use(changed, async (api, signal, revision, ensureCurrent) => {
-      const query = await this.artifactLocation(api, signal, source)
-      const options = { signal }
-      if (request.kind === "restore") {
-        const trash = await api.projectArtifact.artifact.list({ ...query, scope: "trash" }, options)
-        if (!Array.isArray(trash) || !trash.some((row) => object(row) && "deletionID" in row && row.deletionID === request.deletionID)) throw new DesktopError("This artifact is no longer in trash. Refresh artifacts.")
-        ensureCurrent(changed)
-        await api.projectArtifact.artifact.restore({ ...query, deletionID: request.deletionID }, options)
-        return { revision }
-      }
-      const target = request.artifact
-      const current = await this.readArtifact(api, signal, query, target.scope, target.kind, target.id)
-      if (!sameIdentity(current.identity, target)) throw new DesktopError(stale)
-      const identity = { ...query, scope: target.scope, kind: target.kind, id: target.id, expectedRevision: target.expectedRevision, expectedVersionID: target.expectedVersionID, expectedDigest: target.expectedDigest }
-      if (request.kind === "revert") {
-        if (request.targetVersionID === target.expectedVersionID || !current.versionIDs.includes(request.targetVersionID)) throw new DesktopError("Choose an earlier version of this artifact.")
-        ensureCurrent(changed)
-        await api.projectArtifact.artifact.revert({ ...identity, targetVersionID: request.targetVersionID }, options)
-        return { revision }
-      }
-      if (request.kind === "remove") {
-        ensureCurrent(changed)
-        return { revision, result: displayValue(await api.projectArtifact.artifact.remove(identity, options)) }
-      }
-      const kind = target.kind
-      const id = target.id
-      if (request.kind === "preview") {
-        ensureCurrent(changed)
-        const preview = request.preview === "promotion" ? await api.projectArtifact.artifact.promotion.preview({ ...query, kind, id, expectedRevision: target.expectedRevision, expectedVersionID: target.expectedVersionID, expectedDigest: target.expectedDigest }, options)
-          : request.preview === "fork" ? await api.projectArtifact.artifact.fork.preview({ ...query, kind, id, expectedRevision: target.expectedRevision, expectedVersionID: target.expectedVersionID, expectedDigest: target.expectedDigest }, options)
-            : await api.projectArtifact.artifact.shadow.preview({ ...query, kind, id, expectedRevision: target.expectedRevision, expectedVersionID: target.expectedVersionID, expectedDigest: target.expectedDigest }, options)
-        if (!object(preview) || !nonempty(preview.token) || utf8Length(preview.token) > 1024 || !count(preview.expiresAt)) throw new DesktopError("The backend returned an invalid confirmation preview.")
-        const confirmable = !(request.preview === "promotion" && "collision" in preview && preview.collision !== undefined)
-        this.previews.set(preview.token, { connection: revision, preview: request.preview, identity: target, expiresAt: preview.expiresAt, confirmable })
-        return { revision, preview: { kind: request.preview, token: preview.token, expiresAt: preview.expiresAt, confirmable, details: displayValue(preview) } }
-      }
-      const issued = this.previews.get(request.token)
-      if (!issued || issued.connection !== revision || issued.preview !== request.preview || !sameIdentity(issued.identity, target)) throw new DesktopError("Preview this change again before confirming it.")
-      if (!issued.confirmable) throw new DesktopError("This promotion collides with an existing global artifact and cannot be confirmed.")
-      if (issued.expiresAt <= Date.now()) { this.previews.delete(request.token); throw new DesktopError("The confirmation preview expired. Preview the change again.") }
-      ensureCurrent(changed)
-      this.previews.delete(request.token)
-      const confirm = { ...query, kind, id, token: request.token }
-      if (request.preview === "promotion") return { revision, result: displayValue(await api.projectArtifact.artifact.promotion.confirm(confirm, options)) }
-      if (request.preview === "fork") return { revision, result: displayValue(await api.projectArtifact.artifact.fork.confirm(confirm, options)) }
-      await api.projectArtifact.artifact.shadow.confirm(confirm, options)
-      return { revision }
-    }, { revision: request.revision, unsent: "The backend connection changed before the artifact change was sent. Refresh artifacts and try again.", changed })
   }
 }

@@ -211,11 +211,10 @@ export type SessionManageResult = { readonly revision: number; readonly sessionI
 export type VcsDiffSnapshot = { readonly revision: number; readonly source: ModelSource; readonly mode: "git" | "branch"; readonly branch: Awaited<ReturnType<YCodingClient["vcs"]["branch"]>>["data"]; readonly status: Awaited<ReturnType<YCodingClient["vcs"]["status"]>>["data"]; readonly files: Awaited<ReturnType<YCodingClient["vcs"]["diff"]>>["data"] }
 export type SystemInput = { readonly sessionID?: string; readonly directory?: string }
 export type DisplayValue = null | string | number | boolean | readonly DisplayValue[] | { readonly [key: string]: DisplayValue }
-export type SystemSnapshot = { readonly revision: number; readonly connection: ConnectionState; readonly sessionID?: string; readonly directory?: string; readonly browser?: DisplayValue; readonly browserTabs?: DisplayValue; readonly pairing?: { readonly secret: string; readonly expiresAt: number }; readonly isolatedBrowser?: DisplayValue; readonly isolatedBrowserTabs?: DisplayValue; readonly skills?: DisplayValue; readonly sessionSkills?: DisplayValue; readonly artifacts?: DisplayValue; readonly plugins?: DisplayValue; readonly remote?: DisplayValue; readonly dots?: DisplayValue; readonly server?: { readonly urls: readonly string[] }; readonly configDiagnostics?: DisplayValue; readonly providers?: DisplayValue; readonly references?: DisplayValue; readonly notices: Readonly<Record<string, string>> }
+export type SystemSnapshot = { readonly revision: number; readonly connection: ConnectionState; readonly sessionID?: string; readonly directory?: string; readonly browser?: DisplayValue; readonly browserTabs?: DisplayValue; readonly pairing?: { readonly secret: string; readonly expiresAt: number }; readonly isolatedBrowser?: DisplayValue; readonly isolatedBrowserTabs?: DisplayValue; readonly skills?: DisplayValue; readonly sessionSkills?: DisplayValue; readonly plugins?: DisplayValue; readonly remote?: DisplayValue; readonly dots?: DisplayValue; readonly server?: { readonly urls: readonly string[] }; readonly configDiagnostics?: DisplayValue; readonly providers?: DisplayValue; readonly references?: DisplayValue; readonly notices: Readonly<Record<string, string>> }
 export type SystemManageInput = SystemInput & { readonly revision: number } & (
   | { readonly kind: "browser-start" | "browser-forget" | "isolated-browser-stop" }
   | { readonly kind: "isolated-browser-start"; readonly url: string }
-  | { readonly kind: "artifact-enable" | "artifact-disable"; readonly artifact: Omit<Parameters<YCodingClient["projectArtifact"]["artifact"]["enable"]>[0], "location"> }
   | { readonly kind: "remote-set"; readonly enabled: boolean }
   | { readonly kind: "isolated-browser-pause" | "isolated-browser-resume" }
   | { readonly kind: "dots-set"; readonly enabled: boolean; readonly expectedRevision: number }
@@ -262,22 +261,6 @@ export type TerminalResizeInput = { readonly sessionID: string; readonly ptyID: 
 export type TranscriptExportInput = { readonly sessionID: string; readonly format: "json" | "markdown"; readonly thinking?: boolean; readonly debug?: boolean }
 export type TranscriptExport = { readonly revision: number; readonly sessionID: string; readonly format: "json" | "markdown"; readonly content: string; readonly filename: string; readonly mimeType: "application/json" | "text/markdown" }
 export type SavedExport = { readonly saved: boolean; readonly path?: string }
-export type ArtifactScope = "project" | "global"
-export type ArtifactKind = "skill" | "command" | "agent" | "plugin"
-export type ArtifactStage = "trial" | "active" | "degraded" | "disabled" | "quarantine"
-export type ArtifactsInput = { readonly source?: DesktopSource; readonly scope: ArtifactScope | "trash"; readonly stage?: ArtifactStage }
-export type ArtifactsSnapshot = { readonly revision: number; readonly source: ModelSource; readonly scope: ArtifactScope | "trash"; readonly items: readonly DisplayValue[] }
-export type ArtifactInput = { readonly source?: DesktopSource; readonly scope: ArtifactScope; readonly kind: ArtifactKind; readonly id: string }
-export type ArtifactIdentity = { readonly scope: ArtifactScope; readonly kind: ArtifactKind; readonly id: string; readonly expectedRevision: number; readonly expectedVersionID: string; readonly expectedDigest: string }
-export type ArtifactDetail = { readonly revision: number; readonly source: ModelSource; readonly identity: ArtifactIdentity; readonly stage: ArtifactStage; readonly versionIDs: readonly string[]; readonly details: DisplayValue; readonly metrics: DisplayValue }
-export type ArtifactPreviewKind = "promotion" | "fork" | "shadow"
-export type ArtifactMutationInput = { readonly revision: number; readonly source?: DesktopSource } & (
-  | { readonly kind: "revert"; readonly artifact: ArtifactIdentity; readonly targetVersionID: string }
-  | { readonly kind: "remove"; readonly artifact: ArtifactIdentity }
-  | { readonly kind: "preview"; readonly preview: ArtifactPreviewKind; readonly artifact: ArtifactIdentity }
-  | { readonly kind: "confirm"; readonly preview: ArtifactPreviewKind; readonly artifact: ArtifactIdentity; readonly token: string }
-  | { readonly kind: "restore"; readonly deletionID: string })
-export type ArtifactMutationResult = { readonly revision: number; readonly preview?: { readonly kind: ArtifactPreviewKind; readonly token: string; readonly expiresAt: number; readonly confirmable: boolean; readonly details: DisplayValue }; readonly result?: DisplayValue }
 export type DotsTarget = { readonly dotID: string; readonly threadID: string; readonly environmentID: string; readonly revision: string }
 export type DesktopMenuAction = "check-for-updates" | "open-settings" | "new-chat"
 export type ClipboardContent = {
@@ -420,9 +403,6 @@ export type DesktopAPI = {
   readonly terminalResize: (input: TerminalResizeInput) => Promise<SessionTerminalRead>
   readonly exportSession: (input: TranscriptExportInput) => Promise<TranscriptExport>
   readonly saveExportSession: (input: TranscriptExportInput) => Promise<SavedExport>
-  readonly artifacts: (input: ArtifactsInput) => Promise<ArtifactsSnapshot>
-  readonly artifact: (input: ArtifactInput) => Promise<ArtifactDetail>
-  readonly manageArtifact: (input: ArtifactMutationInput) => Promise<ArtifactMutationResult>
   readonly onState: (listen: (state: ConnectionState) => void) => () => void
   readonly onEvent: (listen: (event: YCodingEvent) => void) => () => void
   readonly onResync: (listen: () => void) => () => void

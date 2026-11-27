@@ -1,12 +1,11 @@
 use std::{fs, path::Path};
 use ycoding_core::resources::{
     config::Roots,
-    project_artifact::{adapter, package, source::Provenance},
     recall::document::{Activation, Document, Kind, Scope, Status, Trust},
     skill::{Service, document},
 };
 use ycoding_schema::{
-    DomainDecode, JsonValue, parse_json,
+    DomainDecode, parse_json,
     skill::{DirectorySource, EmbeddedSource, Info, Source},
 };
 
@@ -66,10 +65,7 @@ async fn directory_skills_become_documents_with_fields_hash_and_activation_signa
     assert_eq!(audit.scope, Scope::Project);
     assert_eq!(audit.key(), (Scope::Project, Kind::Skill, "audit"));
     assert!(audit.source.path.ends_with("skills/audit/SKILL.md"));
-    let expected = package::sha256(&auto.into())
-        .as_lossless()
-        .to_utf8()
-        .unwrap();
+    let expected = "b9e936361844bdd88d76b5cce358ec06b408a2519a4dc6387344973926bd1489";
     assert_eq!(audit.source.content_hash, expected);
     assert_eq!(audit.source.revision, expected);
     assert_eq!(audit.fields.doc_type, "skill");
@@ -146,68 +142,12 @@ async fn embedded_skills_hash_their_content_and_carry_no_cue_fields() {
     let roots = Roots::development(&base).unwrap();
     let documents = service.documents(&infos, |info| document::location_origin(info, None, &roots));
     let built = by_id(&documents, "built-in");
-    let expected = package::sha256(&"Embedded body.".into())
-        .as_lossless()
-        .to_utf8()
-        .unwrap();
+    let expected = "794b1c89c31f6d1d8ec32d1b422565e01757c45976b7be5f8b96885cd930030f";
     assert_eq!(built.source.content_hash, expected);
     assert_eq!(built.source.revision, expected);
     assert_eq!(built.scope, Scope::Workspace);
     assert_eq!(built.fields.title, "Built In");
     assert!(built.fields.tags.is_empty() && built.fields.keywords.is_empty());
     assert_eq!(built.lifecycle.activation, None);
-    fs::remove_dir_all(base).unwrap();
-}
-
-#[tokio::test]
-async fn artifact_backed_skills_take_version_and_digest_from_provenance() {
-    let base = base("artifact");
-    let id = ycoding_schema::project_artifact::Id::decode(&JsonValue::String("reviewer".into()))
-        .unwrap();
-    let definition = ycoding_schema::project_artifact::Definition::decode(
-        &parse_json(r#"{"kind":"skill","name":"Reviewer","description":"Reviews a change. Use when a diff needs review.","content":"Review the diff.","tags":["review","diff"]}"#).unwrap(),
-    )
-    .unwrap();
-    let rendered = adapter::render(&id, &definition);
-    write(
-        &base,
-        "managed/reviewer/SKILL.md",
-        rendered.to_utf8().unwrap().as_str(),
-    );
-    let mut service = Service::new(&base.join("cache"));
-    let infos = list(&mut service, &base.join("managed")).await;
-    let digest = package::sha256(&rendered);
-    let provenance = |scope: &'static str| Provenance {
-        scope,
-        scope_id: ycoding_schema::project_artifact::ScopeId::decode(&JsonValue::String(
-            "pas_fixture".into(),
-        ))
-        .unwrap(),
-        version_id: ycoding_schema::project_artifact::VersionId::decode(&JsonValue::String(
-            "pav_fixture".into(),
-        ))
-        .unwrap(),
-        kind: ycoding_schema::project_artifact::Kind::decode(&JsonValue::String("skill".into()))
-            .unwrap(),
-        id: id.clone(),
-        expected_revision: ycoding_schema::project_artifact::Revision::new(0).unwrap(),
-        expected_digest: digest.clone(),
-    };
-    let project = service.documents(&infos, |_| {
-        document::artifact_origin(&provenance("project"))
-    });
-    let global = service.documents(&infos, |_| document::artifact_origin(&provenance("global")));
-    let doc = &project[0];
-    assert_eq!(doc.scope, Scope::Project);
-    assert_eq!(global[0].scope, Scope::Knowledge);
-    assert_eq!(doc.source.revision, "pav_fixture");
-    assert_eq!(
-        doc.source.content_hash,
-        digest.as_lossless().to_utf8().unwrap()
-    );
-    assert_eq!(doc.lifecycle.trust, Trust::Verified);
-    assert_eq!(doc.fields.title, "Reviewer");
-    assert_eq!(doc.fields.tags, ["review", "diff"]);
-    assert_eq!(doc.fields.body.trim(), "Review the diff.");
     fs::remove_dir_all(base).unwrap();
 }

@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use ycoding_core::session::autonomy::{DecisionMode, Service, State};
 use ycoding_schema::{JsonValue, parse_json, session};
 use ycoding_store::{
-    KeyPart, Store, artifacts, resources,
+    KeyPart, Store, database_format, resources,
     session::{Session, SessionTable},
     tuple_key,
 };
@@ -37,9 +37,9 @@ fn stable_migration(store: &Store, id: &str) {
     let id = id.to_owned();
     store
         .submit(move |tx| {
-            artifacts::MigrationTable::put(
+            database_format::MigrationTable::put(
                 tx,
-                &artifacts::Migration {
+                &database_format::Migration {
                     id: id.into(),
                     time_completed: 1,
                 },

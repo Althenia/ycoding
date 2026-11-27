@@ -106,7 +106,7 @@ test("the stdio worker routes canonical capability operations through the real c
 
 test("every canonical capability operation is accepted by the stdio worker", async () => {
   const owned = await worker()
-  const operations = ["sessionSnapshot", "pendingInputs", "sessionRecall", "sessionInsights", "switchAgent", "activateSkill", "runShell", "sendEditorContext", "openSideChat", "steerParent", "prediction", "promptGenerate", "terminals", "terminal", "exportSession", "artifacts", "artifact", "manageArtifact", "usageDashboard", "incidents", "manageIncident", "appendTelemetry", "telemetryConsent"]
+  const operations = ["sessionSnapshot", "pendingInputs", "sessionRecall", "sessionInsights", "switchAgent", "activateSkill", "runShell", "sendEditorContext", "openSideChat", "steerParent", "prediction", "promptGenerate", "terminals", "terminal", "exportSession", "usageDashboard", "incidents", "manageIncident", "appendTelemetry", "telemetryConsent"]
   try {
     for (const operation of operations) {
       const reply = await owned.request(operation, { invalid: true })

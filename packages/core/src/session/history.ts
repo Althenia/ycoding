@@ -288,37 +288,16 @@ function mergeTranscript(
     .map((entry) => entry.message)
 }
 
-export function visibleForModel<T extends { readonly seq: number; readonly message: SessionMessage.Info }>(
-  entries: ReadonlyArray<T>,
-  durableBoundary?: number,
-) {
-  const boundary =
-    durableBoundary ??
-    entries.findLast(
-      (entry) =>
-        entry.message.type === "synthetic" &&
-        entry.message.metadata !== undefined &&
-        typeof entry.message.metadata.projectArtifactsEnded === "object" &&
-        entry.message.metadata.projectArtifactsEnded !== null,
-    )?.seq
-  if (boundary === undefined) return entries
-  return entries.filter((entry) => {
-    if (entry.seq >= boundary) return !isProjectArtifactBoundary(entry.message)
-    return !isProjectArtifact(entry.message)
-  })
-}
-
 const entriesVisibleForModel = Effect.fnUntraced(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
   model?: CatalogModel.Ref,
   accountIdentityDigest?: string,
 ) {
-  const boundary = yield* latestProjectArtifactBoundary(db, sessionID)
   const selection = yield* SessionContextState.selectEntries(
     db,
     sessionID,
-    (floor) => messageEntries(db, sessionID, floor).pipe(Effect.map((entries) => visibleForModel(entries, boundary))),
+    (floor) => messageEntries(db, sessionID, floor),
     model,
     accountIdentityDigest,
   )
@@ -396,8 +375,6 @@ export const observationState = Effect.fn("SessionHistory.observationState")(fun
     .transaction(() =>
       Effect.gen(function* () {
         const compaction = yield* latestCompaction(db, sessionID)
-        let boundary = yield* latestProjectArtifactBoundary(db, sessionID)
-        let boundaryLoaded = boundary !== undefined
         let before: number | undefined
         let exhausted = false
         const latest = new Map<ObservationSource, string>()
@@ -405,25 +382,6 @@ export const observationState = Effect.fn("SessionHistory.observationState")(fun
         while (!exhausted && latest.size < 4) {
           const selection = yield* SessionContextState.selectEntries(db, sessionID, (floor) =>
             Effect.gen(function* () {
-              if (!boundaryLoaded) {
-                boundary = (yield* db
-                  .select({ seq: SessionMessageTable.seq })
-                  .from(SessionMessageTable)
-                  .where(
-                    and(
-                      eq(SessionMessageTable.session_id, sessionID),
-                      eq(SessionMessageTable.type, "synthetic"),
-                      compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
-                      floor?.retained === undefined ? floorCondition(floor) : undefined,
-                      sql`json_type(${SessionMessageTable.data}, '$.metadata.projectArtifactsEnded') in ('object', 'array')`,
-                    ),
-                  )
-                  .orderBy(desc(SessionMessageTable.seq))
-                  .limit(1)
-                  .get()
-                  .pipe(Effect.orDie))?.seq
-                boundaryLoaded = true
-              }
               const rows = yield* db
                 .select()
                 .from(SessionMessageTable)
@@ -446,7 +404,7 @@ export const observationState = Effect.fn("SessionHistory.observationState")(fun
               const entries = yield* Effect.forEach(rows.toReversed(), (row) =>
                 decodeMessageRow(row).pipe(Effect.map((message) => ({ seq: row.seq, message }))),
               )
-              return visibleForModel(entries, boundary)
+              return entries
             }),
           )
           const candidates = selection.entries
@@ -561,44 +519,6 @@ export const preview = Effect.fn("SessionHistory.preview")(function* (
     )
     .pipe(Effect.catch((error) => (error instanceof Instructions.InitializationBlocked ? error : Effect.die(error))))
 })
-
-const latestProjectArtifactBoundary = Effect.fnUntraced(function* (db: DatabaseService, sessionID: SessionSchema.ID) {
-  return (yield* db
-    .select({ seq: EventTable.seq })
-    .from(EventTable)
-    .where(
-      and(
-        eq(EventTable.aggregate_id, sessionID),
-        eq(EventTable.type, EventRuntime.versionedType(SessionEvent.ProjectArtifactsEnded.type, 1)),
-      ),
-    )
-    .orderBy(desc(EventTable.seq))
-    .limit(1)
-    .get()
-    .pipe(Effect.orDie))?.seq
-})
-
-function isProjectArtifact(message: SessionMessage.Info) {
-  if (message.type === "skill" || message.type === "agent-switched") return message.artifact?.sourceScope === "project"
-  if (message.type !== "user") return false
-  const artifact = message.metadata?.projectArtifact
-  return (
-    artifact !== undefined &&
-    typeof artifact === "object" &&
-    artifact !== null &&
-    "sourceScope" in artifact &&
-    artifact.sourceScope === "project"
-  )
-}
-
-function isProjectArtifactBoundary(message: SessionMessage.Info) {
-  return (
-    message.type === "synthetic" &&
-    message.metadata !== undefined &&
-    typeof message.metadata.projectArtifactsEnded === "object" &&
-    message.metadata.projectArtifactsEnded !== null
-  )
-}
 
 /** Returns the session's sole user message, or `undefined` once a second one exists. */
 export const firstUserMessageIfOnly = Effect.fn("SessionHistory.firstUserMessageIfOnly")(function* (

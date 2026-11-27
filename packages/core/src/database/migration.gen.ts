@@ -53,5 +53,6 @@ export const migrations = (
     import("./migration/20261030011808_session-origin"),
     import("./migration/20261103050046_session-scope"),
     import("./migration/20261117061015_review-pinned-indexes"),
+    import("./migration/20261127053131_drop-project-artifacts"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

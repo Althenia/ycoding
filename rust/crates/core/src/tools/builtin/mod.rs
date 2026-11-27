@@ -13,7 +13,7 @@ pub mod memory;
 mod native;
 pub mod patch;
 pub mod project;
-pub mod project_artifact;
+
 pub mod question;
 pub mod read;
 pub mod read_filesystem;

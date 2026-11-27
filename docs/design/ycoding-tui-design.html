@@ -872,7 +872,7 @@
 <p class="cap">The old design leaned on one weak cue: a colored glyph inside otherwise-grey text. Three cues now carry state, so it reads at a glance from either edge of the row.</p>
 <table>
 <tr><th>State</th><th>Gutter</th><th>Color</th><th>Row treatment</th><th>Used by</th></tr>
-<tr><td>ok · connected · active</td><td><code>✓</code></td><td style="color:#67D7AA">ACCENT</td><td>normal label, <b>medium-weight</b> trailing</td><td>MCP, skills, status, artifacts</td></tr>
+<tr><td>ok · connected · active</td><td><code>✓</code></td><td style="color:#67D7AA">ACCENT</td><td>normal label, <b>medium-weight</b> trailing</td><td>MCP, skills, status</td></tr>
 <tr><td>off · disabled · inactive</td><td><code>○</code></td><td style="color:#98A2B3">MUTED</td><td><b>entire row dimmed</b> — label recedes too</td><td>MCP, skills, models</td></tr>
 <tr><td>pending · connecting</td><td><code>⋯</code></td><td style="color:#79B8FF">INFO</td><td>normal</td><td>MCP, providers, subagents</td></tr>
 <tr><td>attention · conflict · awaiting</td><td><code>!</code></td><td style="color:#F0BE62">WARNING</td><td>label also WARNING</td><td>skills, subagents, guardrail</td></tr>
@@ -888,7 +888,7 @@
 </table>
 <p class="cap">Redundancy also removed: rows previously read <code>agentmemory  connected … ✓ Connected</code> — the same fact twice. The description slot now carries something useful (transport, scope, count) and the trailing slot carries state alone.</p>
 
-<h3>19.3 · All 38 surfaces</h3>
+<h3>19.3 · All 37 surfaces</h3>
 <div id="dlgs"></div>
 
 <style>
@@ -975,12 +975,6 @@ const D=[
    ["g","Active"],["s","● go-developer","project","Active","ok"],["r","writing-test","global","Active","ok"],
    ["g","Conflict"],["r","go-review","2 sources","Needs choice","warn"],
    ["g","Available"],["r","rust-developer","global","Inactive","off"],["r","python-developer","global","Inactive","off"]],"space toggle"],
-
- ["Project artifacts","dialog-project-artifacts.tsx","","Project artifacts",[
-   ["g","Skills"],["s","● go-developer",".ycoding/skills","Loaded","ok"],
-   ["g","Commands"],["r","deploy",".ycoding/commands","Loaded","ok"],
-   ["g","Agents"],["r","reviewer",".ycoding/agents","Loaded","ok"],
-   ["g","Plugins"],["r","agentmemory","draft","Not loaded","off"]],""],
 
  ["Provider usage","provider-usage.tsx","","Provider usage",[
    ["g","This session"],["s","● Claude Opus 5","cache read 220,672","71% hit"],
@@ -1144,11 +1138,11 @@ document.getElementById("dlgs").innerHTML=dOut;
 <tr><td>Command &amp; navigation</td><td>6</td><td>command palette · switch session · move session · fork · timeline · message actions</td></tr>
 <tr><td>Model &amp; provider</td><td>6</td><td>select model · variant · agent · connect a service · connect provider · provider usage</td></tr>
 <tr><td>Subagents &amp; execution</td><td>5</td><td>subagents · session goal · permission · guardrail · retry action</td></tr>
-<tr><td>Artifacts &amp; skills</td><td>4</td><td>project artifacts · session skills · run skill · tag</td></tr>
+<tr><td>Skills</td><td>3</td><td>session skills · run skill · tag</td></tr>
 <tr><td>Workspace &amp; VCS</td><td>3</td><td>workspace changes · stash · export options</td></tr>
 <tr><td>Settings &amp; system</td><td>6</td><td>settings · theme · status · help · debug · MCP servers</td></tr>
 <tr><td>Primitives</td><td>8</td><td>select · prompt · confirm · alert · rename · name-the-copy · export result · delete failed</td></tr>
-<tr><td><b>Total</b></td><td><b>38</b></td><td>34 <code>dialog-*.tsx</code> + palette + permission + guardrail + provider usage · plus toast (§19.4)</td></tr>
+<tr><td><b>Total</b></td><td><b>37</b></td><td>33 <code>dialog-*.tsx</code> + palette + permission + guardrail + provider usage · plus toast (§19.4)</td></tr>
 </table>
 
 <!-- 20 RESPONSIVE -->

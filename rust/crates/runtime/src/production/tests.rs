@@ -291,12 +291,7 @@ fn configuration_precedence_and_project_disable_feed_the_agent_catalog() {
     let description = |f: &Fixture| {
         let prepared = f
             .factory
-            .prepare(
-                &f.directory().to_str().unwrap().into(),
-                None,
-                &"prj_one".into(),
-                &f.directory().to_str().unwrap().into(),
-            )
+            .prepare(&f.directory().to_str().unwrap().into())
             .unwrap();
         prepared
             .configuration
@@ -851,12 +846,7 @@ async fn native_memory_guardrail_limits_forms_questions_and_saved_permissions_ar
     );
     let prepared = f
         .factory
-        .prepare(
-            &f.directory().to_str().unwrap().into(),
-            None,
-            &"prj_one".into(),
-            &f.directory().to_str().unwrap().into(),
-        )
+        .prepare(&f.directory().to_str().unwrap().into())
         .unwrap();
     assert!(!prepared.configuration.guardrails.enabled);
     assert_eq!(prepared.configuration.guardrails.limits.shells, 2);
@@ -968,12 +958,7 @@ fn custom_guardrails_deny_and_unreadable_rules_stay_fail_closed() {
     .unwrap();
     let prepared = f
         .factory
-        .prepare(
-            &f.directory().to_str().unwrap().into(),
-            None,
-            &"prj_one".into(),
-            &f.directory().to_str().unwrap().into(),
-        )
+        .prepare(&f.directory().to_str().unwrap().into())
         .unwrap();
     let layers = (prepared.configuration.guardrails.custom)();
     assert!(layers.iter().any(|layer| !layer.invalid_files.is_empty()));
@@ -2678,53 +2663,11 @@ fn external_mcp_holder_keeps_one_location_generation_until_released() {
     locations.reload(&info).unwrap();
     locations.evict_idle(Instant::now()).unwrap();
     assert!(mcp.upgrade().is_some());
-    assert_eq!(f.factory.globals.sources.lock().unwrap().size(), 1);
     drop(holder);
     locations.evict_idle(Instant::now()).unwrap();
     assert!(mcp.upgrade().is_some());
     locations.close().unwrap();
     assert!(mcp.upgrade().is_none());
-}
-
-#[test]
-fn eviction_keeps_held_generation_alive_and_retired_sources_do_not_remove_the_replacement() {
-    let f = fixture("{}", "{}");
-    let locations = f.locations();
-    let first = f.services(&locations);
-    let info = first.info.clone();
-    assert_eq!(f.factory.globals.sources.lock().unwrap().size(), 1);
-    locations.evict(info.directory.as_lossless(), None).unwrap();
-    assert!(locations.cached().is_empty());
-    assert!(
-        !first
-            .production
-            .as_ref()
-            .unwrap()
-            .tools
-            .materialize(&[])
-            .definitions
-            .is_empty()
-    );
-    let current = f.services(&locations);
-    assert!(!Arc::ptr_eq(
-        &first.production.as_ref().unwrap().tools,
-        &current.production.as_ref().unwrap().tools
-    ));
-    drop(first);
-    locations.evict_idle(Instant::now()).unwrap();
-    assert_eq!(
-        f.factory.globals.sources.lock().unwrap().size(),
-        1,
-        "closing the retired generation must retain the current source snapshot"
-    );
-    locations.reload(&info).unwrap();
-    let replacement = f.services(&locations);
-    drop(current);
-    locations.evict_idle(Instant::now()).unwrap();
-    assert_eq!(f.factory.globals.sources.lock().unwrap().size(), 1);
-    drop(replacement);
-    locations.close().unwrap();
-    assert_eq!(f.factory.globals.sources.lock().unwrap().size(), 0);
 }
 
 #[test]
@@ -3515,95 +3458,6 @@ async fn reload_preserves_location_process_and_ticket_owners() {
     locations.close().unwrap();
 }
 
-#[test]
-fn managed_project_artifacts_overlay_the_location_catalogs() {
-    let f = fixture("{}", "{}");
-    let definition = ycoding_core::ycoding_schema::project_artifact::Definition::decode(
-        &parse_json(r#"{"kind":"agent","name":"Reviewer","description":"Reviews changes","system":"Review without modifying files.","mode":"subagent","permissions":[]}"#)
-            .unwrap(),
-    )
-    .unwrap();
-    let written = f
-        .factory
-        .globals
-        .artifacts
-        .write_manual(
-            ycoding_core::resources::project_artifact::store::ManualWriteInput {
-                scope: ycoding_core::ycoding_schema::project_artifact::ScopeSelector::Project,
-                project_id: Some(
-                    ycoding_core::ycoding_schema::project::Id::new("prj_one").unwrap(),
-                ),
-                id: "review",
-                definition: &definition,
-                expected: None,
-                now: crate::ids::now_millis(),
-            },
-        )
-        .unwrap();
-    let stored = f
-        .factory
-        .globals
-        .artifacts
-        .get(&written.scope_id, &written.kind, &written.id)
-        .unwrap()
-        .encode();
-    let locations = f.locations();
-    let services = f.services(&locations);
-    assert_eq!(
-        services
-            .agents
-            .snapshot()
-            .get(&"review".into())
-            .and_then(|agent| agent.description.as_ref())
-            .and_then(|description| description.as_str()),
-        Some("Reviews changes"),
-        "the managed overlay must reach the Location agent catalog"
-    );
-    let info = services.info.clone();
-    std::fs::write(
-        f.directory().join("ycoding.json"),
-        r#"{"capabilities":{"project_artifacts":false}}"#,
-    )
-    .unwrap();
-    locations.reload(&info).unwrap();
-    assert!(
-        f.services(&locations)
-            .agents
-            .snapshot()
-            .get(&"review".into())
-            .is_none()
-    );
-    locations.evict(info.directory.as_lossless(), None).unwrap();
-    assert!(
-        f.services(&locations)
-            .agents
-            .snapshot()
-            .get(&"review".into())
-            .is_none(),
-        "a fresh boot must not expose managed artifacts under the disabled policy"
-    );
-    assert_eq!(
-        f.factory
-            .globals
-            .artifacts
-            .get(&written.scope_id, &written.kind, &written.id)
-            .unwrap()
-            .encode(),
-        stored
-    );
-    std::fs::write(f.directory().join("ycoding.json"), "{}").unwrap();
-    locations.reload(&info).unwrap();
-    assert!(
-        f.services(&locations)
-            .agents
-            .snapshot()
-            .get(&"review".into())
-            .is_some()
-    );
-    drop(services);
-    locations.close().unwrap();
-}
-
 fn auto_answer_question(id: &str) -> question::Request {
     question::Request {
         id: question::Id::decode(&JsonValue::String(id.into())).unwrap(),
@@ -3672,10 +3526,7 @@ async fn only_the_answers_category_answers_questions() {
 async fn guardrail_review_switches_compose_with_released_defaults() {
     let defaults = fixture("{}", "{}");
     let directory: LosslessString = defaults.directory().to_str().unwrap().into();
-    let prepared = defaults
-        .factory
-        .prepare(&directory, None, &"prj_one".into(), &directory)
-        .unwrap();
+    let prepared = defaults.factory.prepare(&directory).unwrap();
     assert!(prepared.configuration.guardrails.decide_reviews);
     assert!(prepared.configuration.guardrails.decide_hard_reviews);
     let services = defaults.services(&defaults.locations());
@@ -3692,10 +3543,7 @@ async fn guardrail_review_switches_compose_with_released_defaults() {
         "{}",
     );
     let directory: LosslessString = configured.directory().to_str().unwrap().into();
-    let prepared = configured
-        .factory
-        .prepare(&directory, None, &"prj_one".into(), &directory)
-        .unwrap();
+    let prepared = configured.factory.prepare(&directory).unwrap();
     assert!(prepared.configuration.guardrails.decide_reviews);
     assert!(!prepared.configuration.guardrails.decide_hard_reviews);
     assert_eq!(prepared.configuration.guardrails.limits.reviews, 3);

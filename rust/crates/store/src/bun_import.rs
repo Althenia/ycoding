@@ -152,8 +152,8 @@ pub fn first_run(source: &Path, target: &Path, metadata: Metadata) -> Result<(),
 pub(crate) fn blocks_import_when_populated(table: &str) -> bool {
     !matches!(
         table,
-        crate::artifacts::MigrationTable::NAME
-            | crate::artifacts::DatabaseFormatTable::NAME
+        crate::database_format::MigrationTable::NAME
+            | crate::database_format::DatabaseFormatTable::NAME
             | crate::resources::MigrationTable::NAME
             | crate::usage_cells::BackfillTable::NAME
             | DeliveryTable::NAME

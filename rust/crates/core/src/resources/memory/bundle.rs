@@ -2,7 +2,7 @@ use super::{
     Concept, Error, GENERATED_INDEX, Scope, State, Warning, atomic, collapse, create_root, entries,
     okf, parse, read_bounded, read_content, safe_path, text_value, warning,
 };
-use crate::resources::project_artifact::filesystem::{self, Hooks};
+use crate::resources::filesystem::{self, Hooks};
 use chrono::{DateTime, Utc};
 use std::{
     collections::{BTreeMap, BTreeSet},

@@ -8,7 +8,6 @@ import { CredentialGroup } from "../src/groups/credential.js"
 import { IntegrationGroup } from "../src/groups/integration.js"
 import { LocationGroup } from "../src/groups/location.js"
 import { PluginGroup } from "../src/groups/plugin.js"
-import { ProjectArtifactGroup } from "../src/groups/project-artifact.js"
 import { ProjectGroup } from "../src/groups/project.js"
 import { ProviderUsageGroup } from "../src/groups/provider-usage.js"
 import { ReferenceGroup } from "../src/groups/reference.js"
@@ -29,7 +28,6 @@ export const resourceGroups = [
   ClientApi.groups["server.mcp"],
   ClientApi.groups["server.model"],
   PluginGroup,
-  ProjectArtifactGroup,
   ProjectGroup,
   ClientApi.groups["server.provider"],
   ProviderUsageGroup,

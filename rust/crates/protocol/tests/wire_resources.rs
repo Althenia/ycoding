@@ -75,7 +75,7 @@ fn response_stream_snapshot_round_trips_through_strict_wire_validation() {
 }
 
 #[test]
-fn typescript_permission_and_typed_error_corpus_preserves_closed_enums() {
+fn typescript_permission_corpus_preserves_closed_enums() {
     let permission = hex("0a030a012a12020a001801");
     let value = v5::PermissionRule {
         action: encode_lossless(&[42]),
@@ -89,14 +89,6 @@ fn typescript_permission_and_typed_error_corpus_preserves_closed_enums() {
             .encode_to_vec(),
         permission
     );
-    let error = hex("08011001");
-    assert_eq!(
-        decode_strict::<v5::ArtifactBadRequest>(&error)
-            .unwrap()
-            .encode_to_vec(),
-        error
-    );
-    assert!(decode_strict::<v5::ArtifactBadRequest>(&[8, 1, 16, 99]).is_err());
 }
 
 #[test]
@@ -127,31 +119,4 @@ fn typescript_undefined_result_corpus_requires_an_explicit_none_branch() {
         bytes
     );
     assert!(decode_strict::<v5::ModelDefaultResultData>(&[]).is_err());
-}
-
-#[test]
-fn typescript_artifact_revision_corpus_preserves_safe_uint64_integers() {
-    let bytes = hex(&format!(
-        "08ffffffffffffff0f12070a057061765f781a420a40{}",
-        "61".repeat(64)
-    ));
-    let value = v5::ProjectArtifactApiExpectation {
-        expected_revision: 9_007_199_254_740_991,
-        expected_version_id: encode_lossless(&"pav_x".encode_utf16().collect::<Vec<_>>()),
-        expected_digest: encode_lossless(&[97; 64]),
-    };
-    assert_eq!(value.encode_to_vec(), bytes);
-    assert_eq!(
-        decode_strict::<v5::ProjectArtifactApiExpectation>(&bytes)
-            .unwrap()
-            .expected_revision,
-        9_007_199_254_740_991
-    );
-    let unsafe_value = v5::ProjectArtifactApiExpectation {
-        expected_revision: 9_007_199_254_740_992,
-        ..value
-    };
-    assert!(
-        decode_strict::<v5::ProjectArtifactApiExpectation>(&unsafe_value.encode_to_vec()).is_err()
-    );
 }

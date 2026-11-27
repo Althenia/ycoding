@@ -7,10 +7,7 @@ use ycoding_core::{
         shell,
     },
     process::guardrails::{CustomLayer, CustomLayers},
-    resources::{
-        config, discovery::markdown, image, mcp, memory, project_artifact::source, skill,
-        tool_output_store,
-    },
+    resources::{config, discovery::markdown, image, mcp, memory, skill, tool_output_store},
     tools::{
         builtin::{
             edit::Edit,
@@ -18,7 +15,6 @@ use ycoding_core::{
             memory::Memory,
             patch::Patch,
             project::{self, Project},
-            project_artifact::ProjectArtifact,
             read::Read,
             search::{Kind, Search},
             shell::{AUTO_BACKGROUND, ShellTool},
@@ -41,7 +37,6 @@ pub(super) struct Handles<'a> {
     pub computer: &'a Arc<ycoding_core::platform::computer::service::Service>,
     pub skills: Arc<tokio::sync::Mutex<skill::Service>>,
     pub mcp: &'a Arc<mcp::Service>,
-    pub artifacts: source::Service,
 }
 pub(super) fn compose(
     factory: &Factory,
@@ -148,7 +143,6 @@ pub(super) fn compose(
                     collator,
                 },
                 policy: policy.clone(),
-                artifacts: Some(handles.artifacts),
             }),
         ),
         (
@@ -233,17 +227,6 @@ pub(super) fn compose(
                     env!("CARGO_PKG_VERSION").into(),
                 )
                 .map_err(|_| unavailable("web search"))?
-            }),
-        ),
-        (
-            "project_artifact".into(),
-            Arc::new(ProjectArtifact {
-                store: Arc::new(factory.globals.artifacts.clone()),
-                project_id: ycoding_core::ycoding_schema::project::Id::new(
-                    services.info.project.id.as_lossless().clone(),
-                )
-                .map_err(|_| unavailable("Project identity"))?,
-                policy: policy.clone(),
             }),
         ),
     ];

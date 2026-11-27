@@ -41,9 +41,7 @@ import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { Permission } from "@ycoding-ai/core/permission"
 import { EventTable } from "@ycoding-ai/core/event/sql"
 import { Project } from "@ycoding-ai/core/project"
-import { ProjectArtifactInstructions } from "@ycoding-ai/core/project-artifact/instructions"
 import { MemoryInstructions } from "@ycoding-ai/core/memory/instructions"
-import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { Form } from "@ycoding-ai/core/form"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
@@ -399,8 +397,7 @@ const unstoredOpenAIResponsesModel = Model.make({
   route: OpenAIResponses.route.with({ limits: testLimits }),
 })
 const defaultSystem = PROMPT_DEFAULT
-const withProjectArtifactGuidance = (...values: readonly string[]) =>
-  [...values, ProjectArtifactInstructions.content, MemoryInstructions.content].join("\n\n")
+const withMemoryGuidance = (...values: readonly string[]) => [...values, MemoryInstructions.content].join("\n\n")
 const replacementModel = Model.make({
   id: "replacement",
   provider: "fake",
@@ -602,15 +599,9 @@ const echo = Layer.effectDiscard(
               Effect.andThen(Effect.die("unexpected tool defect")),
             ),
         }),
-        // Built-in guidance for memory and project artifacts renders only while these tools are callable.
+        // Built-in guidance for memory renders only while the memory tool is callable.
         memory: Tool.make({
           description: "Workspace memory",
-          input: Schema.Struct({}),
-          output: Schema.Struct({}),
-          execute: () => Effect.succeed({}),
-        }),
-        project_artifact: Tool.make({
-          description: "Project artifacts",
           input: Schema.Struct({}),
           output: Schema.Struct({}),
           execute: () => Effect.succeed({}),
@@ -3011,7 +3002,6 @@ describe("SessionRunnerLLM", () => {
         "echo",
         "execute",
         "memory",
-        "project_artifact",
         "snapshot",
         "storefail",
       ])
@@ -3042,7 +3032,6 @@ describe("SessionRunnerLLM", () => {
         "defect",
         "execute",
         "memory",
-        "project_artifact",
         "snapshot",
         "storefail",
       ])
@@ -4937,7 +4926,6 @@ describe("SessionRunnerLLM", () => {
         "echo",
         "execute",
         "memory",
-        "project_artifact",
         "snapshot",
         "storefail",
       ])
@@ -4952,84 +4940,6 @@ describe("SessionRunnerLLM", () => {
         },
       ])
       expect(yield* session.messages({ sessionID })).toHaveLength(4)
-    }),
-  )
-
-  it.effect("keeps durable moved-project history but excludes only ended project artifact injections", () =>
-    Effect.gen(function* () {
-      const session = yield* setup
-      const events = yield* EventRuntime.Service
-      const artifact = (scope: "project" | "global", id: string) => ({
-        scopeID: ProjectArtifact.ScopeID.make(`pas_${scope}`),
-        versionID: ProjectArtifact.VersionID.make(`pav_${id}`),
-        kind: "skill" as const,
-        id: ProjectArtifact.ID.make(id),
-        sourceScope: scope,
-      })
-      yield* events.publish(SessionEvent.Skill.Activated, {
-        sessionID,
-        id: Skill.ID.make("project-skill"),
-        name: Skill.Name.make("PROJECT_SKILL"),
-        text: "PROJECT_SKILL",
-        artifact: artifact("project", "project-skill"),
-      })
-      yield* events.publish(SessionEvent.Skill.Activated, {
-        sessionID,
-        id: Skill.ID.make("global-skill"),
-        name: Skill.Name.make("GLOBAL_SKILL"),
-        text: "GLOBAL_SKILL",
-        artifact: artifact("global", "global-skill"),
-      })
-      yield* session.prompt({
-        sessionID,
-        text: "PROJECT_COMMAND",
-        metadata: { projectArtifact: { ...artifact("project", "project-command"), kind: "command" } },
-        resume: false,
-      })
-      yield* session.prompt({
-        sessionID,
-        text: "GLOBAL_COMMAND",
-        metadata: { projectArtifact: { ...artifact("global", "global-command"), kind: "command" } },
-        resume: false,
-      })
-      response = reply.text("Fixture response", "text-fixture")
-      yield* session.resume(sessionID)
-      requests.length = 0
-      yield* events.publish(SessionEvent.AgentSelected, {
-        sessionID,
-        agent: Agent.ID.make("project-agent"),
-        artifact: { ...artifact("project", "project-agent"), kind: "agent" },
-      })
-      yield* events.publish(SessionEvent.AgentSelected, {
-        sessionID,
-        agent: Agent.ID.make("global-agent"),
-        artifact: { ...artifact("global", "global-agent"), kind: "agent" },
-      })
-      yield* events.publish(SessionEvent.AgentSelected, { sessionID, agent: Agent.ID.make("build") })
-      yield* session.synthetic({ sessionID, text: "ORDINARY_HISTORY" })
-      yield* events.publish(SessionEvent.ProjectArtifactsEnded, {
-        sessionID,
-        oldProjectID: Project.ID.make("old-project"),
-        newProjectID: Project.ID.make("new-project"),
-      })
-      yield* admit(session, "AFTER_MOVE")
-      response = reply.text("Fixture response", "text-fixture")
-
-      yield* session.resume(sessionID)
-
-      const prepared = JSON.stringify(requests.at(-1)?.messages)
-      expect(prepared).not.toContain("PROJECT_SKILL")
-      expect(prepared).not.toContain("PROJECT_COMMAND")
-      expect(prepared).not.toContain("project-agent")
-      expect(prepared).toContain("GLOBAL_SKILL")
-      expect(prepared).toContain("GLOBAL_COMMAND")
-      expect(prepared).toContain("global-agent")
-      expect(prepared).toContain("ORDINARY_HISTORY")
-      expect(prepared).toContain("AFTER_MOVE")
-      const durable = JSON.stringify(yield* session.context(sessionID))
-      expect(durable).toContain("PROJECT_SKILL")
-      expect(durable).toContain("PROJECT_COMMAND")
-      expect(durable).toContain("project-agent")
     }),
   )
 
@@ -5208,7 +5118,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests.at(-1)?.system.map((part) => part.text)).toEqual([
         defaultSystem,
-        withProjectArtifactGuidance("Initial context"),
+        withMemoryGuidance("Initial context"),
       ])
       expect(systemTexts(requests.at(-1)!)).toContain("Changed context")
       expect(systemTexts(requests.at(-1)!)).toContain("Latest context")
@@ -5283,7 +5193,7 @@ describe("SessionRunnerLLM", () => {
       expect(requests).toHaveLength(1)
       expect(requests[0]?.system.map((part) => part.text)).toEqual([
         defaultSystem,
-        withProjectArtifactGuidance("Initial context"),
+        withMemoryGuidance("Initial context"),
       ])
       expect(nonVolatileMessages(requests[0]).map((message) => message.role)).toEqual([
         "user",
@@ -5316,8 +5226,8 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        [defaultSystem, withProjectArtifactGuidance("Initial context")],
-        [defaultSystem, withProjectArtifactGuidance("Initial context")],
+        [defaultSystem, withMemoryGuidance("Initial context")],
+        [defaultSystem, withMemoryGuidance("Initial context")],
       ])
       expect(nonVolatileMessages(requests[1]).map((message) => message.role)).toEqual([
         "user",
@@ -5340,7 +5250,6 @@ describe("SessionRunnerLLM", () => {
       expect(updates[0]?.data).toEqual({
         sessionID,
         delta: {
-          "ycoding/project-artifact-authoring": Instructions.hash(ProjectArtifactInstructions.content),
           "ycoding/workspace-memory": Instructions.hash(MemoryInstructions.content),
           "test/context": Instructions.hash("Initial context"),
         },
@@ -5369,7 +5278,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests.at(-1)?.system.map((part) => part.text)).toEqual([
         expect.stringContaining("You are YCoding, You and the user share the same workspace"),
-        withProjectArtifactGuidance("Initial context"),
+        withMemoryGuidance("Initial context"),
       ])
     }),
   )
@@ -5396,7 +5305,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests.at(-1)?.system.map((part) => part.text)).toEqual([
         expect.stringContaining("You are YCoding, You and the user share the same workspace"),
-        withProjectArtifactGuidance("Initial context"),
+        withMemoryGuidance("Initial context"),
       ])
     }),
   )
@@ -5418,7 +5327,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests.at(-1)?.system.map((part) => part.text)).toEqual([
         "Build agent instructions",
-        withProjectArtifactGuidance("Initial context"),
+        withMemoryGuidance("Initial context"),
       ])
     }),
   )
@@ -5426,7 +5335,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("omits guidance and tools that capability toggles turn off", () =>
     Effect.gen(function* () {
       capabilitiesConfig = new ConfigCapabilities.Info({
-        tools: { deny: ["project_artifact"] },
+        tools: { deny: ["storefail"] },
         builtin_instructions: { deny: ["memory"] },
       })
       const session = yield* setup
@@ -5449,7 +5358,6 @@ describe("SessionRunnerLLM", () => {
         "execute",
         "memory",
         "snapshot",
-        "storefail",
       ])
     }).pipe(Effect.ensuring(Effect.sync(() => (capabilitiesConfig = undefined)))),
   )
@@ -5472,7 +5380,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests.at(-1)?.system.map((part) => part.text)).toEqual([
         "Build agent instructions",
-        ["Initial context", ProjectArtifactInstructions.content].join("\n\n"),
+        "Initial context",
       ])
     }),
   )
@@ -5499,7 +5407,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests.at(-1)?.system.map((part) => part.text)).toEqual([
         "Reviewer instructions",
-        withProjectArtifactGuidance("Initial context"),
+        withMemoryGuidance("Initial context"),
       ])
       expect((yield* session.messages({ sessionID }))[0]).toMatchObject({ type: "assistant", agent: "reviewer" })
     }),
@@ -5531,11 +5439,11 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests.at(-2)?.system.map((part) => part.text)).toEqual([
         "Brainstorm agent instructions",
-        withProjectArtifactGuidance("Initial context"),
+        withMemoryGuidance("Initial context"),
       ])
       expect(requests.at(-1)?.system.map((part) => part.text)).toEqual([
         "Build agent instructions",
-        withProjectArtifactGuidance("Initial context"),
+        withMemoryGuidance("Initial context"),
       ])
       expect(
         (yield* session.messages({ sessionID })).some(
@@ -5569,7 +5477,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests.at(-1)?.system.map((part) => part.text)).toEqual([
         "Reviewer instructions",
-        withProjectArtifactGuidance("Initial context"),
+        withMemoryGuidance("Initial context"),
       ])
       expect((yield* session.messages({ sessionID }))[0]).toMatchObject({ type: "assistant", agent: "reviewer" })
     }),
@@ -5646,8 +5554,8 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        [defaultSystem, withProjectArtifactGuidance("Initial context", "Build skills")],
-        [defaultSystem, withProjectArtifactGuidance("Initial context", "Build skills")],
+        [defaultSystem, withMemoryGuidance("Initial context", "Build skills")],
+        [defaultSystem, withMemoryGuidance("Initial context", "Build skills")],
       ])
       expect(systemTexts(requests[1]!)).toContainEqual(expect.stringContaining("Reviewer skills"))
     }),
@@ -5675,7 +5583,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        [defaultSystem, withProjectArtifactGuidance("Initial context", "Build skills")],
+        [defaultSystem, withMemoryGuidance("Initial context", "Build skills")],
       ])
     }),
   )
@@ -5700,7 +5608,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
       expect(requests.map((request) => request.model)).toEqual([model])
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        [defaultSystem, withProjectArtifactGuidance("Initial context")],
+        [defaultSystem, withMemoryGuidance("Initial context")],
       ])
     }),
   )
@@ -5742,7 +5650,7 @@ describe("SessionRunnerLLM", () => {
       expect(requests[0]?.system.map((part) => part.text)).toEqual([
         defaultSystem,
         [
-          withProjectArtifactGuidance("Initial context"),
+          withMemoryGuidance("Initial context"),
           "",
           '<context key="deploy-target">',
           "production",
@@ -5860,9 +5768,9 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        [defaultSystem, withProjectArtifactGuidance("Initial context")],
-        [defaultSystem, withProjectArtifactGuidance("Initial context")],
-        [defaultSystem, withProjectArtifactGuidance("Initial context")],
+        [defaultSystem, withMemoryGuidance("Initial context")],
+        [defaultSystem, withMemoryGuidance("Initial context")],
+        [defaultSystem, withMemoryGuidance("Initial context")],
       ])
       expect(nonVolatileMessages(requests[1]).map((message) => message.role)).toEqual([
         "user",
@@ -5909,9 +5817,9 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        [defaultSystem, withProjectArtifactGuidance("Initial context")],
-        [defaultSystem, withProjectArtifactGuidance("Initial context")],
-        [defaultSystem, withProjectArtifactGuidance("Initial context")],
+        [defaultSystem, withMemoryGuidance("Initial context")],
+        [defaultSystem, withMemoryGuidance("Initial context")],
+        [defaultSystem, withMemoryGuidance("Initial context")],
       ])
     }),
   )
@@ -5939,8 +5847,8 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        [defaultSystem, withProjectArtifactGuidance("Initial context")],
-        [defaultSystem, withProjectArtifactGuidance("Initial context")],
+        [defaultSystem, withMemoryGuidance("Initial context")],
+        [defaultSystem, withMemoryGuidance("Initial context")],
       ])
       expect(nonVolatileMessages(requests[1]).map((message) => message.role)).toEqual([
         "user",
@@ -5983,7 +5891,7 @@ describe("SessionRunnerLLM", () => {
       // Compaction already moved current values into the new epoch before the unavailable read.
       expect(requests.at(-1)?.system.map((part) => part.text)).toEqual([
         defaultSystem,
-        withProjectArtifactGuidance("Changed context"),
+        withMemoryGuidance("Changed context"),
       ])
       expect(systemTexts(requests.at(-1)!)).not.toContain("Changed context")
     }),
@@ -6050,7 +5958,6 @@ describe("SessionRunnerLLM", () => {
         "echo",
         "execute",
         "memory",
-        "project_artifact",
         "snapshot",
         "storefail",
       ])
@@ -6286,8 +6193,8 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests.map((request) => request.model)).toEqual([model, replacementModel])
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        [defaultSystem, withProjectArtifactGuidance("Initial context")],
-        [defaultSystem, withProjectArtifactGuidance("Initial context")],
+        [defaultSystem, withMemoryGuidance("Initial context")],
+        [defaultSystem, withMemoryGuidance("Initial context")],
       ])
       expect(systemTexts(requests[1]!)).toContain("Replacement context")
     }),

@@ -252,18 +252,6 @@ enum Session_Message_AgentSelected_type {
   SESSION_MESSAGE_AGENTSELECTED_TYPE_AGENT_SWITCHED = 1 [(ycoding.v5.domain_label) = "agent-switched"];
 }
 
-enum Session_Message_ArtifactProvenance_kind {
-  SESSION_MESSAGE_ARTIFACTPROVENANCE_KIND_SKILL = 1 [(ycoding.v5.domain_label) = "skill"];
-  SESSION_MESSAGE_ARTIFACTPROVENANCE_KIND_COMMAND = 2 [(ycoding.v5.domain_label) = "command"];
-  SESSION_MESSAGE_ARTIFACTPROVENANCE_KIND_AGENT = 3 [(ycoding.v5.domain_label) = "agent"];
-  SESSION_MESSAGE_ARTIFACTPROVENANCE_KIND_PLUGIN = 4 [(ycoding.v5.domain_label) = "plugin"];
-}
-
-enum Session_Message_ArtifactProvenance_sourceScope {
-  SESSION_MESSAGE_ARTIFACTPROVENANCE_SOURCESCOPE_PROJECT = 1 [(ycoding.v5.domain_label) = "project"];
-  SESSION_MESSAGE_ARTIFACTPROVENANCE_SOURCESCOPE_GLOBAL = 2 [(ycoding.v5.domain_label) = "global"];
-}
-
 enum Session_Message_ModelSelected_type {
   SESSION_MESSAGE_MODELSELECTED_TYPE_MODEL_SWITCHED = 1 [(ycoding.v5.domain_label) = "model-switched"];
 }
@@ -981,28 +969,12 @@ enum SessionLogItemValue2_type {
   SESSIONLOGITEMVALUE2_TYPE_SESSION_AGENT_SELECTED = 1 [(ycoding.v5.domain_label) = "session.agent.selected"];
 }
 
-enum Session_Event_ArtifactProvenance_kind {
-  SESSION_EVENT_ARTIFACTPROVENANCE_KIND_SKILL = 1 [(ycoding.v5.domain_label) = "skill"];
-  SESSION_EVENT_ARTIFACTPROVENANCE_KIND_COMMAND = 2 [(ycoding.v5.domain_label) = "command"];
-  SESSION_EVENT_ARTIFACTPROVENANCE_KIND_AGENT = 3 [(ycoding.v5.domain_label) = "agent"];
-  SESSION_EVENT_ARTIFACTPROVENANCE_KIND_PLUGIN = 4 [(ycoding.v5.domain_label) = "plugin"];
-}
-
-enum Session_Event_ArtifactProvenance_sourceScope {
-  SESSION_EVENT_ARTIFACTPROVENANCE_SOURCESCOPE_PROJECT = 1 [(ycoding.v5.domain_label) = "project"];
-  SESSION_EVENT_ARTIFACTPROVENANCE_SOURCESCOPE_GLOBAL = 2 [(ycoding.v5.domain_label) = "global"];
-}
-
 enum SessionLogItemValue3_type {
   SESSIONLOGITEMVALUE3_TYPE_SESSION_MODEL_SELECTED = 1 [(ycoding.v5.domain_label) = "session.model.selected"];
 }
 
 enum SessionLogItemValue4_type {
   SESSIONLOGITEMVALUE4_TYPE_SESSION_DAYBREAK_SET = 1 [(ycoding.v5.domain_label) = "session.daybreak.set"];
-}
-
-enum SessionLogItemValue5_type {
-  SESSIONLOGITEMVALUE5_TYPE_SESSION_PROJECT_ARTIFACTS_ENDED = 1 [(ycoding.v5.domain_label) = "session.project-artifacts-ended"];
 }
 
 enum SessionLogItemValue53_type {
@@ -2947,7 +2919,6 @@ message Session_Message_AgentSelected {
   required Session_Message_AgentSelected_time time = 3;
   required Session_Message_AgentSelected_type type = 4;
   required LosslessString agent = 5;
-  optional Session_Message_ArtifactProvenance artifact = 6;
 }
 
 message Session_Message_AgentSelected_metadata {
@@ -2961,14 +2932,6 @@ message Session_Message_AgentSelected_metadataEntry {
 
 message Session_Message_AgentSelected_time {
   required double created = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/schema.ts#DateTimeUtcFromMillis" }];
-}
-
-message Session_Message_ArtifactProvenance {
-  required LosslessString scopeID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-message.ts#SessionMessage.ArtifactProvenance" }];
-  required LosslessString versionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-message.ts#SessionMessage.ArtifactProvenance" }];
-  required Session_Message_ArtifactProvenance_kind kind = 3;
-  required LosslessString id = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-message.ts#SessionMessage.ArtifactProvenance" }];
-  required Session_Message_ArtifactProvenance_sourceScope sourceScope = 5;
 }
 
 message Session_Message_ModelSelected {
@@ -3079,7 +3042,7 @@ message Session_Message_Skill {
   optional LosslessString directory = 11;
   optional Skill_Conflicts conflicts = 8;
   optional Session_Message_Skill_skillDeactivations skillDeactivations = 9;
-  optional Session_Message_ArtifactProvenance artifact = 10;
+  reserved 10;
 }
 
 message Session_Message_Skill_metadata {
@@ -6042,7 +6005,6 @@ message SessionLogItem {
     SessionLogItemValue2 value_2 = 2;
     SessionLogItemValue3 value_3 = 3;
     SessionLogItemValue4 value_4 = 4;
-    SessionLogItemValue5 value_5 = 5;
     SessionLogItemValue53 value_53 = 53;
     SessionLogItemValue54 value_54 = 54;
     SessionLogItemValue55 value_55 = 55;
@@ -6114,7 +6076,7 @@ message SessionLogItem {
     SessionLogItemValue51 value_51 = 51;
     SessionLogItemValue52 value_52 = 52;
   }
-  reserved 40;
+  reserved 5, 40;
 }
 
 message SessionLogItemValue1 {
@@ -6219,15 +6181,6 @@ message SessionLogItemValue2_durable {
 message SessionLogItemValue2_data {
   required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
   required LosslessString agent = 2;
-  optional Session_Event_ArtifactProvenance artifact = 3;
-}
-
-message Session_Event_ArtifactProvenance {
-  required LosslessString scopeID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-event.ts#SessionEvent.ArtifactProvenance" }];
-  required LosslessString versionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-event.ts#SessionEvent.ArtifactProvenance" }];
-  required Session_Event_ArtifactProvenance_kind kind = 3;
-  required LosslessString id = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-event.ts#SessionEvent.ArtifactProvenance" }];
-  required Session_Event_ArtifactProvenance_sourceScope sourceScope = 5;
 }
 
 message SessionLogItemValue3 {
@@ -6290,38 +6243,6 @@ message SessionLogItemValue4_durable {
 message SessionLogItemValue4_data {
   required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
   optional Model_Daybreak daybreak = 2;
-}
-
-message SessionLogItemValue5 {
-  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
-  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/schema.ts#DateTimeUtcFromMillis" }];
-  optional SessionLogItemValue5_metadata metadata = 3;
-  required LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" utf16_min: 1 }];
-  required SessionLogItemValue5_type type = 5;
-  required SessionLogItemValue5_durable durable = 6;
-  optional Location_Ref location = 7;
-  required SessionLogItemValue5_data data = 8;
-}
-
-message SessionLogItemValue5_metadata {
-  repeated SessionLogItemValue5_metadataEntry entries = 1;
-}
-
-message SessionLogItemValue5_metadataEntry {
-  required LosslessString key = 1;
-  required Value value = 2;
-}
-
-message SessionLogItemValue5_durable {
-  required LosslessString aggregateID = 1;
-  required uint64 seq = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "0" integer_max: "9007199254740991" }];
-  required int64 version = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "1" integer_max: "9007199254740991" }];
-}
-
-message SessionLogItemValue5_data {
-  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
-  required LosslessString oldProjectID = 2;
-  required LosslessString newProjectID = 3;
 }
 
 message SessionLogItemValue53 {
@@ -8351,7 +8272,7 @@ message SessionLogItemValue26_data {
   required LosslessString text = 4;
   optional LosslessString directory = 7;
   optional Skill_Conflicts conflicts = 5;
-  optional Session_Event_ArtifactProvenance artifact = 6;
+  reserved 6;
 }
 
 message SessionLogItemValue27 {
@@ -8479,8 +8400,8 @@ message Recall_Item {
   optional Recall_Rejection rejection = 7;
   required Recall_Source source = 8;
   optional Recall_Okf okf = 9;
-  optional Session_Message_ArtifactProvenance artifact = 10;
   optional uint64 tokens = 11 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/recall.ts#Recall.Item" integer_min: "0" integer_max: "9007199254740991" }];
+  reserved 10;
 }
 
 message Recall_Scores {

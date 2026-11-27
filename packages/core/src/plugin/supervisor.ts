@@ -61,8 +61,6 @@ import { LocationAnnouncements } from "../location-announcements"
 import { PluginInternal } from "./internal"
 import { PluginOperations } from "./operations"
 import { PluginRuntime } from "./runtime"
-import { ProjectArtifactSource } from "../project-artifact/source"
-import { ProjectArtifactStore } from "../project-artifact"
 import { SdkPlugins } from "./sdk"
 import { importModule } from "#runtime-import"
 
@@ -264,8 +262,6 @@ export const node = makeLocationNode({
     SessionTodo.node,
     Shell.node,
     Skill.node,
-    ProjectArtifactSource.node,
-    ProjectArtifactStore.node,
     ToolRegistry.toolsNode,
     WebSearchTool.configNode,
     WellKnown.node,

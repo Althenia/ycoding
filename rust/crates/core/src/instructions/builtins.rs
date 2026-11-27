@@ -22,7 +22,6 @@ pub fn enabled(
     let required = match name {
         "subagent-reuse" => Some("subagent"),
         "shell-memory" => Some("shell"),
-        "project-artifact-authoring" => Some("project_artifact"),
         "decision-input" => Some("question"),
         "decision-use" => Some("decision"),
         "task-completion" => Some("task_complete"),

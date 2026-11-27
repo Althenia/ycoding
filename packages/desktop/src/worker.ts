@@ -161,9 +161,6 @@ export async function runDesktopWorker(options: {
             case "terminalControl": data = await controller.terminalControl(input); break
             case "terminalResize": data = await controller.terminalResize(input); break
             case "exportSession": data = await controller.exportSession(input); break
-            case "artifacts": data = await controller.artifacts(input); break
-            case "artifact": data = await controller.artifact(input); break
-            case "manageArtifact": data = await controller.manageArtifact(input); break
             case "saveExportSession": throw new DesktopError("Saving exports to a folder is unavailable in this runtime. Copy the export instead.")
             default: throw new DesktopError("Unsupported native desktop operation.")
           }

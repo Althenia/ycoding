@@ -43,7 +43,7 @@ export interface Source {
 
 type DatabaseClient = EffectDrizzleSqlite.EffectSQLiteDatabase
 export type Transaction = Parameters<Parameters<DatabaseClient["transaction"]>[0]>[0]
-export type ProtectedStateSource = Exclude<ContextManifest.ProtectedStateSource, "project_artifacts">
+export type ProtectedStateSource = ContextManifest.ProtectedStateSource
 type DatabaseSource = Exclude<ProtectedStateSource, "guardrails">
 
 export interface DatabaseCapture {

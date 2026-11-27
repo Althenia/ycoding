@@ -2226,7 +2226,6 @@ message PublicEvent {
     SessionLogItemValue2 session_agent_selected = 7 [(ycoding.v5.public_event) = { diagnostic_name: "session.agent.selected" durable: true }];
     SessionLogItemValue3 session_model_selected = 8 [(ycoding.v5.public_event) = { diagnostic_name: "session.model.selected" durable: true }];
     SessionLogItemValue4 session_daybreak_set = 9 [(ycoding.v5.public_event) = { diagnostic_name: "session.daybreak.set" durable: true }];
-    SessionLogItemValue5 session_project_artifacts_ended = 10 [(ycoding.v5.public_event) = { diagnostic_name: "session.project-artifacts-ended" durable: true }];
     SessionLogItemValue53 session_guardrail_dismissed = 104 [(ycoding.v5.public_event) = { diagnostic_name: "session.guardrail.dismissed" durable: true }];
     SessionLogItemValue54 session_guardrail_escalated = 105 [(ycoding.v5.public_event) = { diagnostic_name: "session.guardrail.escalated" durable: true }];
     SessionLogItemValue55 session_guardrail_decided = 106 [(ycoding.v5.public_event) = { diagnostic_name: "session.guardrail.decided" durable: true }];
@@ -2360,6 +2359,6 @@ message PublicEvent {
     PublicEvent_mcp_status_changed mcp_status_changed = 100 [(ycoding.v5.public_event) = { diagnostic_name: "mcp.status.changed" durable: false }];
     PublicEvent_mcp_resources_changed mcp_resources_changed = 101 [(ycoding.v5.public_event) = { diagnostic_name: "mcp.resources.changed" durable: false }];
   }
-  reserved 116;
+  reserved 10, 116;
   reserved "shell_updated";
 }

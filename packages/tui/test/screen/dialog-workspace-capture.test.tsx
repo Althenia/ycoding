@@ -5,7 +5,6 @@ import { expect, test } from "bun:test"
 import path from "path"
 import { onMount, type JSX } from "solid-js"
 import { CommandPaletteDialog } from "../../src/component/command-palette"
-import { DialogProjectArtifacts } from "../../src/component/dialog-project-artifacts"
 import { DialogSessionSkills } from "../../src/component/dialog-session-skills"
 import { ConfigProvider } from "../../src/config"
 import { ClientProvider } from "../../src/context/client"
@@ -40,13 +39,6 @@ const skillInfo = [
   { id: "python-developer", name: "python-developer", content: "", location: "/tmp/ycoding/home/.agents/skills/python-developer/SKILL.md" },
 ]
 
-const artifacts = [
-  artifact({ kind: "skill", id: "go-developer", name: "go-developer", description: ".ycoding/skills" }),
-  artifact({ kind: "command", id: "deploy", name: "deploy", description: ".ycoding/commands" }),
-  artifact({ kind: "agent", id: "reviewer", name: "reviewer", description: ".ycoding/agents" }),
-  artifact({ kind: "plugin", id: "agentmemory", name: "agentmemory", description: "draft", stage: "quarantine" }),
-]
-
 test("captures workspace dialogs at reference terminal dimensions", async () => {
   for (const viewport of viewports) {
     await capture(
@@ -63,13 +55,6 @@ test("captures workspace dialogs at reference terminal dimensions", async () => 
       sessionSkillsClient(),
       viewport,
       "python-developer",
-    )
-    await capture(
-      "project-artifacts",
-      () => <DialogProjectArtifacts location={{ directory: "/repo" }} />,
-      artifactsClient(),
-      viewport,
-      "agentmemory",
     )
   }
 }, 120_000)
@@ -156,40 +141,6 @@ async function capture(
       expect(goReviewRow!.includes("! ")).toBe(true)
     }
 
-    if (name === "project-artifacts") {
-      const title = origin(rows, "Project artifacts")
-      expectAt(rows, title.row, title.column + 88, "esc")
-      expectAt(rows, title.row + 6, title.column, "Skills")
-      expectAt(rows, title.row + 8, title.column + 3, "go-developer")
-      // difference:workspace-project-artifacts-scope-tabs
-      // Expected: title row contains "Project artifacts" and "esc" but no scope tabs
-      const titleRow = rows.find((r) => r.includes("Project artifacts"))
-      expect(titleRow).toBeDefined()
-      expect(titleRow!.includes("Project")).toBe(true)
-      expect(titleRow!.includes("esc")).toBe(true)
-      expect(titleRow!.includes("Global")).toBe(false)
-      expect(titleRow!.includes("Trash")).toBe(false)
-
-      // difference:workspace-project-artifacts-row-metadata
-      // Expected: artifact rows show their repository paths, not "project" for every row
-      const goDeveloperRow = rows.find((r) => r.includes("go-developer"))
-      expect(goDeveloperRow).toBeDefined()
-      expect(goDeveloperRow!.includes(".ycoding/skills")).toBe(true)
-      expect(goDeveloperRow!.includes("project")).toBe(false)
-
-      const deployRow = rows.find((r) => r.includes("deploy"))
-      expect(deployRow).toBeDefined()
-      expect(deployRow!.includes(".ycoding/commands")).toBe(true)
-
-      const reviewerRow = rows.find((r) => r.includes("reviewer"))
-      expect(reviewerRow).toBeDefined()
-      expect(reviewerRow!.includes(".ycoding/agents")).toBe(true)
-
-      const agentmemoryRow = rows.find((r) => r.includes("agentmemory"))
-      expect(agentmemoryRow).toBeDefined()
-      expect(agentmemoryRow!.includes("draft")).toBe(true)
-    }
-
     // --- End focused assertions ---
 
     await Bun.write(path.join(renders, `dialog-workspace-${name}-${viewport.width}x${viewport.height}.txt`), rows.join("\n"))
@@ -226,14 +177,6 @@ function sessionSkillsClient() {
   } as unknown as V5Client
 }
 
-function artifactsClient() {
-  return {
-    projectArtifact: { artifact: { list: async () => artifacts } },
-    event: { subscribe: async function* () {} },
-    transport: { close() {}, reconnect: async () => {} },
-  } as unknown as V5Client
-}
-
 function skill(input: {
   id: string
   name: string
@@ -248,23 +191,5 @@ function skill(input: {
     conflicts: input.conflicts ?? [],
     declarations: {},
     ...(input.state === "inactive" ? { inactiveReason: "compacted" as const } : {}),
-  }
-}
-
-function artifact(input: {
-  kind: "skill" | "command" | "agent" | "plugin"
-  id: string
-  name: string
-  description: string
-  stage?: "trial" | "active" | "degraded" | "disabled" | "quarantine"
-}) {
-  return {
-    scope: { type: "project" as const, id: "scope_dialog_capture" },
-    ...input,
-    stage: input.stage ?? "active",
-    revision: 1,
-    currentVersionID: "pav_dialog_capture",
-    currentDigest: "dialog-capture",
-    timeUpdated: 0,
   }
 }

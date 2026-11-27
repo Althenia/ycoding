@@ -735,31 +735,9 @@ async fn move_session(
             .await
             .map_err(Failure::Unavailable)?;
     }
-    let destination_agent = if held.info.project.id != info.project.id {
-        let destination_location = core.locations.move_location(&info)?;
-        destination_location
-            .agents
-            .snapshot()
-            .default()
-            .map(|agent| agent.id.clone())
-    } else {
-        None
-    };
-    let artifacts = core
-        .artifacts
-        .as_ref()
-        .and_then(|artifacts| artifacts(&held.info));
     services
         .runner
-        .move_to(
-            core.execution.coordinator(),
-            &id,
-            &info,
-            artifacts
-                .as_ref()
-                .and_then(|artifacts| artifacts.store.accounting()),
-            destination_agent.as_ref(),
-        )
+        .move_to(core.execution.coordinator(), &id, &info)
         .await
         .map_err(failure)?;
     core.locations.cancel_session(&id).await?;

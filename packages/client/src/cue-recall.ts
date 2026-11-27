@@ -31,13 +31,6 @@ export type RecallItem = {
     readonly freshness: string
     readonly lifecycle: string
   }
-  readonly artifact?: {
-    readonly kind: string
-    readonly id: string
-    readonly sourceScope: string
-    readonly scopeID: string
-    readonly versionID: string
-  }
   readonly tokens?: number
 }
 
@@ -131,7 +124,6 @@ function readItem(value: unknown): RecallItem | undefined {
   if (item.kind !== "memory" && item.kind !== "skill") return undefined
   if (!stage || !stages.includes(stage) || !method || !methods.includes(method)) return undefined
   const okf = record(item.okf)
-  const artifact = record(item.artifact)
   const scores = readScores(item.scores)
   return {
     kind: item.kind,
@@ -144,17 +136,6 @@ function readItem(value: unknown): RecallItem | undefined {
     source: { id: sourceID, revision },
     ...(okf && text(okf.type) && text(okf.trust) && text(okf.freshness) && text(okf.lifecycle)
       ? { okf: { type: text(okf.type)!, trust: text(okf.trust)!, freshness: text(okf.freshness)!, lifecycle: text(okf.lifecycle)! } }
-      : {}),
-    ...(artifact && text(artifact.kind) && text(artifact.id) && text(artifact.sourceScope) && text(artifact.scopeID) && text(artifact.versionID)
-      ? {
-          artifact: {
-            kind: text(artifact.kind)!,
-            id: text(artifact.id)!,
-            sourceScope: text(artifact.sourceScope)!,
-            scopeID: text(artifact.scopeID)!,
-            versionID: text(artifact.versionID)!,
-          },
-        }
       : {}),
     ...(count(item.tokens) === undefined ? {} : { tokens: count(item.tokens)! }),
   }
@@ -253,16 +234,12 @@ function relevance(item: RecallItem) {
 }
 
 function itemDetail(item: RecallItem, withheld: boolean): RecallItemDetail {
-  const artifact = item.artifact
-    ? `${item.artifact.kind} ${item.artifact.id} · ${item.artifact.sourceScope} · ${item.artifact.versionID}`
-    : undefined
   const rows: [string, string | undefined][] = [
     ["outcome", withheld ? [item.stage, item.rejection].filter(Boolean).join(" · ") : undefined],
     ["method", item.method],
     ["relevance", relevance(item)],
     ["reason", item.reason || undefined],
     ["source", `${item.source.id} @ ${item.source.revision}`],
-    ["artifact", artifact],
     ["type", item.okf?.type],
     ["trust", item.okf?.trust],
     ["freshness", item.okf?.freshness],

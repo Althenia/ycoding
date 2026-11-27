@@ -63,8 +63,7 @@ The current runtime evaluates guardrails immediately before supported side effec
 - model-facing shell and direct Session shell;
 - edit, write, and patch commits;
 - durable subagent creation;
-- mutation-capable or process-like MCP execution;
-- project-artifact mutation.
+- mutation-capable or process-like MCP execution.
 
 A permission approval cannot bypass a guardrail decision. A guardrail approval cannot widen the agent's effective permission policy.
 

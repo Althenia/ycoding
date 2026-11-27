@@ -534,7 +534,6 @@ const ignoredEventTypes: readonly string[] = [
   "session.file-change.recorded",
   "guardrail.decided",
   "session.task.updated",
-  "session.project-artifacts-ended",
   "session.moved",
   "session.forked",
   "session.deleted",
@@ -672,7 +671,6 @@ export function isDotSteerSynthetic(message: RemoteMessageView): boolean {
     metadata.review !== undefined ||
     metadata.instruction !== undefined ||
     metadata.compactionCheckpoint !== undefined ||
-    metadata.projectArtifactsEnded !== undefined ||
     metadata.decisionInputID !== undefined
   )) return false
   if (classifySyntheticNotice(message) !== undefined) return false

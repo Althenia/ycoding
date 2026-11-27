@@ -32,7 +32,6 @@ import { CredentialHandler } from "./handlers/credential"
 import { ProjectHandler } from "./handlers/project"
 import { ProjectCopyHandler } from "./handlers/project-copy"
 import { VcsHandler } from "./handlers/vcs"
-import { ProjectArtifactHandler } from "./handlers/project-artifact"
 import { EventFeed } from "./event-feed"
 import { BrowserHandler } from "./handlers/browser"
 import { InteractionHandler } from "./handlers/interaction"
@@ -78,7 +77,6 @@ export const handlers = Layer.mergeAll(
   ReferenceHandler,
   ProjectCopyHandler,
   VcsHandler,
-  ProjectArtifactHandler,
   BrowserHandler,
   InteractionHandler,
   IsolatedBrowserHandler,

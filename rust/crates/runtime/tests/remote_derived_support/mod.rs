@@ -125,7 +125,7 @@ pub fn world() -> &'static World {
             .iter()
             .chain(project::TABLES)
             .chain(resources::TABLES)
-            .chain(ycoding_store::artifacts::TABLES)
+            .chain(ycoding_store::database_format::TABLES)
             .chain(ycoding_store::usage_cells::TABLES)
             .chain(ycoding_store::coordination::TABLES)
             .copied()

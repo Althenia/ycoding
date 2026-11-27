@@ -31,28 +31,6 @@ const Base = {
   time: Schema.Struct({ created: DateTimeUtcFromMillis }),
 }
 
-const projectArtifactScopeBrand: string = "ProjectArtifact.ScopeID"
-const projectArtifactVersionBrand: string = "ProjectArtifact.VersionID"
-const projectArtifactIDBrand: string = "ProjectArtifact.ID"
-const ArtifactScopeID = Schema.String.check(Schema.isPattern(/^pas_[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/)).pipe(
-  Schema.brand(projectArtifactScopeBrand),
-)
-const ArtifactVersionID = Schema.String.check(Schema.isPattern(/^pav_[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/)).pipe(
-  Schema.brand(projectArtifactVersionBrand),
-)
-const ArtifactID = Schema.String.check(
-  Schema.isPattern(/^(?!(?:aux|com[1-9]|con|lpt[1-9]|nul|prn)$)[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/),
-).pipe(Schema.brand(projectArtifactIDBrand))
-
-export const ArtifactProvenance = Schema.Struct({
-  scopeID: ArtifactScopeID,
-  versionID: ArtifactVersionID,
-  kind: Schema.Literals(["skill", "command", "agent", "plugin"]),
-  id: ArtifactID,
-  sourceScope: Schema.Literals(["project", "global"]),
-}).annotate({ identifier: "Session.Message.ArtifactProvenance" })
-export type ArtifactProvenance = typeof ArtifactProvenance.Type
-
 export const ProviderState = Schema.Record(Schema.String, Schema.Unknown).annotate({
   identifier: "Session.Message.ProviderState",
 })
@@ -63,7 +41,6 @@ export const AgentSelected = Schema.Struct({
   ...Base,
   type: Schema.tag("agent-switched"),
   agent: Agent.ID,
-  artifact: ArtifactProvenance.pipe(optional),
 }).annotate({ identifier: "Session.Message.AgentSelected" })
 
 export interface ModelSelected extends Schema.Schema.Type<typeof ModelSelected> {}
@@ -124,7 +101,6 @@ export const Skill = Schema.Struct({
   directory: Schema.String.pipe(optional),
   conflicts: SkillSchema.Conflicts.pipe(optional),
   skillDeactivations: Schema.Array(SkillDeactivation).pipe(optional),
-  artifact: ArtifactProvenance.pipe(optional),
 }).annotate({ identifier: "Session.Message.Skill" })
 
 export interface Shell extends Schema.Schema.Type<typeof Shell> {}

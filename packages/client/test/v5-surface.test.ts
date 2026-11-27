@@ -88,11 +88,6 @@ const cases: [string, string, (client: V5Client) => Promise<unknown>][] = [
   ["reference", "reference.list", (client) => client.reference.list()],
   ["projectCopy", "projectCopy.refresh", (client) => client.projectCopy.refresh({ projectID: "project_fixture" })],
   ["vcs", "vcs.diff", (client) => client.vcs.diff({ mode: "working" })],
-  [
-    "projectArtifact",
-    "artifact.list",
-    (client) => client.projectArtifact.artifact.list({ scope: "project", kind: "skill", stage: "active" }),
-  ],
   ["debug", "debug.location", (client) => client.debug.location.list()],
   ["browser", "browser.status", (client) => client.browser.status({ sessionID: "ses_owner" })],
   ["isolatedBrowser", "isolatedBrowser.status", (client) => client.isolatedBrowser.status({ sessionID: "ses_owner" })],
@@ -130,9 +125,9 @@ test.each(cases)("REQ-WIRE-001 %s group dispatches its canonical %s operation", 
   }
 })
 
-test("REQ-WIRE-001 the complete 242-method surface has one canonical LocalClient descriptor", () => {
-  expect(methodCoverage).toHaveLength(242)
-  expect(new Set(methodCoverage.map((entry) => entry.method)).size).toBe(242)
+test("REQ-WIRE-001 the complete 226-method surface has one canonical LocalClient descriptor", () => {
+  expect(methodCoverage).toHaveLength(226)
+  expect(new Set(methodCoverage.map((entry) => entry.method)).size).toBe(226)
   for (const entry of methodCoverage) {
     const operation = operations.find((operation) => operation.operationId === entry.operationID)!
     expect(operation.diagnosticName).toBe(entry.operation)

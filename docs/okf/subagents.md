@@ -47,7 +47,6 @@ TUI subagent indicators rehydrate from durable state after reconnect or restart;
 - [Session Execution and Autonomy](./session.md)
 - [Session Guardrails](./session-guardrails.md)
 - [Package Architecture](./architecture.md)
-- [Project Artifacts](./project-artifacts.md)
 
 [^runtime-doc]: repo:///docs/runtime.md
 [^product-dir]: repo:///docs/product-direction.md

@@ -83,7 +83,7 @@ YCoding discovers:
 - the global YCoding config directory;
 - global `~/.claude` and `~/.agents` skill directories when present, unless `capabilities.home_roots` is `false`.
 
-[Capability toggles](./configuration.md#capability-toggles) narrow what discovery exposes: `capabilities.home_roots: false` omits `~/.claude` and `~/.agents` (including when the project lies below the home directory), and `capabilities.skills`, `tools`, `mcp`, `plugins`, `project_artifacts`, and `instructions` filter the discovered resources by ID, name, or path.
+[Capability toggles](./configuration.md#capability-toggles) narrow what discovery exposes: `capabilities.home_roots: false` omits `~/.claude` and `~/.agents` (including when the project lies below the home directory), and `capabilities.skills`, `tools`, `mcp`, `plugins`, and `instructions` filter the discovered resources by ID, name, or path.
 
 Runtime config document order is documented in [`configuration.md`](./configuration.md#runtime-configuration-discovery-and-precedence).
 
@@ -274,7 +274,7 @@ YCoding adds skill sources from:
 
 Local skill listings re-read and parse the current Markdown bytes without adding full documents to a process-wide parser cache. Unquoted colons in frontmatter scalar values use the YAML block-scalar fallback; malformed frontmatter remains invalid on repeated reads.
 
-`capabilities.skills` filters skills by ID after discovery from every source above, managed project-artifact skills, MCP-served skills, and the built-in `ycoding`, `chatgpt-connectors`, `browser-use`, `computer-use` and `report` skills; a filtered skill is absent from the catalog and cannot be loaded by explicit ID. `capabilities.skills.enabled: false` also hides the `skill` tool.
+`capabilities.skills` filters skills by ID after discovery from every source above, MCP-served skills, and the built-in `ycoding`, `chatgpt-connectors`, `browser-use`, `computer-use` and `report` skills; a filtered skill is absent from the catalog and cannot be loaded by explicit ID. `capabilities.skills.enabled: false` also hides the `skill` tool.
 
 ### Supported layouts
 
@@ -614,18 +614,6 @@ Servers declaring the Resources capability and `io.modelcontextprotocol/skills` 
 Loading an MCP-served skill is lazy and requires the `skill` tool permission. For a fixed manifest, YCoding first binds approval to a digest-derived identity of the server, skill URI, and complete resource manifest, then fetches `SKILL.md`. It verifies the retrieved file's manifest membership, size, digest, and parsed frontmatter before content reaches the model. Dynamic manifests are listed but cannot load. Supporting resources are read only by a later `skill` call for an already active skill, from the manifest retained by its durable activation; unlisted, changed, malformed, or escaping resource references fail without exposing bytes or downloading files to disk.
 
 See [`configuration.md`](./configuration.md#mcp) for local and remote server shapes.
-
-## Project artifacts
-
-YCoding's project-artifact system manages agents, commands, skills, and plugin drafts with validation, preview, confirmation, deletion, restore, and rollback. Project artifacts are durable managed records; filesystem resources are their deployed or imported representation.
-
-Skills, commands and agents can carry up to eight lowercase `tags` (letters, digits and hyphens). The `project_artifact` tool writes them with the artifact and replaces them on the next version. `action: "search"` with a `query`, `tags` or both returns up to 20 matching artifacts of the calling project, ranked by the retrieval used for memory and skill selection. A result lists the kind, ID, name, description, tags, stage and version identity; it never includes artifact content. Search applies the session's `project_artifact` permission to every hit and only reads trial and active artifacts whose stored bytes match the recorded digest. Tags and content never grant trust or turn an artifact into a skill.
-
-A manually written managed skill may include the unprefixed activation keys described under skill metadata in its definition's `activation` field. Create and edit keep them, and the skill is selected only by a matching cue that the session's skill permission allows. Model-written artifacts cannot carry activation keys. A v5 `artifact.update` carries neither field, so the server keeps the stored tags and activation after verifying the current version's digest.
-
-Use the TUI project-artifact manager for lifecycle operations when provenance and rollback matter. Direct file edits remain valid for repository-owned resources and are reloaded by the watcher.
-
-`capabilities.project_artifacts: false` applies no managed project artifacts to the Location and hides the `project_artifact` tool and its guidance.
 
 ## Reload behavior
 

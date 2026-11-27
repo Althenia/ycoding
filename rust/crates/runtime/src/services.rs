@@ -22,16 +22,6 @@ use ycoding_core::ycoding_store::Client;
 use ycoding_protocol::connection::Budgets;
 
 #[derive(Clone)]
-pub struct ArtifactServices {
-    pub store: ycoding_core::resources::project_artifact::store::Service,
-    pub refresh: Arc<dyn Fn() + Send + Sync>,
-}
-
-pub type ArtifactProvider = Arc<
-    dyn Fn(&ycoding_core::ycoding_schema::location::Info) -> Option<ArtifactServices> + Send + Sync,
->;
-
-#[derive(Clone)]
 pub struct Identity {
     pub version: String,
     pub pid: u64,
@@ -48,7 +38,6 @@ pub struct Core {
     pub integrations: Option<IntegrationResolver>,
     pub mcp: Option<McpResolver>,
     pub catalogs: Option<CatalogProvider>,
-    pub artifacts: Option<ArtifactProvider>,
     pub remote: Option<crate::connector::Control>,
     pub dots: Option<Arc<crate::dots::Services>>,
     pub sessions: SessionStore,
@@ -202,7 +191,6 @@ impl Core {
             platform_default_location: None,
             telemetry: ycoding_core::telemetry::Service::new(client.clone(), retention.clone()),
             keep_awake: ycoding_core::platform::keep_awake::Service::new(),
-            artifacts: None,
             provider_usage: None,
             retention,
             remote: None,

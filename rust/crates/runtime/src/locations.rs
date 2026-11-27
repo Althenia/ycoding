@@ -890,7 +890,7 @@ impl Locations {
     ) -> Result<Arc<LocationServices>, Failure> {
         self.acquire(directory, workspace, |directory| {
             // A recorded Project that differs from the filesystem identity keeps its ID so
-            // Sessions, permissions and artifacts already bound to it stay attached.
+            // Sessions and permissions already bound to it stay attached.
             self.project_identity(directory, workspace)
         })
     }
@@ -1160,20 +1160,9 @@ impl Locations {
             .filter(|_| standalone.is_none())
             .map(|factory| {
                 if !force {
-                    return factory.prepare(
-                        directory,
-                        workspace,
-                        project.id.as_lossless(),
-                        &project.directory,
-                    );
+                    return factory.prepare(directory);
                 }
-                factory.prepare_refresh(
-                    directory,
-                    workspace,
-                    project.id.as_lossless(),
-                    &project.directory,
-                    force,
-                )
+                factory.prepare_refresh(directory, force)
             })
             .transpose()?;
         let mut configuration = standalone
@@ -1570,6 +1559,7 @@ impl Locations {
         ))
     }
 
+    #[cfg(test)]
     pub(crate) fn move_location(
         &self,
         info: &location::Info,

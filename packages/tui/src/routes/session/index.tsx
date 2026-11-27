@@ -75,7 +75,6 @@ import { DialogSessionSkills } from "../../component/dialog-session-skills"
 import { SessionRecallRow } from "./recall-row"
 import { DialogSessionTerminals } from "../../component/dialog-session-terminals"
 import { SessionIsolatedBrowserCommand } from "../../component/dialog-session-browser"
-import { DialogProjectArtifacts } from "../../component/dialog-project-artifacts"
 import { DialogMessage } from "./dialog-message"
 import { DialogFork } from "./dialog-fork"
 import { DialogTimeline } from "./dialog-timeline"
@@ -1343,15 +1342,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       group: "Session",
       run: () => {
         dialog.replace(() => <DialogSessionSkills sessionID={route.sessionID} location={location()} />)
-      },
-    },
-    {
-      title: "Project artifacts",
-      id: "project.artifacts",
-      group: "Session",
-      slash: { name: "artifacts" },
-      run: () => {
-        dialog.replace(() => <DialogProjectArtifacts location={location()} />)
       },
     },
     {

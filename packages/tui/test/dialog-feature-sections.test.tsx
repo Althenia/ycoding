@@ -7,7 +7,6 @@ import { ConfigProvider } from "../src/config"
 import { ClientProvider } from "../src/context/client"
 import { Keymap } from "../src/context/keymap"
 import { ThemeProvider } from "../src/context/theme"
-import { DialogProjectArtifacts } from "../src/component/dialog-project-artifacts"
 import { DialogSessionSkills } from "../src/component/dialog-session-skills"
 import { DialogProvider, useDialog } from "../src/ui/dialog"
 import { ToastProvider } from "../src/ui/toast"
@@ -34,71 +33,6 @@ test("renders Active, Conflict, and Available skill sections with conflict treat
   expect(inactive).toContain("○")
   expect(result.frame).not.toContain("global")
   expect(result.frame).not.toContain("project")
-})
-
-test("renders all artifact kind sections at once", async () => {
-  const result = await renderDialog(
-    () => <DialogProjectArtifacts />,
-    artifactsClient([
-      artifact({ kind: "skill", name: "Go developer" }),
-      artifact({ kind: "command", name: "Deploy" }),
-      artifact({ kind: "agent", name: "Reviewer" }),
-      artifact({ kind: "plugin", name: "Agent memory", stage: "quarantine" }),
-    ]),
-  )
-
-  expect(result.frame).toContain("Skills")
-  expect(result.frame).toContain("Commands")
-  expect(result.frame).toContain("Agents")
-  expect(result.frame).toContain("Plugins")
-})
-
-test("renders project and global skill scopes from registered skill locations", async () => {
-  const result = await renderDialog(
-    () => <DialogSessionSkills sessionID="ses_1" />,
-    sessionSkillsClient(
-      [
-        skill({ id: "project-skill", name: "Project skill", state: "active" }),
-        skill({ id: "global-skill", name: "Global skill", state: "active" }),
-      ],
-      [
-        skillInfo({ id: "project-skill", name: "Project skill", location: "/repo/.ycoding/skills/project-skill/SKILL.md" }),
-        skillInfo({ id: "global-skill", name: "Global skill", location: "/tmp/ycoding/home/.agents/skills/global-skill/SKILL.md" }),
-      ],
-    ),
-  )
-
-  expect(result.frame).toContain("project")
-  expect(result.frame).toContain("global")
-})
-
-test("renders no scope for a skill outside known project and global roots", async () => {
-  const result = await renderDialog(
-    () => <DialogSessionSkills sessionID="ses_1" />,
-    sessionSkillsClient(
-      [skill({ id: "external-skill", name: "External skill", state: "inactive" })],
-      [skillInfo({ id: "external-skill", name: "External skill", location: "/opt/skills/external-skill/SKILL.md" })],
-    ),
-  )
-
-  expect(result.frame).toContain("External skill")
-  expect(result.frame).not.toContain("project")
-  expect(result.frame).not.toContain("global")
-})
-
-test("renders artifact scope and stage-derived load status", async () => {
-  const result = await renderDialog(
-    () => <DialogProjectArtifacts />,
-    artifactsClient([
-      artifact({ kind: "skill", name: "Go developer", stage: "active" }),
-      artifact({ kind: "plugin", name: "Agent memory", stage: "quarantine" }),
-    ]),
-  )
-
-  expect(result.frame).toContain("Project · All")
-  expect(result.frame).toContain("Loaded")
-  expect(result.frame).toContain("○")
-  expect(result.frame).toContain("Not loaded")
 })
 
 async function renderDialog(view: () => ReturnType<typeof DialogSessionSkills>, api: V5Client) {
@@ -129,7 +63,7 @@ async function renderDialog(view: () => ReturnType<typeof DialogSessionSkills>, 
     { width: 100, height: 40 },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("Session skills") || frame.includes("Project artifacts"))
+  await app.waitForFrame((frame) => frame.includes("Session skills"))
 
   try {
     return { frame: app.captureCharFrame() }
@@ -148,18 +82,6 @@ function sessionSkillsClient(skills: ReturnType<typeof skill>[], skillInfos: Ret
         location: { directory: "/repo", project: { id: "project_1", directory: "/repo" } },
         data: skillInfos,
       }),
-    },
-    event: { subscribe: async function* () {} },
-    transport: { close() {}, reconnect: async () => {} },
-  } as unknown as V5Client
-}
-
-function artifactsClient(artifacts: ReturnType<typeof artifact>[]) {
-  return {
-    projectArtifact: {
-      artifact: {
-        list: async () => artifacts,
-      },
     },
     event: { subscribe: async function* () {} },
     transport: { close() {}, reconnect: async () => {} },
@@ -187,24 +109,5 @@ function skillInfo(input: { id: string; name: string; location: string }) {
   return {
     ...input,
     content: "",
-  }
-}
-
-function artifact(input: {
-  kind: "skill" | "command" | "agent" | "plugin"
-  name: string
-  stage?: "trial" | "active" | "degraded" | "disabled" | "quarantine"
-}) {
-  return {
-    scope: { type: "project" as const, id: "scope_1" },
-    kind: input.kind,
-    id: input.name.toLowerCase().replaceAll(" ", "-"),
-    name: input.name,
-    description: "",
-    stage: input.stage ?? "active",
-    revision: 1,
-    currentVersionID: "pav_1",
-    currentDigest: "digest",
-    timeUpdated: 0,
   }
 }

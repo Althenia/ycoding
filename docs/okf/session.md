@@ -81,7 +81,6 @@ Runtime observations for session-state, team-view, and step-limit sources are ap
 - [Session Guardrails](./session-guardrails.md)
 - [Durable Background Subagents](./subagents.md)
 - [Provider Integration and Cache](./provider-integration.md)
-- [Project Artifacts](./project-artifacts.md)
 
 [^runtime-doc]: repo:///docs/runtime.md
 [^spec-v2]: repo:///specs/session.md

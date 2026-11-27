@@ -1285,7 +1285,7 @@ test("file suggestions show complete paths across the row and wrap without clipp
       expect(layout.rows.map((row) => row.text).toSorted()).toEqual([
         "@packages/core/src/config/plugin/agent.ts",
         "@packages/core/src/plugin/agent.ts",
-        "@packages/core/src/project-artifact/adapter/agent.ts",
+        "@packages/core/src/session/runner/agent.ts",
       ])
       for (const row of layout.rows) {
         expect(row.clipped).toBe(false)
@@ -1299,7 +1299,7 @@ test("file suggestions show complete paths across the row and wrap without clipp
       await type(page, input, "@agent.ts")
       await wait(page, `document.querySelectorAll('.mini-composer__mount [role="option"]').length === 3`)
       await page.evaluate(`document.querySelectorAll('.mini-composer__mount [role="option"]')[2].click()`)
-      expect(await page.evaluate(`document.querySelector(${JSON.stringify(input)}).value`)).toBe("@packages/core/src/project-artifact/adapter/agent.ts ")
+      expect(await page.evaluate(`document.querySelector(${JSON.stringify(input)}).value`)).toBe("@packages/core/src/session/runner/agent.ts ")
     } finally { await page.close() }
   }
 }, 120_000)

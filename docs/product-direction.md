@@ -24,7 +24,7 @@ Sessions and subagents can select named profiles independently for the same prov
 | Autonomy                   | Explicit control over automatic answers, approvals, and goal continuation.                                              | [Runtime](./runtime.md)                              |
 | Permission and guardrail   | Tool authority and family-wide review of high-impact actions.                                                           | [Operator guide](./guardrails-and-provider-usage.md) |
 | Interaction                 | One locally approved Chrome tab or macOS window per Session grant, with independent Stop. Browser and IsolatedBrowser HTTP and SDK operations stay separate. | [Runtime](./runtime.md#session-interaction)         |
-| Skill and project artifact | Loadable guidance and managed reusable agent customization.                                                             | [Repository resources](./repository-resources.md)    |
+| Skill                      | Loadable guidance for agents.                                                                                           | [Repository resources](./repository-resources.md)    |
 | Workspace memory           | Explicit linked knowledge, separate from transcripts and prompt caches.                                                 | [Memory](./memory.md)                                |
 | Provider cache and quota   | Provider-owned reuse telemetry and read-only usage reporting.                                                           | [Provider efficiency](./provider-efficiency.md)      |
 | Native Dots access         | Profile-pinned native control with global opt-in, connection information, and exact typed decisions.                     | [Runtime](./runtime.md#native-dots-access)            |
@@ -41,7 +41,7 @@ Native Dots requires trusted global enablement and an explicitly selected OpenAI
 
 The authenticated native Rust executor uses host-user authority for its admitted operations. The profile and access preference gate the channel. Per-operation Session decisions do not gate executor requests.
 
-Changes that affect sessions, prompts, tools, permissions, subagents, skills, project artifacts, cache diagnostics, or transcript history must be proven through the CLI/TUI path.
+Changes that affect sessions, prompts, tools, permissions, subagents, skills, cache diagnostics, or transcript history must be proven through the CLI/TUI path.
 
 Supported presentation surfaces are the terminal application and the SolidJS remote web client. A macOS Electrobun desktop window, published as the Apple silicon release asset `YCoding-Desktop-v<version>-darwin-arm64.zip`, signed with a self-signed certificate and not notarized, and buildable from source with `bun run build:desktop`, connects directly to a private bundled backend or an existing shared local backend and lists, reads, starts and continues that backend's native Sessions. The public site and remote client share `ycoding.althenia.app`. The public site publishes its documentation both as pages and as Markdown for AI agents (`/llms.txt`, `/llms-full.txt`, `/docs/<slug>.md`). Opening the remote client while signed out shows only an OAuth sign-in screen; Google is the supported provider. The browser and relay own no repository, shell, tool, model, or Session execution authority. There is no hosted-agent runtime, Electron shell, or native office client in the current product.
 
@@ -55,7 +55,7 @@ New changes extend current contracts; there is one current runtime. Changing sto
 
 Sessions preserve user intent and execution state across ordinary process lifecycle boundaries.
 
-Durable state owns prompt admission, session history, instructions, compaction results, orchestration records, autonomy state, and project artifacts. Process-local coordinators may optimize execution but cannot become the sole owner of user-visible state.
+Durable state owns prompt admission, session history, instructions, compaction results, orchestration records, and autonomy state. Process-local coordinators may optimize execution but cannot become the sole owner of user-visible state.
 
 ### 4. Explicit autonomy
 
@@ -92,12 +92,9 @@ Customization is a product capability. Supported domains include:
 - hooks and plugins;
 - TUI slots;
 - MCP servers and tools;
-- project and global artifacts;
 - model providers;
 - opt-in local meeting capture and intelligence through `ycoding meeting`, its page-owned consent-led audio capture, and its runtime and TUI plugins;
 - Session guardrails and provider-usage sources.
-
-Project artifacts provide managed scope, lifecycle, validation, provenance, and rollback for reusable agent behavior.
 
 ### 7. Provider efficiency and correctness
 

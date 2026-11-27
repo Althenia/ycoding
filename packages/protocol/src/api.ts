@@ -37,7 +37,6 @@ import { CredentialGroup } from "./groups/credential.js"
 import { makeProjectGroup } from "./groups/project.js"
 import { ProjectCopyGroup } from "./groups/project-copy.js"
 import { VcsGroup } from "./groups/vcs.js"
-import { ProjectArtifactGroup } from "./groups/project-artifact.js"
 import { makeIncidentGroup } from "./groups/incident.js"
 import { makeBrowserGroup } from "./groups/browser.js"
 import { makeIsolatedBrowserGroup } from "./groups/isolated-browser.js"
@@ -61,7 +60,6 @@ type LocationGroups<LocationId extends HttpApiMiddleware.AnyId> =
   | HttpApiGroup.AddMiddleware<typeof ReferenceGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof ProjectCopyGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof VcsGroup, LocationId>
-  | HttpApiGroup.AddMiddleware<typeof ProjectArtifactGroup, LocationId>
 
 type SessionGroups<SessionLocationId extends HttpApiMiddleware.AnyId, SessionLocationService> =
   | ReturnType<typeof makeSessionGroup<SessionLocationId, SessionLocationService>>
@@ -232,7 +230,6 @@ const makeApiFromGroup = <
     .add(ReferenceGroup.middleware(locationMiddleware))
     .add(ProjectCopyGroup.middleware(locationMiddleware))
     .add(VcsGroup.middleware(locationMiddleware))
-    .add(ProjectArtifactGroup.middleware(locationMiddleware))
     .add(DebugGroup)
     .add(makeBrowserGroup(sessionLocationMiddleware))
     .add(makeIsolatedBrowserGroup(sessionLocationMiddleware))

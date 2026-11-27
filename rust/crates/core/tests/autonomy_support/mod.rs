@@ -42,7 +42,7 @@ const CATALOG: Catalog = Catalog::new(
         TableDeclaration::of::<ycoding_store::model_incident::IncidentTable>(),
         TableDeclaration::of::<ycoding_store::model_incident::GuidanceClearTable>(),
         TableDeclaration::of::<ycoding_store::resources::MigrationTable>(),
-        TableDeclaration::of::<ycoding_store::artifacts::MigrationTable>(),
+        TableDeclaration::of::<ycoding_store::database_format::MigrationTable>(),
     ],
 );
 

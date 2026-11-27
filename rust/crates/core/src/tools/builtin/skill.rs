@@ -22,7 +22,7 @@ use std::{
 };
 use ycoding_ai::llm::{ToolDefinition, ToolOutput};
 use ycoding_schema::{
-    DomainDecode, DomainEncode, JsonValue, LosslessString, ObjectEncoder,
+    DomainEncode, JsonValue, LosslessString, ObjectEncoder,
     llm::{ToolContent, ToolTextContent},
     mcp_skill, parse_json, session_message, session_skill_status, skill,
 };
@@ -38,7 +38,6 @@ pub struct SkillTool {
     pub sessions: crate::session::store::Service,
     pub reader: Read,
     pub policy: Arc<LeafPolicy>,
-    pub artifacts: Option<crate::resources::project_artifact::source::Service>,
 }
 
 impl Tool for SkillTool {
@@ -132,7 +131,7 @@ impl SkillTool {
             return Ok(already_active(&active.name));
         }
         let local = self.local(&id).await?;
-        load_local(&local, &self.policy, context, self.artifacts.as_ref()).await
+        load_local(&local, &self.policy, context).await
     }
     async fn local(&self, id: &skill::Id) -> Result<skill::Info, Failure> {
         self.skills
@@ -386,7 +385,6 @@ pub async fn load_local(
     info: &skill::Info,
     policy: &LeafPolicy,
     context: Context,
-    artifact_source: Option<&crate::resources::project_artifact::source::Service>,
 ) -> Result<Output, Failure> {
     policy
         .assert(
@@ -436,27 +434,6 @@ pub async fn load_local(
     };
     files.sort_by(|left, right| left.encode_utf16().cmp(right.encode_utf16()));
     files.truncate(10);
-    if let Some(source) = artifact_source {
-        use crate::resources::project_artifact::source::{ActivationInput, ActivationSource};
-        if source
-            .activate(ActivationInput {
-                kind: ycoding_schema::project_artifact::Kind::decode(&JsonValue::String(
-                    "skill".into(),
-                ))
-                .expect("fixed kind"),
-                id: info.id.clone(),
-                session_id: context.session_id.clone(),
-                agent_id: Some(context.agent.clone()),
-                source: ActivationSource::SkillTool {
-                    message_id: context.message_id.as_lossless().clone(),
-                    call_id: Some(context.call_id.clone()),
-                },
-            })
-            .is_err()
-        {
-            source.record_activation_failure();
-        }
-    }
     Ok(Output {
         name: info.name.clone(),
         directory: directory.to_string_lossy().into_owned(),

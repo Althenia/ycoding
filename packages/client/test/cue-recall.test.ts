@@ -19,7 +19,6 @@ const skill = {
   method: "cue",
   reason: "command cargo build",
   source: { id: "skill:project/rust-build", revision: "pav_1" },
-  artifact: { kind: "skill", id: "rust-build", sourceScope: "project", scopeID: "pas_x", versionID: "pav_1" },
   tokens: 220,
 }
 const cue = { type: "session.cue.detected", id: "evt_cue", created: 90, data: { sessionID: "ses_a", cueID: "c1", kind: "command", subject: "cargo build" } }
@@ -68,7 +67,6 @@ test("detail exposes trigger, cue, methods, relevance, provenance, trust, freshn
     { label: "lifecycle", value: "active" },
     { label: "tokens", value: "~120" },
   ])
-  expect(second!.rows).toContainEqual({ label: "artifact", value: "skill rust-build · project · pav_1" })
   expect(first!.target).toEqual({ kind: "memory", id: "build/linker", sourceID: "memory:repository/build/linker", revision: "sha256:abc" })
 })
 

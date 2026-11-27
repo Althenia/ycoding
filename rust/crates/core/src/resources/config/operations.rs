@@ -501,15 +501,15 @@ pub(crate) fn atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         }
         file.write_all(bytes)?;
         file.sync_all()?;
-        crate::resources::project_artifact::filesystem::execute_mutation(
-            crate::resources::project_artifact::filesystem::MutationRequest::Rename {
+        crate::resources::filesystem::execute_mutation(
+            crate::resources::filesystem::MutationRequest::Rename {
                 source_root: parent,
                 destination_root: parent,
                 source: &temporary,
                 destination: path,
                 replace: true,
             },
-            &crate::resources::project_artifact::filesystem::Hooks::default(),
+            &crate::resources::filesystem::Hooks::default(),
         )
         .map_err(std::io::Error::other)?;
         Ok(())

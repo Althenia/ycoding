@@ -1677,10 +1677,6 @@ details[open] > summary > .rl-disclosure-chev { transform: rotate(90deg); }
 .desktop-dialog[data-kind="system"] .desktop-dialog__body { display: flex; flex-direction: column; }
 .desktop-dialog[data-kind="system"] .desktop-dialog__body > [role="tabpanel"] { display: grid; align-content: start; grid-template-columns: minmax(0, 1fr); gap: 16px; min-height: 0; }
 .desktop-dialog[data-kind="system"] [role="tabpanel"]:is([aria-label="Status & Debug"], [aria-label="Remote & Pairing"]) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.desktop-dialog[data-kind="system"] [role="tabpanel"][aria-label="Artifacts & Plugins"] { display: flex; flex: 1; flex-direction: column; overflow: hidden; }
-.desktop-artifact-browser { display: grid; flex: 1; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--yc-line-subtle); border-radius: var(--yc-radius-card); }
-.desktop-artifact-list, .desktop-artifact-detail { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 12px; }
-.desktop-artifact-list { display: grid; align-content: start; gap: 12px; border-inline-end: 1px solid var(--yc-line-subtle); background: var(--yc-plane-hover); }
 .desktop-agent-browser .st-section { border: 0; border-block-end: 1px solid var(--yc-line-divider); border-radius: 0; background: transparent; }
 .desktop-agent-browser .st-section[data-selected="true"] { box-shadow: inset 2px 0 var(--yc-green-graphic); background: var(--yc-green-tonal); }
 .desktop-dialog .rl-meta { grid-template-columns: minmax(100px, .6fr) minmax(0, 1fr); align-content: start; gap: 8px 12px; }

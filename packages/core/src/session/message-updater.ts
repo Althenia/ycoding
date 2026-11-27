@@ -311,7 +311,6 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
             type: "agent-switched",
             metadata: event.metadata,
             agent: event.data.agent,
-            artifact: event.data.artifact,
             time: { created: event.created },
           }),
         )
@@ -332,21 +331,6 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
         })
       },
       "session.daybreak.set": () => Effect.void,
-      "session.project-artifacts-ended": (event) =>
-        adapter.appendMessage(
-          SessionMessage.Synthetic.make({
-            id: SessionMessage.ID.fromEvent(event.id),
-            type: "synthetic",
-            text: "",
-            metadata: {
-              projectArtifactsEnded: {
-                oldProjectID: event.data.oldProjectID,
-                newProjectID: event.data.newProjectID,
-              },
-            },
-            time: { created: event.created },
-          }),
-        ),
       "session.moved": () => Effect.void,
       "session.renamed": () => Effect.void,
       "session.deleted": () => Effect.void,
@@ -422,7 +406,6 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
             text: event.data.text,
             directory: event.data.directory,
             conflicts: event.data.conflicts ?? { skills: [], instructions: [] },
-            artifact: event.data.artifact,
             metadata: event.metadata,
             time: { created: event.created },
           }),

@@ -177,7 +177,6 @@ test("exposes every standard HTTP API group", () => {
     "reference",
     "projectCopy",
     "vcs",
-    "projectArtifact",
     "debug",
     "browser",
     "isolatedBrowser",
@@ -799,25 +798,6 @@ test("session.get returns the wire projection", async () => {
   const result = await client.session.get({ sessionID: "ses_test" })
 
   expect(result.time.created).toBe(1_717_171_717_000)
-})
-
-test("project artifact list uses the public HTTP contract", async () => {
-  const client = YCoding.make({
-    baseUrl: "http://localhost:3000",
-    fetch: async (input) => {
-      expect(typeof input === "string" ? input : input instanceof URL ? input.href : input.url).toBe(
-        "http://localhost:3000/api/artifact?location%5Bdirectory%5D=%2Ftmp%2Fproject&scope=project",
-      )
-      return Response.json({ data: [] })
-    },
-  })
-
-  const result = await client.projectArtifact.artifact.list({
-    location: { directory: "/tmp/project" },
-    scope: "project",
-  })
-
-  expect(result).toEqual([])
 })
 
 test("session instructions methods use the public HTTP contract", async () => {

@@ -114,7 +114,7 @@ const store: RemoteStore = {
       return { status: "ok", files: [{ path: "slow.txt", uri: "file:///workspace/ycoding/slow.txt", kind: "file" as const }] }
     }
     if (query === "fail") return { status: "failed", message: "File search is unavailable" }
-    if (query === "agent.ts") return { status: "ok", files: ["packages/core/src/config/plugin/agent.ts", "packages/core/src/plugin/agent.ts", "packages/core/src/project-artifact/adapter/agent.ts"].map((path) => ({ path, uri: `file:///workspace/ycoding/${path}`, kind: "file" as const })) }
+    if (query === "agent.ts") return { status: "ok", files: ["packages/core/src/config/plugin/agent.ts", "packages/core/src/plugin/agent.ts", "packages/core/src/session/runner/agent.ts"].map((path) => ({ path, uri: `file:///workspace/ycoding/${path}`, kind: "file" as const })) }
     return { status: "ok", files: [{ path: "apps/web/src/remote/ui/composer.tsx", uri: "file:///workspace/ycoding/apps/web/src/remote/ui/composer.tsx", kind: "file" as const }].filter((item) => item.path.includes(query)) }
   },
   setDraft: (sessionID: string, text: string) => update({ ...state(), drafts: { ...state().drafts, [sessionID]: text } }),

@@ -275,7 +275,6 @@ describe("public event manifest", () => {
         "session.dots.instruction.rejected.1",
         "session.dots.report.recorded.1",
         "session.permission.assessed.1",
-        "session.project-artifacts-ended.1",
         "session.moved.1",
         "session.renamed.1",
         "session.usage.recorded.1",

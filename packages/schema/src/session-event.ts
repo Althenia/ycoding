@@ -56,11 +56,6 @@ const Base = {
   sessionID: SessionID,
 }
 
-export const ArtifactProvenance = SessionMessage.ArtifactProvenance.annotate({
-  identifier: "Session.Event.ArtifactProvenance",
-})
-export type ArtifactProvenance = typeof ArtifactProvenance.Type
-
 export const Created = Event.durable({
   type: "session.created",
   durable: {
@@ -96,7 +91,6 @@ export const AgentSelected = Event.durable({
   schema: {
     ...Base,
     agent: Agent.ID,
-    artifact: ArtifactProvenance.pipe(optional),
   },
 })
 export type AgentSelected = typeof AgentSelected.Type
@@ -281,17 +275,6 @@ export const DaybreakSet = Event.durable({
   },
 })
 export type DaybreakSet = typeof DaybreakSet.Type
-
-export const ProjectArtifactsEnded = Event.durable({
-  type: "session.project-artifacts-ended",
-  ...options,
-  schema: {
-    ...Base,
-    oldProjectID: Project.ID,
-    newProjectID: Project.ID,
-  },
-})
-export type ProjectArtifactsEnded = typeof ProjectArtifactsEnded.Type
 
 export const Moved = Event.durable({
   type: "session.moved",
@@ -613,8 +596,7 @@ export namespace Skill {
       text: Schema.String,
       directory: Schema.String.pipe(optional),
       conflicts: SkillSchema.Conflicts.pipe(optional),
-      artifact: ArtifactProvenance.pipe(optional),
-    },
+      },
   })
   export type Activated = typeof Activated.Type
 
@@ -1115,7 +1097,6 @@ export const Definitions = Event.inventory(
   AgentSelected,
   ModelSelected,
   DaybreakSet,
-  ProjectArtifactsEnded,
   GuardrailDismissed,
   GuardrailEscalated,
   GuardrailDecided,

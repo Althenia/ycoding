@@ -5,7 +5,6 @@ pub const DURABLE: &[&str] = &[
     "session.agent.selected.1",
     "session.model.selected.1",
     "session.daybreak.set.1",
-    "session.project-artifacts-ended.1",
     "session.guardrail.dismissed.1",
     "session.guardrail.escalated.1",
     "session.guardrail.decided.1",

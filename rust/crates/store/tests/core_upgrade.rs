@@ -1,3 +1,5 @@
+mod common;
+
 use redb::{ReadableDatabase, ReadableTable, TableDefinition, TableHandle};
 use std::collections::BTreeMap;
 use std::ops::Bound;
@@ -5,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use ycoding_schema::{JsonValue, LosslessString, parse_json};
 use ycoding_store::{
-    Catalog, KeyPart, Metadata, Options, Store, TableDeclaration, TableSpec, artifacts, backup,
-    mcp_events, model_incident,
+    Catalog, KeyPart, Metadata, Options, Store, TableDeclaration, TableSpec, backup,
+    database_format, mcp_events, model_incident,
     native::{self, DatabaseKind},
     project, resources, session,
     session::Document,
@@ -119,10 +121,8 @@ fn target() -> Catalog {
 }
 
 fn without(names: &[&str]) -> Catalog {
-    let tables = target()
-        .tables()
-        .iter()
-        .copied()
+    let tables = common::with_removed(target().tables())
+        .into_iter()
         .filter(|table| !names.contains(&table.name) && !ADDED_SINCE_USAGE.contains(&table.name))
         .collect::<Vec<_>>();
     Catalog::new(1, Box::leak(tables.into_boxed_slice()))
@@ -468,7 +468,7 @@ fn strip_origin(path: &Path) {
 fn the_current_catalog_registers_seven_new_tables_only_in_core() {
     let current = target();
     assert_eq!(current.version, 5);
-    assert_eq!(current.tables().len(), 65);
+    assert_eq!(current.tables().len(), 52);
     let predecessor = without(&[]);
     assert_eq!(predecessor.tables().len(), 58);
     assert_eq!(
@@ -505,8 +505,8 @@ fn the_current_catalog_registers_seven_new_tables_only_in_core() {
         .collect::<Vec<_>>();
     bootstrap.sort();
     let mut expected = vec![
-        artifacts::MigrationTable::NAME,
-        artifacts::DatabaseFormatTable::NAME,
+        database_format::MigrationTable::NAME,
+        database_format::DatabaseFormatTable::NAME,
         native::ProvenanceTable::NAME,
     ];
     expected.sort();
@@ -602,6 +602,10 @@ fn usage_catalog_evolution_preserves_legacy_rows_indexes_history_and_absent_outc
         );
     }
     for (name, rows) in &before {
+        if common::removed(name) {
+            assert!(!after.contains_key(name), "{name}");
+            continue;
+        }
         if name == "session" {
             let current = rows
                 .iter()
@@ -674,6 +678,10 @@ fn head_store(directory: &Directory) -> PathBuf {
 
 fn assert_preserved_except(before: &Dump, after: &Dump, rewritten: &[&str]) {
     for (name, rows) in before {
+        if common::removed(name) {
+            assert!(!after.contains_key(name), "{name}");
+            continue;
+        }
         if name == "storage_metadata" {
             for key in [
                 "physical_format",
@@ -1469,7 +1477,7 @@ fn all_predecessors_are_recognized_from_the_live_declarations() {
         .map(|table| table.name)
         .collect::<Vec<_>>();
     names.sort();
-    assert_eq!(names.len(), 65);
+    assert_eq!(names.len(), 52);
     assert_eq!(before_mcp_events().tables().len(), 56);
     assert_eq!(before_incidents().tables().len(), 54);
     assert_eq!(before_analytics().tables().len(), 53);

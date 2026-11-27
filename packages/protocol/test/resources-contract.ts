@@ -6,24 +6,6 @@ import type { Constraints } from "../src/v5/constraints.js"
 
 export const resourceIDs = {
   "agent.list": 2000,
-  "artifact.confirmGlobal": 2001,
-  "artifact.create": 2002,
-  "artifact.disable": 2003,
-  "artifact.enable": 2004,
-  "artifact.fork.confirm": 2005,
-  "artifact.fork.preview": 2006,
-  "artifact.get": 2007,
-  "artifact.list": 2008,
-  "artifact.metrics": 2009,
-  "artifact.promotion.confirm": 2010,
-  "artifact.promotion.preview": 2011,
-  "artifact.purge": 2012,
-  "artifact.remove": 2013,
-  "artifact.restore": 2014,
-  "artifact.revert": 2015,
-  "artifact.shadow.confirm": 2016,
-  "artifact.shadow.preview": 2017,
-  "artifact.update": 2018,
   "command.list": 2019,
   "config.diagnostics": 2020,
   "credential.activate": 2021,
@@ -111,26 +93,7 @@ export function resourceSourceIdentity(ast: SchemaAST.AST, hint: string) {
         : [],
   )[0]
   const name = String(checked ?? named ?? hint)
-  const api: Record<string, string> = {
-    ApiScope: "ArtifactScope",
-    ApiListScope: "ArtifactListScope",
-    ApiQuery: "ArtifactQuery",
-    ApiMutation: "ArtifactMutation",
-    ApiCreate: "ArtifactCreate",
-    ApiExpectation: "ArtifactExpectation",
-    ApiRevert: "ArtifactRevert",
-    ApiGlobalMutationConfirmation: "GlobalMutationConfirmation",
-    ApiMutationResult: "ArtifactMutationResult",
-    ApiConfirmationPreview: "ConfirmationPreview",
-    ApiTrashSummary: "ArtifactTrashSummary",
-    ApiListItem: "ArtifactListItem",
-    ApiMetrics: "MetricsResponse",
-  }
   const parts = name.split(/[._]/)
-  if (parts[0] === "ProjectArtifact" && parts[1]?.startsWith("Api"))
-    return `packages/protocol/src/groups/project-artifact.ts#${api[parts[1]] ?? "ProjectArtifactGroup"}`
-  if (parts[0].startsWith("Artifact") && parts[0].endsWith("Error") === false)
-    return `packages/protocol/src/groups/project-artifact.ts#${parts[0]}`
   if (parts[0].endsWith("Error")) return `packages/protocol/src/errors.ts#${parts[0]}`
   if (parts[0] === "LocationQuery") return "packages/protocol/src/groups/location.ts#LocationQuery"
   if (parts[0] === "Integration" && parts[1]?.startsWith("AccountSkills"))
@@ -156,7 +119,6 @@ export function resourceSourceIdentity(ast: SchemaAST.AST, hint: string) {
     Permission: "permission",
     Plugin: "plugin",
     Project: "project",
-    ProjectArtifact: "project-artifact",
     Provider: "provider",
     ProviderRequest: "provider-request",
     ProviderUsage: "provider-usage",

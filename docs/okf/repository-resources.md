@@ -42,7 +42,6 @@ Hooks are a plugin API rather than a standalone repository file format; .ycoding
 ## Related Concepts
 
 - [Configuration Surfaces](./configuration.md)
-- [Project Artifacts](./project-artifacts.md)
 - [Session Execution and Autonomy](./session.md)
 - [Package Architecture](./architecture.md)
 

@@ -23,8 +23,6 @@ import { PtyTicket } from "@ycoding-ai/core/pty/ticket"
 import { Pty } from "@ycoding-ai/core/pty"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectInventory } from "@ycoding-ai/core/project/inventory"
-import { ProjectArtifactStore } from "@ycoding-ai/core/project-artifact"
-import { ProjectArtifactAccounting } from "@ycoding-ai/core/project-artifact/accounting"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SessionCompaction } from "@ycoding-ai/core/session/compaction"
@@ -96,8 +94,6 @@ const applicationServices = LayerNode.group([
   Job.node,
   Project.node,
   ProjectInventory.node,
-  ProjectArtifactStore.node,
-  ProjectArtifactAccounting.node,
   Session.node,
   SessionStore.node,
   PluginRuntime.providerNode,

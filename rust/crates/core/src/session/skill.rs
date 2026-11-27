@@ -558,10 +558,6 @@ pub(crate) async fn activate_with_origin(
         type_: "session.skill.activated.1".into(),
         data: JsonValue::Object(data),
     };
-    if let Some(source) = store.artifact_source() {
-        source.publish_skill_activation(event, automatic).await?;
-        return Ok(());
-    }
     store
         .client
         .submit(move |tx| {

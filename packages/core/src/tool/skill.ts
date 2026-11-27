@@ -6,7 +6,7 @@ import path from "path"
 import { pathToFileURL } from "url"
 import { ToolFailure } from "@ycoding-ai/ai"
 import { McpSkill } from "@ycoding-ai/schema/mcp-skill"
-import { Effect, Option, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { Config } from "../config"
 import { ConfigCapabilities } from "../config/capabilities"
 import { ConfigMarkdown } from "../config/markdown"
@@ -18,7 +18,6 @@ import { Skill } from "../skill"
 import { Permission } from "../permission"
 import { Hash } from "../util/hash"
 import { SessionMessage } from "../session/message"
-import { ProjectArtifactSource } from "../project-artifact/source"
 import { Tool } from "./tool"
 import { ReadTool } from "./read"
 import { ReadToolFileSystem } from "./read-filesystem"
@@ -266,7 +265,6 @@ export const Plugin = {
     const permission = yield* Permission.Service
     const mutation = yield* LocationMutation.Service
     const reader = yield* ReadToolFileSystem.Service
-    const projectArtifactSource = yield* Effect.serviceOption(ProjectArtifactSource.Service)
     const runtime = yield* PluginRuntime.Service
     const config = yield* Config.Service
     yield* ctx.tool
@@ -363,25 +361,6 @@ export const Plugin = {
                     source: { type: "tool", messageID: context.messageID, callID: context.callID },
                   })
                   const output = yield* instructions(fs, skill)
-                  if (Option.isSome(projectArtifactSource))
-                    yield* projectArtifactSource.value
-                      .activate({
-                        kind: "skill",
-                        id: skill.id,
-                        sessionID: context.sessionID,
-                        agentID: context.agent,
-                        source: "skill-tool",
-                        messageID: context.messageID,
-                        callID: context.callID,
-                      })
-                      .pipe(
-                        Effect.catchCause((cause) =>
-                          Effect.logWarning("project artifact skill activation failed", {
-                            cause,
-                            sessionID: context.sessionID,
-                          }),
-                        ),
-                      )
                   return {
                     name: skill.name,
                     directory: path.dirname(skill.location),

@@ -388,7 +388,7 @@ fn capabilities_merge_each_leaf_and_replace_lists() {
     let fixture = Fixture::new();
     fixture.write(
         "global/ycoding/ycoding.json",
-        r#"{"capabilities":{"instructions":{"global":false,"project":true,"exclude":["global"]},"builtin_instructions":{"enabled":false,"allow":["date"],"deny":["memory"]},"skills":{"enabled":false,"allow":["global"],"deny":["private"]},"tools":{"deny":["shell"],"allow":["shell"]},"mcp":{"enabled":false,"allow":["global"],"deny":["private"]},"plugins":{"enabled":false,"allow":["global"],"deny":["private"]},"home_roots":false,"project_artifacts":false,"websearch_provider":"exa"}}"#,
+        r#"{"capabilities":{"instructions":{"global":false,"project":true,"exclude":["global"]},"builtin_instructions":{"enabled":false,"allow":["date"],"deny":["memory"]},"skills":{"enabled":false,"allow":["global"],"deny":["private"]},"tools":{"deny":["shell"],"allow":["shell"]},"mcp":{"enabled":false,"allow":["global"],"deny":["private"]},"plugins":{"enabled":false,"allow":["global"],"deny":["private"]},"home_roots":false,"websearch_provider":"exa"}}"#,
     );
     fixture.write(
         "explicit.json",
@@ -443,7 +443,6 @@ fn capabilities_merge_each_leaf_and_replace_lists() {
     assert_eq!(config.capabilities.plugins.allow, Some(vec![]));
     assert_eq!(config.capabilities.plugins.deny, Some(vec![]));
     assert_eq!(config.capabilities.home_roots, Some(false));
-    assert_eq!(config.capabilities.project_artifacts, Some(false));
     assert_eq!(
         config.capabilities.websearch_provider,
         Some(WebsearchProvider::Parallel)
@@ -460,7 +459,6 @@ fn capabilities_merge_each_leaf_and_replace_lists() {
     assert_eq!(config.capabilities.tools.deny, Some(vec!["edit".into()]));
     assert_eq!(config.capabilities.tools.allow, Some(vec!["read".into()]));
     assert_eq!(config.capabilities.home_roots, None);
-    assert_eq!(config.capabilities.project_artifacts, None);
     assert_eq!(config.capabilities.plugins.enabled, None);
     assert_eq!(
         config.capabilities.websearch_provider,
@@ -484,7 +482,6 @@ fn absent_capabilities_are_permissive_and_failed_reload_preserves_policy() {
         assert!(selection.allows(&"anything".into()));
     }
     assert!(config.capabilities.allows_tool(&"skill".into()));
-    assert!(config.capabilities.allows_tool(&"project_artifact".into()));
     fs::write(&source, r#"{"capabilities":{"tools":{"enabled":false}}}"#).unwrap();
     config.reload().unwrap();
     assert_eq!(config.capabilities.tools.enabled, Some(false));

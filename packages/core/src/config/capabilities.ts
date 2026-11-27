@@ -8,7 +8,6 @@ export const BuiltinInstruction = Schema.Literals([
   "date",
   "subagent-reuse",
   "shell-memory",
-  "project-artifact-authoring",
   "git-worktree",
   "git-attribution",
   "decision-input",
@@ -65,9 +64,6 @@ export class Info extends Schema.Class<Info>("Config.Capabilities")({
   plugins: Schema.optional(selection(Schema.String, "external plugins")).annotate({
     description: "External plugins by plugin ID",
   }),
-  project_artifacts: Schema.optional(Schema.Boolean).annotate({
-    description: "Apply managed project artifacts and expose the project_artifact tool (default: true).",
-  }),
   home_roots: Schema.optional(Schema.Boolean).annotate({
     description: "Discover ~/.agents and ~/.claude ecosystem roots (default: true).",
   }),
@@ -83,7 +79,6 @@ export type Resolved = {
   readonly tools?: Selection
   readonly mcp?: Selection
   readonly plugins?: Selection
-  readonly project_artifacts?: boolean
   readonly home_roots?: boolean
   readonly websearch_provider?: Info["websearch_provider"]
   readonly dots?: boolean
@@ -114,7 +109,6 @@ export function allows(selection: Selection | undefined, name: string) {
 
 export function allowsTool(capabilities: Resolved, name: string) {
   if (name === "skill" && capabilities.skills?.enabled === false) return false
-  if (name === "project_artifact" && capabilities.project_artifacts === false) return false
   // CodeMode's `execute` wrapper follows the tools it carries; only `enabled: false` or a deny hides it.
   if (name === "execute") return allows(capabilities.tools && { ...capabilities.tools, allow: undefined }, name)
   return allows(capabilities.tools, name)

@@ -16,7 +16,6 @@ import { MCPSkills } from "@ycoding-ai/core/mcp/skills"
 import { Permission } from "@ycoding-ai/core/permission"
 import { Hash } from "@ycoding-ai/core/util/hash"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
-import { ProjectArtifactSource } from "@ycoding-ai/core/project-artifact/source"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { Skill } from "@ycoding-ai/core/skill"
@@ -68,7 +67,6 @@ const skillToolNode = makeLocationNode({
     MCP.node,
     Permission.node,
     PluginRuntime.node,
-    ProjectArtifactSource.node,
     LocationMutation.node,
     ReadToolFileSystem.node,
   ],
@@ -256,7 +254,6 @@ describe("MCP skill model-facing integration", () => {
               ...skillsMcpReplacements(server.url),
               [Permission.node, permission],
               [PluginRuntime.node, runtime],
-              [ProjectArtifactSource.node, Layer.mock(ProjectArtifactSource.Service, {})],
               [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
               [Image.node, imagePassthrough],
               [Location.node, testLocationLayer],

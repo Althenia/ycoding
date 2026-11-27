@@ -60,12 +60,6 @@ export const publicEvents = [
     type: "ycoding.v5.SessionLogItemValue4",
   },
   {
-    name: "session.project-artifacts-ended",
-    durable: true,
-    tag: 10,
-    type: "ycoding.v5.SessionLogItemValue5",
-  },
-  {
     name: "session.guardrail.dismissed",
     durable: true,
     tag: 104,

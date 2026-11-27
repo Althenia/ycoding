@@ -176,7 +176,6 @@ pub(crate) fn fold(
                 &session_message::Info::AgentSelected(session_message::AgentSelected {
                     id,
                     agent,
-                    artifact: object.optional("artifact").map_err(record_error)?,
                     metadata: decoded.metadata.clone(),
                     time: session_message::BaseTime { created: time },
                 }),

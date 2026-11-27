@@ -173,7 +173,6 @@ fn production_stage(failure: &crate::Failure) -> &str {
             Some(
                 stage @ ("account catalog"
                 | "agent configuration"
-                | "artifact accounting secret"
                 | "built-in agent catalog"
                 | "Claude account source"
                 | "Claude account store"

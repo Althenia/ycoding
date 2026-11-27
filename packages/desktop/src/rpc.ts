@@ -307,9 +307,6 @@ export function createDesktopRPC(controller: BackendController, preferences: {
       const current = () => { const state = controller.state(); return state.status === "connected" && state.generation === started.generation && state.revision === exported.revision }
       return host.saveExport(exported, current)
     },
-    artifacts: (input: Parameters<DesktopAPI["artifacts"]>[0]) => controller.artifacts(input),
-    artifact: (input: Parameters<DesktopAPI["artifact"]>[0]) => controller.artifact(input),
-    manageArtifact: (input: Parameters<DesktopAPI["manageArtifact"]>[0]) => controller.manageArtifact(input),
   }
   return new Proxy(handlers, {
     get(target, key, receiver) {
