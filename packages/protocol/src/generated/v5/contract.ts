@@ -1,4 +1,4 @@
-export const CONTRACT_DIGEST = "fc8f5d3b60c6c11dc833436dff811b4273a165725f1b64e72569cc36be91ac77"
+export const CONTRACT_DIGEST = "0b6f19df52c7ec4c04a72aeece137d01a879d8cdd2c20d291f12c713d8d9e7e3"
 export const messages = {
   "ycoding.v5.Empty": {
     oneofs: 0,
@@ -52563,6 +52563,208 @@ export const messages = {
       },
     ],
   },
+  "ycoding.v5.PublicEvent_coordination_subagent_request_blocked": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "id",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          domainObligations: ["packages/schema/src/event-manifest.ts#ServerDefinitions"],
+        },
+      },
+      {
+        tag: 2,
+        name: "created",
+        type: 1,
+        required: true,
+        repeated: false,
+        target: "",
+        constraints: {
+          domainObligations: ["packages/schema/src/event-manifest.ts#ServerDefinitions"],
+        },
+      },
+      {
+        tag: 3,
+        name: "metadata",
+        type: 11,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.PublicEvent_coordination_subagent_request_blocked_metadata",
+      },
+      {
+        tag: 4,
+        name: "sourceEpoch",
+        type: 11,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          utf16Min: 1,
+          domainObligations: ["packages/schema/src/event-manifest.ts#ServerDefinitions"],
+        },
+      },
+      {
+        tag: 5,
+        name: "type",
+        type: 14,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.PublicEvent_coordination_subagent_request_blocked_type",
+      },
+      {
+        tag: 6,
+        name: "durable",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.PublicEvent_coordination_subagent_request_blocked_durable",
+      },
+      {
+        tag: 7,
+        name: "location",
+        type: 11,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.Location_Ref",
+      },
+      {
+        tag: 8,
+        name: "data",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.PublicEvent_coordination_subagent_request_blocked_data",
+      },
+    ],
+  },
+  "ycoding.v5.PublicEvent_coordination_subagent_request_blocked_metadata": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "entries",
+        type: 11,
+        required: false,
+        repeated: true,
+        target: "ycoding.v5.PublicEvent_coordination_subagent_request_blocked_metadataEntry",
+      },
+    ],
+  },
+  "ycoding.v5.PublicEvent_coordination_subagent_request_blocked_metadataEntry": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "key",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+      },
+      {
+        tag: 2,
+        name: "value",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.Value",
+      },
+    ],
+  },
+  "ycoding.v5.PublicEvent_coordination_subagent_request_blocked_durable": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "aggregateID",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+      },
+      {
+        tag: 2,
+        name: "seq",
+        type: 4,
+        required: true,
+        repeated: false,
+        target: "",
+        constraints: {
+          integerMin: "0",
+          integerMax: "9007199254740991",
+          domainObligations: ["packages/schema/src/event-manifest.ts#ServerDefinitions"],
+        },
+      },
+      {
+        tag: 3,
+        name: "version",
+        type: 3,
+        required: true,
+        repeated: false,
+        target: "",
+        constraints: {
+          integerMin: "1",
+          integerMax: "9007199254740991",
+          domainObligations: ["packages/schema/src/event-manifest.ts#ServerDefinitions"],
+        },
+      },
+    ],
+  },
+  "ycoding.v5.PublicEvent_coordination_subagent_request_blocked_data": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "sessionID",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          domainObligations: ["packages/schema/src/event-manifest.ts#ServerDefinitions"],
+        },
+      },
+      {
+        tag: 2,
+        name: "agent",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          utf16Min: 1,
+          utf16Max: 256,
+          domainObligations: ["packages/schema/src/event-manifest.ts#ServerDefinitions"],
+        },
+      },
+      {
+        tag: 3,
+        name: "reason",
+        type: 14,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.PublicEvent_coordination_subagent_request_blocked_data_reason",
+      },
+      {
+        tag: 4,
+        name: "message",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          utf16Min: 1,
+          utf16Max: 4096,
+          domainObligations: ["packages/schema/src/event-manifest.ts#ServerDefinitions"],
+        },
+      },
+    ],
+  },
   "ycoding.v5.PublicEvent_coordination_updated": {
     oneofs: 0,
     fields: [
@@ -60716,6 +60918,15 @@ export const messages = {
         required: false,
         repeated: false,
         target: "ycoding.v5.PublicEvent_coordination_member_owner_changed",
+        group: 0,
+      },
+      {
+        tag: 145,
+        name: "coordination_subagent_request_blocked",
+        type: 11,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.PublicEvent_coordination_subagent_request_blocked",
         group: 0,
       },
       {
@@ -82452,6 +82663,8 @@ export const enums = {
   "ycoding.v5.PublicEvent_coordination_group_deleted_type": [1],
   "ycoding.v5.PublicEvent_coordination_member_owner_changed_type": [1],
   "ycoding.v5.PublicEvent_coordination_member_owner_changed_data_reason": [1, 2],
+  "ycoding.v5.PublicEvent_coordination_subagent_request_blocked_type": [1],
+  "ycoding.v5.PublicEvent_coordination_subagent_request_blocked_data_reason": [1, 2, 3, 4, 5],
   "ycoding.v5.PublicEvent_coordination_updated_type": [1],
   "ycoding.v5.PublicEvent_coordination_request_escalated_type": [1],
   "ycoding.v5.PublicEvent_filesystem_changed_type": [1],

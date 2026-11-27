@@ -2,6 +2,10 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-11-27: Record blocked subagent requests
+
+- Add the public durable event `coordination.subagent.request.blocked.1` on the `sessionID` aggregate. Data: `sessionID` (the requesting parent Session), `agent` (the requested agent name, 1 to 256 characters), `reason` (`concurrency-ceiling`, `agent-missing`, `permission-denied`, `project-paused` or `route-unavailable`) and `message` (the runtime's exact refusal text, 1 to 4096 characters). Add `PublicEvent` field 145 `coordination_subagent_request_blocked`. The event is additive; no child Session exists for a blocked request.
+
 ## 2026-11-20: Guardrail review recovery and Dot input origin
 
 - `Guardrail.Request` accepts optional `created` (epoch milliseconds of the first ask); this runtime always sets it, and requests from earlier backends decode without it. Add `Guardrail.staleAfterMs` (900 000) and `Guardrail.ClosedReason` (`"cancelled" | "expired"`). `guardrail.cancelled`, `session.guardrail.decided` and `Guardrail.Status.decisions[]` accept optional `reason: ClosedReason`.

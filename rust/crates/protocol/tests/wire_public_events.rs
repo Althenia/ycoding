@@ -29,7 +29,7 @@ fn public_event_membership_and_durability_are_closed() {
             .iter()
             .filter(|event| event.0.starts_with("session."))
             .count(),
-        86
+        85
     );
     for (name, payload) in [
         (
@@ -76,6 +76,10 @@ fn public_event_membership_and_durability_are_closed() {
             (
                 "coordination.member.owner.changed",
                 "ycoding.v5.PublicEvent_coordination_member_owner_changed"
+            ),
+            (
+                "coordination.subagent.request.blocked",
+                "ycoding.v5.PublicEvent_coordination_subagent_request_blocked"
             ),
         ]
     );

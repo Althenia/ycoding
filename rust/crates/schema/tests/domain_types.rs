@@ -263,6 +263,9 @@ fn check_domain_goldens(prefixes: &[&str]) {
             "Coordination.Event.OwnerChanged" => round_trip::<
                 event::DurablePayload<ycoding_schema::coordination::event::OwnerChanged>,
             >(&input),
+            "Coordination.Event.SubagentRequestBlocked" => round_trip::<
+                event::DurablePayload<ycoding_schema::coordination::event::SubagentRequestBlocked>,
+            >(&input),
             "Coordination.Event.Updated" => round_trip::<
                 event::EphemeralPayload<ycoding_schema::coordination::event::Updated>,
             >(&input),

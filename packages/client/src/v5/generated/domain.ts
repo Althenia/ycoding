@@ -1793,6 +1793,16 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "1": "completed",
     "2": "released",
   },
+  "ycoding.v5.PublicEvent_coordination_subagent_request_blocked_type": {
+    "1": "coordination.subagent.request.blocked",
+  },
+  "ycoding.v5.PublicEvent_coordination_subagent_request_blocked_data_reason": {
+    "1": "concurrency-ceiling",
+    "2": "agent-missing",
+    "3": "permission-denied",
+    "4": "project-paused",
+    "5": "route-unavailable",
+  },
   "ycoding.v5.PublicEvent_coordination_updated_type": {
     "1": "coordination.updated",
   },

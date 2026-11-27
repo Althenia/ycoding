@@ -87,6 +87,7 @@ pub const DURABLE: &[&str] = &[
     "coordination.group.changed.1",
     "coordination.group.deleted.1",
     "coordination.member.owner.changed.1",
+    "coordination.subagent.request.blocked.1",
 ];
 pub fn definitions() -> Vec<LosslessString> {
     DURABLE

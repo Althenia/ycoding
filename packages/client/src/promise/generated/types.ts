@@ -1532,6 +1532,22 @@ export type SessionRevertCommitted = {
   data: { sessionID: string; to: string }
 }
 
+export type CoordinationEventSubagentRequestBlocked = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "coordination.subagent.request.blocked"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    agent: string
+    reason: "concurrency-ceiling" | "agent-missing" | "permission-denied" | "project-paused" | "route-unavailable"
+    message: string
+  }
+}
+
 export type FilesystemChanged = {
   id: string
   created: number
@@ -5841,6 +5857,7 @@ export type ServerEvent =
   | CoordinationEventChanged
   | CoordinationEventDeleted
   | CoordinationEventOwnerChanged
+  | CoordinationEventSubagentRequestBlocked
   | CoordinationEventUpdated
   | CoordinationEventRequestEscalated
   | FilesystemChanged

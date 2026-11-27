@@ -546,6 +546,12 @@ export const publicEvents = [
     type: "ycoding.v5.PublicEvent_coordination_member_owner_changed",
   },
   {
+    name: "coordination.subagent.request.blocked",
+    durable: true,
+    tag: 145,
+    type: "ycoding.v5.PublicEvent_coordination_subagent_request_blocked",
+  },
+  {
     name: "coordination.updated",
     durable: false,
     tag: 123,

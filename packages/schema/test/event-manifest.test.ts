@@ -252,6 +252,7 @@ describe("public event manifest", () => {
         "coordination.group.changed.1",
         "coordination.group.deleted.1",
         "coordination.member.owner.changed.1",
+        "coordination.subagent.request.blocked.1",
         "session.created.2",
         "session.deleted.2",
         "session.archived.2",

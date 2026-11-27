@@ -18358,6 +18358,18 @@
     "negativeZeros": []
   },
   {
+    "name": "Coordination.Event.SubagentRequestBlocked",
+    "input": "{\"id\":\"evt_fixture\",\"created\":0,\"type\":\"coordination.subagent.request.blocked\",\"durable\":{\"aggregateID\":\"cgrp_fixture\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"ses_parent\",\"agent\":\"occam\",\"reason\":\"concurrency-ceiling\",\"message\":\"Subagent limit reached: 3/3 subagents running.\"}}",
+    "output": "{\"id\":\"evt_fixture\",\"created\":0,\"type\":\"coordination.subagent.request.blocked\",\"durable\":{\"aggregateID\":\"cgrp_fixture\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"ses_parent\",\"agent\":\"occam\",\"reason\":\"concurrency-ceiling\",\"message\":\"Subagent limit reached: 3/3 subagents running.\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "Coordination.Event.SubagentRequestBlocked",
+    "input": "{\"id\":\"evt_fixture\",\"created\":0,\"type\":\"coordination.subagent.request.blocked\",\"durable\":{\"aggregateID\":\"cgrp_fixture\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"ses_parent\",\"agent\":\"occam\",\"reason\":\"busy\",\"message\":\"Subagent limit reached.\"}}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
     "name": "Coordination.Event.Updated",
     "input": "{\"id\":\"evt_fixture\",\"created\":0,\"type\":\"coordination.updated\",\"data\":{\"groupID\":\"cgrp_fixture\",\"revision\":1}}",
     "output": "{\"id\":\"evt_fixture\",\"created\":0,\"type\":\"coordination.updated\",\"data\":{\"groupID\":\"cgrp_fixture\",\"revision\":1}}",

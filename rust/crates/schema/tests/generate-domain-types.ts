@@ -3270,6 +3270,27 @@ for (const [name, schema, values] of [
     ],
   ],
   [
+    "Coordination.Event.SubagentRequestBlocked",
+    Coordination.Event.SubagentRequestBlocked,
+    [
+      coordinationEnvelope(
+        "coordination.subagent.request.blocked",
+        {
+          sessionID: "ses_parent",
+          agent: "occam",
+          reason: "concurrency-ceiling",
+          message: "Subagent limit reached: 3/3 subagents running.",
+        },
+        1,
+      ),
+      coordinationEnvelope(
+        "coordination.subagent.request.blocked",
+        { sessionID: "ses_parent", agent: "occam", reason: "busy", message: "Subagent limit reached." },
+        1,
+      ),
+    ],
+  ],
+  [
     "Coordination.Event.Updated",
     Coordination.Event.Updated,
     [coordinationEnvelope("coordination.updated", { groupID: "cgrp_fixture", revision: 1 })],

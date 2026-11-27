@@ -549,6 +549,7 @@
       "coordination.group.changed",
       "coordination.group.deleted",
       "coordination.member.owner.changed",
+      "coordination.subagent.request.blocked",
       "coordination.updated",
       "coordination.request.escalated",
       "installation.updated",
@@ -704,6 +705,7 @@
       "coordination.group.changed",
       "coordination.group.deleted",
       "coordination.member.owner.changed",
+      "coordination.subagent.request.blocked",
       "coordination.updated",
       "coordination.request.escalated",
       "filesystem.changed",
@@ -843,7 +845,8 @@
       "coordination.group.created.2",
       "coordination.group.changed.1",
       "coordination.group.deleted.1",
-      "coordination.member.owner.changed.1"
+      "coordination.member.owner.changed.1",
+      "coordination.subagent.request.blocked.1"
     ]
   }
 }

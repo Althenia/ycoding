@@ -99,6 +99,8 @@ The backend admits `inputOrigin: coordination` with Project, Master, sender Sess
 
 ## Member notifications
 
+A subagent launch that the runtime refuses records one durable `coordination.subagent.request.blocked.1` event on the requesting Session's `sessionID` aggregate. The event carries `sessionID`, the requested `agent`, a `reason` of `concurrency-ceiling`, `agent-missing`, `permission-denied`, `project-paused` or `route-unavailable`, and the refusal `message`. A blocked request creates no child Session, task or board node, and no running child is ever recorded for it.
+
 Member lifecycle events and requests raised in the member's family produce notifications only for the recorded owner. Lifecycle events of descendant Sessions produce none. Completion requires no unfinished child task (including supervising ownership), no undelivered task notice, no outstanding or running job and no member pending input of any kind. Token deltas and tool progress do not notify. Deterministic admission identities prevent duplicate delivery.
 
 Project notifications appear only in a member's live recorded owner Session. The Master receives them only for members it explicitly owns; siblings, unrelated Sessions and other Projects receive none. `started` and `progress` never wake their receiver. Completion and interruption wake only while the Project is active; urgent items retain their inactive-Project wake behavior. Waiting or starting owners retain inputs until they run; supervising owners return to running on an eligible wake, subject to open-review and revert gates. Cancelled, cancelling, failed, lost or archived owners never resume from member notices.

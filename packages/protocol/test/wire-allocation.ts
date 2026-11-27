@@ -591,6 +591,7 @@ export const wireAllocation: WireAllocation = {
       "session_input_deleted",
       "session_cue_detected",
       "session_recall_recorded",
+      "coordination_subagent_request_blocked",
     ],
     SessionLogItemValue24_data_change: [
       "launched",

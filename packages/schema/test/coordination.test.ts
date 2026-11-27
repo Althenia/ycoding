@@ -96,7 +96,22 @@ test("Project IDs retain cgrp_ and only Project lifecycle and member ownership f
   expect(() => Schema.decodeUnknownSync(Coordination.GroupID)("ses_member")).toThrow()
   expect(Coordination.DurableDefinitions.map((event) => event.type)).toEqual([
     "coordination.group.created", "coordination.group.changed", "coordination.group.deleted", "coordination.member.owner.changed",
+    "coordination.subagent.request.blocked",
   ])
+})
+
+test("a blocked subagent request is a durable fact on the parent Session carrying the requested agent and the reason", () => {
+  const event = Coordination.Event.SubagentRequestBlocked
+  const data = { sessionID: "ses_parent", agent: "occam", reason: "concurrency-ceiling", message: "Subagent limit reached: 3/3 subagents running." }
+  const decodes = (input: unknown) => Schema.decodeUnknownOption(event.data as never, { onExcessProperty: "error" })(input)._tag === "Some"
+  expect(event.durable).toEqual({ aggregate: "sessionID", version: 1 })
+  expect(EventManifest.Durable.get("coordination.subagent.request.blocked.1")).toBe(event)
+  expect(EventManifest.Server.get("coordination.subagent.request.blocked")).toBe(event)
+  expect(decodes(data)).toBe(true)
+  for (const reason of ["concurrency-ceiling", "agent-missing", "permission-denied", "project-paused", "route-unavailable"])
+    expect(decodes({ ...data, reason })).toBe(true)
+  for (const patch of [{ reason: "busy" }, { agent: "" }, { message: "" }, { sessionID: "msg_parent" }, { extra: true }])
+    expect(decodes({ ...data, ...patch })).toBe(false)
 })
 
 test("attach names one Session with an optional owner and returns the bound membership receipt", () => {
