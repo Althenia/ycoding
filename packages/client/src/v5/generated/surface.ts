@@ -1,6 +1,7 @@
 import type { YCodingClient } from "../../promise/index.js"
 import type {
   AgentListInput,
+  AutonomyDefaultsSetInput,
   BrowserActionInput,
   BrowserCloseInput,
   BrowserControlInput,
@@ -1269,6 +1270,16 @@ export const methodCoverage = [
     method: "keepAwake.set",
     operation: "keepAwake.set",
     operationID: 3026,
+  },
+  {
+    method: "autonomyDefaults.get",
+    operation: "autonomyDefaults.get",
+    operationID: 3056,
+  },
+  {
+    method: "autonomyDefaults.set",
+    operation: "autonomyDefaults.set",
+    operationID: 3057,
   },
   {
     method: "config.diagnostics",
@@ -3251,6 +3262,29 @@ export function bind(transport: LocalTransport) {
         transport.call<Awaited<ReturnType<Client["keepAwake"]["set"]>>>(
           { method: "keepAwake.set", operationID: 3026, resultPath: ["data"], empty: false },
           { payload: { enabled: input["enabled"] } },
+          input,
+          requestOptions,
+        ),
+    },
+    autonomyDefaults: {
+      get: (requestOptions?: RequestOptions) =>
+        transport.call<Awaited<ReturnType<Client["autonomyDefaults"]["get"]>>>(
+          { method: "autonomyDefaults.get", operationID: 3056, resultPath: ["data"], empty: false },
+          {},
+          undefined,
+          requestOptions,
+        ),
+      set: (input?: AutonomyDefaultsSetInput, requestOptions?: RequestOptions) =>
+        transport.call<Awaited<ReturnType<Client["autonomyDefaults"]["set"]>>>(
+          { method: "autonomyDefaults.set", operationID: 3057, resultPath: ["data"], empty: false },
+          {
+            payload: {
+              permissions: input?.["permissions"],
+              guardrails: input?.["guardrails"],
+              answers: input?.["answers"],
+              acceptYolo: input?.["acceptYolo"],
+            },
+          },
           input,
           requestOptions,
         ),

@@ -21,6 +21,7 @@ import { PluginGroup } from "./groups/plugin.js"
 import { HealthGroup } from "./groups/health.js"
 import { ServerGroup } from "./groups/server.js"
 import { UsageGroup } from "./groups/usage.js"
+import { AutonomyDefaultsGroup } from "./groups/autonomy-defaults.js"
 import { KeepAwakeGroup } from "./groups/keep-awake.js"
 import { RemoteGroup } from "./groups/remote.js"
 import { DebugGroup } from "./groups/debug.js"
@@ -118,6 +119,7 @@ type ApiGroups<
   | typeof UsageGroup
   | typeof RemoteGroup
   | typeof KeepAwakeGroup
+  | typeof AutonomyDefaultsGroup
   | typeof DebugGroup
   | typeof LocationGroup
   | typeof ConfigGroup
@@ -237,6 +239,7 @@ const makeApiFromGroup = <
     .add(makeIncidentGroup(locationMiddleware))
     .add(RemoteGroup)
     .add(KeepAwakeGroup)
+    .add(AutonomyDefaultsGroup)
     .add(ConfigGroup)
     .add(makeReviewGroup(sessionLocationMiddleware))
     .add(CoordinationGroup)

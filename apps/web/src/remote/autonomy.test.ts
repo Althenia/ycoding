@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test"
 import {
   autonomyAnnouncement,
   autonomyChange,
+  autonomyDefaultAnnouncement,
+  autonomyDefaultChange,
   autonomyKeyIntent,
   autonomyLabels,
   autonomyRows,
@@ -9,6 +11,7 @@ import {
   autonomyTone,
   requiresYoloConfirmation,
   cycleAutonomyMode,
+  readAutonomyDefaults,
   type AutonomyModes,
   type EffectiveAutonomyView,
 } from "./autonomy"
@@ -57,6 +60,9 @@ describe("keyboard", () => {
     ["1", 1, { type: "all", mode: "manual" }],
     ["2", 0, { type: "all", mode: "yolo" }],
     ["3", 2, { type: "all", mode: "auto" }],
+    ["d", 1, { type: "save-default", category: "guardrails" }],
+    ["D", 0, { type: "save-default", category: "permissions" }],
+    ["r", 2, { type: "reset-default", category: "answers" }],
   ] as const)("%s on row %i", (name, selected, intent) => {
     expect(autonomyKeyIntent(key(name), selected)).toEqual(intent)
   })
@@ -67,6 +73,43 @@ describe("keyboard", () => {
       expect(autonomyKeyIntent(key("1", { [modifier]: true }), 0)).toBeUndefined()
       expect(autonomyKeyIntent(key("ArrowRight", { [modifier]: true }), 0)).toBeUndefined()
     }
+  })
+})
+
+describe("saved defaults", () => {
+  test("a save names the Session's own mode for that category", () => {
+    const own = { ...manual, answers: "auto" } as const
+    expect(autonomyDefaultChange({ type: "save-default", category: "answers" }, own)).toEqual({ answers: "auto" })
+    expect(autonomyDefaultChange({ type: "save-default", category: "permissions" }, own)).toEqual({ permissions: "manual" })
+  })
+
+  test("a reset names Manual for that category alone", () => {
+    expect(autonomyDefaultChange({ type: "reset-default", category: "guardrails" }, { permissions: "yolo", guardrails: "auto", answers: "yolo" })).toEqual({ guardrails: "manual" })
+  })
+
+  test("saving YOLO needs acceptance unless that default is already YOLO; Manual and Auto never do", () => {
+    const saved: AutonomyModes = { permissions: "yolo", guardrails: "auto", answers: "manual" }
+    expect(requiresYoloConfirmation(saved, { guardrails: "yolo" })).toBe(true)
+    expect(requiresYoloConfirmation(saved, { permissions: "yolo" })).toBe(false)
+    expect(requiresYoloConfirmation(saved, { permissions: "manual" })).toBe(false)
+    expect(requiresYoloConfirmation(saved, { answers: "auto" })).toBe(false)
+  })
+
+  test("rows carry the saved default beside the Session's effective mode", () => {
+    const rows = autonomyRows({ ...manual, effective: effective({ permissions: "auto", inherited: { permissions: "ses_parent" } }) }, { permissions: "yolo", guardrails: "manual", answers: "auto" })
+    expect(rows.map((row) => [row.mode, row.saved])).toEqual([["auto", "yolo"], ["manual", "manual"], ["manual", "auto"]])
+    expect(autonomyRows(manual).every((row) => row.saved === undefined)).toBe(true)
+  })
+
+  test("reads only a complete answer with known modes", () => {
+    expect(readAutonomyDefaults({ data: { permissions: "yolo", guardrails: "auto", answers: "manual", yoloAcceptedAt: { permissions: 1 } } })).toEqual({ permissions: "yolo", guardrails: "auto", answers: "manual" })
+    for (const payload of [undefined, null, {}, { data: null }, { data: { permissions: "yolo", guardrails: "auto" } }, { data: { ...manual, answers: "sometimes" } }])
+      expect(readAutonomyDefaults(payload)).toBeUndefined()
+  })
+
+  test("announces each saved or reset category for new Sessions", () => {
+    expect(autonomyDefaultAnnouncement({ guardrails: "yolo" })).toBe("Guardrails default saved as YOLO for new Sessions")
+    expect(autonomyDefaultAnnouncement({ answers: "manual" })).toBe("Answers default reset to Manual for new Sessions")
   })
 })
 

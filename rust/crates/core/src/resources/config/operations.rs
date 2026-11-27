@@ -405,7 +405,7 @@ impl Configuration {
         })
     }
 
-    fn write(
+    pub(super) fn write(
         &self,
         scope: Scope,
         mcp: bool,

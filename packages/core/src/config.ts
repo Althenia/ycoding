@@ -20,6 +20,7 @@ import { AbsolutePath, PositiveInt } from "./schema"
 import { ConfigAgent } from "./config/agent"
 import { ConfigAccountConnectors } from "./config/account-connectors"
 import { ConfigAttachments } from "./config/attachments"
+import { ConfigAutonomy } from "./config/autonomy"
 import { ConfigCapabilities } from "./config/capabilities"
 import { ConfigCompaction } from "./config/compaction"
 import { ConfigCoordination } from "./config/coordination"
@@ -145,6 +146,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   dots: ConfigDots.Info.pipe(Schema.optional).annotate({
     description: "Dots remote connector enablement (default: disabled)",
+  }),
+  autonomy: ConfigAutonomy.Info.pipe(Schema.optional).annotate({
+    description: "Global-only autonomy configuration: saved default modes for new root Sessions",
   }),
   skills: Schema.String.pipe(Schema.Array, Schema.optional).annotate({
     description: "Additional paths or URLs to discover skills from",

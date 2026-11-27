@@ -105,3 +105,43 @@ test("the announcement lives in a polite status region", () => {
   const html = render({ announcement: "Permissions set to Auto" })
   expect(html).toMatch(/<[a-z]+[^>]*role="status"[^>]*>[^<]*Permissions set to Auto/)
 })
+
+const saved = { permissions: "yolo", guardrails: "manual", answers: "auto" } as const
+
+test("each row shows its saved default while its badge keeps the Session's mode", () => {
+  const html = render({ defaults: saved })
+  expect(html).toContain("Default for new Sessions: YOLO")
+  expect(html).toContain("Default for new Sessions: Auto")
+  expect(html.match(/Default for new Sessions:/g)).toHaveLength(3)
+  expect(tag(html, "autonomous-row-permissions")).toContain('aria-label="Permissions: Manual, default YOLO"')
+  expect(html).toMatch(/autonomous__value" data-mode="manual">Manual/)
+  expect(render()).not.toContain("Default for new Sessions:")
+})
+
+test("the selected row offers Save as default and Reset default with their shortcuts", () => {
+  const html = render({ defaults: saved, selected: 1, autonomy: autonomy({ guardrails: "auto", effective: { ...idle, guardrails: "auto" } }) })
+  expect(html).toContain('aria-label="Guardrails default for new Sessions"')
+  expect(html).toMatch(/<button[^>]*aria-label="Save as default for Guardrails"[^>]*aria-keyshortcuts="D"(?![^>]*disabled)[^>]*>/)
+  expect(html).toMatch(/<button[^>]*aria-label="Reset default for Guardrails"[^>]*aria-keyshortcuts="R"[^>]*disabled/)
+  expect(render({ defaults: saved, selected: 2 })).toContain('aria-label="Reset default for Answers"')
+})
+
+test("Save is unavailable when the Session already matches its default, and Reset when the default is Manual", () => {
+  const html = render({ defaults: saved, selected: 0, autonomy: autonomy({ permissions: "yolo", effective: { ...idle, permissions: "yolo" } }) })
+  expect(html).toMatch(/<button[^>]*aria-label="Save as default for Permissions"[^>]*disabled/)
+  expect(html).not.toMatch(/<button[^>]*aria-label="Reset default for Permissions"[^>]*disabled/)
+})
+
+test("default controls stay disabled until the saved defaults are known, while busy, and while offline", () => {
+  for (const props of [{}, { defaults: saved, busy: true }, { defaults: saved, reachable: false }]) {
+    const html = render({ selected: 2, autonomy: autonomy({ answers: "yolo", effective: { ...idle, answers: "yolo" } }), ...props })
+    for (const name of ["Save as default for Answers", "Reset default for Answers"]) expect(html).toMatch(new RegExp(`<button[^>]*aria-label="${name}"[^>]*disabled`))
+  }
+})
+
+test("an unreadable saved-defaults read explains itself without raising an alert", () => {
+  const html = render({ defaultsUnreadable: "Autonomy defaults: Unknown operation" })
+  expect(html).toContain("Saved defaults are unavailable: Autonomy defaults: Unknown operation")
+  expect(html).not.toContain('role="alert"')
+  expect(render({ reachable: false, defaultsUnreadable: "x" })).not.toContain("Saved defaults are unavailable")
+})

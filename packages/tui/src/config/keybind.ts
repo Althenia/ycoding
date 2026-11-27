@@ -241,6 +241,8 @@ export const Definitions = {
   "dialog.autonomous.all_manual": keybind("1", "Set every autonomy row to Manual"),
   "dialog.autonomous.all_yolo": keybind("2", "Set every autonomy row to YOLO"),
   "dialog.autonomous.all_auto": keybind("3", "Set every autonomy row to Auto"),
+  "dialog.autonomous.default_save": keybind("s", "Save the selected autonomy row as the default for new Sessions"),
+  "dialog.autonomous.default_reset": keybind("r", "Reset the selected autonomy default to Manual"),
   "dialog.plugins.install": keybind("shift+i", "Install plugin from plugin dialog"),
 
   terminal_suspend: keybind("ctrl+z", "Suspend terminal"),

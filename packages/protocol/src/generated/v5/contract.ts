@@ -1,4 +1,4 @@
-export const CONTRACT_DIGEST = "426e08fb8bb46d73c9a23d064d73467913267bea29710b1de8aa04720206b4e2"
+export const CONTRACT_DIGEST = "ca2348c15a7e1a676c761df3bfd1b45a355113ca3d941940ec7d207f2c6bb8f8"
 export const messages = {
   "ycoding.v5.Empty": {
     oneofs: 0,
@@ -62734,6 +62734,167 @@ export const messages = {
       },
     ],
   },
+  "ycoding.v5.autonomyDefaults_get_Request": {
+    oneofs: 0,
+    fields: [],
+  },
+  "ycoding.v5.autonomyDefaults_get_Result": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "data",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.AutonomyDefaults_Info",
+      },
+    ],
+  },
+  "ycoding.v5.AutonomyDefaults_Info": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "permissions",
+        type: 14,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.AutonomyDefaults_Mode",
+      },
+      {
+        tag: 2,
+        name: "guardrails",
+        type: 14,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.AutonomyDefaults_Mode",
+      },
+      {
+        tag: 3,
+        name: "answers",
+        type: 14,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.AutonomyDefaults_Mode",
+      },
+      {
+        tag: 4,
+        name: "yoloAcceptedAt",
+        type: 11,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.AutonomyDefaults_YoloAcceptedAt",
+      },
+    ],
+  },
+  "ycoding.v5.AutonomyDefaults_YoloAcceptedAt": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "permissions",
+        type: 4,
+        required: false,
+        repeated: false,
+        target: "",
+        constraints: {
+          integerMin: "0",
+          integerMax: "9007199254740991",
+          domainObligations: ["packages/schema/src/autonomy-defaults.ts#AutonomyDefaults.YoloAcceptedAt"],
+        },
+      },
+      {
+        tag: 2,
+        name: "guardrails",
+        type: 4,
+        required: false,
+        repeated: false,
+        target: "",
+        constraints: {
+          integerMin: "0",
+          integerMax: "9007199254740991",
+          domainObligations: ["packages/schema/src/autonomy-defaults.ts#AutonomyDefaults.YoloAcceptedAt"],
+        },
+      },
+      {
+        tag: 3,
+        name: "answers",
+        type: 4,
+        required: false,
+        repeated: false,
+        target: "",
+        constraints: {
+          integerMin: "0",
+          integerMax: "9007199254740991",
+          domainObligations: ["packages/schema/src/autonomy-defaults.ts#AutonomyDefaults.YoloAcceptedAt"],
+        },
+      },
+    ],
+  },
+  "ycoding.v5.autonomyDefaults_set_Request_payload": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "permissions",
+        type: 14,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.AutonomyDefaults_Mode",
+      },
+      {
+        tag: 2,
+        name: "guardrails",
+        type: 14,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.AutonomyDefaults_Mode",
+      },
+      {
+        tag: 3,
+        name: "answers",
+        type: 14,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.AutonomyDefaults_Mode",
+      },
+      {
+        tag: 4,
+        name: "acceptYolo",
+        type: 8,
+        required: false,
+        repeated: false,
+        target: "",
+      },
+    ],
+  },
+  "ycoding.v5.autonomyDefaults_set_Request": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "payload",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.autonomyDefaults_set_Request_payload",
+      },
+    ],
+  },
+  "ycoding.v5.autonomyDefaults_set_Result": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "data",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.AutonomyDefaults_Info",
+      },
+    ],
+  },
   "ycoding.v5.browser_action_Request_params": {
     oneofs: 0,
     fields: [
@@ -84085,6 +84246,7 @@ export const enums = {
   "ycoding.v5.PublicEvent_vcs_branch_updated_type": [1],
   "ycoding.v5.PublicEvent_mcp_status_changed_type": [1],
   "ycoding.v5.PublicEvent_mcp_resources_changed_type": [1],
+  "ycoding.v5.AutonomyDefaults_Mode": [1, 2, 3],
   "ycoding.v5.browser_action_Request_payload_actionValue1_type": [1],
   "ycoding.v5.browser_action_Request_payload_actionValue2_type": [1],
   "ycoding.v5.browser_action_Request_payload_actionValue3_type": [1],
@@ -84183,7 +84345,7 @@ export const enums = {
     1, 2, 3, 4, 5, 6, 109, 86, 87, 88, 89, 90, 91, 113, 114, 125, 7, 8, 9, 10, 112, 11, 12, 13, 14, 15, 16, 115, 123,
     116, 17, 117, 118, 119, 120, 18, 124, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37,
     38, 39, 40, 41, 42, 43, 121, 122, 71, 72, 44, 45, 46, 47, 48, 49, 50, 51, 52, 92, 53, 54, 55, 56, 57, 58, 59, 60,
-    105, 106, 108, 110, 111, 61, 62, 63, 64, 67, 68, 69, 70, 107, 73, 74, 75, 76, 77, 65, 66,
+    105, 106, 108, 110, 111, 61, 62, 63, 64, 67, 68, 69, 70, 107, 73, 74, 75, 76, 77, 65, 66, 126, 127,
   ],
   "ycoding.v5.Telemetry_RequestSample_outcome": [1, 2, 3, 4],
   "ycoding.v5.Telemetry_RequestSample_reason": [1, 2, 3, 4],

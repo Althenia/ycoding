@@ -200,6 +200,9 @@ pub async fn create(
     } else {
         core.sessions.create(event).await.map_err(store)?
     };
+    if parent.is_none() {
+        crate::autonomy_defaults::apply_to_new_root(core, &created.id).await;
+    }
     result(&created)
 }
 

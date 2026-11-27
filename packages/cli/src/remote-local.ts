@@ -20,6 +20,8 @@ import {
   type UsageDashboardInput,
   type UsageDashboardOutput,
   type KeepAwakeStatus,
+  type AutonomyDefaultsInfo,
+  type AutonomyDefaultsSetInput,
   type Project,
   type ProjectDirectory,
   type SessionInfo,
@@ -111,6 +113,8 @@ export type LocalServer = {
   readonly telemetryConsentSet: (input: { readonly enabled: boolean; readonly noticeVersion: 1 }) => Promise<RemoteTelemetryConsent>
   readonly keepAwakeGet: () => Promise<KeepAwakeStatus>
   readonly keepAwakeSet: (enabled: boolean) => Promise<KeepAwakeStatus>
+  readonly autonomyDefaultsGet: () => Promise<AutonomyDefaultsInfo>
+  readonly autonomyDefaultsSet: (input: AutonomyDefaultsSetInput) => Promise<AutonomyDefaultsInfo>
   readonly listPage: (input: { limit: number; cursor?: string }) => Promise<{
     readonly data: readonly SessionInfo[]
     readonly next?: string
@@ -567,6 +571,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     integrationCommandCancel: (location, integrationID, attemptID) => call(async () => { await client.integration.command.cancel({ integrationID, attemptID }, request(location, timeoutMs)) }),
     keepAwakeGet: () => call(() => client.keepAwake.get({ signal: AbortSignal.timeout(timeoutMs) })),
     keepAwakeSet: (enabled) => call(() => client.keepAwake.set({ enabled }, { signal: AbortSignal.timeout(timeoutMs) })),
+    autonomyDefaultsGet: () => call(() => client.autonomyDefaults.get({ signal: AbortSignal.timeout(timeoutMs) })),
+    autonomyDefaultsSet: (input) => call(() => client.autonomyDefaults.set(input, { signal: AbortSignal.timeout(timeoutMs) })),
     autonomySet: (sessionID, location, payload) => {
       const deadline = "goal" in payload && typeof payload.goal === "string" ? RemoteLimits.goalSetTimeoutMs : timeoutMs
       return call(() =>

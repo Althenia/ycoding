@@ -379,6 +379,9 @@ import type {
   KeepAwakeGetOutput,
   KeepAwakeSetInput,
   KeepAwakeSetOutput,
+  AutonomyDefaultsGetOutput,
+  AutonomyDefaultsSetInput,
+  AutonomyDefaultsSetOutput,
   ConfigDiagnosticsInput,
   ConfigDiagnosticsOutput,
   ReviewListInput,
@@ -3118,6 +3121,36 @@ export function make(options: ClientOptions) {
             method: "PUT",
             path: `/api/keep-awake`,
             body: { enabled: input["enabled"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+    },
+    autonomyDefaults: {
+      get: (requestOptions?: RequestOptions) =>
+        request<{ readonly data: AutonomyDefaultsGetOutput }>(
+          {
+            method: "GET",
+            path: `/api/autonomy-defaults`,
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      set: (input?: AutonomyDefaultsSetInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: AutonomyDefaultsSetOutput }>(
+          {
+            method: "PUT",
+            path: `/api/autonomy-defaults`,
+            body: {
+              permissions: input?.["permissions"],
+              guardrails: input?.["guardrails"],
+              answers: input?.["answers"],
+              acceptYolo: input?.["acceptYolo"],
+            },
             successStatus: 200,
             declaredStatuses: [401, 400],
             empty: false,

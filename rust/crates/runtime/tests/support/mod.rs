@@ -133,6 +133,7 @@ impl ActiveChildren {
 pub struct World {
     _reports: report_support::Reports,
     pub core: Core,
+    pub global_config: PathBuf,
     pub store: ycoding_core::ycoding_store::Client,
     pub active_children: Arc<ActiveChildren>,
 }
@@ -240,9 +241,29 @@ pub fn world() -> &'static World {
         .unwrap();
         let clock: Arc<dyn ycoding_core::session::runner::Clock> = Arc::new(ycoding_core::session::runner::WallClock);
         let generation = ycoding_core::generation_activity::Service::new(clock.now(), clock.nanos());
+        let roots = ycoding_core::resources::config::Roots::development(&directory).unwrap();
+        roots.initialize().unwrap();
+        let mut core = Core::new(client.clone(), execution, configuration(), generation, state);
+        core.global_configuration = Some(Arc::new(
+            ycoding_core::resources::config::Configuration::load(
+                ycoding_core::resources::config::LoadOptions {
+                    directory: roots.config.clone(),
+                    roots: roots.clone(),
+                    project: false,
+                    file: None,
+                    content: None,
+                    env: Default::default(),
+                },
+            )
+            .unwrap()
+            .with_mutation_policy(ycoding_core::resources::config::MutationPolicy(Arc::new(
+                |_| true,
+            ))),
+        ));
         World {
             _reports: reports,
-            core: Core::new(client.clone(), execution, configuration(), generation, state),
+            core,
+            global_config: roots.config.clone(),
             store: client,
             active_children,
         }

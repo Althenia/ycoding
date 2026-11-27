@@ -2072,6 +2072,11 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   "ycoding.v5.PublicEvent_mcp_resources_changed_type": {
     "1": "mcp.resources.changed",
   },
+  "ycoding.v5.AutonomyDefaults_Mode": {
+    "1": "manual",
+    "2": "yolo",
+    "3": "auto",
+  },
   "ycoding.v5.browser_action_Request_payload_actionValue1_type": {
     "1": "navigate",
   },
@@ -2525,6 +2530,8 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "123": "session.deleteMessage",
     "124": "session.message.delete",
     "125": "coordination.board",
+    "126": "machine.autonomyDefaults.get",
+    "127": "machine.autonomyDefaults.set",
   },
   "ycoding.v5.Telemetry_RequestSample_outcome": {
     "1": "ok",

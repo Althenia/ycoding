@@ -52,6 +52,7 @@ export const groupNames = {
   "server.incident": "incident",
   "server.remote": "remote",
   "server.keepAwake": "keepAwake",
+  "server.autonomyDefaults": "autonomyDefaults",
   "server.debug": "debug",
   "server.location": "location",
   "server.agent": "agent",

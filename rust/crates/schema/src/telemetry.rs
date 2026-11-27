@@ -119,6 +119,7 @@ operations! {
     SessionFork => "session.fork",
     CoordinationAttach => "coordination.attach",
     CoordinationDetach => "coordination.detach",
+    CoordinationBoard => "coordination.board",
     SessionPendingRemove => "session.pending.remove",
     SessionPendingSteer => "session.pending.steer",
     SessionInteractionStatus => "session.interaction.status",
@@ -129,6 +130,8 @@ operations! {
     SessionGuardrailRetry => "session.guardrail.retry",
     SessionDeleteMessage => "session.deleteMessage",
     SessionMessageDelete => "session.message.delete",
+    MachineAutonomyDefaultsGet => "machine.autonomyDefaults.get",
+    MachineAutonomyDefaultsSet => "machine.autonomyDefaults.set",
 }
 crate::schema::literal_enum_type!(Outcome,{Ok=>"ok",Failed=>"failed",Unknown=>"unknown",Unavailable=>"unavailable"});
 crate::schema::literal_enum_type!(Reason,{NotConnected=>"not-connected",InFlightLimit=>"in-flight-limit",RequestLimit=>"request-limit",Cancelled=>"cancelled"});

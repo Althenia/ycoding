@@ -562,6 +562,8 @@ export function telemetryOperation(operation: string) {
     "usage.get": "usage.summary",
     "keepAwake.get": "machine.keepAwake.get",
     "keepAwake.set": "machine.keepAwake.set",
+    "autonomyDefaults.get": "machine.autonomyDefaults.get",
+    "autonomyDefaults.set": "machine.autonomyDefaults.set",
   }
   return labels[operation] ?? operation
 }

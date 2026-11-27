@@ -243,6 +243,8 @@ export function createDesktopRPC(controller: BackendController, preferences: {
     session: (input: Parameters<DesktopAPI["session"]>[0]) => controller.session(input),
     autonomy: (input: Parameters<DesktopAPI["autonomy"]>[0]) => controller.autonomy(input),
     setAutonomy: (input: Parameters<DesktopAPI["setAutonomy"]>[0]) => controller.setAutonomy(input),
+    autonomyDefaults: () => controller.autonomyDefaults(),
+    setAutonomyDefaults: (input: Parameters<DesktopAPI["setAutonomyDefaults"]>[0]) => controller.setAutonomyDefaults(input),
     fileChanges: (input: Parameters<DesktopAPI["fileChanges"]>[0]) => controller.fileChanges(input),
     activity: (input: Parameters<DesktopAPI["activity"]>[0]) => controller.activity(input),
     shellOutput: (input: Parameters<DesktopAPI["shellOutput"]>[0]) => controller.shellOutput(input),

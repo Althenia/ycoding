@@ -783,6 +783,8 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
             wired,
             [
                 "agent.list",
+                "autonomyDefaults.get",
+                "autonomyDefaults.set",
                 "browser.action",
                 "browser.close",
                 "browser.control",

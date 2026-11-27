@@ -36,6 +36,7 @@ import { EventFeed } from "./event-feed"
 import { BrowserHandler } from "./handlers/browser"
 import { InteractionHandler } from "./handlers/interaction"
 import { IsolatedBrowserHandler } from "./handlers/isolated-browser"
+import { AutonomyDefaultsHandler } from "./handlers/autonomy-defaults"
 import { KeepAwakeHandler } from "./handlers/keep-awake"
 import { RemoteHandler } from "./handlers/remote"
 import { CoordinationHandler } from "./handlers/coordination"
@@ -82,4 +83,5 @@ export const handlers = Layer.mergeAll(
   IsolatedBrowserHandler,
   RemoteHandler,
   KeepAwakeHandler,
+  AutonomyDefaultsHandler,
 )

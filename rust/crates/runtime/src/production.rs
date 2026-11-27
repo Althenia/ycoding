@@ -449,6 +449,15 @@ impl Core {
         global.project = false;
         let global =
             Arc::new(config::Configuration::load(global).map_err(global_configuration_error)?);
+        let global_writer = Arc::new((*global).clone().with_mutation_policy(
+            config::MutationPolicy(Arc::new(|mutation| {
+                matches!(
+                    mutation,
+                    config::Mutation::Configuration(target)
+                        if target.scope == config::Scope::Global
+                )
+            })),
+        ));
         let configuration = factory.configuration(&global)?;
         let sessions = Service::new(client.clone());
         reconcile(&sessions, &client).await?;
@@ -959,6 +968,7 @@ impl Core {
                 })
             }),
             roots: Some(factory.options.roots.clone()),
+            global_configuration: Some(global_writer),
             attachments: Some(Arc::new(
                 attachment_store::Store::new(factory.options.roots.data.clone())
                     .map_err(|_| unavailable("managed attachments"))?,

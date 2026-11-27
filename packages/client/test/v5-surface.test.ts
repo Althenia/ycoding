@@ -95,6 +95,7 @@ const cases: [string, string, (client: V5Client) => Promise<unknown>][] = [
   ["incident", "incident.report", (client) => client.incident.report({ group: "model" })],
   ["remote", "remote.set", (client) => client.remote.set({ enabled: false })],
   ["keepAwake", "keepAwake.set", (client) => client.keepAwake.set({ enabled: false })],
+  ["autonomyDefaults", "autonomyDefaults.set", (client) => client.autonomyDefaults.set({ answers: "yolo", acceptYolo: true })],
   ["config", "config.diagnostics", (client) => client.config.diagnostics()],
   ["coordination", "coordination.get", (client) => client.coordination.get({ groupID: "cgrp_fixture" })],
   ["dots", "dots.get", (client) => client.dots.get()],
@@ -125,9 +126,9 @@ test.each(cases)("REQ-WIRE-001 %s group dispatches its canonical %s operation", 
   }
 })
 
-test("REQ-WIRE-001 the complete 226-method surface has one canonical LocalClient descriptor", () => {
-  expect(methodCoverage).toHaveLength(226)
-  expect(new Set(methodCoverage.map((entry) => entry.method)).size).toBe(226)
+test("REQ-WIRE-001 the complete 228-method surface has one canonical LocalClient descriptor", () => {
+  expect(methodCoverage).toHaveLength(228)
+  expect(new Set(methodCoverage.map((entry) => entry.method)).size).toBe(228)
   for (const entry of methodCoverage) {
     const operation = operations.find((operation) => operation.operationId === entry.operationID)!
     expect(operation.diagnosticName).toBe(entry.operation)

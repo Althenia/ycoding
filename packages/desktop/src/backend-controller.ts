@@ -20,7 +20,7 @@ import { TerminalRelay, terminalSocketUrl, type TerminalSocketFactory } from "./
 import { validateSelection } from "./preferences"
 import { questionAnswerError } from "./question-rules"
 import { composerByteLimit, composerFileLimit, inlineFileSize } from "./composer-files"
-import { activityInput, attachmentRead, directoriesInput, pendingAction, isRevision, pageInput, requestReply, revertInput, session, setAutonomyInput, shellOutputInput, usageInput } from "./requests"
+import { activityInput, attachmentRead, directoriesInput, pendingAction, isRevision, pageInput, requestReply, revertInput, session, setAutonomyDefaultsInput, setAutonomyInput, shellOutputInput, usageInput } from "./requests"
 import { bundledBackend } from "./resources"
 import { describeError, redactSecrets } from "./app-log"
 import { pinRequest, projectSessionRecord, projectSessions, sessionsQuery, sessionTarget } from "./sessions"
@@ -99,6 +99,8 @@ const autonomyDecision = (value: unknown) => literal(value, ["manual", "auto", "
 const autonomyValid = (value: unknown) => object(value) && value.mode === "normal" && autonomyDecision(value.permissions) && autonomyDecision(value.guardrails) && autonomyDecision(value.answers) &&
   (value.goal === undefined || value.goal === null || (object(value.goal) && string(value.goal.text) && literal(value.goal.status, ["active", "completed", "stopped", "exhausted"]) && count(value.goal.iteration) && count(value.goal.noProgress) && count(value.goal.maxNoProgress) && value.goal.maxNoProgress > 0 && (value.goal.lastProgressDigest === null || optional(value.goal.lastProgressDigest, string)))) &&
   (value.defer === undefined || value.defer === null || object(value.defer)) && object(value.effective) && autonomyDecision(value.effective.permissions) && autonomyDecision(value.effective.guardrails) && autonomyDecision(value.effective.answers) && boolean(value.effective.deferred) && boolean(value.effective.guardrailsEnabled) && object(value.effective.inherited) && [value.effective.inherited.permissions, value.effective.inherited.guardrails, value.effective.inherited.answers].every((item) => item === null || optional(item, sessionID))
+const autonomyDefaultsValid = (value: unknown) => object(value) && autonomyDecision(value.permissions) && autonomyDecision(value.guardrails) && autonomyDecision(value.answers) &&
+  (value.yoloAcceptedAt === undefined || (object(value.yoloAcceptedAt) && [value.yoloAcceptedAt.permissions, value.yoloAcceptedAt.guardrails, value.yoloAcceptedAt.answers].every((item) => optional(item, count))))
 const fields = <T extends object>(value: T, keys: readonly string[]): T => Object.fromEntries(keys.filter((key) => Object.hasOwn(value, key)).map((key) => [key, Reflect.get(value, key)])) as T
 const cursor = (value: unknown) => value === undefined || (object(value) && (value.next === undefined || value.next === null || (typeof value.next === "string" && value.next.length > 0 && utf8Length(value.next) <= 4096)))
 const times = (value: unknown) => object(value) && count(value.created) && count(value.updated)
@@ -880,6 +882,24 @@ export class BackendController {
       ensureCurrent("The backend connection changed before autonomy was changed.")
       return { revision, sessionID: request.sessionID, autonomy: this.projectAutonomy(await api.session.autonomy.set({ sessionID: request.sessionID, payload: request.payload }, { signal })) }
     }, { revision: request.revision, unsent: "The backend connection changed before autonomy was changed.", changed })
+  }
+
+  private projectAutonomyDefaults(value: Awaited<ReturnType<Native["api"]["autonomyDefaults"]["get"]>>) {
+    if (!autonomyDefaultsValid(value)) throw new Error("Invalid autonomy defaults")
+    return { ...fields(value, ["permissions", "guardrails", "answers"]), ...(value.yoloAcceptedAt === undefined ? {} : { yoloAcceptedAt: fields(value.yoloAcceptedAt, ["permissions", "guardrails", "answers"]) }) }
+  }
+
+  async autonomyDefaults() {
+    return this.use("Autonomy defaults could not be read. Refresh to retry.", async (api, signal, revision) => ({ revision, defaults: this.projectAutonomyDefaults(await api.autonomyDefaults.get({ signal })) }))
+  }
+
+  async setAutonomyDefaults(input: unknown) {
+    const request = setAutonomyDefaultsInput(input)
+    const changed = "The autonomy default change was not confirmed. Refresh the defaults before retrying."
+    return this.use(changed, async (api, signal, revision, ensureCurrent) => {
+      ensureCurrent("The backend connection changed before the autonomy default was changed.")
+      return { revision, defaults: this.projectAutonomyDefaults(await api.autonomyDefaults.set(request.payload, { signal })) }
+    }, { revision: request.revision, unsent: "The backend connection changed before the autonomy default was changed.", changed })
   }
 
   async fileChanges(input: unknown): Promise<SessionFileChanges> {

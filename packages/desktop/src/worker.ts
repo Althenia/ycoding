@@ -106,6 +106,8 @@ export async function runDesktopWorker(options: {
             case "session": data = await controller.session(input); break
             case "autonomy": data = await controller.autonomy(input); break
             case "setAutonomy": data = await controller.setAutonomy(input); break
+            case "autonomyDefaults": data = await controller.autonomyDefaults(); break
+            case "setAutonomyDefaults": data = await controller.setAutonomyDefaults(input); break
             case "file-changes": data = await controller.fileChanges(input); break
             case "activity": data = await controller.activity(input); break
             case "shellOutput": data = await controller.shellOutput(input); break

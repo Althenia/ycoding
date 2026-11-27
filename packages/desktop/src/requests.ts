@@ -1,4 +1,4 @@
-import { DesktopError, utf8Length, type FormAnswer, type RequestReply, type PageInput, type RevertInput, type SetAutonomyInput, type ShellOutputInput, type WorkspaceDirectoriesInput, type UsageRange, type RequestLocation } from "./contract"
+import { DesktopError, utf8Length, type FormAnswer, type RequestReply, type PageInput, type RevertInput, type SetAutonomyInput, type SetAutonomyDefaultsInput, type ShellOutputInput, type WorkspaceDirectoriesInput, type UsageRange, type RequestLocation } from "./contract"
 import path from "node:path"
 
 type ClassicReply = Exclude<RequestReply, { readonly kind: "guardrail" | "guardrail-recovery" | "review" }>
@@ -54,6 +54,15 @@ export function setAutonomyInput(value: unknown): SetAutonomyInput {
   if (decision(guardrails)) return { sessionID, revision, payload: { guardrails, ...(decision(answers) ? { answers } : {}) } }
   if (decision(answers)) return { sessionID, revision, payload: { answers } }
   throw invalid()
+}
+export function setAutonomyDefaultsInput(value: unknown): SetAutonomyDefaultsInput {
+  const invalid = () => new DesktopError("Invalid autonomy default change.")
+  if (!record(value) || Object.keys(value).some((key) => key !== "revision" && key !== "payload") || !isRevision(value.revision) || !record(value.payload)) throw invalid()
+  const payload = value.payload
+  const categories = ["permissions", "guardrails", "answers"].filter((key) => Object.hasOwn(payload, key))
+  if (!categories.length || Object.keys(payload).some((key) => key !== "acceptYolo" && !categories.includes(key)) || categories.some((key) => !decision(payload[key])) || (Object.hasOwn(payload, "acceptYolo") && payload.acceptYolo !== true)) throw invalid()
+  const { permissions, guardrails, answers, acceptYolo } = payload
+  return { revision: value.revision, payload: { ...(decision(permissions) ? { permissions } : {}), ...(decision(guardrails) ? { guardrails } : {}), ...(decision(answers) ? { answers } : {}), ...(acceptYolo === true ? { acceptYolo } : {}) } }
 }
 export function pageInput(value: unknown): PageInput {
   if (value === undefined) return {}

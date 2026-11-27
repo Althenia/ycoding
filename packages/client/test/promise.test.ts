@@ -85,6 +85,27 @@ test("outstanding reports lost shell notices through the generated Session clien
   ])
 })
 
+test("autonomy defaults methods use the local-runtime HTTP contract without a Session or Location", async () => {
+  const requests: Request[] = []
+  const saved = { permissions: "manual", guardrails: "auto", answers: "yolo", yoloAcceptedAt: { answers: 1_700_000_000_000 } }
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push(request)
+      return Response.json({ data: saved })
+    },
+  })
+  expect(await client.autonomyDefaults.get()).toEqual(saved)
+  expect(await client.autonomyDefaults.set({ answers: "yolo", acceptYolo: true })).toEqual(saved)
+  expect(requests.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
+    ["GET", "/api/autonomy-defaults"],
+    ["PUT", "/api/autonomy-defaults"],
+  ])
+  expect(await requests[1]!.json()).toEqual({ answers: "yolo", acceptYolo: true })
+  expect(requests.every((request) => !request.headers.has("x-ycoding-directory"))).toBe(true)
+})
+
 test("keep-awake methods use the local-runtime HTTP contract without a Session or Location", async () => {
   const requests: Request[] = []
   const client = YCoding.make({
@@ -184,6 +205,7 @@ test("exposes every standard HTTP API group", () => {
     "incident",
     "remote",
     "keepAwake",
+    "autonomyDefaults",
     "config",
     "review",
     "coordination",
@@ -194,6 +216,7 @@ test("exposes every standard HTTP API group", () => {
   expect(Object.keys(client.coordination)).toEqual(["settings", "list", "create", "get", "update", "delete", "attach", "detach"])
   expect(Object.keys(client.dots)).toEqual(["get", "set", "attach", "detach", "remove", "threads", "task", "thread", "resume"])
   expect(Object.keys(client.keepAwake)).toEqual(["get", "set"])
+  expect(Object.keys(client.autonomyDefaults)).toEqual(["get", "set"])
   expect(Object.keys(client.incident)).toEqual(["report", "recent", "guidance"])
   expect(Object.keys(client.incident.guidance)).toEqual(["get", "clear"])
   expect(Object.keys(client.debug)).toEqual(["location"])

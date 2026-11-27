@@ -1136,7 +1136,7 @@ ycoding mcp add docs --global -- bunx @example/docs-mcp`,
         blocks: [
           {
             kind: "paragraph",
-            text: "Autonomous mode is durable per-Session state with three independent categories: `permissions`, `guardrails`, and `answers`. Each is Manual (the default), YOLO, or Auto. They are Session state, not `ycoding.jsonc` keys, and any other value is rejected.",
+            text: "Autonomous mode is durable per-Session state with three independent categories: `permissions`, `guardrails`, and `answers`. Each is Manual (the default), YOLO, or Auto, and any other value is rejected. A new root Session starts from the saved defaults described under Default modes for new Sessions; the modes themselves are Session state, not configuration.",
           },
           {
             kind: "table",
@@ -1175,6 +1175,33 @@ ycoding mcp add docs --global -- bunx @example/docs-mcp`,
               "A child Session's effective Permissions take YOLO over Auto over Manual across its managed-task ancestors; Guardrails read the root Session; Answers take the Session's own or an ancestor's YOLO before its own Auto or Manual. An ancestor's Auto Answers never reach a child.",
               "A local Manual never cancels inherited authority. The Autonomous control shows each row's effective mode with the Session it comes from, and the Session's own setting beneath it.",
               "A change that is still sending locks the control. A failed or unconfirmed change stays visible beside it and is never resent automatically; read the modes before changing them again.",
+            ],
+          },
+        ],
+      },
+      {
+        heading: "Default modes for new Sessions",
+        blocks: [
+          {
+            kind: "paragraph",
+            text: "Each category has one saved default mode that new root Sessions start in. Every surface reads and writes the same value in the global `ycoding.json` or `ycoding.jsonc`. Project configuration files never set it. When a category has no saved default, new Sessions start in Manual.",
+          },
+          {
+            kind: "table",
+            head: ["Key", "Type", "Meaning"],
+            rows: [
+              ["`autonomy.defaults.permissions`, `.guardrails`, `.answers`", "`manual`, `auto`, or `yolo`", "The mode a new root Session starts in for that category. An omitted category is Manual."],
+              ["`autonomy.defaults.yolo_accepted_at.permissions`, `.guardrails`, `.answers`", "Epoch milliseconds", "Records when you accepted the YOLO risk for that category. A YOLO default without this record reads as Manual."],
+            ],
+          },
+          { kind: "code", language: "jsonc", label: "ycoding.jsonc (global)", code: '{\n  "autonomy": {\n    "defaults": {\n      "permissions": "auto",\n      "guardrails": "manual",\n      "answers": "yolo",\n      "yolo_accepted_at": { "answers": 1790000000000 }\n    }\n  }\n}' },
+          {
+            kind: "list",
+            items: [
+              "In the Autonomous control on the TUI, web and Desktop, Save as default stores the selected row's own Session mode as that category's default, and Reset default sets it back to Manual. Each row shows its saved default. In the TUI, `s` saves and `r` resets the selected row.",
+              "Saving a YOLO default asks for the same explicit risk acceptance as turning YOLO on in a Session. The acceptance time is stored beside the default, and a save without acceptance is refused and writes nothing. Saving Manual or Auto needs no confirmation and clears that category's acceptance record.",
+              "Defaults apply only when a root Session is created. Existing Sessions, child Sessions, inheritance, Defer, permission ceilings and deny rules are unchanged, and the Autonomous badges keep showing the Session's actual mode.",
+              "To set a YOLO default by editing the file, add the category's `yolo_accepted_at` entry yourself; the value counts as your acceptance of the risk. If the global configuration has any validation diagnostic, new Sessions start in Manual.",
             ],
           },
         ],
@@ -1260,7 +1287,7 @@ ycoding mcp add docs --global -- bunx @example/docs-mcp`,
           },
           {
             kind: "paragraph",
-            text: "Guardrail settings are read when a Location's services start, so a configuration reload does not change a running Location: changes apply after the backend restarts or that Location's services are rebuilt. The Autonomous modes (`/autonomous`) are durable Session state, not configuration keys, and apply immediately within their scopes. `guardrails` resolves as the highest-priority defined object rather than a deep merge, so a higher-priority `guardrails` object that omits `decide_reviews` leaves standard-match verification on; only an explicit `false` there turns it off.",
+            text: "Guardrail settings are read when a Location's services start, so a configuration reload does not change a running Location: changes apply after the backend restarts or that Location's services are rebuilt. The Autonomous modes (`/autonomous`) are durable Session state and apply immediately within their scopes; only the defaults for new Sessions live in configuration (`autonomy.defaults`). `guardrails` resolves as the highest-priority defined object rather than a deep merge, so a higher-priority `guardrails` object that omits `decide_reviews` leaves standard-match verification on; only an explicit `false` there turns it off.",
           },
         ],
       },

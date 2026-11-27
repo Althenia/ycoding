@@ -379,8 +379,9 @@ test("every capability operation crosses RPC and both bridge surfaces with its e
     terminals: { sessionID: parent }, terminal: { sessionID: parent, ptyID: "pty_a" }, exportSession: { sessionID: parent, format: "json" },
     usageDashboard: { refresh: true }, incidents: { kind: "report", group: "model" }, manageIncident: { revision: 1, kind: "guidance-clear", provider: "openai", model: "gpt" },
     appendTelemetry: { samples: [{ kind: "long-task", at: "2026-11-15T00:00:00.000Z", durationMs: 60 }] }, requests: { scope: "global", directory: "/synthetic/repo" },
+    setAutonomyDefaults: { revision: 1, payload: { answers: "yolo", acceptYolo: true } },
   }
-  const bare = ["telemetryConsent"]
+  const bare = ["telemetryConsent", "autonomyDefaults"]
   const { createDesktopRPC } = await import("../src/rpc")
   const calls: unknown[][] = []
   const controller = new Proxy({}, { get: (_target, key) => (...args: unknown[]) => { calls.push([key, ...args]); return Promise.resolve(undefined) } })

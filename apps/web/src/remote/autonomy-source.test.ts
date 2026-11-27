@@ -83,6 +83,14 @@ test("the Autonomous dialog uses the shared Modal for focus containment, Escape,
   expect(source).not.toContain("setTimeout")
 })
 
+test("saving a YOLO default reuses the dialog's risk confirmation and sends acceptance only after it", async () => {
+  const source = await Bun.file(path.join(root, "remote/ui/autonomous-dialog.tsx")).text()
+  expect(source).toContain("Accept risk & save YOLO default")
+  expect(source).toContain("YOLO disables all blockers in the selected categories")
+  expect(source).toContain("persistDefault(change, false)")
+  expect(source).toContain("persistDefault(request().change, true)")
+})
+
 function removedAutonomyLines(source: string, fileName = "fixture.tsx") {
   const matches = [...source.matchAll(new RegExp(removed, "g"))]
   if (matches.length === 0) return []

@@ -968,6 +968,8 @@ export const wireAllocation: WireAllocation = {
       "session.deleteMessage",
       "session.message.delete",
       "coordination.board",
+      "machine.autonomyDefaults.get",
+      "machine.autonomyDefaults.set",
     ],
   },
 }

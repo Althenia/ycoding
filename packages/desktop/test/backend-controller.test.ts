@@ -249,6 +249,7 @@ test.each(["settings", "project", "workspace"] as const)("%s mutation interrupte
     expect(writes).toBe(1)
   })
 })
+const defaultsRoute = (route: string) => route.replaceAll("-", "").toLowerCase() === "/api/autonomydefaults"
 const autonomy = { mode: "normal", permissions: "manual", guardrails: "auto", answers: "yolo", goal: { text: "Synthetic goal", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 }, effective: { permissions: "auto", guardrails: "manual", answers: "yolo", inherited: { permissions: "ses_parent" }, deferred: false, guardrailsEnabled: true } } as const
 
 test("autonomy reads and fenced updates project valid views without replay", async () => {
@@ -270,6 +271,50 @@ test("autonomy reads and fenced updates project valid views without replay", asy
     await expect(controller.autonomy(id)).rejects.toThrow()
     await expect(controller.setAutonomy({ sessionID: id, revision: rev, payload: { goal: null } })).rejects.toThrow("not confirmed")
     expect(calls).toEqual([{ method: "GET" }, { method: "PUT", payload: { permissions: "auto", answers: "manual" } }, ...[{ guardrails: "manual" }, { answers: "auto" }, { defer: true }, { goal: "synthetic", maxNoProgress: 2 }, { goal: true }].map((payload) => ({ method: "PUT", payload })), { method: "GET" }, { method: "PUT", payload: { goal: null } }])
+  })
+})
+
+test("autonomy defaults read, save one category and confirm the stored result without replay", async () => {
+  const calls: { method: string; payload?: unknown }[] = []
+  let stored: Record<string, unknown> = { permissions: "manual", guardrails: "auto", answers: "yolo", yoloAcceptedAt: { answers: 5, extra: 1 }, extra: "hidden" }
+  await connected(async (route, request) => {
+    if (!defaultsRoute(route)) return undefined
+    const payload = request.method === "PUT" ? await request.json() as Record<string, unknown> : undefined
+    calls.push({ method: request.method, ...(payload ? { payload } : {}) })
+    if (payload?.permissions === "yolo" && payload.acceptYolo !== true) return Response.json({ error: "refused" }, { status: 400 })
+    if (payload) stored = { ...stored, ...payload, acceptYolo: undefined }
+    return Response.json({ data: stored })
+  }, async (controller, rev) => {
+    expect(await controller.autonomyDefaults()).toEqual({ revision: rev, defaults: { permissions: "manual", guardrails: "auto", answers: "yolo", yoloAcceptedAt: { answers: 5 } } })
+    expect((await controller.setAutonomyDefaults({ revision: rev, payload: { guardrails: "manual" } })).defaults.guardrails).toBe("manual")
+    expect((await controller.setAutonomyDefaults({ revision: rev, payload: { permissions: "yolo", acceptYolo: true } })).defaults.permissions).toBe("yolo")
+    await expect(controller.setAutonomyDefaults({ revision: rev + 1, payload: { answers: "manual" } })).rejects.toThrow()
+    for (const payload of [{}, { acceptYolo: true }, { permissions: "invalid" }, { permissions: "yolo", acceptYolo: false }, { answers: "auto", extra: true }, { defer: true }])
+      await expect(controller.setAutonomyDefaults({ revision: rev, payload })).rejects.toThrow()
+    await expect(controller.setAutonomyDefaults({ revision: rev, payload: { permissions: "auto" }, extra: 1 })).rejects.toThrow()
+    await expect(controller.setAutonomyDefaults({ payload: { permissions: "auto" } })).rejects.toThrow()
+    stored = { permissions: "invalid", guardrails: "auto", answers: "yolo" }
+    await expect(controller.autonomyDefaults()).rejects.toThrow()
+    expect(calls).toEqual([{ method: "GET" }, { method: "PUT", payload: { guardrails: "manual" } }, { method: "PUT", payload: { permissions: "yolo", acceptYolo: true } }, { method: "GET" }])
+  })
+})
+
+test("an autonomy default update interrupted in flight is unconfirmed and never replayed", async () => {
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  let writes = 0
+  await connected(async (route, request) => {
+    if (!defaultsRoute(route) || request.method !== "PUT") return undefined
+    writes++; entered.resolve(); await release.promise
+    return Response.json({ data: { permissions: "manual", guardrails: "manual", answers: "manual" } })
+  }, async (controller, rev) => {
+    const pending = controller.setAutonomyDefaults({ revision: rev, payload: { answers: "manual" } })
+    const outcome = pending.then(() => "resolved", (error: unknown) => error instanceof Error ? error.message : String(error))
+    await entered.promise
+    await controller.disconnect()
+    release.resolve()
+    expect(await outcome).toContain("not confirmed")
+    expect(writes).toBe(1)
   })
 })
 

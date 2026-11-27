@@ -291,6 +291,23 @@ const COORDINATION: Shape = Shape::Object(&[optional(
         optional("expires_at", NONNEGATIVE),
     ]),
 )]);
+const AUTONOMY_MODE: Shape = Shape::Enum(&["manual", "auto", "yolo"]);
+const AUTONOMY: Shape = Shape::Object(&[optional(
+    "defaults",
+    Shape::Object(&[
+        optional("permissions", AUTONOMY_MODE),
+        optional("guardrails", AUTONOMY_MODE),
+        optional("answers", AUTONOMY_MODE),
+        optional(
+            "yolo_accepted_at",
+            Shape::Object(&[
+                optional("permissions", NONNEGATIVE),
+                optional("guardrails", NONNEGATIVE),
+                optional("answers", NONNEGATIVE),
+            ]),
+        ),
+    ]),
+)]);
 const PLUGIN: Shape = Shape::Union(&[
     Shape::Nonempty,
     Shape::Object(&[
@@ -328,6 +345,7 @@ const ROOT: Shape = Shape::Object(&[
     optional("dots", Shape::Dots),
     optional("account_connectors", ACCOUNT_CONNECTORS),
     optional("coordination", COORDINATION),
+    optional("autonomy", AUTONOMY),
     optional("watcher", Shape::Object(&[optional("ignore", STRINGS)])),
     optional(
         "formatter",

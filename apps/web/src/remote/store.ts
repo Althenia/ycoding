@@ -796,6 +796,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (scope === undefined) return
     void queryClient.invalidateQueries({ queryKey: remoteKeys.usage(scope) }, { cancelRefetch: false })
     void queryClient.invalidateQueries({ queryKey: remoteKeys.keepAwake(scope) }, { cancelRefetch: false })
+    void queryClient.invalidateQueries({ queryKey: remoteKeys.autonomyDefaults(scope) }, { cancelRefetch: false })
     void queryClient.invalidateQueries({ queryKey: remoteKeys.dots(scope) }, { cancelRefetch: false })
   }
 

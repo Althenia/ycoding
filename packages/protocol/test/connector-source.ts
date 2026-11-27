@@ -102,6 +102,8 @@ export const connectorOperations = {
   "coordination.board": [6008, "coordination.board", "A", "READ"],
   "machine.keepAwake.get": [3025, "keepAwake.get", "A", "READ"],
   "machine.keepAwake.set": [3026, "keepAwake.set", "A", "MUTATION"],
+  "machine.autonomyDefaults.get": [3056, "autonomyDefaults.get", "A", "READ"],
+  "machine.autonomyDefaults.set": [3057, "autonomyDefaults.set", "A", "MUTATION"],
   "machine.telemetry.consent.get": [3047, "telemetry.consent.get", "A", "READ"],
   "machine.telemetry.consent.set": [3048, "telemetry.consent.set", "A", "MUTATION"],
   "machine.latency.append": [3046, "telemetry.append", "B-reuse", "MUTATION"],

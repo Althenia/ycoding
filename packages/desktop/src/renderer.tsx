@@ -6,7 +6,7 @@ import { browserScriptPermission } from "@ycoding-ai/client/tool-display"
 import { batch, createContext, createEffect, createMemo, createSignal, createUniqueId, For, on, onCleanup, onMount, Show, useContext, type JSX } from "solid-js"
 import { render } from "solid-js/web"
 import { ComposerToolbar, revealComposerControls } from "../../../apps/web/src/remote/ui/composer-toolbar"
-import type { ConnectionState, FormAnswer, FormRequest, Messages, PendingRequests, PermissionRequest, ComposerCatalog, PromptAgent, PromptFile, RequestReply, SessionItem, ModelSelection, ShellOutput, UsageRange, RevertInput, SetAutonomyInput, SettingsMutationInput, ProjectMutationInput, WorkspaceMutationInput, PinRequest } from "./contract"
+import type { ConnectionState, FormAnswer, FormRequest, Messages, PendingRequests, PermissionRequest, ComposerCatalog, AutonomyCategory, AutonomyDefaultsSnapshot, SetAutonomyDefaultsInput, PromptAgent, PromptFile, RequestReply, SessionItem, ModelSelection, ShellOutput, UsageRange, RevertInput, SetAutonomyInput, SettingsMutationInput, ProjectMutationInput, WorkspaceMutationInput, PinRequest } from "./contract"
 import { desktop as api } from "./bridge"
 import { createEventRefresh, eventSessionID } from "./event-refresh"
 import { createPromptVisibility } from "./prompt-visibility"
@@ -2177,9 +2177,25 @@ function NewChat() {
   </section>
 }
 
+const yoloRisk = "YOLO approves every request in each selected YOLO category, bypassing permission limits, hard policies and custom rules. Answers settle automatically. Actions can modify or delete data, send messages, spend money or affect real systems. You accept all resulting risks and assume full responsibility. Accept these risks and enable YOLO?"
+const autonomyDecisionLabels = { manual: "Manual", auto: "Auto", yolo: "YOLO" } as const
+const autonomyCategoryLabels = { permissions: "Permissions", guardrails: "Guardrails", answers: "Answers" } as const
+export const yoloDefaultAcceptLabel = "Accept risk & save YOLO default"
+
 export function autonomyPrompt(payload: SetAutonomyInput["payload"], prompt: string) {
   if (![payload.permissions, payload.guardrails, payload.answers].includes("yolo")) return prompt
-  return `${prompt} YOLO approves every request in each selected YOLO category, bypassing permission limits, hard policies and custom rules. Answers settle automatically. Actions can modify or delete data, send messages, spend money or affect real systems. You accept all resulting risks and assume full responsibility. Accept these risks and enable YOLO?`
+  return `${prompt} ${yoloRisk}`
+}
+
+export function autonomyDefaultLabel(defaults: AutonomyDefaultsSnapshot["defaults"] | undefined, category: AutonomyCategory) {
+  return defaults ? `Saved default: ${autonomyDecisionLabels[defaults[category]]}` : "Saved default: Unknown"
+}
+
+export async function changeAutonomyDefault(category: AutonomyCategory, mode: "manual" | "auto" | "yolo", revision: number, deps: { readonly confirm: (prompt: string, accept?: string) => Promise<boolean>; readonly set: (input: SetAutonomyDefaultsInput) => Promise<AutonomyDefaultsSnapshot> }) {
+  if (mode === "yolo" && !(await deps.confirm(`Save YOLO as the default ${autonomyCategoryLabels[category].toLowerCase()} mode for new Sessions? ${yoloRisk}`, yoloDefaultAcceptLabel))) return undefined
+  const result = await deps.set({ revision, payload: { [category]: mode, ...(mode === "yolo" ? { acceptYolo: true } : {}) } })
+  if (result.revision !== revision || result.defaults[category] !== mode) throw new Error("The autonomy default was not confirmed. Refresh the defaults before retrying.")
+  return result
 }
 
 export function autonomyLabels(view: { readonly goal?: { readonly text: string; readonly status: string } | null; readonly effective: { readonly permissions: string; readonly guardrails: string; readonly answers: string; readonly deferred: boolean } } | undefined) {
@@ -2214,18 +2230,18 @@ export function lastOpenedSessionOf<T extends { readonly id: string }>(items: re
   return sessionID ? items.find((item) => item.id === sessionID) : undefined
 }
 
-type ConfirmRequest = { readonly prompt: string; readonly resolve: (value: boolean) => void }
-let confirmOpener: ((prompt: string) => Promise<boolean>) | undefined
-export function confirmInPage(prompt: string): Promise<boolean> {
-  return confirmOpener ? confirmOpener(prompt) : Promise.resolve(false)
+type ConfirmRequest = { readonly prompt: string; readonly accept: string; readonly resolve: (value: boolean) => void }
+let confirmOpener: ((prompt: string, accept: string) => Promise<boolean>) | undefined
+export function confirmInPage(prompt: string, accept = "Confirm"): Promise<boolean> {
+  return confirmOpener ? confirmOpener(prompt, accept) : Promise.resolve(false)
 }
 
 function ConfirmDialog() {
   const [request, setRequest] = createSignal<ConfirmRequest>()
   let dialog: HTMLDialogElement | undefined
-  confirmOpener = (prompt) => new Promise<boolean>((resolve) => {
+  confirmOpener = (prompt, accept) => new Promise<boolean>((resolve) => {
     if (request() || !dialog) { resolve(false); return }
-    setRequest({ prompt, resolve })
+    setRequest({ prompt, accept, resolve })
     dialog.showModal()
   })
   const finish = (value: boolean) => {
@@ -2238,7 +2254,7 @@ function ConfirmDialog() {
   return <dialog ref={dialog} class="confirm" aria-labelledby="confirm-title" onClose={() => finish(false)} onCancel={(event) => { event.preventDefault(); finish(false) }}>
     <h2 id="confirm-title">Confirm</h2>
     <p>{request()?.prompt}</p>
-    <div class="confirm__actions"><button type="button" class="rl-btn" onClick={() => finish(false)}>Cancel</button><button type="button" class="rl-btn" data-primary="true" onClick={() => finish(true)}>Confirm</button></div>
+    <div class="confirm__actions"><button type="button" class="rl-btn" onClick={() => finish(false)}>Cancel</button><button type="button" class="rl-btn" data-primary="true" onClick={() => finish(true)}>{request()?.accept ?? "Confirm"}</button></div>
   </dialog>
 }
 
@@ -3016,6 +3032,26 @@ function Conversation(props: { sessionID: string }) {
     else if (result.status === "unconfirmed") { setPolicyUncertain(true); setPolicyError(failure(result.error, "The autonomy change was not confirmed. Reopen the Session and review its state.")); autonomyRead.refetch() }
     setPolicyBusy(false)
   }
+  const defaultsRead = observe(() => ({ queryKey: ["autonomyDefaults", ...scope()] as const, queryFn: () => api.autonomyDefaults(), enabled: reading() && typeof api.autonomyDefaults === "function" }))
+  const autonomyDefaults = () => defaultsRead.result().isError || defaultsRead.result().data?.revision !== connection().revision ? undefined : defaultsRead.result().data?.defaults
+  const [defaultsBusy, setDefaultsBusy] = createSignal(false)
+  const saveDefault = async (category: AutonomyCategory, mode: "manual" | "auto" | "yolo") => {
+    const revision = connection().revision
+    if (revision === undefined || !reading() || defaultsBusy() || typeof api.setAutonomyDefaults !== "function") return
+    setDefaultsBusy(true); setPolicyError(undefined)
+    try { if (await changeAutonomyDefault(category, mode, revision, { confirm: confirmInPage, set: api.setAutonomyDefaults })) defaultsRead.refetch() }
+    catch (cause) { setPolicyError(failure(cause, "The autonomy default could not be saved.")); defaultsRead.refetch() }
+    setDefaultsBusy(false)
+  }
+  const defaultRow = (category: AutonomyCategory, title: string, value: () => "manual" | "auto" | "yolo", change: (mode: "manual" | "auto" | "yolo") => void) => <>
+    <p class="model-popover__label">{title}</p>
+    <SharedRadioGroup label={title} options={decisionModes} value={value()} disabled={policyBusy() || policyUncertain()} onChange={(mode) => change(mode as "manual" | "auto" | "yolo")} />
+    <div class="rl-policy-default" data-part={`autonomy-default-${category}`}>
+      <span class="st-muted">{autonomyDefaultLabel(autonomyDefaults(), category)}</span>
+      <button type="button" class="rl-btn" disabled={defaultsBusy() || !reading() || !autonomy() || typeof api.setAutonomyDefaults !== "function"} onClick={() => void saveDefault(category, autonomy()![category])} aria-label={`Save ${title} as default`}>Save as default</button>
+      <button type="button" class="rl-btn" disabled={defaultsBusy() || !reading() || typeof api.setAutonomyDefaults !== "function"} onClick={() => void saveDefault(category, "manual")} aria-label={`Reset ${title} default`}>Reset default</button>
+    </div>
+  </>
   const policyButtons = () => <><button type="button" onClick={openPolicy}>{policyLabels().goal}</button><button type="button" onClick={openPolicy}>{policyLabels().autonomy}</button></>
   const [selectedTurn, setSelectedTurn] = createSignal<string>()
   const [linkNote, setLinkNote] = createSignal<string>()
@@ -3650,7 +3686,7 @@ function Conversation(props: { sessionID: string }) {
       <Show when={(unsure() && !sending()) || (pending() && !sending() && !unsure()) || stopNote()}><div class="desktop__actions">
         <Show when={unsure() && !sending()}><button type="button" onClick={() => { update(pending()?.text ?? text()); hold(undefined); promptGuard.reset(); unconfirmed.delete(props.sessionID); setUnsure(false); setRevertUncertain(false); setError(undefined); sessionRead.refetch() }}>I reviewed the Session</button></Show><Show when={pending() && !sending() && !unsure()}><button type="button" onClick={() => { update(pending()?.text ?? ""); hold(undefined); setError(undefined) }}>Edit as a new message</button></Show>
         <Show when={stopNote()}>{(note) => <span role="status" class="desktop__muted">{note()}</span>}</Show></div></Show></>} />
-    <Show when={policyOpen()}><ResponsiveLayer class="desktop-popover rl-policy-panel" role="dialog" label="Goal and autonomy" onClose={() => closePolicy(true)} onKeyDown={(event) => { if (event.key === "Escape" && !event.defaultPrevented && !event.isComposing && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); closePolicy(true) } }}><div class="rl-pane-section-heading"><strong>Goal and autonomy</strong><button type="button" class="rl-btn" onClick={() => closePolicy(true)}>Close</button></div><Show when={!autonomy()}><p role="status">Goal and autonomy are unavailable until the Session state is read.</p><Show when={autonomyRead.result().isError}><button type="button" class="rl-btn" onClick={autonomyRead.refetch}>Refresh</button></Show></Show><Show when={autonomy()}><p class="model-popover__label">Permissions</p><SharedRadioGroup label="Permissions" options={decisionModes} value={permissions()} disabled={policyBusy() || policyUncertain()} onChange={(value) => setPermissions(value as "manual" | "auto" | "yolo")} /><p class="model-popover__label">Guardrails</p><SharedRadioGroup label="Guardrails" options={decisionModes} value={guardrails()} disabled={policyBusy() || policyUncertain()} onChange={(value) => setGuardrails(value as "manual" | "auto" | "yolo")} /><p class="model-popover__label">Answers</p><SharedRadioGroup label="Answers" options={decisionModes} value={answers()} disabled={policyBusy() || policyUncertain()} onChange={(value) => setAnswers(value as "manual" | "auto" | "yolo")} /><div class="rl-policy-actions"><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading()} onClick={() => void setPolicy({ permissions: permissions(), guardrails: guardrails(), answers: answers() }, `Change autonomy decisions to ${permissions()}/${guardrails()}/${answers()}?`)}>Apply autonomy</button><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading()} aria-pressed={!!autonomy()?.effective.deferred} onClick={() => void setPolicy({ defer: !autonomy()?.effective.deferred }, autonomy()?.effective.deferred ? "Disable deferral of unresolved decisions?" : "Enable persistent deferral of unresolved decisions?")}>{autonomy()?.effective.deferred ? "Defer on" : "Defer off"}</button></div><label class="desktop__field">Goal<textarea value={policyGoal()} disabled={policyBusy() || policyUncertain()} onInput={(event) => setPolicyGoal(event.currentTarget.value)} /></label><div class="rl-policy-actions"><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading() || !policyGoal().trim()} onClick={() => void setPolicy({ goal: policyGoal().trim() }, "Replace the Session goal with this text?")}>Set goal</button><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading() || (!autonomy()?.goal || autonomy()?.goal?.status === "stopped")} onClick={() => void setPolicy({ goal: null }, "Stop the Session goal? Its text will be retained.")}>Stop goal</button></div></Show><Show when={policyError()}>{(error) => <p role="alert">{error()}</p>}</Show></ResponsiveLayer></Show></div></div>
+    <Show when={policyOpen()}><ResponsiveLayer class="desktop-popover rl-policy-panel" role="dialog" label="Goal and autonomy" onClose={() => closePolicy(true)} onKeyDown={(event) => { if (event.key === "Escape" && !event.defaultPrevented && !event.isComposing && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); closePolicy(true) } }}><div class="rl-pane-section-heading"><strong>Goal and autonomy</strong><button type="button" class="rl-btn" onClick={() => closePolicy(true)}>Close</button></div><Show when={!autonomy()}><p role="status">Goal and autonomy are unavailable until the Session state is read.</p><Show when={autonomyRead.result().isError}><button type="button" class="rl-btn" onClick={autonomyRead.refetch}>Refresh</button></Show></Show><Show when={autonomy()}>{defaultRow("permissions", "Permissions", permissions, setPermissions)}{defaultRow("guardrails", "Guardrails", guardrails, setGuardrails)}{defaultRow("answers", "Answers", answers, setAnswers)}<div class="rl-policy-actions"><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading()} onClick={() => void setPolicy({ permissions: permissions(), guardrails: guardrails(), answers: answers() }, `Change autonomy decisions to ${permissions()}/${guardrails()}/${answers()}?`)}>Apply autonomy</button><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading()} aria-pressed={!!autonomy()?.effective.deferred} onClick={() => void setPolicy({ defer: !autonomy()?.effective.deferred }, autonomy()?.effective.deferred ? "Disable deferral of unresolved decisions?" : "Enable persistent deferral of unresolved decisions?")}>{autonomy()?.effective.deferred ? "Defer on" : "Defer off"}</button></div><label class="desktop__field">Goal<textarea value={policyGoal()} disabled={policyBusy() || policyUncertain()} onInput={(event) => setPolicyGoal(event.currentTarget.value)} /></label><div class="rl-policy-actions"><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading() || !policyGoal().trim()} onClick={() => void setPolicy({ goal: policyGoal().trim() }, "Replace the Session goal with this text?")}>Set goal</button><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading() || (!autonomy()?.goal || autonomy()?.goal?.status === "stopped")} onClick={() => void setPolicy({ goal: null }, "Stop the Session goal? Its text will be retained.")}>Stop goal</button></div></Show><Show when={policyError()}>{(error) => <p role="alert">{error()}</p>}</Show></ResponsiveLayer></Show></div></div>
     <Show when={companionOpen()}><aside class="rl-companion" aria-label="Session companion" data-full={fullChangesOpen() && companionTab() === "Changes" ? "true" : undefined}>
       <DesktopCompanion
         runningContent={<RunningActivity sessionID={props.sessionID} data={activityView()} loading={activityRead.result().isPending} error={activityRead.result().isError ? failure(activityRead.result().error, "Running work could not be read.") : undefined} onRefresh={activityRead.refetch} onMore={() => void loadMoreSubagents()} loadingMore={activityMoreBusy()} moreError={activityMoreError()} onOpen={(id) => void navigate({ to: "/sessions/$sessionID", params: { sessionID: id } })} onShell={(id) => { setCompanionTab("Activity"); selectShell(id) }} />}

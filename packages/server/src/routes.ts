@@ -12,6 +12,7 @@ import { FileSystemSearch } from "@ycoding-ai/core/filesystem/search"
 import { Observability } from "@ycoding-ai/core/observability"
 import { MemoryTelemetry } from "@ycoding-ai/core/observability/memory-telemetry"
 import { locationServices } from "@ycoding-ai/core/location-services"
+import { AutonomyDefaults } from "@ycoding-ai/core/autonomy-defaults"
 import { KeepAwake } from "@ycoding-ai/core/keep-awake"
 import { InteractionCapture } from "@ycoding-ai/core/interaction/capture"
 import { InteractionRuntime } from "@ycoding-ai/core/interaction/index"
@@ -115,6 +116,7 @@ const applicationServices = LayerNode.group([
   SessionDecisions.node,
   SessionOrchestrationNotifier.node,
   KeepAwake.node,
+  AutonomyDefaults.node,
   InteractionRuntime.node,
   InteractionCapture.node,
   TelemetryConsent.node,

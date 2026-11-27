@@ -1,4 +1,5 @@
 mod auth;
+mod autonomy_defaults;
 mod browser;
 mod browser_convert;
 mod browser_stream;

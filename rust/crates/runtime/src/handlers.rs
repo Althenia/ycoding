@@ -50,6 +50,8 @@ pub fn standard() -> Result<Dispatcher, RegistrationError> {
     dispatcher.handle("telemetry.consent.set", crate::telemetry::consent_set)?;
     dispatcher.handle("keepAwake.get", crate::keep_awake::get)?;
     dispatcher.handle("keepAwake.set", crate::keep_awake::set)?;
+    dispatcher.handle("autonomyDefaults.get", crate::autonomy_defaults::get)?;
+    dispatcher.handle("autonomyDefaults.set", crate::autonomy_defaults::set)?;
     crate::connector::operations::register(&mut dispatcher)?;
     dispatcher.handle("decision.list", crate::decision::list)?;
     dispatcher.handle("dots.attach", crate::dots::attach)?;

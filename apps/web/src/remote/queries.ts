@@ -18,6 +18,7 @@ import type { OperationName as RemoteOperation } from "./wire-views"
 import { readCentralPolicy, readProject, readProjects, readSessionCandidates, type CentralPolicy, type ProjectBundle, type SessionCandidate } from "./coordination"
 import { readUsageForecast } from "./usage-read"
 import { keepAwakeAnswer, readKeepAwakeStatus, type KeepAwakeState } from "./keep-awake"
+import { readAutonomyDefaults, type AutonomyModes } from "./autonomy"
 import { describeOutcome } from "./outcome"
 import { readSnapshot } from "./projection"
 import { readTeamChildren } from "./team-read"
@@ -61,6 +62,7 @@ export const remoteKeys = {
   incidentGuidance: (scope: QueryScope, input: IncidentGuidanceQueryInput) =>
     [...remoteKeys.incidentGuidanceModel(scope, input), input.sessionID ?? ""] as const,
   keepAwake: (scope: QueryScope) => [...remoteKeys.scope(scope), "keepAwake"] as const,
+  autonomyDefaults: (scope: QueryScope) => [...remoteKeys.scope(scope), "autonomyDefaults"] as const,
   dots: (scope: QueryScope) => [...remoteKeys.scope(scope), "dots"] as const,
   workspaces: (scope: QueryScope) => [...remoteKeys.scope(scope), "workspaces"] as const,
   coordination: (scope: QueryScope) => [...remoteKeys.scope(scope), "coordination"] as const,
@@ -352,6 +354,34 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     return { reached: result.reached }
   }
 
+  const autonomyDefaults = (scope: QueryScope | undefined, enabled: boolean) => {
+    const current = scope ?? idleScope
+    return queryOptions({
+      queryKey: remoteKeys.autonomyDefaults(current),
+      enabled: scope !== undefined && enabled,
+      staleTime: 15_000,
+      refetchOnMount: "always",
+      retry: false,
+      queryFn: async (): Promise<AutonomyModes> => {
+        const outcome = await link.request(current, "autonomyDefaults.get", { timeoutMs: 5_000 })
+        if (outcome.status !== "ok") throw new Error(describeOutcome(outcome, "Autonomy defaults"))
+        const modes = readAutonomyDefaults(outcome.value)
+        if (modes === undefined) throw new Error("The machine returned unreadable autonomy defaults.")
+        return modes
+      },
+    })
+  }
+
+  const saveAutonomyDefaults = async (scope: QueryScope, change: Partial<AutonomyModes>, acceptYolo: boolean): Promise<{ readonly reached: boolean; readonly message?: string }> => {
+    const outcome = await link.request(scope, "autonomyDefaults.set", { input: { ...change, ...(acceptYolo ? { acceptYolo: true } : {}) } })
+    const reached = outcome.status === "ok" && readAutonomyDefaults(outcome.value) !== undefined
+    if (outcome.status !== "unavailable") await client.invalidateQueries({ queryKey: remoteKeys.autonomyDefaults(scope) }, { cancelRefetch: false })
+    if (reached) return { reached }
+    if (outcome.status === "ok") return { reached, message: "Autonomy defaults: the machine returned an unreadable answer. The defaults shown are what it reports now." }
+    if (outcome.status === "unknown") return { reached, message: "Autonomy defaults: the result of saving is unconfirmed. The defaults shown are what the machine reports now; nothing was sent again." }
+    return { reached, message: describeOutcome(outcome, "Autonomy defaults") }
+  }
+
   const workspaces = (scope: QueryScope | undefined, enabled: boolean) => {
     const current = scope ?? idleScope
     return queryOptions({
@@ -507,7 +537,7 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     coordination, swarmBoard, refreshCoordination, changeCoordination, deleteProjectSession, createProjectSession, projectCandidates, childSnapshot, childTeam,
     usageProviders, usageSummary, usageForecast, usageReport, usageDashboard, refreshUsage, refreshUsageDashboard, retryUsageReport,
     incidentReport, incidentRecent, incidentGuidance, clearIncidentGuidance, retryIncidentReport, retryIncidentRecent, retryIncidentGuidance,
-    keepAwake, keepAwakeMutation, toggleKeepAwake, workspaces,
+    keepAwake, keepAwakeMutation, toggleKeepAwake, autonomyDefaults, saveAutonomyDefaults, workspaces,
   }
 }
 

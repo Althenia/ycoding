@@ -6,6 +6,7 @@ use std::{
 use ycoding_schema::{JsonValue, config::Diagnostic};
 
 mod account_connectors;
+mod autonomy;
 pub mod capabilities;
 mod coordination;
 mod jsonc;

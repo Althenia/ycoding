@@ -113,6 +113,8 @@ test("the Autonomous dialog keys are configurable and collide with no dialog lis
     "dialog.autonomous.all_manual": "1",
     "dialog.autonomous.all_yolo": "2",
     "dialog.autonomous.all_auto": "3",
+    "dialog.autonomous.default_save": "s",
+    "dialog.autonomous.default_reset": "r",
   }
   for (const [name, key] of Object.entries(autonomous)) expect(definitions[name]?.default).toBe(key)
 

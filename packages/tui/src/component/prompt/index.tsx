@@ -64,6 +64,7 @@ import {
   restoreSessionSubmission,
   retainSessionSubmission,
   type AutonomyChange,
+  type AutonomyDefaultsServer,
   type AutonomyState,
   type SessionSubmissionRetry,
 } from "../../util/session-autonomy"
@@ -310,6 +311,10 @@ export function Prompt(props: PromptProps) {
     if (!payload) return
     const result = await client.api.session.autonomy.set({ sessionID, payload })
     props.onAutonomyUpdated?.(sessionID, result)
+  }
+  const autonomyDefaults: AutonomyDefaultsServer = {
+    get: () => client.api.autonomyDefaults.get(),
+    set: (change) => client.api.autonomyDefaults.set(change),
   }
   const renderer = useRenderer()
   const exit = useExit()
@@ -903,7 +908,7 @@ export function Prompt(props: PromptProps) {
         palette: true,
         slash: { name: "autonomous" },
         run: async () => {
-          dialog.replace(() => <DialogAutonomous autonomy={() => props.autonomy} save={saveAutonomy} />)
+          dialog.replace(() => <DialogAutonomous autonomy={() => props.autonomy} save={saveAutonomy} defaults={autonomyDefaults} />)
         },
       },
       {

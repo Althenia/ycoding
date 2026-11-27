@@ -86,6 +86,7 @@ import {
 export { ScopeUnavailableError } from "./error"
 import { makeGlobalNode } from "../effect/app-node"
 import { KeepAwake } from "../keep-awake"
+import { AutonomyDefaults } from "../autonomy-defaults"
 import { LocationServiceMap } from "../location-service-map"
 import { SessionEvent } from "./event"
 import { SessionPending } from "./pending"
@@ -706,6 +707,7 @@ const layer = Layer.effect(
     const execution = yield* SessionExecution.Service
     const autonomy = yield* SessionAutonomy.Service
     const keepAwake = yield* KeepAwake.Service
+    const autonomyDefaults = yield* AutonomyDefaults.Service
     const compactionJobs = yield* SessionCompactionJob.Service
     const compactionExecution = yield* SessionCompactionExecution.Service
     const contextState = yield* SessionContextState.Service
@@ -1690,6 +1692,16 @@ const layer = Layer.effect(
             }),
           )
         if (projected.type === "existing") return (yield* matches(projected.session)) ? projected.session : yield* new SessionPlacementConflictError({ sessionID })
+        if (!input.parentID && scope === "bound") {
+          const defaults = yield* autonomyDefaults.get
+          if (defaults.permissions !== "manual" || defaults.guardrails !== "manual" || defaults.answers !== "manual")
+            yield* autonomy.set({
+              sessionID,
+              ...(defaults.permissions === "manual" ? {} : { permissions: defaults.permissions }),
+              ...(defaults.guardrails === "manual" ? {} : { guardrails: defaults.guardrails }),
+              ...(defaults.answers === "manual" ? {} : { answers: defaults.answers }),
+            }).pipe(Effect.orDie)
+        }
         // TODO: Restore recorded sessions onto replacement synchronized workspaces in a future API slice.
         return yield* result.get(sessionID).pipe(Effect.orDie)
       }),
@@ -3405,6 +3417,7 @@ export const node = makeGlobalNode({
     SessionExecution.node,
     SessionAutonomy.node,
     KeepAwake.node,
+    AutonomyDefaults.node,
     SessionCompactionJob.node,
     SessionCompactionExecution.node,
     SessionContextState.node,

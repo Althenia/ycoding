@@ -1,4 +1,5 @@
 mod continuation;
+mod defaults;
 mod defer;
 mod goal_state;
 mod service;
@@ -9,6 +10,7 @@ pub use continuation::{
     Error as ContinuationError, Steer, SteerFuture, SteerRequest, continue_goal,
 };
 pub(crate) use continuation::{prepare_continuation, prepare_failure};
+pub use defaults::{Acceptance, Defaults, DefaultsChange, Refusal};
 pub use defer::Origin;
 pub(crate) use defer::{inbox, release_removed};
 pub use goal_state::{

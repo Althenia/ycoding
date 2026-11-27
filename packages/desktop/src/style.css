@@ -778,6 +778,7 @@ input, textarea { font-size: var(--yc-size-sm); }
 @media (hover: hover) { .model-popover__option:hover:not(:disabled):not([aria-selected="true"]) { background: var(--yc-plane-hover); } }
 .model-popover__option:disabled { opacity: .65; cursor: default; }
 .model-popover__label { margin: 0; padding-inline: var(--yc-space-1); color: var(--yc-ink-secondary); font: 500 var(--yc-size-2xs)/var(--yc-leading-2xs) var(--rl-font); }
+.rl-policy-default { display: flex; flex-wrap: wrap; align-items: center; gap: var(--yc-space-2); }
 .model-popover__foot, .rl-policy-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--yc-space-2); }
 .model-popover__foot { padding-block-start: var(--yc-space-2); border-block-start: 1px solid var(--yc-line-divider); }
 .desktop-popover .rl-radios { display: flex; flex-wrap: wrap; gap: 8px; }

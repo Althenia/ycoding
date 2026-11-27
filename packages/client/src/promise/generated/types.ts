@@ -113,6 +113,8 @@ export type TelemetryRequestSample = {
     | "incident.guidance.clear"
     | "machine.keepAwake.get"
     | "machine.keepAwake.set"
+    | "machine.autonomyDefaults.get"
+    | "machine.autonomyDefaults.set"
   outcome: "ok" | "failed" | "unknown" | "unavailable"
   reason?: "not-connected" | "in-flight-limit" | "request-limit" | "cancelled"
   queueMs: number
@@ -936,6 +938,10 @@ export type ModelIncidentDecidedBy = "decision-model" | "client"
 export type ModelIncidentGuidance = { text?: string; clearedAt?: number; enabled: boolean }
 
 export type KeepAwakeState = "off" | "on" | "unsupported" | "error"
+
+export type AutonomyDefaultsMode = "manual" | "yolo" | "auto"
+
+export type AutonomyDefaultsYoloAcceptedAt = { permissions?: number; guardrails?: number; answers?: number }
 
 export type ConfigDiagnosticReason = "invalid-json" | "invalid-values" | "removed-keys"
 
@@ -2987,6 +2993,13 @@ export type KeepAwakeStatus = {
   system?: "off" | "on" | "held" | "setup" | "unsupported" | "error"
   deferHold?: boolean
   message?: string
+}
+
+export type AutonomyDefaultsInfo = {
+  permissions: AutonomyDefaultsMode
+  guardrails: AutonomyDefaultsMode
+  answers: AutonomyDefaultsMode
+  yoloAcceptedAt?: AutonomyDefaultsYoloAcceptedAt
 }
 
 export type ConfigDiagnostic = {
@@ -6495,6 +6508,8 @@ export type ServerTelemetryAppendInput = {
             | "incident.guidance.clear"
             | "machine.keepAwake.get"
             | "machine.keepAwake.set"
+            | "machine.autonomyDefaults.get"
+            | "machine.autonomyDefaults.set"
           readonly outcome: "ok" | "failed" | "unknown" | "unavailable"
           readonly reason?: "not-connected" | "in-flight-limit" | "request-limit" | "cancelled"
           readonly queueMs: number
@@ -12745,6 +12760,37 @@ export type KeepAwakeGetOutput = { data: KeepAwakeStatus }["data"]
 export type KeepAwakeSetInput = { readonly enabled: { readonly enabled: boolean }["enabled"] }
 
 export type KeepAwakeSetOutput = { data: KeepAwakeStatus }["data"]
+
+export type AutonomyDefaultsGetOutput = { data: AutonomyDefaultsInfo }["data"]
+
+export type AutonomyDefaultsSetInput = {
+  readonly permissions?: {
+    readonly permissions?: "manual" | "yolo" | "auto"
+    readonly guardrails?: "manual" | "yolo" | "auto"
+    readonly answers?: "manual" | "yolo" | "auto"
+    readonly acceptYolo?: boolean
+  }["permissions"]
+  readonly guardrails?: {
+    readonly permissions?: "manual" | "yolo" | "auto"
+    readonly guardrails?: "manual" | "yolo" | "auto"
+    readonly answers?: "manual" | "yolo" | "auto"
+    readonly acceptYolo?: boolean
+  }["guardrails"]
+  readonly answers?: {
+    readonly permissions?: "manual" | "yolo" | "auto"
+    readonly guardrails?: "manual" | "yolo" | "auto"
+    readonly answers?: "manual" | "yolo" | "auto"
+    readonly acceptYolo?: boolean
+  }["answers"]
+  readonly acceptYolo?: {
+    readonly permissions?: "manual" | "yolo" | "auto"
+    readonly guardrails?: "manual" | "yolo" | "auto"
+    readonly answers?: "manual" | "yolo" | "auto"
+    readonly acceptYolo?: boolean
+  }["acceptYolo"]
+}
+
+export type AutonomyDefaultsSetOutput = { data: AutonomyDefaultsInfo }["data"]
 
 export type ConfigDiagnosticsInput = {
   readonly location?: {

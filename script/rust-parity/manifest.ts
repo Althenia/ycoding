@@ -32,6 +32,7 @@ const groups: Record<string, string> = {
   "provider-usage": "providerUsage",
   "isolated-browser": "isolatedBrowser",
   "keep-awake": "keepAwake",
+  "autonomy-defaults": "autonomyDefaults",
 }
 const connectorRules = [
   { prefix: "provider.auth.", owner: "WP-005" },
@@ -46,6 +47,7 @@ const connectorRules = [
   { prefix: "dots.", owner: "WP-008" },
   { prefix: "incident.", owner: "WP-004" },
   { prefix: "keepAwake.", owner: "WP-010" },
+  { prefix: "autonomyDefaults.", owner: "WP-008" },
   { prefix: "mcp.app.view", owner: "WP-010" },
   { prefix: "telemetry.", owner: "WP-004" },
   { prefix: "shell.output", owner: "WP-009" },
@@ -99,6 +101,7 @@ export const ownerRules: readonly OwnerRule[] = [
       { group: "incident", owner: "WP-004" },
       { group: "coordination", owner: "WP-008" },
       { group: "dots", owner: "WP-008" },
+      { group: "autonomy-defaults", owner: "WP-008" },
     ],
   ]
     .flat()
