@@ -25,6 +25,7 @@ pub mod okf;
 mod recall;
 pub mod reset;
 mod retrieval;
+pub mod schema;
 mod search;
 pub mod templates;
 use bundle::{indexes, prefixes, refresh, scan};
@@ -585,7 +586,7 @@ impl Service {
             .ok_or(Error::Unavailable)?;
         let view = okf::View {
             paths: &paths,
-            legacy_root_fallback: false,
+            legacy_root_fallback: bundle::legacy(bundle.version.as_deref()),
         };
         let mut diagnostics = written.doc.diagnostics.clone();
         diagnostics.extend(

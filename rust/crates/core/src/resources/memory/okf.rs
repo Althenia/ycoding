@@ -469,7 +469,8 @@ pub fn parse(content: &str) -> Parsed {
             Some(1),
         ));
     }
-    let (meta, diagnostics) = extract(&yaml, type_, body);
+    let (meta, mut diagnostics) = extract(&yaml, type_, body);
+    diagnostics.extend(super::schema::concept(&yaml));
     Parsed::Concept(Box::new(Doc {
         yaml,
         body: body.into(),
@@ -1330,6 +1331,7 @@ pub fn root_index(content: &str) -> (Vec<Diagnostic>, Option<String>, Option<Str
             Some(1),
         ));
     }
+    found.extend(super::schema::bundle_index(&yaml));
     let license = scalar(field(&yaml, "license"));
     (found, scalar(version), license)
 }

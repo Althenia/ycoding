@@ -39,11 +39,16 @@ pub(super) fn scan(state: &State, now: DateTime<Utc>) -> Result<Bundle, Error> {
     bundle
         .concepts
         .sort_by(|a, b| a.summary.id.cmp(&b.summary.id));
+    if !legacy(bundle.version.as_deref()) {
+        for concept in &mut bundle.concepts {
+            concept.without_legacy_timestamp(now);
+        }
+    }
     link(&mut bundle);
     Ok(bundle)
 }
 
-fn legacy(version: Option<&str>) -> bool {
+pub(super) fn legacy(version: Option<&str>) -> bool {
     let Some(version) = version else {
         return true;
     };

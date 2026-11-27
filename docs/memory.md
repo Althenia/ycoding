@@ -135,13 +135,28 @@ The harness, not the agent, owns provenance:
 
 - **Authorship.** On every meaningful content change the harness stamps `generated: { by: ycoding/<version>, at: <time> }`. An unchanged rewrite keeps the existing stamp and its digest.
 - **Verification.** `verified` is a list of `{ by, at }` events. An agent cannot add one. A human event is accepted only when the write sets `allowHumanActor` after the person explicitly confirmed, and its time is not in the future. An existing event passes through unchanged.
-- **Trust tier.** Derived from current `verified` events only: `unverified` when none is current, `machine-confirmed` for non-human actors, `human-reviewed` when a human event is current. An event is current only when its `at` is not earlier than `generated.at`, so editing a verified concept drops it back to `unverified`.
+- **Trust tier.** Derived from current `verified` events only: `unverified` when none is current, `machine-confirmed` for non-human actors, `human-reviewed` when a human event is current. An event is current only when its `at` is not earlier than `generated.at`, or when the concept has no `generated`. Editing a verified concept drops it back to `unverified`; the earlier events stay in the file as history and never count. A `verified` entry may be a single mapping or a list. Trust is advisory and never makes a concept ineligible.
 - **Lifecycle status.** `status` is `stable`, `draft`, or `deprecated`; other values read as non-current. `supersede` and `retire` set `deprecated` and maintain `superseded_by`. The harness never invents `stale_after`.
 - **Freshness.** A concept is stale once `stale_after` has passed, and a malformed `stale_after` is flagged.
 - **Conflicts.** Two or more current concepts with the same normalized `type` and `title` under different IDs conflict. Creating one is answered with `duplicateOf` instead of storing it; hand-placed files can still conflict.
 - **Duplicates.** A create is a duplicate when a current concept has the same normalized type and title, or a body with at least 90% token overlap and at least eight tokens.
 
 `list`, `search`, and automatic recall expose these as `signals`: `status`, `current`, `trust`, `stale`, `stale_after`, `superseded_by`, `verification_older_than_content`, and `conflicts_with`. `review` collects the flagged concepts so they can be repaired.
+
+## Content validation
+
+Every concept's frontmatter, and the bundle-root `index.md` frontmatter, is checked against a content schema that is compiled into the runtime. The schema is derived from OKF v0.3 SPEC.md at upstream revision `527e81aff55992be21507e97004286789126f88c`. Upstream publishes no machine-readable schema at that revision, so the schema is a derived, unofficial reading of the spec text and carries no authority beyond the sections it cites. It is the same file the `okf-knowledge-bundle` skill packages, and a test fails if the two copies differ.
+
+Before the check, the content is reduced to the spec's normal form: a null, empty string or empty list is an absent key, a property that holds a list may be written as one item, and unknown keys are always accepted. Findings name the parsed field and its spec section and never quote the rejected value:
+
+- `S100` is an error: a missing required field such as `sources[0].resource`, `verified[0].at`, `usage_window.to`, `parameters[0].type`, `executor.resource`, or `runtime` on an Attested Computation, or a value of the wrong type or form, such as a non-string `title` or a `stale_after` that is not an RFC 3339 date-time or date.
+- `S101` is a warning: a vocabulary or convention such as an unknown `status` or an actor that is not `<producer>/<version>` or `<scheme>:<id>`.
+
+The schema cannot express links, path fields, bundle confinement, trust tiers or the reserved-file rules. The checks listed in the authoring contract and the `W` codes cover those and run beside the schema, not instead of it. Optional metadata defects are reported and never reject a read or a write. Only `type` is required on an ordinary concept.
+
+Older bundles are compatibility inputs. A bundle that declares no `okf_version`, or declares 0.2 or earlier, may use the v0.1 `timestamp` key when `generated` is absent, and may resolve a path field that does not resolve from its file against the bundle root (`W119`). A bundle that declares 0.3 or later ignores `timestamp` for trust, freshness and retrieval revision, and resolves path fields from the file or from the bundle root with a leading `/` only. Footnote definitions such as `[^id]: text` are never read as link reference definitions.
+
+The conformance suite includes the SPEC Appendix A finance bundle as a fixture under `rust/crates/core/tests/fixtures/okf_appendix_a`. Its example actors, usage window, typed parameters and license belong to the fixture only. No default, template or generated index requires or copies them, and validation never executes or evaluates the example computations or attesters.
 
 ## Repository identity and storage
 

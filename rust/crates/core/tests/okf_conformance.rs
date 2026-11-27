@@ -1158,33 +1158,780 @@ mod experiences {
     }
 }
 
-mod validators {
+mod v03 {
     use super::*;
-    use std::process::Command;
+    use ycoding_core::resources::{
+        memory::okf::Level,
+        recall::document::{Document, Trust as DocumentTrust},
+    };
 
-    fn helper() -> Option<PathBuf> {
-        let path = PathBuf::from(std::env::var_os("HOME")?)
-            .join(".agents/skills/okf-knowledge-bundle/scripts/okf_helper.py");
-        path.exists().then_some(path)
+    const EARLY: &str = "2026-10-01T00:00:00Z";
+    const MIDDLE: &str = "2026-10-15T00:00:00Z";
+    const LATE: &str = "2026-11-01T00:00:00Z";
+
+    fn place(f: &Fixture, relative: &str, content: &str) {
+        let path = f.root().join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
     }
-    fn interpreter() -> String {
-        std::env::var("YCODING_OKF_HELPER_PYTHON").unwrap_or_else(|_| "python3".into())
+    fn declare(f: &Fixture, version: &str) {
+        place(
+            f,
+            "index.md",
+            &format!("---\nokf_version: \"{version}\"\n---\n"),
+        );
+    }
+    fn trust(f: &Fixture, id: &str) -> Trust {
+        f.summary(id).signals.trust
+    }
+    fn stale_review(f: &Fixture, id: &str) -> bool {
+        f.summary(id).signals.verification_older_than_content
+    }
+    fn document(f: &Fixture, id: &str) -> Document {
+        f.store
+            .documents(Scope::Repository)
+            .unwrap()
+            .into_iter()
+            .find(|document| document.id == id)
+            .unwrap_or_else(|| panic!("{id} has no document"))
+    }
+    fn codes(f: &Fixture, id: &str) -> Vec<&'static str> {
+        f.store
+            .review(Scope::Repository)
+            .unwrap()
+            .findings
+            .into_iter()
+            .filter(|(path, _)| path == &format!("{id}.md"))
+            .map(|(_, found)| found.code)
+            .collect()
+    }
+    fn verified(events: &[(&str, &str)]) -> String {
+        events
+            .iter()
+            .map(|(by, at)| format!("  - by: {by}\n    at: \"{at}\"\n"))
+            .collect::<String>()
+    }
+    fn concept(generated: Option<&str>, events: &[(&str, &str)]) -> String {
+        let mut text = "---\ntype: Note\n".to_owned();
+        if let Some(at) = generated {
+            text += &format!("generated: {{ by: \"ycoding/0.1\", at: \"{at}\" }}\n");
+        }
+        if !events.is_empty() {
+            text += &format!("verified:\n{}", verified(events));
+        }
+        text + "---\nBody\n"
     }
 
     #[tokio::test]
-    async fn rust_written_bundles_pass_the_reference_helper() {
-        let Some(helper) = helper() else {
+    async fn declared_v03_bundles_ignore_the_legacy_timestamp() {
+        let f = Fixture::new();
+        declare(&f, "0.3");
+        place(
+            &f,
+            "a.md",
+            &format!(
+                "---\ntype: Note\ntimestamp: \"{MIDDLE}\"\nverified:\n{}---\nBody\n",
+                verified(&[("human:alice", EARLY)])
+            ),
+        );
+        let signals = f.summary("a").signals;
+        assert_eq!(signals.generated_at, None);
+        assert!(!signals.verification_older_than_content);
+        assert_eq!(signals.trust, Trust::HumanReviewed);
+        let projected = document(&f, "a");
+        assert_eq!(projected.lifecycle.trust, DocumentTrust::Verified);
+        assert_eq!(projected.source.revision, projected.source.content_hash);
+    }
+    #[tokio::test]
+    async fn eligible_legacy_bundles_keep_the_legacy_timestamp() {
+        for version in [None, Some("0.2"), Some("0.1")] {
+            let f = Fixture::new();
+            if let Some(version) = version {
+                declare(&f, version);
+            }
+            place(
+                &f,
+                "a.md",
+                &format!(
+                    "---\ntype: Note\ntimestamp: \"{MIDDLE}\"\nverified:\n{}---\nBody\n",
+                    verified(&[("human:alice", EARLY)])
+                ),
+            );
+            let signals = f.summary("a").signals;
+            assert_eq!(
+                signals.generated_at,
+                Some(Utc.with_ymd_and_hms(2026, 10, 15, 0, 0, 0).unwrap()),
+                "{version:?}"
+            );
+            assert!(signals.verification_older_than_content, "{version:?}");
+            assert_eq!(signals.trust, Trust::Unverified, "{version:?}");
+            assert!(document(&f, "a").source.revision.starts_with("2026-10-15"));
+        }
+    }
+    #[tokio::test]
+    async fn generated_always_wins_over_the_legacy_timestamp() {
+        let f = Fixture::new();
+        place(
+            &f,
+            "a.md",
+            &format!(
+                "---\ntype: Note\ntimestamp: \"{LATE}\"\ngenerated: {{ by: \"ycoding/0.1\", at: \"{EARLY}\" }}\nverified:\n{}---\nBody\n",
+                verified(&[("human:alice", MIDDLE)])
+            ),
+        );
+        assert_eq!(trust(&f, "a"), Trust::HumanReviewed);
+    }
+
+    #[tokio::test]
+    async fn trust_comes_only_from_current_verification_events() {
+        let f = Fixture::new();
+        declare(&f, "0.3");
+        place(&f, "none.md", &concept(Some(MIDDLE), &[]));
+        place(
+            &f,
+            "stale-human.md",
+            &concept(Some(LATE), &[("human:alice", MIDDLE)]),
+        );
+        place(
+            &f,
+            "machine.md",
+            &concept(Some(MIDDLE), &[("ci/1.0", LATE)]),
+        );
+        place(
+            &f,
+            "human.md",
+            &concept(Some(MIDDLE), &[("human:alice", LATE)]),
+        );
+        place(
+            &f,
+            "both.md",
+            &concept(Some(MIDDLE), &[("ci/1.0", LATE), ("human:alice", LATE)]),
+        );
+        place(
+            &f,
+            "machine-over-stale-human.md",
+            &concept(Some(MIDDLE), &[("human:alice", EARLY), ("ci/1.0", LATE)]),
+        );
+        place(
+            &f,
+            "same-instant.md",
+            &concept(Some(MIDDLE), &[("human:alice", MIDDLE)]),
+        );
+        place(
+            &f,
+            "no-generated-human.md",
+            &concept(None, &[("human:alice", EARLY)]),
+        );
+        place(
+            &f,
+            "no-generated-machine.md",
+            &concept(None, &[("ci/1.0", EARLY)]),
+        );
+        place(&f, "no-generated-none.md", &concept(None, &[]));
+        for (id, tier, older) in [
+            ("none", Trust::Unverified, false),
+            ("stale-human", Trust::Unverified, true),
+            ("machine", Trust::MachineConfirmed, false),
+            ("human", Trust::HumanReviewed, false),
+            ("both", Trust::HumanReviewed, false),
+            ("machine-over-stale-human", Trust::MachineConfirmed, false),
+            ("same-instant", Trust::HumanReviewed, false),
+            ("no-generated-human", Trust::HumanReviewed, false),
+            ("no-generated-machine", Trust::MachineConfirmed, false),
+            ("no-generated-none", Trust::Unverified, false),
+        ] {
+            assert_eq!(trust(&f, id), tier, "{id}");
+            assert_eq!(stale_review(&f, id), older, "{id}");
+            assert_eq!(
+                document(&f, id).lifecycle.trust,
+                if tier == Trust::Unverified {
+                    DocumentTrust::Unverified
+                } else {
+                    DocumentTrust::Verified
+                },
+                "{id}"
+            );
+            assert!(
+                document(&f, id).lifecycle.eligible(START),
+                "trust is advisory: {id}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn file_relative_and_bundle_root_links_and_path_fields_both_resolve() {
+        let f = Fixture::new();
+        f.write(
+            "ops/target",
+            &note("Target words with their own vocabulary"),
+        )
+        .await;
+        f.write("top", &note("Top level words in a different vocabulary"))
+            .await;
+        let written = f
+            .write(
+                "ops/a",
+                "---\ntype: Note\nresource: ../top.md\nsources:\n  - id: s1\n    resource: /ops/target.md\n---\nBare [one](target.md), parent [two](../top.md), root [three](/top.md).[^s1]\n\n[^s1]: Source.\n",
+            )
+            .await;
+        assert!(
+            written
+                .diagnostics
+                .iter()
+                .all(|d| !matches!(d.code, "W115" | "W116")),
+            "{:?}",
+            written.diagnostics
+        );
+        assert_eq!(
+            document(&f, "ops/a").fields.relationships,
+            ["ops/target", "top"]
+        );
+        assert!(
+            codes(&f, "ops/a")
+                .iter()
+                .all(|c| !matches!(*c, "W115" | "W116"))
+        );
+    }
+    #[tokio::test]
+    async fn unresolved_links_and_path_fields_are_warnings_never_rejections() {
+        let f = Fixture::new();
+        let written = f
+            .write(
+                "a",
+                "---\ntype: Note\nresource: nowhere.md\nsuperseded_by: gone.md\n---\nMissing [m](missing.md), above-root [o](../../x.md), anchor [h](#top), external [e](https://example.com/x) and [mail](mailto:a@example.com).\n",
+            )
+            .await;
+        let codes = written
+            .diagnostics
+            .iter()
+            .map(|d| d.code)
+            .collect::<Vec<_>>();
+        assert!(
+            codes.contains(&"W115") && codes.contains(&"W116"),
+            "{codes:?}"
+        );
+        assert!(
+            written.diagnostics.iter().all(|d| d.level != Level::Error),
+            "{:?}",
+            written.diagnostics
+        );
+        assert!(document(&f, "a").fields.relationships.is_empty());
+        assert_eq!(f.summary("a").id, "a");
+    }
+
+    #[tokio::test]
+    async fn legacy_fallback_resolves_only_eligible_legacy_inputs() {
+        let content = "---\ntype: Note\nsuperseded_by: target.md\nstatus: deprecated\n---\nBody [l](target.md)\n";
+        for (version, eligible) in [
+            (None, true),
+            (Some("0.2"), true),
+            (Some("0.3"), false),
+            (Some("1.0"), false),
+            (Some("unknown"), false),
+        ] {
+            let f = Fixture::new();
+            if let Some(version) = version {
+                declare(&f, version);
+            }
+            place(
+                &f,
+                "target.md",
+                &note("Target words with their own vocabulary"),
+            );
+            place(&f, "ops/a.md", content);
+            let found = codes(&f, "ops/a");
+            assert_eq!(found.contains(&"W119"), eligible, "{version:?}: {found:?}");
+            assert_eq!(found.contains(&"W116"), !eligible, "{version:?}: {found:?}");
+            assert!(
+                found.contains(&"W115"),
+                "links never fall back: {version:?}"
+            );
+            assert_eq!(
+                document(&f, "ops/a").lifecycle.superseded_by.as_deref(),
+                Some(if eligible { "target" } else { "ops/target" }),
+                "{version:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn no_read_or_write_escapes_the_bundle_root() {
+        let f = Fixture::new();
+        f.write("inside", &note("Inside words only")).await;
+        let outside = f.path.join("outside.md");
+        fs::write(&outside, note("Outside bytes")).unwrap();
+        for id in [
+            "../outside",
+            "a/../../outside",
+            "/outside",
+            "..",
+            "a/./b",
+            ".hidden",
+            "a\\b",
+            "inside/../../outside",
+        ] {
+            assert!(
+                matches!(
+                    f.store
+                        .write(Scope::Repository, id, &note("Escape attempt"), None, false)
+                        .await,
+                    Err(Error::UnsafePath)
+                ),
+                "write {id}"
+            );
+            assert!(
+                matches!(f.store.read(Scope::Repository, id), Err(Error::UnsafePath)),
+                "read {id}"
+            );
+        }
+        assert_eq!(fs::read_to_string(&outside).unwrap(), note("Outside bytes"));
+        let escaping = f
+            .write(
+                "b",
+                "---\ntype: Note\nresource: ../../outside.md\n---\n[o](../../outside.md)\n",
+            )
+            .await;
+        assert!(escaping.diagnostics.iter().any(|d| d.code == "W116"));
+        assert!(document(&f, "b").fields.relationships.is_empty());
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlinks_never_carry_a_read_or_write_out_of_the_bundle() {
+        use std::os::unix::fs::symlink;
+        let f = Fixture::new();
+        f.write("inside", &note("Inside words only")).await;
+        let elsewhere = f.path.join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        fs::write(elsewhere.join("secret.md"), note("Secret words elsewhere")).unwrap();
+        symlink(&elsewhere, f.root().join("linkdir")).unwrap();
+        symlink(elsewhere.join("secret.md"), f.root().join("linkfile.md")).unwrap();
+        for id in ["linkdir/secret", "linkdir/new", "linkfile"] {
+            assert!(
+                f.store
+                    .write(
+                        Scope::Repository,
+                        id,
+                        &note("Through the link"),
+                        None,
+                        false
+                    )
+                    .await
+                    .is_err(),
+                "write {id}"
+            );
+            assert!(f.store.read(Scope::Repository, id).is_err(), "read {id}");
+        }
+        assert!(!elsewhere.join("new.md").exists());
+        assert_eq!(
+            fs::read_to_string(elsewhere.join("secret.md")).unwrap(),
+            note("Secret words elsewhere")
+        );
+        let listing = f.store.list(Scope::Repository, None, None).unwrap();
+        assert_eq!(
+            listing
+                .concepts
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            ["inside"]
+        );
+        let warned = listing
+            .warnings
+            .iter()
+            .filter(|w| w.code == "unsafe-link")
+            .count();
+        assert_eq!(warned, 2);
+        assert_eq!(
+            document(&f, "inside").fields.relationships,
+            Vec::<String>::new()
+        );
+    }
+
+    #[tokio::test]
+    async fn plain_markdown_reference_files_are_not_concepts_and_stay_untouched() {
+        let f = Fixture::new();
+        let guide = "# Guide\n\nPlain Markdown with no frontmatter and a [link](other.md).\n";
+        let skill = "---\nname: example\ndescription: A skill file with its own frontmatter\n---\n# Skill\n";
+        place(&f, "references/guide.md", guide);
+        place(&f, "references/SKILL.md", skill);
+        f.write(
+            "ops/runbook",
+            &note("Runbook words with a distinct vocabulary"),
+        )
+        .await;
+        let listing = f.store.list(Scope::Repository, None, None).unwrap();
+        assert_eq!(
+            listing
+                .concepts
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            ["ops/runbook"]
+        );
+        assert_eq!(
+            listing
+                .warnings
+                .iter()
+                .map(|w| (w.id.as_str(), w.code.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("references/SKILL", "not-a-concept"),
+                ("references/guide", "not-a-concept")
+            ]
+        );
+        assert_eq!(
+            fs::read_to_string(f.root().join("references/guide.md")).unwrap(),
+            guide
+        );
+        assert_eq!(
+            fs::read_to_string(f.root().join("references/SKILL.md")).unwrap(),
+            skill
+        );
+        assert!(!f.root().join("references/index.md").exists());
+        assert!(
+            !fs::read_to_string(f.root().join("index.md"))
+                .unwrap()
+                .contains("references")
+        );
+        assert!(
+            f.store
+                .documents(Scope::Repository)
+                .unwrap()
+                .iter()
+                .all(|d| !d.id.starts_with("references/"))
+        );
+    }
+}
+
+mod appendix_a {
+    use super::*;
+    use ycoding_core::resources::memory::{format, okf};
+
+    const SPEC_PIN: &str = "527e81aff55992be21507e97004286789126f88c";
+    const REVENUE: &str = "computations/revenue";
+    const PROFIT: &str = "computations/profit";
+    const METRIC: &str = "metrics/income-statement";
+
+    fn fixture_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/okf_appendix_a")
+    }
+    fn copy_tree(from: &Path, to: &Path) {
+        fs::create_dir_all(to).unwrap();
+        for entry in fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let target = to.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_tree(&entry.path(), &target);
+            } else {
+                fs::copy(entry.path(), target).unwrap();
+            }
+        }
+    }
+    fn installed() -> Fixture {
+        let f = Fixture::new();
+        copy_tree(&fixture_root().join("bundle"), &f.root());
+        f
+    }
+    fn original(name: &str) -> String {
+        fs::read_to_string(fixture_root().join("bundle").join(name)).unwrap()
+    }
+    fn findings(f: &Fixture) -> Vec<(String, okf::Diagnostic)> {
+        f.store.review(Scope::Repository).unwrap().findings
+    }
+    fn concept(f: &Fixture, id: &str) -> format::Concept {
+        format::parse(id, &f.read(id), f.now()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_appendix_a_bundle_validates_with_no_errors_and_no_schema_findings() {
+        let f = installed();
+        let found = findings(&f);
+        assert!(
+            found
+                .iter()
+                .all(|(_, d)| d.level != okf::Level::Error && !d.code.starts_with('S')),
+            "{found:?}"
+        );
+        let (root, version, license) = okf::root_index(&original("index.md"));
+        assert!(root.is_empty(), "{root:?}");
+        assert_eq!(version.as_deref(), Some("0.3"));
+        assert_eq!(license.as_deref(), Some("CC-BY-4.0"));
+        assert_eq!(
+            f.store.list(Scope::Repository, None, None).unwrap().total,
+            3
+        );
+    }
+    #[tokio::test]
+    async fn the_metric_links_both_attested_computations() {
+        let f = installed();
+        let metric = f
+            .store
+            .documents(Scope::Repository)
+            .unwrap()
+            .into_iter()
+            .find(|d| d.id == METRIC)
+            .unwrap();
+        assert_eq!(metric.fields.doc_type, "Metric");
+        assert_eq!(metric.fields.relationships, [PROFIT, REVENUE]);
+        assert!(
+            findings(&f)
+                .iter()
+                .all(|(_, d)| !matches!(d.code, "W115" | "W116")),
+            "executor, attester and link targets all resolve"
+        );
+    }
+    #[tokio::test]
+    async fn trust_freshness_and_attestation_follow_the_spec_table() {
+        let f = installed();
+        let table = [
+            (METRIC, Trust::HumanReviewed, false, false),
+            (REVENUE, Trust::HumanReviewed, false, true),
+            (PROFIT, Trust::MachineConfirmed, true, true),
+        ];
+        for (id, tier, stale, attestable) in table {
+            let signals = f.summary(id).signals;
+            assert_eq!(signals.trust, tier, "{id}");
+            assert_eq!(signals.stale, stale, "{id}");
+            assert_eq!(signals.attestable, attestable, "{id}");
+        }
+    }
+    #[tokio::test]
+    async fn the_verified_singleton_sources_usage_window_and_parameters_parse_intact() {
+        let f = installed();
+        let revenue = concept(&f, REVENUE);
+        assert!(matches!(
+            revenue.doc.yaml["verified"],
+            yaml_rust2::Yaml::Hash(_)
+        ));
+        assert_eq!(revenue.summary.meta.verified.len(), 1);
+        assert_eq!(revenue.summary.meta.verified[0].by, "human:ahormati");
+        assert_eq!(revenue.summary.meta.sources.len(), 2);
+        assert_eq!(
+            revenue.summary.meta.sources[1].id.as_deref(),
+            Some("exec-rev-dash")
+        );
+        assert_eq!(
+            revenue.summary.meta.sources[1].author.as_deref(),
+            Some("team:finance-fpa")
+        );
+        assert_eq!(
+            revenue.doc.yaml["sources"][1]["usage_count"].as_i64(),
+            Some(5000)
+        );
+        assert_eq!(
+            revenue.doc.yaml["usage_window"]["from"].as_str(),
+            Some("2026-06-01T00:00:00Z")
+        );
+        assert_eq!(
+            revenue.doc.yaml["parameters"][0]["name"].as_str(),
+            Some("year")
+        );
+        assert_eq!(
+            revenue.doc.yaml["parameters"][0]["type"].as_str(),
+            Some("integer")
+        );
+        assert_eq!(
+            revenue.doc.yaml["parameters"][0]["required"].as_bool(),
+            Some(true)
+        );
+        let profit = concept(&f, PROFIT);
+        assert_eq!(
+            profit.doc.yaml["parameters"].as_vec().map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(
+            profit.doc.yaml["parameters"][1]["name"].as_str(),
+            Some("segment")
+        );
+        assert_eq!(
+            profit.summary.meta.verified[0].by,
+            "process:finance-nightly"
+        );
+    }
+    #[tokio::test]
+    async fn read_and_identical_write_preserve_every_byte() {
+        let f = installed();
+        for id in [METRIC, REVENUE, PROFIT] {
+            let name = format!("{id}.md");
+            assert_eq!(f.read(id), original(&name), "{id}");
+            let digest = f.summary(id).digest;
+            let again = f
+                .store
+                .write(Scope::Repository, id, &original(&name), Some(&digest), true)
+                .await
+                .unwrap();
+            assert!(!again.created && again.duplicate_of.is_none(), "{id}");
+            assert_eq!(again.digest, digest, "{id}");
+            assert_eq!(f.read(id), original(&name), "{id}");
+        }
+    }
+    #[tokio::test]
+    async fn supersede_changes_only_the_lifecycle_keys() {
+        let f = installed();
+        let digest = f.summary(REVENUE).digest;
+        f.store
+            .supersede(Scope::Repository, REVENUE, Some(PROFIT), &digest)
+            .await
+            .unwrap();
+        let before = original("computations/revenue.md");
+        let after = f.read(REVENUE);
+        let kept = before
+            .lines()
+            .filter(|line| *line != "status: stable")
+            .collect::<Vec<_>>();
+        for line in &kept {
+            assert!(after.lines().any(|found| found == *line), "lost: {line}");
+        }
+        assert!(after.contains("status: deprecated"));
+        assert!(after.contains("superseded_by"));
+        assert!(
+            after.contains("verified: { by: \"human:ahormati\", at: \"2026-06-25T09:00:00Z\" }")
+        );
+        assert!(after.contains(
+            "usage_window: { from: \"2026-06-01T00:00:00Z\", to: \"2026-06-30T00:00:00Z\" }"
+        ));
+    }
+    #[tokio::test]
+    async fn a_content_edit_keeps_the_family_lines_and_drops_the_stale_trust() {
+        let f = installed();
+        let before = original("computations/profit.md");
+        let edited = before.replace(
+            "Gross profit by segment per the cost-allocation standard.",
+            "Gross profit by segment per the cost-allocation standard, reviewed again.",
+        );
+        assert_ne!(before, edited);
+        let digest = f.summary(PROFIT).digest;
+        f.store
+            .write(Scope::Repository, PROFIT, &edited, Some(&digest), false)
+            .await
+            .unwrap();
+        let after = f.read(PROFIT);
+        for line in before.lines().filter(|line| {
+            line.starts_with("verified:")
+                || line.starts_with("  - { name")
+                || line.starts_with("  receipt")
+                || line.starts_with("    resource")
+                || line.starts_with("  - id")
+                || line.starts_with("stale_after")
+        }) {
+            assert!(after.lines().any(|found| found == line), "lost: {line}");
+        }
+        assert!(after.contains("reviewed again"));
+        assert!(!after.contains("2026-06-10T14:00:00Z"));
+        let signals = f.summary(PROFIT).signals;
+        assert_eq!(signals.trust, Trust::Unverified);
+        assert!(signals.verification_older_than_content);
+    }
+    #[tokio::test]
+    async fn validation_never_executes_or_evaluates_the_example_computations() {
+        let f = installed();
+        let marker = f.path.join("EXECUTED");
+        let script = format!("open(r\"{}\", \"w\").write(\"ran\")\n", marker.display());
+        let attesters = f.root().join("references/attesters");
+        for name in ["sql-equality.py", "dbt-binding.py"] {
+            fs::write(attesters.join(name), &script).unwrap();
+        }
+        let sql_before = original("computations/profit.md");
+        let _ = findings(&f);
+        let _ = f.store.list(Scope::Repository, None, None).unwrap();
+        let _ = f.store.documents(Scope::Repository).unwrap();
+        let _ = f.read(REVENUE);
+        let digest = f.summary(REVENUE).digest;
+        f.store
+            .supersede(Scope::Repository, REVENUE, None, &digest)
+            .await
+            .unwrap();
+        assert!(!marker.exists(), "a computation or attester ran");
+        for name in ["sql-equality.py", "dbt-binding.py"] {
+            assert_eq!(fs::read_to_string(attesters.join(name)).unwrap(), script);
+        }
+        assert_eq!(f.read(PROFIT), sql_before);
+        assert!(f.summary(PROFIT).signals.attestable);
+    }
+    #[tokio::test]
+    async fn fixture_only_fields_are_neither_required_nor_defaulted() {
+        let f = Fixture::new();
+        f.write("plain", "---\ntype: Note\n---\nOnly a type and a body.\n")
+            .await;
+        let found = findings(&f);
+        assert!(
+            found
+                .iter()
+                .all(|(_, d)| d.level != okf::Level::Error && !d.code.starts_with('S')),
+            "{found:?}"
+        );
+        let root_index = fs::read_to_string(f.root().join("index.md")).unwrap();
+        for forbidden in [
+            "license",
+            "CC-BY",
+            "usage_window",
+            "human:ahormati",
+            "finance",
+        ] {
+            assert!(!root_index.contains(forbidden), "{forbidden}");
+        }
+        for kind in templates::kinds() {
+            let skeleton = templates::skeleton(templates::by_kind(kind).unwrap());
+            for forbidden in [
+                "usage_window",
+                "human:ahormati",
+                "process:finance",
+                "license",
+            ] {
+                assert!(!skeleton.contains(forbidden), "{kind}: {forbidden}");
+            }
+        }
+        let written = fs::read_to_string(f.root().join("plain.md")).unwrap();
+        assert!(!written.contains("verified") && !written.contains("sources"));
+    }
+    #[test]
+    fn the_fixture_matches_the_pinned_spec_text_when_the_spec_is_available() {
+        let source = fs::read_to_string(fixture_root().join("SOURCE.txt")).unwrap();
+        assert!(source.contains(SPEC_PIN));
+        let Some(spec) = std::env::var_os("YCODING_OKF_SPEC") else {
             return;
         };
+        let spec = fs::read_to_string(spec).unwrap();
+        for name in [
+            "index.md",
+            "metrics/income-statement.md",
+            "computations/revenue.md",
+            "computations/profit.md",
+        ] {
+            assert!(spec.contains(original(name).trim_end()), "{name}");
+        }
+    }
+}
+
+mod content_schema {
+    use super::*;
+    use ycoding_core::resources::memory::okf::{Diagnostic, Level};
+
+    fn place(f: &Fixture, relative: &str, content: &str) {
+        let path = f.root().join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+    fn declared(f: &Fixture) {
+        place(f, "index.md", "---\nokf_version: \"0.3\"\n---\n");
+    }
+    fn schema_findings(f: &Fixture, id: &str) -> Vec<Diagnostic> {
+        f.store
+            .review(Scope::Repository)
+            .unwrap()
+            .findings
+            .into_iter()
+            .filter(|(path, found)| path == id && found.code.starts_with('S'))
+            .map(|(_, found)| found)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_conformant_bundle_has_no_schema_findings() {
         let f = Fixture::new();
         f.write(
             "ops/runbook",
-            "---\ntype: Procedure\ntitle: Roll back a deploy\ndescription: Steps to revert\ntags: [ops]\nsources:\n  - id: s1\n    resource: https://example.com/runbook\n    title: Runbook\n---\nRevert with the pipeline.[^s1]\n\n[^s1]: Runbook.\n",
-        )
-        .await;
-        f.write(
-            "fact",
-            &note("Plain fact with a fully distinct vocabulary here"),
+            "---\ntype: Procedure\ntitle: Roll back\ntags: [ops]\nsources:\n  - id: s1\n    resource: https://example.com/r\n    title: Runbook\n---\nRevert.[^s1]\n\n[^s1]: Runbook.\n",
         )
         .await;
         let sample = sample_experience();
@@ -1192,25 +1939,669 @@ mod validators {
             .record_experience(Scope::Repository, &experience::id(&sample), &sample, None)
             .await
             .unwrap();
-        let repo = f.path.join("helper-repo");
-        fs::create_dir_all(&repo).unwrap();
-        let bundle = repo.join("bundle");
-        copy(&f.root(), &bundle);
-        let output = Command::new(interpreter())
-            .arg("-B")
-            .arg(&helper)
-            .args(["validate", "--no-git", "--repo"])
-            .arg(&repo)
-            .arg("--bundle")
-            .arg("bundle")
-            .output()
-            .unwrap();
-        let text = String::from_utf8_lossy(&output.stdout).into_owned()
-            + &String::from_utf8_lossy(&output.stderr);
-        if text.contains("No module named") || text.contains("PyYAML is required") {
-            return;
+        let review = f.store.review(Scope::Repository).unwrap();
+        assert!(
+            review
+                .findings
+                .iter()
+                .all(|(_, d)| !d.code.starts_with('S')),
+            "{:?}",
+            review.findings
+        );
+    }
+    #[tokio::test]
+    async fn malformed_content_under_a_declared_v03_index_is_reported_by_field() {
+        let f = Fixture::new();
+        declared(&f);
+        let cases: [(&str, &str, &str, Level); 14] = [
+            (
+                "sources",
+                "sources:\n  - title: no resource\n",
+                "sources[0].resource",
+                Level::Error,
+            ),
+            (
+                "verified",
+                "verified:\n  - by: \"human:a\"\n",
+                "verified[0].at",
+                Level::Error,
+            ),
+            ("generated", "generated: text\n", "generated", Level::Error),
+            ("title", "title: 123\n", "title", Level::Error),
+            ("tags", "tags: [1]\n", "tags[0]", Level::Error),
+            (
+                "stale",
+                "stale_after: tomorrow\n",
+                "stale_after",
+                Level::Error,
+            ),
+            ("status", "status: frozen\n", "status", Level::Warning),
+            (
+                "actor",
+                "generated: { by: no actor here, at: \"2026-10-01T00:00:00Z\" }\n",
+                "generated.by",
+                Level::Warning,
+            ),
+            (
+                "window",
+                "usage_window: { from: \"2026-10-01T00:00:00Z\" }\n",
+                "usage_window.to",
+                Level::Error,
+            ),
+            (
+                "parameters",
+                "parameters:\n  - { name: year }\n",
+                "parameters[0].type",
+                Level::Error,
+            ),
+            (
+                "executor",
+                "executor: {}\n",
+                "executor.resource",
+                Level::Error,
+            ),
+            (
+                "attester",
+                "attester: { receipt: [a] }\n",
+                "attester.resource",
+                Level::Error,
+            ),
+            (
+                "count",
+                "sources:\n  - { resource: \"https://example.com/a\", usage_count: -1 }\n",
+                "sources[0].usage_count",
+                Level::Warning,
+            ),
+            (
+                "window-type",
+                "usage_window: nope\n",
+                "usage_window",
+                Level::Error,
+            ),
+        ];
+        for (id, extra, path, level) in cases {
+            place(
+                &f,
+                &format!("{id}.md"),
+                &format!("---\ntype: Note\n{extra}---\nBody\n"),
+            );
+            let found = schema_findings(&f, &format!("{id}.md"));
+            let hit = found
+                .iter()
+                .find(|d| d.message.starts_with(&format!("{path} ")))
+                .unwrap_or_else(|| panic!("{id}: no finding for {path}: {found:?}"));
+            assert_eq!(hit.level, level, "{id}: {hit:?}");
+            assert!(
+                hit.message.contains("527e81a") && hit.message.contains("not official"),
+                "{hit:?}"
+            );
+            assert!(!hit.message.contains("tomorrow"), "values are never quoted");
         }
-        assert!(output.status.success(), "{text}");
+        place(
+            &f,
+            "computation.md",
+            "---\ntype: Attested Computation\n---\nBody\n",
+        );
+        let found = schema_findings(&f, "computation.md");
+        assert!(
+            found
+                .iter()
+                .any(|d| d.level == Level::Error && d.message.starts_with("runtime ")),
+            "{found:?}"
+        );
+        let review = f.store.review(Scope::Repository).unwrap();
+        assert!(review.findings.iter().any(|(_, d)| d.level == Level::Error));
+        assert!(
+            review
+                .findings
+                .iter()
+                .filter(|(path, _)| path == "index.md")
+                .all(|(_, d)| d.level != Level::Error),
+            "the declared version itself is fine"
+        );
+    }
+    #[tokio::test]
+    async fn a_malformed_root_index_is_reported_by_field() {
+        let f = Fixture::new();
+        place(
+            &f,
+            "index.md",
+            "---\nokf_version: 0.3\nlicense: [a, b]\ntitle: 7\n---\n",
+        );
+        place(&f, "a.md", "---\ntype: Note\n---\nBody\n");
+        let found = schema_findings(&f, "index.md");
+        for path in ["okf_version", "license", "title"] {
+            assert!(
+                found
+                    .iter()
+                    .any(|d| d.level == Level::Error && d.message.starts_with(&format!("{path} "))),
+                "{path}: {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_compiled_in_schema_is_pinned_derived_and_never_official() {
+        use ycoding_core::resources::memory::schema;
+        let schema: serde_json::Value = serde_json::from_str(schema::SCHEMA_TEXT).unwrap();
+        let derived = &schema["x-okf-derived-from"];
+        assert_eq!(derived["commit"], schema::PINNED_COMMIT);
+        assert_eq!(
+            schema::PINNED_COMMIT,
+            "527e81aff55992be21507e97004286789126f88c"
+        );
+        assert_eq!(derived["official"], false);
+        assert_eq!(derived["spec_version"], "0.3");
+        assert!(
+            schema["title"]
+                .as_str()
+                .unwrap()
+                .contains("derived, unofficial")
+        );
+        assert!(
+            schema::unsupported_keywords().is_empty(),
+            "{:?}",
+            schema::unsupported_keywords()
+        );
+    }
+    #[test]
+    fn the_compiled_in_schema_matches_the_skill_package_when_it_is_installed() {
+        use ycoding_core::resources::memory::schema;
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        let packaged = PathBuf::from(home).join(
+            ".agents/skills/okf-knowledge-bundle/assets/okf-v0.3-content.derived.schema.json",
+        );
+        let Ok(packaged) = fs::read_to_string(packaged) else {
+            return;
+        };
+        assert_eq!(packaged, schema::SCHEMA_TEXT);
+    }
+
+    #[tokio::test]
+    async fn optional_content_defects_never_reject_a_write() {
+        let f = Fixture::new();
+        let written = f
+            .write(
+                "a",
+                "---\ntype: Note\ntitle: 123\nsources:\n  - title: no resource\nverified:\n  - by: human:x\n---\nBody\n",
+            )
+            .await;
+        assert!(written.created);
+        let found = written
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.starts_with('S'))
+            .collect::<Vec<_>>();
+        assert!(found.iter().any(|d| d.message.starts_with("title ")));
+    }
+}
+
+mod acceptance {
+    use super::*;
+    use ycoding_core::resources::memory::okf::Level;
+
+    fn place(f: &Fixture, relative: &str, content: &str) {
+        let path = f.root().join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+    fn codes(f: &Fixture, id: &str) -> Vec<&'static str> {
+        f.store
+            .review(Scope::Repository)
+            .unwrap()
+            .findings
+            .into_iter()
+            .filter(|(path, _)| path == &format!("{id}.md"))
+            .map(|(_, found)| found.code)
+            .collect()
+    }
+    fn tree(root: &Path, found: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(root).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                tree(&path, found);
+            } else {
+                found.push(path);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn sources_and_claim_footnotes_are_read_preserved_and_validated() {
+        let f = Fixture::new();
+        let content = "---\ntype: Note\nsources:\n  - id: a\n    resource: https://example.com/a\n    title: Source A\n    author: \"team:docs\"\n    usage_count: 7\n    last_modified: \"2026-10-01T00:00:00Z\"\n  - id: b\n    resource: /other.md\nusage_window: { from: \"2026-10-01T00:00:00Z\", to: \"2026-10-31T00:00:00Z\" }\n---\nClaim one.[^a] Claim two.[^b]\n\n[^a]: Source A\n[^b]: Other\n";
+        f.write("other", &note("Another concept with a distinct vocabulary"))
+            .await;
+        let written = f.write("n", content).await;
+        assert!(
+            written
+                .diagnostics
+                .iter()
+                .all(|d| !matches!(d.code, "W107" | "W108" | "W115" | "W116")
+                    && !d.code.starts_with('S')),
+            "{:?}",
+            written.diagnostics
+        );
+        let stored = f.read("n");
+        for line in content.lines().filter(|line| !line.starts_with("---")) {
+            assert!(stored.lines().any(|found| found == line), "lost: {line}");
+        }
+        let meta = f.summary("n").meta;
+        assert_eq!(meta.sources.len(), 2);
+        assert_eq!(meta.sources[0].id.as_deref(), Some("a"));
+        assert_eq!(meta.sources[0].author.as_deref(), Some("team:docs"));
+        assert_eq!(meta.sources[1].resource, "/other.md");
+        let projected = f
+            .store
+            .documents(Scope::Repository)
+            .unwrap()
+            .into_iter()
+            .find(|d| d.id == "n")
+            .unwrap();
+        assert!(
+            projected
+                .fields
+                .identifiers
+                .contains(&"https://example.com/a".to_owned())
+        );
+        assert!(projected.fields.relationships.contains(&"other".to_owned()));
+        let defective = f
+            .write(
+                "m",
+                "---\ntype: Note\nsources:\n  - id: a\n    resource: https://example.com/a\n  - id: a\n    resource: https://example.com/b\n  - title: no resource\n---\nUndeclared.[^zz]\n\n[^zz]: Missing\n",
+            )
+            .await;
+        let found = defective
+            .diagnostics
+            .iter()
+            .map(|d| d.code)
+            .collect::<Vec<_>>();
+        for code in ["W107", "W108", "S100"] {
+            assert!(found.contains(&code), "{code}: {found:?}");
+        }
+        assert!(
+            !found.contains(&"W115"),
+            "a footnote definition is not a link: {found:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn historical_verification_is_kept_but_never_trusted() {
+        let f = Fixture::new();
+        let first = f.write("a", &note("Body")).await;
+        let at = f.now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let claimed = format!(
+            "---\ntype: Note\nverified:\n  - by: human:alice\n    at: \"{at}\"\n---\nBody\n"
+        );
+        let verified = f
+            .store
+            .write(Scope::Repository, "a", &claimed, Some(&first.digest), true)
+            .await
+            .unwrap();
+        assert_eq!(f.summary("a").signals.trust, Trust::HumanReviewed);
+        f.advance(86_400);
+        let edited = claimed.replace("Body\n", "Changed body\n");
+        let rewritten = f
+            .store
+            .write(
+                Scope::Repository,
+                "a",
+                &edited,
+                Some(&verified.digest),
+                false,
+            )
+            .await
+            .unwrap();
+        let stored = f.read("a");
+        assert!(stored.contains("human:alice"), "the event is kept");
+        let signals = f.summary("a").signals;
+        assert_eq!(signals.trust, Trust::Unverified);
+        assert!(signals.verification_older_than_content);
+        f.advance(3_600);
+        let again = stored.replacen(
+            "verified:\n",
+            &format!(
+                "verified:\n  - by: human:bob\n    at: \"{}\"\n",
+                f.now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            ),
+            1,
+        );
+        f.store
+            .write(
+                Scope::Repository,
+                "a",
+                &again,
+                Some(&rewritten.digest),
+                true,
+            )
+            .await
+            .unwrap();
+        let after = f.summary("a");
+        assert_eq!(after.signals.trust, Trust::HumanReviewed);
+        assert_eq!(
+            after.meta.verified.len(),
+            2,
+            "history stays alongside the current event"
+        );
+        assert_eq!(after.meta.current_verifications().len(), 1);
+        assert_eq!(after.meta.current_verifications()[0].by, "human:bob");
+    }
+
+    #[tokio::test]
+    async fn superseded_by_resolves_from_the_file_and_from_the_bundle_root() {
+        let f = Fixture::new();
+        f.write(
+            "ops/new",
+            &note("Replacement words in their own vocabulary"),
+        )
+        .await;
+        f.write("top", &note("Another current concept with other words"))
+            .await;
+        for (id, target, expected) in [
+            ("ops/old-relative", "new.md", Some("ops/new")),
+            ("ops/old-parent", "../top.md", Some("top")),
+            ("ops/old-root", "/ops/new.md", Some("ops/new")),
+            ("ops/old-dangling", "gone.md", None),
+        ] {
+            f.write(
+                id,
+                &format!(
+                    "---\ntype: Note\nstatus: deprecated\nsuperseded_by: {target}\n---\nOld {id} text\n"
+                ),
+            )
+            .await;
+            let signals = f.summary(id).signals;
+            assert_eq!(signals.replacement.as_deref(), expected, "{id}");
+            assert!(!signals.current, "{id}");
+            let projected = f
+                .store
+                .documents(Scope::Repository)
+                .unwrap()
+                .into_iter()
+                .find(|d| d.id == id)
+                .unwrap();
+            assert!(!projected.lifecycle.eligible(START), "{id}");
+            assert!(
+                projected.lifecycle.superseded_by.is_some(),
+                "{id}: the marker stays even when unresolved"
+            );
+        }
+        let dangling = codes(&f, "ops/old-dangling");
+        assert!(dangling.contains(&"W116"), "{dangling:?}");
+    }
+
+    #[tokio::test]
+    async fn machine_checks_are_never_human_and_no_human_review_is_fabricated() {
+        let f = Fixture::new();
+        let at = f.now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        for (by, reason) in [
+            ("ci/1.0", "verified-requires-evidence"),
+            ("agent:planner", "verified-requires-evidence"),
+            ("Human:alice", "verified-requires-evidence"),
+            (" human:alice", "verified-requires-evidence"),
+        ] {
+            let claimed = format!(
+                "---\ntype: Note\nverified:\n  - by: \"{by}\"\n    at: \"{at}\"\n---\nBody\n"
+            );
+            assert!(
+                matches!(f.reject("x", &claimed).await, Error::Rejected(found) if found == reason),
+                "{by:?}"
+            );
+        }
+        let spoofed = "---\ntype: Note\ngenerated: { by: \"human:alice\", at: \"2026-10-01T00:00:00Z\" }\n---\nBody\n";
+        assert!(matches!(
+            f.reject("y", spoofed).await,
+            Error::Rejected("human-actor-unconfirmed")
+        ));
+        f.write("a", &note("First distinct body about deploys"))
+            .await;
+        let sample = sample_experience();
+        f.store
+            .record_experience(Scope::Repository, &experience::id(&sample), &sample, None)
+            .await
+            .unwrap();
+        let digest = f.summary("a").digest;
+        f.store
+            .supersede(Scope::Repository, "a", None, &digest)
+            .await
+            .unwrap();
+        f.write("b", &note("Second unrelated body about builds"))
+            .await;
+        let mut files = Vec::new();
+        tree(&f.root(), &mut files);
+        for file in files {
+            let text = fs::read_to_string(&file).unwrap();
+            assert!(!text.contains("human:"), "{}", file.display());
+            if let Some(line) = text.lines().find(|line| line.starts_with("generated:")) {
+                assert!(line.contains("ycoding/"), "{}: {line}", file.display());
+            }
+        }
+        let g = Fixture::new();
+        for (id, by, tier) in [
+            ("machine", "ci/1.0", Trust::MachineConfirmed),
+            ("lookalike", "bot/human:alice", Trust::MachineConfirmed),
+            ("capitalised", "Human:alice", Trust::MachineConfirmed),
+            ("human", "human:alice", Trust::HumanReviewed),
+        ] {
+            place(
+                &g,
+                &format!("{id}.md"),
+                &format!(
+                    "---\ntype: Note\nverified:\n  - by: \"{by}\"\n    at: \"2026-11-01T00:00:00Z\"\n---\nBody\n"
+                ),
+            );
+            assert_eq!(g.summary(id).signals.trust, tier, "{id}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_regenerated_root_index_keeps_its_metadata_and_nested_indexes_list_their_children() {
+        let f = Fixture::new();
+        f.write("a", &note("Body words for the root")).await;
+        let path = f.root().join("index.md");
+        let original = fs::read_to_string(&path).unwrap();
+        let edited = replace_line(&original, "title:", "title: Acme notes");
+        let edited = replace_line(
+            &edited,
+            "description:",
+            "description: Notes for the example bundle.",
+        )
+        .replacen("---\n", "---\nlicense: CC-BY-4.0\n", 1);
+        fs::write(&path, &edited).unwrap();
+        f.write(
+            "ops/runbook",
+            &note("Runbook words with their own vocabulary"),
+        )
+        .await;
+        f.write("ops/deep/check", &note("Checklist words that differ again"))
+            .await;
+        let root = fs::read_to_string(&path).unwrap();
+        for kept in [
+            "title: Acme notes",
+            "description: Notes for the example bundle.",
+            "license: CC-BY-4.0",
+            "okf_version: \"0.3\"",
+        ] {
+            assert!(root.contains(kept), "{kept}\n{root}");
+        }
+        assert!(root.contains("ops/index.md") && !root.contains("ops/runbook.md"));
+        let ops = fs::read_to_string(f.root().join("ops/index.md")).unwrap();
+        assert!(ops.contains("runbook.md") && ops.contains("deep/index.md"));
+        assert!(!ops.contains("okf_version"));
+        let deep = fs::read_to_string(f.root().join("ops/deep/index.md")).unwrap();
+        assert!(deep.contains("check.md") && !deep.contains("runbook"));
+        let found = f.store.review(Scope::Repository).unwrap().findings;
+        assert!(
+            found.iter().all(|(_, d)| d.level != Level::Error),
+            "{found:?}"
+        );
+    }
+    #[tokio::test]
+    async fn a_hand_written_index_is_never_overwritten() {
+        let f = Fixture::new();
+        let hand = "---\nokf_version: \"0.3\"\ntitle: By hand\nlicense: MIT\n---\n\n# Contents\n\n* [a](a.md) - hand listed\n";
+        place(&f, "index.md", hand);
+        place(
+            &f,
+            "ops/index.md",
+            "---\ntitle: Ops by hand\n---\n\nOps notes.\n",
+        );
+        f.write("a", &note("Body words for the root")).await;
+        f.write(
+            "ops/runbook",
+            &note("Runbook words with their own vocabulary"),
+        )
+        .await;
+        assert_eq!(fs::read_to_string(f.root().join("index.md")).unwrap(), hand);
+        assert_eq!(
+            fs::read_to_string(f.root().join("ops/index.md")).unwrap(),
+            "---\ntitle: Ops by hand\n---\n\nOps notes.\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_upstream_consumer_scan_agrees_on_trust_freshness_and_lifecycle() {
+        let Some(scan) = std::env::var_os("YCODING_OKF_SCAN").map(PathBuf::from) else {
+            return;
+        };
+        let f = Fixture::new();
+        place(&f, "index.md", "---\nokf_version: \"0.3\"\n---\n");
+        let stamp = |generated: Option<&str>, events: &[(&str, &str)], extra: &str| {
+            let mut text = "---\ntype: Note\n".to_owned();
+            if let Some(at) = generated {
+                text += &format!("generated: {{ by: \"ycoding/0.1\", at: \"{at}\" }}\n");
+            }
+            if !events.is_empty() {
+                text += "verified:\n";
+                for (by, at) in events {
+                    text += &format!("  - by: \"{by}\"\n    at: \"{at}\"\n");
+                }
+            }
+            text + extra + "---\nBody\n"
+        };
+        let cases = [
+            ("none", stamp(Some("2026-10-15T00:00:00Z"), &[], "")),
+            (
+                "stale-human",
+                stamp(
+                    Some("2026-11-01T00:00:00Z"),
+                    &[("human:alice", "2026-10-15T00:00:00Z")],
+                    "",
+                ),
+            ),
+            (
+                "machine",
+                stamp(
+                    Some("2026-10-15T00:00:00Z"),
+                    &[("ci/1.0", "2026-11-01T00:00:00Z")],
+                    "",
+                ),
+            ),
+            (
+                "human",
+                stamp(
+                    Some("2026-10-15T00:00:00Z"),
+                    &[("human:alice", "2026-11-01T00:00:00Z")],
+                    "",
+                ),
+            ),
+            (
+                "no-generated",
+                stamp(None, &[("human:alice", "2026-10-01T00:00:00Z")], ""),
+            ),
+            (
+                "stale",
+                stamp(None, &[], "stale_after: \"2026-11-01T00:00:00Z\"\n"),
+            ),
+            (
+                "fresh",
+                stamp(None, &[], "stale_after: \"2026-12-31T00:00:00Z\"\n"),
+            ),
+            (
+                "malformed-stale",
+                stamp(None, &[], "stale_after: tomorrow\n"),
+            ),
+            ("draft", stamp(None, &[], "status: draft\n")),
+            ("unknown-status", stamp(None, &[], "status: frozen\n")),
+            (
+                "deprecated",
+                stamp(None, &[], "status: deprecated\nsuperseded_by: human.md\n"),
+            ),
+        ];
+        for (id, content) in &cases {
+            place(&f, &format!("{id}.md"), content);
+        }
+        for name in [
+            "metrics/income-statement.md",
+            "computations/revenue.md",
+            "computations/profit.md",
+        ] {
+            place(
+                &f,
+                name,
+                &fs::read_to_string(
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/fixtures/okf_appendix_a/bundle")
+                        .join(name),
+                )
+                .unwrap(),
+            );
+        }
+        let output = std::process::Command::new(
+            std::env::var("YCODING_OKF_PYTHON").unwrap_or_else(|_| "python3".into()),
+        )
+        .arg("-B")
+        .arg(&scan)
+        .arg(f.root())
+        .args(["--json", "--now"])
+        .arg(f.now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .output()
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let concepts = report["concepts"].as_array().unwrap();
+        assert_eq!(concepts.len(), cases.len() + 3);
+        for upstream in concepts {
+            let id = upstream["id"].as_str().unwrap();
+            let ours = f.summary(id).signals;
+            let tier = match ours.trust {
+                Trust::HumanReviewed => "human-reviewed",
+                Trust::MachineConfirmed => "machine-confirmed",
+                Trust::Unverified => "unverified",
+            };
+            assert_eq!(upstream["trust"], tier, "{id}: trust");
+            assert_eq!(upstream["stale"].as_bool(), Some(ours.stale), "{id}: stale");
+            assert_eq!(
+                upstream["current"].as_bool(),
+                Some(ours.current),
+                "{id}: current"
+            );
+            assert_eq!(
+                upstream["verified_before_change"].as_bool(),
+                Some(ours.verification_older_than_content),
+                "{id}: verification before change"
+            );
+            assert_eq!(
+                upstream["replacement_id"].as_str().map(str::to_owned),
+                ours.replacement,
+                "{id}: replacement"
+            );
+        }
+    }
+}
+
+mod validators {
+    use super::*;
+    use std::process::Command;
+
+    fn interpreter() -> String {
+        std::env::var("YCODING_OKF_PYTHON").unwrap_or_else(|_| "python3".into())
     }
 
     #[tokio::test]
@@ -1228,6 +2619,11 @@ mod validators {
         f.write(
             "fact",
             &note("Plain fact with a fully distinct vocabulary here"),
+        )
+        .await;
+        f.write(
+            "ops/links",
+            "---\ntype: Note\ntags: [links]\n---\nFile-relative [runbook](runbook.md), parent-relative [fact](../fact.md), bundle-root [runbook](/ops/runbook.md), external [spec](https://example.com/spec) and a [self link](#links).\n",
         )
         .await;
         let sample = sample_experience();

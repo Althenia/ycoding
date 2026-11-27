@@ -126,6 +126,16 @@ pub fn parse(
         doc,
     })
 }
+impl Concept {
+    pub fn without_legacy_timestamp(&mut self, now: chrono::DateTime<chrono::Utc>) {
+        if self.summary.meta.legacy_timestamp.is_none() {
+            return;
+        }
+        self.summary.meta.legacy_timestamp = None;
+        self.doc.meta.legacy_timestamp = None;
+        self.summary.signals = okf::signals(&self.doc, None, now);
+    }
+}
 pub fn diagnostics(concept: &Concept) -> &[Diagnostic] {
     &concept.doc.diagnostics
 }
@@ -303,7 +313,7 @@ fn markdown_links(body: &str) -> Result<(Vec<String>, String), Error> {
         }
         if indent <= 3 {
             let found = matches(stripped, r"^\[([^\]]+)\]:\s*(?:<([^>]+)>|(\S+))", "g")?;
-            if let Some(value) = found.first() {
+            if let Some(value) = found.first().filter(|value| !value[1].starts_with('^')) {
                 definitions.entry(label(&value[1])).or_insert_with(|| {
                     if value[2].is_empty() {
                         value[3].clone()

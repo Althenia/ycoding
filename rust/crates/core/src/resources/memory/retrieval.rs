@@ -34,11 +34,11 @@ fn strings(concept: &Concept, key: &str) -> Vec<String> {
         .collect()
 }
 
-fn bundle_id(target: &str) -> String {
-    target
-        .trim_start_matches('/')
-        .trim_end_matches(".md")
-        .to_owned()
+fn pointer(id: &str, target: &str) -> String {
+    match okf::resolve(&format!("{id}.md"), target) {
+        okf::Target::Local(path) => path.trim_end_matches(".md").to_owned(),
+        _ => target.to_owned(),
+    }
 }
 
 pub(super) fn project(
@@ -100,10 +100,11 @@ pub(super) fn project(
                 DocumentTrust::Verified
             },
             stale_after,
-            superseded_by: signals
-                .replacement
-                .clone()
-                .or_else(|| meta.superseded_by.as_deref().map(bundle_id)),
+            superseded_by: signals.replacement.clone().or_else(|| {
+                meta.superseded_by
+                    .as_deref()
+                    .map(|target| pointer(&summary.id, target))
+            }),
             activation: None,
         },
     }
