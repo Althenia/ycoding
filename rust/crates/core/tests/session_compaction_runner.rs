@@ -607,7 +607,11 @@ fn services(
 ) -> Services {
     let models =
         include_str!("../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json")
-            .replacen("\"context\": 128000", "\"context\": 6000", 1)
+            .replacen(
+                "\"limit\": { \"context\": 128000, \"output\": 8192 }",
+                "\"limit\": { \"context\": 6000, \"output\": 100 }",
+                1,
+            )
             .replacen(
                 "\"models\": {\n      \"gpt-reasoning\": {",
                 "\"models\": {\n      \"gpt-tiny\": {\"id\":\"gpt-tiny\",\"name\":\"GPT Tiny\",\"release_date\":\"2026-01-01\",\"attachment\":false,\"reasoning\":false,\"temperature\":true,\"tool_call\":true,\"limit\":{\"context\":900,\"output\":100}},\n      \"gpt-helper\": {\"id\":\"gpt-helper\",\"name\":\"GPT Helper\",\"release_date\":\"2026-01-01\",\"attachment\":false,\"reasoning\":false,\"temperature\":true,\"tool_call\":true,\"limit\":{\"context\":20000,\"output\":2000}},\n      \"gpt-reasoning\": {",
@@ -1266,21 +1270,48 @@ async fn an_unresolvable_compaction_model_falls_back_to_the_deterministic_summar
 }
 
 #[tokio::test]
-async fn a_request_with_no_reducible_history_is_not_compacted() {
+async fn a_request_with_no_reducible_history_fails_the_step_before_any_provider_request() {
     let store = support::store();
     let service = Service::new(store.client());
     seed_context(&store);
     admit(&service, &"unreducible current request. ".repeat(1_000)).await;
-    let (endpoint, mut requests, server) = server(vec![sse("Answer")]).await;
+    let (endpoint, mut requests, server) = server(vec![]).await;
     let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
-    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
-        .await
-        .unwrap();
-    within(requests.recv()).await.unwrap();
+    let outcome = within(coordinator.run(&session::Id::new("ses_one").unwrap())).await;
+    assert!(outcome.is_err());
     within(server).await.unwrap();
-    let recorded = events(&store);
-    assert_eq!(count(&recorded, "session.compaction.admitted.2"), 0);
-    assert_eq!(count(&recorded, "session.step.ended.1"), 1);
+    assert!(requests.try_recv().is_err());
+    assert_context_limit_failure(&store);
+    assert_eq!(count(&events(&store), "session.compaction.admitted.2"), 0);
+    coordinator.shutdown().await.unwrap();
+}
+
+fn assert_context_limit_failure(store: &ycoding_store::Store) {
+    let recorded = events(store);
+    assert_eq!(count(&recorded, "session.step.started.1"), 1);
+    assert_eq!(count(&recorded, "session.step.ended.1"), 0);
+    assert_eq!(count(&recorded, "session.step.failed.1"), 1);
+    let failed = recorded
+        .iter()
+        .find(|(name, _)| name == "session.step.failed.1")
+        .map(|(_, data)| text_of(data.clone()))
+        .unwrap();
+    assert!(failed.contains("\"type\":\"context.limit\""), "{failed}");
+    assert!(failed.contains("input budget"), "{failed}");
+}
+
+#[tokio::test]
+async fn an_over_cap_request_without_context_state_fails_the_step_before_any_provider_request() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service, &"unreducible current request. ".repeat(1_000)).await;
+    let (endpoint, mut requests, server) = server(vec![]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
+    let outcome = within(coordinator.run(&session::Id::new("ses_one").unwrap())).await;
+    assert!(outcome.is_err());
+    within(server).await.unwrap();
+    assert!(requests.try_recv().is_err());
+    assert_context_limit_failure(&store);
     coordinator.shutdown().await.unwrap();
 }
 
@@ -1734,7 +1765,7 @@ fn tiny_helper() -> helper::Settings {
 }
 
 #[tokio::test]
-async fn w48_r1_an_unchanged_deterministic_failure_is_not_readmitted_by_the_next_gate_pass() {
+async fn w48_r1_an_unchanged_deterministic_failure_is_not_readmitted_and_fails_the_over_cap_step() {
     let store = support::store();
     let service = Service::new(store.client());
     seed_context(&store);
@@ -1746,20 +1777,17 @@ async fn w48_r1_an_unchanged_deterministic_failure_is_not_readmitted_by_the_next
         ),
     );
     admit(&service, "Answer the prompt").await;
-    let (endpoint, mut requests, server) = server(vec![sse("Answer")]).await;
+    let (endpoint, mut requests, server) = server(vec![]).await;
     let coordinator = Coordinator::new(Arc::new(local_with(&store, &endpoint, tiny_helper())));
-    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
-        .await
-        .unwrap();
-    let step = text_of(within(requests.recv()).await.unwrap());
+    let outcome = within(coordinator.run(&session::Id::new("ses_one").unwrap())).await;
+    assert!(outcome.is_err());
     within(server).await.unwrap();
     assert!(requests.try_recv().is_err());
-    assert!(!step.contains("<conversation-checkpoint>"));
     let recorded = events(&store);
     assert_eq!(count(&recorded, "session.compaction.admitted.2"), 1);
     assert_eq!(count(&recorded, "session.compaction.failed.2"), 1);
     assert_eq!(count(&recorded, "session.compaction.ended.2"), 0);
-    assert_eq!(count(&recorded, "session.step.ended.1"), 1);
+    assert_context_limit_failure(&store);
     coordinator.shutdown().await.unwrap();
 }
 
@@ -1777,13 +1805,13 @@ async fn w48_r2_a_new_complete_message_after_a_deterministic_failure_admits_exac
     );
     fail_deterministically(&service, "msg_old_assistant", 2).await;
     admit(&service, "Answer the prompt").await;
-    let (endpoint, mut requests, server) = server(vec![sse("Answer")]).await;
+    let (endpoint, mut requests, server) = server(vec![]).await;
     let coordinator = Coordinator::new(Arc::new(local_with(&store, &endpoint, tiny_helper())));
-    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
-        .await
-        .unwrap();
-    within(requests.recv()).await.unwrap();
+    let outcome = within(coordinator.run(&session::Id::new("ses_one").unwrap())).await;
+    assert!(outcome.is_err());
     within(server).await.unwrap();
+    assert!(requests.try_recv().is_err());
+    assert_context_limit_failure(&store);
     let boundaries = admitted_boundaries(&store, &service);
     assert_eq!(boundaries.len(), 2, "{boundaries:?}");
     assert_eq!(boundaries[0], ("msg_old_assistant".to_string(), 2));

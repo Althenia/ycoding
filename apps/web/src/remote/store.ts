@@ -39,6 +39,7 @@ import {
   readAutonomy,
   readCompactionHistory,
   applyRecallEvent,
+  applyLifecycleEvent,
   readCapturedChangesPage,
   readEventSequence,
   readModelRef,
@@ -2735,9 +2736,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const outcome = await owner.request("session.log", { sessionID, input: { after: 0, follow: false } })
     if (outcome.status !== "ok" || token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID) return
     const recall = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "recall") : undefined
+    const lifecycle = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "lifecycle") : undefined
     const view = container.state.view
-    if (!Array.isArray(recall) || view?.id !== sessionID) return
-    setState({ view: recall.reduce<SessionView>((next, event) => applyRecallEvent(next, event), view) })
+    if (view?.id !== sessionID) return
+    const recalled = Array.isArray(recall) ? recall.reduce<SessionView>((next, event) => applyRecallEvent(next, event), view) : view
+    const folded = Array.isArray(lifecycle) ? lifecycle.reduce<SessionView>((next, event) => applyLifecycleEvent(next, event), recalled) : recalled
+    if (folded !== view) setState({ view: folded })
   }
 
   const reconcileLogAfter = async (owner: RemoteTransport, sessionID: string, token: number, after: number) => {

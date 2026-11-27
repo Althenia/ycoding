@@ -546,6 +546,22 @@ export type RecallFreshness = "fresh" | "stale" | "unknown"
 
 export type RecallLifecycle = "active" | "draft" | "deprecated" | "superseded" | "archived" | "unknown"
 
+export type LifecycleDecision = "continue" | "recover" | "complete"
+
+export type LifecycleBasis = "tool_results" | "answered" | "truncated" | "silent" | "unsettled"
+
+export type HarnessStage = "baseline" | "propose" | "probe" | "compose" | "adopt"
+
+export type HarnessMode = "adaptive" | "parallel" | "sequential" | "disabled"
+
+export type HarnessCandidateID = string
+
+export type HarnessOutcome = string
+
+export type HarnessVersionID = string
+
+export type HarnessExperienceID = string
+
 export type ShellInfo = {
   id: string
   status: "running" | "exited" | "timeout" | "memory-limit" | "killed"
@@ -2503,6 +2519,77 @@ export type SessionCueDetected = {
 
 export type RecallOkf = { type: string; trust: RecallTrust; freshness: RecallFreshness; lifecycle: RecallLifecycle }
 
+export type SessionLifecycleRecorded = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.lifecycle.recorded"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    step: number
+    decision: LifecycleDecision
+    basis: LifecycleBasis
+    recovery: boolean
+    recalled: boolean
+  }
+}
+
+export type SessionHarnessEvaluated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.harness.evaluated"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    stage: HarnessStage
+    mode: HarnessMode
+    signals: number
+    insufficient: boolean
+    skipReason?: string
+  }
+}
+
+export type SessionHarnessProbed = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.harness.probed"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; candidate: HarnessCandidateID; outcome: HarnessOutcome; tokens: number; latencyMs: number }
+}
+
+export type SessionHarnessAdopted = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.harness.adopted"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; version: HarnessVersionID; parent: HarnessVersionID }
+}
+
+export type SessionHarnessRolledBack = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.harness.rolled-back"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; from: HarnessVersionID; to: HarnessVersionID }
+}
+
+export type HarnessExperiences = Array<HarnessExperienceID>
+
 export type SessionShellStarted = {
   id: string
   created: number
@@ -3550,6 +3637,17 @@ export type RecallItem = {
   source: RecallSource
   okf?: RecallOkf
   tokens?: number
+}
+
+export type SessionHarnessReflected = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.harness.reflected"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; experiences: HarnessExperiences }
 }
 
 export type ModelInfo = {
@@ -5413,6 +5511,86 @@ export type SessionLogItem =
       created: number
       metadata?: { [x: string]: any }
       sourceEpoch: string
+      type: "session.lifecycle.recorded"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: {
+        sessionID: string
+        step: number
+        decision: LifecycleDecision
+        basis: LifecycleBasis
+        recovery: boolean
+        recalled: boolean
+      }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.harness.evaluated"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: {
+        sessionID: string
+        stage: HarnessStage
+        mode: HarnessMode
+        signals: number
+        insufficient: boolean
+        skipReason?: string
+      }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.harness.probed"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: {
+        sessionID: string
+        candidate: HarnessCandidateID
+        outcome: HarnessOutcome
+        tokens: number
+        latencyMs: number
+      }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.harness.adopted"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: { sessionID: string; version: HarnessVersionID; parent: HarnessVersionID }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.harness.rolled-back"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: { sessionID: string; from: HarnessVersionID; to: HarnessVersionID }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.harness.reflected"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: { sessionID: string; experiences: HarnessExperiences }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
       type: "session.shell.started"
       durable: { aggregateID: string; seq: number; version: 1 }
       location?: LocationRef
@@ -5823,6 +6001,12 @@ export type ServerEvent =
   | SessionSkillDeactivated
   | SessionCueDetected
   | SessionRecallRecorded
+  | SessionLifecycleRecorded
+  | SessionHarnessEvaluated
+  | SessionHarnessProbed
+  | SessionHarnessAdopted
+  | SessionHarnessRolledBack
+  | SessionHarnessReflected
   | SessionShellStarted
   | SessionShellEnded
   | SessionStepStarted

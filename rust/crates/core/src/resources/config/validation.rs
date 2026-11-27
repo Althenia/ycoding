@@ -397,6 +397,33 @@ const ROOT: Shape = Shape::Object(&[
         ]),
     ),
     optional(
+        "harness",
+        Shape::Object(&[
+            optional(
+                "mode",
+                Shape::Enum(&["adaptive", "parallel", "sequential", "disabled"]),
+            ),
+            optional("steps", POSITIVE),
+            optional("max_concurrency", POSITIVE),
+            optional("max_depth", Shape::Int(1.0, 255.0)),
+            optional("max_tokens", POSITIVE),
+            optional("max_latency_ms", POSITIVE),
+            optional("min_signals", NONNEGATIVE),
+            optional("recall_limit", NONNEGATIVE),
+            optional(
+                "ceiling",
+                Shape::Object(&[
+                    optional("skills", Shape::Array(&Shape::Nonblank)),
+                    optional("agents", Shape::Array(&Shape::Nonblank)),
+                    optional("plugins", Shape::Array(&Shape::Nonblank)),
+                    optional("scripts", Shape::Array(&Shape::Nonblank)),
+                    optional("max_item_bytes", POSITIVE),
+                    optional("max_items", POSITIVE),
+                ]),
+            ),
+        ]),
+    ),
+    optional(
         "session_retention",
         Shape::Object(&[
             optional("days", POSITIVE),

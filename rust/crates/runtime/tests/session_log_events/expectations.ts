@@ -115,6 +115,12 @@ const variants = [
   "input.deleted",
   "cue.detected",
   "recall.recorded",
+  "lifecycle.recorded",
+  "harness.evaluated",
+  "harness.probed",
+  "harness.adopted",
+  "harness.rolled-back",
+  "harness.reflected",
 ]
 const itemID = "rvw_fixture"
 const fingerprint = "a".repeat(64)
@@ -338,6 +344,8 @@ const extra: Record<number, Record<string, unknown>> = {
       },
     ],
   },
+  79: { skipReason: lossless },
+  83: { experiences: ["exp_fixture"] },
   62: {
     outcome: "escalate",
     via: "yolo",
@@ -941,6 +949,12 @@ for (const [variant, data] of [
     77,
     { ...base, key: "rcl_fixture", trigger: "prompt", methods: [], outcome: "abstained", items: [], elapsedMs: 0, injectedTokens: 0 },
   ],
+  [78, { ...base, step: 3, decision: "recover", basis: "silent", recovery: false, recalled: true }],
+  [79, { ...base, stage: "baseline", mode: "adaptive", signals: 0, insufficient: false }],
+  [80, { ...base, candidate: "cand_fixture", outcome: "completed", tokens: 0, latencyMs: 0 }],
+  [81, { ...base, version: "hv_fixture", parent: "hv_parent" }],
+  [82, { ...base, from: "hv_fixture", to: "hv_parent" }],
+  [83, { ...base, experiences: [] }],
 ] as const) {
   add(variant, "absent", data)
   add(variant, "present", { ...data, ...extra[variant] }, true)

@@ -1,5 +1,6 @@
 import { For, Show, createSignal, createUniqueId, type JSX } from "solid-js"
 import { recallDetails, recallSummary, type RecallEntry, type RecallItemDetail, type RecallTarget } from "../../../../../packages/client/src/cue-recall"
+import { lifecycleDetails, lifecycleSummary, type LifecycleEntry } from "../../../../../packages/client/src/lifecycle"
 import { Collapsible } from "../../ui/collapsible"
 import { Icon } from "../../ui/icon"
 
@@ -43,5 +44,24 @@ export function RecallEntryView(props: { readonly entry: RecallEntry; readonly o
       <Icon name="chevron-right" size={16} />
     </button>
     <Collapsible open={open()} id={id}><RecallBody entry={props.entry} onInspect={props.onInspect} /></Collapsible>
+  </div>
+}
+
+export function LifecycleBody(props: { readonly entry: LifecycleEntry }): JSX.Element {
+  return <div class="transcript-recall__body"><Rows rows={lifecycleDetails(props.entry)} /></div>
+}
+
+export function LifecycleEntryView(props: { readonly entry: LifecycleEntry }): JSX.Element {
+  const [open, setOpen] = createSignal(false)
+  const id = createUniqueId()
+  const summary = () => lifecycleSummary(props.entry)
+  return <div class="transcript-notice transcript-recall" data-open={open() ? "" : undefined} data-decision={props.entry.kind === "step" ? props.entry.decision : props.entry.event}>
+    <button type="button" class="transcript-notice__toggle" aria-label={summary().label} aria-expanded={open()} aria-controls={id} onClick={() => setOpen(!open())}>
+      <span class="transcript-notice__mark" aria-hidden="true"><Icon name="reset" size={16} /></span>
+      <strong>{summary().title}</strong>
+      <span class="transcript-notice__status">{summary().meta}</span>
+      <Icon name="chevron-right" size={16} />
+    </button>
+    <Collapsible open={open()} id={id}><LifecycleBody entry={props.entry} /></Collapsible>
   </div>
 }

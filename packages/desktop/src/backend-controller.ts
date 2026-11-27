@@ -3,6 +3,7 @@ import path from "node:path"
 import fs from "node:fs/promises"
 import os from "node:os"
 import { capturedPartPatches } from "@ycoding-ai/client/file-change-summary"
+import { lifecycleEventType } from "@ycoding-ai/client/lifecycle"
 import { Service, type Endpoint } from "@ycoding-ai/client/service"
 import { isSessionDirectoryPath } from "../../remote/src/session-directory"
 import { interactionGeneration } from "../../../apps/web/src/remote/interaction-control"
@@ -1978,7 +1979,7 @@ export class BackendController {
       const events: unknown[] = []
       for await (const event of api.session.log({ sessionID, follow: false }, { signal })) {
         if (!object(event) || typeof event.type !== "string") throw new DesktopError("The backend returned an invalid Session log. Refresh to retry.")
-        if (event.type !== "session.cue.detected" && event.type !== "session.recall.recorded") continue
+        if (event.type !== "session.cue.detected" && event.type !== "session.recall.recorded" && !lifecycleEventType(event.type)) continue
         if (events.push(event) > 20_000) throw new DesktopError("The recall history is too large to read.")
       }
       return { revision, sessionID, events }

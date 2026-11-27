@@ -199,6 +199,8 @@ export function sessionSourceIdentity(ast: SchemaAST.AST, hint: string): string 
     Coordination: "coordination",
     McpEvents: "mcp-events",
     Recall: "recall",
+    Lifecycle: "lifecycle",
+    Harness: "harness",
   }
   if (modules[module])
     return `packages/schema/src/${modules[module]}.ts#${module}.${name.split(/[._]/)[1]?.replace(/Value\d+$/, "") ?? "Info"}`

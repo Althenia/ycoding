@@ -1,12 +1,14 @@
 mod auth_refresh;
 mod compaction;
 mod diagnostics;
+pub mod harness_hooks;
 mod helper;
 mod ingress;
 mod max_steps;
 pub(crate) mod messages;
 mod notifier;
 mod publisher;
+pub mod react;
 mod stall;
 mod title;
 pub mod unfinished_ending;
@@ -18,8 +20,8 @@ pub use ycoding_ai::route::Executor;
 use ycoding_schema::recall as recall_schema;
 
 use super::{
-    cache_diagnostics, compaction_gate, continuation, execution, history, live_state,
-    orchestration, projector, prompt_cache, provider_request,
+    cache_diagnostics, compaction_gate, context_pressure, continuation, execution, history,
+    live_state, orchestration, projector, prompt_cache, provider_request,
     run_coordinator::{Drain, DrainRequest, Error, Outcome, RunFuture},
     skill,
     store::Service,
@@ -236,6 +238,7 @@ struct Inner {
     refresh: Option<Refresh>,
     instructions: Option<super::instruction_assembly::Context>,
     recall: Option<super::recall::Context>,
+    harness: std::sync::OnceLock<harness_hooks::Hooks>,
     title: Option<Arc<super::title::Service>>,
     titles: Mutex<BTreeMap<session::Id, TitleTask>>,
     providers: Result<Option<model::ProviderContext>, model::Error>,
@@ -434,6 +437,7 @@ impl Local {
             refresh: None,
             instructions: None,
             recall: None,
+            harness: std::sync::OnceLock::new(),
             title: None,
             titles: Mutex::new(BTreeMap::new()),
             providers: providers.map(Some),
@@ -454,6 +458,7 @@ impl Local {
             refresh: None,
             instructions: None,
             recall: None,
+            harness: std::sync::OnceLock::new(),
             title: None,
             titles: Mutex::new(BTreeMap::new()),
             providers: Ok(None),
@@ -473,6 +478,10 @@ impl Local {
     pub fn with_recall(mut self, context: super::recall::Context) -> Self {
         Arc::get_mut(&mut self.0).expect("unshared runner").recall = Some(context);
         self
+    }
+
+    pub fn install_harness(&self, hooks: harness_hooks::Hooks) -> bool {
+        self.0.harness.set(hooks).is_ok()
     }
 
     pub fn with_title(mut self, title: Arc<super::title::Service>) -> Self {
@@ -1055,6 +1064,55 @@ impl Local {
     }
 
     async fn run(&self, request: DrainRequest) -> Outcome {
+        let Some(hooks) = self.0.harness.get().cloned() else {
+            return self.run_steps(request, &mut None).await;
+        };
+        let task = match self.0.services.store.get(&request.session_id) {
+            Ok(Some(session)) => Some(harness_hooks::task(
+                &session.id,
+                session
+                    .agent
+                    .as_ref()
+                    .and_then(|agent| agent.as_str())
+                    .unwrap_or(""),
+                &self.pending_text(&request.session_id),
+            )),
+            _ => None,
+        };
+        let mut run = match task.clone() {
+            Some(task) => harness_hooks::prepare(&hooks, task).await,
+            None => None,
+        };
+        let outcome = self.run_steps(request, &mut run).await;
+        if let (Some(task), Some(run)) = (task, run) {
+            let result = match &outcome {
+                Ok(()) => crate::harness::Outcome::Completed,
+                Err(error) => crate::harness::Outcome::Failed(error.to_string()),
+            };
+            harness_hooks::reflect(&hooks, task, run, result).await;
+        }
+        outcome
+    }
+
+    fn pending_text(&self, id: &session::Id) -> String {
+        self.0
+            .services
+            .store
+            .pending_list(id)
+            .unwrap_or_default()
+            .iter()
+            .filter(|input| input.type_.as_str() == Some("user"))
+            .filter_map(|input| session_pending::UserData::decode(&input.data).ok())
+            .filter_map(|data| data.text.as_str().map(str::to_owned))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    async fn run_steps(
+        &self,
+        request: DrainRequest,
+        harness: &mut Option<harness_hooks::Run>,
+    ) -> Outcome {
         let mut step = 1u64;
         let mut force = request.force;
         let mut recovery = false;
@@ -1971,6 +2029,9 @@ impl Local {
                 prepared.tools.clear();
                 prepared.tool_choice = Some(llm::ToolChoice::None);
             }
+            if let Some(run) = harness.as_ref() {
+                prepared.system = harness_hooks::apply(&prepared.system, &run.version);
+            }
             prepared.system = cursor::system::system(&prepared.model, &prepared.system);
             prepared.generation.max_tokens = prepared
                 .generation
@@ -2017,10 +2078,19 @@ impl Local {
                 }
                 None => false,
             };
-            if route.current.is_some() {
-                if let Some(next) = &next
-                    && compaction_gate::estimated_provider_input_tokens(&prepared)
-                        >= context_window - services.compaction.context_safety_margin_tokens
+            let input_cap =
+                context_pressure::hard_input_cap_tokens(&context_pressure::Capabilities {
+                    context_window_tokens: context_window,
+                    max_output_tokens: prepared
+                        .generation
+                        .max_tokens
+                        .map_or(resolved.info.limit.output.get(), |tokens| tokens as i64),
+                    context_safety_margin_tokens: services.compaction.context_safety_margin_tokens,
+                });
+            {
+                if route.current.is_some()
+                    && let Some(next) = &next
+                    && compaction_gate::estimated_provider_input_tokens(&prepared) >= input_cap
                 {
                     let assistant = match restart.take() {
                         Some(restart) => restart.assistant,
@@ -2057,7 +2127,6 @@ impl Local {
                     force = true;
                     continue;
                 }
-            } else {
                 let gate = local
                     .ensure_within_limit(compaction::GateInput {
                         agent: &agent.id,
@@ -2071,10 +2140,31 @@ impl Local {
                         admissions: &mut gate_admissions,
                     })
                     .await?;
-                if matches!(gate, compaction::Gate::Restart) {
-                    gate_rounds += 1;
-                    force = true;
-                    continue;
+                match gate {
+                    compaction::Gate::Proceed => (),
+                    compaction::Gate::Restart => {
+                        gate_rounds += 1;
+                        force = true;
+                        continue;
+                    }
+                    compaction::Gate::Exceeded(failure) => {
+                        if restart.take().is_none() {
+                            self.start_step(local, &session.id, &agent.id, &selection)
+                                .await?;
+                        }
+                        let work = self
+                            .0
+                            .active
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .get(&session.id)
+                            .cloned();
+                        if let Some(work) = work {
+                            local.fail(&session.id, &work, &failure).await?;
+                        }
+                        self.remove(&session.id);
+                        return Err(failure);
+                    }
                 }
             }
             if overflow == Some(Overflow::Pending) {
@@ -2391,7 +2481,6 @@ impl Local {
                     .finish(),
                 );
             }
-            let terminal_silence;
             match result {
                 Err(failure) => {
                     let mut failure = failure;
@@ -2429,7 +2518,6 @@ impl Local {
                     let overflowed = work.overflow.load(std::sync::atomic::Ordering::Relaxed);
                     if overflowed
                         && overflow.is_none()
-                        && route.current.is_none()
                         && compaction_gate::can_reduce(
                             &prepared,
                             &loaded,
@@ -2534,16 +2622,12 @@ impl Local {
                                     &prepared.model.route.id,
                                 )
                                 .await;
-                            terminal_silence = !recovery && !needs_continuation;
                             if recovery && needs_continuation {
                                 self.remove(&session.id);
                                 return Err(failure);
                             }
                         }
                         Some(settlement) => {
-                            terminal_silence = settlement.reason != llm::FinishReason::Length
-                                && !publisher.assistant_text
-                                && !needs_continuation;
                             let explicit_silent = settlement.reason == llm::FinishReason::Stop
                                 && !publisher.evidence
                                 && !publisher.output_content
@@ -2660,15 +2744,46 @@ impl Local {
             gate_rounds = 0;
             overflow = None;
             auth_refreshed = false;
-            force = publisher.continuation;
-            if terminal_silence && !force && !recovery_used {
-                recovery_used = true;
-                recovery = true;
-                force = true;
-            } else {
-                recovery = false;
+            let verdict = react::evaluate(
+                &react::Observation {
+                    finish: publisher
+                        .settlement
+                        .as_ref()
+                        .map(|settlement| settlement.reason),
+                    assistant_text: publisher.assistant_text,
+                    continuation: publisher.continuation,
+                    recovering: recovery,
+                },
+                recovery_used,
+            );
+            let decision = verdict.decision;
+            if let Some(run) = harness.as_mut() {
+                run.observe(
+                    publisher
+                        .settlement
+                        .as_ref()
+                        .and_then(|settlement| settlement.usage.as_ref())
+                        .and_then(|usage| usage.total_tokens),
+                );
             }
-            continuation = publisher.continuation || recovery;
+            if local.0.standalone.is_none() {
+                react::record(
+                    &services.store,
+                    react::Step {
+                        session: &session.id,
+                        number: step as i64 - 1,
+                        verdict,
+                        recovery,
+                        recalled,
+                    },
+                    services.clock.now(),
+                )
+                .await?;
+            }
+            force = decision != react::Decision::Complete;
+            recovery = decision == react::Decision::Recover;
+            recovery_used |= recovery;
+            continuation = force;
         }
     }
 

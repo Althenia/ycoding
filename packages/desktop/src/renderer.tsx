@@ -34,9 +34,10 @@ import { PendingPreview } from "../../../apps/web/src/remote/ui/pending-preview"
 import { MessageDelete } from "../../../apps/web/src/remote/ui/message-delete"
 import { ordinarySession } from "./sessions"
 import { Markdown, MarkdownClipboard } from "../../../apps/web/src/remote/ui/markdown"
-import { RecallEntryView } from "../../../apps/web/src/remote/ui/recall-entry"
-import { recallPlacements } from "./recall"
-import { foldRecallEvents, type RecallEntry } from "@ycoding-ai/client/cue-recall"
+import { LifecycleEntryView, RecallEntryView } from "../../../apps/web/src/remote/ui/recall-entry"
+import { recordPlacements, transcriptRecords, type TranscriptRecord } from "./recall"
+import { foldRecallEvents } from "@ycoding-ai/client/cue-recall"
+import { foldLifecycleEvents } from "@ycoding-ai/client/lifecycle"
 import { createInteractionControl, interactionControlVisible, interactionEventGeneration, readInteractionStatus, type InteractionView } from "../../../apps/web/src/remote/interaction-control"
 import { InteractionControl, InteractionPreview } from "../../../apps/web/src/remote/ui/interaction-control"
 import { McpApp } from "../../../apps/web/src/remote/ui/mcp-app"
@@ -2472,8 +2473,9 @@ function intermediateAssistant(message: Messages[number] | undefined): message i
   return !message.content.some(part => part.type === "text" && part.text.length > 0)
 }
 
-function RecallTurn(props: { entry: RecallEntry }) {
-  return <li class="transcript__turn rl-sys" data-speaker="recall" data-layout="block"><SharedMessageTurn kind="recall" recall={<RecallEntryView entry={props.entry} />} /></li>
+function RecallTurn(props: { record: TranscriptRecord }) {
+  const view = () => { const record = props.record; return record.kind === "recall" ? <RecallEntryView entry={record.entry} /> : <LifecycleEntryView entry={record.entry} /> }
+  return <li class="transcript__turn rl-sys" data-speaker="recall" data-layout="block"><SharedMessageTurn kind="recall" recall={view()} /></li>
 }
 
 function TurnView(props: { sessionID: string; message: Messages[number]; continuation?: boolean; delivery?: keyof typeof deliveryLabels; onDelete: (id: string) => Promise<string | undefined>; onOpenApp?: (app: OpenMcpApp) => void }) {
@@ -3128,8 +3130,8 @@ function Conversation(props: { sessionID: string }) {
   const visibleHistory = () => visibleDesktopMessages(history()?.messages ?? []).filter((message) => !activeRevert() || message.id < activeRevert()!.messageID)
   const turns = () => visibleHistory().filter((message) => !findQuery().trim() || transcriptText(message).toLowerCase().includes(findQuery().trim().toLowerCase()))
   const recallRead = observe(() => ({ queryKey: ["sessionRecall", ...scope(), props.sessionID] as const, queryFn: () => api.sessionRecall(props.sessionID), enabled: reading() }))
-  const recalls = () => { const data = recallRead.result().isError ? undefined : currentSnapshot(recallRead.result().data, connection().revision, props.sessionID); return data ? foldRecallEvents(data.events).entries : [] }
-  const recallRows = createMemo(() => recallPlacements(turns(), findQuery().trim() ? [] : recalls()))
+  const recalls = () => { const data = recallRead.result().isError ? undefined : currentSnapshot(recallRead.result().data, connection().revision, props.sessionID); return data ? transcriptRecords(foldRecallEvents(data.events).entries, foldLifecycleEvents(data.events).entries) : [] }
+  const recallRows = createMemo(() => recordPlacements(turns(), findQuery().trim() ? [] : recalls()))
   const continuations = createMemo(() => {
     const ids = new Set<string>()
     let previous: Messages[number] | undefined
@@ -3616,9 +3618,9 @@ function Conversation(props: { sessionID: string }) {
       <Show when={historyError()}><p role="alert">{historyError()}</p></Show>
       <Show when={!messages.result().isPending} fallback={<SharedLoadingSkeleton kind="conversation" label="Loading the transcript…" />}><Show when={!messages.result().isError} fallback={<div role="alert" class="desktop__error"><p>{failure(messages.result().error, "The transcript could not be read. Check the connection and refresh.")}</p><button type="button" onClick={messages.refetch} disabled={!reading()}>Refresh transcript</button></div>}>
         <Show when={turns().length} fallback={<div class="desktop-empty-transcript" role="status" aria-label="Empty transcript"><Icon name="chat" /><p>No messages in this Session yet.</p></div>}><ol class="transcript rl-thread" aria-label="Transcript"><Keyed each={turns()} by={(item) => item.id}>{(item) => <>
-          <For each={recallRows().before.get(item().id) ?? []}>{(entry) => <RecallTurn entry={entry} />}</For>
+          <For each={recallRows().before.get(item().id) ?? []}>{(record) => <RecallTurn record={record} />}</For>
           <TurnView sessionID={props.sessionID} message={item()} continuation={!findQuery().trim() && continuations().has(item().id)} delivery={deliveries().get(item().id)} onDelete={deleteMessage} onOpenApp={openCompanionApp} />
-          <Show when={editPlacements().get(item().id)}>{(edit) => <li class="transcript__turn transcript__edits"><SharedEditedFilesCard files={edit().files} onViewChanges={(path) => { setSelectedTurn(edit().turnID); openChanges(path) }} onUndo={() => { setSelectedTurn(edit().turnID); openChanges(); void doRevert("stage") }} undoDisabled={revertBusy() || revertUncertain() || running()} footerNote={activeRevert() ? "Staged revert · preview and confirmation required" : undefined} /></li>}</Show></>}</Keyed><For each={recallRows().tail}>{(entry) => <RecallTurn entry={entry} />}</For></ol></Show>
+          <Show when={editPlacements().get(item().id)}>{(edit) => <li class="transcript__turn transcript__edits"><SharedEditedFilesCard files={edit().files} onViewChanges={(path) => { setSelectedTurn(edit().turnID); openChanges(path) }} onUndo={() => { setSelectedTurn(edit().turnID); openChanges(); void doRevert("stage") }} undoDisabled={revertBusy() || revertUncertain() || running()} footerNote={activeRevert() ? "Staged revert · preview and confirmation required" : undefined} /></li>}</Show></>}</Keyed><For each={recallRows().tail}>{(record) => <RecallTurn record={record} />}</For></ol></Show>
       </Show></Show>
       <Show when={requests.result().isError}><div role="alert" class="desktop__error"><p>Pending requests could not be read. Refresh to retry.</p><button type="button" onClick={requests.refetch} disabled={!reading()}>Refresh requests</button></div></Show>
       <Show when={requests.result().data && !pendingRequests()}><p role="status">Refreshing requests after a connection change…</p></Show>

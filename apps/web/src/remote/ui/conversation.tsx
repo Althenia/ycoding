@@ -40,7 +40,7 @@ import { DotTrail } from "./dot-trail"
 import { SharedCompactionDivider, SharedDeliveryStatus, SharedMessageTurn, SharedTurnHead } from "./shared-workspace"
 import { FileChangeCard } from "./file-change-card"
 import { MessageDelete } from "./message-delete"
-import { RecallEntryView } from "./recall-entry"
+import { LifecycleEntryView, RecallEntryView } from "./recall-entry"
 import { ImagePreview, UserImage } from "./image"
 import { LoadingPlaceholder } from "./loading"
 import { McpAppResult } from "./mcp-app-result"
@@ -449,7 +449,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
           }>{(provenance) => <details class="transcript-notice transcript-notice--waiting"><summary><Icon name="chevron-right" size={16} />{fallbackText()}</summary><DecisionProvenance provenance={provenance()} /></details>}</Show>
         </Show>
 
-      </>} unavailable={oversized()?.state === "error" ? "Content too large or unavailable" : oversized()?.state === "pending" ? "Waiting for content" : "Loading content"} onRetry={oversized()?.state === "error" ? () => void remote.store.loadOversizedMessage(props.message().id) : undefined} peerLabel={peer()} peerText={systemText(props.message())} compaction={<CompactionDivider message={props.message} />} recall={<Show when={recallOf(props.message())}>{(entry) => <RecallEntryView entry={entry()} />}</Show>} />
+      </>} unavailable={oversized()?.state === "error" ? "Content too large or unavailable" : oversized()?.state === "pending" ? "Waiting for content" : "Loading content"} onRetry={oversized()?.state === "error" ? () => void remote.store.loadOversizedMessage(props.message().id) : undefined} peerLabel={peer()} peerText={systemText(props.message())} compaction={<CompactionDivider message={props.message} />} recall={<Show when={recallOf(props.message())}>{(entry) => <RecallEntryView entry={entry()} />}</Show>} lifecycle={<Show when={lifecycleOf(props.message())}>{(entry) => <LifecycleEntryView entry={entry()} />}</Show>} />
       </Show>
     </Show>
   )
@@ -593,6 +593,7 @@ const userState = (message: RemoteMessageView) => (message.kind === "user" ? mes
 const assistantOf = (message: RemoteMessageView): AssistantMessageView | undefined => (message.kind === "assistant" ? message : undefined)
 const systemText = (message: RemoteMessageView) => (message.kind === "system" || message.kind === "synthetic" ? message.text : "")
 const recallOf = (message: RemoteMessageView) => (message.kind === "recall" ? message.entry : undefined)
+const lifecycleOf = (message: RemoteMessageView) => (message.kind === "lifecycle" ? message.entry : undefined)
 const noticeText = (message: RemoteMessageView) => (message.kind === "notice" ? message.text : "")
 const shellOf = (message: RemoteMessageView) => (message.kind === "shell" ? message : undefined)
 const shellStatus = (message: RemoteMessageView) => {

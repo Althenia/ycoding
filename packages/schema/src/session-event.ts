@@ -40,6 +40,8 @@ import { Dots } from "./dots.js"
 import { Form } from "./form.js"
 import { ToolInvocation } from "./tool-invocation.js"
 import { Recall } from "./recall.js"
+import { Lifecycle } from "./lifecycle.js"
+import { Harness } from "./harness.js"
 
 export { FileAttachment }
 
@@ -1091,6 +1093,79 @@ export const RecallRecorded = Event.durable({
 })
 export type RecallRecorded = typeof RecallRecorded.Type
 
+export const LifecycleRecorded = Event.durable({
+  type: "session.lifecycle.recorded",
+  ...options,
+  schema: {
+    ...Base,
+    step: NonNegativeInt,
+    decision: Lifecycle.Decision,
+    basis: Lifecycle.Basis,
+    recovery: Schema.Boolean,
+    recalled: Schema.Boolean,
+  },
+})
+export type LifecycleRecorded = typeof LifecycleRecorded.Type
+
+export const HarnessEvaluated = Event.durable({
+  type: "session.harness.evaluated",
+  ...options,
+  schema: {
+    ...Base,
+    stage: Harness.Stage,
+    mode: Harness.Mode,
+    signals: NonNegativeInt,
+    insufficient: Schema.Boolean,
+    skipReason: Schema.String.check(Schema.isMaxLength(200)).pipe(optional),
+  },
+})
+export type HarnessEvaluated = typeof HarnessEvaluated.Type
+
+export const HarnessProbed = Event.durable({
+  type: "session.harness.probed",
+  ...options,
+  schema: {
+    ...Base,
+    candidate: Harness.CandidateID,
+    outcome: Harness.Outcome,
+    tokens: NonNegativeInt,
+    latencyMs: NonNegativeInt,
+  },
+})
+export type HarnessProbed = typeof HarnessProbed.Type
+
+export const HarnessAdopted = Event.durable({
+  type: "session.harness.adopted",
+  ...options,
+  schema: {
+    ...Base,
+    version: Harness.VersionID,
+    parent: Harness.VersionID,
+  },
+})
+export type HarnessAdopted = typeof HarnessAdopted.Type
+
+export const HarnessRolledBack = Event.durable({
+  type: "session.harness.rolled-back",
+  ...options,
+  schema: {
+    ...Base,
+    from: Harness.VersionID,
+    to: Harness.VersionID,
+  },
+})
+export type HarnessRolledBack = typeof HarnessRolledBack.Type
+
+export const HarnessReflected = Event.durable({
+  type: "session.harness.reflected",
+  ...options,
+  schema: {
+    ...Base,
+    experiences: Harness.Experiences,
+  },
+})
+export type HarnessReflected = typeof HarnessReflected.Type
+
 export const Definitions = Event.inventory(
   Created,
   DotsAccessChanged,
@@ -1144,6 +1219,12 @@ export const Definitions = Event.inventory(
   Skill.Deactivated,
   CueDetected,
   RecallRecorded,
+  LifecycleRecorded,
+  HarnessEvaluated,
+  HarnessProbed,
+  HarnessAdopted,
+  HarnessRolledBack,
+  HarnessReflected,
   Shell.Started,
   Shell.Ended,
   Step.Started,

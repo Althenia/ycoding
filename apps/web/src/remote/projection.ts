@@ -10,6 +10,7 @@ import { ToolInvocation } from "../../../../packages/schema/src/tool-invocation"
 import type { Form } from "../../../../packages/schema/src/form"
 import { browserScriptPermission, escapeDisplayText, toolDisplayName } from "../../../../packages/client/src/tool-display"
 import { emptyRecall, foldRecallEvent, recallVisible, type RecallEntry, type RecallState } from "../../../../packages/client/src/cue-recall"
+import { emptyLifecycle, foldLifecycleEvent, lifecycleVisible, type LifecycleEntry, type LifecycleState } from "../../../../packages/client/src/lifecycle"
 import { isInternalTranscriptEnvelope } from "../../../../packages/client/src/transcript-visibility"
 import { RemoteLimits, isSessionID, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory } from "@ycoding-ai/remote"
 import { autonomyCategories, autonomyLabels, readAutonomyMode, type AutonomyCategory, type AutonomyModes, type EffectiveAutonomyView } from "./autonomy"
@@ -334,6 +335,7 @@ export type RemoteMessageView =
       readonly error?: string
     }
   | { readonly kind: "recall"; readonly id: string; readonly entry: RecallEntry; readonly created: number }
+  | { readonly kind: "lifecycle"; readonly id: string; readonly entry: LifecycleEntry; readonly created: number }
   | {
       readonly kind: "notice"
       readonly id: string
@@ -457,6 +459,7 @@ export type SessionView = {
   readonly messages: readonly RemoteMessageView[]
   readonly compactionHistory?: RemoteCompactionHistory
   readonly recall?: RecallState
+  readonly lifecycle?: LifecycleState
   readonly requests: readonly PendingRequestView[]
   readonly projectEscalations?: Readonly<Record<string, ProjectEscalationView>>
   readonly capturedChanges?: RemoteCapturedChangesPage["data"]
@@ -632,6 +635,7 @@ export function transcriptMessageVisible(message: RemoteMessageView): boolean {
   if (message.kind === "synthetic") return Boolean(message.description?.trim())
   if (message.kind === "compaction") return message.status === "running" || message.status === "completed" || message.status === "failed" && (message.failureCode === "cancelled" || message.failureCode === "superseded" || message.jobID === undefined && message.failureCode === "aborted")
   if (message.kind === "recall") return recallVisible(message.entry)
+  if (message.kind === "lifecycle") return lifecycleVisible(message.entry)
   if (message.kind === "assistant") return message.parts.some(transcriptPartVisible) || message.completed !== undefined || message.error !== undefined || message.retry !== undefined
   return true
 }
@@ -1316,6 +1320,13 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
     case "session.cue.detected":
     case "session.recall.recorded":
       return applyRecallEvent(view, payload)
+    case "session.lifecycle.recorded":
+    case "session.harness.evaluated":
+    case "session.harness.probed":
+    case "session.harness.adopted":
+    case "session.harness.rolled-back":
+    case "session.harness.reflected":
+      return applyLifecycleEvent(view, payload)
     case "session.revert.staged":
       return pushNotice(view, "revert", "Revert staged", now)
     case "session.revert.cleared":
@@ -1997,6 +2008,18 @@ export function applyRecallEvent(view: SessionView, payload: unknown): SessionVi
   const others = view.messages.filter((existing) => existing.id !== entry.id && !(existing.kind === "recall" && existing.entry.key === entry.key))
   const later = others.findIndex((existing) => "created" in existing && existing.created !== undefined && existing.created > entry.created)
   return { ...view, recall, messages: later < 0 ? [...others, message] : [...others.slice(0, later), message, ...others.slice(later)] }
+}
+
+export function applyLifecycleEvent(view: SessionView, payload: unknown): SessionView {
+  const before = view.lifecycle ?? emptyLifecycle
+  const lifecycle = foldLifecycleEvent(before, payload)
+  if (lifecycle === before) return view
+  const entry = lifecycle.entries.find((item) => !before.entries.includes(item))
+  if (entry === undefined) return { ...view, lifecycle }
+  const message: RemoteMessageView = { kind: "lifecycle", id: entry.id, entry, created: entry.created }
+  const others = view.messages.filter((existing) => existing.id !== entry.id)
+  const later = others.findIndex((existing) => "created" in existing && existing.created !== undefined && existing.created > entry.created)
+  return { ...view, lifecycle, messages: later < 0 ? [...others, message] : [...others.slice(0, later), message, ...others.slice(later)] }
 }
 
 function replaceMessage(view: SessionView, message: RemoteMessageView): SessionView {

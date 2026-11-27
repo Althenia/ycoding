@@ -342,6 +342,42 @@ export const publicEvents = [
     type: "ycoding.v5.SessionLogItemValue77",
   },
   {
+    name: "session.lifecycle.recorded",
+    durable: true,
+    tag: 146,
+    type: "ycoding.v5.SessionLogItemValue78",
+  },
+  {
+    name: "session.harness.evaluated",
+    durable: true,
+    tag: 147,
+    type: "ycoding.v5.SessionLogItemValue79",
+  },
+  {
+    name: "session.harness.probed",
+    durable: true,
+    tag: 148,
+    type: "ycoding.v5.SessionLogItemValue80",
+  },
+  {
+    name: "session.harness.adopted",
+    durable: true,
+    tag: 149,
+    type: "ycoding.v5.SessionLogItemValue81",
+  },
+  {
+    name: "session.harness.rolled-back",
+    durable: true,
+    tag: 150,
+    type: "ycoding.v5.SessionLogItemValue82",
+  },
+  {
+    name: "session.harness.reflected",
+    durable: true,
+    tag: 151,
+    type: "ycoding.v5.SessionLogItemValue83",
+  },
+  {
     name: "session.shell.started",
     durable: true,
     tag: 36,

@@ -313,6 +313,42 @@
   },
   {
     "name": "SessionEvent.All",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.lifecycle.recorded\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.lifecycle.recorded\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.All",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.evaluated\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.evaluated\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.All",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.probed\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":0}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.probed\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":0}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.All",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.adopted\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"version\":\"a\",\"parent\":\"a\"}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.adopted\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"version\":\"a\",\"parent\":\"a\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.All",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.rolled-back\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"from\":\"a\",\"to\":\"a\"}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.rolled-back\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"from\":\"a\",\"to\":\"a\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.All",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.reflected\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"experiences\":[]}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.reflected\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"experiences\":[]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.All",
     "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.shell.started\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"shell\":{\"id\":\"sh_x\",\"status\":\"running\",\"command\":\"a\",\"cwd\":\"a\",\"shell\":\"a\",\"file\":\"a\",\"metadata\":{},\"time\":{\"started\":0}}}}",
     "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.shell.started\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"shell\":{\"id\":\"sh_x\",\"status\":\"running\",\"command\":\"a\",\"cwd\":\"a\",\"shell\":\"a\",\"file\":\"a\",\"metadata\":{},\"time\":{\"started\":0}}}}",
     "negativeZeros": []
@@ -841,6 +877,42 @@
   },
   {
     "name": "SessionEvent.Durable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.lifecycle.recorded\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.lifecycle.recorded\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.Durable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.evaluated\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.evaluated\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.Durable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.probed\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":0}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.probed\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":0}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.Durable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.adopted\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"version\":\"a\",\"parent\":\"a\"}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.adopted\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"version\":\"a\",\"parent\":\"a\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.Durable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.rolled-back\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"from\":\"a\",\"to\":\"a\"}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.rolled-back\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"from\":\"a\",\"to\":\"a\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.Durable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.reflected\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"experiences\":[]}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.reflected\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"experiences\":[]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.Durable",
     "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.shell.started\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"shell\":{\"id\":\"sh_x\",\"status\":\"running\",\"command\":\"a\",\"cwd\":\"a\",\"shell\":\"a\",\"file\":\"a\",\"metadata\":{},\"time\":{\"started\":0}}}}",
     "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.shell.started\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"shell\":{\"id\":\"sh_x\",\"status\":\"running\",\"command\":\"a\",\"cwd\":\"a\",\"shell\":\"a\",\"file\":\"a\",\"metadata\":{},\"time\":{\"started\":0}}}}",
     "negativeZeros": []
@@ -1341,6 +1413,42 @@
     "name": "SessionEvent.PublicDurable",
     "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.recall.recorded\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"key\":\"a\",\"trigger\":\"prompt\",\"methods\":[],\"outcome\":\"injected\",\"items\":[],\"elapsedMs\":0,\"injectedTokens\":0}}",
     "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.recall.recorded\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"key\":\"a\",\"trigger\":\"prompt\",\"methods\":[],\"outcome\":\"injected\",\"items\":[],\"elapsedMs\":0,\"injectedTokens\":0}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.PublicDurable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.lifecycle.recorded\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.lifecycle.recorded\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.PublicDurable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.evaluated\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.evaluated\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.PublicDurable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.probed\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":0}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.probed\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":0}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.PublicDurable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.adopted\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"version\":\"a\",\"parent\":\"a\"}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.adopted\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"version\":\"a\",\"parent\":\"a\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.PublicDurable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.rolled-back\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"from\":\"a\",\"to\":\"a\"}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.rolled-back\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"from\":\"a\",\"to\":\"a\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.PublicDurable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.reflected\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"experiences\":[]}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.harness.reflected\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"experiences\":[]}}",
     "negativeZeros": []
   },
   {
@@ -4405,6 +4513,396 @@
   },
   {
     "name": "SessionEvent.session.recall.recorded",
+    "input": "{}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.lifecycle.recorded",
+    "input": "{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.lifecycle.recorded",
+    "input": "{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"recover\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"recover\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.lifecycle.recorded",
+    "input": "{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"complete\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"complete\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.lifecycle.recorded",
+    "input": "{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"continue\",\"basis\":\"answered\",\"recovery\":false,\"recalled\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"continue\",\"basis\":\"answered\",\"recovery\":false,\"recalled\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.lifecycle.recorded",
+    "input": "{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"continue\",\"basis\":\"truncated\",\"recovery\":false,\"recalled\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"continue\",\"basis\":\"truncated\",\"recovery\":false,\"recalled\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.lifecycle.recorded",
+    "input": "{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"continue\",\"basis\":\"silent\",\"recovery\":false,\"recalled\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"continue\",\"basis\":\"silent\",\"recovery\":false,\"recalled\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.lifecycle.recorded",
+    "input": "{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"continue\",\"basis\":\"unsettled\",\"recovery\":false,\"recalled\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"continue\",\"basis\":\"unsettled\",\"recovery\":false,\"recalled\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.lifecycle.recorded",
+    "input": "{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"__invalid__\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.lifecycle.recorded",
+    "input": "{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"continue\",\"basis\":\"__invalid__\",\"recovery\":false,\"recalled\":false}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.lifecycle.recorded",
+    "input": "{\"sessionID\":\"sesx\",\"step\":-2,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.lifecycle.recorded",
+    "input": "{\"sessionID\":\"sesx\",\"step\":-1,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.lifecycle.recorded",
+    "input": "{\"sessionID\":\"sesx\",\"step\":1,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"step\":1,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.lifecycle.recorded",
+    "input": "{\"sessionID\":\"sesx\",\"step\":2,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"step\":2,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.lifecycle.recorded",
+    "input": "{\"sessionID\":\"sesx\",\"step\":9007199254740991,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"step\":9007199254740991,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.lifecycle.recorded",
+    "input": "{\"sessionID\":\"sesx\",\"step\":9007199254740992,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.lifecycle.recorded",
+    "input": "{\"step\":0,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.lifecycle.recorded",
+    "input": "{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false,\"unknownField\":true}",
+    "output": "{\"sessionID\":\"sesx\",\"step\":0,\"decision\":\"continue\",\"basis\":\"tool_results\",\"recovery\":false,\"recalled\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.lifecycle.recorded",
+    "input": "{}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.evaluated",
+    "input": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.evaluated",
+    "input": "{\"sessionID\":\"sesx\",\"stage\":\"propose\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"stage\":\"propose\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.evaluated",
+    "input": "{\"sessionID\":\"sesx\",\"stage\":\"probe\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"stage\":\"probe\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.evaluated",
+    "input": "{\"sessionID\":\"sesx\",\"stage\":\"compose\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"stage\":\"compose\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.evaluated",
+    "input": "{\"sessionID\":\"sesx\",\"stage\":\"adopt\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"stage\":\"adopt\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.evaluated",
+    "input": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"parallel\",\"signals\":0,\"insufficient\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"parallel\",\"signals\":0,\"insufficient\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.evaluated",
+    "input": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"sequential\",\"signals\":0,\"insufficient\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"sequential\",\"signals\":0,\"insufficient\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.evaluated",
+    "input": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"disabled\",\"signals\":0,\"insufficient\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"disabled\",\"signals\":0,\"insufficient\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.evaluated",
+    "input": "{\"sessionID\":\"sesx\",\"stage\":\"__invalid__\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.evaluated",
+    "input": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"__invalid__\",\"signals\":0,\"insufficient\":false}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.evaluated",
+    "input": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":-2,\"insufficient\":false}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.evaluated",
+    "input": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":-1,\"insufficient\":false}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.evaluated",
+    "input": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":1,\"insufficient\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":1,\"insufficient\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.evaluated",
+    "input": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":2,\"insufficient\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":2,\"insufficient\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.evaluated",
+    "input": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":9007199254740991,\"insufficient\":false}",
+    "output": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":9007199254740991,\"insufficient\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.evaluated",
+    "input": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":9007199254740992,\"insufficient\":false}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.evaluated",
+    "input": "{\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.evaluated",
+    "input": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false,\"unknownField\":true}",
+    "output": "{\"sessionID\":\"sesx\",\"stage\":\"baseline\",\"mode\":\"adaptive\",\"signals\":0,\"insufficient\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.evaluated",
+    "input": "{}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.probed",
+    "input": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":0}",
+    "output": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":0}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.probed",
+    "input": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":-2,\"latencyMs\":0}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.probed",
+    "input": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":-1,\"latencyMs\":0}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.probed",
+    "input": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":1,\"latencyMs\":0}",
+    "output": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":1,\"latencyMs\":0}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.probed",
+    "input": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":2,\"latencyMs\":0}",
+    "output": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":2,\"latencyMs\":0}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.probed",
+    "input": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":9007199254740991,\"latencyMs\":0}",
+    "output": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":9007199254740991,\"latencyMs\":0}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.probed",
+    "input": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":9007199254740992,\"latencyMs\":0}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.probed",
+    "input": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":-2}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.probed",
+    "input": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":-1}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.probed",
+    "input": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":1}",
+    "output": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":1}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.probed",
+    "input": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":2}",
+    "output": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":2}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.probed",
+    "input": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":9007199254740991}",
+    "output": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":9007199254740991}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.probed",
+    "input": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":9007199254740992}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.probed",
+    "input": "{\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":0}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.probed",
+    "input": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":0,\"unknownField\":true}",
+    "output": "{\"sessionID\":\"sesx\",\"candidate\":\"a\",\"outcome\":\"a\",\"tokens\":0,\"latencyMs\":0}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.probed",
+    "input": "{}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.adopted",
+    "input": "{\"sessionID\":\"sesx\",\"version\":\"a\",\"parent\":\"a\"}",
+    "output": "{\"sessionID\":\"sesx\",\"version\":\"a\",\"parent\":\"a\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.adopted",
+    "input": "{\"version\":\"a\",\"parent\":\"a\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.adopted",
+    "input": "{\"sessionID\":\"sesx\",\"version\":\"a\",\"parent\":\"a\",\"unknownField\":true}",
+    "output": "{\"sessionID\":\"sesx\",\"version\":\"a\",\"parent\":\"a\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.adopted",
+    "input": "{}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.rolled-back",
+    "input": "{\"sessionID\":\"sesx\",\"from\":\"a\",\"to\":\"a\"}",
+    "output": "{\"sessionID\":\"sesx\",\"from\":\"a\",\"to\":\"a\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.rolled-back",
+    "input": "{\"from\":\"a\",\"to\":\"a\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.rolled-back",
+    "input": "{\"sessionID\":\"sesx\",\"from\":\"a\",\"to\":\"a\",\"unknownField\":true}",
+    "output": "{\"sessionID\":\"sesx\",\"from\":\"a\",\"to\":\"a\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.rolled-back",
+    "input": "{}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.reflected",
+    "input": "{\"sessionID\":\"sesx\",\"experiences\":[]}",
+    "output": "{\"sessionID\":\"sesx\",\"experiences\":[]}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.reflected",
+    "input": "{\"experiences\":[]}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.reflected",
+    "input": "{\"sessionID\":\"sesx\",\"experiences\":[],\"unknownField\":true}",
+    "output": "{\"sessionID\":\"sesx\",\"experiences\":[]}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.harness.reflected",
     "input": "{}",
     "output": null,
     "negativeZeros": []

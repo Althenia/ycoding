@@ -73,6 +73,7 @@ import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { DialogSessionGoal } from "../../component/dialog-session-goal"
 import { DialogSessionSkills } from "../../component/dialog-session-skills"
 import { SessionRecallRow } from "./recall-row"
+import { SessionLifecycleRow } from "./lifecycle-row"
 import { DialogSessionTerminals } from "../../component/dialog-session-terminals"
 import { SessionIsolatedBrowserCommand } from "../../component/dialog-session-browser"
 import { DialogMessage } from "./dialog-message"
@@ -2356,6 +2357,9 @@ export function SessionRowView(props: {
           </Match>
           <Match when={props.row.type === "recall" ? props.row : undefined}>
             {(row) => <SessionRecallRow entry={row().entry} width={props.width} />}
+          </Match>
+          <Match when={props.row.type === "lifecycle" ? props.row : undefined}>
+            {(row) => <SessionLifecycleRow entry={row().entry} width={props.width} />}
           </Match>
           <Match
             when={

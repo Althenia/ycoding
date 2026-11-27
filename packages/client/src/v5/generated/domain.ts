@@ -1494,6 +1494,49 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "5": "archived",
     "6": "unknown",
   },
+  "ycoding.v5.SessionLogItemValue78_type": {
+    "1": "session.lifecycle.recorded",
+  },
+  "ycoding.v5.Lifecycle_Decision": {
+    "1": "continue",
+    "2": "recover",
+    "3": "complete",
+  },
+  "ycoding.v5.Lifecycle_Basis": {
+    "1": "tool_results",
+    "2": "answered",
+    "3": "truncated",
+    "4": "silent",
+    "5": "unsettled",
+  },
+  "ycoding.v5.SessionLogItemValue79_type": {
+    "1": "session.harness.evaluated",
+  },
+  "ycoding.v5.Harness_Stage": {
+    "1": "baseline",
+    "2": "propose",
+    "3": "probe",
+    "4": "compose",
+    "5": "adopt",
+  },
+  "ycoding.v5.Harness_Mode": {
+    "1": "adaptive",
+    "2": "parallel",
+    "3": "sequential",
+    "4": "disabled",
+  },
+  "ycoding.v5.SessionLogItemValue80_type": {
+    "1": "session.harness.probed",
+  },
+  "ycoding.v5.SessionLogItemValue81_type": {
+    "1": "session.harness.adopted",
+  },
+  "ycoding.v5.SessionLogItemValue82_type": {
+    "1": "session.harness.rolled-back",
+  },
+  "ycoding.v5.SessionLogItemValue83_type": {
+    "1": "session.harness.reflected",
+  },
   "ycoding.v5.SessionLogItemValue28_type": {
     "1": "session.shell.started",
   },

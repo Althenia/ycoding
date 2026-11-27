@@ -4,6 +4,7 @@
 
 import { ToolInvocation } from "@ycoding-ai/schema/tool-invocation"
 import { emptyRecall, foldRecallEvent, foldRecallEvents, type RecallState } from "@ycoding-ai/client/cue-recall"
+import { emptyLifecycle, foldLifecycleEvent, foldLifecycleEvents, lifecycleEventType, type LifecycleState } from "@ycoding-ai/client/lifecycle"
 import { GuardrailEscalation } from "../guardrail-escalation"
 import type {
   AgentInfo,
@@ -210,6 +211,7 @@ type Store = {
     compaction: Record<string, Record<string, DataSessionCompactionLifecycle>>
     compactionHistory: Record<string, SessionCompactionListOutput>
     recall: Record<string, RecallState>
+    lifecycle: Record<string, LifecycleState>
     pending: Record<string, SessionPendingInfo[]>
     subagent: Record<string, SubagentPage>
     todo: Record<string, SessionTodoInfo[]>
@@ -737,6 +739,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         compaction: {},
         compactionHistory: {},
         recall: {},
+        lifecycle: {},
         pending: {},
         subagent: {},
         todo: {},
@@ -1295,6 +1298,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       sync.forget(`session.message:${sessionID}`)
       sync.forget(`session.compaction:${sessionID}`)
       sync.forget(`session.recall:${sessionID}`)
+      sync.forget(`session.lifecycle:${sessionID}`)
       sync.forget(`session.diagnostics:${sessionID}`)
       sync.forget(`session.usage:${sessionID}`)
       sync.forget(`session.taskCosts:${sessionID}`)
@@ -1314,6 +1318,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           delete draft.compaction[sessionID]
           delete draft.compactionHistory[sessionID]
           delete draft.recall[sessionID]
+          delete draft.lifecycle[sessionID]
           delete draft.diagnostics[sessionID]
           delete draft.prediction[sessionID]
           delete draft.predictionDismissed[sessionID]
@@ -1814,6 +1819,14 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         case "session.cue.detected":
         case "session.recall.recorded":
           result.session.recall.apply(event.data.sessionID, event)
+          break
+        case "session.lifecycle.recorded":
+        case "session.harness.evaluated":
+        case "session.harness.probed":
+        case "session.harness.adopted":
+        case "session.harness.rolled-back":
+        case "session.harness.reflected":
+          result.session.lifecycle.apply(event.data.sessionID, event)
           break
         case "session.skill.deactivated":
           message.update(event.data.sessionID, (draft, index) => {
@@ -2800,6 +2813,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                 delete draft.compaction[sessionID]
                 delete draft.compactionHistory[sessionID]
                 delete draft.recall[sessionID]
+                delete draft.lifecycle[sessionID]
               }),
             )
             pruneMetadata()
@@ -2837,6 +2851,24 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               }
               if (!current()) return
               setStore("session", "recall", sessionID, (existing = emptyRecall) => foldRecallEvents(events, existing))
+            })
+          },
+        },
+        lifecycle: {
+          list(sessionID: string) {
+            return store.session.lifecycle[sessionID]?.entries ?? []
+          },
+          apply(sessionID: string, event: unknown) {
+            setStore("session", "lifecycle", sessionID, (current = emptyLifecycle) => foldLifecycleEvent(current, event))
+          },
+          sync(sessionID: string) {
+            return sync.run(`session.lifecycle:${sessionID}`, async (current, signal) => {
+              const events: unknown[] = []
+              for await (const event of client.api.session.log({ sessionID, follow: false }, { signal })) {
+                if (lifecycleEventType(event.type)) events.push(event)
+              }
+              if (!current()) return
+              setStore("session", "lifecycle", sessionID, (existing = emptyLifecycle) => foldLifecycleEvents(events, existing))
             })
           },
         },

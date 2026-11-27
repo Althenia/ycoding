@@ -122,7 +122,7 @@ fn ts_encoder_cases_cover_every_public_durable_variant_and_preserve_envelopes() 
             .collect::<BTreeSet<_>>(),
         expected
     );
-    assert_eq!(expected.len(), 74);
+    assert_eq!(expected.len(), 80);
     assert!(!expected.contains(&"session.tool.progress".into()));
     assert!(log::excluded("session.tool.progress.1"));
     for (name, entry, expected, _) in cases {
@@ -739,7 +739,7 @@ async fn real_runner_flow_preserves_order_follow_watermark_cursor_and_full_value
             }
             tag >> 3
         }).collect::<Vec<_>>();
-        assert_eq!(kinds, [15, 22, 14, 23, 30, 16, 35, 36, 33, 34, 31]);
+        assert_eq!(kinds, [15, 22, 14, 23, 30, 16, 35, 36, 33, 34, 31, 78]);
         for sub in [&live, &follow] {
             assert_eq!(durable_records(&client, sub), sequence, "{sub}");
         }

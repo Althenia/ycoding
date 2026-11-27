@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test"
 import { renderToString } from "solid-js/web"
 import { foldRecallEvents } from "../../../../../packages/client/src/cue-recall"
-import { RecallBody, RecallEntryView } from "./recall-entry"
+import { foldLifecycleEvents } from "../../../../../packages/client/src/lifecycle"
+import { LifecycleBody, LifecycleEntryView, RecallBody, RecallEntryView } from "./recall-entry"
 
 const injected = (id: string, extra: Record<string, unknown> = {}) => ({
   kind: "memory",
@@ -33,4 +34,14 @@ test("expanded body lists cue, method, relevance, provenance, trust, freshness a
   for (const text of ["command · cargo build", "cue, rrf", "bm25 1.5 · semantic 0.25 · rrf 0.03 · rank 1", "memory:repository/build/linker @ sha256:abc", "trusted", "fresh", "active", "Inspect"]) expect(html).toContain(text)
   expect(html).toContain("1 not injected · 2 candidates · 1 selected · 1 injected")
   expect(html).toContain('aria-expanded="false"')
+})
+
+const lifecycle = foldLifecycleEvents([{ type: "session.lifecycle.recorded", id: "lc_1", created: 5, data: { sessionID: "ses_a", step: 3, decision: "recover", basis: "silent", recovery: true, recalled: false } }]).entries[0]!
+
+test("lifecycle entry renders collapsed from the record and lists its details", () => {
+  const html = renderToString(() => <LifecycleEntryView entry={lifecycle} />)
+  expect(html).toContain('aria-label="Retried for a reply · step 3 · no reply"')
+  expect(html).toContain('aria-expanded="false"')
+  const body = renderToString(() => <LifecycleBody entry={lifecycle} />)
+  for (const text of ["recovery step", "no reply", "recover"]) expect(body).toContain(text)
 })

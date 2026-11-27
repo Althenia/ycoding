@@ -1778,6 +1778,8 @@ impl Factory {
                 .map(compaction_policy::Info::decode)
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|_| unavailable("compaction configuration"))?;
+            let harness = ycoding_core::session::harness_config::resolve(prepared.disk.values("harness"))
+                .map_err(|_| unavailable("harness configuration"))?;
             let attachments = Arc::new(
                 attachment_store::Store::new(roots.data.clone())
                     .map_err(|_| unavailable("managed attachments"))?,
@@ -2211,6 +2213,47 @@ impl Factory {
                 Some(refresh) => runner.with_refresh(refresh),
                 None => runner,
             };
+            if let Some(harness) = harness {
+                let store = Service::new(self.client.clone());
+                let dependencies = ycoding_core::session::helper_generation::Dependencies {
+                    store: store.clone(),
+                    agents: agents.clone(),
+                    generate: Arc::new(runner.clone()),
+                    memory: memory.clone(),
+                    permissions: services.permissions.clone(),
+                    feed: self.events.clone(),
+                    location: reference.clone(),
+                };
+                let engine = Arc::new(ycoding_core::harness::Engine::new(
+                    harness.settings,
+                    ycoding_core::harness::Parts {
+                        proposer: Arc::new(ycoding_core::session::harness_proposer::Service::new(
+                            dependencies.clone(),
+                        )),
+                        prober: Arc::new(ycoding_core::session::harness_probe::Service::new(
+                            dependencies,
+                            self.globals.clock.clone(),
+                        )),
+                        versions: Arc::new(ycoding_core::harness::FileVersions::new(
+                            roots.data.join("harness"),
+                        )),
+                        experiences: Arc::new(ycoding_core::harness::MemoryExperiences::new(
+                            memory.clone(),
+                            ycoding_core::resources::memory::Scope::Repository,
+                        )),
+                        events: Arc::new(ycoding_core::session::harness_events::Emitter::spawn(
+                            store,
+                            self.globals.clock.clone(),
+                        )),
+                    },
+                ));
+                runner.install_harness(
+                    ycoding_core::session::runner::harness_hooks::Hooks {
+                        controller: engine,
+                        ceiling: harness.ceiling,
+                    },
+                );
+            }
             let generate = Arc::new(generate::Service {
                 models: prepared.models.clone(),
                 credentials: self.credentials.clone(),

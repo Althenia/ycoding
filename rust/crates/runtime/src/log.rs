@@ -403,6 +403,67 @@ pub fn record(
                 budget_tokens: opt_count(data, "budgetTokens")?,
             }
         ),
+        Some("session.lifecycle.recorded") => item!(
+            Value78,
+            SessionLogItemValue78,
+            v5::SessionLogItemValue78Data {
+                session_id: text(data, "sessionID")?,
+                step: count(data, "step")?,
+                decision: literal(data, "decision", payload::LIFECYCLE_DECISION)?,
+                basis: literal(data, "basis", payload::LIFECYCLE_BASIS)?,
+                recovery: data.field("recovery")?.boolean()?,
+                recalled: data.field("recalled")?.boolean()?,
+            }
+        ),
+        Some("session.harness.evaluated") => item!(
+            Value79,
+            SessionLogItemValue79,
+            v5::SessionLogItemValue79Data {
+                session_id: text(data, "sessionID")?,
+                stage: literal(data, "stage", payload::HARNESS_STAGE)?,
+                mode: literal(data, "mode", payload::HARNESS_MODE)?,
+                signals: count(data, "signals")?,
+                insufficient: data.field("insufficient")?.boolean()?,
+                skip_reason: opt_text(data, "skipReason")?,
+            }
+        ),
+        Some("session.harness.probed") => item!(
+            Value80,
+            SessionLogItemValue80,
+            v5::SessionLogItemValue80Data {
+                session_id: text(data, "sessionID")?,
+                candidate: text(data, "candidate")?,
+                outcome: text(data, "outcome")?,
+                tokens: count(data, "tokens")?,
+                latency_ms: count(data, "latencyMs")?,
+            }
+        ),
+        Some("session.harness.adopted") => item!(
+            Value81,
+            SessionLogItemValue81,
+            v5::SessionLogItemValue81Data {
+                session_id: text(data, "sessionID")?,
+                version: text(data, "version")?,
+                parent: text(data, "parent")?,
+            }
+        ),
+        Some("session.harness.rolled-back") => item!(
+            Value82,
+            SessionLogItemValue82,
+            v5::SessionLogItemValue82Data {
+                session_id: text(data, "sessionID")?,
+                from: text(data, "from")?,
+                to: text(data, "to")?,
+            }
+        ),
+        Some("session.harness.reflected") => item!(
+            Value83,
+            SessionLogItemValue83,
+            v5::SessionLogItemValue83Data {
+                session_id: text(data, "sessionID")?,
+                experiences: payload::harness_experiences(data.field("experiences")?)?,
+            }
+        ),
         Some("session.shell.started") => item!(
             Value28,
             SessionLogItemValue28,

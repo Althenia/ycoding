@@ -468,6 +468,24 @@ fn check_domain_goldens(prefixes: &[&str]) {
             "SessionEvent.session.recall.recorded" => {
                 round_trip::<session_event::RecallRecorded>(&input)
             }
+            "SessionEvent.session.lifecycle.recorded" => {
+                round_trip::<session_event::LifecycleRecorded>(&input)
+            }
+            "SessionEvent.session.harness.evaluated" => {
+                round_trip::<session_event::HarnessEvaluated>(&input)
+            }
+            "SessionEvent.session.harness.probed" => {
+                round_trip::<session_event::HarnessProbed>(&input)
+            }
+            "SessionEvent.session.harness.adopted" => {
+                round_trip::<session_event::HarnessAdopted>(&input)
+            }
+            "SessionEvent.session.harness.rolled-back" => {
+                round_trip::<session_event::HarnessRolledBack>(&input)
+            }
+            "SessionEvent.session.harness.reflected" => {
+                round_trip::<session_event::HarnessReflected>(&input)
+            }
             "SessionEvent.session.shell.started" => {
                 round_trip::<session_event::ShellStarted>(&input)
             }

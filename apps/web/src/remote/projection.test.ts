@@ -32,6 +32,7 @@ import {
   appendShellOutputPage,
   applySessionEvent,
   applyRecallEvent,
+  applyLifecycleEvent,
   contextWindowDisplay,
   generationSpeedDisplay,
   boundedText,
@@ -1872,5 +1873,34 @@ describe("recall events", () => {
     expect(applyRecallEvent(base(), { type: "session.recall.recorded", id: "x", data: {} })).toEqual(base())
     const abstained = applyRecallEvent(base(), recorded("recall_x", 20, "candidate"))
     expect(visibleTranscriptMessages(abstained.messages).map((message) => message.id)).toEqual(["u1", "a1"])
+  })
+})
+
+describe("lifecycle events", () => {
+  const recorded = (id: string, created: number, decision = "recover", basis = "silent") => ({
+    type: "session.lifecycle.recorded",
+    id,
+    created,
+    data: { sessionID: "ses_a", step: 2, decision, basis, recovery: decision === "recover", recalled: false },
+  })
+  const base = (): SessionView => ({
+    ...createSessionView("ses_a"),
+    messages: [
+      { kind: "user", id: "u1", text: "Q", state: "consumed", created: 10 },
+      { kind: "assistant", id: "a1", created: 30, parts: [{ kind: "text", ordinal: 0, text: "A" }] },
+    ],
+  })
+
+  test("a live event lands at its chronological place and history load keeps the order", () => {
+    const live = applySessionEvent(base(), recorded("lc_1", 20), 1)
+    expect(live.messages.map((message) => message.id)).toEqual(["u1", "lc_1", "a1"])
+    const loaded = [recorded("lc_3", 99, "complete", "truncated"), recorded("lc_2", 25)].reduce(applyLifecycleEvent, base())
+    expect(visibleTranscriptMessages(loaded.messages).map((message) => message.id)).toEqual(["u1", "lc_2", "a1", "lc_3"])
+  })
+
+  test("malformed and invisible entries produce no row", () => {
+    expect(applyLifecycleEvent(base(), { type: "session.lifecycle.recorded", id: "x", data: {} })).toEqual(base())
+    const quiet = applyLifecycleEvent(applyLifecycleEvent(base(), recorded("lc_c", 20, "continue", "tool_results")), recorded("lc_a", 21, "complete", "answered"))
+    expect(visibleTranscriptMessages(quiet.messages).map((message) => message.id)).toEqual(["u1", "a1"])
   })
 })

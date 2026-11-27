@@ -45,6 +45,26 @@ The `Ceiling` describes what a session may change; no edit can exceed it.
 
 `MemoryExperiences` stores each experience as an `Experience` OKF concept at `experiences/<id>` in a memory scope, using the memory service's experience support, and recalls them with the task text. Recall drops experiences whose applicability names a different agent or no shared domain. Memory requires every experience to cite evidence as a reference, so each evidence string is stored percent-encoded under a `harness://evidence/` resource and decoded on recall; an experience with no evidence is stored with the `harness://assumed` marker, tagged `assumed`, and comes back with empty evidence. The linked change is stored as the version id followed by the percent-encoded edit summaries, truncated to the reference limit.
 
+## Configuration
+
+The `harness` runtime object turns adaptation on. Without it no harness runs and Sessions behave unchanged. With it, every Session run prepares a harness version before the first Step, appends the version's `system-prompt` and `tool-guidance` items to the Step system prompt, and records a reflection after the run settles. Fields merge independently in normal configuration order.
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `harness.mode` | `adaptive` \| `parallel` \| `sequential` \| `disabled` | `adaptive` | Selects the behavior in the Modes table. `disabled` keeps the current version and records a skipped evaluation. |
+| `harness.steps` | positive integer | `1` | Candidates probed per round. |
+| `harness.max_concurrency` | positive integer | `2` | Probes run at once. |
+| `harness.max_depth` | integer 1 to 255 | `1` | Rounds in `sequential` mode. |
+| `harness.max_tokens` | positive integer | `200000` | Token budget for one preparation. |
+| `harness.max_latency_ms` | positive integer | `600000` | Latency budget for one preparation. |
+| `harness.min_signals` | non-negative integer | `2` | Signal count at which `adaptive` mode judges a baseline insufficient. |
+| `harness.recall_limit` | non-negative integer | `5` | Experiences recalled per task. |
+| `harness.ceiling.skills`, `.agents`, `.plugins`, `.scripts` | array of names | empty | Keys an edit may set or remove in the matching component. |
+| `harness.ceiling.max_item_bytes` | positive integer | `4096` | Largest content of one item. |
+| `harness.ceiling.max_items` | positive integer | `64` | Largest total item count. |
+
+Versions are stored under `<YCoding data directory>/harness` and experiences are stored as repository memory concepts. A probe is a dry replay: it sends the task to the helper model with the candidate's prompt items and executes no tools.
+
 ## Events
 
 `Events::emit` receives an `Event` for each stage: `Baseline` (signal count and whether the harness was judged insufficient), `Proposed`, `Probed` (candidate, outcome, tokens, latency), `Composed` (kept and dropped counts), `Adopted` (version and parent), `RolledBack` and `Reflected`. A `Skipped` detail carries the reason when a stage ends the run: `disabled`, `baseline-sufficient`, `no-candidates`, `no-probe-results`, `budget-exhausted`, `no-improvement`, `no-change` or `conflict: …`.

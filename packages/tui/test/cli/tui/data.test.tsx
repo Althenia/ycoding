@@ -5385,3 +5385,24 @@ test("recall events fold by key in chronological order, attach their cue, and dr
     app.renderer.destroy()
   }
 })
+
+test("lifecycle events fold in chronological order, ignore malformed records, and drop on eviction", async () => {
+  const { data, app } = await mountData({})
+  try {
+    const recorded = (id: string, created: number, decision: string, basis: string) => ({
+      type: "session.lifecycle.recorded",
+      id,
+      created,
+      data: { sessionID: "s1", step: 1, decision, basis, recovery: false, recalled: false },
+    })
+    data.session.lifecycle.apply("s1", recorded("b", 20, "complete", "silent"))
+    data.session.lifecycle.apply("s1", recorded("a", 10, "recover", "unsettled"))
+    data.session.lifecycle.apply("s1", { type: "session.lifecycle.recorded", id: "bad", data: {} })
+    expect(data.session.lifecycle.list("s1").map((entry) => entry.id)).toEqual(["a", "b"])
+    expect(data.session.lifecycle.list("s2")).toEqual([])
+    data.session.message.evict("s1")
+    expect(data.session.lifecycle.list("s1")).toEqual([])
+  } finally {
+    app.renderer.destroy()
+  }
+})

@@ -1136,6 +1136,28 @@ pub(super) const CUE_KIND: &[(&str, i32)] = &[
     ("memory_revision", 12),
     ("skill_revision", 13),
 ];
+pub(super) const LIFECYCLE_DECISION: &[(&str, i32)] =
+    &[("continue", 1), ("recover", 2), ("complete", 3)];
+pub(super) const LIFECYCLE_BASIS: &[(&str, i32)] = &[
+    ("tool_results", 1),
+    ("answered", 2),
+    ("truncated", 3),
+    ("silent", 4),
+    ("unsettled", 5),
+];
+pub(super) const HARNESS_STAGE: &[(&str, i32)] = &[
+    ("baseline", 1),
+    ("propose", 2),
+    ("probe", 3),
+    ("compose", 4),
+    ("adopt", 5),
+];
+pub(super) const HARNESS_MODE: &[(&str, i32)] = &[
+    ("adaptive", 1),
+    ("parallel", 2),
+    ("sequential", 3),
+    ("disabled", 4),
+];
 pub(super) const RECALL_TRIGGER: &[(&str, i32)] = &[
     ("prompt", 1),
     ("cue", 2),
@@ -1192,6 +1214,17 @@ const RECALL_LIFECYCLE: &[(&str, i32)] = &[
     ("archived", 5),
     ("unknown", 6),
 ];
+
+pub(super) fn harness_experiences(json: J) -> R<v5::HarnessExperiences> {
+    json.items()?
+        .iter()
+        .map(|value| match value {
+            JsonValue::String(value) => Ok(crate::convert::wire(value)),
+            _ => Err(Unrepresentable("experience")),
+        })
+        .collect::<R<Vec<_>>>()
+        .map(|items| v5::HarnessExperiences { items })
+}
 
 pub(super) fn recall_methods(json: J) -> R<v5::SessionLogItemValue77DataMethods> {
     json.items()?

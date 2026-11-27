@@ -687,6 +687,54 @@
         "session.recall.recorded/absent",
         "session.recall.recorded/present"
       ]
+    },
+    {
+      "variant": 78,
+      "type": "session.lifecycle.recorded",
+      "tests": [
+        "session.lifecycle.recorded/absent",
+        "session.lifecycle.recorded/present"
+      ]
+    },
+    {
+      "variant": 79,
+      "type": "session.harness.evaluated",
+      "tests": [
+        "session.harness.evaluated/absent",
+        "session.harness.evaluated/present"
+      ]
+    },
+    {
+      "variant": 80,
+      "type": "session.harness.probed",
+      "tests": [
+        "session.harness.probed/absent",
+        "session.harness.probed/present"
+      ]
+    },
+    {
+      "variant": 81,
+      "type": "session.harness.adopted",
+      "tests": [
+        "session.harness.adopted/absent",
+        "session.harness.adopted/present"
+      ]
+    },
+    {
+      "variant": 82,
+      "type": "session.harness.rolled-back",
+      "tests": [
+        "session.harness.rolled-back/absent",
+        "session.harness.rolled-back/present"
+      ]
+    },
+    {
+      "variant": 83,
+      "type": "session.harness.reflected",
+      "tests": [
+        "session.harness.reflected/absent",
+        "session.harness.reflected/present"
+      ]
     }
   ],
   "cases": [
@@ -9225,8 +9273,365 @@
           "budgetTokens": 2048
         }
       },
-      "hex": "ea04ff030a120a106576745f776972655f666978747572651100000000000045401a5e0a080a020a0012020a000a520a04120200d8124a3a480a160a060a0474657874120c220a120800d83dd800deffdf0a0d0a070a05656d707479120232000a130a060a047a65726f12091900000000000000000a0a0a040a026e6f1202100022130a11736f757263652d65706f63682d746573742801321e0a110a0f7365735f776972655f6576656e747310ffffffffffffff0f18013a1b0a0a0a082f70726f6a656374120d0a0b77726b5f6669787475726542ab020a110a0f7365735f776972655f6576656e7473120d0a0b72636c5f666978747572651801220d0a0b6375655f666978747572652a0c0801080208030804080508063002380142dc010a9701080112120a106465636973696f6e732f636f62616c74180420062a1d09000000000000f83f11000000000000d03f19a4703d0ad7a3a03f2000320a120800d83dd800deffdf380342380a240a226d656d6f72793a7265706f7369746f72792f6465636973696f6e732f636f62616c7412100a0e7368613235363a666978747572654a120a0a0a084465636973696f6e10011801200158780a400802120c0a0a727573742d6275696c641805200132020a0042260a120a10736b696c6c3a727573742d6275696c6412100a0e7368613235363a6669787475726548005000588010",
-      "streamHex": "ea04ff020a150a136576745f776972655f73747265616d5f32343311000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310f301180142ab020a110a0f7365735f776972655f6576656e7473120d0a0b72636c5f666978747572651801220d0a0b6375655f666978747572652a0c0801080208030804080508063002380142dc010a9701080112120a106465636973696f6e732f636f62616c74180420062a1d09000000000000f83f11000000000000d03f19a4703d0ad7a3a03f2000320a120800d83dd800deffdf380342380a240a226d656d6f72793a7265706f7369746f72792f6465636973696f6e732f636f62616c7412100a0e7368613235363a666978747572654a120a0a0a084465636973696f6e10011801200158780a400802120c0a0a727573742d6275696c641805200132020a0042260a120a10736b696c6c3a727573742d6275696c6412100a0e7368613235363a6669787475726548005000588010"
+      "hex": "ea04ff030a120a106576745f776972655f666978747572651100000000000045401a5e0a080a020a0012020a000a520a04120200d8124a3a480a160a060a0474657874120c220a120800d83dd800deffdf0a0d0a070a05656d707479120232000a130a060a047a65726f12091900000000000000000a0a0a040a026e6f1202100022130a11736f757263652d65706f63682d746573742801321e0a110a0f7365735f776972655f6576656e747310ffffffffffffff0f18013a1b0a0a0a082f70726f6a656374120d0a0b77726b5f6669787475726542ab020a110a0f7365735f776972655f6576656e7473120d0a0b72636c5f666978747572651801220d0a0b6375655f666978747572652a0c0801080208030804080508063002380142dc010a9701080112120a106465636973696f6e732f636f62616c74180420062a1d09000000000000f83f11000000000000d03f19a4703d0ad7a3a03f2000320a120800d83dd800deffdf380342380a240a226d656d6f72793a7265706f7369746f72792f6465636973696f6e732f636f62616c7412100a0e7368613235363a666978747572654a120a0a0a084465636973696f6e10011801200150780a400802120c0a0a727573742d6275696c641805200132020a0042260a120a10736b696c6c3a727573742d6275696c6412100a0e7368613235363a6669787475726548005000588010",
+      "streamHex": "ea04ff020a150a136576745f776972655f73747265616d5f32343311000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310f301180142ab020a110a0f7365735f776972655f6576656e7473120d0a0b72636c5f666978747572651801220d0a0b6375655f666978747572652a0c0801080208030804080508063002380142dc010a9701080112120a106465636973696f6e732f636f62616c74180420062a1d09000000000000f83f11000000000000d03f19a4703d0ad7a3a03f2000320a120800d83dd800deffdf380342380a240a226d656d6f72793a7265706f7369746f72792f6465636973696f6e732f636f62616c7412100a0e7368613235363a666978747572654a120a0a0a084465636973696f6e10011801200150780a400802120c0a0a727573742d6275696c641805200132020a0042260a120a10736b696c6c3a727573742d6275696c6412100a0e7368613235363a6669787475726548005000588010"
+    },
+    {
+      "name": "session.lifecycle.recorded/absent",
+      "variant": 78,
+      "event": {
+        "id": "evt_wire_fixture",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.lifecycle.recorded",
+        "durable": {
+          "aggregateID": "ses_wire_events",
+          "seq": 0,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_wire_events",
+          "step": 3,
+          "decision": "recover",
+          "basis": "silent",
+          "recovery": false,
+          "recalled": true
+        }
+      },
+      "hex": "f2046c0a120a106576745f776972655f6669787475726511000000000000454022130a11736f757263652d65706f63682d74657374280132170a110a0f7365735f776972655f6576656e747310001801421d0a110a0f7365735f776972655f6576656e747310031802200428003001",
+      "streamHex": "f204700a150a136576745f776972655f73747265616d5f32343411000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310f4011801421d0a110a0f7365735f776972655f6576656e747310031802200428003001"
+    },
+    {
+      "name": "session.lifecycle.recorded/present",
+      "variant": 78,
+      "event": {
+        "id": "evt_wire_fixture",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.lifecycle.recorded",
+        "durable": {
+          "aggregateID": "ses_wire_events",
+          "seq": 9007199254740991,
+          "version": 1
+        },
+        "metadata": {
+          "": null,
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "empty": [],
+            "zero": 0,
+            "no": false
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "data": {
+          "sessionID": "ses_wire_events",
+          "step": 3,
+          "decision": "recover",
+          "basis": "silent",
+          "recovery": false,
+          "recalled": true
+        }
+      },
+      "hex": "f204f0010a120a106576745f776972655f666978747572651100000000000045401a5e0a080a020a0012020a000a520a04120200d8124a3a480a160a060a0474657874120c220a120800d83dd800deffdf0a0d0a070a05656d707479120232000a130a060a047a65726f12091900000000000000000a0a0a040a026e6f1202100022130a11736f757263652d65706f63682d746573742801321e0a110a0f7365735f776972655f6576656e747310ffffffffffffff0f18013a1b0a0a0a082f70726f6a656374120d0a0b77726b5f66697874757265421d0a110a0f7365735f776972655f6576656e747310031802200428003001",
+      "streamHex": "f204700a150a136576745f776972655f73747265616d5f32343511000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310f5011801421d0a110a0f7365735f776972655f6576656e747310031802200428003001"
+    },
+    {
+      "name": "session.harness.evaluated/absent",
+      "variant": 79,
+      "event": {
+        "id": "evt_wire_fixture",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.harness.evaluated",
+        "durable": {
+          "aggregateID": "ses_wire_events",
+          "seq": 0,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_wire_events",
+          "stage": "baseline",
+          "mode": "adaptive",
+          "signals": 0,
+          "insufficient": false
+        }
+      },
+      "hex": "fa046a0a120a106576745f776972655f6669787475726511000000000000454022130a11736f757263652d65706f63682d74657374280132170a110a0f7365735f776972655f6576656e747310001801421b0a110a0f7365735f776972655f6576656e74731001180120002800",
+      "streamHex": "fa046e0a150a136576745f776972655f73747265616d5f32343611000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310f6011801421b0a110a0f7365735f776972655f6576656e74731001180120002800"
+    },
+    {
+      "name": "session.harness.evaluated/present",
+      "variant": 79,
+      "event": {
+        "id": "evt_wire_fixture",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.harness.evaluated",
+        "durable": {
+          "aggregateID": "ses_wire_events",
+          "seq": 9007199254740991,
+          "version": 1
+        },
+        "metadata": {
+          "": null,
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "empty": [],
+            "zero": 0,
+            "no": false
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "data": {
+          "sessionID": "ses_wire_events",
+          "stage": "baseline",
+          "mode": "adaptive",
+          "signals": 0,
+          "insufficient": false,
+          "skipReason": "\ud800😀\udfff"
+        }
+      },
+      "hex": "fa04fa010a120a106576745f776972655f666978747572651100000000000045401a5e0a080a020a0012020a000a520a04120200d8124a3a480a160a060a0474657874120c220a120800d83dd800deffdf0a0d0a070a05656d707479120232000a130a060a047a65726f12091900000000000000000a0a0a040a026e6f1202100022130a11736f757263652d65706f63682d746573742801321e0a110a0f7365735f776972655f6576656e747310ffffffffffffff0f18013a1b0a0a0a082f70726f6a656374120d0a0b77726b5f6669787475726542270a110a0f7365735f776972655f6576656e74731001180120002800320a120800d83dd800deffdf",
+      "streamHex": "fa047a0a150a136576745f776972655f73747265616d5f32343711000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310f701180142270a110a0f7365735f776972655f6576656e74731001180120002800320a120800d83dd800deffdf"
+    },
+    {
+      "name": "session.harness.probed/absent",
+      "variant": 80,
+      "event": {
+        "id": "evt_wire_fixture",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.harness.probed",
+        "durable": {
+          "aggregateID": "ses_wire_events",
+          "seq": 0,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_wire_events",
+          "candidate": "cand_fixture",
+          "outcome": "completed",
+          "tokens": 0,
+          "latencyMs": 0
+        }
+      },
+      "hex": "820583010a120a106576745f776972655f6669787475726511000000000000454022130a11736f757263652d65706f63682d74657374280132170a110a0f7365735f776972655f6576656e74731000180142340a110a0f7365735f776972655f6576656e7473120e0a0c63616e645f666978747572651a0b0a09636f6d706c6574656420002800",
+      "streamHex": "820587010a150a136576745f776972655f73747265616d5f32343811000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310f801180142340a110a0f7365735f776972655f6576656e7473120e0a0c63616e645f666978747572651a0b0a09636f6d706c6574656420002800"
+    },
+    {
+      "name": "session.harness.probed/present",
+      "variant": 80,
+      "event": {
+        "id": "evt_wire_fixture",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.harness.probed",
+        "durable": {
+          "aggregateID": "ses_wire_events",
+          "seq": 9007199254740991,
+          "version": 1
+        },
+        "metadata": {
+          "": null,
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "empty": [],
+            "zero": 0,
+            "no": false
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "data": {
+          "sessionID": "ses_wire_events",
+          "candidate": "cand_fixture",
+          "outcome": "completed",
+          "tokens": 0,
+          "latencyMs": 0
+        }
+      },
+      "hex": "820587020a120a106576745f776972655f666978747572651100000000000045401a5e0a080a020a0012020a000a520a04120200d8124a3a480a160a060a0474657874120c220a120800d83dd800deffdf0a0d0a070a05656d707479120232000a130a060a047a65726f12091900000000000000000a0a0a040a026e6f1202100022130a11736f757263652d65706f63682d746573742801321e0a110a0f7365735f776972655f6576656e747310ffffffffffffff0f18013a1b0a0a0a082f70726f6a656374120d0a0b77726b5f6669787475726542340a110a0f7365735f776972655f6576656e7473120e0a0c63616e645f666978747572651a0b0a09636f6d706c6574656420002800",
+      "streamHex": "820587010a150a136576745f776972655f73747265616d5f32343911000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310f901180142340a110a0f7365735f776972655f6576656e7473120e0a0c63616e645f666978747572651a0b0a09636f6d706c6574656420002800"
+    },
+    {
+      "name": "session.harness.adopted/absent",
+      "variant": 81,
+      "event": {
+        "id": "evt_wire_fixture",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.harness.adopted",
+        "durable": {
+          "aggregateID": "ses_wire_events",
+          "seq": 0,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_wire_events",
+          "version": "hv_fixture",
+          "parent": "hv_parent"
+        }
+      },
+      "hex": "8a057d0a120a106576745f776972655f6669787475726511000000000000454022130a11736f757263652d65706f63682d74657374280132170a110a0f7365735f776972655f6576656e747310001801422e0a110a0f7365735f776972655f6576656e7473120c0a0a68765f666978747572651a0b0a0968765f706172656e74",
+      "streamHex": "8a0581010a150a136576745f776972655f73747265616d5f32353011000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310fa011801422e0a110a0f7365735f776972655f6576656e7473120c0a0a68765f666978747572651a0b0a0968765f706172656e74"
+    },
+    {
+      "name": "session.harness.adopted/present",
+      "variant": 81,
+      "event": {
+        "id": "evt_wire_fixture",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.harness.adopted",
+        "durable": {
+          "aggregateID": "ses_wire_events",
+          "seq": 9007199254740991,
+          "version": 1
+        },
+        "metadata": {
+          "": null,
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "empty": [],
+            "zero": 0,
+            "no": false
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "data": {
+          "sessionID": "ses_wire_events",
+          "version": "hv_fixture",
+          "parent": "hv_parent"
+        }
+      },
+      "hex": "8a0581020a120a106576745f776972655f666978747572651100000000000045401a5e0a080a020a0012020a000a520a04120200d8124a3a480a160a060a0474657874120c220a120800d83dd800deffdf0a0d0a070a05656d707479120232000a130a060a047a65726f12091900000000000000000a0a0a040a026e6f1202100022130a11736f757263652d65706f63682d746573742801321e0a110a0f7365735f776972655f6576656e747310ffffffffffffff0f18013a1b0a0a0a082f70726f6a656374120d0a0b77726b5f66697874757265422e0a110a0f7365735f776972655f6576656e7473120c0a0a68765f666978747572651a0b0a0968765f706172656e74",
+      "streamHex": "8a0581010a150a136576745f776972655f73747265616d5f32353111000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310fb011801422e0a110a0f7365735f776972655f6576656e7473120c0a0a68765f666978747572651a0b0a0968765f706172656e74"
+    },
+    {
+      "name": "session.harness.rolled-back/absent",
+      "variant": 82,
+      "event": {
+        "id": "evt_wire_fixture",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.harness.rolled-back",
+        "durable": {
+          "aggregateID": "ses_wire_events",
+          "seq": 0,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_wire_events",
+          "from": "hv_fixture",
+          "to": "hv_parent"
+        }
+      },
+      "hex": "92057d0a120a106576745f776972655f6669787475726511000000000000454022130a11736f757263652d65706f63682d74657374280132170a110a0f7365735f776972655f6576656e747310001801422e0a110a0f7365735f776972655f6576656e7473120c0a0a68765f666978747572651a0b0a0968765f706172656e74",
+      "streamHex": "920581010a150a136576745f776972655f73747265616d5f32353211000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310fc011801422e0a110a0f7365735f776972655f6576656e7473120c0a0a68765f666978747572651a0b0a0968765f706172656e74"
+    },
+    {
+      "name": "session.harness.rolled-back/present",
+      "variant": 82,
+      "event": {
+        "id": "evt_wire_fixture",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.harness.rolled-back",
+        "durable": {
+          "aggregateID": "ses_wire_events",
+          "seq": 9007199254740991,
+          "version": 1
+        },
+        "metadata": {
+          "": null,
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "empty": [],
+            "zero": 0,
+            "no": false
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "data": {
+          "sessionID": "ses_wire_events",
+          "from": "hv_fixture",
+          "to": "hv_parent"
+        }
+      },
+      "hex": "920581020a120a106576745f776972655f666978747572651100000000000045401a5e0a080a020a0012020a000a520a04120200d8124a3a480a160a060a0474657874120c220a120800d83dd800deffdf0a0d0a070a05656d707479120232000a130a060a047a65726f12091900000000000000000a0a0a040a026e6f1202100022130a11736f757263652d65706f63682d746573742801321e0a110a0f7365735f776972655f6576656e747310ffffffffffffff0f18013a1b0a0a0a082f70726f6a656374120d0a0b77726b5f66697874757265422e0a110a0f7365735f776972655f6576656e7473120c0a0a68765f666978747572651a0b0a0968765f706172656e74",
+      "streamHex": "920581010a150a136576745f776972655f73747265616d5f32353311000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310fd011801422e0a110a0f7365735f776972655f6576656e7473120c0a0a68765f666978747572651a0b0a0968765f706172656e74"
+    },
+    {
+      "name": "session.harness.reflected/absent",
+      "variant": 83,
+      "event": {
+        "id": "evt_wire_fixture",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.harness.reflected",
+        "durable": {
+          "aggregateID": "ses_wire_events",
+          "seq": 0,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_wire_events",
+          "experiences": []
+        }
+      },
+      "hex": "9a05640a120a106576745f776972655f6669787475726511000000000000454022130a11736f757263652d65706f63682d74657374280132170a110a0f7365735f776972655f6576656e74731000180142150a110a0f7365735f776972655f6576656e74731200",
+      "streamHex": "9a05680a150a136576745f776972655f73747265616d5f32353411000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310fe01180142150a110a0f7365735f776972655f6576656e74731200"
+    },
+    {
+      "name": "session.harness.reflected/present",
+      "variant": 83,
+      "event": {
+        "id": "evt_wire_fixture",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.harness.reflected",
+        "durable": {
+          "aggregateID": "ses_wire_events",
+          "seq": 9007199254740991,
+          "version": 1
+        },
+        "metadata": {
+          "": null,
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "empty": [],
+            "zero": 0,
+            "no": false
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "data": {
+          "sessionID": "ses_wire_events",
+          "experiences": [
+            "exp_fixture"
+          ]
+        }
+      },
+      "hex": "9a05f7010a120a106576745f776972655f666978747572651100000000000045401a5e0a080a020a0012020a000a520a04120200d8124a3a480a160a060a0474657874120c220a120800d83dd800deffdf0a0d0a070a05656d707479120232000a130a060a047a65726f12091900000000000000000a0a0a040a026e6f1202100022130a11736f757263652d65706f63682d746573742801321e0a110a0f7365735f776972655f6576656e747310ffffffffffffff0f18013a1b0a0a0a082f70726f6a656374120d0a0b77726b5f6669787475726542240a110a0f7365735f776972655f6576656e7473120f0a0d0a0b6578705f66697874757265",
+      "streamHex": "9a05770a150a136576745f776972655f73747265616d5f32353511000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310ff01180142240a110a0f7365735f776972655f6576656e7473120f0a0d0a0b6578705f66697874757265"
     }
   ],
   "synced": [
