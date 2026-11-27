@@ -714,3 +714,54 @@ fn fact_discovery_visits_only_half_open_time_bounds_across_equal_timestamp_pages
         .is_err()
     );
 }
+
+#[test]
+fn a_location_boot_keeps_the_published_usage_unless_its_pricing_changed() {
+    use std::sync::Mutex;
+    use ycoding_core::session::usage_read::Pricing;
+    use ycoding_schema::{location, schema::AbsolutePath};
+
+    let store = Store::disposable(
+        Options::core(),
+        native::catalog(native::DatabaseKind::Core),
+        Metadata::new([7; 16], 1),
+    )
+    .unwrap();
+    let client = store.client();
+    let _reports = report_support::start(client.clone());
+    client
+        .submit(|tx| UsageAnalyticsRequestTable::insert(tx, &fact(1, None, None, None)))
+        .unwrap()
+        .wait()
+        .unwrap();
+    let pricing = Arc::new(Mutex::new(Some(Pricing {
+        provider: Vec::new(),
+        router: Vec::new(),
+    })));
+    let reader = pricing.clone();
+    let views = ycoding_core::usage_view::Service::new(
+        Service::new(client.clone()),
+        Some(Arc::new(move |_| Ok(reader.lock().unwrap().clone()))),
+    );
+    assert!(views.publish().unwrap());
+    let booted = location::Ref {
+        directory: AbsolutePath::new("/synthetic").unwrap(),
+        workspace_id: None,
+    };
+    let published = views.epoch();
+
+    views.location_changed(&booted);
+    assert_eq!(views.epoch(), published);
+    assert!(views.publish().unwrap());
+    assert_eq!(views.epoch(), published);
+
+    *pricing.lock().unwrap() = None;
+    views.location_changed(&booted);
+    assert_eq!(views.epoch(), published + 1);
+
+    views.location_changed(&location::Ref {
+        directory: AbsolutePath::new("/elsewhere").unwrap(),
+        workspace_id: None,
+    });
+    assert_eq!(views.epoch(), published + 1);
+}

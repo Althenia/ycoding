@@ -292,7 +292,10 @@ impl Globals {
         {
             return;
         }
-        self.usage_views.catalog_changed(location, || {});
+        match location {
+            Some(location) => self.usage_views.location_changed(location),
+            None => self.usage_views.invalidate(),
+        }
         self.composition.wake().notify();
     }
 

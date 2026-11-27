@@ -138,6 +138,12 @@ pub struct Trace {
     pub started: std::time::Instant,
 }
 
+impl Default for Trace {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Trace {
     pub fn new() -> Self {
         Self {
