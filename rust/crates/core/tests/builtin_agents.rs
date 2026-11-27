@@ -53,7 +53,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.6,
             "#e67e22",
             include_str!("../src/resources/agent/prompts/GSD.md"),
-            "e967625bd99aea59e021cc59731bd68c00bf9b62daa441abe577a86b0ebd1dd7",
+            "cacf3c45e6741c05613ffdd179b9b6103f7c06917205b8eded14c67356c0b1ee",
         ),
         (
             "architech",
@@ -62,7 +62,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.5,
             "#3498db",
             include_str!("../src/resources/agent/prompts/architech.md"),
-            "e1b5a80d03000426770048995b2c6c3231e8866b80770205eb7656f8bee90e6e",
+            "70d075aab49dcf7c284d16564b16a7acf0a24ed3a4a494fcaa0f777bef6c5eda",
         ),
         (
             "god",
@@ -71,7 +71,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.6,
             "#f1c40f",
             include_str!("../src/resources/agent/prompts/god.md"),
-            "1ef9bd421e9dc966621c9a36db829eb43c6eae60d3e6285198c29b1033312a70",
+            "c511b67511b56f5b6e1d6439779acfb1755057270c9ed51c2c285cc5c98c7879",
         ),
         (
             "yangi",
@@ -80,7 +80,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.5,
             "#2ecc71",
             include_str!("../src/resources/agent/prompts/yangi.md"),
-            "dd8530269755bb3765af7a16ee4fb7e764f769504409c12af0fffdae5f409e17",
+            "61de7eb6df9a9c4c6b0e30273df5bc862d834c7ecc7393ffac0cc75634039185",
         ),
         (
             "occam",
@@ -89,7 +89,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.4,
             "#2ecc71",
             include_str!("../src/resources/agent/prompts/occam.md"),
-            "bee8d03f29014851f19cd2f6f0a22b464fd9d8c0d1e83e1f6e14ec31778a10a3",
+            "e3ac8d35aec9635c474312b9570df319e442e83d3f2483d7d090221582856f18",
         ),
         (
             "omoikane",
@@ -98,7 +98,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.5,
             "#3498db",
             include_str!("../src/resources/agent/prompts/omoikane.md"),
-            "80941065ce0041f9908eb599ca2072a8397fb8107f1ca48c64d8f0015e23fe6c",
+            "e5eb7b780136cc88d29b80e01fc065bd01ab4b9989b12b2a1871f2a428dbc462",
         ),
         (
             "wittgenstein",
@@ -107,7 +107,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.4,
             "#95a5a6",
             include_str!("../src/resources/agent/prompts/wittgenstein.md"),
-            "7826bd22f2432d9f34079f2659b186739645eba62b9af50864991b90292afca9",
+            "f3bf8c7c9112aabba14eb730a0d9b0ed99e11d7701ec3534429745231459f122",
         ),
         (
             "zeus",
@@ -116,7 +116,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.6,
             "#f1c40f",
             include_str!("../src/resources/agent/prompts/zeus.md"),
-            "6baea4501ce3e967e6b41ad021fa33340176f7301c8ae94dfa8a1aed470ef40c",
+            "45dbef7b3c783a8924f82c832ee91bab96ca5178c309b7c1123440e66aa867d4",
         ),
     ];
     for (id, name, mode, temperature, color, source, digest) in fixtures {
@@ -425,7 +425,7 @@ fn user_then_project_overrides_preserve_builtin_identity_and_unspecified_values(
     assert!(service.get(&"occam".into()).is_none());
     assert_eq!(
         service.get(&"team".into()).unwrap().system,
-        Some("project".into())
+        Some(format!("{}\n\nproject", prompts::PROJECT).into())
     );
     assert_eq!(
         god.permissions[17..]
@@ -568,10 +568,11 @@ fn primary_and_child_agents_resolve_recoverable_obstacles_within_their_authority
         for rule in [
             "As Master or a supervising owner, route repository work to member Sessions at the repository's canonical checkout or a managed worktree for that repository.",
             "Keep `~/.local/share/ycoding/tasks/` for scratch files, logs, and evidence only; never use it or a subdirectory as a Project member Location.",
-            "Use live evidence and permitted tools to settle routine choices and recover from errors, conflicts and failing checks within your authority.",
+            "Work agentically. Resolve every blocker and issue yourself: diagnose the root cause, try every local compliant fix, and recover from failed checks, conflicts and environment errors, then keep going.",
+            "Pursue the user's goal proactively and relentlessly to full completion; never stop at an intermediate milestone, a status report, or a question you can settle from evidence.",
             "Do not add approval gates or wait for status nudges to continue authorized work.",
-            "Keep independent authorized work moving while a dependency or approval is pending.",
-            "After reasonable recovery, report the blocked action and target, what you checked and found, and the decision or input needed.",
+            "Escalate only through native controls: permission, guardrail and human-only approval requests, and missing secrets or credentials.",
+            "Finish all non-blocked work first, keep independent authorized work moving while a request is pending, and report the blocked action and target, what you checked and found, and the input needed.",
             "Honor explicit user pauses and cancellations.",
             "Respect enforced permissions, denies, ceilings, guardrails and hard reviews.",
             "Use native controls for required approvals and human decisions; never bypass a refusal or treat silence as consent.",
@@ -583,18 +584,28 @@ fn primary_and_child_agents_resolve_recoverable_obstacles_within_their_authority
         let (heading, recovery, escalation) = if primary {
             (
                 "Main-session controls:",
-                "Work with the assigned owner to resolve recoverable conflicts and failing checks before escalating.",
-                "Escalate only overlapping file conflicts or failing checks, preserving native approval gates.",
+                "Resolve conflicts, overlapping files and failing checks with the assigned owner from live code and history, preserving native approval gates.",
+                "Complete consolidated checks -> single commit",
             )
         } else {
             (
                 "Subagent controls:",
-                "Resolve recoverable conflicts and failing checks in your scope before escalating.",
-                "escalate overlapping file conflicts or failing checks to the parent.",
+                "Resolve conflicts and failing checks in your scope yourself.",
+                "resolving conflicts and failing checks yourself.",
             )
         };
         let controls = &system[system.find(heading).unwrap()..];
         assert_eq!(controls.matches(recovery).count(), 1, "{id}");
+        for stale in [
+            "irreconcilable blocker",
+            "unrequested mandatory",
+            "unrequested decision",
+            "unrequested high-impact",
+            "escalate unresolved decisions",
+            "report the actual blocker precisely",
+        ] {
+            assert!(!system.contains(stale), "{id}: {stale}");
+        }
         assert!(
             controls.find(recovery).unwrap() < controls.find(escalation).unwrap(),
             "{id}"
@@ -702,13 +713,12 @@ fn specialist_descriptions_and_shared_clauses_match_contract() {
     let clauses = [
         "Obey the user's explicit goals, directives, and preferences within enforced runtime permissions and guardrails; never argue with, lecture, or push back against the user.",
         "An explicit user directive naming an action and target already authorizes it; do not ask for confirmation twice.",
-        "Decide reversible implementation, tooling, and debugging choices yourself instead of asking the user, and drive proactively and relentlessly toward the user's goal.",
-        "When an error, failing test, broken build, or environment issue occurs, diagnose the root cause and exhaust local compliant fixes before treating it as a blocker.",
-        "Escalate only an irreconcilable blocker or unrequested mandatory gate, and only after completing all non-blocked work.",
+        "Use live evidence and permitted tools to settle routine choices, and decide reversible implementation, tooling and debugging choices yourself.",
+        "Escalate only through native controls: permission, guardrail and human-only approval requests, and missing secrets or credentials.",
         "Stop exploring once you have enough evidence to act, and run independent reads, searches, edits, and checks in parallel for fast, reliable delivery.",
         "Write natural, specific, human prose in all documents, notes, comments, commit messages, and replies.",
-        "reuse settled results, pivot a missing broad search to a likely file, symbol, caller or directory, and repeat reads only for changed inputs or new evidence. When a permitted direct check can decide the question, run it promptly instead of repeating source checks or extending the investigation. When work stalls or repeats without new evidence, report the actual blocker precisely.",
-        "Require confirmation before external writes, purchases, destructive or irreversible actions, dependency changes, data or schema migrations, CI/CD changes, public-contract breaks and material scope expansion. If your permission ceiling prevents asking, do not act; report the blocker.",
+        "reuse settled results, pivot a missing broad search to a likely file, symbol, caller or directory, and repeat reads only for changed inputs or new evidence. When a permitted direct check can decide the question, run it promptly instead of repeating source checks or extending the investigation. When work stalls or repeats without new evidence, change approach and diagnose the cause.",
+        "Route external writes, purchases, destructive or irreversible actions, dependency changes, data or schema migrations, CI/CD changes, public-contract breaks and material scope expansion through native approval. If your permission ceiling prevents asking, do not act; report the blocker.",
         "Before overwriting or deleting data, check whether version control can restore it; treat untracked or ignored data as unrecoverable.",
         "Never run full-repository, full-workspace, or entire-package test suites, including through package scripts, CI wrappers, or batches that reconstruct a full suite.",
         "Use native and local tools exclusively whenever they support the required capability; use connectors only for capabilities unavailable through both. Never discover or invoke tools.chatgpt.ycoding* from a local YCoding Session.",
@@ -760,7 +770,6 @@ fn specialist_descriptions_and_shared_clauses_match_contract() {
             system.contains("Await notifications and do not poll."),
             "{id}"
         );
-        assert!(system.contains("Scale executor subagent fanout from zero to five across genuinely disjoint file/check lanes"), "{id}");
         assert!(system.contains("serialize only for a real dependency, shared file, or approval, never for ceremony, handoffs, slots, or resource limitations"), "{id}");
     }
     for id in ["occam", "omoikane", "wittgenstein", "zeus"] {
@@ -839,7 +848,10 @@ fn helper_and_delivery_prompts_keep_verified_execution_and_cleanup_explicit() {
     }
     assert!(prompts::MAIN.contains("Resolve routine child snags, failed checks, scope details, and routing adjustments yourself without escalating to the user."));
     assert!(prompts::MAIN.contains("Never pause to ask for plan sign-off, status confirmation, or permission to continue authorized work while the user's goal can be advanced."));
-    assert!(prompts::CHILD.contains("Make narrow, reversible local decisions from repository evidence, diagnose root causes, and exhaust compliant local fixes before escalating anything to the parent."));
+    assert!(prompts::CHILD.contains("Make narrow, reversible local decisions from repository evidence and drive the bounded outcome to verified completion."));
+    assert!(prompts::CHILD.contains(
+        "Escalate to your parent only native-control requests and missing secrets or credentials"
+    ));
     assert!(!prompts::MAIN.contains("and keep the branch"));
 }
 
@@ -907,5 +919,82 @@ fn every_model_family_and_base_prompt_limits_escalation_and_uses_plain_prose() {
         ] {
             assert!(!text.contains(stale), "{id}: {stale}");
         }
+    }
+}
+
+#[test]
+fn the_agentic_and_swarm_rules_reach_every_agent_exactly_once() {
+    let entries = [Entry::Document {
+        path: Some("/repo/ycoding.json".into()),
+        info: parse_json(r#"{"agents":{"custom":{"mode":"subagent","system":"Review the diff."},"title":{"system":"Custom title."}}}"#).unwrap(),
+    }];
+    let service = Service::from_documents(
+        &entries,
+        &roots().home,
+        agent::builtin::catalog(&roots(), ycoding_schema::session_scope::Scope::Bound).unwrap(),
+    )
+    .unwrap();
+    let agentic = "Work agentically. Resolve every blocker and issue yourself: diagnose the root cause, try every local compliant fix, and recover from failed checks, conflicts and environment errors, then keep going.";
+    let swarm = "Drive assigned work as a swarm by default: swarm execution is the primary operating mode for every Session, whether Project Master, Project member or standalone, and single-lane execution is the exception for indivisible or tightly coupled work.";
+    for id in [
+        "god",
+        "GSD",
+        "architech",
+        "yangi",
+        "zeus",
+        "occam",
+        "omoikane",
+        "wittgenstein",
+        "custom",
+    ] {
+        let system = service
+            .get(&id.into())
+            .unwrap()
+            .system
+            .as_ref()
+            .unwrap()
+            .to_utf8()
+            .unwrap();
+        for rule in [swarm, agentic] {
+            assert_eq!(system.matches(rule).count(), 1, "{id}: {rule}");
+        }
+        assert!(
+            system.find(swarm).unwrap() < system.find(agentic).unwrap(),
+            "{id}"
+        );
+        assert!(system.starts_with(prompts::PROJECT), "{id}");
+        for stale in [
+            "Scale executor subagent fanout from zero to five",
+            "fewest subagents",
+            "Do not spawn child agents",
+        ] {
+            assert!(!system.contains(stale), "{id}: {stale}");
+        }
+    }
+    assert_eq!(
+        service.get(&"title".into()).unwrap().system,
+        Some("Custom title.".into())
+    );
+    for utility in [
+        "btw",
+        "compaction",
+        "goal",
+        "prediction",
+        "prompt",
+        "decision",
+        "summary",
+    ] {
+        let system = service
+            .get(&utility.into())
+            .unwrap()
+            .system
+            .as_ref()
+            .unwrap()
+            .to_utf8()
+            .unwrap();
+        assert!(
+            !system.contains(swarm) && !system.contains(agentic),
+            "{utility}"
+        );
     }
 }

@@ -43,6 +43,23 @@ pub fn empty(id: Id) -> Info {
         ],
     }
 }
+pub fn is_utility(id: &Id) -> bool {
+    [
+        "btw",
+        "compaction",
+        "title",
+        "goal",
+        "prediction",
+        "prompt",
+        "decision",
+        "yolo-permission",
+        "yolo-guardrail",
+        "yolo-answer",
+        "summary",
+    ]
+    .iter()
+    .any(|utility| id == &(*utility).into())
+}
 pub fn is_selectable(agent: &Info) -> bool {
     agent.mode != "subagent".into() && !agent.hidden && agent.id != "btw".into()
 }
@@ -138,6 +155,22 @@ impl Service {
                     if let Some(value) = item.get(&name.into()) {
                         encoded.insert(name.into(), value.clone());
                     }
+                }
+                if let Some(JsonValue::String(system)) = item.get(&"system".into())
+                    && !system.is_empty()
+                    && !is_utility(id)
+                {
+                    encoded.insert(
+                        "system".into(),
+                        JsonValue::String(
+                            format!(
+                                "{}\n\n{}",
+                                prompts::PROJECT,
+                                system.to_utf8().unwrap_or_default()
+                            )
+                            .into(),
+                        ),
+                    );
                 }
                 if let Some(value) = item.get(&"model".into()) {
                     encoded.insert("model".into(), discovery::selection(value)?.encode());

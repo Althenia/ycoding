@@ -485,27 +485,27 @@ async fn coordination_instruction_release_text_matches_every_role_and_revocation
         (
             Role::Master,
             false,
-            "7ba69b43b5dae326da74ce3a1eab93e181242e4bd8f0fba2b83616ddd698a867",
+            "345b73f73309a5acfa4fd493e2830d38f8f7def0247dea737463b1201e85d9b9",
         ),
         (
             Role::Master,
             true,
-            "7ba69b43b5dae326da74ce3a1eab93e181242e4bd8f0fba2b83616ddd698a867",
+            "345b73f73309a5acfa4fd493e2830d38f8f7def0247dea737463b1201e85d9b9",
         ),
         (
             Role::Supervisor,
             false,
-            "8f499595b2144cb85b3fd5add37c7d9e0e363db4c89d2f333c8fab22a29403e4",
+            "75097cc85780471a8fb598f646a68494b3583cca700a2d7ec5df20354c7abbf5",
         ),
         (
             Role::Supervisor,
             true,
-            "8f499595b2144cb85b3fd5add37c7d9e0e363db4c89d2f333c8fab22a29403e4",
+            "75097cc85780471a8fb598f646a68494b3583cca700a2d7ec5df20354c7abbf5",
         ),
         (
             Role::Executor,
             false,
-            "bf9601e2057b40ddf28b208f32842b0b08b91ab43bbf17ffb2342d1613aad3c7",
+            "37a97c8fb06d37f374a265e6254dbab7ea7eb5c0e09a7bca64f8fcc749ea7ecf",
         ),
         (
             Role::Executor,
@@ -527,7 +527,7 @@ async fn coordination_instruction_release_text_matches_every_role_and_revocation
             let expected = if coordinating {
                 "c041987d38cfa740ce9e90c29299b41eaa18739ac350226615b89c0276e3d410"
             } else {
-                "3165db2cdc5b152f02fad5e7d35c966d7882d883e0f7558a25a27e08b8d60c50"
+                "8536cfa6ff24dd29a406614f717a8fad861e3e301b7da70ca52c5d0695bd39ee"
             };
             assert_eq!(
                 digest(&(source.changed)(&previous, &value).unwrap()),
@@ -1047,6 +1047,58 @@ fn coordinators_delegate_all_project_work_without_direct_master_defaults() {
                 .as_str()
                 .unwrap()
                 .contains(rule)
+        );
+    }
+}
+
+#[test]
+fn project_roles_inherit_the_base_swarm_rule_without_separate_coordination_text() {
+    use std::{collections::BTreeMap, path::Path};
+    use ycoding_core::resources::{agent, config::Roots};
+    let roots = Roots::runtime(
+        Path::new("/home/fixture"),
+        Path::new("/tmp"),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let catalog =
+        agent::builtin::catalog(&roots, ycoding_schema::session_scope::Scope::Bound).unwrap();
+    let system = |id: &str| {
+        catalog
+            .iter()
+            .find(|agent| agent.id == id.into())
+            .and_then(|agent| agent.system.as_ref())
+            .unwrap()
+            .to_utf8()
+            .unwrap()
+    };
+    let rule = "Drive assigned work as a swarm by default: swarm execution is the primary operating mode for every Session, whether Project Master, Project member or standalone, and single-lane execution is the exception for indivisible or tightly coupled work.";
+    let sessions = [
+        ("normal", "god", None),
+        ("master", "god", Some(Role::Master)),
+        ("member", "zeus", Some(Role::Executor)),
+    ];
+    for (name, id, role) in sessions {
+        let mut text = system(id);
+        if let Some(role) = role {
+            let injected = coordination::instructions::initial(role, false);
+            let injected = injected.as_str().unwrap();
+            for separate in [
+                "swarm",
+                "Launch every ready",
+                "never launch filler",
+                "native subagents and run them concurrently",
+                "coordination.subagent.request.blocked",
+            ] {
+                assert!(!injected.contains(separate), "{name}: {separate}");
+            }
+            text.push_str("\n\n");
+            text.push_str(injected);
+        }
+        assert_eq!(text.matches(rule).count(), 1, "{name}");
+        assert!(
+            text.find(rule).unwrap() < text.find("Work agentically.").unwrap(),
+            "{name}"
         );
     }
 }
