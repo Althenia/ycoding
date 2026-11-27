@@ -156,6 +156,71 @@ string_domain!(AgentSystem, |v: &LosslessString| bounded_text(
 string_domain!(PluginDraft, |v: &LosslessString| bounded_text(
     v, 32768, 32768, false
 ));
+string_domain!(Tag, |v: &LosslessString| v.as_str().is_some_and(|s| {
+    let bytes = s.as_bytes();
+    (1..=32).contains(&bytes.len())
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
+        && bytes[0] != b'-'
+        && bytes[bytes.len() - 1] != b'-'
+}));
+pub const MAX_TAGS: usize = 8;
+string_domain!(ActivationValue, |v: &LosslessString| bounded_text(
+    v, 512, 2048, true
+));
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SkillActivation {
+    pub version: Option<ActivationValue>,
+    pub keywords: Option<ActivationValue>,
+    pub events: Option<ActivationValue>,
+    pub commands: Option<ActivationValue>,
+    pub paths: Option<ActivationValue>,
+}
+impl DomainDecode for SkillActivation {
+    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
+        let o = crate::ObjectDecoder::new(v, p)?;
+        Ok(Self {
+            version: o.optional("version")?,
+            keywords: o.optional("keywords")?,
+            events: o.optional("events")?,
+            commands: o.optional("commands")?,
+            paths: o.optional("paths")?,
+        })
+    }
+}
+impl DomainEncode for SkillActivation {
+    fn encode(&self) -> JsonValue {
+        crate::ObjectEncoder::new()
+            .optional("version", &self.version)
+            .optional("keywords", &self.keywords)
+            .optional("events", &self.events)
+            .optional("commands", &self.commands)
+            .optional("paths", &self.paths)
+            .finish()
+    }
+}
+fn decode_tags(o: &crate::ObjectDecoder, p: &JsonPath) -> Result<Vec<Tag>, DecodeError> {
+    let tags = o.optional::<Vec<Tag>>("tags")?.unwrap_or_default();
+    if tags.len() > MAX_TAGS
+        || tags
+            .iter()
+            .enumerate()
+            .any(|(i, tag)| tags[..i].contains(tag))
+    {
+        return Err(p
+            .key("tags")
+            .error(DecodeErrorKind::Expected("at most 8 distinct tags")));
+    }
+    Ok(tags)
+}
+fn with_tags(object: crate::ObjectEncoder, tags: &[Tag]) -> crate::ObjectEncoder {
+    if tags.is_empty() {
+        object
+    } else {
+        object.field("tags", &tags.to_vec())
+    }
+}
 string_domain!(ConfirmationToken, |v: &LosslessString| v
     .as_str()
     .is_some_and(|s| !s.is_empty()
@@ -438,18 +503,22 @@ impl DomainEncode for ScopeSelector {
 pub struct SkillDefinition {
     pub name: DisplayName,
     pub description: Description,
+    pub tags: Vec<Tag>,
+    pub activation: Option<SkillActivation>,
     pub content: SkillContent,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommandDefinition {
     pub name: DisplayName,
     pub description: Description,
+    pub tags: Vec<Tag>,
     pub template: CommandTemplate,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentDefinition {
     pub name: DisplayName,
     pub description: Description,
+    pub tags: Vec<Tag>,
     pub system: AgentSystem,
     pub permissions: crate::permission::Ruleset,
 }
@@ -476,6 +545,8 @@ impl DomainDecode for Definition {
             Some("skill") => Ok(Self::Skill(SkillDefinition {
                 name: o.field("name")?,
                 description: o.field("description")?,
+                tags: decode_tags(&o, p)?,
+                activation: o.optional("activation")?,
                 content: o.field("content")?,
             })),
             Some("command") => {
@@ -483,6 +554,7 @@ impl DomainDecode for Definition {
                 Ok(Self::Command(CommandDefinition {
                     name: o.field("name")?,
                     description: o.field("description")?,
+                    tags: decode_tags(&o, p)?,
                     template: o.field("template")?,
                 }))
             }
@@ -491,15 +563,23 @@ impl DomainDecode for Definition {
                 Ok(Self::Agent(AgentDefinition {
                     name: o.field("name")?,
                     description: o.field("description")?,
+                    tags: decode_tags(&o, p)?,
                     system: o.field("system")?,
                     permissions: o.field("permissions")?,
                 }))
             }
-            Some("plugin") => Ok(Self::Plugin(PluginDefinition {
-                name: o.field("name")?,
-                description: o.field("description")?,
-                draft: o.field("draft")?,
-            })),
+            Some("plugin") => {
+                if !decode_tags(&o, p)?.is_empty() {
+                    return Err(p
+                        .key("tags")
+                        .error(DecodeErrorKind::Expected("no tags on plugin drafts")));
+                }
+                Ok(Self::Plugin(PluginDefinition {
+                    name: o.field("name")?,
+                    description: o.field("description")?,
+                    draft: o.field("draft")?,
+                }))
+            }
             _ => unreachable!(),
         }
     }
@@ -507,27 +587,37 @@ impl DomainDecode for Definition {
 impl DomainEncode for Definition {
     fn encode(&self) -> JsonValue {
         match self {
-            Self::Skill(v) => crate::ObjectEncoder::new()
-                .field("kind", &LosslessString::from("skill"))
-                .field("name", &v.name)
-                .field("description", &v.description)
-                .field("content", &v.content)
-                .finish(),
-            Self::Command(v) => crate::ObjectEncoder::new()
-                .field("kind", &LosslessString::from("command"))
-                .field("name", &v.name)
-                .field("description", &v.description)
-                .field("template", &v.template)
-                .field("subtask", &false)
-                .finish(),
-            Self::Agent(v) => crate::ObjectEncoder::new()
-                .field("kind", &LosslessString::from("agent"))
-                .field("name", &v.name)
-                .field("description", &v.description)
-                .field("system", &v.system)
-                .field("mode", &LosslessString::from("subagent"))
-                .field("permissions", &v.permissions)
-                .finish(),
+            Self::Skill(v) => with_tags(
+                crate::ObjectEncoder::new()
+                    .field("kind", &LosslessString::from("skill"))
+                    .field("name", &v.name)
+                    .field("description", &v.description),
+                &v.tags,
+            )
+            .optional("activation", &v.activation)
+            .field("content", &v.content)
+            .finish(),
+            Self::Command(v) => with_tags(
+                crate::ObjectEncoder::new()
+                    .field("kind", &LosslessString::from("command"))
+                    .field("name", &v.name)
+                    .field("description", &v.description),
+                &v.tags,
+            )
+            .field("template", &v.template)
+            .field("subtask", &false)
+            .finish(),
+            Self::Agent(v) => with_tags(
+                crate::ObjectEncoder::new()
+                    .field("kind", &LosslessString::from("agent"))
+                    .field("name", &v.name)
+                    .field("description", &v.description),
+                &v.tags,
+            )
+            .field("system", &v.system)
+            .field("mode", &LosslessString::from("subagent"))
+            .field("permissions", &v.permissions)
+            .finish(),
             Self::Plugin(v) => crate::ObjectEncoder::new()
                 .field("kind", &LosslessString::from("plugin"))
                 .field("name", &v.name)

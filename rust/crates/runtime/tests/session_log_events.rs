@@ -122,7 +122,7 @@ fn ts_encoder_cases_cover_every_public_durable_variant_and_preserve_envelopes() 
             .collect::<BTreeSet<_>>(),
         expected
     );
-    assert_eq!(expected.len(), 72);
+    assert_eq!(expected.len(), 75);
     assert!(!expected.contains(&"session.tool.progress".into()));
     assert!(log::excluded("session.tool.progress.1"));
     for (name, entry, expected, _) in cases {

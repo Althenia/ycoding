@@ -1484,7 +1484,7 @@ fn automatic_retry_finishes_an_available_package_without_double_charging_reserve
         .join("data/project-artifacts")
         .join(scope.storage_id.as_lossless().as_str().unwrap());
     let version_id = project_artifact::VersionId::decode(&JsonValue::String(
-        "pav_84dc108deefcca51fd5339ab7c404f1e".into(),
+        "pav_9b364aa7d4e478e7111026571e844c55".into(),
     ))
     .unwrap();
     let marker = package::marker(package::MarkerInput {
@@ -1493,10 +1493,16 @@ fn automatic_retry_finishes_an_available_package_without_double_charging_reserve
         kind: project_artifact::Kind::decode(&JsonValue::String("skill".into())).unwrap(),
         id: project_artifact::Id::decode(&JsonValue::String("recover".into())).unwrap(),
         version_id: version_id.clone(),
-        content: adapter::render(&project_artifact::Definition::decode(&definition).unwrap()),
+        content: adapter::render(
+            &project_artifact::Id::decode(&JsonValue::String("recover".into())).unwrap(),
+            &project_artifact::Definition::decode(&definition).unwrap(),
+        ),
     });
-    let operation_id = "pop_fafc8f6d7801aaf63d79ad3fc4061c4a";
-    let content = adapter::render(&project_artifact::Definition::decode(&definition).unwrap());
+    let operation_id = "pop_f2f19f988d6df348be78cf2fb6b5a35f";
+    let content = adapter::render(
+        &project_artifact::Id::decode(&JsonValue::String("recover".into())).unwrap(),
+        &project_artifact::Definition::decode(&definition).unwrap(),
+    );
     let prepared = package::prepare_commit(
         package::CommitInput {
             root: &root,
@@ -1523,16 +1529,16 @@ fn automatic_retry_finishes_an_available_package_without_double_charging_reserve
                     artifact_id: "recover".into(),
                     operation: "create".into(),
                     request_fingerprint:
-                        "fafc8f6d7801aaf63d79ad3fc4061c4a7ea7c025d99d2917a246e02d75f560db".into(),
+                        "f2f19f988d6df348be78cf2fb6b5a35f7995748ce808b424075d483bbb2657c3".into(),
                     expected_revision: None,
                     expected_version_id: None,
                     expected_digest: None,
                     source_scope_id: None,
                     source_version_id: None,
                     source_digest: None,
-                    target_version_id: Some("pav_84dc108deefcca51fd5339ab7c404f1e".into()),
+                    target_version_id: Some("pav_9b364aa7d4e478e7111026571e844c55".into()),
                     target_digest: Some(
-                        "dececb15aa76c55ecda31e851c93b3dbd7420e82aff5a50fb8714bb67befcc42".into(),
+                        "357c293b74cb27682096f030be3f3deba4d3b9b84a9ea248a72c589c940035ae".into(),
                     ),
                     final_version_id: None,
                     deletion_id: None,
@@ -1579,7 +1585,10 @@ fn general_recovery_finishes_shared_journal_and_preserves_exact_version_on_repea
         .root
         .join("data/project-artifacts")
         .join(scope.storage_id.as_lossless().as_str().unwrap());
-    let content = adapter::render(&definition());
+    let content = adapter::render(
+        &project_artifact::Id::decode(&JsonValue::String("recover-shared".into())).unwrap(),
+        &definition(),
+    );
     let marker = package::marker(package::MarkerInput {
         scope_id: scope.id.clone(),
         storage_id: scope.storage_id.clone(),
@@ -1957,7 +1966,10 @@ fn general_recovery_aborts_only_preparing_orphans_and_rejects_unowned_shared_jou
         .root
         .join("data/project-artifacts")
         .join(scope.storage_id.as_lossless().as_str().unwrap());
-    let content = adapter::render(&definition());
+    let content = adapter::render(
+        &project_artifact::Id::decode(&JsonValue::String("unowned".into())).unwrap(),
+        &definition(),
+    );
     let marker = package::marker(package::MarkerInput {
         scope_id: scope.id.clone(),
         storage_id: scope.storage_id,
@@ -2441,7 +2453,7 @@ fn governor_degradation_restores_durable_fallback_bytes_and_version_states_atomi
             &second.id
         ))
         .unwrap(),
-        adapter::render(&definition()).as_str().unwrap()
+        adapter::render(&second.id, &definition()).as_str().unwrap()
     );
 }
 
@@ -3178,4 +3190,343 @@ fn global_manual_confirmation_is_single_use_expires_at_five_minutes_and_rechecks
             .is_err()
     );
     assert_eq!(std::fs::read_to_string(content).unwrap(), "user-owned");
+}
+
+fn tagged(
+    name: &str,
+    description: &str,
+    tags: &str,
+    content: &str,
+) -> project_artifact::Definition {
+    project_artifact::Definition::decode(
+        &parse_json(&format!(
+            r#"{{"kind":"skill","name":"{name}","description":"{description}","tags":{tags},"content":"{content}"}}"#
+        ))
+        .unwrap(),
+    )
+    .unwrap()
+}
+fn tag(value: &str) -> project_artifact::Tag {
+    project_artifact::Tag::decode(&JsonValue::String(value.into())).unwrap()
+}
+fn find(
+    fixture: &Fixture,
+    project: &project::Id,
+    query: &str,
+    tags: &[&str],
+) -> Vec<(String, String)> {
+    let tags = tags.iter().map(|value| tag(value)).collect::<Vec<_>>();
+    fixture
+        .service
+        .search(store::SearchInput {
+            project_id: project,
+            query,
+            tags: &tags,
+            kind: None,
+            limit: 10,
+        })
+        .unwrap()
+        .into_iter()
+        .map(|hit| {
+            (
+                hit.id.as_lossless().to_utf8().unwrap(),
+                hit.version_id.as_lossless().to_utf8().unwrap(),
+            )
+        })
+        .collect()
+}
+fn ids(hits: &[(String, String)]) -> Vec<&str> {
+    hits.iter().map(|(id, _)| id.as_str()).collect()
+}
+fn write_as(
+    fixture: &Fixture,
+    project: &project::Id,
+    id: &str,
+    definition: &project_artifact::Definition,
+    expected: Option<project_artifact::MutationExpectation>,
+) -> store::WriteResult {
+    fixture
+        .service
+        .write_manual(store::ManualWriteInput {
+            scope: project_artifact::ScopeSelector::Project,
+            project_id: Some(project.clone()),
+            id,
+            definition,
+            expected,
+            now: 1000,
+        })
+        .unwrap()
+}
+fn expecting(written: &store::WriteResult, revision: f64) -> project_artifact::MutationExpectation {
+    project_artifact::MutationExpectation {
+        expected_revision: project_artifact::Revision::decode(&JsonValue::Number(revision))
+            .unwrap(),
+        expected_version_id: written.version_id.clone(),
+        expected_digest: written.content_digest.clone(),
+    }
+}
+
+#[test]
+fn tag_recall_follows_create_update_tag_replacement_and_deletion_without_stale_results() {
+    let fixture = Fixture::new();
+    let project = project();
+    let boundary = write_as(
+        &fixture,
+        &project,
+        "boundary",
+        &tagged(
+            "Workspace verification",
+            "Verify Rust workspace boundaries",
+            r#"["rust","verification"]"#,
+            "Check the workspace identity.",
+        ),
+        None,
+    );
+    write_as(
+        &fixture,
+        &project,
+        "release-notes",
+        &tagged(
+            "Release notes",
+            "Summarize release changes",
+            r#"["release"]"#,
+            "List the shipped changes.",
+        ),
+        None,
+    );
+    write_as(
+        &fixture,
+        &project,
+        "plain-guide",
+        &project_artifact::Definition::decode(&parse_json(r#"{"kind":"skill","name":"Plain guide","description":"Older untagged cobalt guide","content":"Follow the guide."}"#).unwrap()).unwrap(),
+        None,
+    );
+
+    assert_eq!(ids(&find(&fixture, &project, "", &["rust"])), ["boundary"]);
+    assert_eq!(
+        ids(&find(&fixture, &project, "", &["rust", "verification"])),
+        ["boundary"]
+    );
+    assert!(find(&fixture, &project, "", &["rust", "release"]).is_empty());
+    assert_eq!(
+        ids(&find(&fixture, &project, "workspace", &[])),
+        ["boundary"]
+    );
+    assert_eq!(
+        ids(&find(&fixture, &project, "cobalt", &[])),
+        ["plain-guide"]
+    );
+    assert_eq!(
+        ids(&find(&fixture, &project, "workspace", &["release"])),
+        Vec::<&str>::new()
+    );
+
+    let original = find(&fixture, &project, "", &["rust"]).remove(0).1;
+    let replaced = write_as(
+        &fixture,
+        &project,
+        "boundary",
+        &tagged(
+            "Workspace verification",
+            "Verify Rust workspace boundaries",
+            r#"["python"]"#,
+            "Check the workspace identity.",
+        ),
+        Some(expecting(&boundary, 0.0)),
+    );
+    assert!(find(&fixture, &project, "", &["rust"]).is_empty());
+    let hits = find(&fixture, &project, "", &["python"]);
+    assert_eq!(ids(&hits), ["boundary"]);
+    assert_ne!(hits[0].1, original);
+    assert_eq!(
+        hits[0].1,
+        replaced.version_id.as_lossless().to_utf8().unwrap()
+    );
+
+    let retitled = write_as(
+        &fixture,
+        &project,
+        "boundary",
+        &tagged(
+            "Boundary audit",
+            "Audit the crate boundaries",
+            r#"["python"]"#,
+            "Check the workspace identity.",
+        ),
+        Some(expecting(&replaced, 1.0)),
+    );
+    assert!(find(&fixture, &project, "workspace", &[]).is_empty());
+    assert_eq!(ids(&find(&fixture, &project, "audit", &[])), ["boundary"]);
+
+    fixture
+        .service
+        .remove(store::LifecycleInput {
+            scope_id: &retitled.scope_id,
+            kind: &retitled.kind,
+            id: &retitled.id,
+            expected: &expecting(&retitled, 2.0),
+            now: 2000,
+        })
+        .unwrap();
+    assert!(find(&fixture, &project, "", &["python"]).is_empty());
+    assert!(find(&fixture, &project, "audit", &[]).is_empty());
+    assert_eq!(
+        ids(&find(&fixture, &project, "", &["release"])),
+        ["release-notes"]
+    );
+}
+
+#[test]
+fn tag_recall_is_limited_to_the_callers_project_and_verified_bytes() {
+    let fixture = Fixture::new();
+    let project = project();
+    let adopted = project::Id::decode(&JsonValue::String("adopted".into())).unwrap();
+    write_as(
+        &fixture,
+        &project,
+        "shared-name",
+        &tagged(
+            "Project only",
+            "Visible to project",
+            r#"["rust"]"#,
+            "Project body.",
+        ),
+        None,
+    );
+    assert!(find(&fixture, &adopted, "", &["rust"]).is_empty());
+    assert!(find(&fixture, &adopted, "project", &[]).is_empty());
+    write_as(
+        &fixture,
+        &adopted,
+        "adopted-only",
+        &tagged(
+            "Adopted only",
+            "Visible to adopted",
+            r#"["rust"]"#,
+            "Adopted body.",
+        ),
+        None,
+    );
+    assert_eq!(
+        ids(&find(&fixture, &adopted, "", &["rust"])),
+        ["adopted-only"]
+    );
+    assert_eq!(
+        ids(&find(&fixture, &project, "", &["rust"])),
+        ["shared-name"]
+    );
+
+    let global = project::Id::decode(&JsonValue::String("global".into())).unwrap();
+    for (project_id, query, tags) in [(&global, "", vec![tag("rust")]), (&project, "", vec![])] {
+        assert!(
+            fixture
+                .service
+                .search(store::SearchInput {
+                    project_id,
+                    query,
+                    tags: &tags,
+                    kind: None,
+                    limit: 5,
+                })
+                .is_err()
+        );
+    }
+
+    let content = std::iter::successors(Some(vec![fixture.root.join("data")]), |dirs| {
+        let next = dirs
+            .iter()
+            .flat_map(|dir| std::fs::read_dir(dir).into_iter().flatten().flatten())
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+        (!next.is_empty()).then_some(next)
+    })
+    .flatten()
+    .filter(|path| {
+        path.is_file()
+            && path
+                .parent()
+                .is_some_and(|dir| dir.ends_with("shared-name"))
+    })
+    .collect::<Vec<_>>();
+    assert_eq!(content.len(), 1);
+    std::fs::write(
+        &content[0],
+        "---\nname: \"Changed\"\ndescription: \"Changed\"\ntags: [\"rust\"]\n---\nTampered.",
+    )
+    .unwrap();
+    assert!(find(&fixture, &project, "", &["rust"]).is_empty());
+}
+
+#[test]
+fn reset_removes_every_artifact_row_and_owned_scope_store_but_keeps_unowned_files() {
+    use std::ops::Bound;
+    use ycoding_core::resources::project_artifact::reset;
+    use ycoding_store::artifacts;
+
+    let fixture = Fixture::new();
+    fixture.service.write_manual(manual(&definition())).unwrap();
+    global(&fixture);
+    let data = fixture.root.join("data");
+    let stray = data.join("project-artifacts/notes.txt");
+    std::fs::write(&stray, "keep").unwrap();
+    let canonical = fixture.root.join("home/.agents/skills/canonical");
+    std::fs::create_dir_all(&canonical).unwrap();
+    std::fs::write(
+        canonical.join("SKILL.md"),
+        "---\nname: canonical\ndescription: Stays.\n---\n",
+    )
+    .unwrap();
+    let count = |fixture: &Fixture| {
+        let snapshot = fixture.db.client().snapshot().unwrap();
+        let any = Bound::Unbounded;
+        [
+            snapshot
+                .scan::<artifacts::ScopeTable>(any, any, 8)
+                .unwrap()
+                .len(),
+            snapshot
+                .scan::<artifacts::ArtifactTable>(any, any, 8)
+                .unwrap()
+                .len(),
+            snapshot
+                .scan::<artifacts::VersionTable>(any, any, 8)
+                .unwrap()
+                .len(),
+            snapshot
+                .scan::<artifacts::OperationTable>(any, any, 8)
+                .unwrap()
+                .len(),
+        ]
+    };
+    assert!(count(&fixture).iter().all(|rows| *rows > 0));
+    fixture
+        .db
+        .submit(|tx| ycoding_store::artifacts::reset(tx))
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(count(&fixture), [0, 0, 0, 0]);
+    let roots = reset::Roots {
+        data: data.clone(),
+        config: fixture.root.join("config"),
+        cache: fixture.root.join("cache"),
+        standard: vec![fixture.root.join("home/.agents/skills")],
+    };
+    let planned = reset::plan(&roots);
+    assert!(
+        planned
+            .iter()
+            .any(|item| item.kind == reset::Kind::ScopeStore)
+    );
+    assert!(
+        planned
+            .iter()
+            .any(|item| item.kind == reset::Kind::ManagedSkill)
+    );
+    let report = reset::apply(&planned);
+    assert!(report.failed.is_empty(), "{:?}", report.failed);
+    assert_eq!(reset::plan(&roots), vec![]);
+    assert!(stray.exists());
+    assert!(canonical.join("SKILL.md").exists());
+    assert!(!fixture.root.join("home/.agents/skills/review").exists());
 }

@@ -1,7 +1,7 @@
 {
   "type": "object",
   "properties": {
-    "result": { "enum": ["created", "updated", "reconciled"] },
+    "result": { "enum": ["created", "updated", "reconciled", "search"] },
     "kind": { "enum": ["skill", "command", "agent", "plugin"] },
     "id": { "type": "string" },
     "versionID": { "type": "string" },
@@ -18,8 +18,26 @@
       },
       "required": ["session", "projectDaily", "projectArtifacts", "versions", "bytes"],
       "additionalProperties": false
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": { "enum": ["skill", "command", "agent"] },
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "stage": { "enum": ["trial", "active"] },
+          "versionID": { "type": "string" },
+          "contentDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        },
+        "required": ["kind", "id", "name", "description", "tags", "stage", "versionID", "contentDigest"],
+        "additionalProperties": false
+      }
     }
   },
-  "required": ["result", "kind", "id", "versionID", "contentDigest", "stage", "remaining"],
+  "required": ["result"],
   "additionalProperties": false
 }

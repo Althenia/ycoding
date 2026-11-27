@@ -136,6 +136,11 @@ async fn update(
     let definition = convert::definition_domain(&request.payload.definition)?;
     let _ = convert::kind(request.params.kind)?;
     let id = crate::convert::identifier::<project_artifact::Id>(&request.params.id)?;
+    let scope_id = scope(&services.store, &project, request.params.scope)?;
+    let definition = services
+        .store
+        .inherit_metadata(&scope_id, &id, &definition)
+        .map_err(failure)?;
     let id = id
         .as_lossless()
         .as_str()

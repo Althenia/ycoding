@@ -275,6 +275,7 @@ export function createDesktopRPC(controller: BackendController, preferences: {
     switchModel: async (input: Parameters<DesktopAPI["switchModel"]>[0]) => { await controller.switchModel(input) },
     sessionSnapshot: (input: Parameters<DesktopAPI["sessionSnapshot"]>[0]) => controller.sessionSnapshot(input),
     pendingInputs: (input: Parameters<DesktopAPI["pendingInputs"]>[0]) => controller.pendingInputs(input),
+    sessionRecall: (input: Parameters<DesktopAPI["sessionRecall"]>[0]) => controller.sessionRecall(input),
     removePending: async (input: Parameters<DesktopAPI["removePending"]>[0]) => { await controller.removePending(input) },
     steerPending: async (input: Parameters<DesktopAPI["steerPending"]>[0]) => { await controller.steerPending(input) },
     deleteMessage: async (input: Parameters<DesktopAPI["deleteMessage"]>[0]) => { await controller.deleteMessage(input) },

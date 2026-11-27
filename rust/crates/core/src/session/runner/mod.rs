@@ -11,9 +11,11 @@ mod stall;
 mod title;
 pub mod unfinished_ending;
 
+use crate::resources::recall::candidate::{Method as RecallMethod, Reason as RecallReason};
 pub use ingress::{CommandInput, IngressError, ShellInput};
 pub use notifier::mcp_notifier;
 pub use ycoding_ai::route::Executor;
+use ycoding_schema::recall as recall_schema;
 
 use super::{
     cache_diagnostics, compaction_gate, continuation, execution, history, live_state,
@@ -724,6 +726,7 @@ impl Local {
         ceiling: &super::instruction_assembly::Ceiling,
         inputs: &[ycoding_store::session::Pending],
         lifecycle: &[skill::LifecycleCue],
+        trace: &mut super::activation::Trace,
     ) -> Result<Vec<(skill_schema::Info, ycoding_schema::LosslessString, bool)>, Error> {
         let services = &self.0.services;
         let mut requested = Vec::new();
@@ -803,50 +806,7 @@ impl Local {
                 if !skill::valid_automatic(&metadata) {
                     continue;
                 }
-                let matched = lifecycle
-                    .iter()
-                    .any(|cue| skill::triggered(&metadata, cue.event, None))
-                    || inputs.iter().any(|input| {
-                        if input.type_.as_str() != Some("user") {
-                            return false;
-                        }
-                        let Ok(message) = session_message::Id::new(input.id.clone()) else {
-                            return false;
-                        };
-                        let cues = command_cues().lock().unwrap_or_else(|e| e.into_inner());
-                        let cue = cues.get(&(
-                            session.id.clone(),
-                            message,
-                            input.admitted_seq,
-                            input.time_created,
-                        ));
-                        let command = cue.and_then(|cue| cue.command.as_ref());
-                        let path = cue.is_some_and(|cue| {
-                            cue.paths
-                                .iter()
-                                .filter_map(|path| {
-                                    path.relative(std::path::Path::new(
-                                        session
-                                            .location
-                                            .directory
-                                            .as_lossless()
-                                            .as_str()
-                                            .unwrap_or_default(),
-                                    ))
-                                })
-                                .any(|path| skill::path_triggered(&metadata, &path))
-                        });
-                        path || skill::triggered(
-                            &metadata,
-                            "session.input.promoted",
-                            command.map(|cue| cue.0.as_slice()),
-                        ) || command.is_some()
-                            && skill::triggered(
-                                &metadata,
-                                "command.invoked",
-                                command.map(|cue| cue.0.as_slice()),
-                            )
-                    });
+                let matched = cue_match(session, inputs, lifecycle, &metadata);
                 candidates.push((info, metadata, matched));
             }
             let query = inputs
@@ -864,47 +824,64 @@ impl Local {
                 .iter()
                 .map(|(info, metadata, _)| (*info, metadata))
                 .collect::<Vec<_>>();
-            let mut ordered = candidates
-                .iter()
-                .enumerate()
-                .filter_map(|(index, (_, _, matched))| matched.then_some(index))
-                .collect::<Vec<_>>();
-            for index in skill::ranked_implicit(&implicit, &query) {
-                if !ordered.contains(&index) {
-                    ordered.push(index);
+            let mut ordered = Vec::new();
+            for (index, (info, _, matched)) in candidates.iter().enumerate() {
+                if let Some((reason, kind, subject)) = matched {
+                    trace.cue(*kind, subject.clone());
+                    ordered.push((
+                        super::activation::candidate(
+                            info.id.as_str().unwrap_or_default(),
+                            RecallMethod::Cue,
+                            *reason,
+                            1.0,
+                            &info.content.to_utf8().unwrap_or_default(),
+                        ),
+                        index,
+                    ));
                 }
             }
-            for index in ordered {
-                let info = candidates[index].0;
-                if active.iter().any(|status| {
-                    status.id == info.id
-                        && status.state == ycoding_schema::session_skill_status::State::Active
-                }) {
-                    continue;
+            for (index, score) in skill::ranked_implicit(&implicit, &query) {
+                if !ordered.iter().any(|(_, existing)| *existing == index) {
+                    ordered.push((
+                        super::activation::candidate(
+                            candidates[index].0.id.as_str().unwrap_or_default(),
+                            RecallMethod::Bm25,
+                            RecallReason::Lexical,
+                            score,
+                            &candidates[index].0.content.to_utf8().unwrap_or_default(),
+                        ),
+                        index,
+                    ));
                 }
-                if info.conflicts.as_ref().is_some_and(|conflicts| {
+            }
+            super::activation::order(&mut ordered);
+            for (candidate, index) in ordered {
+                let info = candidates[index].0;
+                let text = info.content.to_utf8().unwrap_or_default();
+                let source = super::activation::source(&candidate.id, &text);
+                let tokens = super::context_pressure::estimate(&text);
+                let is_active = |id: &skill_schema::Id| {
+                    active.iter().any(|status| {
+                        status.id == *id
+                            && status.state == ycoding_schema::session_skill_status::State::Active
+                    })
+                };
+                let mut rejection = if is_active(&info.id) {
+                    Some(recall_schema::Rejection::Duplicate)
+                } else if info.conflicts.as_ref().is_some_and(|conflicts| {
                     !conflicts.instructions.is_empty()
                         || conflicts.skills.iter().any(|id| {
-                            active.iter().any(|status| {
-                                status.id == *id
-                                    && status.state
-                                        == ycoding_schema::session_skill_status::State::Active
-                            }) || automatic.iter().any(
-                                |(other, _, _): &(skill_schema::Info, LosslessString, bool)| {
-                                    other.id == *id
-                                },
-                            )
+                            is_active(id)
+                                || automatic.iter().any(
+                                    |(other, _, _): &(skill_schema::Info, LosslessString, bool)| {
+                                        other.id == *id
+                                    },
+                                )
                         })
-                }) {
-                    continue;
-                }
-                if active.iter().any(|status| {
+                }) || active.iter().any(|status| {
                     status.state == ycoding_schema::session_skill_status::State::Active
                         && status.declarations.skills.contains(&info.id)
-                }) {
-                    continue;
-                }
-                if automatic.iter().any(
+                }) || automatic.iter().any(
                     |(other, _, _): &(skill_schema::Info, LosslessString, bool)| {
                         other
                             .conflicts
@@ -912,20 +889,32 @@ impl Local {
                             .is_some_and(|conflicts| conflicts.skills.contains(&info.id))
                     },
                 ) {
-                    continue;
+                    Some(recall_schema::Rejection::Conflict)
+                } else {
+                    None
+                };
+                let mut loaded = None;
+                if rejection.is_none() {
+                    let content = resolver.instructions(info).await.map_err(|_| {
+                        error(
+                            "skill.unavailable",
+                            "Skill instructions could not be loaded",
+                        )
+                    })?;
+                    let size = content.to_utf8().map_or(usize::MAX, |text| text.len());
+                    if automatic_bytes.saturating_add(size) > 2048 {
+                        rejection = Some(recall_schema::Rejection::OverBudget);
+                    } else {
+                        automatic_bytes += size;
+                        loaded = Some(content);
+                    }
                 }
-                let content = resolver.instructions(info).await.map_err(|_| {
-                    error(
-                        "skill.unavailable",
-                        "Skill instructions could not be loaded",
-                    )
-                })?;
-                let size = content.to_utf8().map_or(usize::MAX, |text| text.len());
-                if automatic_bytes.saturating_add(size) > 2048 {
-                    continue;
+                trace.items.push(super::activation::item(
+                    &candidate, source, rejection, tokens,
+                ));
+                if let Some(content) = loaded {
+                    automatic.push((info.clone(), content, true));
                 }
-                automatic_bytes += size;
-                automatic.push((info.clone(), content, true));
             }
             return Ok(automatic);
         }
@@ -975,6 +964,23 @@ impl Local {
                     "Skill instructions could not be loaded",
                 )
             })?;
+            let text = info.content.to_utf8().unwrap_or_default();
+            trace.cue(
+                recall_schema::CueKind::Explicit,
+                id.to_utf8().ok().map(|id| id.to_string()),
+            );
+            trace.items.push(super::activation::item(
+                &super::activation::candidate(
+                    info.id.as_str().unwrap_or_default(),
+                    RecallMethod::Explicit,
+                    RecallReason::ExplicitId,
+                    1.0,
+                    &text,
+                ),
+                super::activation::source(info.id.as_str().unwrap_or_default(), &text),
+                None,
+                super::context_pressure::estimate(&text),
+            ));
             resolved.push((info.clone(), content, false));
         }
         Ok(resolved)
@@ -1323,6 +1329,7 @@ impl Local {
                     }
                     let lifecycle =
                         skill::lifecycle_cues(&services.store.client.snapshot()?, &session.id)?;
+                    let mut trace = super::activation::Trace::new();
                     let prepared = local
                         .resolve_requested_skills(
                             &session,
@@ -1330,6 +1337,7 @@ impl Local {
                             &ceiling,
                             std::slice::from_ref(&input),
                             &lifecycle,
+                            &mut trace,
                         )
                         .await?;
                     match services
@@ -1371,6 +1379,15 @@ impl Local {
                     }
                     promoted_skills.extend(prepared.clone());
                     local.activate_skills(&session, &assembly, prepared).await?;
+                    super::activation::publish(
+                        &services.store,
+                        &session.id,
+                        &format!("skill:{}", input.id.as_str().unwrap_or_default()),
+                        session_message::Id::new(input.id.clone()).ok().as_ref(),
+                        trace,
+                        services.clock.now(),
+                    )
+                    .await?;
                     services
                         .store
                         .client
@@ -1407,10 +1424,32 @@ impl Local {
                 let lifecycle =
                     skill::lifecycle_cues(&services.store.client.snapshot()?, &session.id)?;
                 if !lifecycle.is_empty() {
+                    let mut trace = super::activation::Trace::new();
                     let prepared = local
-                        .resolve_requested_skills(&session, agent, &ceiling, &[], &lifecycle)
+                        .resolve_requested_skills(
+                            &session,
+                            agent,
+                            &ceiling,
+                            &[],
+                            &lifecycle,
+                            &mut trace,
+                        )
                         .await?;
                     local.activate_skills(&session, &assembly, prepared).await?;
+                    let identity = lifecycle
+                        .iter()
+                        .map(|cue| cue.identity.as_str().unwrap_or_default())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    super::activation::publish(
+                        &services.store,
+                        &session.id,
+                        &format!("skill-lifecycle:{identity}"),
+                        None,
+                        trace,
+                        services.clock.now(),
+                    )
+                    .await?;
                     services
                         .store
                         .client
@@ -1940,7 +1979,8 @@ impl Local {
             let context_window = resolved.info.limit.context.get();
             let recalled = match &local.0.recall {
                 Some(recall) => {
-                    recall
+                    let started = std::time::Instant::now();
+                    let appended = recall
                         .append(
                             &session.id,
                             &agent.id,
@@ -1949,7 +1989,31 @@ impl Local {
                             context_window - services.compaction.context_safety_margin_tokens,
                             automatic_budget,
                         )
-                        .await
+                        .await;
+                    let user = loaded.iter().rev().find_map(|message| match message {
+                        session_message::Info::User(user) => Some(user.id.clone()),
+                        _ => None,
+                    });
+                    if let (Some(user), false) = (user, appended.items.is_empty()) {
+                        super::activation::record(
+                            &services.store,
+                            super::activation::Recording {
+                                session: &session.id,
+                                identity: &format!(
+                                    "memory:{}",
+                                    user.as_lossless().as_str().unwrap_or_default()
+                                ),
+                                trigger: recall_schema::Trigger::Prompt,
+                                cue: None,
+                                items: appended.items,
+                                elapsed_ms: started.elapsed().as_millis() as i64,
+                                budget: Some(automatic_budget),
+                            },
+                            services.clock.now(),
+                        )
+                        .await?;
+                    }
+                    appended.injected
                 }
                 None => false,
             };
@@ -3990,6 +4054,72 @@ pub(crate) async fn publish(
     Ok(())
 }
 
+fn cue_match(
+    session: &session::Info,
+    inputs: &[ycoding_store::session::Pending],
+    lifecycle: &[skill::LifecycleCue],
+    metadata: &JsonObject,
+) -> Option<(RecallReason, recall_schema::CueKind, Option<String>)> {
+    if let Some(cue) = lifecycle
+        .iter()
+        .find(|cue| skill::triggered(metadata, cue.event, None))
+    {
+        let kind = if cue.event == "session.compacted" {
+            recall_schema::CueKind::Compaction
+        } else {
+            recall_schema::CueKind::Recovery
+        };
+        return Some((RecallReason::Event, kind, Some(cue.event.to_string())));
+    }
+    let directory = std::path::Path::new(
+        session
+            .location
+            .directory
+            .as_lossless()
+            .as_str()
+            .unwrap_or_default(),
+    );
+    for input in inputs
+        .iter()
+        .filter(|input| input.type_.as_str() == Some("user"))
+    {
+        let Ok(message) = session_message::Id::new(input.id.clone()) else {
+            continue;
+        };
+        let cues = command_cues().lock().unwrap_or_else(|e| e.into_inner());
+        let cue = cues.get(&(
+            session.id.clone(),
+            message,
+            input.admitted_seq,
+            input.time_created,
+        ));
+        let command = cue.and_then(|cue| cue.command.as_ref());
+        let words = command.map(|cue| cue.0.as_slice());
+        if let Some(path) = cue.and_then(|cue| {
+            cue.paths
+                .iter()
+                .filter_map(|path| path.relative(directory))
+                .find(|path| skill::path_triggered(metadata, path))
+        }) {
+            return Some((RecallReason::Path, recall_schema::CueKind::Path, Some(path)));
+        }
+        if command.is_some() && skill::triggered(metadata, "command.invoked", words) {
+            return Some((
+                RecallReason::Command,
+                recall_schema::CueKind::Command,
+                words.map(|words| words.join(" ")),
+            ));
+        }
+        if skill::triggered(metadata, "session.input.promoted", words) {
+            return Some((
+                RecallReason::Event,
+                recall_schema::CueKind::Lifecycle,
+                Some("session.input.promoted".to_string()),
+            ));
+        }
+    }
+    None
+}
 fn event(
     id: &session::Id,
     assistant: Option<&session_message::Id>,

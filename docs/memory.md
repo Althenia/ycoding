@@ -1,103 +1,208 @@
 # Repository memories and shared knowledge
 
-Memory stores linked, human-readable Markdown concepts. It separates repository memories, shared by all worktrees of one local Git repository, from shared knowledge. It is an explicit knowledge store, not Session history, a prompt cache, or a project artifact. The runtime does not extract concepts from transcripts. When a Session has the `memory` tool and effective `allow` for both `memory` and `memory_read` on the repository root, the native runner can append matching repository references to the current provider request. It skips an `ask` or `deny` without prompting. Shared knowledge is never selected automatically. Each reference carries its source IDs and byte digest; identical bodies appear once. These references are not saved as Session messages.
+Memory stores durable knowledge as an [Open Knowledge Format](https://github.com/google/okf) (OKF) v0.3 bundle: UTF-8 Markdown concepts with YAML frontmatter, linked by relative paths, indexed by `index.md`, and journaled in `log.md`. Repository memories are shared by all worktrees of one local Git repository. Shared knowledge is a second bundle that spans repositories. Memory is not Session history, a prompt cache, or a project artifact, and the runtime never extracts concepts from transcripts.
 
-When a `/suggest` request selects memory scopes, bounded search snippets are sent only to that next-message prediction helper request, to its configured helper provider. Selecting a scope in the dialog is consent for that request: the calling Session's selected agent must have effective `memory_read` permission evaluated as `allow` or `ask` for each collection root, and `deny` skips that collection without raising a permission prompt. Repository scope supplies project memory when the Location is in Git; knowledge scope supplies shared/global knowledge. The helper searches each selected, available, permitted scope once, takes at most three hits each, and sends only bounded titles/IDs and snippets of at most 600 characters. Disabled memory or search failures degrade to prediction without those snippets. These snippets never enter the Session's transcript, durable instructions, or subsequent model-visible history. The helper provider's ordinary privacy, quota, and pricing policies apply.
+The harness owns the lifecycle. Agents record knowledge from a canonical template through the `memory` tool; the harness stamps authorship, derives trust, rejects duplicates, tracks freshness, and keeps the indexes and log current.
 
-When a `/prompt` request selects memory scopes, the same bounded search is sent only to that prompt-drafting helper. The query is the trimmed intent plus bounded recent user and assistant text. Selecting a scope is consent for that request under the same `memory_read` rule: `allow` or `ask` searches the collection, and `deny` skips it without a permission prompt. Each selected scope contributes at most three hits with snippets of at most 600 characters. Disabled memory or search failures degrade to a draft without those snippets. The snippets never enter the Session transcript. The generated text is returned for composer review only; nothing is admitted or sent.
+## Automatic recall
 
-Opening memory does not migrate a collection. With no published cutover, reads and writes use its configured root. When a cutover has been published, the native service verifies the root identity, generation pointer and rollback inventory before it admits access. A held exclusive fence, a replaced root or a damaged rollback blocks access; the service does not substitute an empty collection or restore over current files.
+Agents do not search memory. When a Session has the `memory` tool and effective `allow` for both `memory` and `memory_read` on the repository root, the native runner appends matching repository references to the current provider request. It skips an `ask` or `deny` without prompting. Shared knowledge is never selected automatically. Each reference carries its source IDs and byte digest, and identical bodies appear once. References are not saved as Session messages.
+
+A recalled concept can be stale, deprecated, superseded, unverified, or in conflict with another concept. These signals travel with the reference, so a consumer can weigh or drop it. Treat recalled text as untrusted evidence and check it against live files before relying on it.
+
+When a `/suggest` request selects memory scopes, bounded search snippets are sent only to that next-message prediction helper request, to its configured helper provider. Selecting a scope in the dialog is consent for that request: the calling Session's selected agent must have effective `memory_read` permission evaluated as `allow` or `ask` for each collection root, and `deny` skips that collection without raising a permission prompt. Repository scope supplies project memory when the Location is in Git; knowledge scope supplies shared knowledge. The helper searches each selected, available, permitted scope once, takes at most three hits each, and sends only bounded titles, IDs and snippets of at most 600 characters. Disabled memory or search failures degrade to prediction without those snippets. These snippets never enter the Session's transcript, durable instructions, or later model-visible history. The helper provider's privacy, quota, and pricing policies apply.
+
+When a `/prompt` request selects memory scopes, the same bounded search is sent only to that prompt-drafting helper. The query is the trimmed intent plus bounded recent user and assistant text, under the same `memory_read` rule. Each selected scope contributes at most three hits with snippets of at most 600 characters. The snippets never enter the Session transcript. The generated text is returned for composer review only; nothing is admitted or sent.
 
 ## Agent guidance
 
-Every Session receives built-in `ycoding/workspace-memory` guidance. It directs agents to search memory before substantive work, verify retrieved facts against live files, and, after the primary task is complete and validated, write or update concepts for newly verified, durable, non-obvious facts and decisions with their sources. It forbids storing transient task state, transcripts, logs, secrets, credentials, private URLs, customer data, or speculation. Every such call goes through the `memory` tool and its [permission boundary](#permission-boundary).
+Every Session receives built-in `ycoding/workspace-memory` guidance. It tells the agent to record each newly verified, durable, non-obvious fact, decision, constraint, preference, lesson, troubleshooting finding, procedure, or known issue once, after the primary task is complete and validated. The agent calls `template` for the canonical shape, cites evidence in `sources` with matching footnotes, and writes the concept. A near-duplicate answers `duplicateOf`; the agent then updates that concept with its current digest. Outdated knowledge is retired with `supersede` or `retire`.
 
-## Explicit requests
+The guidance states what memory holds: durable verified knowledge only. Procedures belong in skills, events in Session history, and behavior in harness configuration.
 
-Ask the agent to use the built-in `memory` tool directly:
+The guidance forbids transient task state, transcripts, logs, secrets, credentials, personal data, private URLs, machine-local paths, and speculation. It also forbids writing `generated` or `verified` fields. Every call goes through the `memory` tool and its [permission boundary](#permission-boundary).
 
-- “Search workspace memory for build constraints.”
-- “Read the `build/testing` memory concept.”
-- “Save this verified decision to workspace memory, preserving its sources.”
-- “Export the workspace memory graph and give me its local file path.”
+## Tool actions
 
-Every action accepts optional `scope: "repository" | "knowledge"`. Repository scope is the default; select `knowledge` explicitly for shared cross-repository concepts. The interface is:
+Every action accepts an optional `scope` of `repository` (default) or `knowledge`.
 
-| Action    | Input                                                                                       | Result                                                                                                                |
-| --------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `status`  | No additional fields                                                                        | Enabled state, selected scope/root, base, knowledge root, repository/worktree association when available, and limits. |
-| `list`    | Optional `offset` (integer ≥ 0) and `limit` (1–100, default 20)                             | `concepts` metadata, `total` count, and warnings.                                                                     |
-| `search`  | `query` (1–1,024 characters); optional `type`, `tag`, `limit` (1–50, default 10)            | `hits`: concept metadata, `score`, a bounded `snippet`, and warnings.                                                 |
-| `read`    | `id`                                                                                        | `id`, complete Markdown `content`, and its SHA-256 `digest`.                                                          |
-| `write`   | `id`, `content`; optional `expectedDigest`                                                  | `id`, committed `digest`, whether the concept was `created`, and warnings.                                            |
-| `graph`   | No additional fields                                                                        | Local HTML `path`, `digest`, `nodes` and `edges` counts, and warnings.                                                |
-| `delete`  | `id`, required `expectedDigest`                                                             | `id`, `trashID`, `digest`, and warnings.                                                                              |
-| `trash`   | Optional `offset` (integer ≥ 0) and `limit` (1–100, default 20)                             | `entries` (`id`, `trashID`, `digest`), `total`, and warnings.                                                         |
-| `restore` | `trashID`, required `expectedDigest`                                                        | Restored `id`, `digest`, and warnings.                                                                                |
-| `purge`   | `trashID`, required `expectedDigest`                                                        | `trashID`, `purged`, and warnings.                                                                                    |
-| `vacuum`  | Optional `dryRun` (default `true`) and `expectedDigest` (required when `dryRun` is `false`) | `dryRun`, inventory `digest`, `removed` collection-relative paths, and warnings.                                      |
+| Action      | Input                                                                                       | Result                                                                                                                         |
+| ----------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `status`    | No additional fields                                                                        | Enabled state, selected scope and root, base, knowledge root, repository and worktree association, and limits.                 |
+| `template`  | `kind`: `fact`, `decision`, `constraint`, `preference`, `lesson`, `troubleshooting`, `procedure`, or `known-issue` | The canonical `type`, its `purpose`, and a Markdown skeleton to fill in.                                      |
+| `write`     | `id`, `content`; optional `expectedDigest`, `allowHumanActor`                               | `id`, committed `digest`, `created`, `warnings`, advisory `diagnostics`, and `duplicateOf` when a near-duplicate exists.       |
+| `read`      | `id`                                                                                        | `id`, complete Markdown `content`, and its SHA-256 `digest`.                                                                   |
+| `list`      | Optional `offset` (≥ 0) and `limit` (1–100, default 20)                                     | Concept metadata with lifecycle `signals`, `total`, and warnings.                                                              |
+| `search`    | `query` (1–1,024 characters); optional `type`, `tag`, `limit` (1–50, default 10)            | Ranked hits with `score`, a bounded `snippet`, lifecycle `signals`, and warnings. An administrative lookup; Sessions recall automatically. |
+| `review`    | No additional fields                                                                        | Concepts flagged stale, deprecated, draft, unverified, conflicting, or verified before their latest change, plus findings.    |
+| `supersede` | `id`, `replacement`, required `expectedDigest`                                              | Marks `id` deprecated and links `superseded_by` to the replacement.                                                           |
+| `retire`    | `id`, required `expectedDigest`                                                             | Marks `id` deprecated with no replacement.                                                                                     |
+| `graph`     | No additional fields                                                                        | Local HTML `path`, `digest`, `nodes` and `edges` counts, and warnings.                                                         |
+| `delete`    | `id`, required `expectedDigest`                                                             | `id`, `trashID`, `digest`, and warnings.                                                                                       |
+| `trash`     | Optional `offset` (≥ 0) and `limit` (1–100, default 20)                                     | `entries` (`id`, `trashID`, `digest`), `total`, and warnings.                                                                  |
+| `restore`   | `trashID`, required `expectedDigest`                                                        | Restored `id`, `digest`, and warnings.                                                                                         |
+| `purge`     | `trashID`, required `expectedDigest`                                                        | `trashID`, `purged`, and warnings.                                                                                             |
+| `vacuum`    | Optional `dryRun` (default `true`) and `expectedDigest` (required when `dryRun` is `false`) | `dryRun`, inventory `digest`, `removed` collection-relative paths, and warnings.                                               |
 
-Every `digest` is a SHA-256 hash, and its subject depends on the action. For concepts and trash entries it hashes the exact content bytes; for `graph` it hashes the exported HTML; for `vacuum` it is a plan digest over the planned removals, live concepts, and trash inventory. `delete`, `restore`, `purge`, and applied `vacuum` require the current digest and fail without changing anything when it is missing, malformed, or stale. In `write`, `expectedDigest` stays optional: omit it to create, supply the current digest to replace, and an exact retry of identical bytes succeeds. A `trashID` is `trash_` followed by 64 lowercase hexadecimal characters.
+Every `digest` is a SHA-256 hash. For concepts and trash entries it hashes the exact content bytes; for `graph` it hashes the exported HTML; for `vacuum` it is a plan digest over the planned removals, live concepts, and trash inventory. `delete`, `restore`, `purge`, `supersede`, `retire`, and applied `vacuum` require the current digest and change nothing when it is missing, malformed, or stale. In `write`, `expectedDigest` stays optional: omit it to create, supply the current digest to replace, and an exact retry of identical bytes succeeds. A `trashID` is `trash_` followed by 64 lowercase hexadecimal characters.
 
-Search runs locally and returns BM25 results from the selected collection:
+Search and list leave the Markdown collection unchanged.
 
-- **Tokens:** the query and concept text are lowercased as a whole string with JavaScript lowercasing, then NFC-normalized, then split into words of Unicode letters, numbers, and underscores. This normalization applies only to matching; stored concept content is never normalized. There is no stemming, accent or locale folding, phrase, prefix, or Boolean syntax. Distinct query tokens are whole-token OR terms: a concept matches when any token occurs.
-- **Fields:** three aggregate fields score: title and ID combined (boost 4), type, tags, and description combined (boost 2), and body (boost 1). Each aggregate field is length-normalized separately against its own average length, which includes every concept in the collection, even those with an empty field. An aggregate field's BM25 term score (`k1` = 1.2, `b` = 0.75) is multiplied by its boost.
-- **IDF:** `ln(1 + (N − df + 0.5) / (df + 0.5))`, where `N` is the number of concepts in the collection and `df` is the number whose any field contains the token.
-- **Filters:** `type` and `tag` are exact, case-sensitive matches applied after scoring; collection statistics (`N`, `df`, field lengths) are computed before filtering and do not change with filters.
-- **Order:** higher scores rank first; ties sort by ascending concept ID. Scores depend on the collection's contents and are comparable only within one result.
+Search runs locally and returns ranked results from the selected collection. [`cue-retrieval.md`](./cue-retrieval.md) describes the engine:
+
+- **Tokens:** the query and concept text are NFC-normalized and lowercased, then split into word tokens that keep underscores. Common English function words are dropped from the query. This normalization applies only to matching; stored concept content is never normalized. There is no stemming, accent or locale folding, prefix, or Boolean syntax. Distinct query tokens are OR terms.
+- **Fields:** Tantivy BM25 scores the title (boost 3), identifiers (3), tags (2), keywords (2), description (2), type (2), body (1), and relationships (0.5). Each field is length-normalized separately.
+- **Exact tiers:** a concept whose ID, title, tag, or identifier equals the query, or whose body contains the query as a phrase, ranks above BM25-only results.
+- **Filters:** `type` and `tag` are exact, case-sensitive matches. `Toolchain` does not match the tag `toolchain`.
+- **Order:** exact tiers first, then higher BM25 scores; ties sort by ascending concept ID. Search returns the top `limit` results without a score floor. Scores depend on the collection's contents and are comparable only within one result.
 - **Snippet:** at most 320 UTF-16 code units from the body, positioned at the first matching token's original text and never splitting a surrogate pair. It is not guaranteed to end on a whole-character (grapheme) boundary.
 
-Search and list leave the Markdown collection unchanged. Search keeps a rebuildable index under `recall/index` in the data directory. A changed ID or digest invalidates the lexical generation. If another process holds the publication lock or the snapshot cannot be saved, search uses the current in-memory index. An interrupted build never publishes a partial index or returns hits from an obsolete generation.
+
+## Concept templates
+
+Each canonical type has a template with a shared foundation and type-specific optional fields. The shared foundation is `type`, `title`, `description`, `tags`, and, where a claim needs evidence, `sources` with matching footnotes. Type-specific fields use the `x-ycoding-` prefix so they stay clear of OKF's reserved keys.
+
+| Kind              | `type`         | Sourced | Sections                           | Type-specific fields                                                  |
+| ----------------- | -------------- | ------- | ---------------------------------- | --------------------------------------------------------------------- |
+| `fact`            | Verified Fact  | yes     | Fact, Evidence                     | `x-ycoding-subject`                                                   |
+| `decision`        | Decision       | yes     | Decision, Rationale, Consequences  | `x-ycoding-revisit-when`                                              |
+| `constraint`      | Constraint     | yes     | Constraint, Reason                 | `x-ycoding-applies-to`, `x-ycoding-enforced-by`                       |
+| `preference`      | Preference     | yes     | Preference, Evidence               | `x-ycoding-applies-to`                                                |
+| `lesson`          | Lesson         | no      | Lesson, Context                    | `x-ycoding-trigger`                                                   |
+| `troubleshooting` | Troubleshooting| no      | Symptom, Cause, Fix                | `x-ycoding-symptom`                                                   |
+| `procedure`       | Procedure      | no      | When to use, Steps                 | `x-ycoding-applies-to`                                                |
+| `known-issue`     | Known Issue    | no      | Issue, Workaround, Resolution      | `x-ycoding-affects`, `x-ycoding-workaround`, `x-ycoding-resolution`   |
+| `experience`      | Experience     | yes     | Cue, Lesson, Evidence              | `x-ycoding-cue`, `x-ycoding-lesson`, `x-ycoding-applicability`, `x-ycoding-outcome`, `x-ycoding-confidence`, `x-ycoding-harness-change` |
+
+Templates guide authors; they are not a schema. A concept with any other `type` is valid OKF and is accepted. A write returns advisory `diagnostics` with `Y` codes for deviations: a missing title (`Y301`), description (`Y302`) or body (`Y303`), a non-canonical type (`Y300`), missing source citations on a sourced type (`Y304`), a missing template section (`Y305`), a machine-local path (`Y310`), and a private URL (`Y311`). Advice never blocks a write.
+
+## Experiences
+
+An `Experience` concept records one cue-triggered lesson from one observed outcome. The native harness produces experiences through `Service::record_experience(scope, id, &Experience, expected_digest)`. `experience::render` builds the canonical Markdown, `experience::id` derives a stable ID from the cue and outcome, and every write of a concept whose `type` is `Experience` (any letter case) passes the same validation, whichever path wrote it.
+
+| Field                      | Where                         | Rule                                                                                       |
+| -------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------ |
+| cue                        | `x-ycoding-cue`               | Required. One line, at most 240 characters. The situation that should recall the lesson.   |
+| lesson                     | `x-ycoding-lesson`            | Required. One line, at most 600 characters. The rule the outcome established.              |
+| applicability              | `x-ycoding-applicability`     | Required. One line, at most 240 characters. Where the lesson holds.                        |
+| outcome                    | `x-ycoding-outcome`           | Required. Exactly `success` or `failure`.                                                  |
+| confidence                 | `x-ycoding-confidence`        | Required. A number from 0 to 1, written as a quoted string. The writer's own estimate.     |
+| evidence                   | `sources` with footnotes      | Required. One to eight sources. Each `resource` is a URI with a scheme other than `file`, or the absolute path of another concept ending in `.md`, with no whitespace. |
+| linked harness change      | `x-ycoding-harness-change`    | Optional. One whitespace-free string of at most 300 characters, such as a `repo:///` path, a commit, or an ID. |
+
+Rejections carry a reason: `experience-cue-invalid`, `experience-lesson-invalid`, `experience-applicability-invalid`, `experience-outcome-invalid`, `experience-confidence-invalid`, `experience-harness-change-invalid`, `experience-evidence-missing`, `experience-evidence-invalid`, `experience-transcript` (two or more lines that start with a speaker label such as `user:` or `assistant:`), and `experience-body-too-long` (more than 4096 bytes).
+
+Trust comes only from verification events. Confidence, outcome, and evidence never raise it, and the producer never writes `generated` or `verified`. An experience stays unverified until a human confirms it through `write` with `allowHumanActor`, and any edit to its content drops that verification. The title is the outcome plus the cue, so one cue can hold one success and one failure. A second experience with the same title or a near-identical body answers `duplicateOf` instead of creating a duplicate.
+
+Memory holds durable verified knowledge, skills hold procedures, Session history holds events, and harness configuration holds behavior. An experience carries the distilled lesson and a reference to its evidence. It never carries a transcript, a command log, step-by-step instructions, or the state of a running task.
+
+Retrieval receives an experience as a `Document` whose `keywords` include the cue and whose `identifiers` include the linked harness change, next to the usual tags, sources, and body.
+
+## Authoring contract
+
+IDs are slash-separated lowercase letters, digits, underscores, and hyphens, starting each segment with a letter or digit. Supply no extension. Absolute paths, dot segments, symlink escapes, and the reserved `index` and `log` segments are rejected. Hand-placed concepts with any other safe file name are still read, listed and recalled.
+
+A concept needs YAML frontmatter with a nonempty string `type`, delimited by `---` lines, holding one mapping with unique keys. OKF treats every other field as optional, so a malformed optional field never rejects a concept or hides it from readers. It surfaces as a warning on `list` and `review` instead. A write is rejected only for:
+
+- frontmatter that is not a YAML mapping, has duplicate keys, is unterminated, or lacks `type`;
+- a credential pattern anywhere in the content (private key blocks, GitHub and AWS tokens, Bearer headers);
+- a `verified` event the harness cannot attribute, or a `human:` actor without `allowHumanActor`.
+
+```markdown
+---
+type: Decision
+title: Test ownership
+description: Checks run from the package that owns the behavior.
+tags: [testing, architecture]
+sources:
+  - id: guide
+    resource: repo:///AGENTS.md
+    title: Repository guide
+---
+
+# Decision
+
+Run checks from the package that owns the behavior.[^guide]
+
+[^guide]: Repository guide.
+```
+
+Each source needs a `resource`; `id` is optional unless the body cites that source. A footnote with no matching source is a warning. YCoding checks this structure and does not verify that the cited material exists or supports the claim. Links may be relative (`../decisions.md`), bundle-root-relative (`/testing/build.md`), or reference-style. A link must stay inside the bundle. Links in code do not create edges, and dangling links produce warnings. Unknown frontmatter fields and exact UTF-8 content, including a byte-order mark, are preserved. Attested computation concepts (`runtime`, `attester`) are read and validated; their embedded code is never executed.
+
+## Provenance, trust and freshness
+
+The harness, not the agent, owns provenance:
+
+- **Authorship.** On every meaningful content change the harness stamps `generated: { by: ycoding/<version>, at: <time> }`. An unchanged rewrite keeps the existing stamp and its digest.
+- **Verification.** `verified` is a list of `{ by, at }` events. An agent cannot add one. A human event is accepted only when the write sets `allowHumanActor` after the person explicitly confirmed, and its time is not in the future. An existing event passes through unchanged.
+- **Trust tier.** Derived from current `verified` events only: `unverified` when none is current, `machine-confirmed` for non-human actors, `human-reviewed` when a human event is current. An event is current only when its `at` is not earlier than `generated.at`, so editing a verified concept drops it back to `unverified`.
+- **Lifecycle status.** `status` is `stable`, `draft`, or `deprecated`; other values read as non-current. `supersede` and `retire` set `deprecated` and maintain `superseded_by`. The harness never invents `stale_after`.
+- **Freshness.** A concept is stale once `stale_after` has passed, and a malformed `stale_after` is flagged.
+- **Conflicts.** Two or more current concepts with the same normalized `type` and `title` under different IDs conflict. Creating one is answered with `duplicateOf` instead of storing it; hand-placed files can still conflict.
+- **Duplicates.** A create is a duplicate when a current concept has the same normalized type and title, or a body with at least 90% token overlap and at least eight tokens.
+
+`list`, `search`, and automatic recall expose these as `signals`: `status`, `current`, `trust`, `stale`, `stale_after`, `superseded_by`, `verification_older_than_content`, and `conflicts_with`. `review` collects the flagged concepts so they can be repaired.
 
 ## Repository identity and storage
 
 The default base is `<YCoding data directory>/memory`, normally `~/.local/share/ycoding/memory`. The repository layout uses `repository/repo_<sha256>/`, keyed by the canonical Git common directory, not by the opened worktree folder or remote URL.
 
-The main checkout, its subdirectories, symlink aliases, and linked worktrees share repository memories. Separate local Git repositories remain isolated even if their remotes match. Shared concepts live under `knowledge/`; knowledge operations remain available outside Git. Changing the configured base changes where YCoding looks and does not migrate existing files.
+The main checkout, its subdirectories, symlink aliases, and linked worktrees share repository memories. Separate local Git repositories remain isolated even if their remotes match. Shared concepts live under `knowledge/`; knowledge operations remain available outside Git. Changing the configured base changes where YCoding looks and does not move existing files.
 
-An explicit write or graph export creates storage, and an applied vacuum on missing storage can create the collection root. Delete, restore, and purge require existing storage and never create it; a vacuum preview never creates storage or lock files. Missing storage reads as empty; inaccessible storage is an error. Disabling the feature leaves existing files intact. On POSIX, managed scope directories are private (`0700`) and newly written concept and derived files use `0600`.
+An explicit write or graph export creates storage, and an applied vacuum on missing storage can create the collection root. Delete, restore, and purge require existing storage and never create it; a vacuum preview never creates storage or lock files. Missing storage reads as empty; inaccessible storage is an error. Disabling the feature leaves existing files intact. On POSIX, managed scope directories are private (`0700`) and newly written files use `0600`.
 
 ```text
 memory/
   repository/
     repo_<sha256>/
       index.md
-      mem_build_rules.md
+      log.md
+      build_rules.md
+      testing/
+        index.md
+        ownership.md
       graph.html
-      trash/
+      .trash/
         trash_<sha256>.md
         trash_<sha256>.json
   knowledge/
     index.md
+    log.md
     testing.md
-    graph.html
 ```
 
-Concept Markdown is authoritative. Root/nested `index.md` and `graph.html` are derived; do not edit them as knowledge. Each `trash/` entry is an archived copy (`.md`) with a version 1 receipt (`.json`) that records its original concept ID; both are managed by the tool. The repository index associates memories with the repository and its checkout/worktree paths, so review it before sharing. Repository exports include shared knowledge for cross-tree traversal; knowledge-only exports do not scan other repositories.
+Concept Markdown is authoritative. The root `index.md` carries `okf_version: "0.3"`, a title, a description, and an `x-ycoding-repository` identifier, then lists subdirectories and concepts. Nested `index.md` files list their directory. A generated index is rewritten from the concepts; an `index.md` whose frontmatter you wrote yourself keeps that frontmatter. Indexes name no machine-local paths. `log.md` has no frontmatter and records each change as a dated bullet under a `## YYYY-MM-DD` heading, newest date first. `graph.html` is derived. Do not edit derived files as knowledge. The `.trash/` folder sits outside the bundle: each entry is an archived copy (`.md`) with a version 1 receipt (`.json`) that records the original concept ID.
 
 ## Maintenance lifecycle
 
 The maintenance contract is collection-scoped:
 
 - **Update:** read the entry and pass its current digest to `write`. A stale digest must not overwrite newer content.
+- **Retire:** `supersede` and `retire` mark an entry deprecated and keep it readable; recall treats it as non-current.
 - **Delete:** move an exact, digest-checked entry to recoverable trash. Repository deletion affects all worktrees sharing that collection; shared-knowledge deletion affects all its consumers.
-- **Inspect trash:** list recoverable entries separately. Trash is excluded from normal search, concept lists, indexes, and newly generated graphs.
+- **Inspect trash:** list recoverable entries separately. Trash is excluded from normal listing, recall, indexes, and newly generated graphs.
 - **Restore:** restore to the original concept ID, refusing to overwrite an existing entry. The `trashID` and the entry's current digest are required.
-- **Purge:** permanently remove one explicitly selected trash entry, identified by its `trashID` and current digest. Purge does not mean deleting an entire repository collection or every entry matching a wildcard.
-- **Vacuum:** collection-local file maintenance, not SQLite `VACUUM`. `dryRun` defaults to `true`; the preview lists the paths an apply would remove and returns a `digest` that binds the exact bytes of each, the live concepts, and the trash inventory. Apply with `dryRun: false` and that exact `expectedDigest`; a missing or stale digest removes nothing. Apply removes only:
-  - recognized obsolete generated `index.md` files; and
-  - recognized orphan trash receipts: regular, size-bounded version 1 `.json` receipts with a valid concept ID whose archived copy is absent.
+- **Purge:** permanently remove one explicitly selected trash entry, identified by its `trashID` and current digest.
+- **Vacuum:** collection-local file maintenance. `dryRun` defaults to `true`; the preview lists the paths an apply would remove and returns a `digest` that binds the exact bytes of each, the live concepts, and the trash inventory. Apply with `dryRun: false` and that exact `expectedDigest`; a missing or stale digest removes nothing. Apply removes only recognized obsolete generated `index.md` files and recognized orphan trash receipts (regular, size-bounded version 1 `.json` receipts with a valid concept ID whose archived copy is absent). The preview lists at most the configured `max_concepts` receipts and adds a truncation warning when more exist. It then rebuilds the indexes. Vacuum preserves every archived copy, live concept, and other collection, plus unrecognized, malformed, oversized, symlinked, and unknown-version receipts and any file it did not inspect. An archive without a receipt is reported with an `unpaired-trash` warning and left unchanged.
 
-  The preview lists at most the configured `max_concepts` known orphan receipts and adds a truncation warning when more exist; apply removes exactly that unchanged previewed batch, so repeat preview and apply to clear a larger backlog. It then rebuilds derived indexes. Vacuum preserves every archived copy, live concept, and other collection, plus unrecognized, malformed, oversized, symlinked, and unknown-version receipts, temporary files, and any file it did not inspect. An archive without a receipt is reported with an `unpaired-trash` warning and left unchanged: it is a nonblocking advisory diagnostic, not a recoverable receipt entry, its bytes do not count toward receipt capacity, and vacuum never cleans it up automatically. The bound covers orphan-receipt selection and diagnostic output, not every directory read.
+There is no automatic expiry, eviction, bulk prune, or deletion of a repository collection merely because a checkout cannot be found. Trash remains until explicitly restored or purged, subject to bounded storage. Deleting an entry whose receipt already exists for the same concept ID and bytes reuses that archived copy; a genuinely new receipt is admitted only from a complete, readable receipt inventory. A truncated or unreadable listing refuses the new deletion. Restore, purge, and applied vacuum stay available in that state.
 
-There is no automatic expiry, eviction, bulk prune, or deletion of a repository collection merely because a checkout cannot be found. Trash remains until explicitly restored or purged, subject to bounded storage. Maintenance uses the same permission, guardrail, locking, and path-containment boundaries as other mutations.
+A mutation refreshes the managed indexes, log, and graph of its own collection. An exported repository graph embeds a snapshot of shared knowledge and keeps it until exported again. Purging a trash entry does not erase copies, backups, or earlier graph exports.
 
-Deleting an entry whose receipt already exists for the same concept ID and bytes reuses that archived copy and consumes no additional trash capacity; the receipt is reused only after its archived bytes and original-id metadata validate, otherwise the deletion refuses. A genuinely new receipt is admitted only from a complete, readable receipt inventory: a truncated or unreadable receipt listing refuses the new deletion instead of admitting it against partial counts. Unpaired archives never block a deletion on their own. Explicitly selected valid purge and restore operations remain available in that state, and so does bounded recovery cleanup by applied vacuum. Only a new distinct deletion stays refused until the receipt inventory is complete again, for example after an applied vacuum removes the orphan receipts that made it incomplete.
+When a mutation commits and a later ordinary filesystem or derived-file step fails, the result reports the actual committed change with warnings: `index-out-of-date` for derived indexes and graphs, `vacuum-incomplete` when an applied vacuum removed only part of its plan, and `trash-metadata-out-of-date` when a restore or purge leaves its receipt file behind. Maintenance provides no rollback across files. An interruption can leave partial state, so inspect with `read`, `trash`, and a vacuum preview before retrying.
 
-A mutation refreshes or invalidates the managed graph of its own collection so it does not continue presenting a removed entry. An exported repository graph embeds a snapshot of shared knowledge: a knowledge write, deletion, or purge does not refresh or revoke it, and it keeps that snapshot until the repository graph is exported again. Purging a trash entry does not erase copies, backups, or previously shared graph exports, and does not promise secure physical erasure.
+## One-time reset
 
-When a mutation commits and a later ordinary filesystem or derived-file step fails, the result reports the actual committed change with warnings: `index-out-of-date` for derived indexes and graphs, `vacuum-incomplete` when an applied vacuum removed only part of its plan, and `trash-metadata-out-of-date` when a restore or purge leaves its receipt file behind. Maintenance provides no rollback and no all-or-nothing guarantee across files. An interruption or process crash can leave partial state and may return no result, so inspect with `read`, `trash`, and a vacuum preview before retrying.
+The harness can reset legacy memory state once, through `Service::reset_plan` and `Service::reset`. The reset is never started automatically and never recurs.
+
+The plan inventories and digests everything it would remove:
+
+- legacy repository collections and shared knowledge under the memory base;
+- generated indexes, graph exports, and legacy `trash` folders inside them;
+- the retrieval caches under `<data directory>/recall`;
+- obsolete `.ycoding-memory-migration-*` control directories next to the base.
+
+Applying the plan requires its exact digest and an empty archive directory outside the base. The reset copies each removed tree into the archive, verifies the copy, removes the original, and initializes clean OKF v0.3 bundles for shared knowledge. It never follows symbolic links, never migrates legacy content into the new bundles, and leaves everything else in place: skills, unrelated files, Session history, credentials, configuration, and user data. A stale digest, a non-empty archive, or an archive inside the base refuses the reset with nothing changed.
 
 ## Configuration
 
@@ -114,66 +219,38 @@ Use the normal runtime configuration discovery chain. Fields merge independently
 }
 ```
 
-These are the defaults. Set `"enabled": false` to disable operations without deleting knowledge. Optional `path` overrides the managed base: `~/` expands against the user home; relative paths resolve against the repository's main checkout so linked worktrees share the base, or the current Location folder outside Git. Use a common absolute base to share knowledge across repositories when overriding the default. The byte/count limits must be positive integers; `path` must not be blank. Limits apply to concept bytes, not derived indexes or the HTML export.
+These are the defaults. Set `"enabled": false` to disable operations without deleting knowledge. Optional `path` overrides the managed base: `~/` expands against the user home; relative paths resolve against the repository's main checkout so linked worktrees share the base, or the current Location folder outside Git. Use a common absolute base to share knowledge across repositories when overriding the default. The byte and count limits must be positive integers; `path` must not be blank. Limits apply to concept bytes, not derived indexes or the HTML export.
 
 See [configuration precedence](./configuration.md#runtime-configuration-discovery-and-precedence) and [permissions](./configuration.md#permissions).
-
-## Author a concept
-
-IDs are slash-separated lowercase letters, digits, underscores, and hyphens, starting each segment with a letter or digit. Supply no extension. Absolute paths, dot segments, symlink escapes, and reserved `index`, `log`, `_meta`, or `trash` segments are rejected.
-
-Each concept requires YAML frontmatter with a nonempty `type`. Types are open-ended. `title` and `description` are optional. A single string tag counts as one tag; an array can specify several. Unknown metadata and exact UTF-8 content, including a byte-order mark, are preserved.
-
-For a native write, put each `---` delimiter on a line by itself. Supply one YAML mapping with unique keys. A missing closing delimiter in an existing entry does not hide its content: `list` and `search` report `unterminated-frontmatter` with the entry ID, and search includes the raw text. To repair it, `read` the entry, insert the closing `---` between the metadata and the body, then `write` the replacement with the digest from that read. Inspection and search leave the original file and its digest unchanged.
-
-```markdown
----
-type: Decision
-title: Test ownership
-tags: [testing, architecture]
-sources:
-  - id: guide
-    resource: repo:///AGENTS.md
-custom:
-  owner: runtime
----
-
-Run checks from the package that owns the behavior.[^guide]
-See [build constraints](build/constraints.md).
-```
-
-Each source record requires `resource`; `id` is optional unless the body cites that source. Declared source IDs must be unique. A source-footnote reference must have a matching source record or Markdown footnote definition. YCoding checks this structure; it does not verify that a source exists or supports the statement. Save only verified, relevant knowledge and do not store secrets or private customer data.
-
-Links may be relative (`../decisions.md`), memory-root-relative (`/knowledge/testing.md` or `/repository/repo_<sha256>/mem_build_rules.md`), or reference-style Markdown links. From a repository collection's root, `../../knowledge/testing.md` reaches shared knowledge. Links inside code do not create graph edges. Links to concepts outside the selected export remain dangling rather than triggering scans of other repositories. Dangling links produce warnings rather than inventing targets. External URLs are not fetched by memory or its graph.
 
 ## Safe updates and failures
 
 Without `expectedDigest`, a write is create-only. To replace a concept, read it first and pass that digest. A stale digest fails without overwriting the current content. If current bytes already equal the requested bytes, the exact retry succeeds without rewriting the concept.
 
-A bundle lock serializes cooperating tool writers, and a same-directory temporary file is atomically renamed for each update. Direct edits in an editor are not transactionally locked: read again before overwriting an externally edited file. Avoid concurrent manual edits during tool writes.
-
-If the concept commits but refreshing the generated files fails, the result includes the committed digest and an `index-out-of-date` warning. Do not blindly replay it as a failed write. A subsequent write or graph export can refresh those files. Search can rebuild its separate derived index without changing the bundle. Malformed unrelated concepts are reported in warnings; capacity excess fails explicitly.
+A bundle lock serializes cooperating tool writers, and a same-directory temporary file is atomically renamed for each update. Direct edits in an editor are not transactionally locked: read again before overwriting an externally edited file. If the concept commits but refreshing the generated files fails, the result includes the committed digest and an `index-out-of-date` warning. Do not replay it as a failed write; a later write or graph export refreshes those files. Malformed unrelated concepts are reported in warnings; capacity excess fails explicitly.
 
 ## Permission boundary
 
 The whole tool uses the `memory` visibility policy. These actions require `memory_read`:
 
-- `status`, `list`, `search`, and `read`;
+- `status`, `template`, `list`, `search`, `read`, and `review`;
 - `trash`; and
-- `vacuum` with `dryRun` omitted or `true` (the preview).
+- `vacuum` with `dryRun` omitted or `true`.
 
-These require `memory_write`: `write`, `graph`, `delete`, `restore`, `purge`, and `vacuum` with `dryRun: false`. Repository graph export also requires read authority for the shared-knowledge root.
+These require `memory_write`: `write`, `supersede`, `retire`, `graph`, `delete`, `restore`, `purge`, and `vacuum` with `dryRun: false`. Repository graph export also requires read authority for the shared-knowledge root.
 
-Every `memory_write` action also acquires a `file_mutation` Session guardrail reservation on the collection root, released when the action settles. Its metadata carries the `memoryAction`, an `operation` of `remove` for `delete`, `purge`, and applied `vacuum` or `write` for `write`, `restore`, and `graph`, and a digest of the exact input, so a granted review does not cover a changed operation. `purge` and applied `vacuum` have no separate built-in confirmation flag; the applicable permission and guardrail approvals still apply, and an approval covers only the exact reviewed destructive scope. Reads, `trash`, and the vacuum preview take no guardrail reservation. A collection root outside the YCoding data directories, such as one under a configured `path`, can fall under ordinary outside-repository guardrail review.
+Every `memory_write` action also acquires a `file_mutation` Session guardrail reservation on the collection root, released when the action settles. Its metadata carries the `memoryAction`, an `operation` of `remove` for `delete`, `purge`, and applied `vacuum`, or `write` for the other mutations, and a digest of the exact input, so a granted review does not cover a changed operation. `purge` and applied `vacuum` have no separate built-in confirmation flag; the applicable permission and guardrail approvals still apply, and an approval covers only the exact reviewed destructive scope. Reads, `trash`, and the vacuum preview take no guardrail reservation. A collection root outside the YCoding data directories, such as one under a configured `path`, can fall under ordinary outside-repository guardrail review.
 
-Explicit permission denies remain effective. No memory-specific automatic allow rule is installed.
-
-Approval covers the resolved workspace memory root. The operation checks the root again after approval rather than writing to a changed configuration target. `status` may resolve paths but does not read concept content. Disabled operations do not read or delete knowledge.
+Explicit permission denies remain effective. No memory-specific automatic allow rule is installed. Approval covers the resolved workspace memory root, and the operation checks the root again after approval rather than writing to a changed configuration target. Disabled operations do not read or delete knowledge.
 
 ## Offline graph and reader
 
 The `graph` action returns an HTML file path to open manually in a browser. The file embeds a snapshot of the concepts, has no external assets or network requests, and is read-only with respect to the source Markdown.
 
-Use Search and Type to filter the visible concepts. Select a graph node or matching-concept button with a pointer or keyboard (`Tab`, then `Enter` or `Space`) to update the plain-text Markdown reader. Related-concept buttons navigate connected concepts. Lines show the selected concept's relationships. An empty bundle has an explicit empty state.
+Use Search and Type to filter the visible concepts. Select a graph node or matching-concept button with a pointer or keyboard (`Tab`, then `Enter` or `Space`) to update the plain-text Markdown reader. Related-concept buttons navigate connected concepts. An empty bundle has an explicit empty state.
 
-The reader displays untrusted concept text as text, never executable HTML. The exported file contains complete concept contents, not just titles; share it only with the intended audience. Export again after editing or removing concepts, including shared knowledge, to refresh the snapshot; an existing file is never revoked, and copies outside the managed folder remain. Graph export neither opens a browser automatically nor starts a server.
+The reader displays untrusted concept text as text, never executable HTML. The exported file contains complete concept contents, so share it only with the intended audience. Export again after editing or removing concepts, including shared knowledge, to refresh the snapshot; an existing file is never revoked, and copies outside the managed folder remain. Graph export neither opens a browser automatically nor starts a server.
+
+## What belongs in memory
+
+Memory holds durable, verified knowledge. Procedures belong in skills, events belong in Session history, and behavior belongs in harness configuration. Write a concept for a fact or decision that stays true across Sessions, cite its sources, and link to the skill that applies it. Do not copy a procedure, a transcript or a setting into a concept. [Where knowledge lives](./repository-resources.md#where-knowledge-lives) describes the same split from the skill side.

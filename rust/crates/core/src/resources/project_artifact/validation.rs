@@ -1,7 +1,7 @@
 use crate::regexp::{Budget, RegExp};
 use icu_normalizer::ComposingNormalizer;
 use std::sync::OnceLock;
-use ycoding_schema::{DomainDecode, JsonValue, LosslessString, project_artifact};
+use ycoding_schema::{DomainDecode, DomainEncode, JsonValue, LosslessString, project_artifact};
 
 const UNSAFE: &[(&str, &str)] = &[
     (r"-----BEGIN [A-Z ]*PRIVATE KEY-----", "i"),
@@ -88,12 +88,13 @@ pub fn validate_automatic(
         )];
     };
     let fields: &[&str] = match kind.as_str() {
-        Some("skill") => &["kind", "name", "description", "content"],
-        Some("command") => &["kind", "name", "description", "template", "subtask"],
+        Some("skill") => &["kind", "name", "description", "tags", "content"],
+        Some("command") => &["kind", "name", "description", "tags", "template", "subtask"],
         Some("agent") => &[
             "kind",
             "name",
             "description",
+            "tags",
             "system",
             "mode",
             "permissions",
@@ -126,16 +127,27 @@ pub fn validate_automatic(
         512,
         2048,
     ));
+    if let Some(tags) = value.get(&"tags".into())
+        && !valid_tags(tags)
+    {
+        errors.push(error("InvalidArtifact", "tags"));
+    }
     let (field, maximum) = match kind.as_str() {
         Some("skill") => ("content", 24 * 1024),
         Some("command") => ("template", 16 * 1024),
         _ => ("system", 16 * 1024),
     };
-    errors.extend(validate_text(
-        value.get(&field.into()).unwrap_or(&JsonValue::Null),
-        field,
-        maximum,
-    ));
+    let body = value.get(&field.into()).unwrap_or(&JsonValue::Null);
+    errors.extend(validate_text(body, field, maximum));
+    if kind.as_str() == Some("skill") {
+        if matches!(id, JsonValue::String(id) if id.as_str().is_some_and(|id| id.contains("--"))) {
+            errors.push(error("InvalidArtifact", "id"));
+        }
+        if matches!(body, JsonValue::String(body) if body.as_str().is_some_and(|body| body.lines().count() > crate::resources::skill::spec::MAX_LINES))
+        {
+            errors.push(error("ContentTooLarge", field));
+        }
+    }
     errors
 }
 
@@ -256,6 +268,28 @@ fn has_absolute_path(value: &[u16]) -> bool {
         }
     }
     false
+}
+
+pub fn valid_activation(activation: &project_artifact::SkillActivation) -> bool {
+    let JsonValue::Object(fields) = activation.encode() else {
+        return false;
+    };
+    let mut metadata = ycoding_schema::JsonObject::new();
+    metadata.insert("activation".into(), JsonValue::String("auto".into()));
+    for (key, value) in fields.iter() {
+        metadata.insert(key.clone(), value.clone());
+    }
+    crate::session::skill::valid_automatic(&metadata)
+}
+
+fn valid_tags(value: &JsonValue) -> bool {
+    Vec::<project_artifact::Tag>::decode(value).is_ok_and(|tags| {
+        tags.len() <= project_artifact::MAX_TAGS
+            && tags
+                .iter()
+                .enumerate()
+                .all(|(index, tag)| !tags[..index].contains(tag))
+    })
 }
 
 fn error(code: &str, field: &str) -> project_artifact::ValidationError {

@@ -163,6 +163,8 @@ fn rejects_automatic_plugins_unknown_kinds_and_extra_fields() {
     }
     for input in [
         r#"{"kind":"skill","name":"Review","description":"Review changes","content":"Review.","extra":1}"#,
+        r#"{"kind":"skill","name":"Review","description":"Review changes","activation":{"events":"command.invoked"},"content":"Review."}"#,
+        r#"{"kind":"command","name":"Review","description":"Review changes","tags":["review"],"activation":{},"template":"Review."}"#,
         r#"{"kind":"command","name":"Review","description":"Review changes","template":"Review.","subtask":true}"#,
         r#"{"kind":"agent","name":"Review","description":"Review changes","system":"Review.","mode":"primary","permissions":[]}"#,
     ] {

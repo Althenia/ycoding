@@ -92,23 +92,34 @@ pub fn decode(
         ycoding_schema::DecodeErrorKind::Expected("matching adapter kind"),
     )))
 }
-pub fn render(input: &project_artifact::Definition) -> LosslessString {
-    let (name, description, body, extra) = match input {
-        project_artifact::Definition::Skill(value) => (
-            &value.name,
-            &value.description,
-            value.content.as_lossless(),
-            String::new(),
-        ),
+pub fn render(id: &project_artifact::Id, input: &project_artifact::Definition) -> LosslessString {
+    let (name, description, tags, body, extra) = match input {
+        project_artifact::Definition::Skill(value) => {
+            return discovery::join(
+                &[
+                    format!(
+                        "---\nname: {}\ndescription: {}\nmetadata:\n{}---\n",
+                        ycoding_schema::stringify_json(&id.encode()),
+                        ycoding_schema::stringify_json(&value.description.encode()),
+                        skill_metadata(value)
+                    )
+                    .into(),
+                    value.content.as_lossless().clone(),
+                ],
+                "",
+            );
+        }
         project_artifact::Definition::Command(value) => (
             &value.name,
             &value.description,
+            value.tags.as_slice(),
             value.template.as_lossless(),
             "subtask: false\n".into(),
         ),
         project_artifact::Definition::Agent(value) => (
             &value.name,
             &value.description,
+            value.tags.as_slice(),
             value.system.as_lossless(),
             format!(
                 "mode: subagent\n{}\n",
@@ -117,10 +128,18 @@ pub fn render(input: &project_artifact::Definition) -> LosslessString {
         ),
         project_artifact::Definition::Plugin(value) => return value.draft.as_lossless().clone(),
     };
+    let tags = if tags.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "tags: {}\n",
+            ycoding_schema::stringify_json(&tags.to_vec().encode())
+        )
+    };
     discovery::join(
         &[
             format!(
-                "---\nname: {}\ndescription: {}\n{extra}---\n",
+                "---\nname: {}\ndescription: {}\n{tags}{extra}---\n",
                 ycoding_schema::stringify_json(&name.encode()),
                 ycoding_schema::stringify_json(&description.encode())
             )
@@ -156,9 +175,28 @@ pub fn parse(
     value.insert("kind".into(), kind.encode());
     match kind.as_lossless().as_str() {
         Some("skill") => {
+            if let Some(display) = markdown
+                .data
+                .get("metadata")
+                .and_then(|metadata| metadata.get("display-name"))
+            {
+                value.insert("name".into(), display.json().map_err(Error::Markdown)?);
+            }
+            if let Some(tags) = markdown
+                .data
+                .get("metadata")
+                .and_then(|metadata| metadata.get("tags"))
+                .and_then(|tags| tags.json().ok())
+            {
+                value.insert("tags".into(), split_tags(&tags));
+            }
+            if let Some(activation) = parse_activation(&markdown.data)? {
+                value.insert("activation".into(), activation);
+            }
             value.insert("content".into(), JsonValue::String(markdown.content.into()));
         }
         Some("command") => {
+            insert_tags(&mut value, &markdown.data)?;
             value.insert(
                 "template".into(),
                 JsonValue::String(markdown.content.into()),
@@ -166,6 +204,7 @@ pub fn parse(
             value.insert("subtask".into(), JsonValue::Bool(false));
         }
         _ => {
+            insert_tags(&mut value, &markdown.data)?;
             value.insert("system".into(), JsonValue::String(markdown.content.into()));
             value.insert("mode".into(), JsonValue::String("subagent".into()));
             value.insert(
@@ -321,6 +360,86 @@ pub fn collision(existing: &[Existing<'_>], shadow: Option<(&str, &str)>) -> Opt
         },
         allowed: false,
     })
+}
+
+fn skill_metadata(value: &project_artifact::SkillDefinition) -> String {
+    let mut lines = vec![format!(
+        "  display-name: {}\n",
+        ycoding_schema::stringify_json(&value.name.encode())
+    )];
+    if !value.tags.is_empty() {
+        lines.push(format!(
+            "  tags: {}\n",
+            ycoding_schema::stringify_json(&JsonValue::String(
+                value
+                    .tags
+                    .iter()
+                    .filter_map(|tag| tag.as_lossless().as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+                    .as_str()
+                    .into()
+            ))
+        ));
+    }
+    if let Some(JsonValue::Object(fields)) = value.activation.as_ref().map(DomainEncode::encode) {
+        lines.push("  activation: \"auto\"\n".into());
+        lines.extend(fields.iter().filter_map(|(key, value)| {
+            Some(format!(
+                "  {}: {}\n",
+                key.as_str()?,
+                ycoding_schema::stringify_json(value)
+            ))
+        }));
+    }
+    lines.concat()
+}
+
+fn split_tags(value: &JsonValue) -> JsonValue {
+    match value {
+        JsonValue::String(text) => JsonValue::Array(
+            text.as_str()
+                .map(|text| {
+                    text.split(',')
+                        .map(|tag| JsonValue::String(tag.trim().into()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn insert_tags(
+    value: &mut ycoding_schema::JsonObject,
+    data: &discovery::markdown::Value,
+) -> Result<(), Error> {
+    if let Some(tags) = data.get("tags") {
+        value.insert("tags".into(), tags.json().map_err(Error::Markdown)?);
+    }
+    Ok(())
+}
+
+fn parse_activation(data: &discovery::markdown::Value) -> Result<Option<JsonValue>, Error> {
+    let Some(metadata) = data.get("metadata") else {
+        return Ok(None);
+    };
+    if !matches!(
+        metadata.get("activation").map(|value| value.json()),
+        Some(Ok(JsonValue::String(mode))) if mode.as_str() == Some("auto")
+    ) {
+        return Ok(None);
+    }
+    let mut fields = ycoding_schema::JsonObject::new();
+    for key in ["version", "keywords", "events", "commands", "paths"] {
+        if let Some(value) = metadata.get(key) {
+            fields.insert(key.into(), value.json().map_err(Error::Markdown)?);
+        }
+    }
+    let value = JsonValue::Object(fields);
+    Ok(project_artifact::SkillActivation::decode(&value)
+        .is_ok()
+        .then_some(value))
 }
 
 fn render_permissions(rules: &permission::Ruleset) -> String {

@@ -1439,3 +1439,161 @@ async fn artifact_manifest_is_fully_registered_location_only_and_missing_composi
     assert_eq!(unavailable.code, 1);
     server.shutdown().await.unwrap();
 }
+
+fn tagged_skill() -> project_artifact::Definition {
+    project_artifact::Definition::decode(
+        &ycoding_core::ycoding_schema::parse_json(
+            r#"{"kind":"skill","name":"Review","description":"Reusable review guidance","tags":["rust","review"],"activation":{"version":"1","keywords":"cobalt","commands":"cargo check"},"content":"Review the current change."}"#,
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+fn recalled(fixture: &Fixture, project: &str, tags: &[&str]) -> Vec<(String, String)> {
+    let project = project::Id::decode(&JsonValue::String(project.into())).unwrap();
+    let tags = tags
+        .iter()
+        .map(|tag| project_artifact::Tag::decode(&JsonValue::String((*tag).into())).unwrap())
+        .collect::<Vec<_>>();
+    fixture
+        .service
+        .search(store::SearchInput {
+            project_id: &project,
+            query: "",
+            tags: &tags,
+            kind: None,
+            limit: 10,
+        })
+        .unwrap()
+        .into_iter()
+        .map(|hit| {
+            (
+                hit.id.as_lossless().to_utf8().unwrap(),
+                hit.version_id.as_lossless().to_utf8().unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v5_update_without_tags_or_activation_keeps_the_stored_values() {
+    let mut fixture = Fixture::new().await;
+    let project = project::Id::decode(&JsonValue::String("prj_one".into())).unwrap();
+    let seeded = fixture
+        .service
+        .write_manual(store::ManualWriteInput {
+            scope: project_artifact::ScopeSelector::Project,
+            project_id: Some(project.clone()),
+            id: "review",
+            definition: &tagged_skill(),
+            expected: None,
+            now: 1000,
+        })
+        .unwrap();
+    let before = fixture.get(1, 1, "review").await;
+    let _: v5::ArtifactUpdateResult = ask(
+        &mut fixture.client,
+        "artifact.update",
+        location_scope("/project"),
+        v5::ArtifactUpdateRequest {
+            query: query("/project", None),
+            params: v5::ArtifactUpdateRequestParams {
+                scope: 1,
+                kind: 1,
+                id: text("review"),
+            },
+            payload: mutation(&before, skill("Review the change carefully.")),
+        },
+    )
+    .await;
+    let stored = fixture
+        .service
+        .get(&seeded.scope_id, &seeded.kind, &seeded.id)
+        .unwrap();
+    let project_artifact::Definition::Skill(kept) = stored.definition else {
+        panic!("expected skill")
+    };
+    let project_artifact::Definition::Skill(seed) = tagged_skill() else {
+        unreachable!()
+    };
+    assert_eq!(kept.tags, seed.tags);
+    assert_eq!(kept.activation, seed.activation);
+    assert_eq!(
+        kept.content.as_lossless(),
+        &"Review the change carefully.".into()
+    );
+    assert_eq!(stored.artifact.revision.get(), 1);
+
+    let hits = recalled(&fixture, "prj_one", &["rust"]);
+    assert_eq!(
+        hits,
+        [(
+            "review".to_owned(),
+            stored.current_version.id.as_lossless().to_utf8().unwrap()
+        )]
+    );
+    assert_ne!(
+        hits[0].1,
+        seeded.version_id.as_lossless().to_utf8().unwrap()
+    );
+    assert!(recalled(&fixture, "prj_other", &["rust"]).is_empty());
+
+    let replaced = fixture
+        .service
+        .write_manual(store::ManualWriteInput {
+            scope: project_artifact::ScopeSelector::Project,
+            project_id: Some(project),
+            id: "review",
+            definition: &project_artifact::Definition::decode(
+                &ycoding_core::ycoding_schema::parse_json(
+                    r#"{"kind":"skill","name":"Review","description":"Reusable review guidance","tags":["python"],"content":"Review the change carefully."}"#,
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            expected: Some(project_artifact::MutationExpectation {
+                expected_revision: stored.artifact.revision,
+                expected_version_id: stored.current_version.id.clone(),
+                expected_digest: stored.current_version.content_digest.clone(),
+            }),
+            now: 2000,
+        })
+        .unwrap();
+    assert!(recalled(&fixture, "prj_one", &["rust"]).is_empty());
+    assert_eq!(
+        recalled(&fixture, "prj_one", &["python"]),
+        [(
+            "review".to_owned(),
+            replaced.version_id.as_lossless().to_utf8().unwrap()
+        )]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v5_update_of_an_untagged_artifact_stays_untagged() {
+    let mut fixture = Fixture::new().await;
+    let _ = fixture
+        .create(1, "plain", skill("Review the current change."))
+        .await;
+    let first = fixture.get(1, 1, "plain").await;
+    let _: v5::ArtifactUpdateResult = ask(
+        &mut fixture.client,
+        "artifact.update",
+        location_scope("/project"),
+        v5::ArtifactUpdateRequest {
+            query: query("/project", None),
+            params: v5::ArtifactUpdateRequestParams {
+                scope: 1,
+                kind: 1,
+                id: text("plain"),
+            },
+            payload: mutation(&first, skill("Review the change carefully.")),
+        },
+    )
+    .await;
+    let second = fixture.get(1, 1, "plain").await;
+    assert_eq!(second.artifact.revision, 1);
+    assert_eq!(second.definition, skill("Review the change carefully."));
+    assert!(recalled(&fixture, "prj_one", &["rust"]).is_empty());
+}

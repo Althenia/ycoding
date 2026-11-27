@@ -6,6 +6,7 @@ import { createRemoteHttp } from "../http"
 import { applySessionEvent, createSessionView, type PendingRequestView, type RemoteMessageView } from "../projection"
 import { createRemoteStore } from "../store"
 import { MessageRow, RequestCard, TranscriptActivityRow } from "./conversation"
+import { foldRecallEvents } from "../../../../../packages/client/src/cue-recall"
 
 function render(view: () => JSX.Element, running = false): string {
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window")
@@ -168,4 +169,13 @@ test("non-steer synthetic notices keep their notice or system rendering", () => 
     expect(html).not.toContain('class="transcript-message__bubble"')
     expect(html).not.toContain('aria-label="Dot steer prompt"')
   }
+})
+
+test("a recall message renders as one collapsed disclosure from the recorded entry", () => {
+  const entry = foldRecallEvents([{ type: "session.recall.recorded", id: "recall_1", created: 3, data: { sessionID: "ses_a", key: "k", trigger: "compaction", methods: ["rrf"], outcome: "restored", elapsedMs: 9, injectedTokens: 80, items: [{ kind: "skill", id: "rust-build", stage: "restored", method: "rrf", reason: "", source: { id: "skill:project/rust-build", revision: "pav_1" } }] } }]).entries[0]!
+  const html = render(() => <MessageRow message={() => ({ kind: "recall", id: "recall_1", entry, created: 3 })} />)
+  expect(html).toContain("transcript-message--recall")
+  expect(html).toContain('aria-label="Restored 1 skill · 9 ms · ~80 tokens"')
+  expect(html).toContain('aria-expanded="false"')
+  expect(html).toContain('data-outcome="restored"')
 })

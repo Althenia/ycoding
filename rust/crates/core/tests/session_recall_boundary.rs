@@ -32,7 +32,7 @@ async fn repository_references_obey_current_authority_and_never_modify_the_stabl
     let bytes = "---\ntype: Decision\n---\nThe cobalt canary is ready.\n";
     for id in ["checks/first", "checks/second"] {
         service
-            .write(Scope::Repository, id, bytes, None)
+            .write(Scope::Repository, id, bytes, None, false)
             .await
             .unwrap();
     }
@@ -42,6 +42,7 @@ async fn repository_references_obey_current_authority_and_never_modify_the_stabl
             "other",
             "---\ntype: Decision\n---\ncobalt canary shared-only marker\n",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -85,7 +86,13 @@ async fn repository_references_obey_current_authority_and_never_modify_the_stabl
             2048,
         )
         .await;
-    assert!(appended);
+    assert!(appended.injected);
+    assert!(
+        appended
+            .items
+            .iter()
+            .all(|item| item.stage == ycoding_schema::recall::Stage::Injected)
+    );
     assert_eq!(request.messages.len(), 2);
     assert_eq!(request.messages[0], prefix.messages[0]);
     assert_eq!(request.tools, prefix.tools);
@@ -112,7 +119,7 @@ async fn repository_references_obey_current_authority_and_never_modify_the_stabl
             2048,
         )
         .await;
-    assert!(!appended);
+    assert!(!appended.injected);
     assert_eq!(abstained.messages, prefix.messages);
     let mut clipped = prefix.clone();
     let appended = recall
@@ -125,7 +132,7 @@ async fn repository_references_obey_current_authority_and_never_modify_the_stabl
             8,
         )
         .await;
-    assert!(!appended);
+    assert!(!appended.injected);
     assert_eq!(clipped.messages, prefix.messages);
     for effect in ["ask", "deny"] {
         rules(effect);

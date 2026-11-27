@@ -2,27 +2,46 @@ use crate::resources::{
     config::Entry,
     discovery::{self, Error},
 };
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 use ycoding_schema::{
-    JsonValue, LosslessString,
+    JsonObject, JsonValue, LosslessString,
     skill::{EmbeddedSource, Source},
 };
+
+const DOCUMENTS: [&str; 5] = [
+    include_str!("../../../../../../packages/core/src/plugin/skill/ycoding/SKILL.md"),
+    include_str!("../../../../../../packages/core/src/plugin/skill/chatgpt-connectors/SKILL.md"),
+    include_str!("../../../../../../packages/core/src/plugin/skill/browser-use/SKILL.md"),
+    include_str!("../../../../../../packages/core/src/plugin/skill/computer-use/SKILL.md"),
+    include_str!("../../../../../../packages/core/src/plugin/skill/report/SKILL.md"),
+];
+
+pub fn metadata() -> Result<BTreeMap<LosslessString, JsonObject>, Error> {
+    DOCUMENTS
+        .into_iter()
+        .map(|source| {
+            let doc = discovery::markdown::parse(source)
+                .map_err(|_| Error::Rejected("Invalid bundled skill document"))?;
+            let id = match doc.data.get("name") {
+                Some(discovery::markdown::Value::String(id)) => id.clone(),
+                _ => return Err(Error::Rejected("Missing bundled skill ID")),
+            };
+            let metadata = doc
+                .data
+                .get("metadata")
+                .map(super::metadata_projection)
+                .unwrap_or_default();
+            Ok((id, metadata))
+        })
+        .collect()
+}
 
 pub fn sources(
     entries: &[Entry],
     directory: &Path,
     env: impl Fn(&str) -> Option<String>,
 ) -> Result<Vec<Source>, Error> {
-    let documents = [
-        include_str!("../../../../../../packages/core/src/plugin/skill/ycoding/SKILL.md"),
-        include_str!(
-            "../../../../../../packages/core/src/plugin/skill/chatgpt-connectors/SKILL.md"
-        ),
-        include_str!("../../../../../../packages/core/src/plugin/skill/browser-use/SKILL.md"),
-        include_str!("../../../../../../packages/core/src/plugin/skill/computer-use/SKILL.md"),
-        include_str!("../../../../../../packages/core/src/plugin/skill/report/SKILL.md"),
-    ];
-    documents
+    DOCUMENTS
         .into_iter()
         .map(|source| {
             let doc = discovery::markdown::parse(source)
@@ -36,19 +55,8 @@ pub fn sources(
                 _ => None,
             }
             .ok_or(Error::Rejected("Missing bundled skill ID"))?;
-            let path = format!("/builtin/{id}.md");
-            let mut skill = super::from_frontmatter(
-                Path::new(&path),
-                Path::new("/builtin"),
-                &data,
-                &doc.content,
-            )?;
-            let Some(discovery::markdown::Value::String(name)) =
-                doc.data.get("metadata").and_then(|m| m.get("display-name"))
-            else {
-                return Err(Error::Rejected("Missing bundled skill display name"));
-            };
-            skill.name = name.clone();
+            let path = format!("/builtin/{id}/SKILL.md");
+            let mut skill = super::from_frontmatter(Path::new(&path), &data, &doc.content)?;
             if id == "report" {
                 skill.content = report(skill.content, entries, directory, &env);
             }

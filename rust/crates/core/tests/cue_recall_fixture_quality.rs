@@ -37,6 +37,7 @@ async fn held_out_fixture_meets_retrieval_quality() {
                     concept["body"].as_str().unwrap()
                 ),
                 None,
+                false,
             )
             .await
             .unwrap();

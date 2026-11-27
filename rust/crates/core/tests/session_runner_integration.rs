@@ -844,6 +844,7 @@ async fn recovery_boundary(restart: bool) {
             "checks/cobalt",
             "---\ntype: Decision\n---\nThe cobalt canary gate is ready.\n",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1493,6 +1494,24 @@ async fn keyword_relevance_activates_only_strong_eligible_skills() {
         assert_eq!(request.contains("MATCHED-KEYWORD-SKILL"), expected);
         assert!(!request.contains("MANUAL-KEYWORD-SKILL"));
         assert!(!request.contains("WEAK-KEYWORD-SKILL"));
+        let recorded = service
+            .log(&session::Id::new(id).unwrap(), None, 200)
+            .unwrap()
+            .events
+            .into_iter()
+            .filter(|entry| entry.event.0.event_type.as_str() == Some("session.recall.recorded"))
+            .map(|entry| {
+                ycoding_schema::stringify_json(&ycoding_schema::JsonValue::Object(
+                    entry.event.0.data.0,
+                ))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(recorded.len(), usize::from(expected));
+        if expected {
+            assert!(recorded[0].contains(r#""id":"build""#));
+            assert!(recorded[0].contains(r#""method":"bm25""#));
+            assert!(recorded[0].contains(r#""stage":"injected""#));
+        }
     }
     server.await.unwrap();
     coordinator.shutdown().await.unwrap();

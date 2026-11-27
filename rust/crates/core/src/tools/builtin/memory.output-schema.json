@@ -3,46 +3,113 @@
     {
       "type": "object",
       "properties": {
-        "enabled": { "type": "boolean" },
-        "scope": { "enum": ["repository", "knowledge"] },
-        "root": { "type": "string" },
-        "base": { "type": "string" },
-        "knowledgeRoot": { "type": "string" },
+        "enabled": {
+          "type": "boolean"
+        },
+        "scope": {
+          "enum": [
+            "repository",
+            "knowledge"
+          ]
+        },
+        "root": {
+          "type": "string"
+        },
+        "base": {
+          "type": "string"
+        },
+        "knowledgeRoot": {
+          "type": "string"
+        },
         "repository": {
           "type": "object",
           "properties": {
-            "id": { "type": "string" },
-            "directory": { "type": "string" },
-            "commonDirectory": { "type": "string" },
-            "worktrees": { "type": "array", "items": { "type": "string" } }
+            "id": {
+              "type": "string"
+            },
+            "directory": {
+              "type": "string"
+            },
+            "commonDirectory": {
+              "type": "string"
+            },
+            "worktrees": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
           },
-          "required": ["id", "directory", "commonDirectory", "worktrees"],
+          "required": [
+            "id",
+            "directory",
+            "commonDirectory",
+            "worktrees"
+          ],
           "additionalProperties": false
         },
         "limits": {
           "type": "object",
           "properties": {
-            "enabled": { "type": "boolean" },
-            "path": { "type": "string" },
-            "max_concept_bytes": { "type": "number" },
-            "max_bundle_bytes": { "type": "number" },
-            "max_concepts": { "type": "number" }
+            "enabled": {
+              "type": "boolean"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_concept_bytes": {
+              "type": "number"
+            },
+            "max_bundle_bytes": {
+              "type": "number"
+            },
+            "max_concepts": {
+              "type": "number"
+            }
           },
-          "required": ["enabled", "max_concept_bytes", "max_bundle_bytes", "max_concepts"],
+          "required": [
+            "enabled",
+            "max_concept_bytes",
+            "max_bundle_bytes",
+            "max_concepts"
+          ],
           "additionalProperties": false
         }
       },
-      "required": ["enabled", "scope", "root", "base", "knowledgeRoot", "limits"],
+      "required": [
+        "enabled",
+        "scope",
+        "root",
+        "base",
+        "knowledgeRoot",
+        "limits"
+      ],
       "additionalProperties": false
     },
     {
       "type": "object",
       "properties": {
-        "concepts": { "type": "array", "items": { "$ref": "#/$defs/Concept" } },
-        "total": { "type": "number" },
-        "warnings": { "type": "array", "items": { "$ref": "#/$defs/Warning" } }
+        "concepts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Concept"
+          }
+        },
+        "total": {
+          "type": "number"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          }
+        }
       },
-      "required": ["concepts", "total", "warnings"],
+      "required": [
+        "concepts",
+        "total",
+        "warnings"
+      ],
       "additionalProperties": false
     },
     {
@@ -53,107 +120,363 @@
           "items": {
             "type": "object",
             "properties": {
-              "id": { "type": "string" },
-              "type": { "type": "string" },
-              "title": { "type": "string" },
-              "description": { "type": "string" },
-              "tags": { "type": "array", "items": { "type": "string" } },
-              "digest": { "type": "string" },
-              "score": { "type": "number" },
-              "snippet": { "type": "string" }
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "digest": {
+                "type": "string"
+              },
+              "score": {
+                "type": "number"
+              },
+              "snippet": {
+                "type": "string"
+              },
+              "signals": {
+                "$ref": "#/$defs/Signals"
+              }
             },
-            "required": ["id", "type", "digest", "score", "snippet"],
+            "required": [
+              "id",
+              "type",
+              "digest",
+              "score",
+              "snippet",
+              "signals"
+            ],
             "additionalProperties": false
           }
         },
-        "warnings": { "type": "array", "items": { "$ref": "#/$defs/Warning" } }
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          }
+        }
       },
-      "required": ["hits", "warnings"],
+      "required": [
+        "hits",
+        "warnings"
+      ],
       "additionalProperties": false
     },
     {
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "content": { "type": "string" },
-        "digest": { "type": "string" }
+        "id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        }
       },
-      "required": ["id", "content", "digest"],
+      "required": [
+        "id",
+        "content",
+        "digest"
+      ],
       "additionalProperties": false
     },
     {
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "digest": { "type": "string" },
-        "created": { "type": "boolean" },
-        "warnings": { "type": "array", "items": { "$ref": "#/$defs/Warning" } }
+        "id": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "created": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          }
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Diagnostic"
+          }
+        },
+        "duplicateOf": {
+          "type": "string"
+        }
       },
-      "required": ["id", "digest", "created", "warnings"],
+      "required": [
+        "id",
+        "digest",
+        "created",
+        "warnings",
+        "diagnostics"
+      ],
       "additionalProperties": false
     },
     {
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "trashID": { "type": "string" },
-        "digest": { "type": "string" },
-        "warnings": { "type": "array", "items": { "$ref": "#/$defs/Warning" } }
+        "id": {
+          "type": "string"
+        },
+        "trashID": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          }
+        }
       },
-      "required": ["id", "trashID", "digest", "warnings"],
+      "required": [
+        "id",
+        "trashID",
+        "digest",
+        "warnings"
+      ],
       "additionalProperties": false
     },
     {
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "digest": { "type": "string" },
-        "warnings": { "type": "array", "items": { "$ref": "#/$defs/Warning" } }
+        "id": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          }
+        }
       },
-      "required": ["id", "digest", "warnings"],
+      "required": [
+        "id",
+        "digest",
+        "warnings"
+      ],
       "additionalProperties": false
     },
     {
       "type": "object",
       "properties": {
-        "entries": { "type": "array", "items": { "$ref": "#/$defs/TrashEntry" } },
-        "total": { "type": "number" },
-        "warnings": { "type": "array", "items": { "$ref": "#/$defs/Warning" } }
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TrashEntry"
+          }
+        },
+        "total": {
+          "type": "number"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          }
+        }
       },
-      "required": ["entries", "total", "warnings"],
+      "required": [
+        "entries",
+        "total",
+        "warnings"
+      ],
       "additionalProperties": false
     },
     {
       "type": "object",
       "properties": {
-        "trashID": { "type": "string" },
-        "purged": { "type": "boolean" },
-        "warnings": { "type": "array", "items": { "$ref": "#/$defs/Warning" } }
+        "trashID": {
+          "type": "string"
+        },
+        "purged": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          }
+        }
       },
-      "required": ["trashID", "purged", "warnings"],
+      "required": [
+        "trashID",
+        "purged",
+        "warnings"
+      ],
       "additionalProperties": false
     },
     {
       "type": "object",
       "properties": {
-        "dryRun": { "type": "boolean" },
-        "digest": { "type": "string" },
-        "removed": { "type": "array", "items": { "type": "string" } },
-        "warnings": { "type": "array", "items": { "$ref": "#/$defs/Warning" } }
+        "dryRun": {
+          "type": "boolean"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "removed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          }
+        }
       },
-      "required": ["dryRun", "digest", "removed", "warnings"],
+      "required": [
+        "dryRun",
+        "digest",
+        "removed",
+        "warnings"
+      ],
       "additionalProperties": false
     },
     {
       "type": "object",
       "properties": {
-        "path": { "type": "string" },
-        "digest": { "type": "string" },
-        "nodes": { "type": "number" },
-        "edges": { "type": "number" },
-        "warnings": { "type": "array", "items": { "$ref": "#/$defs/Warning" } }
+        "path": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "nodes": {
+          "type": "number"
+        },
+        "edges": {
+          "type": "number"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          }
+        }
       },
-      "required": ["path", "digest", "nodes", "edges", "warnings"],
+      "required": [
+        "path",
+        "digest",
+        "nodes",
+        "edges",
+        "warnings"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "status": {
+          "const": "deprecated"
+        },
+        "supersededBy": {
+          "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "digest",
+        "status",
+        "warnings"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "total": {
+          "type": "number"
+        },
+        "flagged": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FlaggedConcept"
+          }
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Diagnostic"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          }
+        }
+      },
+      "required": [
+        "total",
+        "flagged",
+        "findings",
+        "warnings"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "markdown": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "type",
+        "purpose",
+        "markdown"
+      ],
       "additionalProperties": false
     }
   ],
@@ -161,26 +484,195 @@
     "Concept": {
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "type": { "type": "string" },
-        "title": { "type": "string" },
-        "description": { "type": "string" },
-        "tags": { "type": "array", "items": { "type": "string" } },
-        "digest": { "type": "string" }
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "digest": {
+          "type": "string"
+        },
+        "signals": {
+          "$ref": "#/$defs/Signals"
+        }
       },
-      "required": ["id", "type", "digest"],
+      "required": [
+        "id",
+        "type",
+        "digest",
+        "signals"
+      ],
       "additionalProperties": false
     },
     "Warning": {
       "type": "object",
-      "properties": { "id": { "type": "string" }, "code": { "type": "string" } },
-      "required": ["id", "code"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "code"
+      ],
       "additionalProperties": false
     },
     "TrashEntry": {
       "type": "object",
-      "properties": { "id": { "type": "string" }, "trashID": { "type": "string" }, "digest": { "type": "string" } },
-      "required": ["id", "trashID", "digest"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "trashID": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "trashID",
+        "digest"
+      ],
+      "additionalProperties": false
+    },
+    "Signals": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "current": {
+          "type": "boolean"
+        },
+        "trust": {
+          "enum": [
+            "unverified",
+            "machine-confirmed",
+            "human-reviewed"
+          ]
+        },
+        "stale": {
+          "type": "boolean"
+        },
+        "staleAfter": {
+          "type": "string"
+        },
+        "generatedAt": {
+          "type": "string"
+        },
+        "supersededBy": {
+          "type": "string"
+        },
+        "verificationOlderThanContent": {
+          "type": "boolean"
+        },
+        "conflictsWith": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "status",
+        "current",
+        "trust",
+        "stale",
+        "verificationOlderThanContent",
+        "conflictsWith"
+      ],
+      "additionalProperties": false
+    },
+    "Diagnostic": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "enum": [
+            "error",
+            "warning",
+            "info",
+            "advice"
+          ]
+        },
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "line": {
+          "type": "number"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "level",
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "FlaggedConcept": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "digest": {
+          "type": "string"
+        },
+        "signals": {
+          "$ref": "#/$defs/Signals"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "digest",
+        "signals",
+        "reasons"
+      ],
       "additionalProperties": false
     }
   }

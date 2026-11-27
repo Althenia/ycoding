@@ -6,15 +6,15 @@ import { build } from "vite"
 import { nodeExecArgv, nodeTarget } from "../src/node/target"
 import { mainConfig } from "../vite.node.config"
 
-const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-operator-build-"))
+const directory = await mkdtemp(path.join(os.tmpdir(), "session-operator-build-"))
 
 afterAll(async () => {
   await rm(directory, { recursive: true, force: true })
 })
 
 const pinned = {
-  bytes: 29_055,
-  sha256: "554aabefcb0258eaa5c1966f8a719d049b56fb4e8db6bd9c953fe17cf25ccad8",
+  bytes: 30_366,
+  sha256: "241dae490283dd37951d7e415d290d2876bf3cf45b55004f4489b455ab2383b9",
   finalNewline: true,
 }
 
@@ -24,12 +24,12 @@ async function bundle(kind: "bun" | "node") {
     entry,
     `
     import { createHash } from "node:crypto"
-    import { ycodingOperatorSkill } from ${JSON.stringify(path.resolve(import.meta.dirname, "../src/remote-control/ycoding-operator-skill.ts"))}
-    const bytes = new TextEncoder().encode(ycodingOperatorSkill)
+    import { sessionOperatorSkill } from ${JSON.stringify(path.resolve(import.meta.dirname, "../src/remote-control/session-operator-skill.ts"))}
+    const bytes = new TextEncoder().encode(sessionOperatorSkill)
     console.log(JSON.stringify({
       bytes: bytes.byteLength,
       sha256: createHash("sha256").update(bytes).digest("hex"),
-      finalNewline: ycodingOperatorSkill.endsWith("\\n"),
+      finalNewline: sessionOperatorSkill.endsWith("\\n"),
     }))
   `,
   )

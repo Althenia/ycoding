@@ -1,3 +1,4 @@
+import { recallVisible, type RecallEntry } from "@ycoding-ai/client/cue-recall"
 import { isInternalTranscriptEnvelope } from "@ycoding-ai/client/transcript-visibility"
 import type {
   GuardrailGrade,
@@ -28,6 +29,7 @@ export type GuardrailRowDetail = { label: string; value: string }
 export type SessionRow =
   | { type: "message"; messageID: string }
   | { type: "compaction"; jobID: string }
+  | { type: "recall"; entry: RecallEntry }
   | { type: "guardrail"; requestID: string; reason: string; decided?: string; detail?: GuardrailRowDetail[] }
   | { type: "subagent"; sessionID: string; agent: string; created: number }
   | { type: "task"; content: string; status: "completed" | "in_progress" }
@@ -97,7 +99,7 @@ export function createSessionRows(sessionID: Accessor<string>) {
       sessionID: sessionID(),
       decisions: data.session.guardrail.decided(sessionID()),
       pending: data.session.guardrail.list(sessionID()),
-    })
+    }, data.session.recall.list(sessionID()))
     if (showLifecycle) {
       const row: SessionRow = { type: "compaction", jobID: latestLifecycle.jobID }
       const index = latestLifecycle.status === "completed" ? 0 : compactionRowIndex(latestLifecycle, messages, rows)
@@ -137,6 +139,7 @@ export function createSessionRows(sessionID: Accessor<string>) {
       setRows(reconcile(reduce(), { key: "key" }))
       void data.session.pending.sync(id).catch(() => undefined)
       void data.session.diagnostics.sync(id).catch(() => undefined)
+      void data.session.recall.sync(id).catch(() => undefined)
       void data.session.message.sync(id).then(
         () => {
           if (sessionID() !== id) return
@@ -167,6 +170,13 @@ export function createSessionRows(sessionID: Accessor<string>) {
               `${item.requestID}:${item.reply}:${item.choice}:${item.confidence}:${item.source?.messageID ?? ""}:${item.source?.callID ?? ""}:${item.ruleIDs?.join(",") ?? ""}:${JSON.stringify(item.grades)}`,
           ),
       ],
+      () => setRows(reconcile(reduce(), { key: "key" })),
+    ),
+  )
+
+  createEffect(
+    on(
+      () => data.session.recall.list(sessionID()).map((entry) => entry.id),
       () => setRows(reconcile(reduce(), { key: "key" })),
     ),
   )
@@ -388,6 +398,7 @@ export function reduceSessionRows(
     >
     pending: GuardrailRequestListOutput
   },
+  recalls: readonly RecallEntry[] = [],
 ) {
   const chatStart = messages.find(
     (message) => message.type !== "compaction" && !isCompactionCheckpoint(message) && !inputs.has(message.id),
@@ -425,12 +436,15 @@ export function reduceSessionRows(
         } satisfies SessionRow,
       }
     })
-    .sort((left, right) => left.created - right.created || left.row.requestID.localeCompare(right.row.requestID))
+  const timeline = [
+    ...provenance.map((item) => ({ created: item.created, row: item.row as SessionRow })),
+    ...recalls.filter(recallVisible).map((entry) => ({ created: entry.created, row: { type: "recall", entry } as SessionRow })),
+  ].sort((left, right) => left.created - right.created || rowKey(left.row).localeCompare(rowKey(right.row)))
   let nextProvenance = 0
   const insertThrough = (rows: SessionRow[], created: number) => {
-    while (nextProvenance < provenance.length && provenance[nextProvenance]!.created <= created) {
+    while (nextProvenance < timeline.length && timeline[nextProvenance]!.created <= created) {
       completePrevious(rows)
-      rows.push(provenance[nextProvenance++]!.row)
+      rows.push(timeline[nextProvenance++]!.row)
     }
   }
   const transcript = messages.filter(
@@ -668,6 +682,8 @@ function rowKey(row: SessionRow, message?: SessionMessageInfo): string {
     }
     case "compaction":
       return `compaction:${row.jobID}`
+    case "recall":
+      return `recall:${row.entry.id}`
     case "guardrail":
       return `guardrail:${row.requestID}`
     case "subagent":

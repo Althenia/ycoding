@@ -28,7 +28,16 @@ fn activate_artifact(skills: &mut skill::Service, root: &Path, id: &str) {
     .unwrap();
     let path = adapter::project_path(&adapter::kind(&definition), root, id);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(&path, adapter::render(&definition).to_utf8().unwrap()).unwrap();
+    fs::write(
+        &path,
+        adapter::render(
+            &project_artifact::Id::decode(&JsonValue::String(id.into())).unwrap(),
+            &definition,
+        )
+        .to_utf8()
+        .unwrap(),
+    )
+    .unwrap();
     adapter::activate(
         &adapter::VersionIndex {
             scope_id: project_artifact::ScopeId::decode(&JsonValue::String("pas_scope".into()))
@@ -160,6 +169,9 @@ async fn skill_scope_follows_project_then_global_root_containment_of_the_skill_l
         scopes,
         BTreeMap::from([
             ("ycoding".into(), None),
+            ("chatgpt-connectors".into(), None),
+            ("browser-use".into(), None),
+            ("computer-use".into(), None),
             ("report".into(), None),
             ("project-claude".into(), Some(Scope::Project)),
             ("nested-agents".into(), Some(Scope::Project)),

@@ -119,6 +119,9 @@ const variants = [
   "dots.decision.settled",
   "input.withdrawn",
   "input.steered",
+  "input.deleted",
+  "cue.detected",
+  "recall.recorded",
 ]
 const itemID = "rvw_fixture"
 const fingerprint = "a".repeat(64)
@@ -312,6 +315,36 @@ const extra: Record<number, Record<string, unknown>> = {
       { name: "sha256:3333333333333333", type: "score", confidence: 0.5, score: 2 },
       { name: "sha256:4444444444444444", type: "text", confidence: 0.8, length: 0 },
       { name: "sha256:5555555555555555", type: "refusal", confidence: 0 },
+    ],
+  },
+  76: { subject: lossless, messageID },
+  77: {
+    cueID: "cue_fixture",
+    methods: ["explicit", "cue", "exact", "bm25", "semantic", "rrf"],
+    abstention: "no_match",
+    budgetTokens: 2048,
+    items: [
+      {
+        kind: "memory",
+        id: "decisions/cobalt",
+        stage: "injected",
+        method: "rrf",
+        scores: { bm25: 1.5, semantic: 0.25, rrf: 0.0325, rank: 0 },
+        reason: lossless,
+        rejection: "stale",
+        source: { id: "memory:repository/decisions/cobalt", revision: "sha256:fixture" },
+        okf: { type: "Decision", trust: "trusted", freshness: "fresh", lifecycle: "active" },
+        artifact,
+        tokens: 120,
+      },
+      {
+        kind: "skill",
+        id: "rust-build",
+        stage: "restored",
+        method: "explicit",
+        reason: "",
+        source: { id: "skill:rust-build", revision: "sha256:fixture" },
+      },
     ],
   },
   62: {
@@ -910,6 +943,17 @@ add(1, "standalone", {
 })
 add(73, "absent", { ...base, inputID: messageID })
 add(74, "absent", { ...base, inputID: messageID })
+for (const [variant, data] of [
+  [75, { ...base, inputID: messageID }],
+  [76, { ...base, cueID: "cue_fixture", kind: "command" }],
+  [
+    77,
+    { ...base, key: "rcl_fixture", trigger: "prompt", methods: [], outcome: "abstained", items: [], elapsedMs: 0, injectedTokens: 0 },
+  ],
+] as const) {
+  add(variant, "absent", data)
+  add(variant, "present", { ...data, ...extra[variant] }, true)
+}
 const mapping = variants.flatMap((name, index) =>
   name === undefined
     ? []

@@ -336,6 +336,18 @@ export const publicEvents = [
     type: "ycoding.v5.SessionLogItemValue27",
   },
   {
+    name: "session.cue.detected",
+    durable: true,
+    tag: 143,
+    type: "ycoding.v5.SessionLogItemValue76",
+  },
+  {
+    name: "session.recall.recorded",
+    durable: true,
+    tag: 144,
+    type: "ycoding.v5.SessionLogItemValue77",
+  },
+  {
     name: "session.shell.started",
     durable: true,
     tag: 36,

@@ -448,10 +448,13 @@ async fn refresh_rejects_invalid_bytes_and_collisions_without_leaking_registrati
         .to_string();
     std::fs::write(
         path,
-        ycoding_core::resources::project_artifact::adapter::render(&definition(
-            "command",
-            "Tampered command",
-        ))
+        ycoding_core::resources::project_artifact::adapter::render(
+            &ycoding_schema::project_artifact::Id::decode(&ycoding_schema::JsonValue::String(
+                "review".into(),
+            ))
+            .unwrap(),
+            &definition("command", "Tampered command"),
+        )
         .as_str()
         .unwrap(),
     )
@@ -1101,9 +1104,15 @@ async fn promoted_global_catalogs_and_explicit_shadow_require_exact_origin_evide
     );
     std::fs::write(
         global_path,
-        adapter::render(&definition("command", "Changed global command"))
-            .as_str()
+        adapter::render(
+            &ycoding_schema::project_artifact::Id::decode(&ycoding_schema::JsonValue::String(
+                "review".into(),
+            ))
             .unwrap(),
+            &definition("command", "Changed global command"),
+        )
+        .as_str()
+        .unwrap(),
     )
     .unwrap();
     fixture.source.refresh().await;

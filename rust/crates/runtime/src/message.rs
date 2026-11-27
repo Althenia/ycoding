@@ -156,7 +156,7 @@ pub fn message(info: &session_message::Info) -> R<v5::SessionMessageInfo> {
     Ok(v5::SessionMessageInfo { kind: Some(kind) })
 }
 
-fn artifact(json: J) -> R<v5::SessionMessageArtifactProvenance> {
+pub(crate) fn artifact(json: J) -> R<v5::SessionMessageArtifactProvenance> {
     Ok(v5::SessionMessageArtifactProvenance {
         scope_id: text(json, "scopeID")?,
         version_id: text(json, "versionID")?,

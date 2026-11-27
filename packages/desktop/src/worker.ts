@@ -138,6 +138,7 @@ export async function runDesktopWorker(options: {
             case "find-files": data = await controller.findFiles(input); break
             case "sessionSnapshot": data = await controller.sessionSnapshot(input); break
             case "pendingInputs": data = await controller.pendingInputs(input); break
+            case "sessionRecall": data = await controller.sessionRecall(input); break
             case "removePending": data = await controller.removePending(input); break
             case "steerPending": data = await controller.steerPending(input); break
             case "deleteMessage": data = await controller.deleteMessage(input); break

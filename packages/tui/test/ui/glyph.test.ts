@@ -10,6 +10,7 @@ const cases: ReadonlyArray<readonly [GlyphName, string, string, string]> = [
   ["awaitingInput", "?", "?  ", "warning"],
   ["subagent", "◦", "◦  ", "info"],
   ["compaction", "~", "~  ", "muted"],
+  ["recall", "↺", "↺  ", "info"],
   ["connected", "✓", "✓  ", "accent"],
   ["disabled", "○", "○  ", "muted"],
   ["connecting", "⋯", "⋯  ", "info"],

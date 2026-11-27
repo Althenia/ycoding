@@ -504,6 +504,56 @@ export type SessionOrchestrationQuestion1 = {
   deferred?: boolean
 }
 
+export type RecallCueKind =
+  | "explicit"
+  | "command"
+  | "path"
+  | "symbol"
+  | "tool_call"
+  | "tool_result"
+  | "tool_error"
+  | "workspace"
+  | "lifecycle"
+  | "compaction"
+  | "recovery"
+  | "memory_revision"
+  | "skill_revision"
+
+export type RecallTrigger = "prompt" | "cue" | "explicit" | "compaction" | "recovery" | "delegation"
+
+export type RecallMethod = "explicit" | "cue" | "exact" | "bm25" | "semantic" | "rrf"
+
+export type RecallOutcome = "injected" | "abstained" | "restored"
+
+export type RecallAbstention = "no_match" | "below_threshold" | "explicit_unavailable" | "out_of_budget" | "offline"
+
+export type RecallKind = "memory" | "skill"
+
+export type RecallStage = "candidate" | "rejected" | "selected" | "injected" | "restored"
+
+export type RecallScores = { bm25?: number; semantic?: number; rrf?: number; rank?: number }
+
+export type RecallRejection =
+  | "denied"
+  | "disabled"
+  | "stale"
+  | "out_of_scope"
+  | "over_budget"
+  | "duplicate"
+  | "conflict"
+  | "below_threshold"
+  | "manual_only"
+  | "missing"
+  | "untrusted"
+
+export type RecallSource = { id: string; revision: string }
+
+export type RecallTrust = "trusted" | "unverified"
+
+export type RecallFreshness = "fresh" | "stale" | "unknown"
+
+export type RecallLifecycle = "active" | "draft" | "deprecated" | "superseded" | "archived" | "unknown"
+
 export type ShellInfo = {
   id: string
   status: "running" | "exited" | "timeout" | "memory-limit" | "killed"
@@ -2503,6 +2553,19 @@ export type SessionDotsReportRecorded = {
   }
 }
 
+export type SessionCueDetected = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.cue.detected"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; cueID: string; kind: RecallCueKind; subject?: string; messageID?: string }
+}
+
+export type RecallOkf = { type: string; trust: RecallTrust; freshness: RecallFreshness; lifecycle: RecallLifecycle }
+
 export type SessionShellStarted = {
   id: string
   created: number
@@ -3619,6 +3682,20 @@ export type SessionDotsDeviceDelegationCreated = {
   data: { sessionID: string; exchangeID: string; fingerprint: string; grant: DotsDeviceDelegationInfo }
 }
 
+export type RecallItem = {
+  kind: RecallKind
+  id: string
+  stage: RecallStage
+  method: RecallMethod
+  scores?: RecallScores
+  reason: string
+  rejection?: RecallRejection
+  source: RecallSource
+  okf?: RecallOkf
+  artifact?: SessionMessageArtifactProvenance
+  tokens?: number
+}
+
 export type ModelInfo = {
   id: string
   modelID: string
@@ -4128,6 +4205,29 @@ export type SessionReviewDecided = {
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
   data: { sessionID: string; itemID: SessionReviewID; decision: SessionReviewDecision; source?: FormClientReplySource }
+}
+
+export type SessionRecallRecorded = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.recall.recorded"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    key: string
+    trigger: RecallTrigger
+    cueID?: string
+    methods: Array<RecallMethod>
+    outcome: RecallOutcome
+    abstention?: RecallAbstention
+    items: Array<RecallItem>
+    elapsedMs: number
+    injectedTokens: number
+    budgetTokens?: number
+  }
 }
 
 export type UsageDashboardQuotaReady = {
@@ -5536,6 +5636,38 @@ export type SessionLogItem =
       created: number
       metadata?: { [x: string]: any }
       sourceEpoch: string
+      type: "session.cue.detected"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: { sessionID: string; cueID: string; kind: RecallCueKind; subject?: string; messageID?: string }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.recall.recorded"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: {
+        sessionID: string
+        key: string
+        trigger: RecallTrigger
+        cueID?: string
+        methods: Array<RecallMethod>
+        outcome: RecallOutcome
+        abstention?: RecallAbstention
+        items: Array<RecallItem>
+        elapsedMs: number
+        injectedTokens: number
+        budgetTokens?: number
+      }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
       type: "session.shell.started"
       durable: { aggregateID: string; seq: number; version: 1 }
       location?: LocationRef
@@ -5945,6 +6077,8 @@ export type ServerEvent =
   | SessionSynthetic
   | SessionSkillActivated
   | SessionSkillDeactivated
+  | SessionCueDetected
+  | SessionRecallRecorded
   | SessionShellStarted
   | SessionShellEnded
   | SessionStepStarted

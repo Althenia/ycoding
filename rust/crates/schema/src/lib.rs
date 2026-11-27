@@ -87,6 +87,7 @@ pub mod project_directories;
 pub mod pty;
 pub mod pty_ticket;
 pub mod question;
+pub mod recall;
 pub mod reference;
 pub mod remote;
 pub mod server_event;

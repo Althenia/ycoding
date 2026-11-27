@@ -30,7 +30,7 @@ impl Directory {
         self.data()
             .join("dots")
             .join("skills")
-            .join("ycoding-operator")
+            .join("session-operator")
             .join("SKILL.md")
     }
 }
@@ -51,10 +51,10 @@ fn next_ok(calls: Arc<AtomicUsize>) -> Prepare {
 
 #[test]
 fn embedded_skill_matches_the_pinned_digest() {
-    assert_eq!(SKILL.len(), 29_778);
+    assert_eq!(SKILL.len(), 30_366);
     assert_eq!(
         sha256(SKILL),
-        "d81f10a8c97322865fadd12b1c7e3c125731c5cee7805fe8f01494cca68c2204"
+        "241dae490283dd37951d7e415d290d2876bf3cf45b55004f4489b455ab2383b9"
     );
     assert!(SKILL.ends_with('\n'));
 }
@@ -64,6 +64,27 @@ async fn ensure_writes_an_absent_skill_and_its_parents() {
     let directory = Directory::new();
     ensure(directory.data()).await.unwrap();
     assert_eq!(std::fs::read(directory.skill()).unwrap(), SKILL.as_bytes());
+}
+
+#[tokio::test]
+async fn ensure_removes_the_replaced_skill_directory_but_keeps_foreign_files() {
+    let directory = Directory::new();
+    let replaced = directory
+        .data()
+        .join("dots")
+        .join("skills")
+        .join("ycoding-operator");
+    std::fs::create_dir_all(&replaced).unwrap();
+    std::fs::write(replaced.join("SKILL.md"), "synthetic replaced skill\n").unwrap();
+    ensure(directory.data()).await.unwrap();
+    assert!(!replaced.exists());
+    assert_eq!(std::fs::read(directory.skill()).unwrap(), SKILL.as_bytes());
+    std::fs::create_dir_all(&replaced).unwrap();
+    std::fs::write(replaced.join("SKILL.md"), "synthetic replaced skill\n").unwrap();
+    std::fs::write(replaced.join("notes.md"), "kept\n").unwrap();
+    ensure(directory.data()).await.unwrap();
+    assert!(!replaced.join("SKILL.md").exists());
+    assert_eq!(std::fs::read(replaced.join("notes.md")).unwrap(), b"kept\n");
 }
 
 #[tokio::test]

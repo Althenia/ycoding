@@ -603,6 +603,10 @@ fn check_domain_goldens(prefixes: &[&str]) {
             "SessionEvent.session.skill.deactivated" => {
                 round_trip::<session_event::SkillDeactivated>(&input)
             }
+            "SessionEvent.session.cue.detected" => round_trip::<session_event::CueDetected>(&input),
+            "SessionEvent.session.recall.recorded" => {
+                round_trip::<session_event::RecallRecorded>(&input)
+            }
             "SessionEvent.session.shell.started" => {
                 round_trip::<session_event::ShellStarted>(&input)
             }

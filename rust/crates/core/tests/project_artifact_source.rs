@@ -267,6 +267,250 @@ async fn disabled_artifacts_restore_standard_catalogs_without_store_mutation() {
     fixture.cleanup();
 }
 
+#[tokio::test]
+async fn only_explicitly_written_managed_skills_activate_from_matching_permitted_cues() {
+    use std::sync::{Arc, Mutex};
+    use ycoding_core::{
+        resources::{
+            agent, command,
+            project_artifact::{accounting, store},
+            skill,
+        },
+        session::skill::{path_triggered, triggered},
+        tools::policy::evaluate,
+    };
+    use ycoding_schema::{DomainEncode, parse_json, permission};
+    let fixture = ToolFixture::new();
+    let client = fixture.authority.store.client();
+    let registry = Arc::new(Mutex::new(Registry::default()));
+    let artifacts = store::Service::new(
+        client.clone(),
+        store::Paths {
+            data: fixture.root.join("data"),
+            home: fixture.root.join("home"),
+            config: fixture.root.join("config"),
+        },
+        registry.clone(),
+    );
+    let definition =
+        |json: &str| project_artifact::Definition::decode(&parse_json(json).unwrap()).unwrap();
+    let write = |id: &str,
+                 definition: &project_artifact::Definition,
+                 expected: Option<project_artifact::MutationExpectation>| {
+        artifacts.write_manual(store::ManualWriteInput {
+            scope: project_artifact::ScopeSelector::Project,
+            project_id: Some(project_id("project")),
+            id,
+            definition,
+            expected,
+            now: 100,
+        })
+    };
+    let trusted = definition(
+        r#"{"kind":"skill","name":"Trusted","description":"Checks Rust changes","tags":["rust"],"activation":{"version":"1","keywords":"cobalt","events":"command.invoked","commands":"cargo check","paths":"rust/**/*.rs"},"content":"Run cargo check."}"#,
+    );
+    let legacy = definition(
+        r#"{"kind":"skill","name":"Legacy","description":"Older untagged guide","content":"Follow the older guide."}"#,
+    );
+    let tagged = definition(
+        r#"{"kind":"skill","name":"Tagged","description":"Tags and body text only","tags":["release","activation"],"content":"metadata:\n  activation: auto\n  events: command.invoked\n"}"#,
+    );
+    let created = write("trusted", &trusted, None).unwrap();
+    write("legacy", &legacy, None).unwrap();
+    write("tagged", &tagged, None).unwrap();
+    for invalid in [
+        r#"{"events":"two words"}"#,
+        r#"{"paths":"/absolute/path"}"#,
+        r#"{"commands":"cargo check,"}"#,
+        r#"{"version":" "}"#,
+    ] {
+        let rejected = definition(&format!(
+            r#"{{"kind":"skill","name":"Bad","description":"Rejected","activation":{invalid},"content":"Body."}}"#
+        ));
+        assert_eq!(
+            write("bad", &rejected, None).unwrap_err().code.encode(),
+            JsonValue::String("InvalidArtifact".into())
+        );
+    }
+    let stored = artifacts
+        .get(&created.scope_id, &created.kind, &created.id)
+        .unwrap();
+    assert_eq!(stored.definition, trusted);
+    let source = source::Service::new(
+        source::Options {
+            client: client.clone(),
+            store: artifacts.clone(),
+            accounting: accounting::Service::new(client.clone(), "synthetic".into()),
+            registry,
+            location: ycoding_schema::location::Ref {
+                directory: ycoding_schema::schema::AbsolutePath::new(
+                    fixture.root.to_string_lossy().as_ref(),
+                )
+                .unwrap(),
+                workspace_id: None,
+            },
+            project_id: project_id("project"),
+            project_directory: fixture.root.clone(),
+            data_root: fixture.root.join("data"),
+        },
+        source::Catalogs {
+            agents: agent::Service::new(vec![agent::empty("standard".into())]),
+            commands: command::Service::default(),
+            skills: skill::Service::new(&fixture.root.join("cache")),
+        },
+    );
+    let skill_kind = project_artifact::Kind::decode(&JsonValue::String("skill".into())).unwrap();
+    let activates = |catalog: &skill::Service,
+                     info: &ycoding_schema::skill::Info,
+                     rules: &[permission::Rule],
+                     event: &str,
+                     argv: Option<&[String]>,
+                     path: Option<&str>| {
+        let Some(metadata) = catalog.activation_metadata(info) else {
+            return false;
+        };
+        info.autoinvoke == Some(true)
+            && evaluate(&"skill".into(), &info.id, rules).effect.0.as_str() == Some("allow")
+            && (triggered(&metadata, event, argv)
+                || path.is_some_and(|path| path_triggered(&metadata, path)))
+    };
+    let allow = [permission::Rule {
+        action: "skill".into(),
+        resource: "*".into(),
+        effect: permission::Effect("allow".into()),
+    }];
+    let deny = [permission::Rule {
+        action: "skill".into(),
+        resource: "trusted".into(),
+        effect: permission::Effect("deny".into()),
+    }];
+    let check: Vec<String> = ["cargo", "check", "--workspace"].map(String::from).into();
+    let checker: Vec<String> = ["cargo", "checker"].map(String::from).into();
+
+    source.refresh().await;
+    let mut catalogs = source.catalogs().await;
+    let listed = catalogs.skills.list().await.unwrap();
+    let find = |id: &str| {
+        listed
+            .iter()
+            .find(|info| info.id.as_str() == Some(id))
+            .unwrap()
+    };
+    let provenance = source.provenance(&skill_kind, "trusted").unwrap();
+    assert_eq!(provenance.scope, "project");
+    assert_eq!(provenance.version_id, created.version_id);
+    assert_eq!(provenance.expected_digest, created.content_digest);
+    assert!(stored.artifact.revision.get() == 0);
+
+    let trusted_info = find("trusted");
+    assert!(activates(
+        &catalogs.skills,
+        trusted_info,
+        &allow,
+        "command.invoked",
+        Some(&check),
+        None
+    ));
+    assert!(activates(
+        &catalogs.skills,
+        trusted_info,
+        &allow,
+        "other",
+        None,
+        Some("rust/crates/a.rs")
+    ));
+    assert!(!activates(
+        &catalogs.skills,
+        trusted_info,
+        &allow,
+        "session.input.promoted",
+        Some(&checker),
+        Some("docs/a.md")
+    ));
+    assert!(!activates(
+        &catalogs.skills,
+        trusted_info,
+        &deny,
+        "command.invoked",
+        Some(&check),
+        Some("rust/crates/a.rs")
+    ));
+    for id in ["legacy", "tagged"] {
+        let info = find(id);
+        assert_ne!(info.autoinvoke, Some(true));
+        assert!(catalogs.skills.activation_metadata(info).is_none());
+        assert!(!activates(
+            &catalogs.skills,
+            info,
+            &allow,
+            "command.invoked",
+            Some(&check),
+            Some("rust/crates/a.rs")
+        ));
+        assert!(source.provenance(&skill_kind, id).is_some());
+    }
+    assert_eq!(
+        find("legacy").content.as_str(),
+        Some("Follow the older guide.")
+    );
+
+    let expectation =
+        |details: &project_artifact::ArtifactDetails| project_artifact::MutationExpectation {
+            expected_revision: details.artifact.revision,
+            expected_version_id: details.current_version.id.clone(),
+            expected_digest: details.current_version.content_digest.clone(),
+        };
+    let content_edit = definition(
+        r#"{"kind":"skill","name":"Trusted","description":"Checks Rust changes","tags":["rust"],"activation":{"version":"1","keywords":"cobalt","events":"command.invoked","commands":"cargo check","paths":"rust/**/*.rs"},"content":"Run cargo check and clippy."}"#,
+    );
+    let edited = write("trusted", &content_edit, Some(expectation(&stored))).unwrap();
+    let keyword_edit = definition(
+        r#"{"kind":"skill","name":"Trusted","description":"Checks Rust changes","tags":["rust"],"activation":{"version":"2","keywords":"amber","commands":"cargo test"},"content":"Run cargo check and clippy."}"#,
+    );
+    let details = artifacts
+        .get(&edited.scope_id, &edited.kind, &edited.id)
+        .unwrap();
+    assert_eq!(details.definition, content_edit);
+    write("trusted", &keyword_edit, Some(expectation(&details))).unwrap();
+    let details = artifacts
+        .get(&edited.scope_id, &edited.kind, &edited.id)
+        .unwrap();
+    assert_eq!(details.definition, keyword_edit);
+
+    source.refresh().await;
+    catalogs = source.catalogs().await;
+    let listed = catalogs.skills.list().await.unwrap();
+    let info = listed
+        .iter()
+        .find(|info| info.id.as_str() == Some("trusted"))
+        .unwrap();
+    let test_argv: Vec<String> = ["cargo", "test"].map(String::from).into();
+    assert!(activates(
+        &catalogs.skills,
+        info,
+        &allow,
+        "x",
+        Some(&test_argv),
+        None
+    ));
+    assert!(!activates(
+        &catalogs.skills,
+        info,
+        &allow,
+        "command.invoked",
+        Some(&check),
+        Some("rust/crates/a.rs")
+    ));
+    assert_eq!(
+        source
+            .provenance(&skill_kind, "trusted")
+            .unwrap()
+            .version_id,
+        details.current_version.id
+    );
+    fixture.cleanup();
+}
+
 fn project_id(id: &str) -> project::Id {
     project::Id::decode(&JsonValue::String(id.into())).unwrap()
 }
@@ -414,7 +658,7 @@ fn validates_authoritative_managed_bytes_and_captures_only_exact_provenance() {
         .join(scope.storage_id.as_lossless().as_str().unwrap());
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(package::scope_marker_path(&root), r#"{"schema":1,"scopeID":"pas_source","type":"project","storageID":"11111111-1111-4111-8111-111111111111"}"#).unwrap();
-    let content = adapter::render(&details.definition);
+    let content = adapter::render(&details.artifact.id, &details.definition);
     let marker = package::marker(package::MarkerInput {
         scope_id: scope.id.clone(),
         storage_id: scope.storage_id.clone(),

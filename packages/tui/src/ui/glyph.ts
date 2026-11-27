@@ -10,6 +10,7 @@ export type GlyphName =
   | "awaitingInput"
   | "subagent"
   | "compaction"
+  | "recall"
   | "connected"
   | "disabled"
   | "connecting"
@@ -43,6 +44,7 @@ const GLYPHS: Readonly<Record<GlyphName, GlyphSlot>> = {
   awaitingInput: createGlyph("?", "subagent awaiting input", "warning", "warning"),
   subagent: createGlyph("◦", "subagent identity", "info", "info"),
   compaction: createGlyph("~", "compaction checkpoint", "muted"),
+  recall: createGlyph("↺", "cue and recall", "info", "info"),
   connected: createGlyph("✓", "connected / enabled", "accent", "success"),
   disabled: createGlyph("○", "disabled / inactive", "muted"),
   connecting: createGlyph("⋯", "pending / connecting", "info", "info"),

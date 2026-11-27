@@ -4,16 +4,23 @@ use super::{
     recall::Cache,
 };
 use crate::resources::discovery;
-use crate::resources::recall::{lexical::Document, ranking};
+use crate::resources::recall::{
+    candidate::{Method, Query as RecallQuery, Reason},
+    document::{Document, Fields, Kind, Lifecycle, Scope, Source},
+    hybrid::Calibration,
+    index::Entry,
+};
 use icu_properties::{
     CodePointMapData,
     props::{GeneralCategory, GeneralCategoryGroup},
 };
-use std::collections::BTreeSet;
+use std::{
+    collections::{BTreeSet, HashMap},
+    time::{Duration, Instant},
+};
 
 const SNIPPET_LENGTH: usize = 320;
 const SNIPPET_LEAD: usize = 60;
-const BM25_CONTEXT_FLOOR: f64 = 3.583519;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Span {
@@ -38,62 +45,115 @@ pub(super) fn rank(
     }
     let words = tokens(query.text)?;
     let matching = words.iter().cloned().collect::<BTreeSet<_>>();
-    let docs: Vec<_> = concepts
+    let documents: HashMap<&str, Document> = concepts
         .iter()
-        .map(|c| {
-            let s = &c.summary;
-            let tags: Vec<_> = s.tags.iter().flatten().map(text_value).collect();
-            Document {
-                id: &s.id,
-                title: s.title.as_ref().map(text_value).unwrap_or_default(),
-                metadata: format!(
-                    "{} {} {}",
-                    text_value(&s.type_),
-                    tags.join(" "),
-                    s.description.as_ref().map(text_value).unwrap_or_default()
-                ),
-                tags,
-                body: &c.body,
-            }
+        .map(|c| (c.summary.id.as_str(), document(c)))
+        .collect();
+    let manifest: Vec<Entry> = documents
+        .values()
+        .map(|d| Entry {
+            scope: d.scope,
+            kind: d.kind,
+            id: d.id.clone(),
+            hash: d.source.content_hash.clone(),
         })
         .collect();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    let (scores, _) = cache.scores(cache_path, &concepts, &docs, &matching, deadline)?;
-    let normalized = icu_normalizer::ComposingNormalizerBorrowed::new_nfc()
-        .normalize(&query.text.trim().to_lowercase())
-        .into_owned();
-    let rows = docs
-        .iter()
-        .zip(scores)
-        .enumerate()
-        .filter_map(|(i, (d, score))| {
-            let c = &concepts[i];
-            if query
-                .type_
-                .is_some_and(|v| !v.is_empty() && c.summary.type_.as_str() != Some(v))
-                || query
-                    .tag
-                    .is_some_and(|v| !v.is_empty() && !d.tags.iter().any(|t| t == v))
-            {
-                return None;
-            }
-            Some((i, d.id, score))
-        });
-    ranking::rank(rows, query.limit)
+    let retriever = cache.retriever(cache_path);
+    retriever
+        .sync(
+            &manifest,
+            |entry| documents.get(entry.id.as_str()).cloned(),
+            Instant::now() + Duration::from_secs(60),
+        )
+        .map_err(|_| Error::Unavailable)?;
+    let request = RecallQuery {
+        text: query.text.trim().to_owned(),
+        kinds: vec![Kind::Concept],
+        tags: query
+            .tag
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+            .into_iter()
+            .collect(),
+        types: query
+            .type_
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+            .into_iter()
+            .collect(),
+        limit: query.limit,
+        ..RecallQuery::default()
+    };
+    let ranked = retriever.search_with(
+        &request,
+        &Calibration {
+            bm25_floor: 0.0,
+            ..Calibration::default()
+        },
+    );
+    let automatic: HashMap<String, Reason> = retriever
+        .search(&RecallQuery {
+            limit: 50,
+            ..request
+        })
+        .candidates
         .into_iter()
-        .map(|(i, score)| {
-            let c = &concepts[i];
-            let automatic_reason = docs[i]
-                .match_reason(&normalized, &words)?
-                .or((score >= BM25_CONTEXT_FLOOR).then_some("lexical"));
-            Ok(SearchHit {
-                summary: c.summary.clone(),
+        .map(|c| (c.id, c.reason))
+        .collect();
+    let by_id: HashMap<&str, &Concept> = concepts
+        .iter()
+        .map(|c| (c.summary.id.as_str(), c))
+        .collect();
+    ranked
+        .candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            let concept = by_id.get(candidate.id.as_str())?;
+            let score = [Method::Bm25, Method::Exact]
+                .into_iter()
+                .find_map(|m| candidate.score(m))
+                .map_or(0.0, |s| s.score);
+            Some((
+                concept,
                 score,
-                snippet: snippet(&c.body, &matching)?,
+                automatic.get(&candidate.id).map(|r| r.as_str()),
+            ))
+        })
+        .map(|(concept, score, automatic_reason)| {
+            Ok(SearchHit {
+                summary: concept.summary.clone(),
+                score,
+                snippet: snippet(&concept.body, &matching)?,
                 automatic_reason,
             })
         })
         .collect()
+}
+
+fn document(concept: &Concept) -> Document {
+    let summary = &concept.summary;
+    let text = |value: &Option<ycoding_schema::LosslessString>| {
+        value.as_ref().map(text_value).unwrap_or_default()
+    };
+    Document {
+        id: summary.id.clone(),
+        kind: Kind::Concept,
+        scope: Scope::Knowledge,
+        source: Source {
+            path: format!("{}.md", summary.id),
+            revision: summary.digest.clone(),
+            content_hash: summary.digest.clone(),
+        },
+        fields: Fields {
+            doc_type: text_value(&summary.type_),
+            title: text(&summary.title),
+            description: text(&summary.description),
+            body: concept.body.clone(),
+            tags: summary.tags.iter().flatten().map(text_value).collect(),
+            ..Fields::default()
+        },
+        lifecycle: Lifecycle::default(),
+    }
 }
 
 fn snippet(body: &str, terms: &BTreeSet<String>) -> Result<ycoding_schema::LosslessString, Error> {

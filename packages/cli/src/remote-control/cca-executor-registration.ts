@@ -3,7 +3,7 @@ import { open, readFile, rename, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { setTimeout } from "node:timers/promises"
-import { ycodingDotsSkillsRoot } from "./ycoding-operator-skill"
+import { ycodingDotsSkillsRoot } from "./session-operator-skill"
 
 export const ccaExecutorRegistrationURL = "https://chatgpt.com/backend-api/flora/cca/executor"
 export const ccaDesktopAppVersion = "26.1023.50603"

@@ -3,6 +3,12 @@ name: ycoding
 description: "Use this skill for questions about YCoding behavior, configuration, troubleshooting, plugins, hooks, Clients, Server, API, agents, commands, skills, tools, permissions, MCP, providers, models, themes, keymaps, the CLI, the TUI, and contributing to this repository."
 metadata:
   display-name: "YCoding"
+  purpose: "Answer questions about YCoding behavior, configuration and contribution from the repository's own documents."
+  applicability: "Questions about YCoding itself; not for unrelated coding tasks."
+  triggers: "ycoding configuration, ycoding troubleshooting, plugins and hooks, permissions, providers and models, contributing"
+  capabilities: "locate the owning document, explain configuration, diagnose runtime behavior"
+  prerequisites: "repository documents readable from the Session"
+  related: "report"
 ---
 # YCoding
 

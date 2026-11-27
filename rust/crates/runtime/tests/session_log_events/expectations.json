@@ -671,6 +671,30 @@
       "tests": [
         "session.input.steered/absent"
       ]
+    },
+    {
+      "variant": 75,
+      "type": "session.input.deleted",
+      "tests": [
+        "session.input.deleted/absent",
+        "session.input.deleted/present"
+      ]
+    },
+    {
+      "variant": 76,
+      "type": "session.cue.detected",
+      "tests": [
+        "session.cue.detected/absent",
+        "session.cue.detected/present"
+      ]
+    },
+    {
+      "variant": 77,
+      "type": "session.recall.recorded",
+      "tests": [
+        "session.recall.recorded/absent",
+        "session.recall.recorded/present"
+      ]
     }
   ],
   "cases": [
@@ -9054,6 +9078,241 @@
       },
       "hex": "d204750a120a106576745f776972655f6669787475726511000000000000454022130a11736f757263652d65706f63682d74657374280132170a110a0f7365735f776972655f6576656e74731000180142260a110a0f7365735f776972655f6576656e747312110a0f6d73675f776972655f6576656e7473",
       "streamHex": "d204790a150a136576745f776972655f73747265616d5f32333911000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310ef01180142260a110a0f7365735f776972655f6576656e747312110a0f6d73675f776972655f6576656e7473"
+    },
+    {
+      "name": "session.input.deleted/absent",
+      "variant": 75,
+      "event": {
+        "id": "evt_wire_fixture",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.input.deleted",
+        "durable": {
+          "aggregateID": "ses_wire_events",
+          "seq": 0,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_wire_events",
+          "inputID": "msg_wire_events"
+        }
+      },
+      "hex": "da04750a120a106576745f776972655f6669787475726511000000000000454022130a11736f757263652d65706f63682d74657374280132170a110a0f7365735f776972655f6576656e74731000180142260a110a0f7365735f776972655f6576656e747312110a0f6d73675f776972655f6576656e7473",
+      "streamHex": "da04790a150a136576745f776972655f73747265616d5f32343011000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310f001180142260a110a0f7365735f776972655f6576656e747312110a0f6d73675f776972655f6576656e7473"
+    },
+    {
+      "name": "session.input.deleted/present",
+      "variant": 75,
+      "event": {
+        "id": "evt_wire_fixture",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.input.deleted",
+        "durable": {
+          "aggregateID": "ses_wire_events",
+          "seq": 9007199254740991,
+          "version": 1
+        },
+        "metadata": {
+          "": null,
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "empty": [],
+            "zero": 0,
+            "no": false
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "data": {
+          "sessionID": "ses_wire_events",
+          "inputID": "msg_wire_events"
+        }
+      },
+      "hex": "da04f9010a120a106576745f776972655f666978747572651100000000000045401a5e0a080a020a0012020a000a520a04120200d8124a3a480a160a060a0474657874120c220a120800d83dd800deffdf0a0d0a070a05656d707479120232000a130a060a047a65726f12091900000000000000000a0a0a040a026e6f1202100022130a11736f757263652d65706f63682d746573742801321e0a110a0f7365735f776972655f6576656e747310ffffffffffffff0f18013a1b0a0a0a082f70726f6a656374120d0a0b77726b5f6669787475726542260a110a0f7365735f776972655f6576656e747312110a0f6d73675f776972655f6576656e7473",
+      "streamHex": "da04790a150a136576745f776972655f73747265616d5f32343111000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310f101180142260a110a0f7365735f776972655f6576656e747312110a0f6d73675f776972655f6576656e7473"
+    },
+    {
+      "name": "session.cue.detected/absent",
+      "variant": 76,
+      "event": {
+        "id": "evt_wire_fixture",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.cue.detected",
+        "durable": {
+          "aggregateID": "ses_wire_events",
+          "seq": 0,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_wire_events",
+          "cueID": "cue_fixture",
+          "kind": "command"
+        }
+      },
+      "hex": "e204730a120a106576745f776972655f6669787475726511000000000000454022130a11736f757263652d65706f63682d74657374280132170a110a0f7365735f776972655f6576656e74731000180142240a110a0f7365735f776972655f6576656e7473120d0a0b6375655f666978747572651802",
+      "streamHex": "e204770a150a136576745f776972655f73747265616d5f32343211000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310f201180142240a110a0f7365735f776972655f6576656e7473120d0a0b6375655f666978747572651802"
+    },
+    {
+      "name": "session.cue.detected/present",
+      "variant": 76,
+      "event": {
+        "id": "evt_wire_fixture",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.cue.detected",
+        "durable": {
+          "aggregateID": "ses_wire_events",
+          "seq": 9007199254740991,
+          "version": 1
+        },
+        "metadata": {
+          "": null,
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "empty": [],
+            "zero": 0,
+            "no": false
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "data": {
+          "sessionID": "ses_wire_events",
+          "cueID": "cue_fixture",
+          "kind": "command",
+          "subject": "\ud800😀\udfff",
+          "messageID": "msg_wire_events"
+        }
+      },
+      "hex": "e20496020a120a106576745f776972655f666978747572651100000000000045401a5e0a080a020a0012020a000a520a04120200d8124a3a480a160a060a0474657874120c220a120800d83dd800deffdf0a0d0a070a05656d707479120232000a130a060a047a65726f12091900000000000000000a0a0a040a026e6f1202100022130a11736f757263652d65706f63682d746573742801321e0a110a0f7365735f776972655f6576656e747310ffffffffffffff0f18013a1b0a0a0a082f70726f6a656374120d0a0b77726b5f6669787475726542430a110a0f7365735f776972655f6576656e7473120d0a0b6375655f666978747572651802220a120800d83dd800deffdf2a110a0f6d73675f776972655f6576656e7473",
+      "streamHex": "e20496010a150a136576745f776972655f73747265616d5f32343311000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310f301180142430a110a0f7365735f776972655f6576656e7473120d0a0b6375655f666978747572651802220a120800d83dd800deffdf2a110a0f6d73675f776972655f6576656e7473"
+    },
+    {
+      "name": "session.recall.recorded/absent",
+      "variant": 77,
+      "event": {
+        "id": "evt_wire_fixture",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.recall.recorded",
+        "durable": {
+          "aggregateID": "ses_wire_events",
+          "seq": 0,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_wire_events",
+          "key": "rcl_fixture",
+          "trigger": "prompt",
+          "methods": [],
+          "outcome": "abstained",
+          "items": [],
+          "elapsedMs": 0,
+          "injectedTokens": 0
+        }
+      },
+      "hex": "ea047d0a120a106576745f776972655f6669787475726511000000000000454022130a11736f757263652d65706f63682d74657374280132170a110a0f7365735f776972655f6576656e747310001801422e0a110a0f7365735f776972655f6576656e7473120d0a0b72636c5f6669787475726518012a003002420048005000",
+      "streamHex": "ea0481010a150a136576745f776972655f73747265616d5f32343411000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310f4011801422e0a110a0f7365735f776972655f6576656e7473120d0a0b72636c5f6669787475726518012a003002420048005000"
+    },
+    {
+      "name": "session.recall.recorded/present",
+      "variant": 77,
+      "event": {
+        "id": "evt_wire_fixture",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.recall.recorded",
+        "durable": {
+          "aggregateID": "ses_wire_events",
+          "seq": 9007199254740991,
+          "version": 1
+        },
+        "metadata": {
+          "": null,
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "empty": [],
+            "zero": 0,
+            "no": false
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "data": {
+          "sessionID": "ses_wire_events",
+          "key": "rcl_fixture",
+          "trigger": "prompt",
+          "methods": [
+            "explicit",
+            "cue",
+            "exact",
+            "bm25",
+            "semantic",
+            "rrf"
+          ],
+          "outcome": "abstained",
+          "items": [
+            {
+              "kind": "memory",
+              "id": "decisions/cobalt",
+              "stage": "injected",
+              "method": "rrf",
+              "scores": {
+                "bm25": 1.5,
+                "semantic": 0.25,
+                "rrf": 0.0325,
+                "rank": 0
+              },
+              "reason": "\ud800😀\udfff",
+              "rejection": "stale",
+              "source": {
+                "id": "memory:repository/decisions/cobalt",
+                "revision": "sha256:fixture"
+              },
+              "okf": {
+                "type": "Decision",
+                "trust": "trusted",
+                "freshness": "fresh",
+                "lifecycle": "active"
+              },
+              "artifact": {
+                "scopeID": "pas_fixture",
+                "versionID": "pav_fixture",
+                "kind": "skill",
+                "id": "fixture",
+                "sourceScope": "project"
+              },
+              "tokens": 120
+            },
+            {
+              "kind": "skill",
+              "id": "rust-build",
+              "stage": "restored",
+              "method": "explicit",
+              "reason": "",
+              "source": {
+                "id": "skill:rust-build",
+                "revision": "sha256:fixture"
+              }
+            }
+          ],
+          "elapsedMs": 0,
+          "injectedTokens": 0,
+          "cueID": "cue_fixture",
+          "abstention": "no_match",
+          "budgetTokens": 2048
+        }
+      },
+      "hex": "ea04ae040a120a106576745f776972655f666978747572651100000000000045401a5e0a080a020a0012020a000a520a04120200d8124a3a480a160a060a0474657874120c220a120800d83dd800deffdf0a0d0a070a05656d707479120232000a130a060a047a65726f12091900000000000000000a0a0a040a026e6f1202100022130a11736f757263652d65706f63682d746573742801321e0a110a0f7365735f776972655f6576656e747310ffffffffffffff0f18013a1b0a0a0a082f70726f6a656374120d0a0b77726b5f6669787475726542da020a110a0f7365735f776972655f6576656e7473120d0a0b72636c5f666978747572651801220d0a0b6375655f666978747572652a0c08010802080308040805080630023801428b020ac601080112120a106465636973696f6e732f636f62616c74180420062a1d09000000000000f83f11000000000000d03f19a4703d0ad7a3a03f2000320a120800d83dd800deffdf380342380a240a226d656d6f72793a7265706f7369746f72792f6465636973696f6e732f636f62616c7412100a0e7368613235363a666978747572654a120a0a0a084465636973696f6e100118012001522d0a0d0a0b7061735f66697874757265120d0a0b7061765f66697874757265180122090a0766697874757265280158780a400802120c0a0a727573742d6275696c641805200132020a0042260a120a10736b696c6c3a727573742d6275696c6412100a0e7368613235363a6669787475726548005000588010",
+      "streamHex": "ea04ae030a150a136576745f776972655f73747265616d5f32343511000000000000454022130a11736f757263652d65706f63682d74657374280132180a110a0f7365735f776972655f6576656e747310f501180142da020a110a0f7365735f776972655f6576656e7473120d0a0b72636c5f666978747572651801220d0a0b6375655f666978747572652a0c08010802080308040805080630023801428b020ac601080112120a106465636973696f6e732f636f62616c74180420062a1d09000000000000f83f11000000000000d03f19a4703d0ad7a3a03f2000320a120800d83dd800deffdf380342380a240a226d656d6f72793a7265706f7369746f72792f6465636973696f6e732f636f62616c7412100a0e7368613235363a666978747572654a120a0a0a084465636973696f6e100118012001522d0a0d0a0b7061735f66697874757265120d0a0b7061765f66697874757265180122090a0766697874757265280158780a400802120c0a0a727573742d6275696c641805200132020a0042260a120a10736b696c6c3a727573742d6275696c6412100a0e7368613235363a6669787475726548005000588010"
     }
   ],
   "synced": [

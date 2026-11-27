@@ -1,0 +1,2541 @@
+{
+  "version": 2,
+  "concepts": [
+    {
+      "id": "build/incremental-compilation",
+      "title": "Incremental compilation reuse",
+      "description": "Local builds reuse cached compiler query results so small edits rebuild quickly.",
+      "tags": [
+        "incremental",
+        "compiler-cache",
+        "dev-loop"
+      ],
+      "identifiers": [
+        "CARGO_INCREMENTAL",
+        "incremental_dir"
+      ],
+      "body": "Incremental compilation stores intermediate results per crate so an edit to one function recompiles only the code that depends on it. Keep it on for developer machines where the same workspace builds hundreds of times a day. Turn it off in CI, because a fresh checkout never benefits and the bookkeeping adds disk writes. Wipe the incremental directory after every compiler upgrade, since stale entries can produce baffling internal errors."
+    },
+    {
+      "id": "build/remote-cache-keys",
+      "title": "Remote cache key hygiene",
+      "description": "A shared build cache is only safe when each key covers every input that affects the output.",
+      "tags": [
+        "remote-cache",
+        "cache-key",
+        "hermetic"
+      ],
+      "identifiers": [
+        "REMOTE_CACHE_URL",
+        "cache_key_salt"
+      ],
+      "body": "A shared cache returns wrong artifacts when the key omits an input. Hash source files, compiler version, target triple, enabled features, and relevant environment variables. Add a salt you can bump to invalidate everything after a toolchain incident. Never let developer machines upload to the shared cache; only CI with a clean environment should write, while everyone else reads."
+    },
+    {
+      "id": "build/lockfile-pinning",
+      "title": "Lockfile pinning for reproducible builds",
+      "description": "Commit the resolved dependency graph and refuse to build when it drifts.",
+      "tags": [
+        "lockfile",
+        "reproducibility",
+        "pinning"
+      ],
+      "identifiers": [
+        "--locked",
+        "Cargo.lock"
+      ],
+      "body": "Commit the lockfile for applications so every machine resolves identical versions. In CI pass the locked flag so a stale lockfile fails the job rather than silently updating. Bump dependencies in dedicated commits, which makes regressions easy to bisect. For libraries, still test against the newest compatible versions in a separate job, because downstream users will not honor your lockfile."
+    },
+    {
+      "id": "build/dependency-pruning",
+      "title": "Pruning unused dependencies",
+      "description": "Remove crates nothing imports to cut compile time and attack surface.",
+      "tags": [
+        "unused-deps",
+        "compile-time",
+        "hygiene"
+      ],
+      "identifiers": [
+        "cargo-udeps",
+        "unused_crate_dependencies"
+      ],
+      "body": "Every dependency adds compile time, binary size, and supply chain exposure. Run an unused dependency detector in CI and fail when a crate is declared but never imported. Check feature flags too, since an optional feature can drag in a large transitive tree. Replace heavy crates used for one helper with a few lines of local code when the behavior is simple and well tested."
+    },
+    {
+      "id": "build/link-time-optimization",
+      "title": "Link time optimization tradeoffs",
+      "description": "Whole-program optimization shrinks and speeds binaries at the price of much slower release builds.",
+      "tags": [
+        "lto",
+        "codegen",
+        "release-profile"
+      ],
+      "identifiers": [
+        "lto",
+        "codegen-units"
+      ],
+      "body": "Link time optimization lets the compiler inline across crate boundaries, which often improves speed by a few percent and shrinks the binary. The cost is longer release builds and higher peak memory. Thin mode captures most of the benefit at a fraction of the time. Reduce codegen units to one only for final distribution builds, and keep the development profile untouched so iteration stays fast."
+    },
+    {
+      "id": "build/workspace-feature-unification",
+      "title": "Workspace feature unification",
+      "description": "Cargo merges feature sets across the workspace, so one member can silently enable features for another.",
+      "tags": [
+        "features",
+        "workspace",
+        "resolver"
+      ],
+      "identifiers": [
+        "resolver",
+        "default-features"
+      ],
+      "body": "In a workspace, a feature enabled by any member is enabled for the shared dependency everywhere it is compiled together. This can make a crate build in the workspace but fail alone. Use the version two resolver, disable default features in shared dependency declarations, and run a per-crate check in CI with each package selected individually so missing feature declarations surface."
+    },
+    {
+      "id": "build/artifact-size-budget",
+      "title": "Binary size budgets",
+      "description": "Track release binary size per commit and fail the build when growth exceeds an agreed budget.",
+      "tags": [
+        "binary-size",
+        "strip",
+        "budget"
+      ],
+      "identifiers": [
+        "strip",
+        "opt-level"
+      ],
+      "body": "Binaries grow slowly until a download becomes painful. Record the stripped size of each release artifact per commit and fail the job when growth exceeds a budget, such as two percent. Inspect symbol tables to find the largest contributors. Size-oriented optimization levels and abort-on-panic trade some speed for smaller output, so apply them only to binaries where distribution size matters."
+    },
+    {
+      "id": "storage/wal-checkpointing",
+      "title": "Write-ahead log checkpointing",
+      "description": "Checkpoints fold the write-ahead log back into the main database file to bound its growth.",
+      "tags": [
+        "wal",
+        "checkpoint",
+        "sqlite"
+      ],
+      "identifiers": [
+        "wal_autocheckpoint",
+        "journal_mode"
+      ],
+      "body": "In write-ahead mode, readers never block the writer, but the log file keeps growing until a checkpoint copies pages back into the database. A long-lived read transaction prevents the checkpoint from finishing, so keep readers short. Set the automatic checkpoint threshold to match your write rate, and run a truncating checkpoint during quiet periods if the file size matters."
+    },
+    {
+      "id": "storage/wal-archiving",
+      "title": "Archiving log segments for point-in-time recovery",
+      "description": "Ship completed write-ahead segments to durable storage so a database can be restored to any moment.",
+      "tags": [
+        "archiving",
+        "pitr",
+        "backup"
+      ],
+      "identifiers": [
+        "archive_command",
+        "restore_command"
+      ],
+      "body": "Continuous archiving copies each completed write-ahead segment to remote object storage, which together with a periodic base backup allows restoring to any chosen timestamp. Make the archive command idempotent and have it fail loudly, because a silent gap breaks the chain. Rehearse a restore monthly and record how long it takes. Alert when the newest archived segment is older than your recovery point objective."
+    },
+    {
+      "id": "storage/index-selection",
+      "title": "Composite index column order",
+      "description": "Put equality columns first, then range columns, so one index serves the most queries.",
+      "tags": [
+        "index",
+        "btree",
+        "query-plan"
+      ],
+      "identifiers": [
+        "CREATE INDEX",
+        "EXPLAIN"
+      ],
+      "body": "A composite index is useful from the leftmost column onward, so order matters. Place columns filtered by equality first, then the column used for range or sorting. Confirm with the planner output that the index is actually chosen rather than assuming it. Every extra index slows writes and consumes memory, so drop ones that the planner never picks and avoid indexing low-selectivity flags alone."
+    },
+    {
+      "id": "storage/connection-pooling",
+      "title": "Connection pool sizing",
+      "description": "Bound open database sessions to what the server can serve and queue the rest.",
+      "tags": [
+        "pooling",
+        "connections",
+        "capacity"
+      ],
+      "identifiers": [
+        "pool_max_size",
+        "idle_timeout"
+      ],
+      "body": "Opening a database connection per request exhausts server memory long before the CPU is busy. Keep a small pool, typically a few times the core count of the database host, and let extra requests wait with a timeout rather than piling on more sessions. Validate connections before reuse, and recycle them on a schedule so a failover is noticed. Size across all application instances, not per instance."
+    },
+    {
+      "id": "storage/schema-migrations",
+      "title": "Forward-only schema migrations",
+      "description": "Apply additive changes in separate deploy steps so old and new code both run against the schema.",
+      "tags": [
+        "migration",
+        "expand-contract",
+        "schema"
+      ],
+      "identifiers": [
+        "migration_lock",
+        "down_revision"
+      ],
+      "body": "Treat migrations as forward-only and split risky changes into expand and contract phases. First add the new column as nullable, deploy code that writes both, backfill in batches, then switch reads and finally drop the old column in a later release. Never rename in place while old code is running. Hold a migration lock so two instances cannot apply the same step concurrently."
+    },
+    {
+      "id": "storage/vacuum-bloat",
+      "title": "Reclaiming dead space after heavy updates",
+      "description": "Updates and deletes leave dead row versions that vacuuming must reclaim.",
+      "tags": [
+        "vacuum",
+        "table-bloat",
+        "maintenance"
+      ],
+      "identifiers": [
+        "VACUUM FULL",
+        "autovacuum_vacuum_scale_factor"
+      ],
+      "body": "Frequent updates and deletes leave dead row versions behind, and tables grow even when the live row count stays flat. Tune the autovacuum threshold lower for hot tables so cleanup keeps pace with churn. Avoid a full rewrite on production, since it takes an exclusive lock for the entire duration. Monitor the ratio of dead to live tuples and alert when it climbs past twenty percent."
+    },
+    {
+      "id": "storage/transaction-isolation",
+      "title": "Choosing a transaction isolation level",
+      "description": "Match isolation strength to the anomalies your logic cannot tolerate, and retry on serialization failure.",
+      "tags": [
+        "isolation",
+        "transactions",
+        "anomalies"
+      ],
+      "identifiers": [
+        "SERIALIZABLE",
+        "SELECT FOR UPDATE"
+      ],
+      "body": "Read committed is fine for most reads but allows a value to change between two statements. Use repeatable read or serializable when a decision depends on several rows staying consistent, and be ready to retry on a serialization failure. For simple counters or inventory, an explicit row lock with select for update is clearer and cheaper than raising isolation globally."
+    },
+    {
+      "id": "network/retry-backoff",
+      "title": "Retries with exponential backoff and jitter",
+      "description": "Failed remote calls are retried with growing delays and random spread to avoid synchronized storms.",
+      "tags": [
+        "retry",
+        "backoff",
+        "resilience"
+      ],
+      "identifiers": [
+        "max_attempts",
+        "jitter_ratio"
+      ],
+      "body": "Retry only operations that are safe to repeat, and cap the attempt count so a dead dependency cannot hold callers forever. Double the delay after each failure up to a ceiling, then add random jitter so many clients do not hit the recovering server at the same instant. Respect any server-supplied wait hint, and surface the final error with the attempt history attached."
+    },
+    {
+      "id": "network/timeout-budgets",
+      "title": "Deadline propagation across services",
+      "description": "Pass the remaining time budget downstream so no hop works on a request the caller has abandoned.",
+      "tags": [
+        "timeout",
+        "deadline",
+        "budget"
+      ],
+      "identifiers": [
+        "x-request-deadline",
+        "connect_timeout"
+      ],
+      "body": "Give each incoming request a total deadline and pass the remaining time to every downstream call. A hop that sees the budget already spent should fail immediately instead of doing useless work. Set connect timeouts much shorter than read timeouts, and make timeouts decrease toward the leaves of the call graph so the edge always answers before the user gives up."
+    },
+    {
+      "id": "network/connection-reuse",
+      "title": "HTTP keep-alive and connection reuse",
+      "description": "Reusing established connections avoids repeated handshakes and keeps tail latency low.",
+      "tags": [
+        "keep-alive",
+        "http",
+        "handshake"
+      ],
+      "identifiers": [
+        "keepalive_timeout",
+        "pool_idle_timeout"
+      ],
+      "body": "Each new connection pays for a TCP handshake and usually a TLS negotiation, so reuse them. Keep an idle pool per host with a timeout slightly shorter than the server's, otherwise requests occasionally hit a connection the server already closed. Prefer multiplexed protocols for many small requests, and cap total connections per host so one slow upstream cannot exhaust local sockets."
+    },
+    {
+      "id": "network/rate-limiting",
+      "title": "Token bucket rate limiting",
+      "description": "Admit bursts up to a bucket size while holding the long-run request rate to a steady refill speed.",
+      "tags": [
+        "rate-limit",
+        "token-bucket",
+        "throttling"
+      ],
+      "identifiers": [
+        "burst_size",
+        "retry-after"
+      ],
+      "body": "A token bucket allows short bursts yet enforces an average rate: tokens refill steadily and each request spends one. Key limits by caller identity, not by address alone, to avoid punishing shared networks. Return a rejection status with a retry-after header so well-behaved clients back off. Share counters through a fast store when several instances serve the same API."
+    },
+    {
+      "id": "network/dns-caching",
+      "title": "DNS caching and TTL handling",
+      "description": "Resolver caches reduce lookup latency but must honor record lifetimes to follow failovers.",
+      "tags": [
+        "dns",
+        "ttl",
+        "resolver"
+      ],
+      "identifiers": [
+        "dns_ttl_floor",
+        "getaddrinfo"
+      ],
+      "body": "Name lookups add latency to every new connection, so cache answers in the process. Honor the record lifetime, with a small floor to avoid hammering the resolver, otherwise traffic keeps flowing to retired addresses after a failover. Long-running services that resolve once at startup are a frequent cause of outages after infrastructure moves. Try all returned addresses with a short stagger."
+    },
+    {
+      "id": "network/tls-session-resumption",
+      "title": "TLS session resumption",
+      "description": "Resuming a prior secure session skips most of the handshake cost for returning connections.",
+      "tags": [
+        "tls",
+        "resumption",
+        "handshake-latency"
+      ],
+      "identifiers": [
+        "session_tickets",
+        "early_data"
+      ],
+      "body": "Session tickets let a returning client skip the full certificate exchange, cutting a round trip. Rotate ticket keys frequently and share them across servers behind the same name, or resumption fails after load balancing. Early data speeds up the first request further but can be replayed, so permit it only for idempotent operations. Measure resumption rate to confirm it is working."
+    },
+    {
+      "id": "rendering/frame-pacing",
+      "title": "Frame pacing and vsync",
+      "description": "Present frames on the display refresh boundary to avoid tearing and uneven motion.",
+      "tags": [
+        "vsync",
+        "frame-time",
+        "smoothness"
+      ],
+      "identifiers": [
+        "present_mode",
+        "target_fps"
+      ],
+      "body": "Uneven frame delivery looks worse than a lower steady rate. Synchronize presentation with the display refresh, and measure frame time rather than average rate, because a few long frames cause visible stutter. Cap the target rate to a divisor of the refresh interval when the workload cannot keep up, and avoid sleeping with coarse timers that overshoot the deadline."
+    },
+    {
+      "id": "rendering/glyph-atlas",
+      "title": "Glyph atlas caching",
+      "description": "Rasterize each glyph once into a shared texture and reuse it for every draw.",
+      "tags": [
+        "glyph",
+        "atlas",
+        "text-rendering"
+      ],
+      "identifiers": [
+        "atlas_size",
+        "subpixel_offset"
+      ],
+      "body": "Rasterizing text every frame wastes time. Render each glyph once into a packed texture atlas keyed by font, size, and subpixel offset, then draw quads that sample it. Evict least recently used entries when the atlas fills, or grow it in powers of two. Quantize subpixel positions to a few steps so the cache stays small without visible jitter."
+    },
+    {
+      "id": "rendering/layout-invalidation",
+      "title": "Layout invalidation and dirty regions",
+      "description": "Mark only changed subtrees as needing layout so unrelated widgets are not measured again.",
+      "tags": [
+        "layout",
+        "invalidation",
+        "dirty-region"
+      ],
+      "identifiers": [
+        "needs_layout",
+        "dirty_rect"
+      ],
+      "body": "Recomputing layout for the entire tree on each change scales poorly. Mark a node dirty when its size inputs change, propagate the flag to ancestors only as far as their size can be affected, and measure just those paths. Collect dirty rectangles during layout and repaint only their union. Fixed-size containers stop propagation, which is why constraining sizes improves speed."
+    },
+    {
+      "id": "rendering/damage-tracking",
+      "title": "Damage tracking for terminal redraw",
+      "description": "Diff the new screen against the previous one and emit only the changed cells.",
+      "tags": [
+        "damage",
+        "terminal",
+        "redraw"
+      ],
+      "identifiers": [
+        "diff_cells",
+        "synchronized_update"
+      ],
+      "body": "Repainting a whole terminal screen causes flicker and wastes bandwidth over slow links. Keep the previous frame buffer, compare cell by cell, and write cursor moves plus only the changed runs. Wrap each update in the synchronized output sequence where supported so the screen swaps atomically. Reset the buffer after a resize, because stale coordinates would corrupt the diff."
+    },
+    {
+      "id": "rendering/color-management",
+      "title": "Color space conversion",
+      "description": "Blend and scale in linear light, then encode to the display space at the end.",
+      "tags": [
+        "color",
+        "srgb",
+        "gamma"
+      ],
+      "identifiers": [
+        "srgb",
+        "linear_rgb"
+      ],
+      "body": "Averaging encoded pixel values darkens gradients and thin text edges. Convert inputs from the display encoding to linear light, perform blending and scaling there, and convert back once at the end. Tag every texture with its color space so loaders do not guess. Terminal palettes differ between emulators, so do not assume that named colors match the values in your design file."
+    },
+    {
+      "id": "rendering/text-wrapping",
+      "title": "Unicode width and text wrapping",
+      "description": "Measure display columns per grapheme, not bytes or code points, before wrapping text.",
+      "tags": [
+        "unicode",
+        "wrapping",
+        "grapheme"
+      ],
+      "identifiers": [
+        "unicode_width",
+        "grapheme_cluster"
+      ],
+      "body": "Byte length and character count both mislead layout. East Asian characters and many emoji occupy two columns, while combining marks occupy none. Segment text into grapheme clusters, sum their display widths, and break at word boundaries first, falling back to cluster boundaries for long tokens. Test with accented letters, flags, and zero-width joiners, because simple width tables drift out of date."
+    },
+    {
+      "id": "concurrency/channel-backpressure",
+      "title": "Bounded channels and backpressure",
+      "description": "Limit queue capacity so fast producers slow down instead of exhausting memory.",
+      "tags": [
+        "channel",
+        "backpressure",
+        "queue"
+      ],
+      "identifiers": [
+        "bounded",
+        "try_send"
+      ],
+      "body": "An unbounded queue hides overload until memory runs out. Use a bounded channel sized for a short burst, and decide explicitly what a full queue means: block the producer, drop the oldest item, or reject new work with an error. Expose the queue depth as a metric. Prefer try_send at network edges, where blocking would stall unrelated connections."
+    },
+    {
+      "id": "concurrency/lock-ordering",
+      "title": "Lock ordering to avoid deadlock",
+      "description": "Acquire multiple mutexes in one global order so threads cannot wait on each other in a cycle.",
+      "tags": [
+        "deadlock",
+        "mutex",
+        "lock-rank"
+      ],
+      "identifiers": [
+        "lock_rank",
+        "try_lock"
+      ],
+      "body": "Deadlock needs a cycle, so remove the cycle: assign every lock a rank and always take them in ascending order. Document the order next to the type definitions and assert it in debug builds. Never call unknown callbacks while holding a lock, because the callback may take another one. Prefer try_lock with a back-off path when ordering cannot be guaranteed."
+    },
+    {
+      "id": "concurrency/cancellation-tokens",
+      "title": "Cooperative cancellation",
+      "description": "Pass a token through long operations so shutdown and timeouts can stop work promptly.",
+      "tags": [
+        "cancellation",
+        "shutdown",
+        "timeouts"
+      ],
+      "identifiers": [
+        "CancellationToken",
+        "select!"
+      ],
+      "body": "Killing tasks abruptly leaves resources half-written. Give every long operation a cancellation token, check it at await points, and race it against the main future so work ends promptly. Child tokens let a parent cancel a whole subtree. After cancelling, wait for tasks to finish cleanup with a bounded grace period before exiting the process."
+    },
+    {
+      "id": "concurrency/async-blocking",
+      "title": "Blocking calls inside async tasks",
+      "description": "Synchronous waits on an executor thread starve other tasks and must move to a dedicated pool.",
+      "tags": [
+        "async",
+        "blocking",
+        "executor"
+      ],
+      "identifiers": [
+        "spawn_blocking",
+        "block_in_place"
+      ],
+      "body": "An async executor has few threads, and a task that blocks on a file read, a sleep, or heavy computation stalls every other task scheduled there. Move such work to a dedicated blocking pool and await its handle. Watch for hidden blockers like synchronous logging sinks and compression libraries. Latency spikes that disappear when worker threads are doubled are a classic sign."
+    },
+    {
+      "id": "concurrency/atomic-ordering",
+      "title": "Atomic memory ordering",
+      "description": "Pick the weakest ordering that still establishes the needed happens-before relationship.",
+      "tags": [
+        "atomics",
+        "memory-model",
+        "ordering"
+      ],
+      "identifiers": [
+        "Ordering::Acquire",
+        "fetch_add"
+      ],
+      "body": "Relaxed ordering is enough for independent counters such as statistics. When one thread publishes data and another consumes it, store with release and load with acquire so the data writes become visible first. Sequentially consistent ordering is the safe default when unsure, and the cost difference is small on most hardware. Verify subtle designs under a model checker rather than by testing alone."
+    },
+    {
+      "id": "concurrency/worker-pool-sizing",
+      "title": "Sizing worker pools",
+      "description": "Match thread counts to the workload: cores for compute, more for waiting on I/O.",
+      "tags": [
+        "thread-pool",
+        "sizing",
+        "throughput"
+      ],
+      "identifiers": [
+        "worker_count",
+        "available_parallelism"
+      ],
+      "body": "For CPU-bound work, a pool near the core count maximizes throughput, and more threads only add context switches. For work that mostly waits on I/O, larger pools help, bounded by downstream capacity. Read the parallelism that the container actually grants rather than the host's core count. Measure queue wait time under load and adjust, instead of copying a number from a blog."
+    },
+    {
+      "id": "concurrency/task-leak",
+      "title": "Detecting leaked tasks",
+      "description": "Track spawned tasks in a set so none outlive their owner unnoticed.",
+      "tags": [
+        "task-leak",
+        "structured-concurrency",
+        "lifecycle"
+      ],
+      "identifiers": [
+        "JoinSet",
+        "abort_on_drop"
+      ],
+      "body": "Fire-and-forget tasks keep running after their owner is gone, holding connections and memory. Collect handles in a join set owned by the component, and abort remaining tasks when it is dropped. Log panics from tasks instead of discarding the join result. A steadily rising task count in metrics is the earliest symptom of a leak."
+    },
+    {
+      "id": "security/secret-scanning",
+      "title": "Scanning commits for leaked credentials",
+      "description": "Run a secret detector before commits land and in CI to catch keys early.",
+      "tags": [
+        "secrets",
+        "scanning",
+        "pre-commit"
+      ],
+      "identifiers": [
+        "gitleaks",
+        "pre-commit"
+      ],
+      "body": "Credentials committed once live in history forever. Run a secret scanner as a pre-commit hook and again in CI on the full diff, with an allowlist for known test fixtures. Treat every hit as compromised: revoke and rotate first, then clean the history. Keep example configuration files with obvious placeholder values so developers never need real keys locally."
+    },
+    {
+      "id": "security/token-rotation",
+      "title": "Rotating access tokens",
+      "description": "Issue short-lived tokens and replace them regularly so a stolen one expires quickly.",
+      "tags": [
+        "tokens",
+        "rotation",
+        "credentials"
+      ],
+      "identifiers": [
+        "token_ttl",
+        "refresh_grace"
+      ],
+      "body": "Give access tokens a lifetime measured in minutes and pair them with a refresh mechanism that can be revoked. Rotate signing keys on a schedule, publish the new key before using it, and keep the old one valid for verification until outstanding tokens lapse. Log every refresh with the client identity so abuse stands out. Automate the process, since manual rotation gets skipped."
+    },
+    {
+      "id": "security/input-validation",
+      "title": "Validating untrusted input at the boundary",
+      "description": "Parse external data into strict types once, reject unknown fields, and bound sizes.",
+      "tags": [
+        "validation",
+        "parsing",
+        "boundaries"
+      ],
+      "identifiers": [
+        "max_body_bytes",
+        "deny_unknown_fields"
+      ],
+      "body": "Validate at the edge, then pass typed values inward. Cap request body size and nesting depth, reject unknown fields so typos do not silently pass, and normalize encodings before checks rather than after. Prefer allowlists to blocklists. Return precise errors for developers in logs but generic messages for callers, and fuzz parsers that handle complex formats."
+    },
+    {
+      "id": "security/path-traversal",
+      "title": "Preventing path traversal",
+      "description": "Resolve user-supplied file names against a fixed root and reject anything that escapes it.",
+      "tags": [
+        "traversal",
+        "filesystem",
+        "dotdot"
+      ],
+      "identifiers": [
+        "canonicalize",
+        "starts_with"
+      ],
+      "body": "Never join untrusted input onto a base directory and open the result directly. Canonicalize the final path, resolve symbolic links, and confirm it still starts inside the allowed root before touching the file. Reject absolute paths and parent components early, and return a generic not-found error so attackers learn nothing about the layout. Test with encoded separators and overlong names."
+    },
+    {
+      "id": "security/csrf-protection",
+      "title": "Cross-site request forgery defenses",
+      "description": "State-changing requests need an unforgeable proof that they came from your own pages.",
+      "tags": [
+        "csrf",
+        "cookies",
+        "same-site"
+      ],
+      "identifiers": [
+        "SameSite",
+        "csrf_token"
+      ],
+      "body": "Browsers attach cookies automatically, so a hostile page can trigger actions on your site. Set the same-site attribute to lax or strict on session cookies, require a per-session token on every state-changing request, and verify the origin header. Never perform changes in response to GET requests. Token-bearing headers in API calls avoid the issue because browsers do not add them on their own."
+    },
+    {
+      "id": "security/dependency-audit",
+      "title": "Auditing dependencies for advisories",
+      "description": "Check the dependency tree against published advisories on every build and on a schedule.",
+      "tags": [
+        "advisories",
+        "audit",
+        "supply-chain"
+      ],
+      "identifiers": [
+        "cargo-audit",
+        "deny.toml"
+      ],
+      "body": "New advisories appear for code that has not changed, so audit on a schedule as well as on each build. Fail CI on high severity findings in reachable code, and keep a reviewed ignore list with an expiry for the rest. Pin the policy in a deny configuration covering licenses, banned crates, and duplicate versions. Prefer upgrading over ignoring, and record why any exception exists."
+    },
+    {
+      "id": "security/least-privilege-sandbox",
+      "title": "Sandboxing child processes",
+      "description": "Run helper processes with only the permissions their task needs.",
+      "tags": [
+        "sandbox",
+        "privileges",
+        "isolation"
+      ],
+      "identifiers": [
+        "seccomp",
+        "drop_privileges"
+      ],
+      "body": "Spawn untrusted or complex helpers with a minimal environment, a restricted working directory, and no inherited secrets. Drop privileges before executing, filter system calls with a seccomp profile where available, and apply memory and time limits. Pass data through pipes rather than shared files. Treat sandbox escapes as expected eventually and keep the helper's credentials narrow so the blast radius stays small."
+    },
+    {
+      "id": "testing/flaky-quarantine",
+      "title": "Quarantining flaky tests",
+      "description": "Move unreliable tests to a tracked quarantine list so they stop blocking merges while owners fix them.",
+      "tags": [
+        "flaky",
+        "quarantine",
+        "ci-stability"
+      ],
+      "identifiers": [
+        "quarantine_list",
+        "retry_count"
+      ],
+      "body": "A test that fails at random teaches the team to ignore red builds. Move it into a quarantine list with an owner and a deadline, keep running it for signal, but stop letting it block merges. Count reruns separately from real failures so the dashboard stays honest. Delete tests that stay quarantined past the deadline instead of letting the list grow."
+    },
+    {
+      "id": "testing/snapshot-review",
+      "title": "Snapshot test discipline",
+      "description": "Treat snapshot diffs as code review items, never as noise to bulk accept.",
+      "tags": [
+        "snapshot",
+        "golden",
+        "review"
+      ],
+      "identifiers": [
+        "INSTA_UPDATE",
+        "assert_snapshot"
+      ],
+      "body": "Snapshots catch unintended output changes cheaply, but blind acceptance turns them into noise. Keep each snapshot small and focused, review every changed line in the pull request, and never bulk update from an environment variable without reading the diff. Strip volatile values such as timestamps and absolute paths before comparing. Large snapshots deserve explicit assertions instead."
+    },
+    {
+      "id": "testing/property-shrinking",
+      "title": "Property tests and shrinking",
+      "description": "Generate many random inputs and let the framework reduce a failing case to a minimal one.",
+      "tags": [
+        "property-testing",
+        "fuzzing",
+        "shrinking"
+      ],
+      "identifiers": [
+        "proptest",
+        "shrink"
+      ],
+      "body": "Describe an invariant, such as decode after encode returns the original, and let the framework try hundreds of generated inputs. When a case fails, shrinking reduces it to a minimal example that is easy to debug. Persist failing seeds as regression tests. Constrain generators to realistic inputs, because arbitrary values may spend the whole budget on rejected cases."
+    },
+    {
+      "id": "testing/fixture-isolation",
+      "title": "Isolating test fixtures",
+      "description": "Give each test its own directory and ports so cases can run in parallel without interference.",
+      "tags": [
+        "fixtures",
+        "isolation",
+        "parallelism"
+      ],
+      "identifiers": [
+        "tempdir",
+        "serial_test"
+      ],
+      "body": "Tests that share a directory, port, or global setting interfere in ways that only show up under parallel runs. Create a unique temporary directory per test, bind to port zero and read the assigned port, and pass configuration explicitly rather than mutating process environment. Where a shared resource is unavoidable, serialize just those cases instead of the whole suite."
+    },
+    {
+      "id": "testing/golden-labelled-sets",
+      "title": "Labelled evaluation sets for retrieval",
+      "description": "Measure search quality with fixed queries and graded relevance, split into development and holdout.",
+      "tags": [
+        "evaluation",
+        "recall",
+        "labelled-data"
+      ],
+      "identifiers": [
+        "recall_at_k",
+        "holdout"
+      ],
+      "body": "Tune ranking on a development split and report numbers only from a holdout split that was never inspected during tuning. Grade relevance so the best document counts more than a partial match, and include queries with no correct answer to measure false positives. Report recall at a fixed cutoff and reciprocal rank, and keep the corpus fixed so scores stay comparable across changes."
+    },
+    {
+      "id": "testing/time-mocking",
+      "title": "Controlling time in tests",
+      "description": "Inject a clock so timeouts and schedules can be advanced instantly and deterministically.",
+      "tags": [
+        "clock",
+        "timers",
+        "determinism"
+      ],
+      "identifiers": [
+        "fake_clock",
+        "tokio::time::pause"
+      ],
+      "body": "Tests that sleep are slow and flaky. Inject a clock interface, or pause the runtime timer, then advance virtual time explicitly to trigger timeouts, retries, and expirations in microseconds. Assert on ordering of events rather than elapsed wall time. Keep one real-time smoke test per subsystem to confirm the wiring to the actual system clock."
+    },
+    {
+      "id": "release/semver-bumping",
+      "title": "Semantic version bumps",
+      "description": "Choose major, minor, or patch from the public surface that changed, checked by tooling.",
+      "tags": [
+        "semver",
+        "versioning",
+        "public-api"
+      ],
+      "identifiers": [
+        "cargo-semver-checks",
+        "breaking_change"
+      ],
+      "body": "Increment the major number for removals or incompatible behavior, minor for additions, and patch for fixes. Run an automated public interface comparison before publishing, because accidental breakage often hides in trait bounds and enum variants. Before one-point-zero, treat minor bumps as the breaking ones. Record the reason for each bump in the changelog so reviewers can disagree with it early."
+    },
+    {
+      "id": "release/changelog-curation",
+      "title": "Curating changelog entries",
+      "description": "Write entries for readers affected by the change, grouped by type, not a dump of commit titles.",
+      "tags": [
+        "changelog",
+        "release-notes",
+        "communication"
+      ],
+      "identifiers": [
+        "CHANGELOG.md",
+        "Unreleased"
+      ],
+      "body": "A changelog is for users deciding whether to upgrade. Group entries under added, changed, fixed, and removed, and write each as the visible effect rather than the internal mechanism. Keep an unreleased section that grows with every merged pull request, and call out breaking changes at the top with migration steps. Link to the issue for details instead of pasting them."
+    },
+    {
+      "id": "release/canary-rollout",
+      "title": "Canary rollout stages",
+      "description": "Expose a new build to a small slice of traffic and widen it only while health signals stay green.",
+      "tags": [
+        "canary",
+        "progressive-delivery",
+        "traffic-shifting"
+      ],
+      "identifiers": [
+        "canary_percent",
+        "rollback_threshold"
+      ],
+      "body": "Ship each change to one percent of traffic first, then widen in fixed steps such as five, twenty-five, and fifty percent. Between steps, compare error rate and latency against the stable fleet over a long enough window to see slow failures. Define the rollback threshold before starting so nobody debates it mid-incident. Automate the abort path, and keep the old version running until the rollout completes."
+    },
+    {
+      "id": "release/tag-signing",
+      "title": "Signing release tags",
+      "description": "Sign annotated tags so consumers can verify who published a release.",
+      "tags": [
+        "signing",
+        "git-tag",
+        "provenance"
+      ],
+      "identifiers": [
+        "git tag -s",
+        "gpg.format"
+      ],
+      "body": "Create annotated tags with a signature from a key whose public half is published, and verify them in the release job before building artifacts. Protect tag names so only maintainers can push them, and never move a published tag; issue a new version instead. Recent Git versions can sign with an SSH key via the format setting, which many teams find easier to manage than a separate keyring."
+    },
+    {
+      "id": "release/feature-flag-cleanup",
+      "title": "Retiring feature flags",
+      "description": "Give every flag an owner and expiry date, and delete the dead branch once fully rolled out.",
+      "tags": [
+        "feature-flags",
+        "tech-debt",
+        "expiry"
+      ],
+      "identifiers": [
+        "flag_owner",
+        "expiry_date"
+      ],
+      "body": "Flags that outlive their rollout multiply the states you must test. Record an owner and an expiry date when the flag is created, review the list each sprint, and remove the flag together with the losing code path once the winner is at one hundred percent. Alert on flags past expiry. Avoid nesting flags inside one another."
+    },
+    {
+      "id": "release/rollback-plan",
+      "title": "Rollback runbooks",
+      "description": "Write down how to return to the previous version before shipping, including data compatibility.",
+      "tags": [
+        "rollback",
+        "runbook",
+        "deployment"
+      ],
+      "identifiers": [
+        "previous_release",
+        "rollback_window"
+      ],
+      "body": "Every deployment needs a tested way back. Keep the previous artifact available, make schema changes compatible with both versions during the rollback window, and script the revert command so nobody improvises under pressure. Decide in advance who may trigger it and which signals justify it. Rehearse in staging, and confirm that the revert itself does not need the broken service."
+    },
+    {
+      "id": "observability/structured-logging",
+      "title": "Structured log fields",
+      "description": "Emit key-value fields with consistent names so logs can be filtered and joined by machines.",
+      "tags": [
+        "logging",
+        "structured",
+        "correlation"
+      ],
+      "identifiers": [
+        "trace_id",
+        "tracing::instrument"
+      ],
+      "body": "Free-form sentences are hard to query. Emit events with stable key names such as request identifier, user identifier, and duration, and put variable data in fields instead of the message. Carry a trace identifier through every service so one request can be reconstructed. Never log secrets or full payloads; redact at the logging layer so mistakes at call sites are harmless."
+    },
+    {
+      "id": "observability/metric-cardinality",
+      "title": "Metric label cardinality",
+      "description": "Each unique label combination is a separate series, so unbounded labels destroy the metrics store.",
+      "tags": [
+        "metrics",
+        "cardinality",
+        "labels"
+      ],
+      "identifiers": [
+        "label_limit",
+        "histogram_buckets"
+      ],
+      "body": "Putting user identifiers, URLs, or error strings into labels creates millions of series and crashes the store. Restrict labels to small bounded sets such as method, route template, and status class. Put high-detail data in logs or traces instead. Choose histogram buckets around your latency objectives, and enforce a per-metric series limit to fail loudly when someone breaks the rule."
+    },
+    {
+      "id": "observability/trace-sampling",
+      "title": "Trace sampling strategies",
+      "description": "Keep a representative share of distributed traces and all interesting ones without storing every request.",
+      "tags": [
+        "tracing",
+        "sampling",
+        "cost-control"
+      ],
+      "identifiers": [
+        "sampling_ratio",
+        "tail_sampling"
+      ],
+      "body": "Recording every trace is expensive and mostly redundant. Use head sampling at a low fixed ratio for baseline coverage, then add tail sampling that always keeps traces containing errors or unusually slow spans. Propagate the sampling decision in the trace context so downstream services agree. Revisit the ratio whenever traffic doubles, and record the effective rate so counts can be scaled back."
+    },
+    {
+      "id": "observability/alert-fatigue",
+      "title": "Alert thresholds and fatigue",
+      "description": "Page only on symptoms users feel, with burn-rate rules instead of raw thresholds.",
+      "tags": [
+        "alerting",
+        "slo",
+        "on-call"
+      ],
+      "identifiers": [
+        "burn_rate",
+        "for_duration"
+      ],
+      "body": "Pages that do not require action train responders to ignore pages. Alert on user-visible symptoms such as error ratio against a service objective, using multi-window burn rates so short blips stay quiet while real budget loss pages quickly. Send causes like high CPU to a dashboard or ticket queue. Every alert should link to a runbook, and unused alerts should be deleted."
+    },
+    {
+      "id": "observability/log-levels",
+      "title": "Choosing log levels",
+      "description": "Reserve error for failures needing attention and keep debug output cheap and off by default.",
+      "tags": [
+        "logging",
+        "levels",
+        "verbosity"
+      ],
+      "identifiers": [
+        "RUST_LOG",
+        "warn"
+      ],
+      "body": "Use error for failures that need a human, warn for recoverable surprises, info for lifecycle events, and debug for developer detail that is off in production. A handled retry is not an error. Make levels adjustable at runtime per module through an environment filter so investigations do not require a redeploy. Avoid formatting expensive debug strings when the level is disabled."
+    },
+    {
+      "id": "observability/health-endpoints",
+      "title": "Liveness and readiness probes",
+      "description": "Separate the check that restarts a process from the check that routes traffic to it.",
+      "tags": [
+        "probes",
+        "liveness",
+        "readiness"
+      ],
+      "identifiers": [
+        "/healthz",
+        "/readyz"
+      ],
+      "body": "A liveness probe answers whether the process should be restarted and must never depend on downstream services, or one outage restarts everything. A readiness probe answers whether the instance should receive traffic and may check warm caches and connections. Keep both cheap, give them separate paths, and add a startup probe for slow initialization so the orchestrator does not kill a booting instance."
+    },
+    {
+      "id": "cli/exit-codes",
+      "title": "Meaningful exit codes",
+      "description": "Return distinct nonzero statuses so scripts can tell usage mistakes from runtime failures.",
+      "tags": [
+        "exit-status",
+        "scripting",
+        "error-handling"
+      ],
+      "identifiers": [
+        "exit_code",
+        "EX_USAGE"
+      ],
+      "body": "Exit zero only on success. Use one for general failure, two for invalid usage, and reserve higher values for specific conditions that callers may want to branch on, documenting each in the help text. Print diagnostics to standard error, never standard output, so pipelines keep clean data. When a command is interrupted by a signal, follow the shell convention of 128 plus the signal number."
+    },
+    {
+      "id": "cli/flag-naming",
+      "title": "Flag naming conventions",
+      "description": "Use long descriptive flags, consistent verbs, and conventional names for common switches.",
+      "tags": [
+        "flags",
+        "naming",
+        "ergonomics"
+      ],
+      "identifiers": [
+        "--dry-run",
+        "--no-color"
+      ],
+      "body": "Offer a long name for every option and a short one only for the most frequent. Reuse conventional names: dry-run to preview, verbose and quiet for output volume, force to skip confirmation. Boolean switches should default to off, with an explicit negated form when the default is on. Keep naming consistent across subcommands so users can guess."
+    },
+    {
+      "id": "cli/stdin-piping",
+      "title": "Reading from standard input and pipes",
+      "description": "Detect whether input is interactive and accept piped data and a dash argument.",
+      "tags": [
+        "stdin",
+        "pipes",
+        "interactive"
+      ],
+      "identifiers": [
+        "isatty",
+        "stdin"
+      ],
+      "body": "Commands that process text should read standard input when no file is given, and treat a lone dash as standard input. Check whether the stream is a terminal: prompt only when interactive, and fail with a clear message instead of hanging when input is piped but a prompt would be needed. Handle a closed output pipe quietly so piping into head does not print a stack trace."
+    },
+    {
+      "id": "cli/config-precedence",
+      "title": "Configuration precedence",
+      "description": "Resolve settings in a fixed order: flags, environment, project file, user file, defaults.",
+      "tags": [
+        "configuration",
+        "precedence",
+        "dotfiles"
+      ],
+      "identifiers": [
+        "XDG_CONFIG_HOME",
+        "--config"
+      ],
+      "body": "Users expect the most specific source to win. Apply defaults first, then the user configuration file, then a project file, then environment variables, and finally command-line flags. Honor the platform's standard config directory variable and allow an explicit path flag. Provide a command that prints the effective settings and where each value came from, which saves hours of support questions."
+    },
+    {
+      "id": "cli/progress-output",
+      "title": "Progress indicators and non-interactive output",
+      "description": "Show spinners only on a terminal and keep machine-readable output free of decoration.",
+      "tags": [
+        "progress",
+        "output",
+        "automation"
+      ],
+      "identifiers": [
+        "NO_COLOR",
+        "--quiet"
+      ],
+      "body": "Draw spinners and bars on standard error, and only when it is a terminal, so redirected output stays clean. Respect the no-color environment convention and a quiet flag. Offer a JSON output mode for automation with a stable schema. When a long task cannot show percentages, print periodic plain lines so CI logs prove it is still alive."
+    },
+    {
+      "id": "cli/shell-completions",
+      "title": "Shell completion generation",
+      "description": "Generate completion scripts from the same definition that parses arguments.",
+      "tags": [
+        "completion",
+        "shell",
+        "autocomplete"
+      ],
+      "identifiers": [
+        "clap_complete",
+        "compgen"
+      ],
+      "body": "Derive completion scripts from the argument definition so they never drift from the real options. Provide a subcommand that prints the script for bash, zsh, and fish, and document where to install each. Complete dynamic values, like profile names, by calling back into the binary, but keep that path fast and silent on errors because users press tab constantly."
+    }
+  ],
+  "skills": [
+    {
+      "id": "release-tagging",
+      "name": "release-tagging",
+      "description": "Creates and pushes an annotated version tag after verifying the changelog and a clean working tree. Use when cutting a new release version.",
+      "keywords": "version tag, release, annotated tag, cut release",
+      "activation": "auto"
+    },
+    {
+      "id": "changelog-drafting",
+      "name": "changelog-drafting",
+      "description": "Drafts changelog entries from merged commits grouped by change type. Use when preparing release notes.",
+      "keywords": "release notes, changelog, merged commits",
+      "activation": "auto"
+    },
+    {
+      "id": "ci-pipeline-repair",
+      "name": "ci-pipeline-repair",
+      "description": "Diagnoses a failing continuous integration job by reading logs and reproducing the failing step locally.",
+      "keywords": "failing build, CI, pipeline red, job logs",
+      "activation": "auto"
+    },
+    {
+      "id": "flaky-test-hunt",
+      "name": "flaky-test-hunt",
+      "description": "Reruns a suspect test repeatedly under varying conditions to expose ordering or timing nondeterminism.",
+      "keywords": "intermittent failure, flaky, rerun, race",
+      "activation": "auto"
+    },
+    {
+      "id": "dependency-upgrade",
+      "name": "dependency-upgrade",
+      "description": "Upgrades a library to a newer version, resolves compile breakage, and runs affected checks.",
+      "keywords": "bump package, outdated dependency, upgrade",
+      "activation": "auto"
+    },
+    {
+      "id": "vulnerability-triage",
+      "name": "vulnerability-triage",
+      "description": "Reviews security advisories against the dependency tree and decides which need action.",
+      "keywords": "CVE, advisory, audit, vulnerable package",
+      "activation": "auto"
+    },
+    {
+      "id": "database-migration-authoring",
+      "name": "database-migration-authoring",
+      "description": "Writes a reversible schema migration with an ordering-safe rollout plan.",
+      "keywords": "schema change, alter table, migration, column",
+      "activation": "auto"
+    },
+    {
+      "id": "query-performance-tuning",
+      "name": "query-performance-tuning",
+      "description": "Inspects a slow database query plan and proposes index or rewrite changes.",
+      "keywords": "slow query, explain, index, latency",
+      "activation": "auto"
+    },
+    {
+      "id": "api-contract-review",
+      "name": "api-contract-review",
+      "description": "Compares an endpoint's old and new contracts to flag breaking changes for consumers.",
+      "keywords": "openapi, breaking change, endpoint, schema diff",
+      "activation": "auto"
+    },
+    {
+      "id": "log-investigation",
+      "name": "log-investigation",
+      "description": "Searches structured logs around an incident window to build a timeline of failures.",
+      "keywords": "incident, error spike, logs, timeline",
+      "activation": "auto"
+    },
+    {
+      "id": "memory-leak-diagnosis",
+      "name": "memory-leak-diagnosis",
+      "description": "Profiles a process whose memory grows over time and locates retained allocations.",
+      "keywords": "heap growth, leak, profiler, allocations",
+      "activation": "auto"
+    },
+    {
+      "id": "terminal-ui-debugging",
+      "name": "terminal-ui-debugging",
+      "description": "Finds layout and redraw glitches in a terminal interface using recorded frames.",
+      "keywords": "garbled screen, tui, redraw, clipped text",
+      "activation": "auto"
+    },
+    {
+      "id": "cli-help-polish",
+      "name": "cli-help-polish",
+      "description": "Reviews command-line usage text, flags, and exit codes for consistency.",
+      "keywords": "help output, flags, usage, command-line",
+      "activation": "auto"
+    },
+    {
+      "id": "code-review-pass",
+      "name": "code-review-pass",
+      "description": "Reads a diff for defects, missing tests, and risky changes and reports findings by severity.",
+      "keywords": "pull request, review, diff, regression",
+      "activation": "auto"
+    },
+    {
+      "id": "refactor-extraction",
+      "name": "refactor-extraction",
+      "description": "Moves tangled logic into focused modules while keeping behavior identical.",
+      "keywords": "restructure, split module, cleanup, extract function",
+      "activation": "auto"
+    },
+    {
+      "id": "docker-image-slimming",
+      "name": "docker-image-slimming",
+      "description": "Shrinks a container image by restructuring layers and base image choice.",
+      "keywords": "dockerfile, image size, layers, multi-stage",
+      "activation": "auto"
+    },
+    {
+      "id": "secret-leak-response",
+      "name": "secret-leak-response",
+      "description": "Handles an accidentally committed credential: revoke, rotate, scrub history, and verify.",
+      "keywords": "leaked key, password in repo, rotate, scrub",
+      "activation": "auto"
+    },
+    {
+      "id": "benchmark-comparison",
+      "name": "benchmark-comparison",
+      "description": "Runs before-and-after benchmarks and reports statistically meaningful differences.",
+      "keywords": "throughput, benchmark, speedup, regression",
+      "activation": "auto"
+    },
+    {
+      "id": "onboarding-readme",
+      "name": "onboarding-readme",
+      "description": "Writes setup and quickstart documentation validated by following it from a clean checkout.",
+      "keywords": "readme, install, quickstart, docs",
+      "activation": "auto"
+    },
+    {
+      "id": "rollback-execution",
+      "name": "rollback-execution",
+      "description": "Reverts a bad deployment to the previous release and confirms service health.",
+      "keywords": "bad deploy, revert, restore previous version, outage",
+      "activation": "auto"
+    },
+    {
+      "id": "production-data-purge",
+      "name": "production-data-purge",
+      "description": "Permanently deletes customer records matching a retention rule. Run only on explicit request.",
+      "keywords": "delete records, retention purge, wipe table",
+      "activation": "manual"
+    },
+    {
+      "id": "force-push-cleanup",
+      "name": "force-push-cleanup",
+      "description": "Rewrites shared branch history with a forced push after squashing commits.",
+      "keywords": "force push, rewrite history, squash",
+      "activation": "manual"
+    },
+    {
+      "id": "billing-plan-change",
+      "name": "billing-plan-change",
+      "description": "Changes subscription tiers and invoices for an account.",
+      "keywords": "subscription, invoice, pricing tier",
+      "activation": "manual"
+    },
+    {
+      "id": "infrastructure-teardown",
+      "name": "infrastructure-teardown",
+      "description": "Destroys a cloud environment and all attached volumes.",
+      "keywords": "destroy environment, terraform destroy, tear down cluster",
+      "activation": "manual"
+    }
+  ],
+  "queries": [
+    {
+      "id": "q001",
+      "kind": "concept",
+      "category": "exact-id",
+      "text": "storage/wal-checkpointing",
+      "relevant": {
+        "storage/wal-checkpointing": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q002",
+      "kind": "concept",
+      "category": "exact-id",
+      "text": "network/dns-caching",
+      "relevant": {
+        "network/dns-caching": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q003",
+      "kind": "concept",
+      "category": "exact-id",
+      "text": "rendering/glyph-atlas",
+      "relevant": {
+        "rendering/glyph-atlas": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q004",
+      "kind": "concept",
+      "category": "exact-id",
+      "text": "concurrency/atomic-ordering",
+      "relevant": {
+        "concurrency/atomic-ordering": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q005",
+      "kind": "concept",
+      "category": "exact-id",
+      "text": "security/csrf-protection",
+      "relevant": {
+        "security/csrf-protection": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q006",
+      "kind": "concept",
+      "category": "exact-id",
+      "text": "release/semver-bumping",
+      "relevant": {
+        "release/semver-bumping": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q007",
+      "kind": "concept",
+      "category": "title",
+      "text": "Remote cache key hygiene",
+      "relevant": {
+        "build/remote-cache-keys": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q008",
+      "kind": "concept",
+      "category": "title",
+      "text": "Composite index column order",
+      "relevant": {
+        "storage/index-selection": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q009",
+      "kind": "concept",
+      "category": "title",
+      "text": "TLS session resumption",
+      "relevant": {
+        "network/tls-session-resumption": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q010",
+      "kind": "concept",
+      "category": "title",
+      "text": "Color space conversion",
+      "relevant": {
+        "rendering/color-management": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q011",
+      "kind": "concept",
+      "category": "title",
+      "text": "Sizing worker pools",
+      "relevant": {
+        "concurrency/worker-pool-sizing": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q012",
+      "kind": "concept",
+      "category": "title",
+      "text": "Snapshot test discipline",
+      "relevant": {
+        "testing/snapshot-review": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q013",
+      "kind": "concept",
+      "category": "tag",
+      "text": "pitr",
+      "relevant": {
+        "storage/wal-archiving": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q014",
+      "kind": "concept",
+      "category": "tag",
+      "text": "binary-size",
+      "relevant": {
+        "build/artifact-size-budget": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q015",
+      "kind": "concept",
+      "category": "tag",
+      "text": "token-bucket",
+      "relevant": {
+        "network/rate-limiting": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q016",
+      "kind": "concept",
+      "category": "tag",
+      "text": "structured-concurrency",
+      "relevant": {
+        "concurrency/task-leak": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q017",
+      "kind": "concept",
+      "category": "tag",
+      "text": "supply-chain",
+      "relevant": {
+        "security/dependency-audit": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q018",
+      "kind": "concept",
+      "category": "tag",
+      "text": "on-call",
+      "relevant": {
+        "observability/alert-fatigue": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q019",
+      "kind": "concept",
+      "category": "identifier",
+      "text": "CARGO_INCREMENTAL",
+      "relevant": {
+        "build/incremental-compilation": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q020",
+      "kind": "concept",
+      "category": "identifier",
+      "text": "autovacuum_vacuum_scale_factor",
+      "relevant": {
+        "storage/vacuum-bloat": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q021",
+      "kind": "concept",
+      "category": "identifier",
+      "text": "needs_layout",
+      "relevant": {
+        "rendering/layout-invalidation": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q022",
+      "kind": "concept",
+      "category": "identifier",
+      "text": "CancellationToken",
+      "relevant": {
+        "concurrency/cancellation-tokens": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q023",
+      "kind": "concept",
+      "category": "identifier",
+      "text": "serial_test",
+      "relevant": {
+        "testing/fixture-isolation": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q024",
+      "kind": "concept",
+      "category": "identifier",
+      "text": "isatty",
+      "relevant": {
+        "cli/stdin-piping": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q025",
+      "kind": "concept",
+      "category": "phrase",
+      "text": "truncating checkpoint",
+      "relevant": {
+        "storage/wal-checkpointing": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q026",
+      "kind": "concept",
+      "category": "phrase",
+      "text": "connect timeouts",
+      "relevant": {
+        "network/timeout-budgets": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q027",
+      "kind": "concept",
+      "category": "phrase",
+      "text": "signing keys",
+      "relevant": {
+        "security/token-rotation": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q028",
+      "kind": "concept",
+      "category": "phrase",
+      "text": "least recently used",
+      "relevant": {
+        "rendering/glyph-atlas": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q029",
+      "kind": "concept",
+      "category": "phrase",
+      "text": "quarantine list",
+      "relevant": {
+        "testing/flaky-quarantine": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q030",
+      "kind": "concept",
+      "category": "phrase",
+      "text": "startup probe",
+      "relevant": {
+        "observability/health-endpoints": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q031",
+      "kind": "concept",
+      "category": "lexical",
+      "text": "how many times should a failed network call be retried and how long should I wait between attempts",
+      "relevant": {
+        "network/retry-backoff": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q032",
+      "kind": "concept",
+      "category": "lexical",
+      "text": "my CI job fails when the lockfile is out of date, should I pass the locked flag",
+      "relevant": {
+        "build/lockfile-pinning": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q033",
+      "kind": "concept",
+      "category": "lexical",
+      "text": "what causes the write-ahead log file to keep growing and how do I checkpoint it",
+      "relevant": {
+        "storage/wal-checkpointing": 2,
+        "storage/wal-archiving": 1
+      },
+      "split": "development"
+    },
+    {
+      "id": "q034",
+      "kind": "concept",
+      "category": "lexical",
+      "text": "how do I avoid deadlock when taking several mutexes",
+      "relevant": {
+        "concurrency/lock-ordering": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q035",
+      "kind": "concept",
+      "category": "lexical",
+      "text": "should I keep spinners on standard error when output is redirected",
+      "relevant": {
+        "cli/progress-output": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q036",
+      "kind": "concept",
+      "category": "lexical",
+      "text": "what should a liveness probe check compared to a readiness probe",
+      "relevant": {
+        "observability/health-endpoints": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q037",
+      "kind": "concept",
+      "category": "lexical",
+      "text": "when should I enable link time optimization and codegen units for release binaries",
+      "relevant": {
+        "build/link-time-optimization": 2,
+        "build/artifact-size-budget": 1
+      },
+      "split": "development"
+    },
+    {
+      "id": "q038",
+      "kind": "concept",
+      "category": "lexical",
+      "text": "how do I keep a token bucket from rejecting legitimate bursts",
+      "relevant": {
+        "network/rate-limiting": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q039",
+      "kind": "concept",
+      "category": "semantic",
+      "text": "why does tweaking one routine not make the entire program start over from nothing",
+      "relevant": {
+        "build/incremental-compilation": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q040",
+      "kind": "concept",
+      "category": "semantic",
+      "text": "storage is ballooning although the number of customer entries is constant",
+      "relevant": {
+        "storage/vacuum-bloat": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q041",
+      "kind": "concept",
+      "category": "semantic",
+      "text": "when a neighbouring system stumbles, how long should consumers pause before knocking again",
+      "relevant": {
+        "network/retry-backoff": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q042",
+      "kind": "concept",
+      "category": "semantic",
+      "text": "animations appear jerky although the numbers on the dashboard seem healthy",
+      "relevant": {
+        "rendering/frame-pacing": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q043",
+      "kind": "concept",
+      "category": "semantic",
+      "text": "two jobs freeze permanently as both grabbed something the partner requires",
+      "relevant": {
+        "concurrency/lock-ordering": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q044",
+      "kind": "concept",
+      "category": "semantic",
+      "text": "a stranger typed dots and slashes into the download box and fetched our private system settings",
+      "relevant": {
+        "security/path-traversal": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q045",
+      "kind": "concept",
+      "category": "semantic",
+      "text": "an untrustworthy verification sometimes goes crimson for no cause and people lose faith in the whole process",
+      "relevant": {
+        "testing/flaky-quarantine": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q046",
+      "kind": "concept",
+      "category": "semantic",
+      "text": "we cannot afford to archive footage of each journey a call takes across our microservices",
+      "relevant": {
+        "observability/trace-sampling": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q047",
+      "kind": "concept",
+      "category": "negative",
+      "text": "how do I tune garbage collection pause times in the JVM",
+      "relevant": {},
+      "split": "development"
+    },
+    {
+      "id": "q048",
+      "kind": "concept",
+      "category": "negative",
+      "text": "how do I shard a message topic by tenant",
+      "relevant": {},
+      "split": "development"
+    },
+    {
+      "id": "q049",
+      "kind": "concept",
+      "category": "negative",
+      "text": "how do I set up GPU passthrough for virtual machines",
+      "relevant": {},
+      "split": "development"
+    },
+    {
+      "id": "q050",
+      "kind": "concept",
+      "category": "negative",
+      "text": "how do I convert a protobuf schema into GraphQL types",
+      "relevant": {},
+      "split": "development"
+    },
+    {
+      "id": "q051",
+      "kind": "skill",
+      "category": "lexical",
+      "text": "my release pipeline fails to tag the version",
+      "relevant": {
+        "release-tagging": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q052",
+      "kind": "skill",
+      "category": "lexical",
+      "text": "draft the changelog entries from the merged commits since last month",
+      "relevant": {
+        "changelog-drafting": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q053",
+      "kind": "skill",
+      "category": "lexical",
+      "text": "the integration job is failing in CI and I need to read the job logs",
+      "relevant": {
+        "ci-pipeline-repair": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q054",
+      "kind": "skill",
+      "category": "lexical",
+      "text": "this test fails intermittently, rerun it repeatedly to find the race",
+      "relevant": {
+        "flaky-test-hunt": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q055",
+      "kind": "skill",
+      "category": "lexical",
+      "text": "upgrade the http library to a newer version and fix the compile breakage",
+      "relevant": {
+        "dependency-upgrade": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q056",
+      "kind": "skill",
+      "category": "lexical",
+      "text": "review the security advisories against our dependency tree",
+      "relevant": {
+        "vulnerability-triage": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q057",
+      "kind": "skill",
+      "category": "lexical",
+      "text": "write a reversible schema migration for the new column",
+      "relevant": {
+        "database-migration-authoring": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q058",
+      "kind": "skill",
+      "category": "lexical",
+      "text": "this slow query needs a better index, check the query plan",
+      "relevant": {
+        "query-performance-tuning": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q059",
+      "kind": "skill",
+      "category": "semantic",
+      "text": "stamp the code snapshot with its public edition number and publish the stamp",
+      "relevant": {
+        "release-tagging": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q060",
+      "kind": "skill",
+      "category": "semantic",
+      "text": "this giant class does too many jobs, carve it up without altering what it does",
+      "relevant": {
+        "refactor-extraction": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q061",
+      "kind": "skill",
+      "category": "semantic",
+      "text": "did my optimisation actually make the program faster, with numbers I can trust",
+      "relevant": {
+        "benchmark-comparison": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q062",
+      "kind": "skill",
+      "category": "semantic",
+      "text": "beginners cannot get this project running, compose them a walkthrough",
+      "relevant": {
+        "onboarding-readme": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q063",
+      "kind": "skill",
+      "category": "semantic",
+      "text": "the latest push broke production, put back what was running yesterday",
+      "relevant": {
+        "rollback-execution": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q064",
+      "kind": "skill",
+      "category": "semantic",
+      "text": "sometimes green and sometimes red on identical code, find out why",
+      "relevant": {
+        "flaky-test-hunt": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q065",
+      "kind": "skill",
+      "category": "semantic",
+      "text": "the page takes ages to load because of one lookup against the data store",
+      "relevant": {
+        "query-performance-tuning": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q066",
+      "kind": "skill",
+      "category": "semantic",
+      "text": "a scanner flagged scary-looking holes in third-party libraries, are any urgent?",
+      "relevant": {
+        "vulnerability-triage": 2
+      },
+      "split": "development"
+    },
+    {
+      "id": "q067",
+      "kind": "skill",
+      "category": "negative",
+      "text": "translate the marketing copy into French",
+      "relevant": {},
+      "split": "development"
+    },
+    {
+      "id": "q068",
+      "kind": "skill",
+      "category": "negative",
+      "text": "pick a color palette for the landing page",
+      "relevant": {},
+      "split": "development"
+    },
+    {
+      "id": "q069",
+      "kind": "skill",
+      "category": "negative",
+      "text": "teach me how quicksort partitions work",
+      "relevant": {},
+      "split": "development"
+    },
+    {
+      "id": "q070",
+      "kind": "skill",
+      "category": "negative",
+      "text": "plan the agenda for the team offsite",
+      "relevant": {},
+      "split": "development"
+    },
+    {
+      "id": "q071",
+      "kind": "skill",
+      "category": "manual",
+      "text": "permanently delete every customer record past the retention period",
+      "relevant": {},
+      "split": "development"
+    },
+    {
+      "id": "q072",
+      "kind": "skill",
+      "category": "manual",
+      "text": "force push my squashed branch over the shared history",
+      "relevant": {},
+      "split": "development"
+    },
+    {
+      "id": "q073",
+      "kind": "concept",
+      "category": "exact-id",
+      "text": "testing/property-shrinking",
+      "relevant": {
+        "testing/property-shrinking": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q074",
+      "kind": "concept",
+      "category": "exact-id",
+      "text": "cli/config-precedence",
+      "relevant": {
+        "cli/config-precedence": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q075",
+      "kind": "concept",
+      "category": "exact-id",
+      "text": "observability/metric-cardinality",
+      "relevant": {
+        "observability/metric-cardinality": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q076",
+      "kind": "concept",
+      "category": "exact-id",
+      "text": "build/link-time-optimization",
+      "relevant": {
+        "build/link-time-optimization": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q077",
+      "kind": "concept",
+      "category": "exact-id",
+      "text": "storage/schema-migrations",
+      "relevant": {
+        "storage/schema-migrations": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q078",
+      "kind": "concept",
+      "category": "exact-id",
+      "text": "network/rate-limiting",
+      "relevant": {
+        "network/rate-limiting": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q079",
+      "kind": "concept",
+      "category": "title",
+      "text": "Scanning commits for leaked credentials",
+      "relevant": {
+        "security/secret-scanning": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q080",
+      "kind": "concept",
+      "category": "title",
+      "text": "Curating changelog entries",
+      "relevant": {
+        "release/changelog-curation": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q081",
+      "kind": "concept",
+      "category": "title",
+      "text": "Choosing log levels",
+      "relevant": {
+        "observability/log-levels": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q082",
+      "kind": "concept",
+      "category": "title",
+      "text": "Flag naming conventions",
+      "relevant": {
+        "cli/flag-naming": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q083",
+      "kind": "concept",
+      "category": "title",
+      "text": "Choosing a transaction isolation level",
+      "relevant": {
+        "storage/transaction-isolation": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q084",
+      "kind": "concept",
+      "category": "title",
+      "text": "Bounded channels and backpressure",
+      "relevant": {
+        "concurrency/channel-backpressure": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q085",
+      "kind": "concept",
+      "category": "tag",
+      "text": "damage",
+      "relevant": {
+        "rendering/damage-tracking": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q086",
+      "kind": "concept",
+      "category": "tag",
+      "text": "determinism",
+      "relevant": {
+        "testing/time-mocking": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q087",
+      "kind": "concept",
+      "category": "tag",
+      "text": "provenance",
+      "relevant": {
+        "release/tag-signing": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q088",
+      "kind": "concept",
+      "category": "tag",
+      "text": "autocomplete",
+      "relevant": {
+        "cli/shell-completions": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q089",
+      "kind": "concept",
+      "category": "tag",
+      "text": "features",
+      "relevant": {
+        "build/workspace-feature-unification": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q090",
+      "kind": "concept",
+      "category": "tag",
+      "text": "privileges",
+      "relevant": {
+        "security/least-privilege-sandbox": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q091",
+      "kind": "concept",
+      "category": "identifier",
+      "text": "expiry_date",
+      "relevant": {
+        "release/feature-flag-cleanup": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q092",
+      "kind": "concept",
+      "category": "identifier",
+      "text": "keepalive_timeout",
+      "relevant": {
+        "network/connection-reuse": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q093",
+      "kind": "concept",
+      "category": "identifier",
+      "text": "trace_id",
+      "relevant": {
+        "observability/structured-logging": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q094",
+      "kind": "concept",
+      "category": "identifier",
+      "text": "deny_unknown_fields",
+      "relevant": {
+        "security/input-validation": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q095",
+      "kind": "concept",
+      "category": "identifier",
+      "text": "cargo-udeps",
+      "relevant": {
+        "build/dependency-pruning": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q096",
+      "kind": "concept",
+      "category": "identifier",
+      "text": "present_mode",
+      "relevant": {
+        "rendering/frame-pacing": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q097",
+      "kind": "concept",
+      "category": "phrase",
+      "text": "target triple",
+      "relevant": {
+        "build/remote-cache-keys": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q098",
+      "kind": "concept",
+      "category": "phrase",
+      "text": "ascending order",
+      "relevant": {
+        "concurrency/lock-ordering": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q099",
+      "kind": "concept",
+      "category": "phrase",
+      "text": "one percent of traffic",
+      "relevant": {
+        "release/canary-rollout": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q100",
+      "kind": "concept",
+      "category": "phrase",
+      "text": "spinners and bars",
+      "relevant": {
+        "cli/progress-output": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q101",
+      "kind": "concept",
+      "category": "phrase",
+      "text": "reciprocal rank",
+      "relevant": {
+        "testing/golden-labelled-sets": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q102",
+      "kind": "concept",
+      "category": "phrase",
+      "text": "symbolic links",
+      "relevant": {
+        "security/path-traversal": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q103",
+      "kind": "concept",
+      "category": "lexical",
+      "text": "how big should the database connection pool be for several application instances",
+      "relevant": {
+        "storage/connection-pooling": 2,
+        "network/connection-reuse": 1
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q104",
+      "kind": "concept",
+      "category": "lexical",
+      "text": "how do I verify a signed git tag before building the release",
+      "relevant": {
+        "release/tag-signing": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q105",
+      "kind": "concept",
+      "category": "lexical",
+      "text": "why does my async task block other tasks when it reads a file",
+      "relevant": {
+        "concurrency/async-blocking": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q106",
+      "kind": "concept",
+      "category": "lexical",
+      "text": "how can I sample traces while keeping the slow and failing ones",
+      "relevant": {
+        "observability/trace-sampling": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q107",
+      "kind": "concept",
+      "category": "lexical",
+      "text": "should I bump the major version when I remove a public function",
+      "relevant": {
+        "release/semver-bumping": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q108",
+      "kind": "concept",
+      "category": "lexical",
+      "text": "how do I stop a hostile page from triggering actions with my session cookie",
+      "relevant": {
+        "security/csrf-protection": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q109",
+      "kind": "concept",
+      "category": "lexical",
+      "text": "how do I roll back a bad deployment safely",
+      "relevant": {
+        "release/rollback-plan": 2,
+        "release/canary-rollout": 1
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q110",
+      "kind": "concept",
+      "category": "lexical",
+      "text": "how do I make text wrapping respect emoji and wide characters in the terminal",
+      "relevant": {
+        "rendering/text-wrapping": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q111",
+      "kind": "concept",
+      "category": "semantic",
+      "text": "send the fresh edition to merely a handful of customers prior to full availability",
+      "relevant": {
+        "release/canary-rollout": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q112",
+      "kind": "concept",
+      "category": "semantic",
+      "text": "how can an automation figure out the manner in which my tool terminated",
+      "relevant": {
+        "cli/exit-codes": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q113",
+      "kind": "concept",
+      "category": "semantic",
+      "text": "my colleague receives different external packages despite unchanged source",
+      "relevant": {
+        "build/lockfile-pinning": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q114",
+      "kind": "concept",
+      "category": "semantic",
+      "text": "our data service rejects newcomers when too many clients are attached simultaneously",
+      "relevant": {
+        "storage/connection-pooling": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q115",
+      "kind": "concept",
+      "category": "semantic",
+      "text": "the event loop becomes unresponsive as one routine runs a long calculation",
+      "relevant": {
+        "concurrency/async-blocking": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q116",
+      "kind": "concept",
+      "category": "semantic",
+      "text": "if a thief grabs our login passes, how do we make sure they stop working soon",
+      "relevant": {
+        "security/token-rotation": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q117",
+      "kind": "concept",
+      "category": "semantic",
+      "text": "Japanese sentences get cut in the middle of a symbol and lines overflow the pane",
+      "relevant": {
+        "rendering/text-wrapping": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q118",
+      "kind": "concept",
+      "category": "semantic",
+      "text": "the cluster manager keeps ending my application while it is still ingesting its large datasets",
+      "relevant": {
+        "observability/health-endpoints": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q119",
+      "kind": "concept",
+      "category": "negative",
+      "text": "which OAuth flow suits a smart television app",
+      "relevant": {},
+      "split": "holdout"
+    },
+    {
+      "id": "q120",
+      "kind": "concept",
+      "category": "negative",
+      "text": "how do I benchmark WebAssembly startup in the browser",
+      "relevant": {},
+      "split": "holdout"
+    },
+    {
+      "id": "q121",
+      "kind": "concept",
+      "category": "negative",
+      "text": "how do I configure BGP peering between two data centers",
+      "relevant": {},
+      "split": "holdout"
+    },
+    {
+      "id": "q122",
+      "kind": "concept",
+      "category": "negative",
+      "text": "how should I train a ranking model for product recommendations",
+      "relevant": {},
+      "split": "holdout"
+    },
+    {
+      "id": "q123",
+      "kind": "skill",
+      "category": "lexical",
+      "text": "compare the old and new endpoint contract for breaking changes",
+      "relevant": {
+        "api-contract-review": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q124",
+      "kind": "skill",
+      "category": "lexical",
+      "text": "search the structured logs around the incident window and build a timeline",
+      "relevant": {
+        "log-investigation": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q125",
+      "kind": "skill",
+      "category": "lexical",
+      "text": "memory keeps growing in my process, profile the retained allocations",
+      "relevant": {
+        "memory-leak-diagnosis": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q126",
+      "kind": "skill",
+      "category": "lexical",
+      "text": "my terminal interface shows clipped text after a redraw",
+      "relevant": {
+        "terminal-ui-debugging": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q127",
+      "kind": "skill",
+      "category": "lexical",
+      "text": "review the command-line usage text and exit codes for consistency",
+      "relevant": {
+        "cli-help-polish": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q128",
+      "kind": "skill",
+      "category": "lexical",
+      "text": "do a review pass on this diff for defects and missing tests",
+      "relevant": {
+        "code-review-pass": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q129",
+      "kind": "skill",
+      "category": "lexical",
+      "text": "shrink the container image by restructuring the layers",
+      "relevant": {
+        "docker-image-slimming": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q130",
+      "kind": "skill",
+      "category": "lexical",
+      "text": "I committed a credential by accident, rotate it and scrub the history",
+      "relevant": {
+        "secret-leak-response": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q131",
+      "kind": "skill",
+      "category": "semantic",
+      "text": "users complained about an outage at night, reconstruct the sequence of events from the recorded output",
+      "relevant": {
+        "log-investigation": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q132",
+      "kind": "skill",
+      "category": "semantic",
+      "text": "the server gets fatter every hour until the OS kills it",
+      "relevant": {
+        "memory-leak-diagnosis": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q133",
+      "kind": "skill",
+      "category": "semantic",
+      "text": "the deployable bundle weighs gigabytes and takes forever to download",
+      "relevant": {
+        "docker-image-slimming": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q134",
+      "kind": "skill",
+      "category": "semantic",
+      "text": "someone pasted our private login string into a public upload, now what",
+      "relevant": {
+        "secret-leak-response": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q135",
+      "kind": "skill",
+      "category": "semantic",
+      "text": "a teammate wants a second pair of eyes before their patch lands",
+      "relevant": {
+        "code-review-pass": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q136",
+      "kind": "skill",
+      "category": "semantic",
+      "text": "will clients of our web service still work after this payload shape alteration",
+      "relevant": {
+        "api-contract-review": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q137",
+      "kind": "skill",
+      "category": "semantic",
+      "text": "characters overlap and the console picture looks scrambled after resizing the window",
+      "relevant": {
+        "terminal-ui-debugging": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q138",
+      "kind": "skill",
+      "category": "semantic",
+      "text": "our third-party components are two majors behind and need modernising",
+      "relevant": {
+        "dependency-upgrade": 2
+      },
+      "split": "holdout"
+    },
+    {
+      "id": "q139",
+      "kind": "skill",
+      "category": "negative",
+      "text": "configure my keyboard layout on Linux",
+      "relevant": {},
+      "split": "holdout"
+    },
+    {
+      "id": "q140",
+      "kind": "skill",
+      "category": "negative",
+      "text": "draft a polite email declining a meeting",
+      "relevant": {},
+      "split": "holdout"
+    },
+    {
+      "id": "q141",
+      "kind": "skill",
+      "category": "negative",
+      "text": "explain how a bloom filter works",
+      "relevant": {},
+      "split": "holdout"
+    },
+    {
+      "id": "q142",
+      "kind": "skill",
+      "category": "negative",
+      "text": "recommend a laptop for video editing",
+      "relevant": {},
+      "split": "holdout"
+    },
+    {
+      "id": "q143",
+      "kind": "skill",
+      "category": "manual",
+      "text": "move this account to the premium subscription plan and invoice them",
+      "relevant": {},
+      "split": "holdout"
+    },
+    {
+      "id": "q144",
+      "kind": "skill",
+      "category": "manual",
+      "text": "destroy the whole staging environment and its volumes",
+      "relevant": {},
+      "split": "holdout"
+    }
+  ]
+}

@@ -594,7 +594,6 @@ async fn next_step_reload_applies_capabilities_and_removes_old_guidance() {
         "core/date",
         "core/memory",
         "ycoding/workspace-memory",
-        "core/project-artifact-authoring",
         "ycoding/project-artifact-authoring",
         "core/skill-guidance",
         "core/mcp-guidance",

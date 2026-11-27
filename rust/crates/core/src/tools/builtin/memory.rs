@@ -22,7 +22,7 @@ impl Tool for Memory {
     fn definition(&self, name: &str) -> ToolDefinition {
         ToolDefinition {
             name: name.into(),
-            description: "Use on-demand knowledge for the active workspace: status, list, ranked local search, read, write linked Markdown, export an offline HTML graph, or maintain entries.\nscope defaults to the active Git repository and may be 'knowledge' for shared cross-repository concepts; outside Git only the knowledge scope is available.\nNever automatically save transcripts or inject memory. Read before replacing or deleting a concept and supply its digest.\ndelete moves an entry to recoverable trash, trash lists it, restore returns it without overwriting, purge permanently removes one exact trash entry, and vacuum previews derived cleanup (dryRun defaults true).\nIDs are lowercase paths without extensions; index/log are reserved. For an unterminated-frontmatter warning, read the entry, add the closing --- line after its YAML fields, and write with the current digest. New concepts require a nonempty YAML type. The graph is a local file; it makes no network requests.".into(),
+            description: "Durable OKF v0.3 Markdown knowledge for the active workspace. Relevant concepts are recalled automatically; use this tool to record or maintain knowledge, not to search for it.\nscope defaults to the active Git repository and may be 'knowledge' for concepts shared across repositories; outside Git only the knowledge scope is available.\nwrite stores one concept as complete Markdown: frontmatter with a nonempty type, then a body. Call template with a kind (fact, decision, constraint, preference, lesson, troubleshooting, procedure, known-issue) for the canonical shape. The harness stamps generated authorship, never accepts new verified events or human actors from the agent, rejects credentials, and answers a near-duplicate with duplicateOf instead of storing it. Replace an existing concept by passing its current digest; read it first.\nsupersede points a concept at its current replacement and retire marks it deprecated; both keep the file and need the current digest. review lists stale, deprecated, unverified, draft, conflicting, and invalid knowledge. delete moves an entry to recoverable trash, trash lists it, restore returns it without overwriting, purge permanently removes one exact trash entry, and vacuum previews derived cleanup (dryRun defaults true). graph exports an offline HTML graph.\nIDs are lowercase paths without extensions; index and log are reserved. Store only verified, durable, non-obvious knowledge that cites its sources; never store transient task state, transcripts, logs, secrets, credentials, private URLs, or speculation.".into(),
             input_schema: parse_json(include_str!("memory.input-schema.json")).unwrap(),
             output_schema: Some(parse_json(include_str!("memory.output-schema.json")).unwrap()),
             cache: None,
@@ -72,7 +72,7 @@ impl Tool for Memory {
             let applying = action == "vacuum" && optional_bool(input, "dryRun")? == Some(false);
             let mutating = matches!(
                 action.as_str(),
-                "write" | "delete" | "restore" | "purge" | "graph"
+                "write" | "delete" | "restore" | "purge" | "graph" | "supersede" | "retire"
             ) || applying;
             let read_only_preview = action == "vacuum" && !applying;
             let mut metadata = JsonObject::new();
@@ -199,9 +199,34 @@ impl Tool for Memory {
                         &text(input, "id")?,
                         &text(input, "content")?,
                         optional_text(input, "expectedDigest")?.as_deref(),
+                        optional_bool(input, "allowHumanActor")?.unwrap_or(false),
                     )
                     .await
                     .map(write_output),
+                "supersede" => self
+                    .service
+                    .supersede(
+                        scope,
+                        &text(input, "id")?,
+                        Some(&text(input, "replacement")?),
+                        &text(input, "expectedDigest")?,
+                    )
+                    .await
+                    .map(lifecycle_output),
+                "retire" => self
+                    .service
+                    .supersede(
+                        scope,
+                        &text(input, "id")?,
+                        None,
+                        &text(input, "expectedDigest")?,
+                    )
+                    .await
+                    .map(lifecycle_output),
+                "review" => self.service.review(scope).map(review_output),
+                "template" => memory::templates::by_kind(&text(input, "kind")?)
+                    .map(template_output)
+                    .ok_or(memory::Error::InvalidConcept),
                 "delete" => self
                     .service
                     .delete(scope, &text(input, "id")?, &text(input, "expectedDigest")?)
@@ -259,8 +284,18 @@ fn validate_input(input: &JsonObject, action: &str) -> Result<(), Failure> {
         "search" => &["action", "scope", "query", "limit", "type", "tag"],
         "read" => &["action", "scope", "id"],
         "vacuum" => &["action", "scope", "dryRun", "expectedDigest"],
-        "write" => &["action", "scope", "id", "content", "expectedDigest"],
-        "delete" => &["action", "scope", "id", "expectedDigest"],
+        "write" => &[
+            "action",
+            "scope",
+            "id",
+            "content",
+            "expectedDigest",
+            "allowHumanActor",
+        ],
+        "delete" | "retire" => &["action", "scope", "id", "expectedDigest"],
+        "supersede" => &["action", "scope", "id", "replacement", "expectedDigest"],
+        "review" => &["action", "scope"],
+        "template" => &["action", "scope", "kind"],
         "restore" | "purge" => &["action", "scope", "trashID", "expectedDigest"],
         _ => return Err(Failure::message("Unknown memory action.")),
     };
@@ -290,18 +325,35 @@ fn validate_input(input: &JsonObject, action: &str) -> Result<(), Failure> {
                 return Err(Failure::message("Memory query is out of range."));
             }
         }
-        "read" | "write" | "delete" => {
+        "read" | "write" | "delete" | "retire" | "supersede" => {
             let id = text(input, "id")?;
-            memory::format::require_id(&id).map_err(memory_failure)?;
+            if action == "write" {
+                memory::format::require_id(&id)
+            } else {
+                memory::format::require_readable_id(&id)
+            }
+            .map_err(memory_failure)?;
             match action {
                 "write" => {
                     text(input, "content")?;
                     optional_digest(input)?;
+                    optional_bool(input, "allowHumanActor")?;
                 }
-                "delete" => {
+                "supersede" => {
+                    memory::format::require_readable_id(&text(input, "replacement")?)
+                        .map_err(memory_failure)?;
+                    required_digest(input)?;
+                }
+                "delete" | "retire" => {
                     required_digest(input)?;
                 }
                 _ => {}
+            }
+        }
+        "template" => {
+            let kind = text(input, "kind")?;
+            if memory::templates::by_kind(&kind).is_none() {
+                return Err(Failure::message("Unknown memory template kind."));
             }
         }
         "restore" | "purge" => {
@@ -418,6 +470,46 @@ fn summary_output(value: memory::Summary) -> JsonValue {
         );
     }
     fields.insert("digest".into(), json_string(value.digest));
+    fields.insert("signals".into(), signals_output(&value.signals));
+    JsonValue::Object(fields)
+}
+fn signals_output(signals: &memory::okf::Signals) -> JsonValue {
+    let mut fields = JsonObject::new();
+    fields.insert("status".into(), json_string(signals.status.clone()));
+    fields.insert("current".into(), JsonValue::Bool(signals.current));
+    fields.insert("trust".into(), json_string(signals.trust.name()));
+    fields.insert("stale".into(), JsonValue::Bool(signals.stale));
+    if let Some(deadline) = &signals.stale_after {
+        fields.insert("staleAfter".into(), json_string(deadline.clone()));
+    }
+    if let Some(at) = signals.generated_at {
+        fields.insert(
+            "generatedAt".into(),
+            json_string(at.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
+        );
+    }
+    if let Some(target) = signals
+        .replacement
+        .as_ref()
+        .or(signals.superseded_by.as_ref())
+    {
+        fields.insert("supersededBy".into(), json_string(target.clone()));
+    }
+    fields.insert(
+        "verificationOlderThanContent".into(),
+        JsonValue::Bool(signals.verification_older_than_content),
+    );
+    fields.insert(
+        "conflictsWith".into(),
+        array(
+            signals
+                .conflicts_with
+                .iter()
+                .cloned()
+                .map(json_string)
+                .collect(),
+        ),
+    );
     JsonValue::Object(fields)
 }
 fn status_output(value: memory::State) -> JsonValue {
@@ -521,12 +613,111 @@ pub fn read_output(value: memory::ReadResult) -> JsonValue {
         ("digest".into(), json_string(value.digest)),
     ])
 }
+fn diagnostics(values: Vec<memory::okf::Diagnostic>) -> JsonValue {
+    array(
+        values
+            .into_iter()
+            .map(|value| {
+                let mut fields = vec![
+                    (
+                        "level".to_owned(),
+                        json_string(match value.level {
+                            memory::okf::Level::Error => "error",
+                            memory::okf::Level::Warning => "warning",
+                            memory::okf::Level::Info => "info",
+                            memory::okf::Level::Advice => "advice",
+                        }),
+                    ),
+                    ("code".to_owned(), json_string(value.code)),
+                    ("message".to_owned(), json_string(value.message)),
+                ];
+                if let Some(line) = value.line {
+                    fields.push(("line".to_owned(), JsonValue::Number(line as f64)));
+                }
+                object_value(fields)
+            })
+            .collect(),
+    )
+}
 fn write_output(value: memory::WriteResult) -> JsonValue {
+    let mut fields = vec![
+        ("id".to_owned(), json_string(value.id)),
+        ("digest".to_owned(), json_string(value.digest)),
+        ("created".to_owned(), JsonValue::Bool(value.created)),
+        ("warnings".to_owned(), warnings(value.warnings)),
+        ("diagnostics".to_owned(), diagnostics(value.diagnostics)),
+    ];
+    if let Some(existing) = value.duplicate_of {
+        fields.push(("duplicateOf".to_owned(), json_string(existing)));
+    }
+    object_value(fields)
+}
+fn lifecycle_output(value: memory::LifecycleResult) -> JsonValue {
+    let mut fields = vec![
+        ("id".to_owned(), json_string(value.id)),
+        ("digest".to_owned(), json_string(value.digest)),
+        ("status".to_owned(), json_string("deprecated")),
+        ("warnings".to_owned(), warnings(value.warnings)),
+    ];
+    if let Some(target) = value.superseded_by {
+        fields.push(("supersededBy".to_owned(), json_string(target)));
+    }
+    object_value(fields)
+}
+fn review_output(value: memory::Review) -> JsonValue {
     object_value([
-        ("id".into(), json_string(value.id)),
-        ("digest".into(), json_string(value.digest)),
-        ("created".into(), JsonValue::Bool(value.created)),
+        ("total".into(), JsonValue::Number(value.total as f64)),
+        (
+            "flagged".into(),
+            array(
+                value
+                    .flagged
+                    .into_iter()
+                    .map(|(summary, reasons)| {
+                        let JsonValue::Object(mut fields) = summary_output(summary) else {
+                            unreachable!()
+                        };
+                        fields.insert(
+                            "reasons".into(),
+                            array(reasons.into_iter().map(json_string).collect()),
+                        );
+                        JsonValue::Object(fields)
+                    })
+                    .collect(),
+            ),
+        ),
+        (
+            "findings".into(),
+            array(
+                value
+                    .findings
+                    .into_iter()
+                    .filter(|(_, found)| found.level != memory::okf::Level::Info)
+                    .map(|(path, found)| {
+                        let JsonValue::Array(mut one) = diagnostics(vec![found]) else {
+                            unreachable!()
+                        };
+                        let JsonValue::Object(mut fields) = one.remove(0) else {
+                            unreachable!()
+                        };
+                        fields.insert("path".into(), json_string(path));
+                        JsonValue::Object(fields)
+                    })
+                    .collect(),
+            ),
+        ),
         ("warnings".into(), warnings(value.warnings)),
+    ])
+}
+fn template_output(value: &memory::templates::Template) -> JsonValue {
+    object_value([
+        ("kind".into(), json_string(value.kind)),
+        ("type".into(), json_string(value.type_name)),
+        ("purpose".into(), json_string(value.purpose)),
+        (
+            "markdown".into(),
+            json_string(memory::templates::skeleton(value)),
+        ),
     ])
 }
 fn delete_output(value: memory::DeleteResult) -> JsonValue {

@@ -14,7 +14,6 @@ pub struct Pull {
 #[derive(Clone)]
 struct Plan {
     root: PathBuf,
-    name: String,
     version: Option<String>,
     files: Vec<(String, PathBuf, String)>,
 }
@@ -66,12 +65,7 @@ pub async fn pull(url: &str, cache: &Path) -> Result<Pull, Error> {
     let plans = index
         .into_iter()
         .filter_map(|skill| {
-            if !safe_segment(&skill.name)
-                || !skill
-                    .files
-                    .iter()
-                    .any(|file| file == "SKILL.md" || file == &format!("{}.md", skill.name))
-            {
+            if !safe_segment(&skill.name) || !skill.files.iter().any(|file| file == "SKILL.md") {
                 return None;
             }
             let root = absolute(&source_root.join(&skill.name)).ok()?;
@@ -105,7 +99,6 @@ pub async fn pull(url: &str, cache: &Path) -> Result<Pull, Error> {
                 .collect::<Option<Vec<_>>>()?;
             Some(Plan {
                 root,
-                name: skill.name,
                 version: skill.version,
                 files,
             })
@@ -269,12 +262,7 @@ async fn load(http: &reqwest::Client, plan: Plan) -> Result<Pull, Error> {
         .root
         .join("SKILL.md")
         .try_exists()
-        .map_err(|e| io(&plan.root, e))?
-        || plan
-            .root
-            .join(format!("{}.md", plan.name))
-            .try_exists()
-            .map_err(|e| io(&plan.root, e))?;
+        .map_err(|e| io(&plan.root, e))?;
     Ok(Pull {
         directories: if exists { vec![plan.root] } else { Vec::new() },
         diagnostics,

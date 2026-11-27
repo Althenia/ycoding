@@ -71,6 +71,7 @@ export function createEventRefresh(input: {
     if (sessionID && type.startsWith("session.") && !fragment) refresh(["session", ...input.scope(), sessionID])
     if (sessionID) refresh(["messages", ...input.scope(), sessionID])
     if (sessionID && !fragment) refresh(["pendingInputs", ...input.scope(), sessionID])
+    if (sessionID && (type === "session.cue.detected" || type === "session.recall.recorded")) refresh(["sessionRecall", ...input.scope(), sessionID])
     if (sessionID && type.startsWith("session.") && !fragment) refresh(["sessionInsights", ...input.scope(), sessionID])
     if (sessionID && (terminal || type === "session.file-change.recorded" || type.startsWith("session.revert.") || type === "session.deleted")) refresh(["fileChanges", ...input.scope(), sessionID])
     if (sessionID && (type.startsWith("session.autonomy.") || type.startsWith("session.goal."))) refresh(["autonomy", ...input.scope(), sessionID])

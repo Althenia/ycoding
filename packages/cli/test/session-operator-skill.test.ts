@@ -19,7 +19,7 @@ import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Skill } from "@ycoding-ai/core/skill"
 import { SkillDiscovery } from "@ycoding-ai/core/skill/discovery"
 import { ClientApi } from "@ycoding-ai/protocol/client"
-import { ycodingDotsSkillsRoot } from "../src/remote-control/ycoding-operator-skill"
+import { ycodingDotsSkillsRoot } from "../src/remote-control/session-operator-skill"
 import { Commands } from "../src/commands/commands"
 import { TuiCommand } from "../src/commands/tui"
 import type { Spec } from "../src/framework/spec"
@@ -40,7 +40,7 @@ test("the default Dots skill root uses Global data, outside the agents skill tre
 })
 
 test("operator instructions retain refusal, delegation, pending-answer and stop boundaries", async () => {
-  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const { sessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
   for (const text of [
     "YCODING_SESSION_ID", "~/.local/bin/ycoding", "first command selects its project root or working directory",
     "action and risk", "retry the identical action only when the refusal confirms it did not run",
@@ -50,42 +50,42 @@ test("operator instructions retain refusal, delegation, pending-answer and stop 
     "--permissions manual --guardrails auto --answers manual", "--session <session-id>",
     "Pressing Stop in Dots does not stop commands on V", "pgrep -fl", "pkill -f",
     "Dots callers have no direct access", "Never print or echo secret values",
-  ]) expect(ycodingOperatorSkill).toContain(text)
-  expect(ycodingOperatorSkill.indexOf("pgrep -fl")).toBeLessThan(ycodingOperatorSkill.indexOf("pkill -f"))
+  ]) expect(sessionOperatorSkill).toContain(text)
+  expect(sessionOperatorSkill.indexOf("pgrep -fl")).toBeLessThan(sessionOperatorSkill.indexOf("pkill -f"))
 })
 
 test("operator instructions document the native Dots access and Remote recovery boundaries", async () => {
-  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const { sessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
   for (const text of [
     "host-user execution", "explicit OpenAI OAuth `dots.profile`", "Remove `dots.fullAccessExecutor`",
     "Do not rely on a sandbox, Location roots, environment filtering, or Session Permissions or Guardrails",
     "Turn Dots access Off to revoke new native access", "Do not assume a native executor process has a runtime deadline",
     "Do not select Antigravity or Muse", "On a failed state read, leave the setting unchanged",
     "Do not reenroll automatically", "production composition failed:",
-  ]) expect(ycodingOperatorSkill).toContain(text)
+  ]) expect(sessionOperatorSkill).toContain(text)
 })
 
 test("operator watch instructions never treat a settled execution as finished work", async () => {
-  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const { sessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
   for (const text of [
     "work.state", "completed only when a current accepted completion receipt", "Every other state is unfinished",
     "Watch the next transition", "never answer, approve, resume or retry work", "descendants' work and decisions",
     "native v5 one-shot watch", 'assessment: "unavailable"', "HTTP/SSE watch endpoints", "family `--checkpoint`",
-  ]) expect(ycodingOperatorSkill).toContain(text)
+  ]) expect(sessionOperatorSkill).toContain(text)
 })
 
 test("operator watch instructions describe push delivery to the Dot thread without approval authority", async () => {
-  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const { sessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
   for (const text of [
     "ycoding decision watch <root-session-id> --family --follow --state <private-dir>/state.json --deliver dot",
     "`dot` resolves to the Dot's current root thread on every delivery pass", "A pushed message approves nothing",
     "Without a running follow watch nothing is pushed",
-  ]) expect(ycodingOperatorSkill).toContain(text)
-  expect(ycodingOperatorSkill).not.toContain("cannot wake an idle Dots conversation")
+  ]) expect(sessionOperatorSkill).toContain(text)
+  expect(sessionOperatorSkill).not.toContain("cannot wake an idle Dots conversation")
 })
 
 test("operator guidance specifies parallel member lanes and durable two-target watch delivery", async () => {
-  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const { sessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
   for (const text of [
     "Scale direct subagents from zero to five across independent file and check lanes",
     "one writer per file", "leave edits, builds and delivery to member Sessions",
@@ -94,26 +94,26 @@ test("operator guidance specifies parallel member lanes and durable two-target w
     "Use the same `--state` when adding targets: existing deliveries stay queued and new targets receive only new events",
     "Do not remove a target with undelivered events",
     "`dot` sends through the Dot's messaging room, while an auto-archived task thread is unarchived automatically before sending.",
-  ]) expect(ycodingOperatorSkill.split(text)).toHaveLength(2)
+  ]) expect(sessionOperatorSkill.split(text)).toHaveLength(2)
 })
 
 test("operator guidance honors explicit main-agent versus subagent provider, model, variant and profile splits", async () => {
-  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const { sessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
   const rule = "Honor explicit main-agent versus subagent provider, model, variant and profile splits: keep the main Session on its designated model and profile, switch active children and launch subagents on their designated subagent model and profile, and never substitute another profile."
-  expect(ycodingOperatorSkill.split(rule)).toHaveLength(2)
-  const delegation = ycodingOperatorSkill.indexOf("Scale direct subagents from zero to five")
+  expect(sessionOperatorSkill.split(rule)).toHaveLength(2)
+  const delegation = sessionOperatorSkill.indexOf("Scale direct subagents from zero to five")
   expect(delegation).toBeGreaterThan(-1)
-  expect(ycodingOperatorSkill.indexOf(rule)).toBeGreaterThan(delegation)
-  expect(ycodingOperatorSkill.indexOf(rule)).toBeLessThan(ycodingOperatorSkill.indexOf("Launch requires an actual parent assistant-message ID"))
+  expect(sessionOperatorSkill.indexOf(rule)).toBeGreaterThan(delegation)
+  expect(sessionOperatorSkill.indexOf(rule)).toBeLessThan(sessionOperatorSkill.indexOf("Launch requires an actual parent assistant-message ID"))
 })
 
 test("operator instructions create a YCoding coordination thread with computer V selected", async () => {
-  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
-  expect(ycodingOperatorSkill).toContain("When creating a YCoding coordination thread, create it with computer V selected.")
+  const { sessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
+  expect(sessionOperatorSkill).toContain("When creating a YCoding coordination thread, create it with computer V selected.")
 })
 
 test("operator reconciles proceedable idle work and defers only exact human gates without empty nudges", async () => {
-  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const { sessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
   for (const text of [
     "open root todos", "attached Project members and their recorded owners", "progressing children/shells", "latest receipts/messages",
     "Never interrupt progressing work, duplicate active execution or invent wake mechanisms",
@@ -123,11 +123,11 @@ test("operator reconciles proceedable idle work and defers only exact human gate
     "keep the pending request open or in the review box", "exact pending question/review ID, decide command and resume condition",
     "Never treat silence as approval", "Continue independent authorized work",
     "completed (task complete), open-questions, recovery-needed and unfinished-idle", "not an exhaustive model",
-  ]) expect(ycodingOperatorSkill).toContain(text)
+  ]) expect(sessionOperatorSkill).toContain(text)
 })
 
 test("operator Library instructions select only the private process channel and preserve its gates", async () => {
-  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const { sessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
   for (const text of [
     "/usr/bin/env CODEX_APPS_MCP_URL=ycoding-library://process python3 <helper-path> < /approved/library-upload.json",
     "beginning of the exec_command cmd, before launch", "a shell export inside an already running process does not select the channel", "account connectors enabled",
@@ -135,101 +135,101 @@ test("operator Library instructions select only the private process channel and 
     "one create_library_file", "20 MiB", "process sandbox", "signed URLs or OAuth values",
     "default or custom HostedApps endpoints", "never fall back", "runtime build implementing the private marker",
     "python3 <helper-path> < /approved/library-upload.json", "not inline image display",
-  ]) expect(ycodingOperatorSkill).toContain(text)
-  expect(ycodingOperatorSkill).not.toContain('{"env":{"CODEX_APPS_MCP_URL":"ycoding-library://process"}}')
-  const example = ycodingOperatorSkill.match(/\{"uploads":\[\{"local_path":"\/approved\/output.png"[^\n]+/)
+  ]) expect(sessionOperatorSkill).toContain(text)
+  expect(sessionOperatorSkill).not.toContain('{"env":{"CODEX_APPS_MCP_URL":"ycoding-library://process"}}')
+  const example = sessionOperatorSkill.match(/\{"uploads":\[\{"local_path":"\/approved\/output.png"[^\n]+/)
   expect(example).not.toBeNull()
   expect(JSON.parse(example![0])).toEqual({ uploads: [{ local_path: "/approved/output.png", purpose: "create_library_file" }] })
 })
 
 test("the exported operator skill equals the pinned shared Markdown bytes", async () => {
-  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
-  const markdown = await readFile(path.join(import.meta.dir, "..", "src", "remote-control", "ycoding-operator.md"), "utf8")
-  expect(ycodingOperatorSkill).toBe(markdown)
-  const bytes = new TextEncoder().encode(ycodingOperatorSkill)
-  expect(bytes.byteLength).toBe(29_778)
-  expect(createHash("sha256").update(bytes).digest("hex")).toBe("d81f10a8c97322865fadd12b1c7e3c125731c5cee7805fe8f01494cca68c2204")
-  expect(ycodingOperatorSkill.endsWith("\n")).toBe(true)
-  const source = await readFile(path.join(import.meta.dir, "..", "src", "remote-control", "ycoding-operator-skill.ts"), "utf8")
-  expect(source).toContain('from "./ycoding-operator.md" with { type: "text" }')
+  const { sessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
+  const markdown = await readFile(path.join(import.meta.dir, "..", "src", "remote-control", "session-operator.md"), "utf8")
+  expect(sessionOperatorSkill).toBe(markdown)
+  const bytes = new TextEncoder().encode(sessionOperatorSkill)
+  expect(bytes.byteLength).toBe(30_366)
+  expect(createHash("sha256").update(bytes).digest("hex")).toBe("241dae490283dd37951d7e415d290d2876bf3cf45b55004f4489b455ab2383b9")
+  expect(sessionOperatorSkill.endsWith("\n")).toBe(true)
+  const source = await readFile(path.join(import.meta.dir, "..", "src", "remote-control", "session-operator-skill.ts"), "utf8")
+  expect(source).toContain('from "./session-operator.md" with { type: "text" }')
   expect(source).not.toContain("# YCoding Operator")
 })
 
 test("ensure writes an absent operator skill under the Dots root", async () => {
-  const { ensureYcodingOperatorSkill, ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
-  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-operator-absent-"))
+  const { ensureSessionOperatorSkill, sessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
+  const root = await mkdtemp(path.join(os.tmpdir(), "session-operator-absent-"))
   directories.push(root)
   const data = path.join(root, "data")
-  await ensureYcodingOperatorSkill(data)
-  expect(await readFile(path.join(data, "dots", "skills", "ycoding-operator", "SKILL.md"), "utf8")).toBe(ycodingOperatorSkill)
+  await ensureSessionOperatorSkill(data)
+  expect(await readFile(path.join(data, "dots", "skills", "session-operator", "SKILL.md"), "utf8")).toBe(sessionOperatorSkill)
 })
 
 test("ensure leaves an equal operator skill untouched", async () => {
-  const { ensureYcodingOperatorSkill, ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
-  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-operator-equal-"))
+  const { ensureSessionOperatorSkill, sessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
+  const root = await mkdtemp(path.join(os.tmpdir(), "session-operator-equal-"))
   directories.push(root)
-  const file = path.join(root, "data", "dots", "skills", "ycoding-operator", "SKILL.md")
+  const file = path.join(root, "data", "dots", "skills", "session-operator", "SKILL.md")
   await mkdir(path.dirname(file), { recursive: true })
-  await writeFile(file, ycodingOperatorSkill, "utf8")
+  await writeFile(file, sessionOperatorSkill, "utf8")
   const modified = new Date(1_000_000_000_000)
   await utimes(file, modified, modified)
-  await ensureYcodingOperatorSkill(path.join(root, "data"))
-  expect(await readFile(file, "utf8")).toBe(ycodingOperatorSkill)
+  await ensureSessionOperatorSkill(path.join(root, "data"))
+  expect(await readFile(file, "utf8")).toBe(sessionOperatorSkill)
   expect((await stat(file)).mtimeMs).toBe(modified.getTime())
 })
 
 test("ensure replaces stale operator skill bytes", async () => {
-  const { ensureYcodingOperatorSkill, ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
-  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-operator-stale-"))
+  const { ensureSessionOperatorSkill, sessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
+  const root = await mkdtemp(path.join(os.tmpdir(), "session-operator-stale-"))
   directories.push(root)
-  const file = path.join(root, "data", "dots", "skills", "ycoding-operator", "SKILL.md")
+  const file = path.join(root, "data", "dots", "skills", "session-operator", "SKILL.md")
   await mkdir(path.dirname(file), { recursive: true })
   await writeFile(file, "synthetic stale operator skill\n", "utf8")
-  await ensureYcodingOperatorSkill(path.join(root, "data"))
-  expect(await readFile(file, "utf8")).toBe(ycodingOperatorSkill)
+  await ensureSessionOperatorSkill(path.join(root, "data"))
+  expect(await readFile(file, "utf8")).toBe(sessionOperatorSkill)
 })
 
 test("ensure propagates a non-missing read failure", async () => {
-  const { ensureYcodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
-  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-operator-read-error-"))
+  const { ensureSessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
+  const root = await mkdtemp(path.join(os.tmpdir(), "session-operator-read-error-"))
   directories.push(root)
-  const file = path.join(root, "data", "dots", "skills", "ycoding-operator", "SKILL.md")
+  const file = path.join(root, "data", "dots", "skills", "session-operator", "SKILL.md")
   await mkdir(file, { recursive: true })
   const read = await readFile(file, "utf8").then(() => undefined, (error: unknown) => error)
-  const failure = await ensureYcodingOperatorSkill(path.join(root, "data")).then(() => undefined, (error: unknown) => error)
+  const failure = await ensureSessionOperatorSkill(path.join(root, "data")).then(() => undefined, (error: unknown) => error)
   expect(read).toBeDefined()
   expect((failure as { code?: string }).code).toBe((read as { code?: string }).code)
   expect((failure as { code?: string }).code).not.toBe("ENOENT")
 })
 
 test("ensure propagates a blocked-ancestor read failure without reaching directory creation", async () => {
-  const { ensureYcodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
-  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-operator-blocked-ancestor-"))
+  const { ensureSessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
+  const root = await mkdtemp(path.join(os.tmpdir(), "session-operator-blocked-ancestor-"))
   directories.push(root)
   const blockedRoot = path.join(root, "blocked-root")
   await writeFile(blockedRoot, "synthetic file in place of the data directory\n", "utf8")
-  const file = path.join(blockedRoot, "dots", "skills", "ycoding-operator", "SKILL.md")
+  const file = path.join(blockedRoot, "dots", "skills", "session-operator", "SKILL.md")
   const read = await readFile(file, "utf8").then(() => undefined, (error: unknown) => error)
-  const failure = await ensureYcodingOperatorSkill(blockedRoot).then(() => undefined, (error: unknown) => error)
+  const failure = await ensureSessionOperatorSkill(blockedRoot).then(() => undefined, (error: unknown) => error)
   expect(read).toBeDefined()
   expect((failure as { code?: string }).code).toBe((read as { code?: string }).code)
   expect((failure as { code?: string }).code).not.toBe("ENOENT")
 })
 
 permissionTest("ensure propagates a directory-creation failure after a missing read", async () => {
-  const { ensureYcodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
-  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-operator-mkdir-error-"))
+  const { ensureSessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
+  const root = await mkdtemp(path.join(os.tmpdir(), "session-operator-mkdir-error-"))
   directories.push(root)
   const data = path.join(root, "data")
   await mkdir(data)
-  const file = path.join(data, "dots", "skills", "ycoding-operator", "SKILL.md")
+  const file = path.join(data, "dots", "skills", "session-operator", "SKILL.md")
   const read = await readFile(file, "utf8").then(() => undefined, (error: unknown) => error)
   expect((read as { code?: string }).code).toBe("ENOENT")
   await chmod(data, 0o555)
   try {
     const probe = await mkdir(path.join(data, "probe")).then(() => undefined, (error: unknown) => error)
     expect((probe as { code?: string }).code).toBe("EACCES")
-    const failure = await ensureYcodingOperatorSkill(data).then(() => undefined, (error: unknown) => error)
+    const failure = await ensureSessionOperatorSkill(data).then(() => undefined, (error: unknown) => error)
     expect((failure as { code?: string }).code).toBe("EACCES")
   } finally {
     await chmod(data, 0o755)
@@ -237,15 +237,15 @@ permissionTest("ensure propagates a directory-creation failure after a missing r
 })
 
 permissionTest("ensure propagates a write failure and keeps the stale bytes", async () => {
-  const { ensureYcodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
-  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-operator-write-error-"))
+  const { ensureSessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
+  const root = await mkdtemp(path.join(os.tmpdir(), "session-operator-write-error-"))
   directories.push(root)
-  const file = path.join(root, "data", "dots", "skills", "ycoding-operator", "SKILL.md")
+  const file = path.join(root, "data", "dots", "skills", "session-operator", "SKILL.md")
   await mkdir(path.dirname(file), { recursive: true })
   await writeFile(file, "synthetic stale operator skill\n", "utf8")
   await chmod(file, 0o444)
   try {
-    const failure = await ensureYcodingOperatorSkill(path.join(root, "data")).then(() => undefined, (error: unknown) => error)
+    const failure = await ensureSessionOperatorSkill(path.join(root, "data")).then(() => undefined, (error: unknown) => error)
     expect((failure as { code?: string }).code).toBe("EACCES")
     expect(await readFile(file, "utf8")).toBe("synthetic stale operator skill\n")
   } finally {
@@ -254,7 +254,7 @@ permissionTest("ensure propagates a write failure and keeps the stale bytes", as
 })
 
 test("operator API operation ids and example bodies match the current Protocol", async () => {
-  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const { sessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
   const spec = OpenApi.fromApi(ClientApi)
   const endpoints = Object.values(ClientApi.groups).flatMap((group) => Object.values(group.endpoints))
   const operations = new Map(Object.entries(spec.paths).flatMap(([route, methods]) => Object.entries(methods).flatMap(([method, operation]) => {
@@ -265,7 +265,7 @@ test("operator API operation ids and example bodies match the current Protocol",
   const operationIDs = new Set(Object.values(spec.paths).flatMap((item) => Object.values(item).flatMap((operation) =>
     typeof operation === "object" && operation !== null && "operationId" in operation ? [operation.operationId] : [],
   )))
-  const mentions = [...ycodingOperatorSkill.matchAll(/(?:ycoding api |`)([\w.-]+\.[\w.-]+)(?=[\s`/])/g)]
+  const mentions = [...sessionOperatorSkill.matchAll(/(?:ycoding api |`)([\w.-]+\.[\w.-]+)(?=[\s`/])/g)]
   const mentioned = new Set(mentions.map((mention) => mention[1]))
   for (const required of [
     "session.review.decide", "session.autonomy.get", "session.autonomy.set", "keepAwake.get", "keepAwake.set",
@@ -289,10 +289,10 @@ test("operator API operation ids and example bodies match the current Protocol",
     "dots.get", "dots.set", "dots.attach", "dots.detach", "dots.remove", "remote.get", "remote.set", "telemetry.list", "telemetry.consent.get", "telemetry.consent.set",
     "session.prediction", "session.promptGenerate", "session.compact", "session.compaction.list", "server.session.session.todo.list",
   ]) expect(mentioned.has(required)).toBe(true)
-  for (const [, operation] of ycodingOperatorSkill.matchAll(/ycoding api ([\w.-]+)(?=[\s`])/g)) {
+  for (const [, operation] of sessionOperatorSkill.matchAll(/ycoding api ([\w.-]+)(?=[\s`])/g)) {
     expect(operationIDs.has(operation), operation).toBe(true)
   }
-  const examples = [...ycodingOperatorSkill.matchAll(/ycoding api ([\w.-]+)[^\n`]*? -d '([^'\n]+)'/g)]
+  const examples = [...sessionOperatorSkill.matchAll(/ycoding api ([\w.-]+)[^\n`]*? -d '([^'\n]+)'/g)]
   expect(examples.length).toBeGreaterThanOrEqual(7)
   for (const example of examples) {
     const endpoint = operations.get(example[1]!)!
@@ -303,21 +303,21 @@ test("operator API operation ids and example bodies match the current Protocol",
 })
 
 test("operator discovery and conversation instructions preserve cross-project search and interactive decisions", async () => {
-  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const { sessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
   for (const text of [
     "without directory/project filters", "--param parentID=null", "punctuation-free", "curly", "straight",
     "cursor.next", "broaden", "stored Session location", "streams assistant output", "waits for execution",
     "automatically rejects permissions, questions and guardrail requests", "cancels forms", "Admission is not completion",
     "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted",
     "No local API", "browser-local", "captured-change card", "side-chat",
-  ]) expect(ycodingOperatorSkill).toContain(text)
+  ]) expect(sessionOperatorSkill).toContain(text)
 })
 
 test("every operator CLI command and flag is advertised by both entrypoint specs", async () => {
-  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const { sessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
   const snippets = [
-    ...ycodingOperatorSkill.matchAll(/^ycoding(?: .*|)$/gm),
-    ...ycodingOperatorSkill.matchAll(/`(ycoding(?: [^`\n]+)?)`/g),
+    ...sessionOperatorSkill.matchAll(/^ycoding(?: .*|)$/gm),
+    ...sessionOperatorSkill.matchAll(/`(ycoding(?: [^`\n]+)?)`/g),
   ].map((match) => match[1] ?? match[0])
   expect(snippets.length).toBeGreaterThan(20)
   for (const root of [Commands, TuiCommand]) {
@@ -347,13 +347,13 @@ test("every operator CLI command and flag is advertised by both entrypoint specs
 })
 
 test("Core's configured skill listing excludes the Dots-only data root", async () => {
-  const { ensureYcodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
-  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-operator-isolation-"))
+  const { ensureSessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
+  const root = await mkdtemp(path.join(os.tmpdir(), "session-operator-isolation-"))
   directories.push(root)
   const home = path.join(root, "home")
   const project = path.join(root, "project")
   const data = path.join(root, "data")
-  await ensureYcodingOperatorSkill(data)
+  await ensureSessionOperatorSkill(data)
   const normalRoot = path.join(home, ".agents", "skills", "visible-skill")
   await mkdir(normalRoot, { recursive: true })
   await writeFile(path.join(normalRoot, "SKILL.md"), "---\nname: visible-skill\ndescription: Synthetic visible skill.\n---\n# Visible\n")
@@ -398,12 +398,12 @@ test("Core's configured skill listing excludes the Dots-only data root", async (
     Effect.scoped,
     Effect.runPromise,
   )
-  const awaitableSkillFile = await readFile(path.join(data, "dots", "skills", "ycoding-operator", "SKILL.md"), "utf8")
-  expect(awaitableSkillFile).toContain("name: ycoding-operator")
+  const awaitableSkillFile = await readFile(path.join(data, "dots", "skills", "session-operator", "SKILL.md"), "utf8")
+  expect(awaitableSkillFile).toContain("name: session-operator")
 })
 
 test("operator instructions create project Sessions in the target project's path and never under the Master", async () => {
-  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
-  expect(ycodingOperatorSkill).toContain("Create a project work Session in the target project's own directory or worktree, never the Master's or the task's path.")
-  expect(ycodingOperatorSkill).toContain("Never create a project work Session under the Master Session; it is a standalone root Session.")
+  const { sessionOperatorSkill } = await import("../src/remote-control/session-operator-skill")
+  expect(sessionOperatorSkill).toContain("Create a project work Session in the target project's own directory or worktree, never the Master's or the task's path.")
+  expect(sessionOperatorSkill).toContain("Never create a project work Session under the Master Session; it is a standalone root Session.")
 })

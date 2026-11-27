@@ -1,2 +1,9 @@
-pub(crate) mod lexical;
-pub(crate) mod ranking;
+pub mod analysis;
+pub mod candidate;
+pub mod document;
+pub mod error;
+pub mod hybrid;
+pub mod index;
+pub mod provision;
+pub mod semantic;
+pub mod vectors;

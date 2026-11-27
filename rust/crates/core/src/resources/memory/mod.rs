@@ -3,6 +3,7 @@ use crate::resources::{
     discovery,
     project_artifact::filesystem::{self, Hooks, MutationRequest},
 };
+use chrono::{DateTime, Utc};
 use std::{
     collections::BTreeSet,
     fmt, fs,
@@ -13,17 +14,25 @@ use std::{
 };
 use ycoding_schema::JsonValue;
 pub mod boundary;
+mod bundle;
+mod edit;
+pub mod experience;
 pub mod format;
-mod frontmatter;
 pub mod graph;
 pub mod instructions;
-mod migration;
+mod lifecycle;
+pub mod okf;
 mod recall;
+pub mod reset;
+mod retrieval;
 mod search;
+pub mod templates;
+use bundle::{indexes, prefixes, refresh, scan};
 pub use format::{Concept, Summary, Warning};
-use format::{parse, require_id, sha256, text_value};
+use format::{parse, require_id, require_readable_id, sha256, text_value};
 
 const SIDECAR_LIMIT: usize = 4096;
+const TRASH: &str = ".trash";
 const GENERATED_INDEX: &str = "Generated index. Edit concept Markdown, not this file.";
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Scope {
@@ -117,9 +126,13 @@ pub enum Error {
     StaleContent,
     TooLarge,
     Unavailable,
+    Rejected(&'static str),
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Self::Rejected(reason) = self {
+            return write!(f, "Memory write rejected: {reason}.");
+        }
         f.write_str(match self {
         Self::Disabled => "Workspace memory is disabled.", Self::NotFound => "Concept, trash entry, or Git repository not found.",
         Self::InvalidConcept => "Invalid concept: begin with a --- line, supply a nonempty YAML string type, valid optional metadata, and defined source footnotes.",
@@ -127,6 +140,7 @@ impl fmt::Display for Error {
         Self::UnterminatedFrontmatter => "Unterminated frontmatter: add a closing --- line after the YAML fields and before the Markdown body. To repair an existing entry, read it first and supply its digest to write.",
         Self::UnsafePath => "Unsafe memory path or changed memory location.", Self::StaleContent => "Content changed or preview is stale; read and supply its current digest.",
         Self::TooLarge => "Workspace memory exceeds a configured concept or bundle limit.", Self::Unavailable => "Workspace memory is unavailable; check storage access and configuration.",
+        Self::Rejected(_) => unreachable!(),
     })
     }
 }
@@ -162,6 +176,22 @@ pub struct WriteResult {
     pub id: String,
     pub digest: String,
     pub created: bool,
+    pub warnings: Vec<Warning>,
+    pub diagnostics: Vec<okf::Diagnostic>,
+    pub duplicate_of: Option<String>,
+}
+#[derive(Debug)]
+pub struct LifecycleResult {
+    pub id: String,
+    pub digest: String,
+    pub superseded_by: Option<String>,
+    pub warnings: Vec<Warning>,
+}
+#[derive(Debug)]
+pub struct Review {
+    pub total: usize,
+    pub flagged: Vec<(Summary, Vec<&'static str>)>,
+    pub findings: Vec<(String, okf::Diagnostic)>,
     pub warnings: Vec<Warning>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -223,9 +253,16 @@ pub struct Search<'a> {
 pub struct Service {
     options: std::sync::RwLock<Options>,
     indexes: [std::sync::Mutex<recall::Cache>; 2],
+    clock: Box<dyn Fn() -> DateTime<Utc> + Send + Sync>,
 }
 impl Service {
     pub fn new(options: Options) -> Result<Self, Error> {
+        Self::with_clock(options, Box::new(Utc::now))
+    }
+    pub fn with_clock(
+        options: Options,
+        clock: Box<dyn Fn() -> DateTime<Utc> + Send + Sync>,
+    ) -> Result<Self, Error> {
         if options.limits.max_concepts == 0
             || options.limits.max_bundle_bytes == 0
             || options.limits.max_concept_bytes == 0
@@ -235,7 +272,27 @@ impl Service {
         Ok(Self {
             options: std::sync::RwLock::new(options),
             indexes: Default::default(),
+            clock,
         })
+    }
+    pub fn now(&self) -> DateTime<Utc> {
+        (self.clock)()
+    }
+    fn reset_locations(&self) -> Result<reset::Locations, Error> {
+        let base = self.describe(Scope::Knowledge)?.base;
+        let data = canonical(&self.options.read().map_err(|_| Error::Unavailable)?.data)?;
+        Ok(reset::Locations { base, data })
+    }
+    pub fn reset_plan(&self) -> Result<reset::Plan, Error> {
+        reset::plan(&self.reset_locations()?)
+    }
+    pub fn reset(&self, expected_digest: &str, archive: &Path) -> Result<reset::Report, Error> {
+        reset::apply(
+            &self.reset_locations()?,
+            expected_digest,
+            archive,
+            self.now(),
+        )
     }
     pub fn configure(&self, limits: Limits) -> Result<(), Error> {
         if limits.max_concepts == 0 || limits.max_bundle_bytes == 0 || limits.max_concept_bytes == 0
@@ -246,28 +303,9 @@ impl Service {
         Ok(())
     }
     pub fn status(&self, scope: Scope) -> Result<State, Error> {
-        let (state, configured_base) = self.describe(scope)?;
-        if state.enabled {
-            let verify = |base: &Path| {
-                migration::verify_published(base).map_err(|error| match error {
-                    migration::MigrationError::Unsafe(_) => Error::UnsafePath,
-                    _ => Error::Unavailable,
-                })
-            };
-            if configured_base != state.base
-                && let Some((parent, name)) =
-                    configured_base.parent().zip(configured_base.file_name())
-            {
-                let configured_base = canonical(parent)?.join(name);
-                if configured_base != state.base {
-                    verify(&configured_base)?;
-                }
-            }
-            verify(&state.base)?;
-        }
-        Ok(state)
+        self.describe(scope)
     }
-    fn describe(&self, scope: Scope) -> Result<(State, PathBuf), Error> {
+    fn describe(&self, scope: Scope) -> Result<State, Error> {
         let input = self.options.read().map_err(|_| Error::Unavailable)?;
         let directory = fs::canonicalize(&input.directory)?;
         if scope == Scope::Repository && input.repository.is_none() {
@@ -328,19 +366,16 @@ impl Service {
             base.join("repository")
                 .join(&repository.as_ref().ok_or(Error::NotFound)?.id)
         };
-        Ok((
-            State {
-                enabled: input.limits.enabled,
-                scope,
-                directory,
-                base,
-                root,
-                knowledge_root,
-                repository,
-                limits: input.limits.clone(),
-            },
-            configured_base,
-        ))
+        Ok(State {
+            enabled: input.limits.enabled,
+            scope,
+            directory,
+            base,
+            root,
+            knowledge_root,
+            repository,
+            limits: input.limits.clone(),
+        })
     }
     fn operate(&self, scope: Scope) -> Result<State, Error> {
         let state = self.status(scope)?;
@@ -361,7 +396,7 @@ impl Service {
         limit: Option<usize>,
         offset: Option<usize>,
     ) -> Result<Listing, Error> {
-        self.list_at(&self.describe(scope)?.0, limit, offset)
+        self.list_at(&self.describe(scope)?, limit, offset)
     }
     pub fn list_at(
         &self,
@@ -371,7 +406,7 @@ impl Service {
     ) -> Result<Listing, Error> {
         self.require_current(state)?;
         let (limit, offset) = page(limit, offset)?;
-        let bundle = scan(state)?;
+        let bundle = scan(state, self.now())?;
         Ok(Listing {
             total: bundle.concepts.len(),
             concepts: bundle
@@ -384,24 +419,41 @@ impl Service {
             warnings: bundle.warnings,
         })
     }
+    pub fn documents(
+        &self,
+        scope: Scope,
+    ) -> Result<Vec<crate::resources::recall::document::Document>, Error> {
+        self.documents_at(&self.describe(scope)?)
+    }
+    pub fn documents_at(
+        &self,
+        state: &State,
+    ) -> Result<Vec<crate::resources::recall::document::Document>, Error> {
+        self.require_current(state)?;
+        let bundle = scan(state, self.now())?;
+        Ok(bundle
+            .concepts
+            .iter()
+            .map(|concept| {
+                retrieval::project(concept, state.scope, bundle.edges.get(&concept.summary.id))
+            })
+            .collect())
+    }
     pub fn read(&self, scope: Scope, id: &str) -> Result<ReadResult, Error> {
-        self.read_at(&self.describe(scope)?.0, id)
+        self.read_at(&self.describe(scope)?, id)
     }
     pub fn read_at(&self, state: &State, id: &str) -> Result<ReadResult, Error> {
         self.require_current(state)?;
-        require_id(id)?;
-        let (concept, _) = format::stored(
-            id,
-            &read_content(state, &state.root.join(format!("{id}.md")))?,
-        )?;
+        require_readable_id(id)?;
+        let content = read_content(state, &state.root.join(format!("{id}.md")))?;
         Ok(ReadResult {
             id: id.into(),
-            content: concept.content,
-            digest: concept.summary.digest,
+            digest: sha256(&content),
+            content,
         })
     }
     pub fn search(&self, scope: Scope, options: Search<'_>) -> Result<SearchResult, Error> {
-        self.search_at(&self.describe(scope)?.0, options)
+        self.search_at(&self.describe(scope)?, options)
     }
     pub fn search_at(&self, state: &State, options: Search<'_>) -> Result<SearchResult, Error> {
         self.require_current(state)?;
@@ -412,7 +464,7 @@ impl Service {
         {
             return Err(Error::InvalidConcept);
         }
-        let bundle = scan(state)?;
+        let bundle = scan(state, self.now())?;
         let data = self
             .options
             .read()
@@ -449,13 +501,15 @@ impl Service {
         id: &str,
         content: &str,
         expected_digest: Option<&str>,
+        allow_human_actor: bool,
     ) -> Result<WriteResult, Error> {
         let state = self.operate(scope)?;
         require_id(id)?;
         if content.len() > state.limits.max_concept_bytes {
             return Err(Error::TooLarge);
         }
-        let concept = parse(id, content)?;
+        let now = self.now();
+        parse(id, content, now)?;
         create_root(&state.root)?;
         let _lock = lock(&state.root).await?;
         let target = state.root.join(format!("{id}.md"));
@@ -464,23 +518,57 @@ impl Service {
         } else {
             None
         };
-        if before.as_ref().is_some_and(|before| {
-            before != content && Some(sha256(before).as_str()) != expected_digest
-        }) || before.is_none() && expected_digest.is_some()
-        {
+        if before.is_none() && expected_digest.is_some() {
             return Err(Error::StaleContent);
         }
-        let bundle = scan(&state)?;
+        let bundle = scan(&state, now)?;
+        let previous = bundle.concepts.iter().find(|c| c.summary.id == id);
+        let draft = lifecycle::prepare(
+            id,
+            content,
+            &lifecycle::Authoring {
+                now,
+                allow_human_actor,
+                before: previous,
+                others: &bundle.concepts,
+            },
+        )?;
+        if let Some(existing) = draft.duplicate_of {
+            let digest = bundle
+                .concepts
+                .iter()
+                .find(|c| c.summary.id == existing)
+                .map(|c| c.summary.digest.clone())
+                .unwrap_or_default();
+            return Ok(WriteResult {
+                id: existing.clone(),
+                digest,
+                created: false,
+                warnings: Vec::new(),
+                diagnostics: Vec::new(),
+                duplicate_of: Some(existing),
+            });
+        }
+        let content = draft.content;
+        if before.as_ref().is_some_and(|before| {
+            before != &content && Some(sha256(before).as_str()) != expected_digest
+        }) {
+            return Err(Error::StaleContent);
+        }
+        let stored = content.len();
         if bundle.count + usize::from(before.is_none()) > state.limits.max_concepts
-            || bundle.bytes - before.as_ref().map_or(0, |text| text.len()) + content.len()
+            || bundle.bytes - before.as_ref().map_or(0, |text| text.len()) + stored
                 > state.limits.max_bundle_bytes
+            || stored > state.limits.max_concept_bytes
         {
             return Err(Error::TooLarge);
         }
         create_parents(&state.root, target.parent().ok_or(Error::UnsafePath)?)?;
-        if before.as_deref() != Some(content) {
-            atomic(&state.root, &target, content)?;
+        let unchanged = before.as_deref() == Some(content.as_str());
+        if !unchanged {
+            atomic(&state.root, &target, &content)?;
         }
+        let concept = parse(id, &content, now)?;
         let digest = concept.summary.digest.clone();
         let mut concepts = bundle
             .concepts
@@ -489,11 +577,175 @@ impl Service {
             .collect::<Vec<_>>();
         concepts.push(concept);
         concepts.sort_by(|a, b| a.summary.id.cmp(&b.summary.id));
+        let mut paths = bundle.paths;
+        paths.insert(format!("{id}.md"));
+        let written = concepts
+            .iter()
+            .find(|c| c.summary.id == id)
+            .ok_or(Error::Unavailable)?;
+        let view = okf::View {
+            paths: &paths,
+            legacy_root_fallback: false,
+        };
+        let mut diagnostics = written.doc.diagnostics.clone();
+        diagnostics.extend(
+            okf::relations(&format!("{id}.md"), &written.doc, &written.links, &view).diagnostics,
+        );
+        diagnostics.retain(|found| found.level != okf::Level::Info);
+        diagnostics.extend(draft.advice);
+        let title = written
+            .summary
+            .title
+            .as_ref()
+            .map(text_value)
+            .unwrap_or_else(|| id.to_owned());
+        let entry = (!unchanged).then_some(bundle::Entry {
+            kind: if before.is_none() {
+                "Creation"
+            } else {
+                "Update"
+            },
+            id,
+            title: &title,
+        });
         Ok(WriteResult {
             id: id.into(),
             digest,
             created: before.is_none(),
-            warnings: refresh(&state, Some(&concepts), id),
+            warnings: refresh(&state, now, Some(&concepts), id, entry),
+            diagnostics,
+            duplicate_of: None,
+        })
+    }
+    pub async fn record_experience(
+        &self,
+        scope: Scope,
+        id: &str,
+        experience: &experience::Experience,
+        expected_digest: Option<&str>,
+    ) -> Result<WriteResult, Error> {
+        self.write(
+            scope,
+            id,
+            &experience::render(experience),
+            expected_digest,
+            false,
+        )
+        .await
+    }
+    pub async fn supersede(
+        &self,
+        scope: Scope,
+        id: &str,
+        replacement: Option<&str>,
+        expected_digest: &str,
+    ) -> Result<LifecycleResult, Error> {
+        let state = self.operate(scope)?;
+        require_readable_id(id)?;
+        if let Some(replacement) = replacement {
+            require_readable_id(replacement)?;
+            if replacement == id {
+                return Err(Error::Rejected("supersession-cycle"));
+            }
+        }
+        require_root(&state.root)?;
+        let _lock = lock(&state.root).await?;
+        let now = self.now();
+        let target = state.root.join(format!("{id}.md"));
+        let before = read_content(&state, &target)?;
+        if sha256(&before) != expected_digest {
+            return Err(Error::StaleContent);
+        }
+        let bundle = scan(&state, now)?;
+        if let Some(replacement) = replacement {
+            let successor = bundle
+                .concepts
+                .iter()
+                .find(|c| c.summary.id == replacement)
+                .ok_or(Error::NotFound)?;
+            if !successor.summary.meta.status.current()
+                || lifecycle::supersession_chain(replacement, &bundle.concepts).contains(id)
+            {
+                return Err(Error::Rejected("replacement-not-current"));
+            }
+        }
+        let edited = lifecycle::deprecate(&before, replacement)?;
+        let concept = parse(id, &edited, now)?;
+        let title = concept
+            .summary
+            .title
+            .as_ref()
+            .map(text_value)
+            .unwrap_or_else(|| id.to_owned());
+        if edited != before {
+            atomic(&state.root, &target, &edited)?;
+        }
+        let digest = concept.summary.digest.clone();
+        let warnings = refresh(
+            &state,
+            now,
+            None,
+            id,
+            (edited != before).then_some(bundle::Entry {
+                kind: if replacement.is_some() {
+                    "Supersession"
+                } else {
+                    "Deprecation"
+                },
+                id,
+                title: &title,
+            }),
+        );
+        Ok(LifecycleResult {
+            id: id.into(),
+            digest,
+            superseded_by: replacement.map(Into::into),
+            warnings,
+        })
+    }
+    pub fn review(&self, scope: Scope) -> Result<Review, Error> {
+        let state = self.operate(scope)?;
+        let bundle = scan(&state, self.now())?;
+        let mut flagged = Vec::new();
+        for concept in &bundle.concepts {
+            let signals = &concept.summary.signals;
+            let mut reasons = Vec::new();
+            if signals.stale {
+                reasons.push(if signals.malformed_stale_after {
+                    "malformed-stale-after"
+                } else {
+                    "stale"
+                });
+            }
+            if !signals.current {
+                reasons.push(if signals.status == "deprecated" {
+                    "deprecated"
+                } else {
+                    "not-current"
+                });
+            }
+            if signals.draft {
+                reasons.push("draft");
+            }
+            if signals.trust == okf::Trust::Unverified && signals.current {
+                reasons.push("unverified");
+            }
+            if signals.verification_older_than_content {
+                reasons.push("verification-older-than-content");
+            }
+            if !signals.conflicts_with.is_empty() {
+                reasons.push("conflicting");
+            }
+            if !reasons.is_empty() {
+                flagged.push((concept.summary.clone(), reasons));
+            }
+        }
+        let findings = bundle.findings;
+        Ok(Review {
+            total: bundle.concepts.len(),
+            flagged,
+            findings,
+            warnings: bundle.warnings,
         })
     }
     pub fn trash(
@@ -527,7 +779,7 @@ impl Service {
             return Err(Error::StaleContent);
         }
         let trash_id = receipt(id, expected_digest);
-        let stored = state.root.join("trash").join(format!("{trash_id}.md"));
+        let stored = state.root.join(TRASH).join(format!("{trash_id}.md"));
         let archived = safe_path(&state.root, &stored)?;
         if !archived {
             let trash = list_trash(&state)?;
@@ -541,7 +793,7 @@ impl Service {
                 return Err(Error::TooLarge);
             }
         }
-        scan(&state)?;
+        scan(&state, self.now())?;
         create_parents(&state.root, stored.parent().ok_or(Error::UnsafePath)?)?;
         if archived {
             let (entry, content) = read_trash(&state, &trash_id)?;
@@ -567,7 +819,17 @@ impl Service {
             id: id.into(),
             trash_id,
             digest: expected_digest.into(),
-            warnings: refresh(&state, None, id),
+            warnings: refresh(
+                &state,
+                self.now(),
+                None,
+                id,
+                Some(bundle::Entry {
+                    kind: "Deletion",
+                    id,
+                    title: id,
+                }),
+            ),
         })
     }
     pub async fn restore(
@@ -587,7 +849,7 @@ impl Service {
         if safe_path(&state.root, &target)? {
             return Err(Error::StaleContent);
         }
-        let bundle = scan(&state)?;
+        let bundle = scan(&state, self.now())?;
         if bundle.count + 1 > state.limits.max_concepts
             || bundle.bytes + content.len() > state.limits.max_bundle_bytes
         {
@@ -597,12 +859,22 @@ impl Service {
         filesystem::move_across(
             &state.root,
             &state.root,
-            &state.root.join("trash").join(format!("{trash_id}.md")),
+            &state.root.join(TRASH).join(format!("{trash_id}.md")),
             &target,
             &Hooks::default(),
         )?;
         let mut warnings = remove_sidecar(&state, trash_id);
-        warnings.extend(refresh(&state, None, &entry.id));
+        warnings.extend(refresh(
+            &state,
+            self.now(),
+            None,
+            &entry.id,
+            Some(bundle::Entry {
+                kind: "Restoration",
+                id: &entry.id,
+                title: &entry.id,
+            }),
+        ));
         Ok(RestoreResult {
             warnings,
             id: entry.id,
@@ -624,12 +896,12 @@ impl Service {
         }
         filesystem::remove(
             &state.root,
-            &state.root.join("trash").join(format!("{trash_id}.md")),
+            &state.root.join(TRASH).join(format!("{trash_id}.md")),
             false,
             &Hooks::default(),
         )?;
         let mut warnings = remove_sidecar(&state, trash_id);
-        warnings.extend(refresh(&state, None, &entry.id));
+        warnings.extend(refresh(&state, self.now(), None, &entry.id, None));
         Ok(PurgeResult {
             trash_id: trash_id.into(),
             purged: true,
@@ -668,7 +940,7 @@ impl Service {
             create_root(&state.root)?;
             Some(lock(&state.root).await?)
         };
-        let bundle = scan(&state)?;
+        let bundle = scan(&state, self.now())?;
         let trash = list_trash(&state)?;
         let plan = cleanup_plan(&state, &bundle.concepts, &trash.orphans)?;
         let digest = inventory_digest(&plan, &bundle.concepts, &trash.entries);
@@ -721,7 +993,7 @@ impl Service {
             .into_iter()
             .chain(trash.warnings.into_iter().filter(|warning| {
                 warning.code != "unreadable-trash"
-                    || !removed.contains(&format!("trash/{}.json", warning.id))
+                    || !removed.contains(&format!("{TRASH}/{}.json", warning.id))
             }))
             .chain(failures)
             .chain(rebuilt)
@@ -900,28 +1172,6 @@ fn read_content(state: &State, target: &Path) -> Result<String, Error> {
     }
     read_bounded(target, state.limits.max_concept_bytes)
 }
-struct Bundle {
-    concepts: Vec<Concept>,
-    warnings: Vec<Warning>,
-    bytes: usize,
-    count: usize,
-}
-fn scan(state: &State) -> Result<Bundle, Error> {
-    let mut bundle = Bundle {
-        concepts: Vec::new(),
-        warnings: Vec::new(),
-        bytes: 0,
-        count: 0,
-    };
-    if !safe_path(&state.root, &state.root)? {
-        return Ok(bundle);
-    }
-    visit(state, &state.root, &mut bundle)?;
-    bundle
-        .concepts
-        .sort_by(|a, b| a.summary.id.cmp(&b.summary.id));
-    Ok(bundle)
-}
 fn entries(directory: &Path) -> Result<Vec<fs::DirEntry>, Error> {
     let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
     entries.sort_by(|a, b| {
@@ -931,65 +1181,6 @@ fn entries(directory: &Path) -> Result<Vec<fs::DirEntry>, Error> {
             .cmp(b.file_name().to_string_lossy().encode_utf16())
     });
     Ok(entries)
-}
-fn visit(state: &State, directory: &Path, bundle: &mut Bundle) -> Result<(), Error> {
-    if !fs::symlink_metadata(directory)?.is_dir() {
-        return Err(Error::UnsafePath);
-    }
-    for entry in entries(directory)? {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.')
-            || matches!(
-                name.as_str(),
-                "index.md" | "log.md" | "graph.html" | "_meta.json" | "trash"
-            )
-        {
-            continue;
-        }
-        let target = entry.path();
-        let id = target
-            .strip_prefix(&state.root)
-            .map_err(|_| Error::UnsafePath)?
-            .to_string_lossy()
-            .trim_end_matches(".md")
-            .to_owned();
-        let info = entry.file_type()?;
-        if info.is_symlink() {
-            bundle.warnings.push(warning(&id, "unsafe-link"));
-            continue;
-        }
-        if info.is_dir() {
-            safe_path(&state.root, &target)?;
-            visit(state, &target, bundle)?;
-            continue;
-        }
-        if !name.ends_with(".md") {
-            continue;
-        }
-        bundle.count += 1;
-        let bytes = fs::symlink_metadata(&target)?.len() as usize;
-        bundle.bytes += bytes;
-        if bundle.count > state.limits.max_concepts
-            || bytes > state.limits.max_concept_bytes
-            || bundle.bytes > state.limits.max_bundle_bytes
-        {
-            return Err(Error::TooLarge);
-        }
-        match read_content(state, &target).and_then(|content| format::stored(&id, &content)) {
-            Ok((concept, diagnostic)) => {
-                bundle.concepts.push(concept);
-                if let Some(diagnostic) = diagnostic {
-                    bundle.warnings.push(diagnostic);
-                }
-            }
-            Err(Error::TooLarge) => return Err(Error::TooLarge),
-            Err(Error::InvalidConcept | Error::InvalidYaml) => {
-                bundle.warnings.push(warning(&id, "invalid-concept"))
-            }
-            Err(_) => bundle.warnings.push(warning(&id, "unreadable-concept")),
-        }
-    }
-    Ok(())
 }
 fn atomic(root: &Path, target: &Path, content: impl AsRef<[u8]>) -> Result<(), Error> {
     safe_path(root, target)?;
@@ -1045,7 +1236,7 @@ fn read_trash(state: &State, trash_id: &str) -> Result<(TrashEntry, String), Err
     if !valid_receipt(trash_id) {
         return Err(Error::NotFound);
     }
-    let directory = state.root.join("trash");
+    let directory = state.root.join(TRASH);
     let content = read_content(state, &directory.join(format!("{trash_id}.md")))?;
     let metadata = directory.join(format!("{trash_id}.json"));
     safe_path(&state.root, &metadata)?;
@@ -1101,10 +1292,10 @@ fn orphan_receipt(directory: &Path, trash_id: &str) -> Option<(String, String)> 
         return None;
     }
     let text = read_bounded(&target, SIDECAR_LIMIT).ok()?;
-    format::is_receipt(&text).then(|| (format!("trash/{trash_id}.json"), sha256(&text)))
+    format::is_receipt(&text).then(|| (format!("{TRASH}/{trash_id}.json"), sha256(&text)))
 }
 fn list_trash(state: &State) -> Result<Trash, Error> {
-    let directory = state.root.join("trash");
+    let directory = state.root.join(TRASH);
     let mut trash = Trash {
         entries: Vec::new(),
         bytes: 0,
@@ -1170,7 +1361,7 @@ fn list_trash(state: &State) -> Result<Trash, Error> {
     Ok(trash)
 }
 fn remove_sidecar(state: &State, trash_id: &str) -> Vec<Warning> {
-    let target = state.root.join("trash").join(format!("{trash_id}.json"));
+    let target = state.root.join(TRASH).join(format!("{trash_id}.json"));
     match safe_path(&state.root, &target).and_then(|exists| {
         if exists {
             filesystem::remove(&state.root, &target, false, &Hooks::default())?;
@@ -1186,117 +1377,6 @@ fn warning(id: &str, code: &str) -> Warning {
         id: id.into(),
         code: code.into(),
     }
-}
-fn refresh(state: &State, concepts: Option<&[Concept]>, id: &str) -> Vec<Warning> {
-    let bundle = if concepts.is_none() {
-        scan(state).ok()
-    } else {
-        None
-    };
-    let result = concepts
-        .or_else(|| bundle.as_ref().map(|b| b.concepts.as_slice()))
-        .ok_or(Error::Unavailable)
-        .and_then(|concepts| indexes(state, concepts));
-    let graph = filesystem::remove(
-        &state.root,
-        &state.root.join("graph.html"),
-        false,
-        &Hooks::default(),
-    );
-    if result.is_err() || graph.is_err() {
-        vec![warning(id, "index-out-of-date")]
-    } else {
-        Vec::new()
-    }
-}
-fn prefixes(concepts: &[Concept]) -> BTreeSet<String> {
-    let mut directories = BTreeSet::from([String::new()]);
-    for concept in concepts {
-        let parts = concept.summary.id.split('/').collect::<Vec<_>>();
-        for i in 1..parts.len() {
-            directories.insert(parts[..i].join("/"));
-        }
-    }
-    directories
-}
-fn indexes(state: &State, concepts: &[Concept]) -> Result<(), Error> {
-    for directory in prefixes(concepts) {
-        let target = state.root.join(&directory).join("index.md");
-        if safe_path(&state.root, &target)?
-            && !read_bounded(&target, state.limits.max_bundle_bytes)?.contains(GENERATED_INDEX)
-        {
-            continue;
-        }
-        let prefix = if directory.is_empty() {
-            String::new()
-        } else {
-            format!("{directory}/")
-        };
-        let mut lines = Vec::new();
-        if directory.is_empty() {
-            if state.scope == Scope::Knowledge {
-                lines.extend([
-                    "---".into(),
-                    "type: Index".into(),
-                    "title: Shared knowledge".into(),
-                    "---".into(),
-                    String::new(),
-                ]);
-            }
-            if state.scope == Scope::Repository {
-                let repo = state.repository.as_ref().ok_or(Error::NotFound)?;
-                lines.extend([
-                    "---".into(),
-                    "type: Index".into(),
-                    format!("repository: {}", repo.id),
-                    "worktrees:".into(),
-                ]);
-                lines.extend(
-                    repo.worktrees
-                        .iter()
-                        .map(|path| format!("  - {}", json_string(&path.to_string_lossy()))),
-                );
-                lines.extend(["---".into(), String::new()]);
-            }
-        }
-        lines.push(if !directory.is_empty() {
-            format!("# {directory}")
-        } else if state.scope == Scope::Knowledge {
-            "# Shared knowledge".into()
-        } else {
-            "# Repository memory".into()
-        });
-        lines.extend([String::new(), GENERATED_INDEX.into(), String::new()]);
-        for concept in concepts
-            .iter()
-            .filter(|c| c.summary.id.starts_with(&prefix))
-        {
-            let summary = &concept.summary;
-            let title = summary
-                .title
-                .as_ref()
-                .map(text_value)
-                .unwrap_or_else(|| summary.id.clone())
-                .replace('\\', "\\\\")
-                .replace('[', "\\[")
-                .replace(']', "\\]");
-            lines.push(format!(
-                "- [{}]({}.md) — {}",
-                collapse(&title),
-                &summary.id[prefix.len()..],
-                collapse(&text_value(&summary.type_))
-            ));
-        }
-        if directory.is_empty() && state.scope == Scope::Repository {
-            lines.extend([
-                String::new(),
-                "Shared knowledge: [../../knowledge/index.md](../../knowledge/index.md)".into(),
-            ]);
-        }
-        lines.push(String::new());
-        atomic(&state.root, &target, lines.join("\n"))?;
-    }
-    Ok(())
 }
 fn collapse(text: &str) -> String {
     let mut result = String::new();
@@ -1339,7 +1419,7 @@ fn find_obsolete_in(
 ) -> Result<(), Error> {
     for entry in entries(directory)? {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') || name == "trash" || entry.file_type()?.is_symlink() {
+        if name.starts_with('.') || name == TRASH || entry.file_type()?.is_symlink() {
             continue;
         }
         if entry.file_type()?.is_dir() {

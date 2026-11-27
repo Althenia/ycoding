@@ -2272,6 +2272,8 @@ message PublicEvent {
     SessionLogItemValue25 session_synthetic = 33 [(ycoding.v5.public_event) = { diagnostic_name: "session.synthetic" durable: true }];
     SessionLogItemValue26 session_skill_activated = 34 [(ycoding.v5.public_event) = { diagnostic_name: "session.skill.activated" durable: true }];
     SessionLogItemValue27 session_skill_deactivated = 35 [(ycoding.v5.public_event) = { diagnostic_name: "session.skill.deactivated" durable: true }];
+    SessionLogItemValue76 session_cue_detected = 143 [(ycoding.v5.public_event) = { diagnostic_name: "session.cue.detected" durable: true }];
+    SessionLogItemValue77 session_recall_recorded = 144 [(ycoding.v5.public_event) = { diagnostic_name: "session.recall.recorded" durable: true }];
     SessionLogItemValue28 session_shell_started = 36 [(ycoding.v5.public_event) = { diagnostic_name: "session.shell.started" durable: true }];
     SessionLogItemValue29 session_shell_ended = 37 [(ycoding.v5.public_event) = { diagnostic_name: "session.shell.ended" durable: true }];
     SessionLogItemValue30 session_step_started = 38 [(ycoding.v5.public_event) = { diagnostic_name: "session.step.started" durable: true }];

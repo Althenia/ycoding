@@ -1134,3 +1134,139 @@ mod tests {
         }
     }
 }
+
+pub(super) const CUE_KIND: &[(&str, i32)] = &[
+    ("explicit", 1),
+    ("command", 2),
+    ("path", 3),
+    ("symbol", 4),
+    ("tool_call", 5),
+    ("tool_result", 6),
+    ("tool_error", 7),
+    ("workspace", 8),
+    ("lifecycle", 9),
+    ("compaction", 10),
+    ("recovery", 11),
+    ("memory_revision", 12),
+    ("skill_revision", 13),
+];
+pub(super) const RECALL_TRIGGER: &[(&str, i32)] = &[
+    ("prompt", 1),
+    ("cue", 2),
+    ("explicit", 3),
+    ("compaction", 4),
+    ("recovery", 5),
+    ("delegation", 6),
+];
+pub(super) const RECALL_METHOD: &[(&str, i32)] = &[
+    ("explicit", 1),
+    ("cue", 2),
+    ("exact", 3),
+    ("bm25", 4),
+    ("semantic", 5),
+    ("rrf", 6),
+];
+pub(super) const RECALL_OUTCOME: &[(&str, i32)] =
+    &[("injected", 1), ("abstained", 2), ("restored", 3)];
+pub(super) const RECALL_ABSTENTION: &[(&str, i32)] = &[
+    ("no_match", 1),
+    ("below_threshold", 2),
+    ("explicit_unavailable", 3),
+    ("out_of_budget", 4),
+    ("offline", 5),
+];
+const RECALL_KIND: &[(&str, i32)] = &[("memory", 1), ("skill", 2)];
+const RECALL_STAGE: &[(&str, i32)] = &[
+    ("candidate", 1),
+    ("rejected", 2),
+    ("selected", 3),
+    ("injected", 4),
+    ("restored", 5),
+];
+const RECALL_REJECTION: &[(&str, i32)] = &[
+    ("denied", 1),
+    ("disabled", 2),
+    ("stale", 3),
+    ("out_of_scope", 4),
+    ("over_budget", 5),
+    ("duplicate", 6),
+    ("conflict", 7),
+    ("below_threshold", 8),
+    ("manual_only", 9),
+    ("missing", 10),
+    ("untrusted", 11),
+];
+const RECALL_TRUST: &[(&str, i32)] = &[("trusted", 1), ("unverified", 2)];
+const RECALL_FRESHNESS: &[(&str, i32)] = &[("fresh", 1), ("stale", 2), ("unknown", 3)];
+const RECALL_LIFECYCLE: &[(&str, i32)] = &[
+    ("active", 1),
+    ("draft", 2),
+    ("deprecated", 3),
+    ("superseded", 4),
+    ("archived", 5),
+    ("unknown", 6),
+];
+
+pub(super) fn recall_methods(json: J) -> R<v5::SessionLogItemValue77DataMethods> {
+    json.items()?
+        .iter()
+        .map(|method| match method {
+            JsonValue::String(value) => RECALL_METHOD
+                .iter()
+                .find(|(name, _)| value.as_str() == Some(*name))
+                .map(|(_, number)| *number)
+                .ok_or(Unrepresentable("method")),
+            _ => Err(Unrepresentable("method")),
+        })
+        .collect::<R<Vec<_>>>()
+        .map(|items| v5::SessionLogItemValue77DataMethods { items })
+}
+
+pub(super) fn recall_items(json: J) -> R<v5::RecallItems> {
+    json.items()?
+        .iter()
+        .map(|value| {
+            let item = J(value);
+            Ok(v5::RecallItem {
+                kind: literal(item, "kind", RECALL_KIND)?,
+                id: text(item, "id")?,
+                stage: literal(item, "stage", RECALL_STAGE)?,
+                method: literal(item, "method", RECALL_METHOD)?,
+                scores: item
+                    .opt("scores")
+                    .map(|scores| {
+                        Ok(v5::RecallScores {
+                            bm25: opt_number(scores, "bm25")?,
+                            semantic: opt_number(scores, "semantic")?,
+                            rrf: opt_number(scores, "rrf")?,
+                            rank: opt_count(scores, "rank")?,
+                        })
+                    })
+                    .transpose()?,
+                reason: text(item, "reason")?,
+                rejection: opt_literal(item, "rejection", RECALL_REJECTION)?,
+                source: {
+                    let source = item.field("source")?;
+                    v5::RecallSource {
+                        id: text(source, "id")?,
+                        revision: text(source, "revision")?,
+                    }
+                },
+                okf: item
+                    .opt("okf")
+                    .map(|okf| {
+                        Ok(v5::RecallOkf {
+                            r#type: text(okf, "type")?,
+                            trust: literal(okf, "trust", RECALL_TRUST)?,
+                            freshness: literal(okf, "freshness", RECALL_FRESHNESS)?,
+                            lifecycle: literal(okf, "lifecycle", RECALL_LIFECYCLE)?,
+                        })
+                    })
+                    .transpose()?,
+                artifact: item.opt("artifact").map(message::artifact).transpose()?,
+                tokens: opt_count(item, "tokens")?,
+            })
+        })
+        .collect::<R<Vec<_>>>()
+        .map(|items| v5::RecallItems { items })
+}

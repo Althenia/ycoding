@@ -17,6 +17,7 @@
     "./service": "./src/promise/service.ts",
     "./file-change-summary": "./src/file-change-summary.ts",
     "./tool-display": "./src/tool-display.ts",
+    "./cue-recall": "./src/cue-recall.ts",
     "./transcript-visibility": "./src/transcript-visibility.ts",
     "./dots-peer": "./src/dots-peer.ts",
     "./effect": "./src/effect/index.ts",

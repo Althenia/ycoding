@@ -77,7 +77,7 @@ impl Service {
             .map_err(|_| error("InvalidArtifact"))?;
         let id = super::validate_definition(input.id, &definition)?;
         let kind = adapter::kind(&definition);
-        let digest = package::sha256(&adapter::render(&definition));
+        let digest = package::sha256(&adapter::render(&id, &definition));
         let normalized = ComposingNormalizer::new_nfkc().normalize(input.insight_key);
         let lowered = normalized
             .trim_matches(crate::resources::discovery::whitespace)
@@ -338,7 +338,7 @@ impl Service {
             && ((old.is_none() && (counters.artifacts >= 32 || counters.kind_artifacts >= cap))
                 || (old.is_some() && counters.versions >= 16)
                 || counters.bytes
-                    + adapter::render(&definition)
+                    + adapter::render(&id, &definition)
                         .as_str()
                         .expect("validated content")
                         .len() as u64

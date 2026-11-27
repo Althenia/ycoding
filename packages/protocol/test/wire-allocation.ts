@@ -315,6 +315,8 @@ export const wireAllocation: WireAllocation = {
       "session.input.withdrawn",
       "session.input.steered",
       "session.input.deleted",
+      "session.cue.detected",
+      "session.recall.recorded",
     ],
     ProviderRequest_Timing: [
       "firstOutputMs",
@@ -587,6 +589,8 @@ export const wireAllocation: WireAllocation = {
       "session_input_steered",
       "session_interaction_changed",
       "session_input_deleted",
+      "session_cue_detected",
+      "session_recall_recorded",
     ],
     SessionLogItemValue24_data_change: [
       "launched",

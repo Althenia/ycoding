@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { applySessionEvent, createSessionView, type RemoteMessageView } from "../projection"
 import type { GuardrailDecisionView } from "../decision-grades"
+import { foldRecallEvents } from "../../../../../packages/client/src/cue-recall"
 import { transcriptRows } from "./transcript-rows"
 
 const decision = (requestID: string, created: number, reply: GuardrailDecisionView["reply"] = "reject"): GuardrailDecisionView => ({ sessionID: "ses_a", requestID, created, reply })
@@ -65,4 +66,10 @@ test("settled rows start at the first resident chat message, so compacted histor
   }
   expect(decisions.map((item) => item.requestID)).toEqual(["covered", "retained"])
   expect(keys([{ ...completed, status: "running" }, user("retained", 10)], decisions)).toEqual(["compact", "retained", "guardrail:retained"])
+})
+
+test("a recall entry keeps its chronological place between the prompt and the reply", () => {
+  const entry = foldRecallEvents([{ type: "session.recall.recorded", id: "recall_1", created: 2, data: { sessionID: "ses_a", key: "k", trigger: "prompt", methods: ["bm25"], outcome: "injected", elapsedMs: 1, injectedTokens: 5, items: [{ kind: "memory", id: "build/linker", stage: "injected", method: "bm25", reason: "", source: { id: "memory:repository/build/linker", revision: "r1" } }] } }]).entries[0]!
+  const assistant: RemoteMessageView = { kind: "assistant", id: "reply", created: 3, parts: [{ kind: "text", ordinal: 0, text: "Done" }] }
+  expect(keys([user("prompt", 1), { kind: "recall", id: "recall_1", entry, created: 2 }, assistant], [])).toEqual(["prompt", "recall_1", "reply"])
 })

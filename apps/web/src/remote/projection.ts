@@ -9,6 +9,7 @@
 import { ToolInvocation } from "../../../../packages/schema/src/tool-invocation"
 import type { Form } from "../../../../packages/schema/src/form"
 import { browserScriptPermission, escapeDisplayText, toolDisplayName } from "../../../../packages/client/src/tool-display"
+import { emptyRecall, foldRecallEvent, recallVisible, type RecallEntry, type RecallState } from "../../../../packages/client/src/cue-recall"
 import { isInternalTranscriptEnvelope } from "../../../../packages/client/src/transcript-visibility"
 import { RemoteLimits, isSessionID, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory } from "@ycoding-ai/remote"
 import { autonomyCategories, autonomyLabels, readAutonomyMode, type AutonomyCategory, type AutonomyModes, type EffectiveAutonomyView } from "./autonomy"
@@ -332,6 +333,7 @@ export type RemoteMessageView =
       readonly summary?: string
       readonly error?: string
     }
+  | { readonly kind: "recall"; readonly id: string; readonly entry: RecallEntry; readonly created: number }
   | {
       readonly kind: "notice"
       readonly id: string
@@ -454,6 +456,7 @@ export type SessionView = {
   readonly executionStarted?: number
   readonly messages: readonly RemoteMessageView[]
   readonly compactionHistory?: RemoteCompactionHistory
+  readonly recall?: RecallState
   readonly requests: readonly PendingRequestView[]
   readonly projectEscalations?: Readonly<Record<string, ProjectEscalationView>>
   readonly capturedChanges?: RemoteCapturedChangesPage["data"]
@@ -629,6 +632,7 @@ export function transcriptMessageVisible(message: RemoteMessageView): boolean {
   if ((message.kind === "system" || message.kind === "synthetic") && isInternalTranscriptEnvelope({ type: message.kind, text: message.text, metadata: { ...message.metadata, ...(message.source ? { contextSource: message.source } : {}) } })) return false
   if (message.kind === "synthetic") return Boolean(message.description?.trim())
   if (message.kind === "compaction") return message.status === "running" || message.status === "completed" || message.status === "failed" && (message.failureCode === "cancelled" || message.failureCode === "superseded" || message.jobID === undefined && message.failureCode === "aborted")
+  if (message.kind === "recall") return recallVisible(message.entry)
   if (message.kind === "assistant") return message.parts.some(transcriptPartVisible) || message.completed !== undefined || message.error !== undefined || message.retry !== undefined
   return true
 }
@@ -1311,6 +1315,9 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         text: `Skill activated: ${stringField(data.name) ?? stringField(data.id) ?? "unknown"}`,
         created: now,
       })
+    case "session.cue.detected":
+    case "session.recall.recorded":
+      return applyRecallEvent(view, payload)
     case "session.revert.staged":
       return pushNotice(view, "revert", "Revert staged", now)
     case "session.revert.cleared":
@@ -1980,6 +1987,18 @@ function isCheckpointSummary(message: RemoteMessageView) {
 
 function pushMessage(view: SessionView, message: RemoteMessageView): SessionView {
   return { ...view, messages: [...view.messages, message] }
+}
+
+export function applyRecallEvent(view: SessionView, payload: unknown): SessionView {
+  const before = view.recall ?? emptyRecall
+  const recall = foldRecallEvent(before, payload)
+  if (recall === before) return view
+  const entry = recall.entries.find((item) => !before.entries.includes(item))
+  if (entry === undefined) return { ...view, recall }
+  const message: RemoteMessageView = { kind: "recall", id: entry.id, entry, created: entry.created }
+  const others = view.messages.filter((existing) => existing.id !== entry.id && !(existing.kind === "recall" && existing.entry.key === entry.key))
+  const later = others.findIndex((existing) => "created" in existing && existing.created !== undefined && existing.created > entry.created)
+  return { ...view, recall, messages: later < 0 ? [...others, message] : [...others.slice(0, later), message, ...others.slice(later)] }
 }
 
 function replaceMessage(view: SessionView, message: RemoteMessageView): SessionView {

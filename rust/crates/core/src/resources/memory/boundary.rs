@@ -1,7 +1,7 @@
 use super::{
-    DeleteResult, Error, Listing, PurgeResult, ReadResult, RestoreResult, Scope, Search,
-    SearchResult, Service, State, TrashListing, VacuumResult, WriteResult, format::require_id,
-    graph::Export,
+    DeleteResult, Error, LifecycleResult, Listing, PurgeResult, ReadResult, RestoreResult, Review,
+    Scope, Search, SearchResult, Service, State, TrashListing, VacuumResult, WriteResult,
+    format::require_id, graph::Export,
 };
 use std::path::Path;
 
@@ -19,7 +19,14 @@ pub enum Input<'a> {
         id: &'a str,
         content: &'a str,
         expected_digest: Option<&'a str>,
+        allow_human_actor: bool,
     },
+    Supersede {
+        id: &'a str,
+        replacement: Option<&'a str>,
+        expected_digest: &'a str,
+    },
+    Review,
     Graph,
     Delete {
         id: &'a str,
@@ -49,6 +56,8 @@ pub enum Output {
     Search(SearchResult),
     Read(ReadResult),
     Write(WriteResult),
+    Lifecycle(LifecycleResult),
+    Review(Review),
     Graph(Export),
     Delete(DeleteResult),
     Trash(TrashListing),
@@ -103,6 +112,12 @@ impl Input<'_> {
             Self::Search(_) => "search",
             Self::Read { .. } => "read",
             Self::Write { .. } => "write",
+            Self::Supersede {
+                replacement: Some(_),
+                ..
+            } => "supersede",
+            Self::Supersede { .. } => "retire",
+            Self::Review => "review",
             Self::Graph => "graph",
             Self::Delete { .. } => "delete",
             Self::Trash { .. } => "trash",
@@ -115,6 +130,7 @@ impl Input<'_> {
         matches!(
             self,
             Self::Write { .. }
+                | Self::Supersede { .. }
                 | Self::Graph
                 | Self::Delete { .. }
                 | Self::Restore { .. }
@@ -127,7 +143,10 @@ impl Input<'_> {
     }
     fn validate(&self) -> Result<(), Error> {
         match self {
-            Self::Read { id } | Self::Write { id, .. } | Self::Delete { id, .. } => require_id(id)?,
+            Self::Write { id, .. } => require_id(id)?,
+            Self::Read { id } | Self::Delete { id, .. } | Self::Supersede { id, .. } => {
+                super::format::require_readable_id(id)?
+            }
             Self::List { limit, offset } | Self::Trash { limit, offset } => {
                 super::page(*limit, *offset)?;
             }
@@ -147,6 +166,9 @@ impl Input<'_> {
             | Self::Vacuum {
                 expected_digest, ..
             } => *expected_digest,
+            Self::Supersede {
+                expected_digest, ..
+            } => Some(*expected_digest),
             Self::Delete {
                 expected_digest, ..
             }
@@ -206,7 +228,10 @@ pub async fn execute(
         Some(authority.reserve(
             if matches!(
                 input,
-                Input::Delete { .. } | Input::Purge { .. } | Input::Vacuum { .. }
+                Input::Delete { .. }
+                    | Input::Purge { .. }
+                    | Input::Vacuum { .. }
+                    | Input::Supersede { .. }
             ) {
                 Mutation::Remove
             } else {
@@ -230,7 +255,22 @@ pub async fn execute(
             id,
             content,
             expected_digest,
-        } => Output::Write(service.write(scope, id, content, expected_digest).await?),
+            allow_human_actor,
+        } => Output::Write(
+            service
+                .write(scope, id, content, expected_digest, allow_human_actor)
+                .await?,
+        ),
+        Input::Supersede {
+            id,
+            replacement,
+            expected_digest,
+        } => Output::Lifecycle(
+            service
+                .supersede(scope, id, replacement, expected_digest)
+                .await?,
+        ),
+        Input::Review => Output::Review(service.review(scope)?),
         Input::Graph => Output::Graph(service.graph(scope).await?),
         Input::Delete {
             id,

@@ -1,7 +1,9 @@
 mod codec;
 mod operations;
+mod reset;
 mod tables;
 pub use operations::*;
+pub use reset::reset;
 pub use tables::*;
 
 use crate::TableDeclaration;

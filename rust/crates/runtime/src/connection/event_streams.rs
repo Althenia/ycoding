@@ -99,6 +99,8 @@ fn public_event(item: v5::SessionLogItem) -> Result<v5::PublicEvent, ProtocolErr
         Kind::Value73(event) => v5::public_event::Kind::SessionInputWithdrawn(event),
         Kind::Value74(event) => v5::public_event::Kind::SessionInputSteered(event),
         Kind::Value75(event) => v5::public_event::Kind::SessionInputDeleted(event),
+        Kind::Value76(event) => v5::public_event::Kind::SessionCueDetected(event),
+        Kind::Value77(event) => v5::public_event::Kind::SessionRecallRecorded(event),
     };
     Ok(v5::PublicEvent { kind: Some(kind) })
 }

@@ -3,6 +3,12 @@ name: computer-use
 description: "Use when a task needs the interaction tool to operate a macOS application window in the background: reading or clicking its controls on the user's Mac. Do not use for web pages in Chrome, shell work, or coding tasks."
 metadata:
   display-name: "Computer use"
+  purpose: "Operate one macOS application window through the interaction tool."
+  applicability: "Native macOS application windows; not for web pages in Chrome or shell work."
+  triggers: "operate a Mac app, click a window control, read an application window"
+  capabilities: "window observation, clicking, typing"
+  prerequisites: "macOS with the computer-use helper, user approval for each action"
+  related: "browser-use"
 ---
 # Computer use
 

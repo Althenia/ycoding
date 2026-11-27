@@ -1,8 +1,8 @@
-use crate::session_message;
 use crate::{
     DecodeError, DecodeErrorKind, DomainDecode, DomainEncode, JsonPath, JsonValue, LosslessString,
     ObjectDecoder, ObjectEncoder,
 };
+use crate::{recall, session_message};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Data(pub crate::JsonObject);
@@ -114,6 +114,8 @@ pub fn definitions() -> Vec<crate::event::Definition> {
         durable("session.synthetic", 1),
         durable("session.skill.activated", 1),
         durable("session.skill.deactivated", 1),
+        durable("session.cue.detected", 1),
+        durable("session.recall.recorded", 1),
         durable("session.shell.started", 1),
         durable("session.shell.ended", 1),
         durable("session.step.started", 1),
@@ -577,6 +579,24 @@ fn canonical_field(
             crate::domain::branded_string(value, "standard.review.", path)
                 .map(|id| Some(id.encode()))
         }
+        ("session.cue.detected", "cueID") | ("session.recall.recorded", "cueID") => {
+            recall::bounded(value, 1, 128, path).map(|text| Some(text.encode()))
+        }
+        ("session.recall.recorded", "key") => {
+            recall::bounded(value, 1, 128, path).map(|text| Some(text.encode()))
+        }
+        ("session.cue.detected", "subject") => {
+            recall::bounded(value, 0, 512, path).map(|text| Some(text.encode()))
+        }
+        ("session.cue.detected", "kind") => canonical::<recall::CueKind>(value, path),
+        ("session.recall.recorded", "trigger") => canonical::<recall::Trigger>(value, path),
+        ("session.recall.recorded", "methods") => canonical::<recall::Methods>(value, path),
+        ("session.recall.recorded", "outcome") => canonical::<recall::Outcome>(value, path),
+        ("session.recall.recorded", "abstention") => canonical::<recall::Abstention>(value, path),
+        ("session.recall.recorded", "items") => canonical::<recall::Items>(value, path),
+        ("session.recall.recorded", "elapsedMs" | "injectedTokens" | "budgetTokens") => {
+            canonical::<crate::schema::NonNegativeInt>(value, path)
+        }
         ("session.guardrail.dismissed", "confidence") => {
             crate::domain::number_range(value, 0.9, 1.0, path)
                 .map(|number| Some(JsonValue::Number(number)))
@@ -778,6 +798,26 @@ fn fields_for(event_type: &str, version: Option<i64>) -> Option<&'static [(&'sta
             ("id", false),
             ("activationMessageID", false),
             ("reason", false),
+        ],
+        "session.cue.detected" => &[
+            ("sessionID", false),
+            ("cueID", false),
+            ("kind", false),
+            ("subject", true),
+            ("messageID", true),
+        ],
+        "session.recall.recorded" => &[
+            ("sessionID", false),
+            ("key", false),
+            ("trigger", false),
+            ("cueID", true),
+            ("methods", false),
+            ("outcome", false),
+            ("abstention", true),
+            ("items", false),
+            ("elapsedMs", false),
+            ("injectedTokens", false),
+            ("budgetTokens", true),
         ],
         "session.shell.started" => &[("sessionID", false), ("shell", false)],
         "session.shell.ended" => &[("sessionID", false), ("shell", false), ("output", false)],
@@ -1264,6 +1304,7 @@ fn validate_event_field(
             | "sourceMessageID"
             | "activationMessageID"
             | "summaryMessageID"
+            | "messageID"
             | "to"
             | "from",
         ) => validate_as::<crate::session_message_id::Id>(value, path),
@@ -1522,6 +1563,8 @@ event_data_type!(TaskUpdated, "session.task.updated", Some(1));
 event_data_type!(Synthetic, "session.synthetic", Some(1));
 event_data_type!(SkillActivated, "session.skill.activated", Some(1));
 event_data_type!(SkillDeactivated, "session.skill.deactivated", Some(1));
+event_data_type!(CueDetected, "session.cue.detected", Some(1));
+event_data_type!(RecallRecorded, "session.recall.recorded", Some(1));
 event_data_type!(ShellStarted, "session.shell.started", Some(1));
 event_data_type!(ShellEnded, "session.shell.ended", Some(1));
 event_data_type!(StepStarted, "session.step.started", Some(1));

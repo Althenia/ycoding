@@ -28,12 +28,15 @@ impl Service {
         let state = self.operate(scope)?;
         create_root(&state.root)?;
         let _lock = lock(&state.root).await?;
-        let repository = scan(&state)?;
+        let repository = scan(&state, self.now())?;
         let knowledge = if scope == Scope::Repository {
-            Some(scan(&State {
-                root: state.knowledge_root.clone(),
-                ..state.clone()
-            })?)
+            Some(scan(
+                &State {
+                    root: state.knowledge_root.clone(),
+                    ..state.clone()
+                },
+                self.now(),
+            )?)
         } else {
             None
         };

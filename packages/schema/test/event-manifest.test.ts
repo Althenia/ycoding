@@ -305,6 +305,8 @@ describe("public event manifest", () => {
         "session.task.updated.1",
         "session.skill.activated.1",
         "session.skill.deactivated.1",
+        "session.cue.detected.1",
+        "session.recall.recorded.1",
         "session.shell.started.1",
         "session.shell.ended.1",
         "session.step.started.1",

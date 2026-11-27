@@ -152,20 +152,20 @@ async fn skill_listing_rereads_files_with_ecosystem_ancestor_order_then_ycoding_
  {
     let f = Fixture::new();
     f.write(
-        ".claude/skills/review.md",
-        "---\nname: global claude\n---\nGlobal",
+        ".claude/skills/review/SKILL.md",
+        "---\nname: review\ndescription: global claude\n---\nGlobal",
     );
     f.write(
-        "project/nested/.claude/skills/review.md",
-        "---\nname: nearest claude\n---\nNearest",
+        "project/nested/.claude/skills/review/SKILL.md",
+        "---\nname: review\ndescription: nearest claude\n---\nNearest",
     );
     f.write(
-        "project/.claude/skills/review.md",
-        "---\nname: ancestor claude\n---\nAncestor",
+        "project/.claude/skills/review/SKILL.md",
+        "---\nname: review\ndescription: ancestor claude\n---\nAncestor",
     );
     let file = f.write(
-        "config/ycoding/skills/review.md",
-        "---\nname: YCoding\n---\nY",
+        "config/ycoding/skills/review/SKILL.md",
+        "---\nname: review\ndescription: YCoding\n---\nY",
     );
     let options = f.options();
     let config = Configuration::load(options.clone()).unwrap();
@@ -183,12 +183,12 @@ async fn skill_listing_rereads_files_with_ecosystem_ancestor_order_then_ycoding_
         "ancestor claude".into()
     );
     f.write(
-        "project/.claude/skills/review.md",
-        "---\nname: edited\n---\nnew",
+        "project/.claude/skills/review/SKILL.md",
+        "---\nname: review\ndescription: edited\n---\nnew",
     );
     assert_eq!(review(service.list().await.unwrap()), "edited".into());
     assert!(service.changed(&file));
-    assert!(!service.changed(&f.0.join("config/ycoding/skills-other/review.md")));
+    assert!(!service.changed(&f.0.join("config/ycoding/skills-other/review/SKILL.md")));
 }
 
 fn review(skills: Vec<ycoding_schema::skill::Info>) -> ycoding_schema::LosslessString {
@@ -207,24 +207,39 @@ fn review(skills: Vec<ycoding_schema::skill::Info>) -> ycoding_schema::LosslessS
             "review"
         ]
     );
-    skills.into_iter().nth(5).unwrap().name
+    skills.into_iter().nth(5).unwrap().description.unwrap()
 }
 
 #[tokio::test]
 async fn skill_listing_derives_path_ids_retains_body_validates_metadata_and_follows_symlinks() {
     let f = Fixture::new();
     let root = f.0.join("skills");
-    f.write("skills/z.md", "---\nname: display\nslash: false\nmetadata:\n  ycoding/slash: ' TRUE '\n  ycoding/autoinvoke: false\n  ycoding/conflicts:\n    skills: [\" other \", other]\n    instructions: [core/instructions, core/instructions]\n---\nBody\n");
+    f.write("skills/z/SKILL.md", "---\nname: z\ndescription: zed\nmetadata:\n  display-name: Display\n  slash: ' TRUE '\n  conflicts: ' other , other'\n  instruction-conflicts: core/instructions, core/instructions\n---\nBody\n");
     f.write(
         "skills/a/one/SKILL.md",
-        "---\ndescription: first\n---\nFirst",
+        "---\nname: one\ndescription: first\n---\nFirst",
     );
-    f.write("skills/b/one/SKILL.md", "---\ndescription: last\n---\nLast");
-    f.write("skills/nested/ignored.md", "Ignored");
-    f.write("skills/empty.md", "");
     f.write(
-        "skills/invalid.md",
-        "---\nmetadata:\n  ycoding/conflicts:\n    instructions: [Bad]\n---\nBad",
+        "skills/b/one/SKILL.md",
+        "---\nname: one\ndescription: last\n---\nLast",
+    );
+    f.write("skills/nested/ignored.md", "Ignored");
+    f.write(
+        "skills/flat.md",
+        "---\nname: flat\ndescription: flat\n---\nFlat",
+    );
+    f.write(
+        "skills/z/references/SKILL.md",
+        "---\nname: references\ndescription: nested\n---\nNested",
+    );
+    f.write("skills/empty/SKILL.md", "");
+    f.write(
+        "skills/invalid/SKILL.md",
+        "---\nname: invalid\ndescription: bad\nmetadata:\n  instruction-conflicts: Bad\n---\nBad",
+    );
+    f.write(
+        "skills/mismatch/SKILL.md",
+        "---\nname: other\ndescription: bad\n---\nBad",
     );
     #[cfg(unix)]
     {
@@ -246,8 +261,9 @@ async fn skill_listing_derives_path_ids_retains_body_validates_metadata_and_foll
     );
     let z = &list[1];
     assert_eq!(z.content, "Body\n".into());
+    assert_eq!(z.name, "Display".into());
     assert_eq!(z.slash, Some(true));
-    assert_eq!(z.autoinvoke, Some(false));
+    assert_eq!(z.autoinvoke, None);
     assert_eq!(z.conflicts.as_ref().unwrap().skills, vec!["other".into()]);
     #[cfg(unix)]
     assert_eq!(list[0].description, Some("first".into()));
@@ -255,7 +271,13 @@ async fn skill_listing_derives_path_ids_retains_body_validates_metadata_and_foll
         service
             .diagnostics()
             .iter()
-            .any(|d| d.path.ends_with("invalid.md"))
+            .any(|d| d.path.ends_with("invalid/SKILL.md"))
+    );
+    assert!(
+        service
+            .diagnostics()
+            .iter()
+            .any(|d| d.path.ends_with("mismatch/SKILL.md"))
     );
 }
 

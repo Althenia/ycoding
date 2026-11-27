@@ -1416,7 +1416,7 @@ The terminal listing shows these items and shell-quoted commands; `--json` retur
 
 #### Dots operator skill
 
-At startup the service writes the bundled `ycoding-operator` skill to `<data>/dots/skills/ycoding-operator/SKILL.md`, updating the file when its contents differ. V advertises `<data>/dots/skills` as the `ycoding-dots-skills` capability root alongside `codex-home-skills` at `~/.agents/skills`. YCoding's own skill sources do not include the Dots skill directory by default. Cloud consumption of a root ID other than `codex-home-skills` requires live verification.
+At startup the service writes the bundled `session-operator` skill to `<data>/dots/skills/session-operator/SKILL.md`, updating the file when its contents differ and removing the `<data>/dots/skills/ycoding-operator/SKILL.md` file that earlier versions installed. V advertises `<data>/dots/skills` as the `ycoding-dots-skills` capability root alongside `codex-home-skills` at `~/.agents/skills`. YCoding's own skill sources do not include the Dots skill directory by default. Cloud consumption of a root ID other than `codex-home-skills` requires live verification.
 
 #### CCA proof scripts
 

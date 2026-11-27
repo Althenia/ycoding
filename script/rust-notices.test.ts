@@ -125,10 +125,14 @@ async function build(specs: Spec[], patch: (data: Data) => void = () => {}, opti
     },
     embedded: [],
     models: { component: "model catalog", url: "https://example.test/models", file: "texts/models.txt", sha256: "" },
+    embeddingModel: { component: "embedding model", url: "https://example.test/embedding", file: "texts/embedding.txt", sha256: "" },
   }
   const models = "model catalog license\n"
   await writeFile(path.join(dataDirectory, "texts/models.txt"), models)
   data.models.sha256 = createHash("sha256").update(models).digest("hex")
+  const embedding = "embedding model license\n"
+  await writeFile(path.join(dataDirectory, "texts/embedding.txt"), embedding)
+  data.embeddingModel.sha256 = createHash("sha256").update(embedding).digest("hex")
   patch(data)
   const shipped = (triple: string) =>
     ["libduckdb-sys 1.0.0", "libsqlite3-sys 2.0.0", ...specs.filter((spec) => spec.targets === undefined || spec.targets.includes(triple)).map((spec) => `${spec.name} ${spec.version ?? "1.0.0"}`)]
@@ -374,6 +378,13 @@ describe("nested license files", () => {
     await expect(buildNotice(current, input)).resolves.toContain("vendor 1.0.0")
   })
 
+  test("ignores package-manager node_modules directories", async () => {
+    const { input, current } = await build([{ name: "vendor", files: { LICENSE: mit("Top"), "node_modules/dep/LICENSE": mit("Tool") } }])
+    const notice = await buildNotice(current, input)
+    expect(notice).toContain("vendor 1.0.0")
+    expect(notice).not.toContain("Tool")
+  })
+
   test("rejects rules whose file or crate no longer exists", async () => {
     const stale = await build([{ name: "vendor", files: { LICENSE: mit("Top") } }], (data) => data.nested.push(rule("include", "gone/LICENSE")))
     await expect(buildNotice(stale.current, stale.input)).rejects.toThrow(/does not exist/)
@@ -401,6 +412,63 @@ describe("bundled native and embedded code", () => {
     expect(notice).not.toContain("SQLite (bundled by")
     input.trees[triples[0]] += "1libsqlite3-sys v2.0.0\n"
     await expect(buildNotice(current, input)).rejects.toThrow(/SQLite native evidence/)
+  })
+
+  describe("ONNX Runtime", () => {
+    const distribution = (runtime: string) =>
+      `target\tfeature_set\turl\tsha256_hash\naarch64-apple-darwin\tcoreml\thttps://cdn.example.test/ms@${runtime}/a.tar\t${"0".repeat(64)}\n`
+    const ort = (runtime = "1.31.0") => ({
+      name: "ort-sys",
+      version: "2.0.0-rc.15",
+      files: { LICENSE: mit("ort"), "build/download/dist.tsv": distribution(runtime) },
+    })
+    const evidence = async (directory: string): Promise<NonNullable<Data["native"]["onnxruntime"]>> => {
+      const license = "onnxruntime license text\n"
+      const notices = "onnxruntime third-party notices\n"
+      await mkdir(path.join(directory, "texts"), { recursive: true })
+      await writeFile(path.join(directory, "texts/onnx-license.txt"), license)
+      await writeFile(path.join(directory, "texts/onnx-notices.txt"), notices)
+      const digest = (text: string) => createHash("sha256").update(text).digest("hex")
+      return {
+        crate: "ort-sys",
+        version: "2.0.0-rc.15",
+        runtime: "1.31.0",
+        distribution: "build/download/dist.tsv",
+        source: "https://example.test/onnxruntime",
+        archive: { file: "onnxruntime.whl", sha256: "a".repeat(64) },
+        licenses: [
+          { path: "onnxruntime/LICENSE", file: "texts/onnx-license.txt", sha256: digest(license) },
+          { path: "onnxruntime/ThirdPartyNotices.txt", file: "texts/onnx-notices.txt", sha256: digest(notices) },
+        ],
+      }
+    }
+
+    test("reproduces the license and third-party notices of the statically linked runtime", async () => {
+      const { input, current } = await build([ort()])
+      input.data.native.onnxruntime = await evidence(input.dataDirectory)
+      const notice = await buildNotice(current, input)
+      expect(notice).toContain("onnxruntime license text")
+      expect(notice).toContain("onnxruntime third-party notices")
+      expect(notice).toContain("ONNX Runtime 1.31.0 onnxruntime/ThirdPartyNotices.txt (statically linked by ort-sys 2.0.0-rc.15")
+      expect(notice).toContain("embedding model license")
+    })
+
+    test("requires evidence exactly when ort-sys is shipped at the pinned version", async () => {
+      const missing = await build([ort()])
+      await expect(buildNotice(missing.current, missing.input)).rejects.toThrow(/ONNX Runtime native evidence/)
+      const orphan = await build([])
+      orphan.input.data.native.onnxruntime = await evidence(orphan.input.dataDirectory)
+      await expect(buildNotice(orphan.current, orphan.input)).rejects.toThrow(/ONNX Runtime native evidence/)
+      const other = await build([ort()])
+      other.input.data.native.onnxruntime = { ...(await evidence(other.input.dataDirectory)), version: "9.9.9" }
+      await expect(buildNotice(other.current, other.input)).rejects.toThrow(/ONNX Runtime native evidence/)
+    })
+
+    test("rejects evidence for a runtime version the crate does not download", async () => {
+      const { input, current } = await build([ort("1.40.0")])
+      input.data.native.onnxruntime = await evidence(input.dataDirectory)
+      await expect(buildNotice(current, input)).rejects.toThrow(/pins 1\.31\.0, but ort-sys downloads 1\.40\.0/)
+    })
   })
 
   test("rejects a DuckDB archive directory without license evidence and stale evidence", async () => {
@@ -640,7 +708,9 @@ describe("repository data", () => {
     const entries = [
       ...data.supplements,
       ...data.native.duckdb.licenses,
+      ...(data.native.onnxruntime?.licenses ?? []),
       data.models,
+      data.embeddingModel,
     ]
     for (const entry of entries) {
       const bytes = await readFile(path.join(root, "script/rust-notices", entry.file))
@@ -714,6 +784,11 @@ describe("repository NOTICE", () => {
       "mime-db extension table",
       "minimatch glob port",
       "models.dev model catalog snapshot",
+      "ONNX Runtime 1.31.0 onnxruntime/LICENSE (statically linked by ort-sys 2.0.0-rc.15",
+      "ONNX Runtime 1.31.0 onnxruntime/ThirdPartyNotices.txt (statically linked by ort-sys 2.0.0-rc.15",
+      "BAAI/bge-small-en-v1.5 embedding model",
+      "fastembed 7.8.0 (LICENSE)",
+      "tantivy 0.27.0 (LICENSE)",
       "libgit2-sys 0.18.8+1.9.7 (libgit2/COPYING)",
       "aws-lc-sys 0.45.0 (aws-lc/LICENSE)",
       "lmdb-master-sys 0.2.6 (lmdb/libraries/liblmdb/LICENSE)",

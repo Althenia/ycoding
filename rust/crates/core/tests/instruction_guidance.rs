@@ -47,7 +47,6 @@ async fn builtin_tool_dependencies_follow_agent_ceiling_and_codemode() {
                 "core/decision-use",
                 "core/task-completion",
                 "core/decision-input",
-                "core/project-artifact-authoring",
                 "ycoding/project-artifact-authoring",
                 "ycoding/workspace-memory",
             ],
@@ -79,7 +78,6 @@ async fn builtin_tool_dependencies_follow_agent_ceiling_and_codemode() {
             vec![
                 "core/date",
                 "core/decision-use",
-                "core/project-artifact-authoring",
                 "ycoding/project-artifact-authoring",
             ],
         ),
@@ -246,9 +244,8 @@ async fn memory_off_removes_all_memory_guidance() {
 #[test]
 fn skill_guidance_filters_denies_and_autoinvoke_and_escapes_xml_then_renders_deltas() {
     let a = skill::from_frontmatter(
-        Path::new("/skills/a.md"),
-        Path::new("/skills"),
-        &parse_json(r#"{"name":"<A & 'quote'\">","description":"Description"}"#).unwrap(),
+        Path::new("/skills/a/SKILL.md"),
+        &parse_json(r#"{"name":"a","description":"Description","metadata":{"display-name":"<A & 'quote'\">"}}"#).unwrap(),
         "A",
     )
     .unwrap();
@@ -408,7 +405,6 @@ fn standalone_builtin_sources_omit_host_only_instructions() {
         [
             "core/date",
             "core/subagent-reuse",
-            "core/project-artifact-authoring",
             "core/decision-input",
             "core/decision-use",
             "core/task-completion",

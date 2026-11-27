@@ -18,12 +18,14 @@ mod governor;
 mod lifecycle;
 mod promotion;
 mod recovery;
+mod search;
 mod trash;
 pub use authoring::{ForkPreviewInput, ShadowInput};
 pub use automatic::AutomaticWriteInput;
 use automatic::WriteContext;
 pub use governor::GovernorInput;
 pub use lifecycle::LifecycleInput;
+pub use search::{MAX_RESULTS as MAX_SEARCH_RESULTS, SearchHit, SearchInput};
 pub use trash::TrashDetails;
 
 #[derive(Clone, Debug)]
@@ -344,6 +346,56 @@ impl Service {
             },
         )
     }
+    pub fn inherit_metadata(
+        &self,
+        scope_id: &project_artifact::ScopeId,
+        id: &project_artifact::Id,
+        definition: &project_artifact::Definition,
+    ) -> Result<project_artifact::Definition, Error> {
+        let kind = adapter::kind(definition);
+        let snapshot = self.client.snapshot()?;
+        let Some(artifact) = snapshot.get::<artifacts::ArtifactTable>(&artifacts::identity(
+            scope_id.as_lossless(),
+            kind.as_lossless(),
+            id.as_lossless(),
+        ))?
+        else {
+            return Ok(definition.clone());
+        };
+        let version = snapshot
+            .get::<artifacts::VersionTable>(&key(&artifact.current_version_id))?
+            .ok_or_else(|| error("VersionNotFound"))?;
+        let scope = self.scope_from_snapshot(&snapshot, scope_id)?;
+        let content = self.read_content(&scope, &artifact, &version)?;
+        if package::sha256(&content.as_str().into()).as_lossless() != &version.content_digest {
+            return Err(error("OwnershipMismatch"));
+        }
+        let current = adapter::parse(&kind, &content).map_err(|_| error("InvalidArtifact"))?;
+        let mut merged = definition.clone();
+        match (&mut merged, current) {
+            (
+                project_artifact::Definition::Skill(next),
+                project_artifact::Definition::Skill(current),
+            ) => {
+                if next.tags.is_empty() {
+                    next.tags = current.tags;
+                }
+                if next.activation.is_none() {
+                    next.activation = current.activation;
+                }
+            }
+            (
+                project_artifact::Definition::Command(next),
+                project_artifact::Definition::Command(current),
+            ) if next.tags.is_empty() => next.tags = current.tags,
+            (
+                project_artifact::Definition::Agent(next),
+                project_artifact::Definition::Agent(current),
+            ) if next.tags.is_empty() => next.tags = current.tags,
+            _ => {}
+        }
+        Ok(merged)
+    }
     pub fn preview_manual(
         &self,
         input: ManualPreviewInput<'_>,
@@ -658,7 +710,7 @@ impl Service {
         let (scope_id, storage_id) = scope_ids(scope);
         let kind = adapter::kind(definition);
         let content = context.snapshot.as_ref().map_or_else(
-            || adapter::render(definition),
+            || adapter::render(id, definition),
             |promotion| promotion.content.clone(),
         );
         let root = scope_root(&self.paths.data, storage_id);
@@ -1144,20 +1196,30 @@ fn validate_definition(
     id: &str,
     definition: &project_artifact::Definition,
 ) -> Result<project_artifact::Id, Error> {
-    let errors =
-        validation::validate_automatic(&JsonValue::String(id.into()), &definition.encode(), &[]);
+    let mut base = definition.clone();
+    let activation = match &mut base {
+        project_artifact::Definition::Skill(value) => value.activation.take(),
+        _ => None,
+    };
+    let errors = validation::validate_automatic(&JsonValue::String(id.into()), &base.encode(), &[]);
     if let Some(error) = errors.first() {
         return Err(Error {
             code: error.code.clone(),
         });
     }
-    if let Some(error) = validation::validate_rendered(&adapter::render(definition)).first() {
+    if let Some(activation) = &activation
+        && !validation::valid_activation(activation)
+    {
+        return Err(error("InvalidArtifact"));
+    }
+    let id = project_artifact::Id::decode(&JsonValue::String(id.into()))
+        .map_err(|_| error("InvalidArtifact"))?;
+    if let Some(error) = validation::validate_rendered(&adapter::render(&id, definition)).first() {
         return Err(Error {
             code: error.code.clone(),
         });
     }
-    project_artifact::Id::decode(&JsonValue::String(id.into()))
-        .map_err(|_| error("InvalidArtifact"))
+    Ok(id)
 }
 fn check_expectation(
     artifact: Option<&artifacts::Artifact>,

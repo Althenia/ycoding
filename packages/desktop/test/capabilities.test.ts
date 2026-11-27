@@ -431,7 +431,7 @@ test("Project members are created and deleted against the current coordination r
 
 test("every capability operation crosses RPC and both bridge surfaces with its exact input", async () => {
   const inputs: Record<string, unknown> = {
-    sessionSnapshot: { sessionID: parent }, pendingInputs: parent, sessionInsights: { sessionID: parent, taskSessionIDs: [child] },
+    sessionSnapshot: { sessionID: parent }, pendingInputs: parent, sessionRecall: parent, sessionInsights: { sessionID: parent, taskSessionIDs: [child] },
     switchAgent: { sessionID: parent, revision: 1, agent: "plan" }, activateSkill: { sessionID: parent, revision: 1, promptID: "msg_a", skill: "garm" },
     runShell: { sessionID: parent, revision: 1, command: "ls" }, sendEditorContext: { sessionID: parent, revision: 1, promptID: "msg_b", text: "x" },
     openSideChat: { parentID: parent, sessionID: side, revision: 1 }, steerParent: { sessionID: side, revision: 1, promptID: "msg_c", text: "y" },

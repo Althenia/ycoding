@@ -38,6 +38,7 @@ import {
   readAggregateID,
   readAutonomy,
   readCompactionHistory,
+  applyRecallEvent,
   readCapturedChangesPage,
   readEventSequence,
   readModelRef,
@@ -2154,6 +2155,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           latency.recordClient("transcript.load", monotonicNow() - transcriptStarted)
       }))
       void loadCompactionHistory(sessionID, token)
+      if (transport !== undefined) void loadRecall(transport, sessionID, token)
       view.messages.filter((message) => message.kind === "oversized" && message.state === "pending").forEach((message) => { void loadOversizedMessage(message.id) })
       const owner = transport
       if (teamWatching && owner !== undefined && container.state.team !== undefined) void loadTeam(owner, token, container.state.team.rootID, undefined, true)
@@ -2727,6 +2729,15 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const watermark = view.watermark
     if (watermark !== undefined && logged.every((event) => event.seq < watermark)) return
     setState({ view: applySessionEvent(view, newest.event, now()) })
+  }
+
+  const loadRecall = async (owner: RemoteTransport, sessionID: string, token: number) => {
+    const outcome = await owner.request("session.log", { sessionID, input: { after: 0, follow: false } })
+    if (outcome.status !== "ok" || token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID) return
+    const recall = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "recall") : undefined
+    const view = container.state.view
+    if (!Array.isArray(recall) || view?.id !== sessionID) return
+    setState({ view: recall.reduce<SessionView>((next, event) => applyRecallEvent(next, event), view) })
   }
 
   const reconcileLogAfter = async (owner: RemoteTransport, sessionID: string, token: number, after: number) => {

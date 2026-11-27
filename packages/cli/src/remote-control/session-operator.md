@@ -1,9 +1,16 @@
 ---
-name: ycoding-operator
+name: session-operator
 description: Use when operating the ycoding CLI, Sessions or tools from a ChatGPT Dots task on V. Do not use for unrelated shell work.
+metadata:
+  purpose: "Run the ycoding CLI from a remote task to inspect and drive Sessions, pending decisions and modes."
+  applicability: "A Dots task running on V with a recorded Session; not for unrelated shell work."
+  triggers: "operate ycoding remotely, drive a Session, answer a pending decision, watch a Session"
+  capabilities: "Session control, decision listing and answering, mode changes, decision watch delivery"
+  prerequisites: "ycoding on PATH or at ~/.local/bin/ycoding, trusted dots.enabled with an OpenAI OAuth dots.profile, authenticated channel"
+  related: "ycoding"
 ---
 
-# YCoding Operator
+# Session Operator
 
 ## Overview
 

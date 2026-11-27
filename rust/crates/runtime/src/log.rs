@@ -386,6 +386,34 @@ pub fn record(
                 reason: literal(data, "reason", &[("conflict_resolved", 1)])?
             }
         ),
+        Some("session.cue.detected") => item!(
+            Value76,
+            SessionLogItemValue76,
+            v5::SessionLogItemValue76Data {
+                session_id: text(data, "sessionID")?,
+                cue_id: text(data, "cueID")?,
+                kind: literal(data, "kind", payload::CUE_KIND)?,
+                subject: opt_text(data, "subject")?,
+                message_id: opt_text(data, "messageID")?,
+            }
+        ),
+        Some("session.recall.recorded") => item!(
+            Value77,
+            SessionLogItemValue77,
+            v5::SessionLogItemValue77Data {
+                session_id: text(data, "sessionID")?,
+                key: text(data, "key")?,
+                trigger: literal(data, "trigger", payload::RECALL_TRIGGER)?,
+                cue_id: opt_text(data, "cueID")?,
+                methods: payload::recall_methods(data.field("methods")?)?,
+                outcome: literal(data, "outcome", payload::RECALL_OUTCOME)?,
+                abstention: opt_literal(data, "abstention", payload::RECALL_ABSTENTION)?,
+                items: payload::recall_items(data.field("items")?)?,
+                elapsed_ms: count(data, "elapsedMs")?,
+                injected_tokens: count(data, "injectedTokens")?,
+                budget_tokens: opt_count(data, "budgetTokens")?,
+            }
+        ),
         Some("session.shell.started") => item!(
             Value28,
             SessionLogItemValue28,

@@ -142,7 +142,7 @@ type Owner = {
   readonly socket: WebSocket
   readonly connection: Connection
   readonly pending: Map<string, Pending>
-  readonly logs: Map<string, { readonly requestID: string; readonly entry: Pending; synced: boolean; watermark?: number; execution?: unknown }>
+  readonly logs: Map<string, { readonly requestID: string; readonly entry: Pending; synced: boolean; watermark?: number; execution?: unknown; readonly recall: unknown[] }>
   readonly snapshots: Map<string, string>
   readonly sessionEpochs: Map<string, string>
   readonly subscriptions: Map<string, { readonly id: string; hydration: "active" | "idle" | "invalidated" }>
@@ -301,6 +301,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
               const seq = Reflect.get(event, "seq")
               if (typeof seq === "number") log.watermark = seq
             } else if (typeof type === "string" && type.startsWith("session.execution.")) log.execution = event
+            else if (type === "session.cue.detected" || type === "session.recall.recorded") log.recall.push(event)
           }
         } else handlers.onEvents?.(decision.batch.scope.target.value, events)
         if (decision.ordinal !== undefined)
@@ -313,7 +314,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
         value.logs.delete(decision.subscriptionID)
         log.entry.cancel()
         log.entry.resolve(log.synced
-          ? { status: "ok", value: { ...(log.watermark === undefined ? {} : { watermark: log.watermark }), ...(log.execution === undefined ? {} : { execution: log.execution }) } }
+          ? { status: "ok", value: { ...(log.watermark === undefined ? {} : { watermark: log.watermark }), ...(log.execution === undefined ? {} : { execution: log.execution }), ...(log.recall.length === 0 ? {} : { recall: log.recall }) } }
           : { status: "unknown", error: { code: "outcome_unknown", message: "The log stream ended before synchronization" } })
         continue
       }
@@ -438,7 +439,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
         if (entry.operation === "session.log") {
           if (typeof fields.subscription_id !== "string") throw new Error("Missing log subscription identity")
           const subscriptionID = fields.subscription_id
-          value.logs.set(subscriptionID, { requestID: decision.requestID, entry, synced: false })
+          value.logs.set(subscriptionID, { requestID: decision.requestID, entry, synced: false, recall: [] })
           if (entry.timeout > 0) entry.cancel = schedule(() => {
             value.logs.delete(subscriptionID)
             process(value, value.connection.releaseSubscription(subscriptionID, now()))

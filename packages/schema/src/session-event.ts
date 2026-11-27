@@ -39,6 +39,7 @@ import { DecisionFailure } from "./decision-failure.js"
 import { Dots } from "./dots.js"
 import { Form } from "./form.js"
 import { ToolInvocation } from "./tool-invocation.js"
+import { Recall } from "./recall.js"
 
 export { FileAttachment }
 
@@ -1076,6 +1077,38 @@ export namespace RevertEvent {
   })
 }
 
+export const CueDetected = Event.durable({
+  type: "session.cue.detected",
+  ...options,
+  schema: {
+    ...Base,
+    cueID: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(128)),
+    kind: Recall.CueKind,
+    subject: Schema.String.check(Schema.isMaxLength(512)).pipe(optional),
+    messageID: SessionMessage.ID.pipe(optional),
+  },
+})
+export type CueDetected = typeof CueDetected.Type
+
+export const RecallRecorded = Event.durable({
+  type: "session.recall.recorded",
+  ...options,
+  schema: {
+    ...Base,
+    key: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(128)),
+    trigger: Recall.Trigger,
+    cueID: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(128)).pipe(optional),
+    methods: Schema.Array(Recall.Method).check(Schema.isMaxLength(6)),
+    outcome: Recall.Outcome,
+    abstention: Recall.Abstention.pipe(optional),
+    items: Recall.Items,
+    elapsedMs: NonNegativeInt,
+    injectedTokens: NonNegativeInt,
+    budgetTokens: NonNegativeInt.pipe(optional),
+  },
+})
+export type RecallRecorded = typeof RecallRecorded.Type
+
 export const Definitions = Event.inventory(
   Created,
   DotsAccessChanged,
@@ -1128,6 +1161,8 @@ export const Definitions = Event.inventory(
   Synthetic,
   Skill.Activated,
   Skill.Deactivated,
+  CueDetected,
+  RecallRecorded,
   Shell.Started,
   Shell.Ended,
   Step.Started,

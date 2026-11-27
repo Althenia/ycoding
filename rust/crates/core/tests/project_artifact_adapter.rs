@@ -2,6 +2,10 @@ use std::path::Path;
 use ycoding_core::resources::{agent, command, config::Entry, project_artifact::adapter, skill};
 use ycoding_schema::{DomainDecode, JsonValue, parse_json, project_artifact};
 
+fn artifact_id(value: &str) -> project_artifact::Id {
+    project_artifact::Id::decode(&JsonValue::String(value.into())).unwrap()
+}
+
 fn definition(input: &str) -> project_artifact::Definition {
     project_artifact::Definition::decode(&parse_json(input).unwrap()).unwrap()
 }
@@ -39,7 +43,9 @@ fn round_trips_every_declarative_definition_with_exact_body_whitespace_and_permi
         r#"{"kind":"agent","name":"Reviewer","description":"Reviews changes","system":"Review without modifying files.","mode":"subagent","permissions":[]}"#,
     ] {
         let value = definition(input);
-        let rendered = adapter::render(&value).to_utf8().unwrap();
+        let rendered = adapter::render(&artifact_id("core-review"), &value)
+            .to_utf8()
+            .unwrap();
         assert_eq!(
             adapter::parse(&adapter::kind(&value), &rendered).unwrap(),
             value
@@ -51,11 +57,44 @@ fn round_trips_every_declarative_definition_with_exact_body_whitespace_and_permi
 }
 
 #[test]
+fn skill_activation_renders_unprefixed_catalog_metadata_and_tolerates_foreign_metadata() {
+    let value = definition(
+        r#"{"kind":"skill","name":"Core review","description":"Review Core changes","tags":["rust"],"activation":{"version":"1","keywords":"cobalt, birch","commands":"cargo check"},"content":"Run focused Core checks."}"#,
+    );
+    let rendered = adapter::render(&artifact_id("core-review"), &value);
+    assert_eq!(
+        rendered,
+        "---\nname: \"core-review\"\ndescription: \"Review Core changes\"\nmetadata:\n  display-name: \"Core review\"\n  tags: \"rust\"\n  activation: \"auto\"\n  version: \"1\"\n  keywords: \"cobalt, birch\"\n  commands: \"cargo check\"\n---\nRun focused Core checks.".into()
+    );
+    assert_eq!(
+        adapter::parse(&adapter::kind(&value), &rendered.to_utf8().unwrap()).unwrap(),
+        value
+    );
+    let kind = adapter::kind(&value);
+    for metadata in [
+        "metadata:\n  activation: manual\n  keywords: cobalt",
+        "metadata:\n  activation: auto\n  version: 1",
+        "metadata:\n  activation: auto\n  keywords: [a, b]",
+        "metadata:\n  ycoding/slash: true",
+    ] {
+        let parsed = adapter::parse(
+            &kind,
+            &format!("---\nname: Core\ndescription: Review\n{metadata}\n---\nBody."),
+        )
+        .unwrap();
+        let project_artifact::Definition::Skill(skill) = parsed else {
+            unreachable!()
+        };
+        assert_eq!(skill.activation, None);
+    }
+}
+
+#[test]
 fn renders_literal_standard_bytes_and_paths() {
     let value = definition(
         r#"{"kind":"skill","name":"Core review","description":"Review Core changes","content":"Run focused Core checks."}"#,
     );
-    assert_eq!(adapter::render(&value), "---\nname: \"Core review\"\ndescription: \"Review Core changes\"\n---\nRun focused Core checks.".into());
+    assert_eq!(adapter::render(&artifact_id("core-review"), &value), "---\nname: \"core-review\"\ndescription: \"Review Core changes\"\nmetadata:\n  display-name: \"Core review\"\n---\nRun focused Core checks.".into());
     let kind = adapter::kind(&value);
     assert_eq!(
         adapter::project_path(&kind, Path::new("/scope"), "core-review"),
@@ -190,7 +229,13 @@ async fn activates_real_skill_command_and_agent_resources_and_clears_authority()
         let definition = definition(input);
         let path = adapter::project_path(&adapter::kind(&definition), &root, id);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, adapter::render(&definition).to_utf8().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            adapter::render(&artifact_id(id), &definition)
+                .to_utf8()
+                .unwrap(),
+        )
+        .unwrap();
         adapter::activate(
             &adapter::VersionIndex {
                 scope_id: project_artifact::ScopeId::decode(&JsonValue::String("pas_test".into()))
@@ -266,7 +311,10 @@ fn requires_authoritative_names_and_decodes_plugins_without_activating_them() {
     }
     let kind = project_artifact::Kind::decode(&JsonValue::String("plugin".into())).unwrap();
     assert_eq!(
-        adapter::render(&adapter::parse(&kind, "export default {}").unwrap()),
+        adapter::render(
+            &artifact_id("draft"),
+            &adapter::parse(&kind, "export default {}").unwrap()
+        ),
         "export default {}".into()
     );
 }

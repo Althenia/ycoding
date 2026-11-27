@@ -3,7 +3,13 @@ name: report
 description: "Use when the user wants to report a YCoding issue or bug. Collect standard diagnostics, add reproduction context, and publish the issue with the GitHub CLI."
 metadata:
   display-name: "Report"
-  ycoding/slash: "true"
+  slash: "true"
+  purpose: "Publish a GitHub issue for a YCoding bug with standard diagnostics."
+  applicability: "The user asks to report a YCoding issue; not for unrelated bug triage."
+  triggers: "report a bug, file a YCoding issue, send diagnostics"
+  capabilities: "collect diagnostics, draft the issue, publish with the GitHub CLI"
+  prerequisites: "GitHub CLI signed in with permission to open issues"
+  related: "ycoding"
 ---
 # Report a YCoding Issue
 

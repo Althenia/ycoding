@@ -23,7 +23,7 @@ import { activityInput, attachmentRead, directoriesInput, pendingAction, isRevis
 import { bundledBackend } from "./resources"
 import { describeError, redactSecrets } from "./app-log"
 import { pinRequest, projectSessionRecord, projectSessions, sessionsQuery, sessionTarget } from "./sessions"
-import { DesktopError, utf8Length, type SessionAttachment, type ConnectionState, type Selection, type SessionFileChanges, type DirectoryListing, type OpenedDirectory, type IntegrationsSnapshot, type IntegrationMutationInput, type IntegrationMutationResult, type IntegrationAttempt, type McpResource, type McpMutationInput, type McpSnapshot, type SessionManageInput, type SessionManageResult, type VcsDiffSnapshot, type SystemInput, type SystemManageInput, type SystemSnapshot, type DisplayValue, type RequestReply, type SessionSnapshot, type PendingInput, type PendingInputs, type SessionInsights, type SideChat, type Prediction, type GeneratedPrompt, type SessionTerminals, type SessionTerminalRead, type TerminalFrames, type TerminalStream, type TranscriptExport, type ArtifactScope, type ArtifactKind, type ArtifactStage, type ArtifactIdentity, type ArtifactsSnapshot, type ArtifactDetail, type ArtifactMutationResult, type ArtifactPreviewKind, type DotsTarget, type Admission, type PendingRequests, type UsageDashboard, type Incidents, type ShellSummary, type ModelSelection, type TelemetryConsentSnapshot } from "./contract"
+import { DesktopError, utf8Length, type SessionAttachment, type ConnectionState, type Selection, type SessionFileChanges, type DirectoryListing, type OpenedDirectory, type IntegrationsSnapshot, type IntegrationMutationInput, type IntegrationMutationResult, type IntegrationAttempt, type McpResource, type McpMutationInput, type McpSnapshot, type SessionManageInput, type SessionManageResult, type VcsDiffSnapshot, type SystemInput, type SystemManageInput, type SystemSnapshot, type DisplayValue, type RequestReply, type SessionSnapshot, type PendingInput, type PendingInputs, type SessionRecall, type SessionInsights, type SideChat, type Prediction, type GeneratedPrompt, type SessionTerminals, type SessionTerminalRead, type TerminalFrames, type TerminalStream, type TranscriptExport, type ArtifactScope, type ArtifactKind, type ArtifactStage, type ArtifactIdentity, type ArtifactsSnapshot, type ArtifactDetail, type ArtifactMutationResult, type ArtifactPreviewKind, type DotsTarget, type Admission, type PendingRequests, type UsageDashboard, type Incidents, type ShellSummary, type ModelSelection, type TelemetryConsentSnapshot } from "./contract"
 
 type Native = Awaited<ReturnType<typeof connectNative>>
 type Control = ReturnType<typeof openControl>
@@ -1974,6 +1974,19 @@ export class BackendController {
       const items = await api.session.pending.list({ sessionID }, { signal })
       if (!Array.isArray(items)) throw new DesktopError("The backend returned invalid pending inputs. Refresh to retry.")
       return { revision, sessionID, items: items.map((item) => pendingInput(item, sessionID)) }
+    })
+  }
+
+  async sessionRecall(input: unknown): Promise<SessionRecall> {
+    const sessionID = session(input)
+    return this.use("Recall records could not be read. Refresh to retry.", async (api, signal, revision) => {
+      const events: unknown[] = []
+      for await (const event of api.session.log({ sessionID, follow: false }, { signal })) {
+        if (!object(event) || typeof event.type !== "string") throw new DesktopError("The backend returned an invalid Session log. Refresh to retry.")
+        if (event.type !== "session.cue.detected" && event.type !== "session.recall.recorded") continue
+        if (events.push(event) > 20_000) throw new DesktopError("The recall history is too large to read.")
+      }
+      return { revision, sessionID, events }
     })
   }
 

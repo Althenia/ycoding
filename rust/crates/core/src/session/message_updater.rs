@@ -310,6 +310,8 @@ pub(crate) fn fold(
             | "session.guardrail.decided"
             | "session.decision.audited"
             | "session.permission.assessed"
+            | "session.cue.detected"
+            | "session.recall.recorded"
             | "session.guardrail.dismissed"
             | "session.review.deferred"
             | "session.review.decided"
