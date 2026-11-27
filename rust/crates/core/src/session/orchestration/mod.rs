@@ -18,8 +18,8 @@ pub use preflight::{
 };
 pub use projection::{apply, delete_session, mark_attempt};
 pub use service::{
-    Asked, Atomic, Error, Execution, LaunchInput, Prepared, QuestionSnapshot, Service, Settlement,
-    SwitchAuthorize, SwitchModel,
+    Asked, Atomic, Blocked, BlockedRequest, Error, Execution, LaunchGate, LaunchInput, Prepared,
+    QuestionSnapshot, Service, Settlement, SwitchAuthorize, SwitchModel,
 };
 pub use view::{
     Rendered, TEAM_VIEW_BYTES, is_terminal, render_team_observation, render_team_view,

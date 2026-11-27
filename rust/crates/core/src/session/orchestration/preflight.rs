@@ -1,4 +1,4 @@
-use super::service::{Error, Prepared};
+use super::service::{Blocked, Error, Prepared};
 use crate::{
     process::guardrails::{Guardrails, Input, Reservation},
     resources::{agent, attachment_store, credential, domain_state::DomainState, model},
@@ -11,6 +11,7 @@ use crate::{
     tools::policy::permissions::Permissions,
 };
 use std::sync::Arc;
+use ycoding_schema::coordination::SubagentRequestBlockedReason as Reason;
 use ycoding_schema::{
     DomainEncode, LosslessString, ObjectEncoder, permission, session,
     session_event::ProfileBinding, session_message,
@@ -73,26 +74,28 @@ impl Preflight {
             .ok_or_else(|| Error::SessionNotFound(parent_id.clone()))?;
         let target = agents
             .resolve(Some(&request.agent))
-            .ok_or_else(|| invalid(format!("Unknown agent: {}", text(&request.agent))))?;
+            .ok_or_else(|| missing(format!("Unknown agent: {}", text(&request.agent))))?;
         if target.mode.as_str() == Some("primary") {
-            return Err(invalid(format!(
+            return Err(missing(format!(
                 "Agent {} cannot run as a subagent",
                 text(&request.agent)
             )));
         }
         let caller = agents
             .resolve(request.caller.as_ref().or(parent.agent.as_ref()))
-            .ok_or_else(|| invalid("Parent agent is unavailable".into()))?;
+            .ok_or_else(|| missing("Parent agent is unavailable".into()))?;
         let rebind = request
             .model
             .as_ref()
             .or(target.model.as_ref())
             .is_some_and(|selected| selected.profile.is_some());
-        let (selection, binding) = self.select(
-            &parent,
-            request.model.as_ref().or(target.model.as_ref()),
-            rebind,
-        )?;
+        let (selection, binding) = self
+            .select(
+                &parent,
+                request.model.as_ref().or(target.model.as_ref()),
+                rebind,
+            )
+            .map_err(unroutable)?;
         Ok(Prepared {
             agent: target.id.clone(),
             caller_permissions: caller.permissions.clone(),
@@ -214,13 +217,14 @@ pub async fn reserve(
     call: &ToolCall,
 ) -> Result<Reservation, Error> {
     let rejected = |error: crate::process::guardrails::Error| {
-        invalid(
-            error
-                .review_message()
-                .or_else(|| error.capacity_message())
-                .unwrap_or_else(|| {
-                    format!("Session guardrail rejected subagent: {}", text(target))
-                }),
+        if let Some(message) = error.capacity_message() {
+            return Blocked::error(Reason::ConcurrencyCeiling, message);
+        }
+        Blocked::error(
+            Reason::PermissionDenied,
+            error.review_message().unwrap_or_else(|| {
+                format!("Session guardrail rejected subagent: {}", text(target))
+            }),
         )
     };
     let mut metadata = ycoding_schema::JsonObject::new();
@@ -258,6 +262,17 @@ pub async fn reserve(
 
 fn invalid(message: String) -> Error {
     Error::InvalidRequest(message)
+}
+
+fn missing(message: String) -> Error {
+    Blocked::error(Reason::AgentMissing, message)
+}
+
+fn unroutable(error: Error) -> Error {
+    match error {
+        Error::InvalidRequest(message) => Blocked::error(Reason::RouteUnavailable, message),
+        other => other,
+    }
 }
 
 #[derive(Clone)]

@@ -276,10 +276,18 @@ struct Harness {
     jobs: job::Jobs,
     attachments: Arc<attachment_store::Store>,
     config: Arc<Configuration>,
+    paused: Arc<std::sync::atomic::AtomicBool>,
 }
 impl Harness {
     async fn new(title_mode: TitleMode, config: &str) -> Self {
-        let fixture = ToolFixture::new();
+        Self::limited(title_mode, config, Default::default()).await
+    }
+    async fn limited(
+        title_mode: TitleMode,
+        config: &str,
+        limits: ycoding_core::process::guardrails::Limits,
+    ) -> Self {
+        let fixture = ToolFixture::new().with_guardrail_limits(limits);
         let server = Server::new().await;
         let mut source = parse_json(include_str!(
             "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
@@ -426,10 +434,17 @@ impl Harness {
             coordinator: Coordinator::new(Arc::new(local)),
             interrupted: Arc::default(),
         });
-        let orchestration = Arc::new(orchestration::Service::new(
-            store.clone(),
-            execution.clone(),
-        ));
+        let paused = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let gate = paused.clone();
+        let orchestration = Arc::new(
+            orchestration::Service::new(store.clone(), execution.clone()).with_launch_gate(
+                Arc::new(move |_| {
+                    gate.load(std::sync::atomic::Ordering::SeqCst).then(|| {
+                        "Project is inactive; send a message in the master chat to resume".into()
+                    })
+                }),
+            ),
+        );
         let jobs = job::Jobs::new();
         let forms = Forms::new(fixture.authority.authority(), fixture.authority.publisher());
         let tools = SessionTools::new(SessionDependencies {
@@ -488,6 +503,7 @@ impl Harness {
             jobs,
             attachments,
             config,
+            paused,
         }
     }
     fn context(&self) -> Context {
@@ -510,6 +526,33 @@ impl Harness {
             config: self.config.clone(),
             collator: Arc::new(|left, right| left.cmp(right)),
         }
+    }
+    fn blocked(&self) -> Vec<(String, String, String, String)> {
+        self.events()
+            .into_iter()
+            .filter(|event| event.type_.as_str() == Some("coordination.subagent.request.blocked.1"))
+            .map(|event| {
+                let field = |name: &str| match &event.data {
+                    JsonValue::Object(data) => match data.get(&name.into()) {
+                        Some(JsonValue::String(text)) => text.to_utf8().unwrap(),
+                        other => panic!("{name}: {other:?}"),
+                    },
+                    other => panic!("{other:?}"),
+                };
+                (
+                    field("sessionID"),
+                    field("agent"),
+                    field("reason"),
+                    field("message"),
+                )
+            })
+            .collect()
+    }
+    fn unblocked_events(&self) -> Vec<ycoding_store::session::Event> {
+        self.events()
+            .into_iter()
+            .filter(|event| event.type_.as_str() != Some("coordination.subagent.request.blocked.1"))
+            .collect()
     }
     async fn call(&self, name: &str, input: &str) -> Settlement {
         within(self.registry.materialize(&[]).invoke(
@@ -1259,9 +1302,110 @@ async fn subagent_launch_is_background_runs_real_runner_and_records_child_ceilin
 }
 
 #[tokio::test]
+async fn blocked_subagent_requests_record_the_reason_and_never_create_a_child() {
+    let h = Harness::limited(
+        TitleMode::Local,
+        "{}",
+        ycoding_core::process::guardrails::Limits {
+            subagents: 1,
+            ..Default::default()
+        },
+    )
+    .await;
+    let parent = h.context().session_id.as_lossless().to_utf8().unwrap();
+    let blocked = |h: &Harness, call: &str, agent: &str, extra: &str| {
+        let mut context = h.context();
+        context.call_id = call.into();
+        let input = parse_json(&format!(
+            r#"{{"agent":"{agent}","description":"Review","prompt":"Review"{extra}}}"#
+        ))
+        .unwrap();
+        let registry = h.registry.clone();
+        async move {
+            registry
+                .materialize(&[])
+                .invoke("subagent", input, context)
+                .await
+                .unwrap()
+        }
+    };
+    assert!(
+        blocked(&h, "call_missing", "ghost", "")
+            .await
+            .output
+            .is_none()
+    );
+    h.fixture.deny("subagent", "explore");
+    assert!(
+        blocked(&h, "call_denied", "explore", "")
+            .await
+            .output
+            .is_none()
+    );
+    h.fixture.authority.rules.lock().unwrap().pop();
+    h.paused.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        blocked(&h, "call_paused", "explore", "")
+            .await
+            .output
+            .is_none()
+    );
+    h.paused.store(false, std::sync::atomic::Ordering::SeqCst);
+    let variant = r#","model":{"providerID":"openai","id":"gpt-reasoning","variant":"not-real"}"#;
+    assert!(
+        blocked(&h, "call_route", "explore", variant)
+            .await
+            .output
+            .is_none()
+    );
+    let gate = h.server.hold();
+    let running = h
+        .call(
+            "subagent",
+            r#"{"agent":"explore","description":"Hold","prompt":"Hold"}"#,
+        )
+        .await;
+    let held = child(&running);
+    assert!(
+        blocked(&h, "call_ceiling", "explore", "")
+            .await
+            .output
+            .is_none()
+    );
+    let mut recorded = h.blocked();
+    recorded.sort_by(|left, right| left.2.cmp(&right.2));
+    assert_eq!(
+        recorded
+            .iter()
+            .map(|(session, agent, reason, _)| (session.as_str(), agent.as_str(), reason.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (parent.as_str(), "ghost", "agent-missing"),
+            (parent.as_str(), "explore", "concurrency-ceiling"),
+            (parent.as_str(), "explore", "permission-denied"),
+            (parent.as_str(), "explore", "project-paused"),
+            (parent.as_str(), "explore", "route-unavailable"),
+        ]
+    );
+    assert!(recorded[0].3.contains("Unknown agent: ghost"));
+    assert!(recorded[1].3.contains("Subagent limit reached: 1/1"));
+    assert!(recorded[3].3.contains("Project is inactive"));
+    let children = h.orchestration.list(&h.context().session_id).unwrap();
+    assert_eq!(
+        children
+            .iter()
+            .map(|task| task.session_id.clone())
+            .collect::<Vec<_>>(),
+        vec![held]
+    );
+    gate.notify_waiters();
+    h.close().await;
+}
+
+#[tokio::test]
 async fn subagent_denial_invalid_variant_depth_and_ownership_reject_before_effect() {
     let h = Harness::new(TitleMode::Local, "{}").await;
-    let initial = h.events();
+    let initial = h.unblocked_events();
     h.fixture.deny("subagent", "explore");
     assert!(
         h.call(
@@ -1272,7 +1416,7 @@ async fn subagent_denial_invalid_variant_depth_and_ownership_reject_before_effec
         .output
         .is_none()
     );
-    assert_eq!(h.events(), initial);
+    assert_eq!(h.unblocked_events(), initial);
     assert!(
         h.orchestration
             .list(&h.context().session_id)
@@ -1296,7 +1440,7 @@ async fn subagent_denial_invalid_variant_depth_and_ownership_reject_before_effec
         .await;
     let id = child(&result);
     within(h.jobs.wait(id.as_lossless().as_str().unwrap(), None)).await;
-    let before = h.events();
+    let before = h.unblocked_events();
     let mut context = h.context();
     context.session_id = id.clone();
     context.agent = "explore".into();
@@ -1314,7 +1458,7 @@ async fn subagent_denial_invalid_variant_depth_and_ownership_reject_before_effec
             .output
             .is_none()
     );
-    assert_eq!(h.events(), before);
+    assert_eq!(h.unblocked_events(), before);
     h.fixture
         .authority
         .session("ses_foreign", None, 2, false, None);
@@ -1337,7 +1481,7 @@ async fn subagent_denial_invalid_variant_depth_and_ownership_reject_before_effec
             .output
             .is_none()
     );
-    assert_eq!(h.events(), before);
+    assert_eq!(h.unblocked_events(), before);
     h.close().await;
 }
 
@@ -2939,7 +3083,7 @@ async fn subagent_custom_guardrail_deny_and_capacity_rejection_produce_no_child_
                 Options::direct(),
             )
             .unwrap();
-        let before = h.events();
+        let before = h.unblocked_events();
         assert!(
             h.call(
                 "subagent",
@@ -2949,7 +3093,7 @@ async fn subagent_custom_guardrail_deny_and_capacity_rejection_produce_no_child_
             .output
             .is_none()
         );
-        assert_eq!(h.events(), before);
+        assert_eq!(h.unblocked_events(), before);
         assert!(
             h.orchestration
                 .list(&h.context().session_id)

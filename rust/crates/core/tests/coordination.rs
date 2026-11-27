@@ -196,6 +196,34 @@ async fn defaults_replacement_cas_and_restart_are_observable_without_rewriting_r
     );
 }
 
+#[tokio::test]
+async fn subagent_launches_are_blocked_only_while_their_project_is_inactive() {
+    let (_store, service, _feed) = fixture();
+    let group = service
+        .create(input("ses_master", &["ses_member"]))
+        .await
+        .unwrap();
+    let block = |id: &str| {
+        coordination::runtime::subagent_launch_block(&service, &session::Id::new(id).unwrap())
+    };
+    for id in ["ses_master", "ses_member"] {
+        assert_eq!(
+            block(id).as_deref(),
+            Some(coordination::runtime::INACTIVE_MESSAGE)
+        );
+    }
+    assert_eq!(block("ses_outside"), None);
+    service.activate(&group.id).unwrap();
+    for id in ["ses_master", "ses_member", "ses_outside"] {
+        assert_eq!(block(id), None);
+    }
+    service.pause(&group.id).unwrap();
+    assert_eq!(
+        block("ses_member").as_deref(),
+        Some(coordination::runtime::INACTIVE_MESSAGE)
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pausing_by_session_requires_the_master_and_persists_without_a_run() {
     let (store, service, feed) = fixture();
@@ -457,27 +485,27 @@ async fn coordination_instruction_release_text_matches_every_role_and_revocation
         (
             Role::Master,
             false,
-            "b53045fc990c9ccea479c7fe978a965ed6fea8fdc2075eec2a191b8773ab88e0",
+            "7ba69b43b5dae326da74ce3a1eab93e181242e4bd8f0fba2b83616ddd698a867",
         ),
         (
             Role::Master,
             true,
-            "b53045fc990c9ccea479c7fe978a965ed6fea8fdc2075eec2a191b8773ab88e0",
+            "7ba69b43b5dae326da74ce3a1eab93e181242e4bd8f0fba2b83616ddd698a867",
         ),
         (
             Role::Supervisor,
             false,
-            "d1fce3602cc74069b7fb96fff7b708e9300b2fce8a5ec782b1957b7232e079a0",
+            "8f499595b2144cb85b3fd5add37c7d9e0e363db4c89d2f333c8fab22a29403e4",
         ),
         (
             Role::Supervisor,
             true,
-            "d1fce3602cc74069b7fb96fff7b708e9300b2fce8a5ec782b1957b7232e079a0",
+            "8f499595b2144cb85b3fd5add37c7d9e0e363db4c89d2f333c8fab22a29403e4",
         ),
         (
             Role::Executor,
             false,
-            "37a97c8fb06d37f374a265e6254dbab7ea7eb5c0e09a7bca64f8fcc749ea7ecf",
+            "bf9601e2057b40ddf28b208f32842b0b08b91ab43bbf17ffb2342d1613aad3c7",
         ),
         (
             Role::Executor,
@@ -499,7 +527,7 @@ async fn coordination_instruction_release_text_matches_every_role_and_revocation
             let expected = if coordinating {
                 "c041987d38cfa740ce9e90c29299b41eaa18739ac350226615b89c0276e3d410"
             } else {
-                "8536cfa6ff24dd29a406614f717a8fad861e3e301b7da70ca52c5d0695bd39ee"
+                "3165db2cdc5b152f02fad5e7d35c966d7882d883e0f7558a25a27e08b8d60c50"
             };
             assert_eq!(
                 digest(&(source.changed)(&previous, &value).unwrap()),

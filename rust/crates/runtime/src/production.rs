@@ -522,6 +522,12 @@ impl Core {
         .with_reviews(policy::Reviews {
             service: reviews.clone(),
             limit: review_limit,
+        })
+        .with_launch_gate({
+            let coordination = factory.globals.coordination.clone();
+            Arc::new(move |session| {
+                ycoding_core::coordination::runtime::subagent_launch_block(&coordination, session)
+            })
         });
         let decision_locations = locations.downgrade();
         let orchestration = orchestration.with_question_policy(Arc::new(move |child| {

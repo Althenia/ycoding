@@ -47,6 +47,7 @@ use ycoding_store::{
     session::{NewEvent, SessionTable, TaskTable},
 };
 
+const BLOCKED_MESSAGE_BYTES: usize = 4 * 1024;
 const PROGRESS_BYTES: usize = 4 * 1024;
 const QUESTION_BYTES: usize = 8 * 1024;
 const EXCERPT_BYTES: usize = 16 * 1024;
@@ -121,6 +122,7 @@ pub enum Error {
         question_id: QuestionId,
     },
     DepthLimit(usize),
+    Blocked(Blocked),
     Conflict(String),
     InvalidRequest(String),
     ModelBlocked(Box<ycoding_schema::session::ModelSwitchBlocked>),
@@ -181,6 +183,7 @@ impl std::fmt::Display for Error {
                 text_of(child_id.as_lossless())
             ),
             Self::DepthLimit(limit) => write!(formatter, "Subagent depth limit reached ({limit})"),
+            Self::Blocked(blocked) => write!(formatter, "{}", blocked.message),
             Self::Conflict(message) | Self::InvalidRequest(message) => {
                 write!(formatter, "{message}")
             }
@@ -223,6 +226,32 @@ impl From<run_coordinator::Error> for Error {
         Self::Execution(error)
     }
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Blocked {
+    pub reason: ycoding_schema::coordination::SubagentRequestBlockedReason,
+    pub message: String,
+}
+
+impl Blocked {
+    pub fn error(
+        reason: ycoding_schema::coordination::SubagentRequestBlockedReason,
+        message: impl Into<String>,
+    ) -> Error {
+        Error::Blocked(Self {
+            reason,
+            message: message.into(),
+        })
+    }
+}
+
+pub struct BlockedRequest<'a> {
+    pub agent: &'a str,
+    pub message_id: &'a str,
+    pub call_id: &'a str,
+}
+
+pub type LaunchGate = Arc<dyn Fn(&session::Id) -> Option<String> + Send + Sync>;
 
 pub struct Prepared {
     pub agent: agent::Id,
@@ -284,6 +313,7 @@ pub struct Service {
     reviews: Option<crate::tools::policy::Reviews>,
     question_evaluator: QuestionEvaluator,
     reconsidering: Arc<Mutex<BTreeSet<LosslessString>>>,
+    launch_gate: LaunchGate,
 }
 
 #[derive(Clone, Debug)]
@@ -322,7 +352,55 @@ impl Service {
             reviews: None,
             question_evaluator: Arc::new(|_| None),
             reconsidering: Arc::default(),
+            launch_gate: Arc::new(|_| None),
         }
+    }
+
+    pub fn with_launch_gate(mut self, gate: LaunchGate) -> Self {
+        self.launch_gate = gate;
+        self
+    }
+
+    pub fn check_launch_gate(&self, parent_id: &session::Id) -> Result<(), Error> {
+        match (self.launch_gate)(parent_id) {
+            Some(message) => Err(Blocked::error(
+                ycoding_schema::coordination::SubagentRequestBlockedReason::ProjectPaused,
+                message,
+            )),
+            None => Ok(()),
+        }
+    }
+
+    pub async fn record_blocked(
+        &self,
+        parent_id: &session::Id,
+        request: &BlockedRequest<'_>,
+        blocked: &Blocked,
+    ) -> Result<(), Error> {
+        let data = ycoding_schema::coordination::SubagentRequestBlockedData {
+            session_id: parent_id.clone(),
+            agent: request.agent.into(),
+            reason: blocked.reason,
+            message: truncate_utf8(&blocked.message, BLOCKED_MESSAGE_BYTES).into(),
+        };
+        let digest = sha256(&format!(
+            "{}\0{}\0{}",
+            text(parent_id.as_lossless()),
+            request.message_id,
+            request.call_id
+        ));
+        let event = NewEvent {
+            id: format!("evt_blocked_{}", &digest[..24]).into(),
+            aggregate_id: parent_id.as_lossless().clone(),
+            created: now(),
+            type_: "coordination.subagent.request.blocked.1".into(),
+            data: data.encode(),
+        };
+        self.sessions
+            .client
+            .submit(move |tx| ycoding_store::session::append(tx, &event, None).map(|_| ()))?
+            .await?;
+        Ok(())
     }
 
     pub fn with_question_policy(mut self, evaluator: QuestionEvaluator) -> Self {
