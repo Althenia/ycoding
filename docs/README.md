@@ -28,6 +28,7 @@ A plan, deleted package, or stale generated file does not override current code.
 | [`computer-use.md`](./computer-use.md)                                   | Native macOS iTerm, Finder, and desktop control, permissions, helper development, and packaging.                                             |
 | [`memory.md`](./memory.md)                                               | On-demand workspace knowledge, Markdown concepts, permissions, conflict-safe updates, and offline graph export.                              |
 | [`cue-retrieval.md`](./cue-retrieval.md) | Recall retrieval: Tantivy BM25, BGE embeddings, rank fusion, abstention thresholds, model provisioning, and benchmarks. |
+| [`harness.md`](./harness.md) | Recursive harness adaptation: versions, modes, probing rounds, authorization ceiling, experiences and events. |
 | [`meeting-intelligence.md`](./meeting-intelligence.md)                   | Opt-in local speech capture, model management, bounded meeting analysis, and approval-gated MCP reconciliation. |
 | [`tui-redesign-backlog.md`](./tui-redesign-backlog.md)                   | Proposed post-rebuild design baseline, blocked-contract, diagnostics, provider-reproduction, and scoring backlog.                            |
 | [`windows-runtime-backlog.md`](./windows-runtime-backlog.md) | Deferred Windows process ownership, private storage, and guardrail contracts with Rust-first reuse. |
