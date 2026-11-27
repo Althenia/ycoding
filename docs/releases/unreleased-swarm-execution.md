@@ -1,6 +1,0 @@
-# Swarm execution
-
-## Added
-
-- Swarm execution is the default driver of all work and comes from the shared base prompt, so every Session gets it: a Project Master, a Project member or a standalone Session. Whoever coordinates splits work into genuinely independent lanes, launches every ready lane at once, and runs its own integration and verification while they run. Each lane delegates independent subtasks to native subagents where its tools grant them and keeps its own integration and verification. Dependencies, overlapping writes and shared integration stay serialized, one writer owns each file, ref or build output, and no filler is launched. Built-in agents and configured agents with their own `system` text start from the same base prompt, which also directs them to resolve every blocker themselves and escalate only through native controls. Project role instructions carry no separate swarm text.
-- A refused subagent launch records the durable `coordination.subagent.request.blocked` event on the requesting Session with the requested agent, the reason and the refusal message. Reasons are `concurrency-ceiling`, `agent-missing`, `permission-denied`, `project-paused` and `route-unavailable`. No child Session is created for a blocked request.

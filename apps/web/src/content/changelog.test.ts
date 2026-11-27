@@ -9,7 +9,7 @@ const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.ve
 describe("release entries", () => {
   test("lists v0.13.5 first and matches its release notes", async () => {
     const entry = RELEASES[0]
-    expect(entry).toMatchObject({ version: "0.13.5", title: "Cue & Recall v2 and harness adaptation", tags: ["Added", "Changed", "Fixed"] })
+    expect(entry).toMatchObject({ version: "0.13.5", title: "Cue & Recall v2, harness and autonomy defaults", tags: ["Added", "Changed", "Fixed"] })
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.13.5.md", import.meta.url)).text()
     expect(notes).toStartWith("# YCoding v0.13.5\n")
     const changes = notes.split(/^## /m).flatMap((section) => {
