@@ -17,7 +17,7 @@ test("preserves inspectable guardrail metadata in the family read", () => {
 
 test("a human can reject a review with missing targets but cannot approve it blindly", async () => {
   const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], guardrailRequests: [{ ...review, resources: [], metadata: {} }] })
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }) })
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(id), handlers }) })
   try {
     await store.load(); await waitFor(() => store.state().sessions.length > 0); await store.selectSession("ses_a")
     await store.replyGuardrail(review.id, "once")
@@ -30,7 +30,7 @@ test("a human can reject a review with missing targets but cannot approve it bli
 
 for (const outcome of ["failed", "unknown"] as const) test(`${outcome} human replies remain explicit and pending without automatic resend`, async () => {
   const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], guardrailRequests: [review], handler: (request) => request.operation === "session.guardrail.reply" ? outcome === "unknown" ? "silent" : { ok: false, code: "invalid_message", message: "Review is no longer pending" } : "default" })
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers, requestTimeoutMs: 30 }) })
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(id), handlers, requestTimeoutMs: 30 }) })
   try {
     await store.load(); await waitFor(() => store.state().sessions.length > 0); await store.selectSession("ses_a")
     await store.replyGuardrail(review.id, "once")
@@ -43,7 +43,7 @@ for (const outcome of ["failed", "unknown"] as const) test(`${outcome} human rep
 
 for (const reply of ["once", "reject"] as const) test(`a human ${reply} answers a child's hard review through the selected parent`, async () => {
   const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], guardrailRequests: [review] })
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }) })
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(id), handlers }) })
   try {
     await store.load()
     await waitFor(() => store.state().sessions.length > 0)
@@ -58,7 +58,7 @@ test("hard Always and absent requests cannot send, and duplicate in-flight repli
   let release: (() => void) | undefined
   const held = new Promise<void>((resolve) => { release = resolve })
   const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], guardrailRequests: [review], handler: async (request) => { if (request.operation === "session.guardrail.reply" && request.input?.requestID === review.id && request.input?.reply !== "always") await held; return "default" as const } })
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }) })
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(id), handlers }) })
   try {
     await store.load(); await waitFor(() => store.state().sessions.length > 0); await store.selectSession("ses_a")
     await store.replyGuardrail(review.id, "always")
@@ -76,7 +76,7 @@ for (const replacement of ["selection", "connection"] as const) test(`a late rep
   let release: (() => void) | undefined
   const held = new Promise<void>((resolve) => { release = resolve })
   const relay = await startRelayDouble({ advertisedSessions: ["ses_a", "ses_b"], guardrailRequests: [{ ...review, sessionID: "ses_a" }], handler: async (request) => { if (request.operation === "session.guardrail.reply" && request.input?.reply === "once") await held; return "default" as const } })
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }) })
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(id), handlers }) })
   try {
     await store.load(); await waitFor(() => store.state().sessions.length > 0); await store.selectSession("ses_a")
     const pending = store.replyGuardrail(review.id, "once")

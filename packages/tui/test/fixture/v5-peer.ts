@@ -505,7 +505,7 @@ export function scriptedTransport(run: Scenario, events: EventSource) {
       if (dispatch.operation.diagnosticName === "event.unsubscribe")
         return peer.result(dispatch, {
           typeName: dispatch.operation.resultType,
-          payload: encodeDomain(dispatch.operation.resultType, {}),
+          payload: encodeDomain(dispatch.operation.resultType, { data: {} }),
         })
       const { url, request } = scenario(dispatch)
       void Promise.resolve()

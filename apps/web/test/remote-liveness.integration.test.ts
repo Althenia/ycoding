@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { parseClientMessage } from "@ycoding-ai/remote"
 import { createRemoteTransport } from "../src/remote/transport"
+import { noResend } from "./transport-fence"
 import { waitFor } from "./relay-double"
 
 class Visibility extends EventTarget {
@@ -28,7 +29,7 @@ test("real WebSocket recovery retires a silent relay connection without replayin
     },
   })
   let reconnects = 0
-  const transport = createRemoteTransport({
+  const transport = createRemoteTransport({ ...noResend,
     url: `ws://127.0.0.1:${server.port}/`, pingIntervalMs: 20, pongTimeoutMs: 20, resetDelayMs: 5,
     handlers: { onReconnect: () => { reconnects += 1 } },
   })
@@ -65,7 +66,7 @@ test("real relay activity keeps a resumed browser transport healthy after foregr
       },
     },
   })
-  const transport = createRemoteTransport({
+  const transport = createRemoteTransport({ ...noResend,
     url: `ws://127.0.0.1:${server.port}/`, document, window,
     pingIntervalMs: 1000, pongTimeoutMs: 20, resetDelayMs: 5,
   })

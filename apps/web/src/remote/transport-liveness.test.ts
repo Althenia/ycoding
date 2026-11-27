@@ -59,10 +59,10 @@ test("a silent OPEN socket recovers without awaiting close or replaying sent and
     expect(first.closes).toEqual([{ code: 4000, reason: "Relay heartbeat timed out" }])
     expect(f.transport.status().kind).toBe("reconnecting")
     expect(await mutations[0]).toMatchObject({ status: "unknown", error: { code: "outcome_unknown" } })
-    expect(await mutations[1]).toEqual({ status: "unavailable", reason: "not-connected" })
     f.advance(1)
     f.sockets[1]!.open()
     expect(f.transport.status().kind).toBe("open")
+    expect(await mutations[1]).toEqual({ status: "unavailable", reason: "connection-changed" })
     expect(f.sockets[1]!.requests()).toEqual([])
   } finally { f.transport.close() }
 })

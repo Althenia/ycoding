@@ -22,7 +22,7 @@ const http: RemoteHttp = {
   removeRevokedDevices: async () => ({ ok: true, value: undefined }),
   logout: async () => ({ ok: true, value: undefined }),
 }
-const store = createRemoteStore({ http, createTransport: (_deviceID, handlers) => createRemoteTransport({ url: relay.href, handlers }) })
+const store = createRemoteStore({ http, createTransport: (_deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.href, handlers }) })
 Object.assign(window, { modelReplayStore: store })
 function Fixture() {
   const remote = useRemote()

@@ -1,7 +1,20 @@
 import { describe, expect, test } from "bun:test"
+import { V5ClientError } from "@ycoding-ai/client/v5"
 import { errorData, errorFormat, errorMessage } from "../../src/util/error"
 
 describe("util.error", () => {
+  test("names the request instead of the bare transport status", () => {
+    expect(errorMessage(new V5ClientError("unsent", "session.todo.list", undefined, true))).toBe(
+      "Request session.todo.list was not sent because the connection to the server was lost. Nothing changed; try again once it reconnects.",
+    )
+    expect(errorMessage(new V5ClientError("unsent", "session.prompt", "Request cancelled before transmission"))).toBe(
+      "Your message was cancelled before it was sent.",
+    )
+    expect(errorMessage(new V5ClientError("unknown", "session.rename"))).toBe(
+      "Request session.rename may not have completed: the connection changed after it was sent. Check the current state before repeating it.",
+    )
+  })
+
   test("formats native Error instances", () => {
     const err = new Error("boom")
     expect(errorMessage(err)).toBe("boom")

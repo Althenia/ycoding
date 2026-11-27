@@ -14,7 +14,7 @@ test("a timed-out catalog remains retryable and overlapping refreshes share one 
     return { ok: true, value: { agents: [], models: [], commands: [], skills: [], references: [], resources: [] } }
   } })
   const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers,
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers,
       createSocket: relay.createSocket, requestTimeoutMs: 200 }) })
   try {
     await store.load()

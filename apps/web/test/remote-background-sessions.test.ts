@@ -23,7 +23,7 @@ async function connect() {
     return "default"
   } })
   const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }) })
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }) })
   await store.load()
   await waitFor(() => store.state().sessions.length === listed.length)
   return { relay, store }

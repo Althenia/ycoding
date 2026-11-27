@@ -11,7 +11,7 @@ test("Team and Conversation cannot concurrently send two answers for the same ow
   const relay = await startRelayDouble({ handler: (request) => request.operation === "session.subagent.list"
     ? { ok: true, value: { data: [waiting], summary: { total: 1, active: 1 }, cursor: {} } }
     : request.operation === "session.subagent.answer" ? held.promise : "default" })
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }), batchMs: 1 })
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers }), batchMs: 1 })
   try {
     await store.load()
     await waitFor(() => store.state().sessions.length > 0)

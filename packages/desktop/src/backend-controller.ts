@@ -13,6 +13,7 @@ import type { YCodingEvent } from "@ycoding-ai/client"
 import { Coordination, Form, Integration, Interaction, KeepAwake, PermissionSaved, Project, ProjectCopy, Pty, Schema, Telemetry } from "@ycoding-ai/client/effect"
 import { terminalConnectInput, terminalControlInput, terminalResizeInput, terminalStreamInput, terminalWriteInput, agentSwitchInput, globalRequestsInput, usageDashboardInput, incidentsInput, incidentMutationInput, answerData, artifactInput, artifactMutationInput, artifactsInput, dotsTarget, editorInput, exportFilename, exportInput, insightsInput, pendingInput, predictionInput, promptGenerateInput, sameIdentity, sameTarget, sessionMarkdown, shellInput, sideChatContext, sideChatInput, skillInput, snapshotInput, steerInput, terminalInput, todoItems } from "./capabilities"
 import { currentModel, modelSelection, modelSource, openedModelLocation, projectDefault, projectModels, running, sameModelLocation, sessionModelLocation, switchRequest, type ModelLocation } from "./models"
+import { resendUnsent, V5ClientError } from "@ycoding-ai/client/v5"
 import { connectNative } from "./native-client"
 import { TerminalRelay, terminalSocketUrl, type TerminalSocketFactory } from "./terminal-relay"
 import { validateSelection } from "./preferences"
@@ -711,18 +712,29 @@ export class BackendController {
     if (!current?.native || this.snapshot.status !== "connected") throw new DesktopError("Connect to a backend before using Sessions.")
     const revision = current.revision
     if (fence.revision !== undefined && fence.revision !== revision) throw new DesktopError(fence.unsent ?? unsent)
-    const api = current.native.api
-    const epoch = api.transport.connectionEpoch
+    let api = current.native.api
+    let epoch = api.transport.connectionEpoch
     const changed = fence.changed ?? "The backend connection changed."
     let value: T
     const ensureCurrent = (message: string) => {
       if (this.current !== current || this.snapshot.status !== "connected" || current.revision !== revision ||
         current.native?.api !== api || api.transport.connectionEpoch !== epoch || api.transport.state === "closed") throw new DesktopError(message)
     }
-    try { value = await run(api, current.abort.signal, revision, ensureCurrent) }
+    const resilient = resendUnsent(() => current.native!.api, {
+      reconnected: () => current.native!.api.transport.ready(),
+      revision: () => current.revision,
+      admit: ({ issuedRevision, target }) => {
+        if (this.current !== current || this.snapshot.status !== "connected" || current.revision !== issuedRevision || target !== current.native?.api) return false
+        api = target
+        epoch = api.transport.connectionEpoch
+        return true
+      },
+    })
+    try { value = await run(resilient, current.abort.signal, revision, ensureCurrent) }
     catch (error) {
       if (error instanceof DesktopError) throw error
-      ensureCurrent(changed)
+      try { ensureCurrent(changed) }
+      catch (moved) { throw error instanceof V5ClientError && fence.changed === undefined && moved instanceof DesktopError ? new DesktopError(`${failure} ${moved.message}`) : moved }
       throw new DesktopError(failure)
     }
     ensureCurrent(changed)

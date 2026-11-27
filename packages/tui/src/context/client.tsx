@@ -1,4 +1,4 @@
-import type { V5Client, EventSubscribeOutput } from "@ycoding-ai/client/v5"
+import { resendUnsent, V5ClientError, type V5Client, type EventSubscribeOutput } from "@ycoding-ai/client/v5"
 import { createGlobalEmitter } from "@solid-primitives/event-bus"
 import { onCleanup, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
@@ -24,6 +24,7 @@ type ManagedService = {
 
 type ClientEventMap = { [Type in EventSubscribeOutput["type"]]: Extract<EventSubscribeOutput, { type: Type }> }
 const connectTimeout = 2_000
+const resendTimeout = 10_000
 const connectionHistoryLimit = 50
 
 export const { use: useClient, provider: ClientProvider } = createSimpleContext({
@@ -45,6 +46,32 @@ export const { use: useClient, provider: ClientProvider } = createSimpleContext(
       attempt: 0,
     })
     let stream: AbortController | undefined
+    const reconnectWaiters = new Set<() => void>()
+    const usable = () => connection.status === "connected" && api.transport.state !== "closed"
+    const reconnected = (signal?: AbortSignal) =>
+      usable()
+        ? Promise.resolve()
+        : new Promise<void>((resolve, reject) => {
+            const settle = (done: () => void) => {
+              clearTimeout(timer)
+              signal?.removeEventListener("abort", cancel)
+              reconnectWaiters.delete(check)
+              done()
+            }
+            const check = () => {
+              if (usable()) settle(resolve)
+            }
+            const cancel = () => settle(() => reject(signal?.reason))
+            const timer = setTimeout(() => settle(() => reject(new Error("Timed out waiting for the server connection"))), resendTimeout)
+            signal?.addEventListener("abort", cancel, { once: true })
+            reconnectWaiters.add(check)
+          })
+    const resilient = resendUnsent(() => api, {
+      reconnected,
+      revision: (client) => client.transport.sourceEpoch,
+      admit: ({ issuedRevision, target }) =>
+        issuedRevision !== undefined && target === api && usable() && target.transport.sourceEpoch === issuedRevision,
+    })
 
     function record(status: ClientConnectionEvent["data"]["status"], attempt: number, error?: string) {
       history.push({ type: "client.connection", created: Date.now(), data: { status, attempt, error } })
@@ -81,6 +108,7 @@ export const { use: useClient, provider: ClientProvider } = createSimpleContext(
             log.info("event stream connected")
             events.emit(first.value.type, first.value)
             setConnection({ status: "connected", attempt: 0, error: undefined })
+            reconnectWaiters.forEach((check) => check())
             while (!abort.signal.aborted && !controller.signal.aborted) {
               const event = await iterator.next()
               if (abort.signal.aborted || controller.signal.aborted) return undefined
@@ -111,6 +139,10 @@ export const { use: useClient, provider: ClientProvider } = createSimpleContext(
             error: message,
           })
           setConnection({ status: "reconnecting", attempt, error: message })
+          if (error instanceof V5ClientError && error.status === "resync") {
+            if (attempt > 1) await wait(1_000, controller.signal)
+            continue
+          }
           let replaced = false
           if (props.service) {
             const next = await props.service.reconnect(controller.signal).catch((error) => {
@@ -151,7 +183,7 @@ export const { use: useClient, provider: ClientProvider } = createSimpleContext(
 
     return {
       get api() {
-        return api
+        return resilient
       },
       baseUrl() {
         return baseUrl

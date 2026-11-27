@@ -11,7 +11,7 @@ async function setup(handler?: (request: { operation: string; input?: Readonly<R
   let nextMessage = 0
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, requestTimeoutMs, pingIntervalMs }),
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, requestTimeoutMs, pingIntervalMs }),
     now: () => 1_000,
     ...(storeClock === undefined ? {} : { schedule: storeClock.schedule, monotonicNow: storeClock.now }),
     createMessageID: () => `msg_local_${++nextMessage}`,

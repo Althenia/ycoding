@@ -27,7 +27,7 @@ import type { Scope, OperationDescriptor } from "@ycoding-ai/protocol/v5"
 import type { Endpoint } from "../service.js"
 import type { RequestOptions } from "../promise/generated/client.js"
 import { decodeDomain, encodeDomain } from "./codec.js"
-import { V5ClientError } from "./error.js"
+import { V5ClientError, unsentReason } from "./error.js"
 import { assetResult } from "./asset.js"
 import { DeliveryStream } from "./stream.js"
 import { globalScope } from "./surface.js"
@@ -322,42 +322,41 @@ export class LocalTransport {
     stream?: DeliveryStream<unknown>,
   ): Promise<unknown> {
     const operation = operations.find((operation) => operation.operationId === binding.operationID)!
+    if (!owner.active || owner !== this.#owner)
+      throw new V5ClientError("unsent", binding.method, unsentReason.closed, true)
     if (
-      !owner.active ||
-      owner !== this.#owner ||
       owner.opening + owner.pending.size >=
-        (owner.connection?.budgets.pendingRequests ??
-          this.#options.budgets?.pendingRequests ??
-          defaultBudgets.pendingRequests)
+      (owner.connection?.budgets.pendingRequests ?? this.#options.budgets?.pendingRequests ?? defaultBudgets.pendingRequests)
     )
-      throw new V5ClientError("unsent", binding.method)
+      throw new V5ClientError("unsent", binding.method, unsentReason.busy)
     owner.opening++
     const aborted = Promise.withResolvers<never>()
     const abortOpening = () =>
-      aborted.reject(new V5ClientError("unsent", binding.method, "Request cancelled before transmission"))
+      aborted.reject(new V5ClientError("unsent", binding.method, unsentReason.cancelled))
     options?.signal?.addEventListener("abort", abortOpening, { once: true })
     if (options?.signal?.aborted) abortOpening()
     try {
       await Promise.race([owner.ready, aborted.promise])
     } catch (error) {
       if (error instanceof V5ClientError && error.status !== "protocol")
-        throw new V5ClientError("unsent", binding.method, error.reason)
+        throw new V5ClientError("unsent", binding.method, error.reason, error.status !== "unsent")
       throw error
     } finally {
       owner.opening--
       options?.signal?.removeEventListener("abort", abortOpening)
     }
-    if (owner !== this.#owner || !owner.active || options?.signal?.aborted)
-      throw new V5ClientError("unsent", binding.method)
+    if (options?.signal?.aborted) throw new V5ClientError("unsent", binding.method, unsentReason.cancelled)
+    if (owner !== this.#owner || !owner.active)
+      throw new V5ClientError("unsent", binding.method, unsentReason.closed, true)
     const connection = owner.connection!
     const request = (() => {
       const reservation = connection.budgets.clientFrameBytes + connection.budgets.inlineBytes
       if (!connection.reservation.reserve(reservation))
-        throw new V5ClientError("unsent", binding.method, "Request allocation limit")
+        throw new V5ClientError("unsent", binding.method, unsentReason.allocation)
       try {
         return this.prepare(operation, data, input, options, connection.budgets.inlineBytes)
       } catch {
-        throw new V5ClientError("unsent", binding.method, "Input cannot be represented by v5")
+        throw new V5ClientError("unsent", binding.method, unsentReason.unrepresentable)
       } finally {
         connection.reservation.release(reservation)
       }
@@ -372,7 +371,7 @@ export class LocalTransport {
     )
     if (!sent.requestID) {
       this.process(owner, sent.decisions)
-      throw new V5ClientError("unsent", binding.method, "Request was not admitted to transport")
+      throw new V5ClientError("unsent", binding.method, unsentReason.notAdmitted)
     }
     owner.pending.set(sent.requestID, {
       binding,
@@ -507,7 +506,9 @@ export class LocalTransport {
         owner.pending.delete(decision.requestID)
         try {
           if (decision.status !== "success" && decision.status !== "rejected") {
-            pending.reject(new V5ClientError(decision.status, pending.binding.method))
+            pending.reject(
+              new V5ClientError(decision.status, pending.binding.method, undefined, decision.status === "unsent"),
+            )
             continue
           }
           if (!decision.payload) {

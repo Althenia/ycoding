@@ -142,7 +142,7 @@ async function relayHarness() {
     const session = options.session ?? await pushServer.signIn()
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: `http://127.0.0.1:${server.port}` }),
-      createTransport: (_deviceID, handlers) => createRemoteTransport({ url: `ws://127.0.0.1:${server.port}/?browser=${session.sessionID}`, handlers }),
+      createTransport: (_deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: `ws://127.0.0.1:${server.port}/?browser=${session.sessionID}`, handlers }),
       notificationDelivery: createNotificationDelivery({
         preferences: () => normalizeNotificationPreferences(undefined),
         desktop: { show: (alert) => { alerts.push(alert) }, dispose: () => {} },

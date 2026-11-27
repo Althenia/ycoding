@@ -21,7 +21,7 @@ const http: RemoteHttp = {
   removeRevokedDevices: async () => ({ ok: true, value: undefined }),
   logout: async () => ({ ok: true, value: undefined }),
 }
-const store = createRemoteStore({ http, createTransport: (_id, handlers) => createRemoteTransport({ url: relay.href, handlers }), batchMs: 1 })
+const store = createRemoteStore({ http, createTransport: (_id, handlers, fence) => createRemoteTransport({ ...fence, url: relay.href, handlers }), batchMs: 1 })
 Object.assign(window, { activityStore: store })
 window.history.replaceState(null, "", "/remote/sessions")
 const router = createAppRouter({ createRemoteStore: () => store })

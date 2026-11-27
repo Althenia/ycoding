@@ -30,7 +30,7 @@ async function setup(handler?: RelayRequestHandler, sessionGroups?: () => readon
   })
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20 }),
+    createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20 }),
     createSessionID: () => created.id,
   })
   await store.load()

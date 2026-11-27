@@ -12,7 +12,7 @@ import "../src/styles/base.css"
 import "../src/styles/remote.css"
 
 const relay = new URLSearchParams(location.search).get("relay")!
-const store = createRemoteStore({ http: createRemoteHttp(), createTransport: (deviceID, handlers) => createRemoteTransport({ url: `${relay.replace(/^http/, "ws")}${RemoteWebSocketPath.client}?device=${deviceID}`, handlers }), batchMs: 0 })
+const store = createRemoteStore({ http: createRemoteHttp(), createTransport: (deviceID, handlers, fence) => createRemoteTransport({ ...fence, url: `${relay.replace(/^http/, "ws")}${RemoteWebSocketPath.client}?device=${deviceID}`, handlers }), batchMs: 0 })
 await store.load()
 await store.selectSession("ses_a")
 Object.assign(window, { uploadFlowState: store.state, uploadFlowSelect: store.selectSession })

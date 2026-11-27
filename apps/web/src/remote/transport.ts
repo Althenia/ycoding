@@ -42,7 +42,7 @@ export type RemoteRequestOutcome =
   | { readonly status: "unknown"; readonly error: RemoteError }
   | {
       readonly status: "unavailable"
-      readonly reason: "not-connected" | "in-flight-limit" | "request-limit" | "cancelled"
+      readonly reason: "not-connected" | "in-flight-limit" | "request-limit" | "cancelled" | "connection-changed"
     }
 export type RemoteTransportStatus =
   | { readonly kind: "idle" }
@@ -90,8 +90,19 @@ export type RemoteTransport = {
   readonly status: () => RemoteTransportStatus
   readonly setPriority: (mode: "interactive" | "background") => void
 }
+export type RemoteResendRequest = {
+  readonly operation: string
+  readonly sessionID?: string
+  readonly workspaceID?: string
+  readonly issuedRevision: unknown
+}
+export type RemoteTransportFence = Pick<RemoteTransportOptions, "revision" | "admit">
 export type RemoteTransportOptions = {
   readonly url: string
+  /** Revision of the caller's scope, read when a request is first attempted. */
+  readonly revision: () => unknown
+  /** Fence for the one resend of a request that was never written; false means the connection changed. */
+  readonly admit: (request: RemoteResendRequest) => boolean | Promise<boolean>
   readonly handlers?: RemoteTransportHandlers
   readonly createSocket?: (url: string) => WebSocket
   readonly schedule?: (callback: () => void, ms: number) => () => void
@@ -146,6 +157,15 @@ type Owner = {
   remove?: () => void
 }
 
+const neverWritten = new WeakSet<RemoteRequestOutcome>()
+const resendWaitMs = 10_000
+
+function unsentOutcome(): RemoteRequestOutcome {
+  const outcome: RemoteRequestOutcome = { status: "unavailable", reason: "not-connected" }
+  neverWritten.add(outcome)
+  return outcome
+}
+
 export function createRemoteTransport(options: RemoteTransportOptions): RemoteTransport {
   const handlers = options.handlers ?? {}
   const now = options.now ?? (() => performance.now())
@@ -174,10 +194,28 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
       timingWarningReported = true
     }
   }
+  const openWaiters = new Set<(open: boolean) => void>()
   const publish = (status: RemoteTransportStatus) => {
     current = status
     handlers.onStatus?.(status)
+    if (status.kind === "open" || (status.kind === "closed" && !status.retryable))
+      for (const waiter of [...openWaiters]) waiter(status.kind === "open")
   }
+  const untilOpen = (signal?: AbortSignal) =>
+    current.kind === "open"
+      ? Promise.resolve(true)
+      : new Promise<boolean>((resolve) => {
+          const finish = (open: boolean) => {
+            cancelWait()
+            signal?.removeEventListener("abort", giveUp)
+            openWaiters.delete(finish)
+            resolve(open)
+          }
+          const giveUp = () => finish(false)
+          const cancelWait = schedule(giveUp, resendWaitMs)
+          signal?.addEventListener("abort", giveUp, { once: true })
+          openWaiters.add(finish)
+        })
   const currentOwner = (value: Owner) => value.active && owner === value && !closedByUs
   const stopListening = () => {
     visibility?.removeEventListener("visibilitychange", followVisibility)
@@ -195,9 +233,9 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
         entry.sent
           ? {
               status: "unknown",
-              error: { code: "outcome_unknown", message: "The relay connection closed before this request settled" },
+              error: { code: "outcome_unknown", message: "The connection changed after this request was sent. Check the current state before repeating it." },
             }
-          : { status: "unavailable", reason: "not-connected" },
+          : unsentOutcome(),
       )
     }
     value.pending.clear()
@@ -311,7 +349,11 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
         const entry = value.pending.get(decision.requestID)
         if (!entry) continue
         entry.cancel()
-        if (decision.status === "unsent" || decision.status === "unavailable") {
+        if (decision.status === "unsent") {
+          entry.resolve(unsentOutcome())
+          continue
+        }
+        if (decision.status === "unavailable") {
           entry.resolve({ status: "unavailable", reason: "not-connected" })
           continue
         }
@@ -401,7 +443,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
             value.logs.delete(subscriptionID)
             process(value, value.connection.releaseSubscription(subscriptionID, now()))
             if (currentOwner(value) && entry.scope.target.case === "session")
-              void request("event.unsubscribe", {
+              void send("event.unsubscribe", {
                 sessionID: entry.scope.target.value,
                 input: { subscription_id: subscriptionID },
               })
@@ -652,7 +694,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
     }
     tick(value)
   }
-  const request: RemoteTransport["request"] = (requestedOperation, input = {}) => {
+  const send: RemoteTransport["request"] = (requestedOperation, input = {}) => {
     const operation = requestedOperation === "session.message.delete" ? "session.deleteMessage" : requestedOperation
     const value = owner
     const unavailable = (reason: Extract<RemoteRequestOutcome, { status: "unavailable" }>["reason"]) => {
@@ -710,7 +752,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
             value.logs.delete(key)
             process(value, value.connection.releaseSubscription(key, now()))
             if (currentOwner(value) && log.entry.scope.target.case === "session")
-              void request("event.unsubscribe", {
+              void send("event.unsubscribe", {
                 sessionID: log.entry.scope.target.value,
                 input: { subscription_id: key },
               })
@@ -800,6 +842,23 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
       }
       pump(value)
     })
+  }
+  const request: RemoteTransport["request"] = async (operation, input = {}) => {
+    const issuedRevision = options.revision()
+    const issuedEpoch = owner?.sourceEpoch
+    const outcome = await send(operation, input)
+    if (!neverWritten.has(outcome) || input.signal?.aborted) return outcome
+    if (!(await untilOpen(input.signal))) return outcome
+    const admitted =
+      issuedEpoch !== undefined &&
+      owner?.sourceEpoch === issuedEpoch &&
+      (await options.admit({
+        operation,
+        ...(input.sessionID === undefined ? {} : { sessionID: input.sessionID }),
+        ...(input.workspaceID === undefined ? {} : { workspaceID: input.workspaceID }),
+        issuedRevision,
+      }))
+    return admitted ? send(operation, input) : { status: "unavailable", reason: "connection-changed" }
   }
   return {
     connect,

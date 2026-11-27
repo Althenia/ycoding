@@ -3,6 +3,7 @@ import type { StorageLike } from "../src/lib/storage"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
+import { noResend } from "./transport-fence"
 import { startRelayDouble, waitFor } from "./relay-double"
 
 const account = (devices: readonly { id: string; name: string; online?: boolean }[]) => ({
@@ -31,7 +32,7 @@ async function setup(devices: readonly { id: string; name: string; online?: bool
     createRemoteStore({
       http: createRemoteHttp({ baseURL: relay.httpURL }),
       createTransport: (deviceID, handlers) =>
-        createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20 }),
+        createRemoteTransport({ ...noResend, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20 }),
       storage,
       now: () => 1_000,
       createMessageID: () => "msg_local_1",

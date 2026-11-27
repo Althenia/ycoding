@@ -3,6 +3,7 @@ import { createRemoteHttp } from "../src/remote/http"
 import { shellOutputFetchFor, shellOutputFor } from "../src/remote/projection"
 import { createRemoteStore, type RemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
+import { noResend } from "./transport-fence"
 import { startRelayDouble, type RelayDouble, type RelayHandlerResult } from "./relay-double"
 
 type Harness = {
@@ -55,7 +56,7 @@ async function harness(options: { readonly handler?: RequestHandler } = {}): Pro
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
     createTransport: (deviceID, handlers) =>
-      createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule }),
+      createRemoteTransport({ ...noResend, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule }),
     schedule,
     batchMs: 20,
     now: () => 1_000,

@@ -5,6 +5,7 @@ import { officeInputFromRemote } from "../src/remote/office/adapter"
 import { projectOffice } from "../src/remote/office/model"
 import { defaultOfficePreferences } from "../src/remote/office/preferences"
 import { createRemoteTransport } from "../src/remote/transport"
+import { noResend } from "./transport-fence"
 import { pacedFlowTimeoutMs, startRelayDouble, waitFor, type RelayHandlerOutcome, type RelayHandlerResult } from "./relay-double"
 import { createRemoteStoreClock } from "./remote-store-clock"
 import { createRemoteQueries } from "../src/remote/queries"
@@ -24,7 +25,7 @@ async function setup(handler: (operation: string, sessionID?: string, cursor?: u
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
     createTransport: (deviceID, handlers) => {
-      const transport = createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 })
+      const transport = createRemoteTransport({ ...noResend, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 })
       return { ...transport, request: (operation, request) => { sent.push(operation); return transport.request(operation, request) } }
     },
     batchMs: 1,

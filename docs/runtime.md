@@ -446,8 +446,11 @@ backoff without waiting for the old socket's close event. Hidden pages suspend
 the liveness watchdog; returning to the foreground or receiving a network-online
 event probes an open connection or immediately retries a connection in backoff.
 Authentication and ownership closures (`4401` and `4403`) remain terminal. Sent
-requests whose responses were not received have unknown outcomes; unsent requests
-are unavailable, and neither is replayed automatically.
+requests whose responses were not received have unknown outcomes and are never
+replayed. A request the transport proves was never written is sent once more after
+the connection returns, only if the store's fence still accepts it: the same device,
+connection generation and selected Session, and the same backend source epoch.
+Otherwise it settles as "connection changed" and the message names the request.
 
 Settings → Web latency keeps the latest 60 anonymous timing samples in this browser tab's memory. It records the account HTTP read and relay request operation names, fixed outcome categories, local queue/pacing time, and time from a send attempt to final settlement, including chunk assembly or a timeout or disconnect. A locally refused or queued-but-unsent request has no settlement duration. Settlement time includes network, relay, and machine work; it does not isolate model time or prove when a change painted on screen. Browsers that support the Long Tasks API also report main-thread tasks of at least 50 ms by duration only; unsupported browsers mark them unreported. Each row has a local timestamp, but never a Session or device ID, account identity, URL, payload, response contents, raw error, header, or long-task attribution. Copy exports only these samples on an explicit click. Clear empties the tab report, and changing machines, disconnecting, signing out, reloading, or disposing the remote workspace discards it; a same-machine reconnect retains it.
 

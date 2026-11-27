@@ -6,7 +6,7 @@ import { testRender } from "@opentui/solid"
 import { onMount } from "solid-js"
 import { ClientProvider, useClient } from "../../../src/context/client"
 import { useEvent } from "../../../src/context/event"
-import { createApi, createEventStream, createFetch } from "../../fixture/tui-client"
+import { createApi, createEventStream, createFetch, json, type FetchHandler } from "../../fixture/tui-client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import type { LogLevel, LogSink } from "../../../src/context/log"
 
@@ -55,9 +55,10 @@ function update(version: string): YCodingEvent {
 async function mount(
   reconnect?: (signal: AbortSignal) => Promise<{ api: V5Client }>,
   log?: LogSink,
+  handler?: FetchHandler,
 ) {
   const events = createEventStream()
-  const calls = createFetch(undefined, events)
+  const calls = createFetch(handler, events)
   const seen: YCodingEvent[] = []
   const workspaces: Array<string | undefined> = []
   let client!: ReturnType<typeof useClient>
@@ -201,7 +202,7 @@ describe("useEvent", () => {
       replacementEvents.emit(event(vcs("rediscovered"), { directory: "/tmp/rediscovered" }))
       await wait(() => seen.some((item) => item.type === "vcs.branch.updated" && item.data.branch === "rediscovered"))
 
-      expect(client.api).toBe(replacement.api)
+      expect(client.api.transport).toBe(replacement.api.transport)
       expect(attempts).toEqual([1])
       const history = client.connection.internal.history()
       expect(history.map((event) => [event.data.status, event.data.attempt])).toEqual([
@@ -217,6 +218,132 @@ describe("useEvent", () => {
     }
   })
 
+  describe("unsent requests", () => {
+    const sessionID = "ses_unsent"
+    const todoPath = `/api/session/${sessionID}/todo`
+    const outcome = (promise: Promise<unknown>) => promise.then(() => undefined, (error: unknown) => error as Error)
+
+    test("never-sent request with an accepting fence is resent once with a single server effect", async () => {
+      const hits: string[] = []
+      const { app, events, client } = await mount(undefined, undefined, (url) => {
+        if (url.pathname === todoPath) {
+          hits.push(url.pathname)
+          return json({ data: [] })
+        }
+      })
+
+      try {
+        await wait(() => client.connection.status() === "connected")
+        events.disconnect()
+        const todos = await client.api.session.todo.list({ sessionID })
+
+        expect(Array.isArray(todos)).toBe(true)
+        expect(hits).toEqual([todoPath])
+        expect(client.connection.status()).toBe("connected")
+      } finally {
+        app.renderer.destroy()
+      }
+    })
+
+    test("never-sent request is not resent when the source epoch changed and names the request", async () => {
+      const hits: string[] = []
+      const handler: FetchHandler = (url) => {
+        if (url.pathname === todoPath) {
+          hits.push(url.pathname)
+          return json({ data: [] })
+        }
+      }
+      const replacementEvents = createEventStream({ sourceEpoch: "source-2" })
+      const replacement = { api: createApi(createFetch(handler, replacementEvents).fetch) }
+      const { app, events, client } = await mount(async () => replacement, undefined, handler)
+
+      try {
+        await wait(() => client.connection.status() === "connected")
+        events.disconnect()
+        const error = await outcome(client.api.session.todo.list({ sessionID }))
+
+        expect(error).toMatchObject({ status: "unsent", operation: "session.todo.list" })
+        expect(error?.message).toBe(
+          "Request session.todo.list was not sent again because the connection changed. Check the current state, then try again.",
+        )
+        expect(hits).toEqual([])
+      } finally {
+        app.renderer.destroy()
+      }
+    })
+
+    test("uncertain transmission is never resent and reports the changed connection", async () => {
+      const hits: string[] = []
+      const { app, events, client } = await mount(undefined, undefined, (url) => {
+        if (url.pathname !== todoPath) return undefined
+        hits.push(url.pathname)
+        return new Promise<Response>(() => {})
+      })
+
+      try {
+        await wait(() => client.connection.status() === "connected")
+        const pending = outcome(client.api.session.todo.list({ sessionID }))
+        await wait(() => hits.length === 1)
+        events.disconnect()
+        const error = await pending
+        await wait(() => client.connection.status() === "connected", 4000)
+
+        expect(error).toMatchObject({ status: "unknown", operation: "session.todo.list" })
+        expect(error?.message).toContain("connection changed")
+        expect(error?.message).toContain("Request session.todo.list")
+        expect(hits).toEqual([todoPath])
+      } finally {
+        app.renderer.destroy()
+      }
+    })
+
+    test("a transmitted mutation stays unknown and is never resent", async () => {
+      const hits: string[] = []
+      const { app, events, client } = await mount(undefined, undefined, (url, request) => {
+        if (request.method === "GET" || !url.pathname.includes(sessionID)) return undefined
+        hits.push(`${request.method} ${url.pathname}`)
+        return new Promise<Response>(() => {})
+      })
+
+      try {
+        await wait(() => client.connection.status() === "connected")
+        const pending = outcome(client.api.session.rename({ sessionID, title: "held" }))
+        await wait(() => hits.length === 1)
+        events.disconnect()
+        const error = await pending
+        await wait(() => client.connection.status() === "connected", 4000)
+
+        expect(error).toMatchObject({ status: "unknown", operation: "session.rename" })
+        expect(hits).toHaveLength(1)
+      } finally {
+        app.renderer.destroy()
+      }
+    })
+  })
+
+  test("resubscribes in place when the event stream needs a canonical resync", async () => {
+    const attempts: number[] = []
+    const { app, events, client } = await mount(async () => {
+      attempts.push(attempts.length + 1)
+      throw new Error("no server")
+    })
+
+    try {
+      await wait(() => client.connection.status() === "connected")
+      const transport = client.api.transport
+      const epoch = transport.connectionEpoch
+      events.overflow()
+      await wait(() => client.connection.internal.history().some((item) => item.data.error === "Canonical snapshot is required"))
+      await wait(() => client.connection.status() === "connected")
+
+      expect(attempts).toEqual([])
+      expect(client.api.transport).toBe(transport)
+      expect(client.api.transport.connectionEpoch).toBe(epoch)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
   test("keeps the current client when reconnection fails", async () => {
     let calls = 0
     const { app, events, client, seen } = await mount(async () => {
@@ -226,7 +353,7 @@ describe("useEvent", () => {
 
     try {
       await wait(() => client.connection.status() === "connected")
-      const original = client.api
+      const original = client.api.transport
       events.disconnect()
       // Reconnection rejects; the loop retries against the last known transport,
       // which succeeds once the fixture accepts the reconnect.
@@ -234,7 +361,7 @@ describe("useEvent", () => {
       events.emit(event(vcs("recovered"), { directory: "/tmp/recovered" }))
       await wait(() => seen.some((item) => item.type === "vcs.branch.updated" && item.data.branch === "recovered"))
 
-      expect(client.api).toBe(original)
+      expect(client.api.transport).toBe(original)
     } finally {
       app.renderer.destroy()
     }

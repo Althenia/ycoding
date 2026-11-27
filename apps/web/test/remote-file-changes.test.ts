@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore, type RemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
+import { noResend } from "./transport-fence"
 import { startRelayDouble, type RelayDouble, type RelayHandlerResult } from "./relay-double"
 
 type Harness = {
@@ -49,7 +50,7 @@ async function harness(options: {
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
     createTransport: (deviceID, handlers) =>
-      createRemoteTransport({
+      createRemoteTransport({ ...noResend,
         url: relay.wsURL(deviceID),
         handlers,
         resetDelayMs: 10,

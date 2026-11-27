@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createRemoteHttp, type RemoteHttp } from "../src/remote/http"
 import { createRemoteStore, type RemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
+import { noResend } from "./transport-fence"
 import { startRelayDouble, waitFor, type RelayDouble } from "./relay-double"
 
 type Deferred = {
@@ -72,7 +73,7 @@ async function accountHarness(options: {
   const store = createRemoteStore({
     http,
     createTransport: (deviceID, handlers) =>
-      createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20 }),
+      createRemoteTransport({ ...noResend, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20 }),
     batchMs: 20,
   })
   const kinds: string[] = []

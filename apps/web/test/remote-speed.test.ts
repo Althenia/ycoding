@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
+import { noResend } from "./transport-fence"
 import { startRelayDouble, type RelayHandlerResult } from "./relay-double"
 
 type Handler = (request: { readonly operation: string; readonly input?: Readonly<Record<string, unknown>>; readonly sessionID?: string }) => RelayHandlerResult
@@ -39,7 +40,7 @@ async function harness(handler: Handler = () => "default") {
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
     createTransport: (deviceID, handlers) => {
-      const transport = createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule, createSocket: relay.createSocket })
+      const transport = createRemoteTransport({ ...noResend, url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule, createSocket: relay.createSocket })
       return { ...transport, request: (operation, input) => {
         signals.push({ operation, signal: input?.signal })
         return transport.request(operation, input)

@@ -20,7 +20,7 @@ async function harness(handler: RelayRequestHandler = () => "default", clock?: R
     if (request.operation === "session.get") return { ok: true, value: { data: rows.find((item) => item.id === request.sessionID) } }
     return "default"
   } })
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }), batchMs: 1,
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(id), handlers }), batchMs: 1,
     ...(clock === undefined ? {} : { schedule: clock.schedule, monotonicNow: clock.now }) })
   await store.load()
   await waitFor(() => store.state().sessions.length === rows.length && store.state().carouselStatus === "ready")
@@ -158,7 +158,7 @@ test.each(["waiting", "running"] as const)("real connector pages remain complete
     if (request.operation === "session.list") return { ok: true, value: listPage(inventory, parseListQuery({ ...request.input, workspace: undefined }), running, waiting) }
     return "default"
   } })
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }) })
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(id), handlers }) })
   const seen = new Set<string>()
   try {
     await store.load()
@@ -194,7 +194,7 @@ test("status refresh retains a loaded multi-page window instead of collapsing it
     return "default"
   } })
   const clock = createRemoteStoreClock()
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }), schedule: clock.schedule, monotonicNow: clock.now })
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(id), handlers }), schedule: clock.schedule, monotonicNow: clock.now })
   try {
     await store.load()
     await waitFor(() => store.state().sessions.length === 25 && store.state().carouselStatus === "ready")
@@ -221,7 +221,7 @@ test("paged classification keeps waiting-first order when the global status read
     if (request.operation === "session.list") return { ok: true, value: listPage(inventory, parseListQuery({ ...request.input, workspace: undefined }), new Set([inventory[1]!.id]), new Set([inventory[0]!.id])) }
     return "default"
   } })
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }) })
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(id), handlers }) })
   try {
     await store.load()
     await waitFor(() => store.state().carouselStatus === "ready")
@@ -245,7 +245,7 @@ test.each([
     if (request.input?.around !== undefined) return { ok: false, code, message }
     return { ok: true, value: listPage(inventory, parseListQuery({ ...request.input, workspace: undefined }), new Set(), new Set()) }
   } })
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }) })
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers, fence) => createRemoteTransport({ ...fence, url: relay.wsURL(id), handlers }) })
   try {
     await store.load()
     await waitFor(() => store.state().sessions.length === 25 && store.state().carouselStatus === "ready")

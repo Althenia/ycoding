@@ -74,6 +74,7 @@ import { assertRemoteRequestSize, uploadAttachments } from "./attachment-upload"
 import type {
   RemoteRequestOutcome,
   RemoteTransport,
+  RemoteTransportFence,
   RemoteTransportHandlers,
   RemoteTransportStatus,
 } from "./transport"
@@ -266,7 +267,7 @@ export type NoticeSyncState = {
 export type RemoteStoreOptions = {
   readonly http: RemoteHttp
   readonly fetch?: (input: string, init?: RequestInit) => Promise<Response>
-  readonly createTransport: (deviceID: string, handlers: RemoteTransportHandlers) => RemoteTransport
+  readonly createTransport: (deviceID: string, handlers: RemoteTransportHandlers, fence: RemoteTransportFence) => RemoteTransport
   readonly schedule?: (callback: () => void, ms: number) => () => void
   readonly now?: () => number
   readonly monotonicNow?: () => number
@@ -3415,6 +3416,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         onReconnect: () => {
           if (!isCurrentConnection(created)) return
           void reloadAfterReconnect(created)
+        },
+      }, {
+        revision: () => ({ deviceID: container.state.activeDeviceID, generation: container.state.generation, sessionID: container.state.activeSessionID }),
+        admit: (request) => {
+          const issued = request.issuedRevision as { readonly deviceID?: string; readonly generation: number; readonly sessionID?: string }
+          return isCurrentConnection(created) && created.status().kind === "open" && container.state.activeDeviceID === issued.deviceID &&
+            container.state.generation === issued.generation && container.state.activeSessionID === issued.sessionID
         },
       })
       transport = created
