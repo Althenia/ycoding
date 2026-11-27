@@ -7,6 +7,7 @@ pub mod dots;
 pub mod event_feed;
 pub mod extension;
 pub mod generation_activity;
+pub mod harness;
 pub mod instructions;
 pub mod job;
 pub mod mcp_events;
