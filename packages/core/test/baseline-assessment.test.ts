@@ -1,5 +1,4 @@
-import { describe, expect, test } from "bun:test"
-import { Guardrail } from "@ycoding-ai/schema/guardrail"
+import { describe, expect } from "bun:test"
 import { Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
 import { eq } from "drizzle-orm"
 import { Agent } from "@ycoding-ai/core/agent"
@@ -16,7 +15,6 @@ import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
-import { SessionAssessment } from "@ycoding-ai/core/session/assessment"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionReviewFold } from "@ycoding-ai/core/session/review-fold"
 import { SessionStore } from "@ycoding-ai/core/session/store"
@@ -29,8 +27,6 @@ const current = Layer.succeed(
   Location.Service,
   Location.Service.of(location({ directory: AbsolutePath.make("/project") })),
 )
-
-type Scores = Record<string, number>
 
 interface Behavior {
   readonly config?: boolean
@@ -303,46 +299,4 @@ describe("YOLO permissions do not invoke a decision model", () => {
       expect(changed.calls).toEqual([])
     }),
   )
-})
-
-describe("assessment grade interpretation", () => {
-  const grades = (scores: Scores) => ({
-    type: "grades" as const,
-    grades: Object.entries(scores).map(([choice, confidence]) => ({
-      choice: choice as Guardrail.DecisionChoice,
-      confidence,
-      evidence: "Bounded evidence",
-    })),
-  })
-  const baseline = SessionAssessment.policy("baseline", true)
-
-  test("settles only on exact choice IDs at their thresholds", () => {
-    expect(SessionAssessment.interpret(grades({ allow: 0.8, deny: 0, escalate: 0 }), baseline).type).toBe("approve")
-    expect(SessionAssessment.interpret(grades({ allow: 0.79, deny: 0, escalate: 0 }), baseline)).toMatchObject({ type: "escalate", provenance: { reason: "low_confidence" } })
-    expect(SessionAssessment.interpret(grades({ allow: 0, deny: 0.8, escalate: 0 }), baseline).type).toBe("deny")
-    expect(SessionAssessment.interpret(grades({ approve: 1, reject: 0, escalate: 0 }), baseline)).toMatchObject({ type: "escalate", provenance: { reason: "invalid-output" } })
-    expect(SessionAssessment.interpret(grades({ allow: 1, deny: 0 }), baseline)).toMatchObject({ type: "escalate", provenance: { reason: "invalid-output" } })
-    expect(SessionAssessment.interpret(grades({ allow: 1, deny: 0, escalate: 0, approve: 0 }), baseline)).toMatchObject({ type: "escalate", provenance: { reason: "invalid-output" } })
-  })
-
-  test("escalates a model escalation tie, a conflict, and any allow that cannot be granted", () => {
-    expect(SessionAssessment.interpret(grades({ allow: 0.9, deny: 0, escalate: 0.9 }), baseline)).toMatchObject({ type: "escalate", provenance: { reason: "escalated", choice: "escalate" } })
-    expect(SessionAssessment.interpret(grades({ allow: 0.9, deny: 0.85, escalate: 0 }), baseline)).toMatchObject({ type: "escalate", provenance: { reason: "conflicting_grades", choice: "allow" } })
-    expect(SessionAssessment.interpret(grades({ allow: 0.99, deny: 0, escalate: 0 }), SessionAssessment.policy("baseline", false))).toMatchObject({
-      type: "escalate",
-      provenance: { authority: "baseline", reason: "escalated", choice: "allow" },
-    })
-    expect(SessionAssessment.interpret(grades({ allow: 0.2, deny: 0.8, escalate: 0 }), SessionAssessment.policy("baseline", false)).type).toBe("deny")
-  })
-
-  test("applies the same exact vocabulary and once-only approval to YOLO", () => {
-    const yolo = SessionAssessment.policy("yolo", true)
-    expect(SessionAssessment.choices(yolo)).toEqual(["allow", "deny", "escalate"])
-    expect(SessionAssessment.interpret(grades({ allow: 0.8, deny: 0, escalate: 0 }), yolo)).toMatchObject({ type: "approve", reply: "once", provenance: { authority: "yolo" } })
-    expect(SessionAssessment.interpret(grades({ approve_all: 0.9, approve: 0.9, reject: 0, escalate: 0 }), yolo)).toMatchObject({ type: "escalate", provenance: { reason: "invalid-output" } })
-    expect(SessionAssessment.interpret({ type: "unsettled", reason: "timeout" }, yolo)).toEqual({
-      type: "escalate",
-      provenance: { authority: "yolo", reason: "timeout" },
-    })
-  })
 })

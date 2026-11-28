@@ -767,6 +767,7 @@ async fn qualifying_grades_settle_with_the_highest_confidence_choice_and_full_pr
     let cancellation = Cancellation::default();
     let fake = Fake::with(vec![
         grades(0.85, 0.1, 0.1),
+        grades(0.8, 0.0, 0.0),
         grades(0.1, 0.9, 0.1),
         grades(0.1, 0.8, 0.2),
     ]);
@@ -780,6 +781,9 @@ async fn qualifying_grades_settle_with_the_highest_confidence_choice_and_full_pr
     assert_eq!(provenance.choice, Some(guardrail::DecisionChoice::Allow));
     assert_eq!(provenance.confidence, Some(confidence(0.85)));
     assert_eq!(provenance.grades.as_ref().unwrap().len(), 3);
+
+    let threshold = grade(&enabled, &ordinary(), true, false, false, &cancellation).await;
+    assert_eq!(settled(&threshold).0, guardrail::Reply::Once);
 
     let denied = grade(&enabled, &ordinary(), true, false, false, &cancellation).await;
     let (reply, provenance) = settled(&denied);
@@ -843,6 +847,11 @@ async fn unqualified_tied_or_conflicting_grades_escalate_with_their_provenance()
             session_review::Reason::LowConfidence,
             guardrail::DecisionChoice::Allow,
         ),
+        (
+            grades(0.79, 0.0, 0.0),
+            session_review::Reason::LowConfidence,
+            guardrail::DecisionChoice::Allow,
+        ),
     ] {
         let fake = Fake::with(vec![reply]);
         let grading = grade(
@@ -875,6 +884,15 @@ async fn refusal_invalid_grades_and_deadline_escalate_without_grades() {
                 ("approve", 0.9, "Scoped"),
                 ("deny", 0.1, "No"),
                 ("escalate", 0.1, "Clear"),
+            ]),
+            session_review::Reason::InvalidOutput,
+        ),
+        (
+            graded(&[
+                ("allow", 1.0, "Scoped"),
+                ("deny", 0.0, "No"),
+                ("escalate", 0.0, "Clear"),
+                ("approve", 0.0, "Extra"),
             ]),
             session_review::Reason::InvalidOutput,
         ),
