@@ -140,7 +140,7 @@ impl Tool for Question {
                         ),
                     ));
                 }
-                _ => return Err(Failure::Defect("The user dismissed this question".into())),
+                _ => return Err(Failure::Defect("The question was dismissed.".into())),
             };
             let settlement = settlement()?;
             let automatic = settlement.automatic.is_some();

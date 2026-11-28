@@ -882,7 +882,7 @@ impl Service {
         let row = self.owned(parent_id, child_id)?;
         if review_fold::stopped_recovery(&self.sessions.client.snapshot()?, child_id)?.is_some() {
             return Err(Error::Conflict(
-                "A stopped recovery requires a human Continue decision".into(),
+                "Continue the stopped recovery through its native control.".into(),
             ));
         }
         let state = state_of(&row);
@@ -977,7 +977,7 @@ impl Service {
                 let snapshot = self.sessions.client.snapshot()?;
                 if review_fold::owns_question(&snapshot, child_id, question_id)? {
                     return Err(Error::Conflict(format!(
-                        "Question {} awaits the user's review",
+                        "Question {} awaits review",
                         text_of(&question_id.0)
                     )));
                 }
@@ -1067,7 +1067,7 @@ impl Service {
                 let snapshot = self.sessions.client.snapshot()?;
                 if review_fold::owns_question(&snapshot, child_id, question_id)? {
                     return Err(Error::Conflict(format!(
-                        "Question {} awaits the user's review",
+                        "Question {} awaits review",
                         text_of(&question_id.0)
                     )));
                 }
@@ -1904,7 +1904,7 @@ impl Service {
             let reviews = self
                 .reviews
                 .as_ref()
-                .ok_or_else(|| Error::Conflict("The user's review box is unavailable".into()))?;
+                .ok_or_else(|| Error::Conflict("The review box is unavailable".into()))?;
             reviews
                 .service
                 .open(crate::session::review::OpenInput {

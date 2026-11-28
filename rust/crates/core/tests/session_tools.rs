@@ -1262,6 +1262,31 @@ async fn human_question_waits_for_real_reply_and_cancellation_cleans_form() {
     cancelled.cancel();
     assert!(within(task).await.unwrap().is_err());
     assert_eq!(forms.state(&form.id).unwrap(), form::State::Cancelled);
+    let registry = h.registry.clone();
+    let context = h.context();
+    let task = tokio::spawn(async move {
+        registry
+            .materialize(&[])
+            .invoke(
+                "question",
+                parse_json(
+                    r#"{"questions":[{"header":"Review","question":"Continue?","options":[]}]}"#,
+                )
+                .unwrap(),
+                context,
+            )
+            .await
+    });
+    within(created.notified()).await;
+    let form = forms.list(None).pop().unwrap();
+    forms.cancel(&form.id).unwrap();
+    let error = within(task).await.unwrap().unwrap_err();
+    assert!(matches!(
+        error,
+        ycoding_core::tools::materialization::Error::Execution(
+            ycoding_core::tools::registry::Failure::Defect(message)
+        ) if message == "The question was dismissed."
+    ));
     drop(registered);
     h.close().await;
 }

@@ -856,7 +856,10 @@ async fn stop_loses_the_child_and_only_one_later_human_continue_restarts_it() {
             "steer",
         )
         .await;
-    assert!(sent.is_err(), "the parent restarted a user-stopped child");
+    assert_eq!(
+        sent.unwrap_err().to_string(),
+        "Continue the stopped recovery through its native control."
+    );
     assert!(harness.sessions.pending_list(&child).unwrap().is_empty());
     assert_eq!(recover(&harness).await, 0);
     assert!(harness.recorder.woken().is_empty() && harness.recorder.resumed().is_empty());

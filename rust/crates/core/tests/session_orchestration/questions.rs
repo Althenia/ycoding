@@ -585,24 +585,42 @@ async fn review_owned_questions_stay_waiting_and_reject_parent_answers() {
         })
         .await
         .unwrap();
+    let error = harness
+        .service
+        .answer(
+            &id("ses_one"),
+            &child,
+            &asked.question.id,
+            Some("parent"),
+            None,
+        )
+        .await
+        .unwrap_err();
     assert!(matches!(
-        harness
-            .service
-            .answer(
-                &id("ses_one"),
-                &child,
-                &asked.question.id,
-                Some("parent"),
-                None
-            )
-            .await,
-        Err(Error::Conflict(_))
+        error,
+        Error::Conflict(message) if message == format!("Question {} awaits review", asked.question.id.0.as_str().unwrap())
     ));
     assert_eq!(
         harness.service.get(&id("ses_one"), &child).unwrap().state,
         State::Waiting
     );
     assert_eq!(harness.sessions.pending_list(&child).unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_deferred_child_question_reports_an_unavailable_review_box() {
+    let harness = harness();
+    let child = launched(&harness, "review-unavailable").await;
+    sleep(&harness, &child, false).await;
+    let error = harness
+        .service
+        .question(&child, "Which?", None)
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        matches!(error, Error::Conflict(message) if message == "The review box is unavailable")
+    );
 }
 
 #[tokio::test]
