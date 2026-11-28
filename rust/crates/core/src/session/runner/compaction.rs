@@ -18,7 +18,7 @@ use ycoding_schema::{
 };
 use ycoding_store::{
     IndexOrder,
-    session::{ContextStateTable, Job, NewEvent},
+    session::{ContextStateTable, Job, MessageTable, NewEvent, RevisionTable},
 };
 
 const MAXIMUM_GATE_ADMISSIONS: u8 = 2;
@@ -81,7 +81,11 @@ impl Local {
         let (provider_input, provider_total) = if estimate < raw {
             (None, None)
         } else {
-            latest_provider_totals(input.history)
+            latest_provider_totals(
+                &services.store.client.snapshot()?,
+                &input.session.id,
+                input.history,
+            )?
         };
         let pressure = estimate
             .max(provider_input.unwrap_or(0))
@@ -164,9 +168,37 @@ impl Local {
         if *input.admissions >= MAXIMUM_GATE_ADMISSIONS {
             return blocked();
         }
-        let Some((boundary, seq)) = self.latest_complete_boundary(&input.session.id)? else {
+        let Some(latest) = self.latest_complete_boundary(&input.session.id)? else {
             return blocked();
         };
+        let mut boundary = latest.clone();
+        if let Some(user) = input
+            .history
+            .iter()
+            .rev()
+            .find_map(|message| match message {
+                session_message::Info::User(user) => Some(user),
+                _ => None,
+            })
+        {
+            let snapshot = services.store.client.snapshot()?;
+            if let Some(row) =
+                snapshot.get::<MessageTable>(&crate::session::key(user.id.as_lossless()))?
+                && let Some(earlier) =
+                    self.latest_complete_boundary_before(&input.session.id, row.seq)?
+            {
+                let history = services
+                    .store
+                    .model_history(&input.session.id)?
+                    .into_iter()
+                    .filter(|entry| entry.seq <= earlier.1)
+                    .map(|entry| entry.message)
+                    .collect::<Vec<_>>();
+                if compaction_gate::can_reduce(input.request, &history, cap) {
+                    boundary = earlier;
+                }
+            }
+        }
         let Some(revision) = services
             .store
             .client
@@ -182,15 +214,15 @@ impl Local {
             return Ok(Gate::Restart);
         }
         let target = compaction_gate::target_input_tokens(input.context_window, policy).min(cap);
-        if !compaction_gate::can_reduce(input.request, input.history, target) {
+        if !compaction_gate::can_reduce(input.request, input.history, cap) {
             return blocked();
         }
-        let admission = || compaction_job::AdmitInput {
+        let admission = |(boundary, seq): &(session_message::Id, i64)| compaction_job::AdmitInput {
             id: None,
             session: input.session.id.clone(),
             trigger: session_compaction::Trigger::Mandatory,
             requested_through_message: boundary.clone(),
-            requested_through_seq: seq,
+            requested_through_seq: *seq,
             base_context_revision: revision,
             target_max_input_tokens: target,
             config_digest: crate::session::compaction_policy::admission_digest(policy),
@@ -200,14 +232,57 @@ impl Local {
             }),
         };
         let now = services.clock.now();
+        if boundary != latest {
+            for message in input.history {
+                if let session_message::Info::Compaction(session_message::Compaction::Failed(
+                    failed,
+                )) = message
+                    && matches!(
+                        failed.code,
+                        session_compaction::FailureCode::ContextLimitUnresolved
+                            | session_compaction::FailureCode::InvalidManifest
+                    )
+                    && let Some(job) = services.store.compaction_job(&failed.job_id)?
+                    && job.base_context_revision == revision
+                    && job.requested_through_seq == boundary.1
+                    && job.requested_through_message_id == *boundary.0.as_lossless()
+                    && let Some(marker) =
+                        services.store.client.snapshot()?.get::<MessageTable>(
+                            &crate::session::key(failed.base.id.as_lossless()),
+                        )?
+                    && (marker.seq < latest.1
+                        || input.history.iter().any(|message| {
+                            matches!(message, session_message::Info::Assistant(assistant)
+                                if assistant.id == latest.0 && assistant.time.completed.is_some())
+                        }))
+                {
+                    boundary = latest.clone();
+                    break;
+                }
+            }
+        }
         if services
             .store
-            .compaction_has_unchanged_deterministic_failure(admission())
+            .compaction_has_unchanged_deterministic_failure(admission(&boundary))
             .await?
         {
-            return blocked();
+            if *input.admissions > 0 || boundary == latest {
+                return blocked();
+            }
+            boundary = latest;
+            if services
+                .store
+                .compaction_has_unchanged_deterministic_failure(admission(&boundary))
+                .await?
+            {
+                return blocked();
+            }
         }
-        let admitted = match services.store.compaction_admit(admission(), now).await {
+        let admitted = match services
+            .store
+            .compaction_admit(admission(&boundary), now)
+            .await
+        {
             Ok(job) => job,
             Err(compaction_job::CompactionError::Store(failure)) => return Err(failure.into()),
             Err(_) => return blocked(),
@@ -444,6 +519,20 @@ impl Local {
         prompt: String,
         attribution: Attribution,
     ) -> Option<String> {
+        let mut request = llm::Request::new(helper.model.clone());
+        request.system = vec![SUMMARY_TEMPLATE.into()];
+        request.messages = vec![llm::Message::user(prompt.as_str())];
+        request.generation.max_tokens = request.model.defaults.output_limit;
+        let capabilities = Capabilities {
+            context_window_tokens: helper.context_window,
+            max_output_tokens: request.generation.max_tokens.unwrap_or(0.0) as i64,
+            context_safety_margin_tokens: self.0.services.compaction.context_safety_margin_tokens,
+        };
+        if compaction_gate::estimated_provider_input_tokens(&request)
+            >= context_pressure::hard_input_cap_tokens(&capabilities)
+        {
+            return None;
+        }
         let streamed = self
             .stream_helper(StreamInput {
                 helper,
@@ -466,6 +555,22 @@ impl Local {
         &self,
         id: &session::Id,
     ) -> Result<Option<(session_message::Id, i64)>, Error> {
+        self.complete_boundary(id, Bound::Unbounded)
+    }
+
+    fn latest_complete_boundary_before(
+        &self,
+        id: &session::Id,
+        seq: i64,
+    ) -> Result<Option<(session_message::Id, i64)>, Error> {
+        self.complete_boundary(id, Bound::Excluded(seq))
+    }
+
+    fn complete_boundary(
+        &self,
+        id: &session::Id,
+        upper: Bound<i64>,
+    ) -> Result<Option<(session_message::Id, i64)>, Error> {
         let snapshot = self.0.services.store.client.snapshot()?;
         let mut after = None;
         loop {
@@ -473,7 +578,7 @@ impl Local {
                 &snapshot,
                 id.as_lossless(),
                 Bound::Unbounded,
-                Bound::Unbounded,
+                upper,
                 IndexOrder::Descending,
                 after.as_ref(),
                 128,
@@ -515,18 +620,44 @@ fn complete(row: &ycoding_store::session::Message) -> bool {
     }
 }
 
-fn latest_provider_totals(history: &[session_message::Info]) -> (Option<i64>, Option<i64>) {
-    let Some(tokens) = history.iter().rev().find_map(|message| match message {
-        session_message::Info::Assistant(assistant) => assistant.tokens.as_ref(),
+fn latest_provider_totals(
+    snapshot: &ycoding_store::Snapshot,
+    session: &session::Id,
+    history: &[session_message::Info],
+) -> Result<(Option<i64>, Option<i64>), ycoding_store::Error> {
+    let Some(assistant) = history.iter().rev().find_map(|message| match message {
+        session_message::Info::Assistant(assistant) if assistant.tokens.is_some() => {
+            Some(assistant)
+        }
         _ => None,
     }) else {
-        return (None, None);
+        return Ok((None, None));
     };
+    let state = snapshot
+        .get::<ContextStateTable>(&crate::session::key(session.as_lossless()))?
+        .filter(|state| state.status.as_str() == Some("active"));
+    if let Some(state) = state {
+        let activation = snapshot
+            .get::<RevisionTable>(&ycoding_store::tuple_key(&[
+                ycoding_store::KeyPart::String(session.as_lossless()),
+                ycoding_store::KeyPart::I64(state.revision),
+            ]))?
+            .and_then(|revision| revision.activation_sequence)
+            .or(state.covered_through_seq);
+        if let Some(activation) = activation {
+            let row =
+                snapshot.get::<MessageTable>(&crate::session::key(assistant.id.as_lossless()))?;
+            if row.is_none_or(|row| row.seq <= activation) {
+                return Ok((None, None));
+            }
+        }
+    }
+    let tokens = assistant.tokens.as_ref().expect("assistant has tokens");
     let input = tokens.input.get() + tokens.cache.read.get() + tokens.cache.write.get();
-    (
+    Ok((
         Some(input as i64),
         Some((input + tokens.output.get() + tokens.reasoning.get()) as i64),
-    )
+    ))
 }
 
 fn budget_error(pressure: i64, cap: i64) -> Error {

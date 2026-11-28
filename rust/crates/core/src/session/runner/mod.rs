@@ -1119,7 +1119,6 @@ impl Local {
         let mut recovery_used = false;
         let mut continuation = false;
         let mut gate_admissions = 0u8;
-        let mut gate_rounds = 0u8;
         let mut overflow = None;
         let mut auth_refreshed = false;
         let mut restart: Option<Restart> = None;
@@ -2136,14 +2135,16 @@ impl Local {
                         request: &prepared,
                         history: &loaded,
                         output_limit: resolved.info.limit.output.get(),
-                        force: overflow == Some(Overflow::Pending) && gate_rounds == 0,
+                        force: overflow == Some(Overflow::Pending),
                         admissions: &mut gate_admissions,
                     })
                     .await?;
                 match gate {
                     compaction::Gate::Proceed => (),
                     compaction::Gate::Restart => {
-                        gate_rounds += 1;
+                        if overflow == Some(Overflow::Pending) {
+                            overflow = Some(Overflow::Used);
+                        }
                         force = true;
                         continue;
                     }
@@ -2518,14 +2519,7 @@ impl Local {
                     let overflowed = work.overflow.load(std::sync::atomic::Ordering::Relaxed);
                     if overflowed
                         && overflow.is_none()
-                        && compaction_gate::can_reduce(
-                            &prepared,
-                            &loaded,
-                            compaction_gate::target_input_tokens(
-                                context_window,
-                                &services.compaction,
-                            ),
-                        )
+                        && compaction_gate::can_reduce(&prepared, &loaded, input_cap)
                     {
                         overflow = Some(Overflow::Pending);
                         restart = Some(Restart {
@@ -2741,7 +2735,6 @@ impl Local {
             prior_route_usage = AttemptUsage::default();
             step += 1;
             gate_admissions = 0;
-            gate_rounds = 0;
             overflow = None;
             auth_refreshed = false;
             let verdict = react::evaluate(

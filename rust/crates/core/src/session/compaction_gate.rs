@@ -39,22 +39,23 @@ pub fn can_reduce(
     history: &[session_message::Info],
     target_max_input_tokens: i64,
 ) -> bool {
-    let last_user = history
-        .iter()
-        .rev()
-        .filter_map(|message| match message {
-            session_message::Info::User(user) => Some(user),
-            _ => None,
-        })
-        .next();
-    let Some(last_user) = last_user else {
-        return false;
-    };
+    let (last_user, completed_after_user) = history.iter().fold(
+        (None, false),
+        |(last_user, completed), message| match message {
+            session_message::Info::User(user) => (Some(user), false),
+            session_message::Info::Assistant(assistant) if assistant.time.completed.is_some() => {
+                (last_user, true)
+            }
+            _ => (last_user, completed),
+        },
+    );
     let removable = history
         .iter()
         .filter_map(|message| match message {
             session_message::Info::User(user)
-                if user.id != last_user.id && user.time.consumed.is_some() =>
+                if last_user
+                    .is_some_and(|last_user| user.id != last_user.id || completed_after_user)
+                    && user.time.consumed.is_some() =>
             {
                 Some(message_name(&user.id))
             }
@@ -67,15 +68,24 @@ pub fn can_reduce(
     if removable.is_empty() {
         return false;
     }
+    let mut removed_assistant = false;
     let reduced = llm::Request {
         messages: request
             .messages
             .iter()
             .filter(|message| {
+                if message.role == llm::Role::Tool && message.id.is_none() {
+                    return message.volatile || !removed_assistant;
+                }
+                removed_assistant = message.role == llm::Role::Assistant
+                    && !message.volatile
+                    && message.id.as_ref().is_some_and(|id| {
+                        removable.contains(id.to_utf8().unwrap_or_default().as_str())
+                    });
                 message.role == llm::Role::System
                     || message.volatile
                     || match &message.id {
-                        None => message.role != llm::Role::Tool,
+                        None => true,
                         Some(id) => !removable.contains(id.to_utf8().unwrap_or_default().as_str()),
                     }
             })

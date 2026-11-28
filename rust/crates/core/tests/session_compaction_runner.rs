@@ -897,7 +897,7 @@ async fn current_input_skill_is_reactivated_after_completed_compaction_before_re
         &parse_json(r#"{"id":"audit","name":"Audit","location":"/skills/audit/SKILL.md","content":"REQUIRED-AUDIT-INSTRUCTIONS"}"#).unwrap(),
     )
     .unwrap();
-    let (endpoint, mut requests, server) = server(vec![helper_reply(6), sse("Answer")]).await;
+    let (endpoint, mut requests, server) = server(vec![helper_reply(2), sse("Answer")]).await;
     let coordinator = Coordinator::new(Arc::new(local_with_skill_resolver(
         &store,
         &endpoint,
@@ -910,6 +910,7 @@ async fn current_input_skill_is_reactivated_after_completed_compaction_before_re
     let step = ycoding_schema::stringify_json(&within(requests.recv()).await.unwrap());
     within(server).await.unwrap();
     assert!(helper.contains("Output exactly one TOON document"));
+    assert!(helper.contains("up to and including 2"));
     assert!(step.contains("REQUIRED-AUDIT-INSTRUCTIONS"));
     let recorded = events(&store);
     assert_eq!(count(&recorded, "session.compaction.ended.2"), 1);
@@ -939,7 +940,7 @@ async fn a_request_over_the_limit_is_compacted_through_a_hidden_helper_before_th
         ),
     );
     admit(&service, "Answer the prompt").await;
-    let (endpoint, mut requests, server) = server(vec![helper_reply(6), sse("Answer")]).await;
+    let (endpoint, mut requests, server) = server(vec![helper_reply(2), sse("Answer")]).await;
     let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
     within(coordinator.run(&session::Id::new("ses_one").unwrap()))
         .await
@@ -949,7 +950,7 @@ async fn a_request_over_the_limit_is_compacted_through_a_hidden_helper_before_th
     let step = ycoding_schema::stringify_json(&step_value);
     within(server).await.unwrap();
     assert!(helper.contains("Output exactly one TOON document"));
-    assert!(helper.contains("up to and including 6"));
+    assert!(helper.contains("up to and including 2"));
     assert!(!helper.contains("\"tools\""));
     assert!(step.contains("<conversation-checkpoint>"));
     assert!(step.contains("HELPER-OBJECTIVE-1"));
@@ -1286,6 +1287,166 @@ async fn a_request_with_no_reducible_history_fails_the_step_before_any_provider_
     coordinator.shutdown().await.unwrap();
 }
 
+#[tokio::test]
+async fn over_cap_history_compacts_even_when_current_input_exceeds_the_advisory_target() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(&store, "earlier answer detail. ".repeat(1_200));
+    let input = "x".repeat(6_000);
+    admit(&service, &input).await;
+    let (endpoint, mut requests, server) = server(vec![helper_reply(2), sse("Answer")]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
+    let id = session::Id::new("ses_one").unwrap();
+    within(coordinator.run(&id)).await.unwrap();
+    let helper = text_of(within(requests.recv()).await.unwrap());
+    let step = text_of(within(requests.recv()).await.unwrap());
+    within(server).await.unwrap();
+    assert!(helper.contains("Output exactly one TOON document"));
+    assert!(helper.len() < (6_000 - 1_000 - 100) * 4);
+    assert!(step.contains("<conversation-checkpoint>"));
+    assert!(step.contains(&input));
+    assert_eq!(count(&events(&store), "session.compaction.ended.2"), 1);
+    assert_eq!(count(&events(&store), "session.step.ended.1"), 1);
+    assert_eq!(service.get(&id).unwrap().unwrap().id, id);
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_long_single_turn_continues_after_an_earlier_checkpoint() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(&store, "earlier answer detail. ".repeat(1_200));
+    let (endpoint, _requests, helper_server) = server(vec![helper_reply(2)]).await;
+    let id = session::Id::new("ses_one").unwrap();
+    let mut configured = services(&store, &endpoint, Default::default(), None);
+    configured.compaction.keep_recent_messages = 0;
+    let job = within(Local::new(configured).compact(&id, None))
+        .await
+        .unwrap();
+    assert_eq!(job.status.as_str(), Some("ended"));
+    within(helper_server).await.unwrap();
+    let seq = store.submit(|tx| {
+        let key = ycoding_store::tuple_key(&[ycoding_store::KeyPart::String(&"ses_one".into())]);
+        let mut sequence = tx.get::<SequenceTable>(&key)?.unwrap();
+        sequence.seq += 1;
+        MessageTable::insert(tx, &Message {
+            id: "msg_tail".into(), session_id: "ses_one".into(), type_: "assistant".into(),
+            seq: sequence.seq, time_created: 4, time_updated: 4,
+            data: parse_json(&format!(r#"{{"agent":"build","model":{{"providerID":"openai","id":"gpt-reasoning"}},"content":[{{"type":"text","text":{}}}],"finish":"stop","time":{{"created":4,"completed":4}}}}"#,
+                text_of(JsonValue::String("long autonomous output. ".repeat(1_200).as_str().into())))).unwrap(),
+        })?;
+        SequenceTable::put(tx, &sequence)?;
+        Ok(sequence.seq)
+    }).unwrap().wait().unwrap();
+    assert!(
+        !service
+            .model_history(&id)
+            .unwrap()
+            .iter()
+            .any(|entry| matches!(entry.message, session_message::Info::User(_)))
+    );
+    let (endpoint, mut requests, server) = server(vec![helper_reply(seq), sse("Answer")]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
+    within(coordinator.run(&id)).await.unwrap();
+    let helper = text_of(within(requests.recv()).await.unwrap());
+    let resumed = text_of(within(requests.recv()).await.unwrap());
+    within(server).await.unwrap();
+    assert!(helper.contains("Output exactly one TOON document"));
+    assert!(resumed.contains("<conversation-checkpoint>"));
+    assert!(!resumed.contains(&"long autonomous output. ".repeat(60)));
+    assert_eq!(count(&events(&store), "session.compaction.ended.2"), 2);
+    assert_eq!(service.get(&id).unwrap().unwrap().id, id);
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_completed_step_can_compact_the_current_turns_large_input() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(&store, "Completed step".into());
+    store
+        .submit(|tx| {
+            let key =
+                ycoding_store::tuple_key(&[ycoding_store::KeyPart::String(&"msg_old_user".into())]);
+            let mut row = tx.get::<MessageTable>(&key)?.unwrap();
+            row.data = parse_json(&format!(
+                r#"{{"text":{},"time":{{"created":1,"consumed":1}}}}"#,
+                text_of(JsonValue::String(
+                    "long current input. ".repeat(1_500).as_str().into()
+                ))
+            ))
+            .unwrap();
+            MessageTable::put(tx, &row)
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    let (endpoint, mut requests, server) = server(vec![helper_reply(2), sse("Answer")]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
+    let id = session::Id::new("ses_one").unwrap();
+    within(coordinator.run(&id)).await.unwrap();
+    let helper = text_of(within(requests.recv()).await.unwrap());
+    let resumed = text_of(within(requests.recv()).await.unwrap());
+    within(server).await.unwrap();
+    assert!(helper.contains("Output exactly one TOON document"));
+    assert!(resumed.contains("<conversation-checkpoint>"));
+    assert!(!resumed.contains(&"long current input. ".repeat(60)));
+    assert_eq!(count(&events(&store), "session.compaction.ended.2"), 1);
+    assert_eq!(service.get(&id).unwrap().unwrap().id, id);
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn stale_usage_from_a_retained_pre_compaction_assistant_does_not_block_a_small_request() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(&store, "short answer".into());
+    store.submit(|tx| {
+        for (id, data) in [
+            ("msg_old_user", parse_json(&format!(r#"{{"text":{},"time":{{"created":1,"consumed":1}}}}"#, text_of(JsonValue::String("earlier question. ".repeat(1_200).as_str().into())))).unwrap()),
+            ("msg_old_assistant", parse_json(r#"{"agent":"build","model":{"providerID":"openai","id":"gpt-reasoning"},"content":[{"type":"text","text":"short answer"}],"finish":"stop","time":{"created":2,"completed":2},"tokens":{"input":8000,"output":20,"reasoning":0,"cache":{"read":0,"write":0}}}"#).unwrap()),
+        ] {
+            let key = ycoding_store::tuple_key(&[ycoding_store::KeyPart::String(&id.into())]);
+            let mut row = tx.get::<MessageTable>(&key)?.unwrap();
+            row.data = data;
+            MessageTable::put(tx, &row)?;
+        }
+        Ok(())
+    }).unwrap().wait().unwrap();
+    service
+        .compaction_admit(
+            AdmitInput {
+                trigger: session_compaction::Trigger::Consider,
+                ..through("msg_old_user", 1)
+            },
+            1,
+        )
+        .await
+        .unwrap();
+    let (endpoint, _requests, helper_server) = server(vec![helper_reply(1)]).await;
+    let mut configured = services(&store, &endpoint, Default::default(), None);
+    configured.compaction.keep_recent_messages = 0;
+    let id = session::Id::new("ses_one").unwrap();
+    let job = within(Local::new(configured).compact(&id, None))
+        .await
+        .unwrap();
+    assert_eq!(job.status.as_str(), Some("ended"));
+    within(helper_server).await.unwrap();
+    assert!(service.model_history(&id).unwrap().iter().any(|entry| matches!(&entry.message, session_message::Info::Assistant(item) if item.tokens.as_ref().is_some_and(|tokens| tokens.input.get() == 8000.0))));
+    let (endpoint, mut requests, server) = server(vec![sse("Answer")]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
+    within(coordinator.run(&id)).await.unwrap();
+    let resumed = text_of(within(requests.recv()).await.unwrap());
+    within(server).await.unwrap();
+    assert!(resumed.contains("short answer"));
+    assert_eq!(count(&events(&store), "session.compaction.admitted.2"), 1);
+    coordinator.shutdown().await.unwrap();
+}
+
 fn assert_context_limit_failure(store: &ycoding_store::Store) {
     let recorded = events(store);
     assert_eq!(count(&recorded, "session.step.started.1"), 1);
@@ -1397,6 +1558,102 @@ fn text_of(value: JsonValue) -> String {
 }
 
 #[tokio::test]
+async fn provider_overflow_compacts_when_current_input_exceeds_the_advisory_target() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(&store, "earlier answer detail. ".repeat(70));
+    let input = "x".repeat(6_000);
+    admit(&service, &input).await;
+    let (endpoint, mut requests, server) = scripted(vec![
+        overflow(),
+        (200, helper_reply(2)),
+        (200, sse("Answer")),
+    ])
+    .await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
+    let id = session::Id::new("ses_one").unwrap();
+    within(coordinator.run(&id)).await.unwrap();
+    let first = text_of(within(requests.recv()).await.unwrap());
+    let helper = text_of(within(requests.recv()).await.unwrap());
+    let second = text_of(within(requests.recv()).await.unwrap());
+    within(server).await.unwrap();
+    assert!(first.contains("earlier answer detail"));
+    assert!(helper.contains("Output exactly one TOON document"));
+    assert!(helper.len() < (6_000 - 1_000 - 100) * 4);
+    assert!(second.contains("<conversation-checkpoint>"));
+    assert!(second.contains(&input));
+    assert!(second.len() < first.len());
+    assert_eq!(count(&events(&store), "session.compaction.ended.2"), 1);
+    assert_eq!(count(&events(&store), "session.step.ended.1"), 1);
+    assert_eq!(service.get(&id).unwrap().unwrap().id, id);
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn provider_overflow_after_a_tool_effect_does_not_repeat_the_effect() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use ycoding_core::tools::registry::{DynamicTool, Options};
+
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(&store, "earlier answer detail. ".repeat(200));
+    admit(&service, "Run the tool and continue").await;
+    let (endpoint, mut requests, server) = scripted(vec![
+        (200, "data: {\"id\":\"tool\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_fixture\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"tool\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n".into()),
+        overflow(),
+        (200, helper_reply(2)),
+        (200, sse("Answer")),
+    ])
+    .await;
+    let configured = services(&store, &endpoint, Default::default(), None);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let called = calls.clone();
+    let _registration = configured
+        .tools
+        .register(
+            vec![(
+                "echo".into(),
+                Arc::new(DynamicTool::new(
+                    "Record one effect",
+                    parse_json(r#"{"type":"object"}"#).unwrap(),
+                    None,
+                    None,
+                    move |input, _| {
+                        let called = called.clone();
+                        Box::pin(async move {
+                            called.fetch_add(1, Ordering::SeqCst);
+                            Ok(ycoding_ai::llm::ToolOutput {
+                                structured: input,
+                                content: Vec::new(),
+                            })
+                        })
+                    },
+                )),
+            )],
+            Options::direct(),
+        )
+        .unwrap();
+    let coordinator = Coordinator::new(Arc::new(Local::new(configured)));
+    let id = session::Id::new("ses_one").unwrap();
+    within(coordinator.run(&id)).await.unwrap();
+    let first = text_of(within(requests.recv()).await.unwrap());
+    let rejected = text_of(within(requests.recv()).await.unwrap());
+    let helper = text_of(within(requests.recv()).await.unwrap());
+    let resumed = text_of(within(requests.recv()).await.unwrap());
+    within(server).await.unwrap();
+    assert!(first.contains("\"name\":\"echo\""));
+    assert!(rejected.contains("\"role\":\"tool\""));
+    assert!(helper.contains("Output exactly one TOON document"));
+    assert!(resumed.contains("<conversation-checkpoint>"));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(count(&events(&store), "session.compaction.ended.2"), 1);
+    assert_eq!(service.get(&id).unwrap().unwrap().id, id);
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn a_provider_context_overflow_rebuilds_the_same_step_once_after_a_forced_compaction() {
     let store = support::store();
     let service = Service::new(store.client());
@@ -1408,7 +1665,7 @@ async fn a_provider_context_overflow_rebuilds_the_same_step_once_after_a_forced_
     admit(&service, "Answer the prompt").await;
     let (endpoint, mut requests, server) = scripted(vec![
         overflow(),
-        (200, helper_reply(6)),
+        (200, helper_reply(2)),
         (200, sse("Answer")),
     ])
     .await;
@@ -1941,7 +2198,7 @@ async fn w40_over_limit(
         ),
     );
     w40_admit(&service, input, "Answer the prompt").await;
-    let (endpoint, mut requests, server) = server(vec![helper_reply(6), sse("Answer")]).await;
+    let (endpoint, mut requests, server) = server(vec![helper_reply(2), sse("Answer")]).await;
     let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
     within(coordinator.run(&session::Id::new("ses_one").unwrap()))
         .await
