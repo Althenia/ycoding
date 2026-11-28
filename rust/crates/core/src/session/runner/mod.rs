@@ -1118,7 +1118,6 @@ impl Local {
         let mut recovery = false;
         let mut recovery_used = false;
         let mut continuation = false;
-        let mut gate_admissions = 0u8;
         let mut overflow = None;
         let mut auth_refreshed = false;
         let mut restart: Option<Restart> = None;
@@ -2087,45 +2086,6 @@ impl Local {
                     context_safety_margin_tokens: services.compaction.context_safety_margin_tokens,
                 });
             {
-                if route.current.is_some()
-                    && let Some(next) = &next
-                    && compaction_gate::estimated_provider_input_tokens(&prepared) >= input_cap
-                {
-                    let assistant = match restart.take() {
-                        Some(restart) => restart.assistant,
-                        None => {
-                            self.start_step(local, &session.id, &agent.id, &selection)
-                                .await?
-                        }
-                    };
-                    let message = format!(
-                        "The request exceeds the input budget of {}/{}",
-                        selection.provider_id.0.to_utf8().unwrap_or_default(),
-                        selection.id.to_utf8().unwrap_or_default()
-                    );
-                    local
-                        .reroute(Reroute {
-                            session: &session.id,
-                            agent: &agent.id,
-                            assistant: &assistant,
-                            from: &selection,
-                            to: next,
-                            failure: &error("context.limit", &message),
-                            abandoned: None,
-                        })
-                        .await?;
-                    route.tried.push(selection.clone());
-                    route.current = Some(next.clone());
-                    route.primary = Some(primary.clone());
-                    restart = Some(Restart {
-                        assistant,
-                        attempts: 0,
-                        pending: None,
-                        usage: AttemptUsage::default(),
-                    });
-                    force = true;
-                    continue;
-                }
                 let gate = local
                     .ensure_within_limit(compaction::GateInput {
                         agent: &agent.id,
@@ -2136,7 +2096,6 @@ impl Local {
                         history: &loaded,
                         output_limit: resolved.info.limit.output.get(),
                         force: overflow == Some(Overflow::Pending),
-                        admissions: &mut gate_admissions,
                     })
                     .await?;
                 match gate {
@@ -2149,6 +2108,39 @@ impl Local {
                         continue;
                     }
                     compaction::Gate::Exceeded(failure) => {
+                        if route.current.is_some()
+                            && let Some(next) = &next
+                        {
+                            let assistant = match restart.take() {
+                                Some(restart) => restart.assistant,
+                                None => {
+                                    self.start_step(local, &session.id, &agent.id, &selection)
+                                        .await?
+                                }
+                            };
+                            local
+                                .reroute(Reroute {
+                                    session: &session.id,
+                                    agent: &agent.id,
+                                    assistant: &assistant,
+                                    from: &selection,
+                                    to: next,
+                                    failure: &failure,
+                                    abandoned: None,
+                                })
+                                .await?;
+                            route.tried.push(selection.clone());
+                            route.current = Some(next.clone());
+                            route.primary = Some(primary.clone());
+                            restart = Some(Restart {
+                                assistant,
+                                attempts: 0,
+                                pending: None,
+                                usage: AttemptUsage::default(),
+                            });
+                            force = true;
+                            continue;
+                        }
                         if restart.take().is_none() {
                             self.start_step(local, &session.id, &agent.id, &selection)
                                 .await?;
@@ -2734,7 +2726,6 @@ impl Local {
             self.remove(&session.id);
             prior_route_usage = AttemptUsage::default();
             step += 1;
-            gate_admissions = 0;
             overflow = None;
             auth_refreshed = false;
             let verdict = react::evaluate(

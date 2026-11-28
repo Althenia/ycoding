@@ -43,16 +43,8 @@ pub fn capabilities(info: &model::Info, safety_margin_tokens: i64) -> Capabiliti
     }
 }
 
-pub fn output_reserve_tokens(capabilities: &Capabilities) -> i64 {
-    capabilities
-        .max_output_tokens
-        .clamp(0, capabilities.context_window_tokens / 2)
-}
-
 pub fn hard_input_cap_tokens(capabilities: &Capabilities) -> i64 {
-    capabilities.context_window_tokens
-        - capabilities.context_safety_margin_tokens
-        - output_reserve_tokens(capabilities)
+    capabilities.context_window_tokens - capabilities.context_safety_margin_tokens
 }
 
 pub fn estimate(text: &str) -> i64 {

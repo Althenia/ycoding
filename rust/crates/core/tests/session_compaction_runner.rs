@@ -28,8 +28,8 @@ use ycoding_core::{
     },
 };
 use ycoding_schema::{
-    DomainDecode, JsonValue, parse_json, session, session_compaction, session_message,
-    session_pending, skill,
+    DomainDecode, DomainEncode, JsonValue, parse_json, session, session_compaction,
+    session_message, session_pending, skill,
 };
 use ycoding_store::session::{
     ContextState, ContextStateTable, ManifestTable, Message, MessageTable, Revision, RevisionTable,
@@ -1288,6 +1288,328 @@ async fn a_request_with_no_reducible_history_fails_the_step_before_any_provider_
 }
 
 #[tokio::test]
+async fn input_budget_regression_compacts_completed_shell_without_a_prior_context_revision() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    store.submit(|tx| {
+        MessageTable::insert(tx, &Message {
+            id: "msg_shell_only".into(), session_id: "ses_one".into(), type_: "synthetic".into(), seq: 1,
+            time_created: 1, time_updated: 1,
+            data: parse_json(&format!(r#"{{"text":{},"metadata":{{"source":"shell","state":"completed"}},"time":{{"created":1}}}}"#, text_of(JsonValue::String("shell output ".repeat(3_000).as_str().into())))).unwrap(),
+        })?;
+        SequenceTable::put(tx, &Sequence { aggregate_id: "ses_one".into(), seq: 1, owner_id: None })
+    }).unwrap().wait().unwrap();
+    admit(&service, "Continue after the shell").await;
+    let (endpoint, mut requests, server) = server(vec![helper_reply(1), sse("Answer")]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
+    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
+        .await
+        .unwrap();
+    let _helper = within(requests.recv()).await.unwrap();
+    let step = text_of(within(requests.recv()).await.unwrap());
+    within(server).await.unwrap();
+    assert!(step.contains("Continue after the shell"));
+    assert!(step.contains("<conversation-checkpoint>"));
+    assert!(!step.contains(&"shell output ".repeat(50)));
+    assert_eq!(count(&events(&store), "session.compaction.ended.2"), 1);
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn input_budget_regression_compacts_older_history_without_a_completed_boundary() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    store
+        .submit(|tx| {
+            MessageTable::insert(
+                tx,
+                &Message {
+                    id: "msg_older_user".into(),
+                    session_id: "ses_one".into(),
+                    type_: "user".into(),
+                    seq: 1,
+                    time_created: 1,
+                    time_updated: 1,
+                    data: parse_json(&format!(
+                        r#"{{"text":{},"time":{{"created":1}}}}"#,
+                        text_of(JsonValue::String(
+                            "Earlier request ".repeat(3_000).as_str().into()
+                        ))
+                    ))
+                    .unwrap(),
+                },
+            )?;
+            SequenceTable::put(
+                tx,
+                &Sequence {
+                    aggregate_id: "ses_one".into(),
+                    seq: 1,
+                    owner_id: None,
+                },
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    admit(&service, "Current request").await;
+    let (endpoint, mut requests, server) = server(vec![helper_reply(1), sse("Answer")]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
+    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
+        .await
+        .unwrap();
+    let _helper = within(requests.recv()).await.unwrap();
+    let step = text_of(within(requests.recv()).await.unwrap());
+    within(server).await.unwrap();
+    assert!(step.contains("Current request"));
+    assert!(step.contains("<conversation-checkpoint>"));
+    assert_eq!(count(&events(&store), "session.compaction.ended.2"), 1);
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn input_budget_regression_compacts_earlier_history_with_an_unfinished_step() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(&store, "earlier answer ".repeat(3_000));
+    store.submit(|tx| {
+        MessageTable::insert(tx, &Message {
+            id: "msg_running".into(), session_id: "ses_one".into(), type_: "assistant".into(), seq: 3,
+            time_created: 3, time_updated: 3,
+            data: parse_json(r#"{"agent":"build","model":{"providerID":"openai","id":"gpt-reasoning"},"content":[{"type":"text","text":"Unfinished work"}],"time":{"created":3}}"#).unwrap(),
+        })?;
+        SequenceTable::put(tx, &Sequence { aggregate_id: "ses_one".into(), seq: 3, owner_id: None })
+    }).unwrap().wait().unwrap();
+    admit(&service, "Continue current work").await;
+    let (endpoint, mut requests, server) = server(vec![helper_reply(2), sse("Answer")]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
+    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
+        .await
+        .unwrap();
+    let _helper = within(requests.recv()).await.unwrap();
+    let step = text_of(within(requests.recv()).await.unwrap());
+    within(server).await.unwrap();
+    assert!(step.contains("Unfinished work"));
+    assert!(step.contains("Continue current work"));
+    assert!(step.contains("<conversation-checkpoint>"));
+    assert_eq!(count(&events(&store), "session.compaction.ended.2"), 1);
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn input_budget_regression_continues_compacting_after_two_admissions() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    store.submit(|tx| {
+        for index in 0..20 {
+            let user_seq = index * 2 + 1;
+            let assistant_seq = user_seq + 1;
+            MessageTable::insert(tx, &Message {
+                id: format!("msg_user_{index}").as_str().into(), session_id: "ses_one".into(), type_: "user".into(), seq: user_seq,
+                time_created: user_seq, time_updated: user_seq,
+                data: parse_json(&format!(r#"{{"text":"Earlier question {index}","time":{{"created":{user_seq},"consumed":{user_seq}}}}}"#)).unwrap(),
+            })?;
+            MessageTable::insert(tx, &Message {
+                id: format!("msg_answer_{index}").as_str().into(), session_id: "ses_one".into(), type_: "assistant".into(), seq: assistant_seq,
+                time_created: assistant_seq, time_updated: assistant_seq,
+                data: parse_json(&format!(r#"{{"agent":"build","model":{{"providerID":"openai","id":"gpt-reasoning"}},"content":[{{"type":"text","text":{}}}],"finish":"stop","time":{{"created":{assistant_seq},"completed":{assistant_seq}}}}}"#, text_of(JsonValue::String(format!("Earlier answer {index}: {}", "detail ".repeat(170)).as_str().into())))).unwrap(),
+            })?;
+        }
+        SequenceTable::put(tx, &Sequence { aggregate_id: "ses_one".into(), seq: 40, owner_id: None })
+    }).unwrap().wait().unwrap();
+    admit(&service, "Continue the current task").await;
+    let (endpoint, mut requests, server) = server(vec![sse("invalid"); 100]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
+    let outcome = within(coordinator.run(&session::Id::new("ses_one").unwrap())).await;
+    let recorded = events(&store);
+    assert!(
+        outcome.is_ok(),
+        "{outcome:?}; ended={}, failed={}",
+        count(&recorded, "session.compaction.ended.2"),
+        count(&recorded, "session.compaction.failed.2")
+    );
+    assert!(
+        count(&recorded, "session.compaction.ended.2") >= 3,
+        "{} compactions",
+        count(&recorded, "session.compaction.ended.2")
+    );
+    let mut bodies = Vec::new();
+    while let Ok(body) = requests.try_recv() {
+        bodies.push(body);
+    }
+    let step = text_of(bodies.pop().expect("step request"));
+    server.abort();
+    assert!(step.contains("Continue the current task"));
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn input_budget_regression_first_request_does_not_reserve_the_full_unspecified_output_limit()
+{
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    admit(&service, &"first request text. ".repeat(350)).await;
+    let (endpoint, mut requests, server) = server(vec![sse("Answer")]).await;
+    let configured = services(&store, &endpoint, Default::default(), None);
+    let mut catalog = (*configured.models.catalog()).clone();
+    catalog.configure(&[parse_json(r#"{"providers":{"openai":{"models":{"gpt-reasoning":{"limit":{"context":6000,"output":3000}}}}}}"#).unwrap()]).unwrap();
+    configured.models.replace(catalog).unwrap();
+    let coordinator = Coordinator::new(Arc::new(Local::new(configured)));
+    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
+        .await
+        .unwrap();
+    let request = text_of(within(requests.recv()).await.unwrap());
+    within(server).await.unwrap();
+    assert!(request.contains("first request text."));
+    assert!(request.contains("\"max_tokens\":3000"));
+    assert_eq!(count(&events(&store), "session.compaction.admitted.2"), 0);
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn input_budget_regression_previous_output_and_reasoning_do_not_inflate_input_pressure() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(&store, "short answer".into());
+    store.submit(|tx| {
+        let key = ycoding_store::tuple_key(&[ycoding_store::KeyPart::String(&"msg_old_assistant".into())]);
+        let mut row = tx.get::<MessageTable>(&key)?.unwrap();
+        row.data = parse_json(r#"{"agent":"build","model":{"providerID":"openai","id":"gpt-reasoning"},"content":[{"type":"text","text":"short answer"}],"finish":"stop","time":{"created":2,"completed":2},"tokens":{"input":50,"output":5000,"reasoning":5000,"cache":{"read":0,"write":0}}}"#).unwrap();
+        MessageTable::put(tx, &row)
+    }).unwrap().wait().unwrap();
+    admit(&service, "Answer the prompt").await;
+    let (endpoint, mut requests, server) = server(vec![sse("Answer")]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
+    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
+        .await
+        .unwrap();
+    let request = text_of(within(requests.recv()).await.unwrap());
+    within(server).await.unwrap();
+    assert!(request.contains("short answer"));
+    assert_eq!(count(&events(&store), "session.compaction.admitted.2"), 0);
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn input_budget_regression_cached_prompt_is_counted_once_across_requests() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    admit(&service, "First question").await;
+    let first = "data: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Answer\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":229576,\"completion_tokens\":320377,\"prompt_tokens_details\":{\"cached_tokens\":200194,\"cache_write_tokens\":29102}}}\n\ndata: [DONE]\n\n";
+    let (endpoint, mut requests, server) = server(vec![first.into(), sse("Second answer")]).await;
+    let mut configured = services(&store, &endpoint, Default::default(), None);
+    configured.compaction.context_safety_margin_tokens = 4_096;
+    let mut catalog = (*configured.models.catalog()).clone();
+    catalog.configure(&[parse_json(r#"{"providers":{"openai":{"models":{"gpt-reasoning":{"limit":{"context":500000,"input":368904,"output":0}}}}}}"#).unwrap()]).unwrap();
+    configured.models.replace(catalog).unwrap();
+    let coordinator = Coordinator::new(Arc::new(Local::new(configured)));
+    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
+        .await
+        .unwrap();
+    service
+        .admit(ycoding_core::session::pending::Request {
+            id: session_message::Id::new("msg_second").unwrap(),
+            session_id: session::Id::new("ses_one").unwrap(),
+            input: session_pending::Message::decode(
+                &parse_json(
+                    r#"{"type":"user","data":{"text":"Second question"},"delivery":"steer"}"#,
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            event_id: ycoding_schema::event::Id::new("evt_second").unwrap(),
+            created: 2,
+        })
+        .await
+        .unwrap();
+    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
+        .await
+        .unwrap();
+    let _first = within(requests.recv()).await.unwrap();
+    let second = text_of(within(requests.recv()).await.unwrap());
+    within(server).await.unwrap();
+    assert!(second.contains("Second question"));
+    assert_eq!(count(&events(&store), "session.compaction.admitted.2"), 0);
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn input_budget_regression_failed_attempt_usage_is_not_next_request_pressure() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(&store, "earlier answer".into());
+    store.submit(|tx| {
+        for (index, pressure) in [549953, 824904, 824962, 838010, 838656].into_iter().enumerate() {
+            let seq = index as i64 + 3;
+            MessageTable::insert(tx, &Message {
+                id: format!("msg_failed_{index}").as_str().into(), session_id: "ses_one".into(),
+                type_: "assistant".into(), seq, time_created: seq, time_updated: seq,
+                data: parse_json(&format!(r#"{{"agent":"build","model":{{"providerID":"openai","id":"gpt-reasoning"}},"content":[],"time":{{"created":{seq},"completed":{seq}}},"error":{{"type":"context.limit","message":"budget"}},"tokens":{{"input":{pressure},"output":0,"reasoning":0,"cache":{{"read":0,"write":0}}}}}}"#)).unwrap(),
+            })?;
+        }
+        SequenceTable::put(tx, &Sequence { aggregate_id: "ses_one".into(), seq: 7, owner_id: None })
+    }).unwrap().wait().unwrap();
+    admit(&service, "Continue").await;
+    let (endpoint, mut requests, server) = server(vec![sse("Answer")]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
+    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
+        .await
+        .unwrap();
+    assert!(text_of(within(requests.recv()).await.unwrap()).contains("Continue"));
+    within(server).await.unwrap();
+    assert_eq!(count(&events(&store), "session.compaction.admitted.2"), 0);
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn input_budget_regression_compacts_completed_shell_output_after_model_switch() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(&store, "earlier answer".into());
+    store.submit(|tx| {
+        let key = ycoding_store::tuple_key(&[ycoding_store::KeyPart::String(&"msg_old_assistant".into())]);
+        let mut row = tx.get::<MessageTable>(&key)?.unwrap();
+        row.data = parse_json(r#"{"agent":"build","model":{"providerID":"anthropic","id":"large-model"},"content":[{"type":"text","text":"earlier answer"}],"finish":"stop","time":{"created":2,"completed":2}}"#).unwrap();
+        MessageTable::put(tx, &row)?;
+        for (id, seq) in [("msg_shell_a", 3), ("msg_shell_b", 4)] {
+            MessageTable::insert(tx, &Message {
+                id: id.into(), session_id: "ses_one".into(), type_: "synthetic".into(), seq,
+                time_created: seq, time_updated: seq,
+                data: parse_json(&format!(r#"{{"text":{},"metadata":{{"source":"shell","state":"completed"}},"time":{{"created":{seq}}}}}"#, text_of(JsonValue::String("shell output detail ".repeat(55_000).as_str().into())))).unwrap(),
+            })?;
+        }
+        SequenceTable::put(tx, &Sequence { aggregate_id: "ses_one".into(), seq: 4, owner_id: None })
+    }).unwrap().wait().unwrap();
+    admit(&service, "Continue after the model switch").await;
+    let (endpoint, mut requests, server) = server(vec![helper_reply(4), sse("Answer")]).await;
+    let mut configured = services(&store, &endpoint, Default::default(), None);
+    configured.compaction.context_safety_margin_tokens = 4_096;
+    let mut catalog = (*configured.models.catalog()).clone();
+    catalog.configure(&[parse_json(r#"{"providers":{"openai":{"models":{"gpt-reasoning":{"limit":{"context":500000,"output":128000}}}}}}"#).unwrap()]).unwrap();
+    configured.models.replace(catalog).unwrap();
+    let coordinator = Coordinator::new(Arc::new(Local::new(configured)));
+    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
+        .await
+        .unwrap();
+    let helper = text_of(within(requests.recv()).await.unwrap());
+    let request = text_of(within(requests.recv()).await.unwrap());
+    within(server).await.unwrap();
+    assert!(helper.contains("Output exactly one TOON document"));
+    assert!(request.contains("<conversation-checkpoint>"));
+    assert!(request.contains("Continue after the model switch"));
+    assert!(!request.contains(&"shell output detail ".repeat(50)));
+    assert_eq!(count(&events(&store), "session.compaction.ended.2"), 1);
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn over_cap_history_compacts_even_when_current_input_exceeds_the_advisory_target() {
     let store = support::store();
     let service = Service::new(store.client());
@@ -1852,10 +2174,13 @@ async fn claim_running(service: &Service) {
 
 async fn fail_deterministically(service: &Service, message: &str, seq: i64) {
     use ycoding_core::session::compaction_job::FailInput;
-    let job = service
-        .compaction_admit(through(message, seq), 1)
-        .await
-        .unwrap();
+    let mut input = through(message, seq);
+    input.config_digest =
+        ycoding_core::session::compaction_policy::admission_digest(&resolve(&[Info {
+            context_safety_margin_tokens: Some(1_000),
+            ..Info::default()
+        }]));
+    let job = service.compaction_admit(input, 1).await.unwrap();
     claim_running(service).await;
     service
         .compaction_fail(FailInput {
@@ -1924,6 +2249,121 @@ async fn complete_compaction(
         })
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn input_budget_regression_restores_a_revision_with_a_durable_manifest() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let id = session::Id::new("ses_one").unwrap();
+    seed_context(&store);
+    seed_history(&store, "earlier answer detail. ".repeat(1_200));
+    let (endpoint, _requests, server) = server(vec![helper_reply(2)]).await;
+    let mut configured = services(&store, &endpoint, Default::default(), None);
+    configured.compaction.keep_recent_messages = 0;
+    let job = within(Local::new(configured).compact(&id, None))
+        .await
+        .unwrap();
+    assert_eq!(job.status.as_str(), Some("ended"));
+    within(server).await.unwrap();
+    let before = service.model_history(&id).unwrap();
+    assert!(
+        before
+            .iter()
+            .any(|entry| text_of(entry.message.encode()).contains("<conversation-checkpoint>"))
+    );
+    store
+        .submit(|tx| {
+            tx.delete::<ContextStateTable>(&ycoding_store::tuple_key(&[
+                ycoding_store::KeyPart::String(&"ses_one".into()),
+            ]))?;
+            Ok(())
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(
+        service.ensure_compaction_revision(&id, 50).await.unwrap(),
+        (1, true)
+    );
+    assert_eq!(service.model_history(&id).unwrap(), before);
+}
+
+#[tokio::test]
+async fn input_budget_regression_rejects_a_mismatched_restored_manifest() {
+    use ycoding_store::session::Document;
+    let store = support::store();
+    let service = Service::new(store.client());
+    let id = session::Id::new("ses_one").unwrap();
+    seed_context(&store);
+    seed_history(&store, "earlier answer".into());
+    complete_compaction(&store, &service, "msg_old_assistant", 2).await;
+    store.submit(|tx| {
+        tx.delete::<ContextStateTable>(&ycoding_store::tuple_key(&[
+            ycoding_store::KeyPart::String(&"ses_one".into()),
+        ]))?;
+        let key = ycoding_store::tuple_key(&[ycoding_store::KeyPart::String(&"d".repeat(64).as_str().into())]);
+        let mut blob = tx.get::<ManifestTable>(&key)?.unwrap();
+        blob.content = Document::new(parse_json(r#"{"schemaVersion":1,"baseContextRevision":0,"coveredThrough":{"messageID":"msg_old_user","seq":1},"protectedState":[],"exclusions":[],"inputTokens":10,"retainedTokens":5}"#).unwrap())?;
+        ManifestTable::put(tx, &blob)
+    }).unwrap().wait().unwrap();
+    let before = service.model_history(&id).unwrap();
+    let result = service.ensure_compaction_revision(&id, 50).await;
+    assert!(
+        matches!(
+            result,
+            Err(ycoding_store::Error::Rejected(
+                "compaction context manifest does not match the revision"
+            ))
+        ),
+        "{result:?}"
+    );
+    assert_eq!(service.model_history(&id).unwrap(), before);
+}
+
+#[tokio::test]
+async fn input_budget_regression_does_not_restore_a_revision_without_its_manifest() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let id = session::Id::new("ses_one").unwrap();
+    seed_context(&store);
+    seed_history(&store, "earlier answer".into());
+    complete_compaction(&store, &service, "msg_old_assistant", 2).await;
+    store
+        .submit(|tx| {
+            tx.delete::<ContextStateTable>(&ycoding_store::tuple_key(&[
+                ycoding_store::KeyPart::String(&"ses_one".into()),
+            ]))?;
+            tx.delete::<ManifestTable>(&ycoding_store::tuple_key(&[
+                ycoding_store::KeyPart::String(&"d".repeat(64).as_str().into()),
+            ]))?;
+            Ok(())
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    let before = service.model_history(&id).unwrap();
+    let result = service.ensure_compaction_revision(&id, 50).await;
+    assert!(
+        matches!(
+            result,
+            Err(ycoding_store::Error::Rejected(
+                "compaction context manifest is missing"
+            ))
+        ),
+        "{result:?}"
+    );
+    assert!(
+        store
+            .snapshot()
+            .unwrap()
+            .get::<ContextStateTable>(&ycoding_store::tuple_key(&[
+                ycoding_store::KeyPart::String(&"ses_one".into()),
+            ]))
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(service.model_history(&id).unwrap(), before);
 }
 
 fn admitted_boundaries(store: &ycoding_store::Store, service: &Service) -> Vec<(String, i64)> {
@@ -2061,6 +2501,7 @@ async fn w48_r2_a_new_complete_message_after_a_deterministic_failure_admits_exac
         ),
     );
     fail_deterministically(&service, "msg_old_assistant", 2).await;
+    select_current(&service, "gpt-reasoning").await;
     admit(&service, "Answer the prompt").await;
     let (endpoint, mut requests, server) = server(vec![]).await;
     let coordinator = Coordinator::new(Arc::new(local_with(&store, &endpoint, tiny_helper())));
@@ -2075,6 +2516,7 @@ async fn w48_r2_a_new_complete_message_after_a_deterministic_failure_admits_exac
     assert_ne!(boundaries[1], boundaries[0]);
     assert!(boundaries[1].1 > 2);
     let boundary = stored(&store, &boundaries[1].0);
+    assert_eq!(boundary.id.as_str(), Some("msg_current_model"));
     assert_eq!(boundary.seq, boundaries[1].1);
     assert_ne!(boundary.type_.as_str(), Some("compaction"));
     assert_eq!(count(&events(&store), "session.compaction.failed.2"), 2);

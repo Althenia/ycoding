@@ -5,7 +5,7 @@ use crate::session::{
     compaction_gate, compaction_job,
     compaction_policy::Resolved,
     compaction_summary::{Generate, SUMMARY_TEMPLATE},
-    context_pressure::{self, Capabilities, Usage},
+    context_pressure::{self, Capabilities},
     live_state, projector, prompt_cache,
     run_coordinator::{Error, Outcome},
     usage_attribution::Attribution,
@@ -14,14 +14,13 @@ use crate::tools::policy::helper::{CompactionScope, Role};
 use std::{future::Future, ops::Bound, pin::Pin};
 use ycoding_ai::llm;
 use ycoding_schema::{
-    JsonValue, ObjectEncoder, model, session, session_compaction, session_event, session_message,
+    DomainEncode, JsonValue, ObjectEncoder, model, session, session_compaction, session_event,
+    session_message,
 };
 use ycoding_store::{
     IndexOrder,
-    session::{ContextStateTable, Job, MessageTable, NewEvent, RevisionTable},
+    session::{ContextStateTable, Job, MessageTable, NewEvent},
 };
-
-const MAXIMUM_GATE_ADMISSIONS: u8 = 2;
 
 pub(super) struct Helper {
     pub model: llm::Model,
@@ -47,7 +46,6 @@ pub(super) struct GateInput<'a> {
     pub history: &'a [session_message::Info],
     pub output_limit: i64,
     pub force: bool,
-    pub admissions: &'a mut u8,
 }
 
 impl Local {
@@ -73,23 +71,7 @@ impl Local {
             return Ok(Gate::Exceeded(budget_error(0, cap)));
         }
         let estimate = compaction_gate::estimated_provider_input_tokens(input.request);
-        let raw = context_pressure::estimated_input_tokens(Usage {
-            system: &input.request.system,
-            tools: &input.request.tools,
-            messages: &input.request.messages,
-        });
-        let (provider_input, provider_total) = if estimate < raw {
-            (None, None)
-        } else {
-            latest_provider_totals(
-                &services.store.client.snapshot()?,
-                &input.session.id,
-                input.history,
-            )?
-        };
-        let pressure = estimate
-            .max(provider_input.unwrap_or(0))
-            .max(provider_total.unwrap_or(0));
+        let pressure = estimate;
         let blocked = || {
             Ok(if pressure < cap {
                 Gate::Proceed
@@ -165,58 +147,23 @@ impl Local {
             }
             return Ok(Gate::Proceed);
         }
-        if *input.admissions >= MAXIMUM_GATE_ADMISSIONS {
-            return blocked();
-        }
-        let Some(latest) = self.latest_complete_boundary(&input.session.id)? else {
-            return blocked();
-        };
-        let mut boundary = latest.clone();
-        if let Some(user) = input
-            .history
-            .iter()
-            .rev()
-            .find_map(|message| match message {
-                session_message::Info::User(user) => Some(user),
-                _ => None,
-            })
-        {
-            let snapshot = services.store.client.snapshot()?;
-            if let Some(row) =
-                snapshot.get::<MessageTable>(&crate::session::key(user.id.as_lossless()))?
-                && let Some(earlier) =
-                    self.latest_complete_boundary_before(&input.session.id, row.seq)?
-            {
-                let history = services
-                    .store
-                    .model_history(&input.session.id)?
-                    .into_iter()
-                    .filter(|entry| entry.seq <= earlier.1)
-                    .map(|entry| entry.message)
-                    .collect::<Vec<_>>();
-                if compaction_gate::can_reduce(input.request, &history, cap) {
-                    boundary = earlier;
-                }
-            }
-        }
-        let Some(revision) = services
+        let (revision, restored) = services
             .store
-            .client
-            .snapshot()?
-            .get::<ContextStateTable>(&crate::session::key(input.session.id.as_lossless()))?
-            .map(|state| state.revision)
-        else {
-            return blocked();
-        };
+            .ensure_compaction_revision(&input.session.id, services.clock.now())
+            .await?;
+        if restored {
+            return Ok(Gate::Restart);
+        }
         let pending = services.store.compaction_pending(&input.session.id).await?;
         if let Some(existing) = pending.first() {
             self.settle(&input, existing).await?;
             return Ok(Gate::Restart);
         }
-        let target = compaction_gate::target_input_tokens(input.context_window, policy).min(cap);
-        if !compaction_gate::can_reduce(input.request, input.history, cap) {
+        let boundaries = self.mandatory_boundaries(&input, cap, revision)?;
+        if boundaries.is_empty() {
             return blocked();
         }
+        let target = compaction_gate::target_input_tokens(input.context_window, policy).min(cap);
         let admission = |(boundary, seq): &(session_message::Id, i64)| compaction_job::AdmitInput {
             id: None,
             session: input.session.id.clone(),
@@ -232,52 +179,20 @@ impl Local {
             }),
         };
         let now = services.clock.now();
-        if boundary != latest {
-            for message in input.history {
-                if let session_message::Info::Compaction(session_message::Compaction::Failed(
-                    failed,
-                )) = message
-                    && matches!(
-                        failed.code,
-                        session_compaction::FailureCode::ContextLimitUnresolved
-                            | session_compaction::FailureCode::InvalidManifest
-                    )
-                    && let Some(job) = services.store.compaction_job(&failed.job_id)?
-                    && job.base_context_revision == revision
-                    && job.requested_through_seq == boundary.1
-                    && job.requested_through_message_id == *boundary.0.as_lossless()
-                    && let Some(marker) =
-                        services.store.client.snapshot()?.get::<MessageTable>(
-                            &crate::session::key(failed.base.id.as_lossless()),
-                        )?
-                    && (marker.seq < latest.1
-                        || input.history.iter().any(|message| {
-                            matches!(message, session_message::Info::Assistant(assistant)
-                                if assistant.id == latest.0 && assistant.time.completed.is_some())
-                        }))
-                {
-                    boundary = latest.clone();
-                    break;
-                }
-            }
-        }
-        if services
-            .store
-            .compaction_has_unchanged_deterministic_failure(admission(&boundary))
-            .await?
-        {
-            if *input.admissions > 0 || boundary == latest {
-                return blocked();
-            }
-            boundary = latest;
-            if services
+        let mut boundary = None;
+        for candidate in boundaries {
+            if !services
                 .store
-                .compaction_has_unchanged_deterministic_failure(admission(&boundary))
+                .compaction_has_unchanged_deterministic_failure(admission(&candidate))
                 .await?
             {
-                return blocked();
+                boundary = Some(candidate);
+                break;
             }
         }
+        let Some(boundary) = boundary else {
+            return blocked();
+        };
         let admitted = match services
             .store
             .compaction_admit(admission(&boundary), now)
@@ -285,11 +200,145 @@ impl Local {
         {
             Ok(job) => job,
             Err(compaction_job::CompactionError::Store(failure)) => return Err(failure.into()),
-            Err(_) => return blocked(),
+            Err(failure) => return Err(error("compaction.admission", &failure.to_string())),
         };
-        *input.admissions += 1;
         self.settle(&input, &admitted).await?;
         Ok(Gate::Restart)
+    }
+
+    fn mandatory_boundaries(
+        &self,
+        input: &GateInput<'_>,
+        cap: i64,
+        revision: i64,
+    ) -> Result<Vec<(session_message::Id, i64)>, Error> {
+        let last_user = input
+            .history
+            .iter()
+            .rposition(|message| matches!(message, session_message::Info::User(_)));
+        let current_user = last_user.filter(|index| {
+            let later = &input.history[index + 1..];
+            !later.iter().any(|message| matches!(message, session_message::Info::Assistant(assistant) if assistant.time.completed.is_some()))
+                || later.iter().any(|message| matches!(message, session_message::Info::Assistant(assistant) if assistant.time.completed.is_none()))
+        });
+        let snapshot = self.0.services.store.client.snapshot()?;
+        let mut candidates = Vec::new();
+        let mut failed = Vec::new();
+        for (index, message) in input.history.iter().enumerate() {
+            if Some(index) == current_user
+                || matches!(message, session_message::Info::Assistant(assistant) if assistant.time.completed.is_none())
+            {
+                break;
+            }
+            if let session_message::Info::User(user) = message
+                && user.time.consumed.is_none()
+                && self.0.services.store.pending(&user.id)?.is_some()
+            {
+                break;
+            }
+            if let session_message::Info::Compaction(session_message::Compaction::Failed(marker)) =
+                message
+            {
+                if let Some(job) = self.0.services.store.compaction_job(&marker.job_id)?
+                    && job.base_context_revision == revision
+                    && matches!(
+                        marker.code,
+                        session_compaction::FailureCode::ContextLimitUnresolved
+                            | session_compaction::FailureCode::InvalidManifest
+                    )
+                {
+                    failed.push((job.requested_through_message_id, job.requested_through_seq));
+                }
+                continue;
+            }
+            let JsonValue::Object(encoded) = message.encode() else {
+                continue;
+            };
+            let Some(JsonValue::String(id)) = encoded.get(&"id".into()) else {
+                continue;
+            };
+            let row = match snapshot.get::<MessageTable>(&crate::session::key(id))? {
+                Some(row) => row,
+                None => {
+                    let Some(state) = snapshot.get::<ContextStateTable>(&crate::session::key(
+                        input.session.id.as_lossless(),
+                    ))?
+                    else {
+                        continue;
+                    };
+                    if state.status.as_str() != Some("active")
+                        || state.covered_through_seq.is_none()
+                    {
+                        continue;
+                    }
+                    let Some(summary) = crate::session::model_history::summary(
+                        &snapshot,
+                        &input.session.id,
+                        &state,
+                    )?
+                    else {
+                        continue;
+                    };
+                    if crate::session::compaction_summary::checkpoint_memory(
+                        summary.sequence,
+                        message,
+                    )
+                    .is_none()
+                    {
+                        continue;
+                    }
+                    let rows = ycoding_store::session::messages(
+                        &snapshot,
+                        input.session.id.as_lossless(),
+                        Bound::Included(summary.sequence),
+                        Bound::Included(summary.sequence),
+                        IndexOrder::Ascending,
+                        None,
+                        1,
+                    )?;
+                    let Some(row) = rows.into_iter().next() else {
+                        continue;
+                    };
+                    row.record
+                }
+            };
+            let id = session_message::Id::new(row.id.to_utf8().unwrap_or_default())
+                .map_err(|_| error("unknown", "Stored message identity is invalid"))?;
+            candidates.push((index, (id, row.seq)));
+        }
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut lower = 0;
+        let mut upper = candidates.len();
+        while lower < upper {
+            let middle = (lower + upper) / 2;
+            if compaction_gate::can_reduce(
+                input.request,
+                &input.history[..=candidates[middle].0],
+                cap,
+            ) {
+                upper = middle;
+            } else {
+                lower = middle + 1;
+            }
+        }
+        let start = lower.min(candidates.len() - 1);
+        let mut boundaries = candidates[start..]
+            .iter()
+            .chain(
+                candidates[..if lower == candidates.len() { start } else { 0 }]
+                    .iter()
+                    .rev(),
+            )
+            .map(|(_, boundary)| boundary.clone())
+            .collect::<Vec<_>>();
+        boundaries.sort_by_key(|(id, seq)| {
+            failed
+                .iter()
+                .any(|(failed_id, failed_seq)| failed_id == id.as_lossless() && failed_seq == seq)
+        });
+        Ok(boundaries)
     }
 
     async fn settle(&self, input: &GateInput<'_>, job: &Job) -> Outcome {
@@ -300,7 +349,7 @@ impl Local {
         {
             Ok(settled) => settled,
             Err(compaction_job::CompactionError::Store(failure)) => return Err(failure.into()),
-            Err(_) => return Ok(()),
+            Err(failure) => return Err(error("compaction.execution", &failure.to_string())),
         };
         if settled.status.as_str() == Some("ended") {
             services
@@ -558,14 +607,6 @@ impl Local {
         self.complete_boundary(id, Bound::Unbounded)
     }
 
-    fn latest_complete_boundary_before(
-        &self,
-        id: &session::Id,
-        seq: i64,
-    ) -> Result<Option<(session_message::Id, i64)>, Error> {
-        self.complete_boundary(id, Bound::Excluded(seq))
-    }
-
     fn complete_boundary(
         &self,
         id: &session::Id,
@@ -618,46 +659,6 @@ fn complete(row: &ycoding_store::session::Message) -> bool {
         ),
         _ => true,
     }
-}
-
-fn latest_provider_totals(
-    snapshot: &ycoding_store::Snapshot,
-    session: &session::Id,
-    history: &[session_message::Info],
-) -> Result<(Option<i64>, Option<i64>), ycoding_store::Error> {
-    let Some(assistant) = history.iter().rev().find_map(|message| match message {
-        session_message::Info::Assistant(assistant) if assistant.tokens.is_some() => {
-            Some(assistant)
-        }
-        _ => None,
-    }) else {
-        return Ok((None, None));
-    };
-    let state = snapshot
-        .get::<ContextStateTable>(&crate::session::key(session.as_lossless()))?
-        .filter(|state| state.status.as_str() == Some("active"));
-    if let Some(state) = state {
-        let activation = snapshot
-            .get::<RevisionTable>(&ycoding_store::tuple_key(&[
-                ycoding_store::KeyPart::String(session.as_lossless()),
-                ycoding_store::KeyPart::I64(state.revision),
-            ]))?
-            .and_then(|revision| revision.activation_sequence)
-            .or(state.covered_through_seq);
-        if let Some(activation) = activation {
-            let row =
-                snapshot.get::<MessageTable>(&crate::session::key(assistant.id.as_lossless()))?;
-            if row.is_none_or(|row| row.seq <= activation) {
-                return Ok((None, None));
-            }
-        }
-    }
-    let tokens = assistant.tokens.as_ref().expect("assistant has tokens");
-    let input = tokens.input.get() + tokens.cache.read.get() + tokens.cache.write.get();
-    Ok((
-        Some(input as i64),
-        Some((input + tokens.output.get() + tokens.reasoning.get()) as i64),
-    ))
 }
 
 fn budget_error(pressure: i64, cap: i64) -> Error {

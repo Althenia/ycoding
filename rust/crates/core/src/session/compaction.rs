@@ -105,7 +105,7 @@ pub async fn manifest(input: Input<'_, '_>) -> Result<Manifest, Failure> {
     } else {
         (input.policy.keep_recent_messages.max(0) as usize).min(uncovered.len())
     };
-    let source = uncovered[..uncovered.len() - tail]
+    let mut source = uncovered[..uncovered.len() - tail]
         .iter()
         .map(|item| {
             Source::new(
@@ -120,6 +120,23 @@ pub async fn manifest(input: Input<'_, '_>) -> Result<Manifest, Failure> {
             )
         })
         .collect::<Vec<_>>();
+    let recompact =
+        source.is_empty() && previous.is_some() && job.trigger.as_str() == Some("mandatory");
+    if recompact
+        && let Some(item) = items.iter().find(|item| item.terminal_seq == covered)
+        && let Some(checkpoint) = selected_before.iter().find(|entry| {
+            entry.seq == covered
+                && compaction_summary::checkpoint_memory(entry.seq, &entry.message).is_some()
+        })
+    {
+        source.push(Source::new(
+            item.message_id.clone(),
+            item.terminal_seq,
+            "checkpoint",
+            Some(&checkpoint.message),
+            &item.payload,
+        ));
+    }
     let Some(last) = source.last() else {
         return Err(Failure::ContextLimitUnresolved);
     };
@@ -194,7 +211,7 @@ pub async fn manifest(input: Input<'_, '_>) -> Result<Manifest, Failure> {
         accepts: &accepts,
         required_texts: Vec::new(),
         required_skills,
-        previous,
+        previous: if recompact { None } else { previous },
     };
     let candidate = match input.generate {
         Some(_) if input.policy.timeout_seconds > 0 => {

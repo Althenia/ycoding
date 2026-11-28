@@ -1,7 +1,7 @@
 use crate::session::{
     compaction_job::{AdmitInput, CompactionError},
     compaction_policy::Resolved,
-    context_pressure::{self, Capabilities, Level, Usage},
+    context_pressure::{self, Capabilities, Level},
     store,
 };
 use std::{collections::BTreeMap, sync::Mutex};
@@ -36,11 +36,8 @@ impl Advisor {
         if context.agent.as_str() == Some("compaction") {
             return Ok(None);
         }
-        let estimate = context_pressure::estimated_input_tokens(Usage {
-            system: &context.request.system,
-            tools: &context.request.tools,
-            messages: &context.request.messages,
-        });
+        let estimate =
+            crate::session::compaction_gate::estimated_provider_input_tokens(context.request);
         let level = context
             .capabilities
             .as_ref()

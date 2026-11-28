@@ -87,6 +87,135 @@ pub struct FailInput {
 }
 
 impl Service {
+    pub async fn ensure_compaction_revision(
+        &self,
+        session: &session::Id,
+        now: i64,
+    ) -> Result<(i64, bool), Error> {
+        let session = session.as_lossless().clone();
+        self.client
+            .submit(move |tx| {
+                if let Some(state) = tx.get::<ContextStateTable>(&key(&session))? {
+                    if state.status.as_str() != Some("active") {
+                        return Err(Error::Rejected("compaction context is quarantined"));
+                    }
+                    return Ok((state.revision, false));
+                }
+                let prefix = key(&session);
+                let mut upper = prefix.clone();
+                while upper.last() == Some(&u8::MAX) {
+                    upper.pop();
+                }
+                *upper
+                    .last_mut()
+                    .ok_or(Error::Rejected("invalid context prefix"))? += 1;
+                let mut cursor = None;
+                let mut latest = None;
+                loop {
+                    let rows = tx.scan::<RevisionTable>(
+                        cursor
+                            .as_deref()
+                            .map_or(Bound::Included(prefix.as_slice()), Bound::Excluded),
+                        Bound::Excluded(upper.as_slice()),
+                        128,
+                    )?;
+                    let Some(last) = rows.last() else { break };
+                    cursor = Some(tuple_key(&[
+                        KeyPart::String(&session),
+                        KeyPart::I64(last.revision),
+                    ]));
+                    latest = Some(last.clone());
+                    if rows.len() < 128 {
+                        break;
+                    }
+                }
+                let revision = match latest {
+                    Some(revision) => revision,
+                    None => {
+                        let revision = Revision {
+                            session_id: session.clone(),
+                            revision: 0,
+                            parent_revision: None,
+                            manifest_digest: None,
+                            covered_through_message_id: None,
+                            covered_through_seq: None,
+                            activation_event_id: None,
+                            activation_sequence: None,
+                            time_created: now,
+                        };
+                        RevisionTable::insert(tx, &revision)?;
+                        revision
+                    }
+                };
+                if revision.revision > 0
+                    && (revision.manifest_digest.is_none()
+                        || revision.covered_through_message_id.is_none()
+                        || revision.covered_through_seq.is_none()
+                        || revision.activation_event_id.is_none())
+                {
+                    return Err(Error::Rejected("compaction context revision is incomplete"));
+                }
+                let state = ContextState {
+                    session_id: session.clone(),
+                    status: "active".into(),
+                    revision: revision.revision,
+                    manifest_digest: revision.manifest_digest,
+                    covered_through_message_id: revision.covered_through_message_id,
+                    covered_through_seq: revision.covered_through_seq,
+                    time_activated: revision
+                        .activation_event_id
+                        .as_ref()
+                        .map(|_| revision.time_created),
+                    activated_event_id: revision.activation_event_id,
+                    error_code: None,
+                };
+                if state.revision > 0 {
+                    let digest = state
+                        .manifest_digest
+                        .as_ref()
+                        .ok_or(Error::Rejected("compaction context revision is incomplete"))?;
+                    let blob = tx
+                        .get::<ManifestTable>(&key(digest))?
+                        .ok_or(Error::Rejected("compaction context manifest is missing"))?;
+                    let manifest = super::context_manifest::parse_manifest(blob.content.value())
+                        .map_err(|_| Error::Rejected("compaction context manifest is invalid"))?;
+                    let boundary = text(&manifest.covered_through.message_id);
+                    if revision.parent_revision != Some(manifest.base_context_revision.get())
+                        || state.covered_through_message_id.as_ref() != Some(&boundary)
+                        || state.covered_through_seq != Some(manifest.covered_through.seq.get())
+                        || tx
+                            .get::<MessageTable>(&key(&boundary))?
+                            .is_none_or(|message| {
+                                message.session_id != session
+                                    || message.seq != manifest.covered_through.seq.get()
+                            })
+                    {
+                        return Err(Error::Rejected(
+                            "compaction context manifest does not match the revision",
+                        ));
+                    }
+                    if manifest.summary.is_some() {
+                        let session_id =
+                            session::Id::decode(&JsonValue::String(session.clone()))
+                                .map_err(|_| Error::Rejected("invalid session identity"))?;
+                        if super::model_history::summary_from(
+                            &session_id,
+                            &state,
+                            Some(&blob),
+                            |id| tx.get::<MessageTable>(&key(id)),
+                        )?
+                        .is_none()
+                        {
+                            return Err(Error::Rejected("compaction context summary is invalid"));
+                        }
+                    }
+                }
+                ContextStateTable::insert(tx, &state)?;
+                Ok((revision.revision, true))
+            })?
+            .await
+    }
+
     pub async fn compaction_admit(&self, input: AdmitInput, now: i64) -> Settled<Job> {
         self.compaction_admit_attributed(input, now, super::usage_attribution::Attribution::Unset)
             .await

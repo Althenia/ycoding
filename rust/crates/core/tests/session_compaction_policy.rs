@@ -135,7 +135,7 @@ fn pressure_levels_follow_the_advisory_thresholds_and_the_hard_input_cap() {
 }
 
 #[test]
-fn the_hard_input_cap_reserves_the_output_budget_up_to_half_the_window() {
+fn the_hard_input_cap_does_not_reserve_output_tokens() {
     let capabilities = |max_output_tokens| Capabilities {
         context_window_tokens: 1000,
         max_output_tokens,
@@ -143,20 +143,49 @@ fn the_hard_input_cap_reserves_the_output_budget_up_to_half_the_window() {
     };
     assert_eq!(
         context_pressure::hard_input_cap_tokens(&capabilities(100)),
-        850
+        950
     );
     assert_eq!(
         context_pressure::hard_input_cap_tokens(&capabilities(800)),
-        450
+        950
     );
     assert_eq!(
         context_pressure::hard_input_cap_tokens(&capabilities(-5)),
         950
     );
     assert_eq!(
-        context_pressure::level(&capabilities(100), &resolve(&[]), 850),
+        context_pressure::level(&capabilities(100), &resolve(&[]), 950),
         Level::Mandatory
     );
+}
+
+#[test]
+fn input_budget_regression_uses_the_window_less_the_safety_margin() {
+    let capabilities = Capabilities {
+        context_window_tokens: 500_000,
+        max_output_tokens: 128_000,
+        context_safety_margin_tokens: 4_096,
+    };
+    assert_eq!(
+        context_pressure::hard_input_cap_tokens(&capabilities),
+        495_904
+    );
+    let policy =
+        resolve(&[
+            info(r#"{"advisory":{"consider_percent":80,"strongly_advised_percent":95}}"#).unwrap(),
+        ]);
+    for (pressure, expected) in [
+        (399_999, Level::Normal),
+        (400_000, Level::Consider),
+        (475_000, Level::Advised),
+        (495_903, Level::Advised),
+        (495_904, Level::Mandatory),
+    ] {
+        assert_eq!(
+            context_pressure::level(&capabilities, &policy, pressure),
+            expected
+        );
+    }
 }
 
 #[test]
