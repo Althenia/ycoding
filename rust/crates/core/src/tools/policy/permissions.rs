@@ -406,7 +406,6 @@ impl Permissions {
         let expected = admission_fingerprint(request, &workdir, deferred)
             .as_lossless()
             .clone();
-        let historical = historical_fingerprint(request, &workdir);
         let mut prior = Vec::new();
         prior.extend(
             self.0
@@ -422,7 +421,7 @@ impl Permissions {
                 .map_err(CoordError::Store)?,
             &request.session_id,
             session_review::Kind::Permission,
-            |payload| permission_matches(payload, &expected, historical.as_ref()),
+            |payload| permission_matches(payload, &expected),
         )?);
         Ok(prior)
     }
@@ -564,26 +563,35 @@ impl Permissions {
             .collect::<Vec<_>>();
         for id in ids {
             let item = pending.get(&id).expect("pending permission held by lock");
-            if !self
-                .0
-                .authority
-                .session(session, None)?
-                .autonomy
-                .can_yolo_permission()
-            {
+            let authority = self.configured(&item.request, item.agent.as_ref())?;
+            if !authority.autonomy.can_yolo_permission() {
                 break;
             }
-            let denied = self.coordinator_denied(&item.request)?;
+            let coordinator = self.coordinator_denied(&item.request)?;
+            let denied = self.rule_effect(&item.request, &authority)? == Effect::Deny;
             let reply = if denied { "reject" } else { "once" };
-            let blocked = denied.then(|| Error::Corrected(format!(
-                "Permission denied: {}. This Session is a Project coordinator; member Sessions make Project changes.",
-                item.request.action.to_utf8().unwrap_or_default()
-            ).as_str().into()));
+            let blocked = denied.then(|| Error::Blocked {
+                rules: authority
+                    .configured
+                    .iter()
+                    .filter(|rule| super::wildcard(&item.request.action, &rule.action))
+                    .cloned()
+                    .collect(),
+                permission: item.request.action.clone(),
+                resources: item.request.resources.clone(),
+                coordinator,
+            });
             self.assessed(
                 &item.request,
                 Assessment {
                     outcome: if denied { "deny" } else { "allow" },
-                    via: if denied { "coordination" } else { "yolo" },
+                    via: if coordinator {
+                        "coordination"
+                    } else if denied {
+                        "baseline"
+                    } else {
+                        "yolo"
+                    },
                     reply: Some(reply),
                     escalation: None,
                     coordination: None,
@@ -729,9 +737,6 @@ impl Permissions {
         if decision(action, std::slice::from_ref(resource), &coordinator, &[]) == Effect::Deny {
             return Ok(Effect::Deny);
         }
-        if authority.autonomy.can_yolo_permission() {
-            return Ok(Effect::Allow);
-        }
         if decision(
             action,
             std::slice::from_ref(resource),
@@ -740,6 +745,9 @@ impl Permissions {
         ) == Effect::Deny
         {
             return Ok(Effect::Deny);
+        }
+        if authority.autonomy.can_yolo_permission() {
+            return Ok(Effect::Allow);
         }
         Ok(decision(
             action,
@@ -765,9 +773,6 @@ impl Permissions {
         if self.coordinator_denied(request)? {
             return Ok(Effect::Deny);
         }
-        if authority.autonomy.can_yolo_permission() {
-            return Ok(Effect::Allow);
-        }
         if decision(
             &request.action,
             &request.resources,
@@ -776,6 +781,9 @@ impl Permissions {
         ) == Effect::Deny
         {
             return Ok(Effect::Deny);
+        }
+        if authority.autonomy.can_yolo_permission() {
+            return Ok(Effect::Allow);
         }
         Ok(decision(
             &request.action,
@@ -807,14 +815,8 @@ impl Permissions {
                 },
             )?;
         }
-        let explicit = request
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get(&"requireExplicitDecision".into()))
-            == Some(&JsonValue::Bool(true));
         let effect = if effect == Effect::Ask
             && authority.autonomy.can_auto_permission()
-            && !explicit
             && !self.explicit_rejection(&request, deferred)?
         {
             self.assessed(
@@ -853,7 +855,6 @@ impl Permissions {
         let id = request.id.clone();
         if effect == Effect::Ask
             && assess
-            && !explicit
             && authority.autonomy.can_yolo_permission()
             && self.0.assessor.get().is_some()
         {
@@ -877,7 +878,7 @@ impl Permissions {
         if effect == Effect::Ask && deferred {
             let (reviews, workdir) = reviews.ok_or(Error::ReviewUnavailable)?;
             let mut request = request;
-            if !explicit && authority.autonomy.can_yolo_permission() {
+            if authority.autonomy.can_yolo_permission() {
                 request.escalation = Some(guardrail::Escalation {
                     authority: Some(guardrail::Authority::Yolo),
                     reason: Some(guardrail::EscalationReason::Unavailable),
@@ -1511,9 +1512,11 @@ impl Permissions {
             Err(error) => return Err(coordination_error(error)),
         };
         if authority.autonomy.can_yolo_permission()
-            && !self
-                .coordinator_denied(&request)
+            && input.decision != Some(Decision::Decline)
+            && self
+                .rule_effect(&request, &authority)
                 .map_err(coordination_error)?
+                != Effect::Deny
         {
             self.reconcile_autonomy(&request.session_id)
                 .map_err(coordination_error)?;
@@ -1526,11 +1529,6 @@ impl Permissions {
         if !(input.gate.validate)(request.clone()).await {
             return Ok(Reconsidered::escalated(fingerprint, "delegation-invalid"));
         }
-        let explicit = request
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get(&"requireExplicitDecision".into()))
-            == Some(&ycoding_schema::JsonValue::Bool(true));
         if input.decision == Some(Decision::Decline) {
             let rationale = input.source.rationale.clone();
             return self
@@ -1561,12 +1559,6 @@ impl Permissions {
                     })
                 })
                 .await;
-        }
-        if explicit {
-            return Ok(Reconsidered::escalated(
-                fingerprint,
-                "explicit-decision:request",
-            ));
         }
         if input.decision == Some(Decision::Approve) {
             return self
@@ -1653,19 +1645,6 @@ impl Permissions {
         let effect = self
             .rule_effect(&request, &authority)
             .map_err(coordination_error)?;
-        if effect == Effect::Ask
-            && input.decision != Some(Decision::Decline)
-            && request
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.get(&"requireExplicitDecision".into()))
-                == Some(&JsonValue::Bool(true))
-        {
-            return Ok(Reconsidered::escalated(
-                fingerprint,
-                "explicit-decision:request",
-            ));
-        }
         let (outcome, via, assessed_via, reply, error, provenance) =
             match decide(effect, &request, &authority)? {
                 Verdict::Escalate(reason) => {
@@ -2087,35 +2066,6 @@ fn evidence(request: &permission::Request, workdir: &LosslessString) -> JsonValu
         )
         .field("workdir", workdir)
         .finish()
-}
-
-fn historical_fingerprint(
-    request: &permission::Request,
-    workdir: &LosslessString,
-) -> Option<LosslessString> {
-    let metadata = request.metadata.as_ref()?;
-    if metadata.get(&"requireExplicitDecision".into()) != Some(&JsonValue::Bool(true)) {
-        return None;
-    }
-    let mut kept = ycoding_schema::JsonObject::new();
-    for (key, value) in metadata.iter() {
-        if key.as_str() != Some("requireExplicitDecision") {
-            kept.insert(key.clone(), value.clone());
-        }
-    }
-    kept.insert("requireHuman".into(), JsonValue::Bool(true));
-    Some(
-        review::fingerprint(&FingerprintInput {
-            action: request.action.clone(),
-            resources: request.resources.clone(),
-            workdir: workdir.clone(),
-            rule_ids: vec![],
-            hard_review: false,
-            metadata: Some(kept),
-        })
-        .as_lossless()
-        .clone(),
-    )
 }
 
 enum Verdict {

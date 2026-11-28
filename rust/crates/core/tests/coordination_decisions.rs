@@ -3,10 +3,7 @@ include!("policy_fixture.rs");
 use std::{sync::Arc, time::Duration};
 use ycoding_core::{
     coordination::{
-        decisions::{
-            Appended, Evidence, Gate, Reconsider, Source, append, explicit_decision_reason,
-            routine_eligible,
-        },
+        decisions::{Appended, Gate, Reconsider, Source, append, routine_eligible},
         runtime::{Decision, DecisionOutcome},
     },
     tools::policy::permissions::Permissions,
@@ -17,138 +14,6 @@ use ycoding_schema::{
 };
 
 const BOUND: Duration = Duration::from_secs(10);
-
-fn evidence<'a>(
-    kind: c::RequestKind,
-    action: &'a str,
-    resources: &'a [LosslessString],
-    metadata: Option<&'a JsonValue>,
-) -> Evidence<'a> {
-    Evidence {
-        kind,
-        action,
-        resources,
-        metadata,
-        hard_review: false,
-        rule_ids: &[],
-    }
-}
-
-fn reason(action: &str, resource: &str) -> Option<&'static str> {
-    let resources = [LosslessString::from(resource)];
-    explicit_decision_reason(&evidence(
-        c::RequestKind::Permission,
-        action,
-        &resources,
-        None,
-    ))
-}
-
-#[test]
-fn explicit_decisions_cover_every_human_only_category() {
-    let cases = [
-        (
-            "edit",
-            ".env.production",
-            "explicit-decision:credentials-account",
-        ),
-        (
-            "write",
-            ".github/workflows/ci.yml",
-            "explicit-decision:ci-cd",
-        ),
-        (
-            "shell",
-            "prisma migrate deploy production",
-            "explicit-decision:production-migration",
-        ),
-        (
-            "shell",
-            "open checkout payment page",
-            "explicit-decision:purchase-spend",
-        ),
-        (
-            "shell",
-            "git push origin main",
-            "explicit-decision:publication",
-        ),
-        (
-            "shell",
-            "kubectl apply -f service.yaml",
-            "explicit-decision:deploy-release",
-        ),
-        (
-            "shell",
-            "rm -rf build",
-            "explicit-decision:destructive-irreversible",
-        ),
-        (
-            "shell",
-            "npm install left-pad",
-            "explicit-decision:dependency-install-download",
-        ),
-        (
-            "external_directory",
-            "/elsewhere",
-            "explicit-decision:external-write",
-        ),
-        (
-            "shell",
-            "plan a breaking change",
-            "explicit-decision:scope-expansion",
-        ),
-    ];
-    for (action, resource, expected) in cases {
-        assert_eq!(
-            reason(action, resource),
-            Some(expected),
-            "{action} {resource}"
-        );
-    }
-    assert_eq!(reason("read", "src/lib.rs"), None);
-    assert_eq!(
-        reason("read", ".env"),
-        None,
-        "reads of plain files stay routine"
-    );
-}
-
-#[test]
-fn hard_review_and_request_metadata_always_require_a_human() {
-    let hard = Evidence {
-        hard_review: true,
-        ..evidence(c::RequestKind::Review, "read", &[], None)
-    };
-    assert_eq!(
-        explicit_decision_reason(&hard),
-        Some("explicit-decision:hard-review")
-    );
-    let metadata = parse_json(r#"{"requireExplicitDecision":true}"#).unwrap();
-    let marked = evidence(c::RequestKind::Permission, "read", &[], Some(&metadata));
-    assert_eq!(
-        explicit_decision_reason(&marked),
-        Some("explicit-decision:request")
-    );
-    let nested = parse_json(r#"{"note":{"a":["rm -rf /"]}}"#).unwrap();
-    let nested = evidence(c::RequestKind::Permission, "shell", &[], Some(&nested));
-    assert_eq!(
-        explicit_decision_reason(&nested),
-        Some("explicit-decision:destructive-irreversible")
-    );
-}
-
-#[test]
-fn questions_check_sensitive_evidence_but_not_mutation_only_rules() {
-    let metadata = parse_json(r#"{"title":"Rotate the api_key","fields":["token"]}"#).unwrap();
-    let credential = evidence(c::RequestKind::Question, "question", &[], Some(&metadata));
-    assert_eq!(
-        explicit_decision_reason(&credential),
-        Some("explicit-decision:credentials-account")
-    );
-    let metadata = parse_json(r#"{"title":"Run git push","fields":[]}"#).unwrap();
-    let publish = evidence(c::RequestKind::Question, "question", &[], Some(&metadata));
-    assert_eq!(explicit_decision_reason(&publish), None);
-}
 
 #[test]
 fn routine_eligibility_is_limited_to_reads_local_writes_and_simple_read_only_shell() {
@@ -440,35 +305,24 @@ async fn revoked_delegation_or_stale_location_escalates_without_settling() {
 }
 
 #[tokio::test]
-async fn explicit_decision_requests_escalate_coordinator_approval_and_wait_for_a_human() {
+async fn coordinator_approval_settles_a_request_marked_require_explicit_decision() {
     let pending = pending("manual", Some(r#"{"requireExplicitDecision":true}"#)).await;
     let fingerprint = pending
         .permissions
         .snapshot(&pending.id)
         .unwrap()
         .fingerprint;
-    for decision in [None, Some(Decision::Approve)] {
-        let result = pending
-            .permissions
-            .reconsider(
-                &pending.id,
-                reconsider(&fingerprint, decision, gate(true, true)),
-            )
-            .await
-            .unwrap();
-        assert_eq!(result.outcome, DecisionOutcome::Escalated);
-        assert!(!result.settled);
-        assert_eq!(
-            result.reason.as_ref().and_then(|reason| reason.as_str()),
-            Some("explicit-decision:request")
-        );
-        assert!(pending.permissions.snapshot(&pending.id).is_some());
-        assert!(!pending.waiting.is_finished());
-    }
-    pending
+    let result = pending
         .permissions
-        .reply(&pending.id, permission::Reply("once".into()), None)
+        .reconsider(
+            &pending.id,
+            reconsider(&fingerprint, Some(Decision::Approve), gate(true, true)),
+        )
+        .await
         .unwrap();
+    assert_eq!(result.outcome, DecisionOutcome::Allowed, "{result:?}");
+    assert!(result.settled);
+    assert!(pending.permissions.snapshot(&pending.id).is_none());
     assert!(
         tokio::time::timeout(BOUND, pending.waiting)
             .await

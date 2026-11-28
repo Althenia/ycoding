@@ -5,10 +5,7 @@ use super::{
     receipt::Record,
 };
 use crate::{
-    coordination::{
-        decisions::{Evidence, Source, explicit_decision_reason, routine_eligible},
-        runtime::DecisionOutcome,
-    },
+    coordination::{decisions::Source, runtime::DecisionOutcome},
     session::{
         autonomy::{DecisionMode, Effective},
         prompt_cache::sha256,
@@ -122,65 +119,18 @@ impl GoalDecisions {
         (!covered).then_some("delegation-out-of-scope")
     }
 
-    pub(super) async fn human_only(
-        &self,
-        session: &session::Id,
-        kind: Kind,
-        subject: &Subject,
-    ) -> Option<String> {
+    pub(super) async fn blocker(&self, session: &session::Id, subject: &Subject) -> Option<String> {
         let (request_kind, action, resources) = match subject {
             Subject::Request {
-                kind: request_kind,
+                kind,
                 action,
                 resources,
-                metadata,
-                rule_ids,
-                standard,
-                hard_review,
-            } => {
-                if kind == Kind::Guardrail {
-                    if *hard_review
-                        || rule_ids
-                            .iter()
-                            .any(|id| id.as_str() == Some("configuration.invalid"))
-                    {
-                        return Some("explicit-decision:hard-review".into());
-                    }
-                    if !*standard
-                        || rule_ids
-                            .iter()
-                            .any(|id| !readable(id).starts_with("standard."))
-                    {
-                        return Some("explicit-decision:custom-review".into());
-                    }
-                }
-                if let Some(reason) = explicit_decision_reason(&Evidence {
-                    kind: *request_kind,
-                    action,
-                    resources,
-                    metadata: metadata.as_ref(),
-                    hard_review: *hard_review,
-                    rule_ids,
-                }) {
-                    return Some(reason.into());
-                }
-                if !routine_eligible(*request_kind, action, resources) {
-                    return Some("unknown-semantics".into());
-                }
-                (*request_kind, action.as_str(), resources.as_slice())
-            }
-            Subject::Form { explicit, .. } => {
-                if let Some(reason) = explicit {
-                    return Some((*reason).into());
-                }
-                (c::RequestKind::Question, "question", &[][..])
-            }
+                ..
+            } => (*kind, action.as_str(), resources.as_slice()),
+            Subject::Form { .. } => (c::RequestKind::Question, "question", &[][..]),
         };
-        let Ok(effective) = self.0.autonomy.effective(session) else {
-            return Some("human-only:unavailable".into());
-        };
-        if !kind.answers_question() && mode_of(&effective, kind) == DecisionMode::Manual {
-            return Some(format!("human-only:manual-{}", kind.category()));
+        if self.0.autonomy.effective(session).is_err() {
+            return Some("autonomy-unavailable".into());
         }
         self.delegation(request_kind, action, resources)
             .await
@@ -210,11 +160,7 @@ impl GoalDecisions {
         self.0
             .autonomy
             .effective(&fence.session)
-            .is_ok_and(|effective| {
-                (fence.kind.answers_question()
-                    || mode_of(&effective, fence.kind) != DecisionMode::Manual)
-                    && (fence.kind != Kind::Guardrail || !effective.deferred)
-            })
+            .is_ok_and(|effective| fence.kind != Kind::Guardrail || !effective.deferred)
     }
 
     pub(super) async fn valid(
@@ -225,10 +171,7 @@ impl GoalDecisions {
     ) -> bool {
         session == fence.session.as_lossless()
             && self.fenced(fence)
-            && self
-                .human_only(&fence.session, fence.kind, subject)
-                .await
-                .is_none()
+            && self.blocker(&fence.session, subject).await.is_none()
     }
 
     async fn waiting(
@@ -262,14 +205,14 @@ impl GoalDecisions {
         let reference = &candidate.reference;
         let rationale = if candidate.answers_question() {
             format!(
-                "The Goal agent settled a routine {} request from bounded task context; an automatic answer is never a human reply.",
+                "The Goal agent settled a {} request from bounded task context; an automatic answer is never a human reply.",
                 reference.kind.as_str()
             )
         } else {
             format!(
-                "The goal loop re-applied the requesting Session's current {} policy to a routine {} request.",
-                reference.kind.category(),
-                reference.kind.as_str()
+                "The goal loop processes a {} request under the active goal with {} deny rules and permission ceilings.",
+                reference.kind.as_str(),
+                reference.kind.category()
             )
         };
         let Ok(authority) = self.0.autonomy.snapshot_inherited(&reference.session) else {
@@ -355,7 +298,7 @@ impl GoalDecisions {
             group_id: None,
             rationale: LosslessString::from(rationale.as_str()),
         };
-        let answer = if candidate.answers_question() && !candidate.has_deterministic_answer() {
+        let answer = if !candidate.has_deterministic_answer() {
             match self.goal_answer(owner, candidate).await {
                 Ok(answer) => Some(answer),
                 Err(reason) => {
@@ -468,11 +411,7 @@ impl GoalDecisions {
         candidate: &Candidate,
     ) -> bool {
         if let Some(reason) = self
-            .human_only(
-                &candidate.reference.session,
-                candidate.reference.kind,
-                &candidate.subject,
-            )
+            .blocker(&candidate.reference.session, &candidate.subject)
             .await
         {
             self.waiting(
@@ -481,7 +420,7 @@ impl GoalDecisions {
                 candidate,
                 &reason,
                 &reason,
-                "A human-only boundary applies; the goal loop does not settle this request.",
+                "The goal delegation or autonomy state does not cover this request; the goal loop did not settle it.",
             )
             .await;
             return false;

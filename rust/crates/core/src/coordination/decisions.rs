@@ -8,11 +8,9 @@ use super::{
 };
 use crate::{
     process::guardrails::{Guardrails, redact_value},
-    session::js_pattern::Pattern,
     tools::policy::{forms::Forms, permissions::Permissions, wildcard},
 };
 use std::{
-    cell::RefCell,
     collections::{BTreeSet, VecDeque},
     future::Future as StdFuture,
     pin::Pin,
@@ -354,17 +352,9 @@ fn review_status(item: &crate::session::review_fold::Folded) -> PriorStatus {
     }
 }
 
-pub fn permission_matches(
-    payload: &session_review::Payload,
-    expected: &LosslessString,
-    historical: Option<&LosslessString>,
-) -> bool {
-    let session_review::Payload::Permission(payload) = payload else {
-        return false;
-    };
-    payload.fingerprint.as_lossless() == expected
-        || (payload.fingerprint_version == session_review::FingerprintVersion::V1
-            && historical.is_some_and(|historical| payload.fingerprint.as_lossless() == historical))
+pub fn permission_matches(payload: &session_review::Payload, expected: &LosslessString) -> bool {
+    matches!(payload, session_review::Payload::Permission(payload)
+        if payload.fingerprint.as_lossless() == expected)
 }
 
 pub fn guardrail_matches(payload: &session_review::Payload, expected: &LosslessString) -> bool {
@@ -535,170 +525,8 @@ pub fn denied_feedback(guardrail: bool, escalation: &guardrail::Escalation) -> L
     .into()
 }
 
-pub struct Evidence<'a> {
-    pub kind: c::RequestKind,
-    pub action: &'a str,
-    pub resources: &'a [LosslessString],
-    pub metadata: Option<&'a JsonValue>,
-    pub hard_review: bool,
-    pub rule_ids: &'a [LosslessString],
-}
-
 fn readable(text: &LosslessString) -> String {
     String::from_utf16_lossy(&text.code_units().collect::<Vec<_>>())
-}
-
-fn metadata_text(value: &JsonValue, depth: usize) -> String {
-    if depth > 3 {
-        return String::new();
-    }
-    match value {
-        JsonValue::String(text) => readable(text),
-        JsonValue::Number(number) => number.to_string(),
-        JsonValue::Bool(flag) => flag.to_string(),
-        JsonValue::Array(items) => items
-            .iter()
-            .take(20)
-            .map(|item| metadata_text(item, depth + 1))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        JsonValue::Object(object) => object
-            .iter()
-            .take(20)
-            .map(|(_, item)| metadata_text(item, depth + 1))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        JsonValue::Null => String::new(),
-    }
-}
-
-fn pattern(source: &str) -> Pattern {
-    Pattern::new(source, "")
-}
-
-struct Rules {
-    sensitive: Pattern,
-    ci: Pattern,
-    migration: Pattern,
-    purchase: Pattern,
-    publication: Pattern,
-    deploy: Pattern,
-    destructive: Pattern,
-    install: Pattern,
-    external: Pattern,
-    scope: Pattern,
-    piped_install: Pattern,
-    communication: Pattern,
-    legal: Pattern,
-}
-
-impl Rules {
-    fn new() -> Self {
-        Self {
-            sensitive: pattern(
-                r"(credential|secret|api[ _-]?key|access[ _-]?token|private[ _-]?key|id_rsa|\.env(?:\.|\b)|\.aws\/|\.ssh\/|keychain|password|oauth|\baccount\b)",
-            ),
-            ci: pattern(
-                r"(\.github\/workflows\/|\.gitlab-ci|jenkinsfile|\.circleci\/|\bci\/cd\b|\bcicd\b)",
-            ),
-            migration: pattern(
-                r"(db:migrate|database migration|prisma migrate|drizzle[^\n]*migrat|alembic upgrade|rails db:migrate|migrat[^\n]*(prod|production)|(prod|production)[^\n]*migrat)",
-            ),
-            purchase: pattern(
-                r"(purchase|checkout|payment|\bpaid\b|billing|subscribe|subscription|buy now)",
-            ),
-            publication: pattern(
-                r"(git\s+push|npm\s+publish|pnpm\s+publish|yarn\s+publish|gh\s+(pr|release|issue)\s+(create|merge|comment)|\bpublish\b)",
-            ),
-            deploy: pattern(
-                r"(wrangler\s+deploy|kubectl\s+apply|terraform\s+apply|\bdeploy\b|release\s+create|git\s+tag\b)",
-            ),
-            destructive: pattern(
-                r"(rm\s+-[a-z]*r|rm\s+--recursive|git\s+reset\s+--hard|git\s+clean\s+-[a-z]*f|drop\s+(table|database)|truncate\s+table|delete\s+from\b|mkfs|dd\s+if=|\bshred\b)",
-            ),
-            install: pattern(
-                r"(\b(bun|npm|pnpm|yarn|pip|pip3|brew|apt|apt-get|cargo|go)\s+(install|add)\b|\bwget\b|\bcurl\b[^\n]*(?:\s-o\b|\s-o\s|--output)|\bdownload\b)",
-            ),
-            external: pattern(
-                r"(curl\b[^\n]*(-x\s*(post|put|patch|delete)|--data|--form)|wget\b[^\n]*--post|\bscp\b|rsync\b[^\n]*:|ssh\b[^\n]*\s\S+@)",
-            ),
-            scope: pattern(
-                r"(public contract|breaking change|scope expansion|expand (the )?scope)",
-            ),
-            piped_install: pattern(r"\b(?:curl|wget)\b[^\n]*\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b"),
-            communication: pattern(
-                r"(\bsendmail\b|(?:^|\n|[;&|]\s*)(?:mailx?|mutt)\s|\bsmtp\b|hooks\.slack\.com|chat\.postmessage|discord(?:app)?\.com\/api\/webhooks|webhook\.office\.com|\b(?:slack|discord|teams)\b[^\n]*\b(?:send|post|webhook)\b|\bsend\s+(?:an?\s+)?(?:e-?mail|message|chat))",
-            ),
-            legal: pattern(
-                r"\b(?:accept|agree)\w*[^\n]*\b(?:terms|licen[cs]es?|eulas?|agreements?)\b|sdkmanager\s+--licenses",
-            ),
-        }
-    }
-}
-
-thread_local! {
-    static RULES: RefCell<Option<Rules>> = const { RefCell::new(None) };
-}
-
-pub fn explicit_decision_reason(input: &Evidence<'_>) -> Option<&'static str> {
-    if input.hard_review {
-        return Some("explicit-decision:hard-review");
-    }
-    if let Some(JsonValue::Object(object)) = input.metadata
-        && object.get(&"requireExplicitDecision".into()) == Some(&JsonValue::Bool(true))
-    {
-        return Some("explicit-decision:request");
-    }
-    let question = input.kind == c::RequestKind::Question;
-    let mutation = !question && !READ_ACTIONS.contains(&input.action);
-    let guarded = mutation || question;
-    let evidence = std::iter::once(input.action.to_owned())
-        .chain(input.resources.iter().map(readable))
-        .chain(input.rule_ids.iter().map(readable))
-        .chain(std::iter::once(
-            input
-                .metadata
-                .map_or_else(String::new, |metadata| metadata_text(metadata, 0)),
-        ))
-        .collect::<Vec<_>>()
-        .join("\n")
-        .to_lowercase();
-    RULES.with(|rules| {
-        let mut rules = rules.borrow_mut();
-        let rules = rules.get_or_insert_with(Rules::new);
-        if guarded && rules.sensitive.is_match(&evidence) {
-            return Some("explicit-decision:credentials-account");
-        }
-        if mutation && rules.ci.is_match(&evidence) {
-            return Some("explicit-decision:ci-cd");
-        }
-        if guarded && rules.migration.is_match(&evidence) {
-            return Some("explicit-decision:production-migration");
-        }
-        if guarded && rules.purchase.is_match(&evidence) {
-            return Some("explicit-decision:purchase-spend");
-        }
-        if mutation && rules.publication.is_match(&evidence) {
-            return Some("explicit-decision:publication");
-        }
-        if mutation && rules.deploy.is_match(&evidence) {
-            return Some("explicit-decision:deploy-release");
-        }
-        if mutation && rules.destructive.is_match(&evidence) {
-            return Some("explicit-decision:destructive-irreversible");
-        }
-        if mutation && rules.install.is_match(&evidence) {
-            return Some("explicit-decision:dependency-install-download");
-        }
-        if mutation && (input.action == "external_directory" || rules.external.is_match(&evidence))
-        {
-            return Some("explicit-decision:external-write");
-        }
-        if guarded && rules.scope.is_match(&evidence) {
-            return Some("explicit-decision:scope-expansion");
-        }
-        None
-    })
 }
 
 fn simple_read_only_shell(command: &str) -> bool {
@@ -765,55 +593,6 @@ pub fn coordinator_routine(
     resources: &[LosslessString],
 ) -> bool {
     action == "shell" || routine_eligible(kind, action, resources)
-}
-
-pub fn coordinator_decision_reason(input: &Evidence<'_>, standard: bool) -> Option<&'static str> {
-    if let Some(reason) = explicit_decision_reason(input) {
-        return Some(reason);
-    }
-    let review = input.kind == c::RequestKind::Review;
-    if review
-        && input
-            .rule_ids
-            .iter()
-            .any(|rule| rule.as_str() == Some("standard.review.outside-repo"))
-    {
-        return Some("explicit-decision:outside-repository");
-    }
-    if review && !standard {
-        return Some("explicit-decision:custom-rule");
-    }
-    let question = input.kind == c::RequestKind::Question;
-    if !question
-        && (READ_ACTIONS.contains(&input.action) || LOCAL_WRITE_ACTIONS.contains(&input.action))
-    {
-        return None;
-    }
-    let evidence = std::iter::once(input.action.to_owned())
-        .chain(input.resources.iter().map(readable))
-        .chain(input.rule_ids.iter().map(readable))
-        .chain(std::iter::once(
-            input
-                .metadata
-                .map_or_else(String::new, |metadata| metadata_text(metadata, 0)),
-        ))
-        .collect::<Vec<_>>()
-        .join("\n")
-        .to_lowercase();
-    RULES.with(|rules| {
-        let mut rules = rules.borrow_mut();
-        let rules = rules.get_or_insert_with(Rules::new);
-        if !question && rules.piped_install.is_match(&evidence) {
-            return Some("explicit-decision:dependency-install-download");
-        }
-        if rules.communication.is_match(&evidence) {
-            return Some("explicit-decision:communication");
-        }
-        if rules.legal.is_match(&evidence) {
-            return Some("explicit-decision:legal-terms");
-        }
-        None
-    })
 }
 
 fn trimmed(text: &LosslessString) -> LosslessString {
@@ -1386,76 +1165,10 @@ impl Inner {
     }
 }
 
-fn form_evidence(form: &form::Info) -> JsonValue {
-    let titles = match form.fields.encode() {
-        JsonValue::Array(fields) => fields
-            .iter()
-            .map(|field| match field {
-                JsonValue::Object(field) => field
-                    .get(&"title".into())
-                    .or_else(|| field.get(&"key".into()))
-                    .cloned()
-                    .unwrap_or(JsonValue::Null),
-                _ => JsonValue::Null,
-            })
-            .collect(),
-        _ => vec![],
-    };
-    let explicit = form
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get(&"requireExplicitDecision".into()))
-        .cloned();
-    ObjectEncoder::new()
-        .optional("requireExplicitDecision", &explicit)
-        .field("title", &form.title)
-        .field("fields", &JsonValue::Array(titles))
-        .optional("metadata", &form.metadata.clone().map(JsonValue::Object))
-        .finish()
-}
-
-fn form_explicit_reason(form: &form::Info) -> Option<&'static str> {
-    coordinator_decision_reason(
-        &Evidence {
-            kind: c::RequestKind::Question,
-            action: "question",
-            resources: &[],
-            metadata: Some(&form_evidence(form)),
-            hard_review: false,
-            rule_ids: &[],
-        },
-        true,
-    )
-}
-
-fn delegation(reason: Option<&'static str>, fallback: Delegation) -> Delegation {
-    match reason {
-        Some(reason) => Delegation::ExplicitDecision(
-            reason
-                .strip_prefix("explicit-decision:")
-                .unwrap_or(reason)
-                .into(),
-        ),
-        None => fallback,
-    }
-}
-
 fn permission_pending(snapshot: &Snapshot<permission::Request>, target: &session::Id) -> Pending {
     let request = &snapshot.request;
     let request_session_id = origin(target, request.session_id.as_lossless());
     let action = readable(&request.action);
-    let metadata = request.metadata.clone().map(JsonValue::Object);
-    let explicit = coordinator_decision_reason(
-        &Evidence {
-            kind: c::RequestKind::Permission,
-            action: &action,
-            resources: &request.resources,
-            metadata: metadata.as_ref(),
-            hard_review: false,
-            rule_ids: &[],
-        },
-        true,
-    );
     let routine = coordinator_routine(c::RequestKind::Permission, &action, &request.resources);
     let request_id = id_text(&request.id);
     let summary = std::iter::once(action.clone())
@@ -1475,14 +1188,11 @@ fn permission_pending(snapshot: &Snapshot<permission::Request>, target: &session
             fingerprint: snapshot.fingerprint.clone(),
             action: request.action.clone(),
             resources: bounded_resources(&request.resources),
-            delegation: delegation(
-                explicit,
-                if routine {
-                    Delegation::Routine
-                } else {
-                    Delegation::DeclineOnly
-                },
-            ),
+            delegation: if routine {
+                Delegation::Routine
+            } else {
+                Delegation::DeclineOnly
+            },
             coordination_escalation: crate::process::guardrails::redacted_escalation(
                 request.coordination_escalation.as_ref(),
             ),
@@ -1498,18 +1208,6 @@ fn review_pending(
     let request = &snapshot.request;
     let request_session_id = origin(target, request.session_id.as_lossless());
     let action = readable(&request.action);
-    let metadata = request.metadata.clone().map(JsonValue::Object);
-    let explicit = coordinator_decision_reason(
-        &Evidence {
-            kind: c::RequestKind::Review,
-            action: &action,
-            resources: &request.resources,
-            metadata: metadata.as_ref(),
-            hard_review: request.hard_review == Some(true),
-            rule_ids: &request.rule_ids,
-        },
-        request.standard,
-    );
     let routine = coordinator_routine(c::RequestKind::Review, &action, &request.resources);
     let request_id = id_text(&request.id);
     let summary = format!(
@@ -1539,14 +1237,11 @@ fn review_pending(
             reason: bounded(&request.reason, 500),
             hard_review: request.hard_review == Some(true),
             standard: request.standard,
-            delegation: delegation(
-                explicit,
-                if routine {
-                    Delegation::Routine
-                } else {
-                    Delegation::DeclineOnly
-                },
-            ),
+            delegation: if routine {
+                Delegation::Routine
+            } else {
+                Delegation::DeclineOnly
+            },
             coordination_escalation: crate::process::guardrails::redacted_escalation(
                 request.coordination_escalation.as_ref(),
             ),
@@ -1613,7 +1308,7 @@ fn question_pending(snapshot: &Snapshot<form::Info>, target: &session::Id) -> Pe
             fingerprint: snapshot.fingerprint.clone(),
             title: bounded(&form.title, 500),
             fields,
-            delegation: delegation(form_explicit_reason(form), Delegation::Routine),
+            delegation: Delegation::Routine,
             coordination_escalation: crate::process::guardrails::redacted_escalation(
                 form.coordination_escalation.as_ref(),
             ),

@@ -404,30 +404,23 @@ async fn auto_answers_a_unique_recommended_option_without_assessing_or_calling_t
 }
 
 #[tokio::test]
-async fn auto_never_assesses_or_answers_an_explicit_decision_request() {
-    for mode in [modes::yolo(false), modes::auto(true)] {
-        let (harness, root) = session(mode).await;
-        let evaluator = Scripted::new(vec![]);
-        let forms = service(&harness, &evaluator);
-        let field = r#"{"key":"q0","type":"string","options":[{"value":"SQLite","label":"SQLite (Recommended)"},{"value":"Postgres","label":"Postgres"}],"custom":false}"#.to_owned();
-        let info = question_form(
-            &root,
-            "frm_explicit",
-            &[field],
-            r#","requireExplicitDecision":true"#,
-        );
-        let _wait = forms.ask(info.clone()).unwrap();
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let field = &assessment_of(&forms, &info.id).fields[0];
-        assert_eq!(field.status, form::FieldAssessmentStatus::NotAssessed);
-        assert_eq!(
-            text(&field.reason),
-            "This request requires an explicit decision; no model assessment."
-        );
-        assert_eq!(forms.state(&info.id).unwrap(), form::State::Pending);
-        assert_eq!(kinds(&harness), ["form.created"]);
-        assert_eq!(evaluator.calls(), 0);
-    }
+async fn auto_answers_a_request_marked_require_explicit_decision() {
+    let (harness, root) = session(modes::auto(true)).await;
+    let evaluator = Scripted::new(vec![]);
+    let forms = service(&harness, &evaluator);
+    let field = r#"{"key":"q0","type":"string","options":[{"value":"SQLite","label":"SQLite (Recommended)"},{"value":"Postgres","label":"Postgres"}],"custom":false}"#.to_owned();
+    let info = question_form(
+        &root,
+        "frm_explicit",
+        &[field],
+        r#","requireExplicitDecision":true"#,
+    );
+    let wait = forms.ask(info.clone()).unwrap();
+    let state = settle(wait).await;
+    assert_eq!(state, form::State::Answered(answer(r#"{"q0":"SQLite"}"#)));
+    assert!(forms.answered_automatically(&info.id).unwrap());
+    assert_eq!(kinds(&harness), ["form.created", "form.replied"]);
+    assert_eq!(evaluator.calls(), 0);
 }
 
 #[tokio::test]
@@ -1369,7 +1362,7 @@ async fn native_coordination_settles_a_yolo_fallback_once_with_coordinator_attri
 }
 
 #[tokio::test]
-async fn native_coordination_never_assesses_manual_explicit_or_coordinator_supplied_answers() {
+async fn native_coordination_never_assesses_manual_or_coordinator_supplied_answers() {
     let (harness, root) = session(modes::yolo(false)).await;
     let evaluator = Scripted::new(vec![]);
     let forms = service(&harness, &evaluator);
@@ -1381,27 +1374,6 @@ async fn native_coordination_never_assesses_manual_explicit_or_coordinator_suppl
         .await
         .unwrap();
     assert_eq!(text(manual.reason.as_ref().unwrap()), "answer-required");
-    assert_eq!(evaluator.calls(), 0);
-
-    let (harness, root) = session(modes::auto(true)).await;
-    let evaluator = Scripted::new(vec![]);
-    let forms = service(&harness, &evaluator);
-    let info = question_form(
-        &root,
-        "frm_explicit_reconsider",
-        &[single("q0")],
-        r#","requireExplicitDecision":true"#,
-    );
-    let _wait = forms.ask(info.clone()).unwrap();
-    let fingerprint = forms.snapshot(&info.id).unwrap().fingerprint;
-    let explicit = forms
-        .reconsider(&info.id, reconsider(&fingerprint, None, None))
-        .await
-        .unwrap();
-    assert_eq!(
-        text(explicit.reason.as_ref().unwrap()),
-        "explicit-decision:request"
-    );
     assert_eq!(evaluator.calls(), 0);
 
     let (harness, root) = session(modes::yolo(false)).await;

@@ -620,7 +620,7 @@ async fn streaming_tool_inputs_fail_unexecuted_before_the_child_resumes() {
 }
 
 #[tokio::test]
-async fn uncertain_dispatched_tools_hold_the_child_for_a_human_only_recovery_decision() {
+async fn uncertain_dispatched_tools_hold_the_child_for_a_review_box_recovery_decision() {
     let harness = harness();
     let child = running(&harness, "call_uncertain").await;
     finished_tool(&harness, &child, "call_done").await;
@@ -716,7 +716,7 @@ async fn uncertain_dispatched_tools_hold_the_child_for_a_human_only_recovery_dec
         .await;
     assert!(
         answered.is_err(),
-        "the parent answered a human-only recovery"
+        "the parent answered a recovery held in the review box"
     );
     assert_eq!(state(&harness, &child), State::Waiting);
 

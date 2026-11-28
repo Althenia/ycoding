@@ -131,18 +131,12 @@ impl DomainEncode for DecisionEscalateResult {
 pub enum Delegation {
     Routine,
     DeclineOnly,
-    ExplicitDecision(LosslessString),
 }
 impl DomainEncode for Delegation {
     fn encode(&self) -> JsonValue {
         match self {
             Self::Routine => "routine".encode(),
             Self::DeclineOnly => "decline-only".encode(),
-            Self::ExplicitDecision(reason) => {
-                let mut units = "explicit-decision:".encode_utf16().collect::<Vec<_>>();
-                units.extend(reason.code_units());
-                LosslessString::from_utf16(units).encode()
-            }
         }
     }
 }

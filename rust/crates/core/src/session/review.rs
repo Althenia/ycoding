@@ -162,7 +162,7 @@ pub fn fingerprint(input: &FingerprintInput) -> Fingerprint {
 
 pub fn deferred_fingerprint(input: &FingerprintInput) -> Fingerprint {
     let metadata = input.metadata.as_ref().map(|metadata| {
-        ["cwd", "workdir", "argv", "requireExplicitDecision"]
+        ["cwd", "workdir", "argv"]
             .into_iter()
             .fold(JsonObject::new(), |mut filtered, key| {
                 let key = LosslessString::from(key);

@@ -13,8 +13,11 @@ use ycoding_core::{
         decisions::{Gate, Settings, Source},
         runtime::{DecisionOutcome, Future as CoordinationFuture},
     },
+    process::guardrails::{
+        Guardrails, Input as GuardrailInput, Limits, Paths, Settings as GuardrailSettings,
+    },
     session::{
-        autonomy::{DecisionChange, DecisionMode, Service as Autonomy},
+        autonomy::Service as Autonomy,
         goal_decisions::{
             AuthorityProof, BoxFuture, Execution, GoalDecisions, Located, Options, ProofFuture,
             Synthesize,
@@ -113,6 +116,7 @@ struct Harness {
     questions: Questions,
     forms: Forms,
     permissions: Permissions,
+    guardrails: Guardrails,
     orchestration: orchestration::Service,
     synth: Arc<Synth>,
     wakes: Arc<Wakes>,
@@ -128,15 +132,37 @@ impl Harness {
             effect: permission::Effect("ask".into()),
         });
         let client = fixture.store.client();
+        let permissions = Permissions::new(
+            fixture.authority(),
+            ProjectId::new("project").unwrap(),
+            fixture.publisher(),
+        );
+        let guardrails = Guardrails::new(
+            fixture.authority(),
+            permissions.clone(),
+            GuardrailSettings {
+                paths: Paths {
+                    workdir: "/workspace/project".into(),
+                    project: "/workspace/project".into(),
+                    home: "/home/operator".into(),
+                    tmpdir: None,
+                    trusted_paths: vec![],
+                },
+                global_roots: vec![],
+                custom: Arc::new(Vec::new),
+                enabled: true,
+                limits: Limits::default(),
+                decide_reviews: false,
+                decide_hard_reviews: false,
+            },
+            fixture.publisher(),
+        );
         Self {
             autonomy: Autonomy::new(client.clone()),
             questions: Questions::new(fixture.authority(), fixture.publisher()),
             forms: Forms::new(fixture.authority(), fixture.publisher()),
-            permissions: Permissions::new(
-                fixture.authority(),
-                ProjectId::new("project").unwrap(),
-                fixture.publisher(),
-            ),
+            permissions,
+            guardrails,
             orchestration: orchestration::Service::new(store::Service::new(client), Arc::new(Idle)),
             synth: Synth::new(),
             wakes: Arc::new(Wakes(Mutex::default())),
@@ -166,6 +192,7 @@ impl Harness {
         let questions = self.questions.clone();
         let forms = self.forms.clone();
         let permissions = self.permissions.clone();
+        let guardrails = self.guardrails.clone();
         GoalDecisions::new(Options {
             client: self.fixture.store.client(),
             autonomy: self.autonomy.clone(),
@@ -176,7 +203,7 @@ impl Harness {
                 move |_id: session::Id| -> BoxFuture<'static, Option<Located>> {
                     let located = Located {
                         permissions: Some(permissions.clone()),
-                        guardrails: None,
+                        guardrails: Some(guardrails.clone()),
                         forms: Some(forms.clone()),
                         questions: Some(questions.clone()),
                         shell_active: None,
@@ -248,16 +275,6 @@ impl Harness {
             .filter(|event| event.type_ == kind)
             .map(|event| event.data.clone())
             .collect()
-    }
-
-    async fn answers(&self, session: &session::Id, mode: DecisionMode) {
-        self.autonomy
-            .set_decisions(
-                session,
-                DecisionChange::new(None, None, Some(mode)).unwrap(),
-            )
-            .await
-            .unwrap();
     }
 
     fn ask_question(
@@ -399,12 +416,6 @@ fn text(value: &JsonValue) -> String {
 fn free_field(description: &str) -> String {
     format!(
         r#"{{"key":"q0","title":"Branch","description":"{description}","type":"string","options":[],"custom":true,"required":true}}"#
-    )
-}
-
-fn option_field(description: &str, label: &str) -> String {
-    format!(
-        r#"{{"key":"q0","title":"Plan","description":"{description}","type":"string","options":[{{"value":"{label}","label":"{label}"}},{{"value":"Skip","label":"Skip"}}],"custom":false}}"#
     )
 }
 
@@ -570,7 +581,7 @@ fn a_multiselect_with_multiple_recommendations_has_no_deterministic_answer() {
 }
 
 #[tokio::test]
-async fn explicit_decision_questions_forms_and_child_questions_never_reach_the_goal_agent() {
+async fn sensitive_questions_forms_and_child_questions_reach_the_goal_agent() {
     let harness = Harness::new();
     let owner = harness.owner("manual");
     let _question = harness.ask_question(
@@ -584,11 +595,6 @@ async fn explicit_decision_questions_forms_and_child_questions_never_reach_the_g
         "frm_password",
         &free_field("What password should the deployment use?"),
     );
-    let _option = harness.ask_form(
-        &owner,
-        "frm_option",
-        &option_field("Which?", "Buy the paid plan"),
-    );
     harness
         .child_question(
             &owner,
@@ -597,35 +603,94 @@ async fn explicit_decision_questions_forms_and_child_questions_never_reach_the_g
         .await;
     harness.goals().inspect(&owner).await;
 
-    let mut outcomes = harness.outcomes(&owner);
-    outcomes.sort();
-    assert_eq!(
-        outcomes,
-        vec![
-            "waiting:explicit-decision:credentials-account",
-            "waiting:explicit-decision:purchase-spend",
-            "waiting:explicit-decision:purchase-spend",
-            "waiting:explicit-decision:purchase-spend",
-        ]
+    let outcomes = harness.outcomes(&owner);
+    assert_eq!(outcomes.len(), 3, "{outcomes:?}");
+    assert!(
+        outcomes
+            .iter()
+            .all(|outcome| outcome.starts_with("settled:")),
+        "{outcomes:?}"
     );
-    assert_eq!(harness.synth.calls(), 0);
-    assert_eq!(harness.questions.list().len(), 1);
-    assert_eq!(harness.forms.snapshots(&owner, 8).len(), 2);
-    assert_eq!(
+    assert_eq!(harness.synth.calls(), 3);
+    assert!(harness.questions.list().is_empty());
+    assert!(harness.forms.snapshots(&owner, 8).is_empty());
+    assert!(
         harness
             .orchestration
             .question_snapshots(&owner)
             .unwrap()
-            .len(),
-        1
+            .is_empty()
     );
 }
 
 #[tokio::test]
-async fn permission_asks_stay_with_the_human_whatever_the_answers_mode() {
+async fn the_goal_agent_settles_a_hard_review_under_manual_guardrails() {
+    for (answer, expected) in [
+        ("approve", "settled:allowed"),
+        ("decline", "settled:denied"),
+    ] {
+        let harness = Harness::new();
+        harness.synth.answer_with(Ok(answer));
+        let owner = harness.owner("manual");
+        let admission = harness
+            .guardrails
+            .assert(GuardrailInput {
+                session_id: owner.clone(),
+                action: "shell".into(),
+                resources: vec!["git reset --hard".into()],
+                metadata: None,
+                skip_review: false,
+                holder: None,
+                source: None,
+            })
+            .unwrap();
+        assert_eq!(admission.request.as_ref().unwrap().hard_review, Some(true));
+        let wait = admission.wait.unwrap();
+        harness.goals().inspect(&owner).await;
+
+        assert_eq!(harness.outcomes(&owner), vec![expected], "{answer}");
+        assert_eq!(harness.synth.calls(), 1);
+        let result = tokio::time::timeout(BOUND, wait).await.unwrap().unwrap();
+        if answer == "approve" {
+            result.unwrap().release();
+        } else {
+            assert!(result.is_err());
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_goal_loop_settles_a_permission_ask_under_manual_permissions() {
     let harness = Harness::new();
+    harness.synth.answer_with(Ok("approve"));
     let owner = harness.owner("manual");
-    harness.answers(&owner, DecisionMode::Yolo).await;
+    let waiting = harness.ask_permission(&owner);
+    tokio::time::timeout(BOUND, async {
+        while harness.permissions.list().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the ask becomes pending");
+    harness.goals().inspect(&owner).await;
+
+    assert_eq!(harness.outcomes(&owner), vec!["settled:allowed"]);
+    assert!(harness.permissions.list().is_empty());
+    assert_eq!(harness.synth.calls(), 1);
+    let prompts = harness.synth.prompts.lock().unwrap();
+    assert!(prompts[0].contains("read") && prompts[0].contains("notes/plan.md"));
+    drop(prompts);
+    tokio::time::timeout(BOUND, waiting)
+        .await
+        .expect("the ask is answered")
+        .unwrap();
+}
+
+#[tokio::test]
+async fn an_invalid_goal_decision_does_not_approve_a_permission() {
+    let harness = Harness::new();
+    harness.synth.answer_with(Ok("not a decision"));
+    let owner = harness.owner("manual");
     let _waiting = harness.ask_permission(&owner);
     tokio::time::timeout(BOUND, async {
         while harness.permissions.list().is_empty() {
@@ -634,16 +699,35 @@ async fn permission_asks_stay_with_the_human_whatever_the_answers_mode() {
     })
     .await
     .expect("the ask becomes pending");
-    let goals = harness.goals();
-    goals.inspect(&owner).await;
-    goals.inspect(&owner).await;
+    harness.goals().inspect(&owner).await;
 
-    assert_eq!(
-        harness.outcomes(&owner),
-        vec!["waiting:human-only:manual-permissions"]
-    );
+    assert_eq!(harness.outcomes(&owner), vec!["waiting:refused"]);
     assert_eq!(harness.permissions.list().len(), 1);
-    assert_eq!(harness.synth.calls(), 0);
+    assert_eq!(harness.synth.calls(), 1);
+}
+
+#[tokio::test]
+async fn the_goal_agent_can_decline_a_permission_ask_under_manual_permissions() {
+    let harness = Harness::new();
+    harness.synth.answer_with(Ok("decline"));
+    let owner = harness.owner("manual");
+    let waiting = harness.ask_permission(&owner);
+    tokio::time::timeout(BOUND, async {
+        while harness.permissions.list().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the ask becomes pending");
+    harness.goals().inspect(&owner).await;
+
+    assert_eq!(harness.outcomes(&owner), vec!["settled:denied"]);
+    assert!(harness.permissions.list().is_empty());
+    assert_eq!(harness.synth.calls(), 1);
+    tokio::time::timeout(BOUND, waiting)
+        .await
+        .expect("the ask is answered")
+        .unwrap();
 }
 
 #[tokio::test]
@@ -689,7 +773,7 @@ fn goal_source(owner: &session::Id) -> Source {
 }
 
 #[tokio::test]
-async fn a_goal_reconsideration_of_an_explicit_decision_form_escalates_without_settling() {
+async fn a_goal_reconsideration_settles_a_form_marked_require_explicit_decision() {
     let harness = Harness::new();
     let owner = harness.owner("manual");
     let info = form::Info::decode(
@@ -701,7 +785,7 @@ async fn a_goal_reconsideration_of_an_explicit_decision_form_escalates_without_s
         .unwrap(),
     )
     .unwrap();
-    let _wait = harness.forms.ask(info.clone()).unwrap();
+    let wait = harness.forms.ask(info.clone()).unwrap();
     let fingerprint = harness.forms.snapshot(&info.id).unwrap().fingerprint;
     let answer =
         form::Answer::decode(&parse_json(r#"{"q0":"feature/synthetic"}"#).unwrap()).unwrap();
@@ -721,12 +805,13 @@ async fn a_goal_reconsideration_of_an_explicit_decision_form_escalates_without_s
         .await
         .unwrap();
 
-    assert!(!result.settled && !matches!(result.outcome, DecisionOutcome::Allowed));
+    assert!(result.settled, "{result:?}");
+    assert!(matches!(result.outcome, DecisionOutcome::Allowed));
     assert_eq!(
-        text(&JsonValue::String(result.reason.unwrap())),
-        "explicit-decision:request"
+        answer_of(settled(wait).await.unwrap()),
+        parse_json(r#"{"q0":"feature/synthetic"}"#).unwrap()
     );
-    assert_eq!(harness.forms.snapshots(&owner, 8).len(), 1);
+    assert!(harness.forms.snapshots(&owner, 8).is_empty());
 }
 
 #[tokio::test]

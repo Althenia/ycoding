@@ -2018,14 +2018,7 @@ impl Guardrails {
             .rule_ids
             .iter()
             .any(|rule| rule.as_str() == Some("configuration.invalid"));
-        if input.decision.is_none() && (request.hard_review == Some(true) || invalid_configuration)
-        {
-            return Ok(Reconsidered::escalated(
-                fingerprint,
-                "explicit-decision:hard-review",
-            ));
-        }
-        if input.decision == Some(Decision::Approve) && invalid_configuration {
+        if input.decision != Some(Decision::Decline) && invalid_configuration {
             return Ok(Reconsidered::escalated(
                 fingerprint,
                 "configuration-invalid",
@@ -2083,18 +2076,6 @@ impl Guardrails {
         {
             return Ok(Reconsidered::stale(fingerprint));
         }
-        if evaluation.hard_review {
-            return Ok(Reconsidered::escalated(
-                fingerprint,
-                "explicit-decision:hard-review",
-            ));
-        }
-        if !evaluation.standard {
-            return Ok(Reconsidered::escalated(
-                fingerprint,
-                "explicit-decision:custom-review",
-            ));
-        }
         if input.decision == Some(Decision::Approve) {
             return self
                 .settle(session, id, order, &input, |request, evaluation, _| {
@@ -2121,12 +2102,6 @@ impl Guardrails {
                                 || evaluation.rule_ids != request.rule_ids =>
                         {
                             Verdict::Stale
-                        }
-                        Effect::Ask if evaluation.hard_review => {
-                            Verdict::Escalate("explicit-decision:hard-review")
-                        }
-                        Effect::Ask if !evaluation.standard => {
-                            Verdict::Escalate("explicit-decision:custom-review")
                         }
                         Effect::Ask => Verdict::Settle {
                             outcome: DecisionOutcome::Allowed,

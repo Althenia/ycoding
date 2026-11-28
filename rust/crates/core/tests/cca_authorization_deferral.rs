@@ -877,7 +877,7 @@ async fn guardrail_explicit_rejection_holds_auto_approval_after_yolo_admits_with
 }
 
 #[tokio::test]
-async fn explicit_permission_decision_requirement_remains_part_of_the_fingerprint() {
+async fn auto_permissions_admit_a_request_marked_require_explicit_decision() {
     let h = Harness::new("auto", "manual");
     let service = h.permissions(16).with_decision(Arc::new(Unassessed), true);
     let mut explicit = request(&h.root, "per_explicit", "one");
@@ -886,16 +886,10 @@ async fn explicit_permission_decision_requirement_remains_part_of_the_fingerprin
         .as_mut()
         .unwrap()
         .insert("requireExplicitDecision".into(), JsonValue::Bool(true));
-    opened(
-        permission_outcome(service.assert_deferred(explicit, None).await.unwrap_err()),
-        true,
-    );
-    assert_eq!(h.items().len(), 1);
-    service
-        .assert_deferred(request(&h.root, "per_auto", "two"), None)
-        .await
-        .unwrap();
-    assert_eq!(h.items().len(), 1);
+    service.assert_deferred(explicit, None).await.unwrap();
+    assert!(h.items().is_empty());
+    assert!(service.list().is_empty());
+    assert_eq!(h.emitted("permission.asked"), 0);
 }
 
 #[tokio::test]

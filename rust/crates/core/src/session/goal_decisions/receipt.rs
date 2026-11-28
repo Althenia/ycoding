@@ -72,7 +72,7 @@ fn receipt_text(
     let subject = label(reference);
     let text = match outcome {
         Outcome::Waiting => format!(
-            "Pending {subject} is waiting for a human decision ({}); the goal loop did not settle it. This record authorizes nothing.",
+            "Pending {subject} is still waiting ({}); the goal loop did not settle it. This record authorizes nothing.",
             reason.unwrap_or("unspecified")
         ),
         Outcome::Settled => {

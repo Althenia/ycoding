@@ -271,7 +271,6 @@ impl Forms {
                 &form,
                 Some(session),
                 &authority.autonomy,
-                explicit_decision(&form),
                 self.0.decision.get().is_some(),
             ) {
                 let mut forms = self
@@ -432,20 +431,14 @@ impl Forms {
             .and_then(|session| self.0.authority.session(session, None).ok())
             .map(|session| session.autonomy)
             .unwrap_or_default();
-        let explicit = explicit_decision(&form);
-        let auto_answer = autonomy.can_auto_answer() && !explicit;
+        let auto_answer = autonomy.can_auto_answer();
         let fence = session.as_ref().map(|session| self.fence(session));
         let evaluator = self.0.decision.get().cloned().filter(|_| {
             autonomy.can_yolo_answer()
                 && fence.as_ref().is_some_and(|fence| fence.context.is_some())
         });
-        let assessment = self.initial_assessment(
-            &form,
-            session.as_ref(),
-            &autonomy,
-            explicit,
-            evaluator.is_some(),
-        );
+        let assessment =
+            self.initial_assessment(&form, session.as_ref(), &autonomy, evaluator.is_some());
         let reviews = self.0.reviews.get().cloned();
         let deterministic = if auto_answer {
             automatic_answer(&form)
@@ -743,9 +736,6 @@ impl Forms {
         if !yolo && input.answer.is_some() && !confident {
             return escalate("low-confidence");
         }
-        if explicit_decision(&info) && !yolo {
-            return escalate("explicit-decision:request");
-        }
         if input.answer.is_none() && !auto && !yolo {
             return escalate("answer-required");
         }
@@ -828,9 +818,6 @@ impl Forms {
         };
         if !(input.gate.current)() {
             return escalate("delegation-invalid");
-        }
-        if explicit_decision(&entry.form) && !yolo {
-            return escalate("explicit-decision:request");
         }
         let current = self.fence(&session);
         let stale = if context_fenced {
@@ -967,9 +954,6 @@ impl Forms {
         };
         if !(input.gate.validate)(info.clone()).await {
             return escalate("delegation-invalid");
-        }
-        if explicit_decision(&info) {
-            return escalate("explicit-decision:request");
         }
         if input.answer.is_some()
             && input.confidence.is_some_and(|confidence| {
@@ -1271,19 +1255,13 @@ impl Forms {
         form: &form::Info,
         session: Option<&SessionId>,
         autonomy: &crate::session::autonomy::Effective,
-        explicit: bool,
         evaluating: bool,
     ) -> Option<form::Assessment> {
         if !assessable(form) {
             return None;
         }
         let mode = answers_mode(autonomy);
-        let (status, reason) = if explicit && !autonomy.can_yolo_answer() {
-            (
-                form::FieldAssessmentStatus::NotAssessed,
-                "This request requires an explicit decision; no model assessment.",
-            )
-        } else if autonomy.can_yolo_answer() {
+        let (status, reason) = if autonomy.can_yolo_answer() {
             if evaluating {
                 (
                     form::FieldAssessmentStatus::Pending,
@@ -1482,13 +1460,6 @@ pub fn deterministic_goal_answer(form: &form::Info) -> Option<form::Answer> {
         return None;
     }
     automatic_answer(form).filter(|answer| !answer.0.is_empty())
-}
-
-fn explicit_decision(form: &form::Info) -> bool {
-    form.metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get(&"requireExplicitDecision".into()))
-        == Some(&JsonValue::Bool(true))
 }
 
 fn answers_mode(autonomy: &crate::session::autonomy::Effective) -> form::AssessmentMode {

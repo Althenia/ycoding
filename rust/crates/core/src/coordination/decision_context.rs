@@ -476,7 +476,7 @@ fn instruction_messages(
     lower: Bound<i64>,
 ) -> Result<Vec<message::User>, Error> {
     let mut rows = BTreeMap::new();
-    for human_only in [false, true] {
+    for human_origin in [false, true] {
         let mut after = None;
         let mut kept = 0;
         'pages: loop {
@@ -495,7 +495,7 @@ fn instruction_messages(
             };
             after = Some(last.cursor.clone());
             for entry in page {
-                if human_only && !human(&entry.record.data) {
+                if human_origin && !human(&entry.record.data) {
                     continue;
                 }
                 rows.insert(entry.record.seq, entry.record);
@@ -528,13 +528,13 @@ fn pending_instructions(
     let prefix = tuple_key(&[KeyPart::String(id.as_lossless()), KeyPart::String(&steer)]);
     let user = LosslessString::from("user");
     let mut rows = BTreeMap::new();
-    for human_only in [false, true] {
+    for human_origin in [false, true] {
         for row in collect::<PendingTable>(
             snapshot,
             "session_pending_session_delivery_seq_idx",
             &prefix,
             IndexOrder::Descending,
-            |row| row.type_ == user && (!human_only || human(&row.data)),
+            |row| row.type_ == user && (!human_origin || human(&row.data)),
             PENDING_INSTRUCTIONS,
         )? {
             rows.insert(row.admitted_seq, row);

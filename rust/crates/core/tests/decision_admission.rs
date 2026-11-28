@@ -249,6 +249,61 @@ async fn yolo_admits_ordinary_and_explicit_requests_without_assessment() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn configured_denies_and_permission_ceilings_block_requests_in_every_mode() {
+    for mode in ["manual", "auto", "yolo"] {
+        for ceiling in [false, true] {
+            let case = ordinary([mode, "manual", "manual"], |fixture| {
+                if !ceiling {
+                    fixture
+                        .rules
+                        .lock()
+                        .unwrap()
+                        .push(rule("edit", "*", "deny"));
+                }
+            });
+            if ceiling {
+                case._harness.fixture.session_with(
+                    "ses_member",
+                    None,
+                    [mode, "manual", "manual"],
+                    false,
+                    Some(vec![rule("edit", "*", "deny")]),
+                );
+            }
+            let result = tokio::time::timeout(BOUND, case.assert(true))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(result.is_err(), "mode={mode} ceiling={ceiling}");
+            assert!(case.permissions.list().is_empty());
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn switching_to_yolo_rechecks_the_ceiling_before_settling_a_pending_request() {
+    let case = ordinary(["manual", "manual", "manual"], |_| {});
+    let waiting = case.assert(true);
+    case.held(&waiting).await;
+    case._harness.fixture.session_with(
+        "ses_member",
+        None,
+        ["yolo", "manual", "manual"],
+        false,
+        Some(vec![rule("edit", "*", "deny")]),
+    );
+    case.permissions.reconcile_autonomy(&case.session).unwrap();
+    assert!(
+        tokio::time::timeout(BOUND, waiting)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err()
+    );
+    assert!(case.permissions.list().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn yolo_ignores_a_durable_rejection_without_granting_a_later_manual_reissue() {
     let case = ordinary(["yolo", "manual", "manual"], |fixture| {
         review_event(fixture, "ses_member", "rvw_one", 10, "reject")

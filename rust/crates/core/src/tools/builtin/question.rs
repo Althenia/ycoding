@@ -218,7 +218,7 @@ impl Tool for Question {
                     text
                 } else if automatic {
                     format!(
-                        "Answers were selected automatically, not provided or approved by the user: {formatted}. Continue independent work within the authorized scope and follow the active goal when one exists. Do not reopen routine choices or treat an automatic selection to wait as a new user instruction or authorization constraint. Permissions, guardrails, and explicit human-only approvals still apply."
+                        "Answers were selected automatically, not provided or approved by the user: {formatted}. Continue independent work within the authorized scope and follow the active goal when one exists. Do not reopen routine choices or treat an automatic selection to wait as a new user instruction or authorization constraint. Permissions and guardrails still apply."
                     )
                 } else {
                     format!(
