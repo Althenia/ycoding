@@ -58,6 +58,13 @@ type Pending = {
   reject: (error: unknown) => void
   stream?: DeliveryStream<unknown>
 }
+type Waiting = {
+  binding: Binding
+  resolve: () => void
+  reject: (error: unknown) => void
+  signal?: AbortSignal
+  abort: () => void
+}
 type Owner = {
   active: boolean
   ready: Promise<void>
@@ -74,6 +81,7 @@ type Owner = {
     { stream: DeliveryStream<unknown>; operation: OperationDescriptor; scope: Scope; closing: boolean }
   >
   opening: number
+  waiting: Waiting[]
   epoch?: string
   sourceEpoch?: string
 }
@@ -185,6 +193,7 @@ export class LocalTransport {
       normalSentAt: [],
       streams: new Map(),
       opening: 0,
+      waiting: [],
     }
     void owner.ready.catch(() => {})
     queueMicrotask(() => {
@@ -324,66 +333,65 @@ export class LocalTransport {
     const operation = operations.find((operation) => operation.operationId === binding.operationID)!
     if (!owner.active || owner !== this.#owner)
       throw new V5ClientError("unsent", binding.method, unsentReason.closed, true)
-    if (
-      owner.opening + owner.pending.size >=
-      (owner.connection?.budgets.pendingRequests ?? this.#options.budgets?.pendingRequests ?? defaultBudgets.pendingRequests)
-    )
-      throw new V5ClientError("unsent", binding.method, unsentReason.busy)
-    owner.opening++
+    await this.admit(owner, binding, options?.signal)
     const aborted = Promise.withResolvers<never>()
     const abortOpening = () =>
       aborted.reject(new V5ClientError("unsent", binding.method, unsentReason.cancelled))
     options?.signal?.addEventListener("abort", abortOpening, { once: true })
     if (options?.signal?.aborted) abortOpening()
+    const pending = Promise.withResolvers<unknown>()
+    let requestID: string | undefined
     try {
       await Promise.race([owner.ready, aborted.promise])
+      if (options?.signal?.aborted) throw new V5ClientError("unsent", binding.method, unsentReason.cancelled)
+      if (owner !== this.#owner || !owner.active)
+        throw new V5ClientError("unsent", binding.method, unsentReason.closed, true)
+      const connection = owner.connection!
+      const request = (() => {
+        const reservation = connection.budgets.clientFrameBytes + connection.budgets.inlineBytes
+        if (!connection.reservation.reserve(reservation))
+          throw new V5ClientError("unsent", binding.method, unsentReason.allocation)
+        try {
+          return this.prepare(operation, data, input, options, connection.budgets.inlineBytes)
+        } catch {
+          throw new V5ClientError("unsent", binding.method, unsentReason.unrepresentable)
+        } finally {
+          connection.reservation.release(reservation)
+        }
+      })()
+      const sent = connection.request(
+        operation.operationId,
+        request.scope,
+        request.payload,
+        request.payload.length + encodeStrict(ScopeSchema, request.scope).length + 256,
+        performance.now(),
+      )
+      if (!sent.requestID) {
+        this.process(owner, sent.decisions)
+        throw new V5ClientError("unsent", binding.method, unsentReason.notAdmitted)
+      }
+      requestID = sent.requestID
+      owner.pending.set(requestID, {
+        binding,
+        operation,
+        scope: request.target ?? request.scope,
+        resolve: pending.resolve,
+        reject: pending.reject,
+        stream,
+      })
+      this.process(owner, sent.decisions)
     } catch (error) {
       if (error instanceof V5ClientError && error.status !== "protocol")
-        throw new V5ClientError("unsent", binding.method, error.reason, error.status !== "unsent")
+        throw new V5ClientError("unsent", binding.method, error.reason, error.status !== "unsent" || error.resendable)
       throw error
     } finally {
       owner.opening--
       options?.signal?.removeEventListener("abort", abortOpening)
+      this.drainWaiting(owner)
     }
-    if (options?.signal?.aborted) throw new V5ClientError("unsent", binding.method, unsentReason.cancelled)
-    if (owner !== this.#owner || !owner.active)
-      throw new V5ClientError("unsent", binding.method, unsentReason.closed, true)
     const connection = owner.connection!
-    const request = (() => {
-      const reservation = connection.budgets.clientFrameBytes + connection.budgets.inlineBytes
-      if (!connection.reservation.reserve(reservation))
-        throw new V5ClientError("unsent", binding.method, unsentReason.allocation)
-      try {
-        return this.prepare(operation, data, input, options, connection.budgets.inlineBytes)
-      } catch {
-        throw new V5ClientError("unsent", binding.method, unsentReason.unrepresentable)
-      } finally {
-        connection.reservation.release(reservation)
-      }
-    })()
-    const pending = Promise.withResolvers<unknown>()
-    const sent = connection.request(
-      operation.operationId,
-      request.scope,
-      request.payload,
-      request.payload.length + encodeStrict(ScopeSchema, request.scope).length + 256,
-      performance.now(),
-    )
-    if (!sent.requestID) {
-      this.process(owner, sent.decisions)
-      throw new V5ClientError("unsent", binding.method, unsentReason.notAdmitted)
-    }
-    owner.pending.set(sent.requestID, {
-      binding,
-      operation,
-      scope: request.target ?? request.scope,
-      resolve: pending.resolve,
-      reject: pending.reject,
-      stream,
-    })
-    this.process(owner, sent.decisions)
     const abort = () => {
-      this.process(owner, connection.cancel(sent.requestID!, performance.now()))
+      this.process(owner, connection.cancel(requestID!, performance.now()))
       this.pump(owner)
     }
     options?.signal?.addEventListener("abort", abort, { once: true })
@@ -393,6 +401,41 @@ export class LocalTransport {
       return await pending.promise
     } finally {
       options?.signal?.removeEventListener("abort", abort)
+    }
+  }
+
+  private admit(owner: Owner, binding: Binding, signal?: AbortSignal) {
+    return new Promise<void>((resolve, reject) => {
+      const waiting: Waiting = {
+        binding,
+        resolve,
+        reject,
+        signal,
+        abort: () => {
+          const index = owner.waiting.indexOf(waiting)
+          if (index < 0) return
+          owner.waiting.splice(index, 1)
+          signal?.removeEventListener("abort", waiting.abort)
+          reject(new V5ClientError("unsent", binding.method, unsentReason.cancelled))
+          this.drainWaiting(owner)
+        },
+      }
+      owner.waiting.push(waiting)
+      signal?.addEventListener("abort", waiting.abort, { once: true })
+      if (signal?.aborted) waiting.abort()
+      else this.drainWaiting(owner)
+    })
+  }
+
+  private drainWaiting(owner: Owner) {
+    if (!owner.active || owner !== this.#owner) return
+    const capacity = owner.connection?.budgets.pendingRequests ?? this.#options.budgets?.pendingRequests ?? defaultBudgets.pendingRequests
+    while (owner.waiting.length && owner.opening + owner.pending.size < capacity &&
+      (!owner.connection || owner.opening < owner.connection.requestSlots)) {
+      const waiting = owner.waiting.shift()!
+      waiting.signal?.removeEventListener("abort", waiting.abort)
+      owner.opening++
+      waiting.resolve()
     }
   }
 
@@ -630,6 +673,7 @@ export class LocalTransport {
         })
       }
     }
+    this.drainWaiting(owner)
   }
 
   private pump(owner: Owner) {
@@ -672,6 +716,10 @@ export class LocalTransport {
   private shutdown(owner: Owner, error: V5ClientError, code = 1012) {
     if (!owner.active) return
     owner.active = false
+    for (const waiting of owner.waiting.splice(0)) {
+      waiting.signal?.removeEventListener("abort", waiting.abort)
+      waiting.reject(new V5ClientError("unsent", waiting.binding.method, unsentReason.closed, true))
+    }
     owner.reject(error)
     owner.detach?.()
     if (owner.timer) clearInterval(owner.timer)

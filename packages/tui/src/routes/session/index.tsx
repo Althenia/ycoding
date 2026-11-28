@@ -98,6 +98,7 @@ import { SubagentTodos } from "./subagent-todos"
 import { filetype } from "../../util/filetype"
 import parsers from "../../parsers-config"
 import { errorMessage } from "../../util/error"
+import { isRecord } from "../../util/record"
 import { useToast } from "../../ui/toast"
 import stripAnsi from "strip-ansi"
 import { usePromptRef } from "../../context/prompt"
@@ -296,7 +297,14 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const forms = createMemo(() => {
     const global = data.session.form.list("global", location()) ?? []
     return [route.sessionID, ...descendantSessionIDs()]
-      .flatMap((sessionID) => data.session.form.list(sessionID) ?? [])
+      .flatMap((sessionID) => (data.session.form.list(sessionID) ?? []).filter((form) => {
+        const tool = form.metadata?.tool
+        if (form.metadata?.kind !== "question" || !isRecord(tool) || typeof tool.messageID !== "string" || typeof tool.callID !== "string") return true
+        const message = data.session.message.list(sessionID).find((item) => item.id === tool.messageID)
+        if (message?.type !== "assistant") return true
+        const part = message.content.find((item) => item.type === "tool" && item.id === tool.callID)
+        return part?.type !== "tool" || part.state.status !== "error"
+      }))
       .concat(global)
   })
   const reviewItems = createMemo(() => data.session.review.list(route.sessionID))
@@ -402,6 +410,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
   const toast = useToast()
   const client = useClient()
+  const [storeUnavailable, setStoreUnavailable] = createSignal(false)
   let skillReadRevision = 0
   createEffect(on([() => client.connection.status(), () => {
     const history = data.session.message.history(route.sessionID)
@@ -459,6 +468,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   })
   const connectionNotice = createMemo(() => {
     const status = client.connection.status()
+    if (storeUnavailable()) return "Session store unavailable"
     if (status === "reconnecting") return "Reconnecting…"
     if (status === "connecting") return "Connecting…"
     const history = data.session.message.history(route.sessionID)
@@ -845,20 +855,24 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     }),
   )
 
+  let sessionSyncRevision = 0
   createEffect(() => {
+    const revision = ++sessionSyncRevision
     if (client.connection.status() !== "connected") return
     const sessionID = route.sessionID
     void data.session.todo.sync(sessionID).catch(() => undefined)
     void data.session.usage.sync(sessionID).catch(() => undefined)
     void (async () => {
       await Promise.all([
-        data.session.message.sync(sessionID),
+        data.session.message.sync(sessionID).then(() => {
+          if (!disposed && revision === sessionSyncRevision && route.sessionID === sessionID) setStoreUnavailable(false)
+        }),
         data.session.permission.sync(sessionID),
         data.session.guardrail.sync(sessionID),
         data.session.review.sync(sessionID),
         data.session.form.sync(sessionID),
       ])
-      if (disposed || route.sessionID !== sessionID) return
+      if (disposed || revision !== sessionSyncRevision || route.sessionID !== sessionID) return
       const info = data.session.get(sessionID)
       if (!info) {
         toast.show({
@@ -872,7 +886,13 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       editor.reconnect(info.location.directory)
       if (!positioned) restoreViewport(sessionID)
     })().catch((error) => {
-      if (route.sessionID !== sessionID) return
+      if (disposed || revision !== sessionSyncRevision || route.sessionID !== sessionID) return
+      if (isRecord(error) && error.message === "Session store unavailable" &&
+        (error._tag === "ServiceUnavailableError" || error._tag === "UnknownError" ||
+          (error._tag === "InvalidRequestError" && error.kind === "unavailable"))) {
+        setStoreUnavailable(true)
+        return
+      }
       toast.show({
         message: errorMessage(error),
         variant: "error",

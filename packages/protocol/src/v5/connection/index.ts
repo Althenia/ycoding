@@ -287,6 +287,9 @@ export class Connection {
   get state() {
     return this.phase
   }
+  get requestSlots() {
+    return Math.max(0, this.budgets.pendingRequests - this.pending.size - this.awaitingSubscription.size)
+  }
   get connectionEpoch() {
     return this.epoch
   }

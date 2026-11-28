@@ -5,6 +5,7 @@
 import { ToolInvocation } from "@ycoding-ai/schema/tool-invocation"
 import { emptyRecall, foldRecallEvent, foldRecallEvents, type RecallState } from "@ycoding-ai/client/cue-recall"
 import { emptyLifecycle, foldLifecycleEvent, foldLifecycleEvents, lifecycleEventType, type LifecycleState } from "@ycoding-ai/client/lifecycle"
+import { V5ClientError } from "@ycoding-ai/client/v5"
 import { GuardrailEscalation } from "../guardrail-escalation"
 import type {
   AgentInfo,
@@ -931,6 +932,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
         props.recordTelemetry?.("transcript.load", performance.now() - started)
       } catch (error) {
+        if (error instanceof V5ClientError && error.status === "unknown" && client.api.transport.state === "closed") {
+          sync.pause()
+          throw error
+        }
         if (current() && messageSyncLoad.get(sessionID) === token) setStore("session", "history", sessionID, { status: "error", error: errorMessage(error), failedRead: "latest" })
         throw error
       } finally {
