@@ -1174,8 +1174,8 @@ fn the_master_instructions_route_descendant_requests_through_the_owner_and_prese
         .unwrap();
     for instruction in [
         "A request raised by a member's subagent or deeper descendant is that member's request: it appears with `requestSessionID`, and you `inspect`, `answer` or `escalate` it with the member's `sessionID`.",
-        "The supervising owner resolves the target Project folder or designated worktree before enrollment.",
-        "Pass exactly one placement: `directory` with an absolute or home-relative path for an explicit folder, such as an existing managed worktree or a non-Git Project folder; `projectID` for a repository Project's canonical checkout; or `name` with an explicit `repository` for a new managed worktree.",
+        "The supervising owner resolves the target repository's folder, its canonical checkout or a designated managed worktree, before enrollment. Create each repository member with `directory` placement at that folder, never at the Project's folder unless it is the same repository.",
+        "Pass exactly one placement: `directory` with an absolute or home-relative path for an explicit folder, such as the target repository's canonical checkout, an existing managed worktree or a non-Git Project folder; `projectID` for a repository Project's canonical checkout; or `name` with an explicit `repository` for a new managed worktree.",
         "Attach, assign, send, model, release and remove never change the Session's ID, parent or Location or move or recreate it.",
         "Never create a project work Session under the Master Session as a child or descendant; member Sessions are independently bound root Sessions, and only lightweight supervisor subagents live under the Master.",
     ] {
@@ -1194,7 +1194,8 @@ fn the_project_tool_description_names_descendant_requests_and_member_autonomy() 
     for text in [
         "A pending request raised by a member's subagent or any deeper descendant Session is listed under that member with requestSessionID naming the requesting Session; inspect, answer and escalate it with the member's sessionID. It neither makes the member waiting nor blocks send.",
         "A request from a member's descendant stays open in its requesting Session, returned as requestSessionID, and the reasons attach to that Session's prompt.",
-        "the member takes your effective permissions, guardrails and answers modes when it joins.",
+        "The member takes your effective permissions, guardrails and answers modes when it joins.",
+        "For repository work, use directory at the target repository's canonical checkout or one of its managed worktrees; never the Project's folder unless it is the same repository, and never ~/.local/share/ycoding/tasks/ or any subdirectory of it.",
         "Questions, forms, permission asks and guardrail reviews raised by a member's descendant Sessions are member events whose notifications carry requestSessionID.",
         "Attaching the same Session with the same owner again returns reconciled true and changes nothing; a different owner is refused, so use assign to change it.",
     ] {

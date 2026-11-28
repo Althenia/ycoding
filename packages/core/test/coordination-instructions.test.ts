@@ -39,8 +39,8 @@ test("only coordinators receive member placement instructions", async () => {
     if (typeof instruction?.value !== "string") throw new Error(`Expected guidance for ${role}`)
     const count = role === "master" || role === "supervisor" ? 1 : 0
     for (const clause of [
-      "verify that its Location is the target repository's canonical checkout or one of its managed worktrees",
-      "Reserve `~/.local/share/ycoding/tasks/` for scratch files, logs, and evidence; never use it or a subdirectory as a Project member Location.",
+      "verify that its Location is the target repository's folder: its canonical checkout or one of its managed worktrees. Never place a member at the Project's folder unless that folder is the same repository.",
+      "Reserve `~/.local/share/ycoding/tasks/` for scratch files, logs, and evidence; never use it or any subdirectory of it as a Project member Location, in any case.",
     ]) expect(instruction.value.split(clause)).toHaveLength(count + 1)
   }
 })

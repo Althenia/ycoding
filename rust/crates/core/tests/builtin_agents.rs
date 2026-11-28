@@ -53,7 +53,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.6,
             "#e67e22",
             include_str!("../src/resources/agent/prompts/GSD.md"),
-            "cacf3c45e6741c05613ffdd179b9b6103f7c06917205b8eded14c67356c0b1ee",
+            "aac71b236c777002fc608784836a730d292a877139b00c56331eaa28ebfcd973",
         ),
         (
             "architech",
@@ -62,7 +62,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.5,
             "#3498db",
             include_str!("../src/resources/agent/prompts/architech.md"),
-            "70d075aab49dcf7c284d16564b16a7acf0a24ed3a4a494fcaa0f777bef6c5eda",
+            "11d44b4879ef5c798c09aebcab0c38dbcb2c9ec6475063f896205ae3a524c892",
         ),
         (
             "god",
@@ -71,7 +71,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.6,
             "#f1c40f",
             include_str!("../src/resources/agent/prompts/god.md"),
-            "c511b67511b56f5b6e1d6439779acfb1755057270c9ed51c2c285cc5c98c7879",
+            "d8f45b411ec2ab5d2df0c7267a44cdca59e9f5ee7b89425759393adb3171306a",
         ),
         (
             "yangi",
@@ -80,7 +80,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.5,
             "#2ecc71",
             include_str!("../src/resources/agent/prompts/yangi.md"),
-            "61de7eb6df9a9c4c6b0e30273df5bc862d834c7ecc7393ffac0cc75634039185",
+            "77abe2b7220e4c2cd734388df068291069cc5940e521c53f63f9710daa817fba",
         ),
         (
             "occam",
@@ -89,7 +89,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.4,
             "#2ecc71",
             include_str!("../src/resources/agent/prompts/occam.md"),
-            "e3ac8d35aec9635c474312b9570df319e442e83d3f2483d7d090221582856f18",
+            "caa95e99ec670d8a13b60620a3118071915fe5472b410b53e9447b2b97e42507",
         ),
         (
             "omoikane",
@@ -98,7 +98,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.5,
             "#3498db",
             include_str!("../src/resources/agent/prompts/omoikane.md"),
-            "e5eb7b780136cc88d29b80e01fc065bd01ab4b9989b12b2a1871f2a428dbc462",
+            "942333e0bb9d498bfa1dd192755e3721480fdd61fa60b425825fccf66a90ff57",
         ),
         (
             "wittgenstein",
@@ -107,7 +107,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.4,
             "#95a5a6",
             include_str!("../src/resources/agent/prompts/wittgenstein.md"),
-            "f3bf8c7c9112aabba14eb730a0d9b0ed99e11d7701ec3534429745231459f122",
+            "e3f385bc384dbefd34ffc99300716ff3fcc0ca8b670577edd8bfa3eb70c986ab",
         ),
         (
             "zeus",
@@ -116,7 +116,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.6,
             "#f1c40f",
             include_str!("../src/resources/agent/prompts/zeus.md"),
-            "45dbef7b3c783a8924f82c832ee91bab96ca5178c309b7c1123440e66aa867d4",
+            "573802ca309adec3a9037aa82ee467e47a775b035d24b063a1e6225685a1e462",
         ),
     ];
     for (id, name, mode, temperature, color, source, digest) in fixtures {
@@ -566,8 +566,9 @@ fn primary_and_child_agents_resolve_recoverable_obstacles_within_their_authority
         let system = agent.system.as_ref().unwrap().to_utf8().unwrap();
         let shared = &system[..system.find("You are ").unwrap()];
         for rule in [
-            "As Master or a supervising owner, route repository work to member Sessions at the repository's canonical checkout or a managed worktree for that repository.",
-            "Keep `~/.local/share/ycoding/tasks/` for scratch files, logs, and evidence only; never use it or a subdirectory as a Project member Location.",
+            "As Master or a supervising owner, create member Sessions at the target repository's folder, its canonical checkout or one of its managed worktrees, with `directory` placement.",
+            "Never create them at the Project's folder unless that folder is the same repository, and never under `~/.local/share/ycoding/tasks/` or any subdirectory of it, in any case.",
+            "Make no mistakes: verify every change and claim against live evidence before reporting it. Work aggressively, doing whatever it takes to complete the task within permissions, guardrails and approval gates.",
             "Work agentically. Resolve every blocker and issue yourself: diagnose the root cause, try every local compliant fix, and recover from failed checks, conflicts and environment errors, then keep going.",
             "Pursue the user's goal proactively and relentlessly to full completion; never stop at an intermediate milestone, a status report, or a question you can settle from evidence.",
             "Do not add approval gates or wait for status nudges to continue authorized work.",

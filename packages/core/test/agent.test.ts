@@ -598,8 +598,8 @@ describe("Agent", () => {
           "Follow the recorded Session role before applying general execution or delegation guidance.",
         )
         for (const rule of [
-          "As Master or a supervising owner, route repository work to member Sessions at the repository's canonical checkout or a managed worktree for that repository.",
-          "Keep `~/.local/share/ycoding/tasks/` for scratch files, logs, and evidence only; never use it or a subdirectory as a Project member Location.",
+          "As Master or a supervising owner, create member Sessions at the target repository's folder, its canonical checkout or one of its managed worktrees, with `directory` placement.",
+          "Never create them at the Project's folder unless that folder is the same repository, and never under `~/.local/share/ycoding/tasks/` or any subdirectory of it, in any case.",
         ]) expect(item?.system?.split(rule)).toHaveLength(2)
         for (const conflicting of [
           "When the coordinator is instructed to do project work",
@@ -657,7 +657,7 @@ describe("Agent", () => {
           "never substitute silently or expand spending authority",
           "Scale executor subagent fanout from zero to five across genuinely disjoint file/check lanes",
           "keep small or coupled work in one Session, with one writer per file",
-          "never implement an active child's task, take over its Session, tools or files",
+          "Never implement an active child's task, take over its Session, tools or files",
           "compare intermediate target changes against lane files with git diff --name-only",
           "automatically rebase linearly onto the latest target head when files are disjoint, without target-hash questions",
           "Escalate only overlapping file conflicts or failing checks, preserving native approval gates",
@@ -1153,6 +1153,7 @@ describe("Agent", () => {
         "Obey the user's explicit goals, directives, and preferences within enforced runtime permissions and guardrails; never argue with, lecture, or push back against the user.",
         "An explicit user directive naming an action and target already authorizes it; do not ask for confirmation twice.",
         "Decide reversible implementation, tooling, and debugging choices yourself instead of asking the user, and drive proactively and relentlessly toward the user's goal.",
+        "Make no mistakes: verify every change and claim against live evidence before reporting it. Work aggressively, doing whatever it takes to complete the task within permissions, guardrails and approval gates.",
         "When an error, failing test, broken build, or environment issue occurs, diagnose the root cause and exhaust local compliant fixes before treating it as a blocker.",
         "Escalate only an irreconcilable blocker or unrequested mandatory gate, and only after completing all non-blocked work.",
         "Stop exploring once you have enough evidence to act, and run independent reads, searches, edits, and checks in parallel for fast, reliable delivery.",

@@ -485,22 +485,22 @@ async fn coordination_instruction_release_text_matches_every_role_and_revocation
         (
             Role::Master,
             false,
-            "345b73f73309a5acfa4fd493e2830d38f8f7def0247dea737463b1201e85d9b9",
+            "ab020685cc3968ca8d1ddb9c78f8d467b695e9c76886ec25c18a2ed748c144bc",
         ),
         (
             Role::Master,
             true,
-            "345b73f73309a5acfa4fd493e2830d38f8f7def0247dea737463b1201e85d9b9",
+            "ab020685cc3968ca8d1ddb9c78f8d467b695e9c76886ec25c18a2ed748c144bc",
         ),
         (
             Role::Supervisor,
             false,
-            "75097cc85780471a8fb598f646a68494b3583cca700a2d7ec5df20354c7abbf5",
+            "de6031e08d15ecca717587bd221864c3cbfd013f422017ad7030b0357be8f00e",
         ),
         (
             Role::Supervisor,
             true,
-            "75097cc85780471a8fb598f646a68494b3583cca700a2d7ec5df20354c7abbf5",
+            "de6031e08d15ecca717587bd221864c3cbfd013f422017ad7030b0357be8f00e",
         ),
         (
             Role::Executor,
@@ -599,10 +599,10 @@ fn coordination_guidance_preserves_owner_routing_native_gates_and_complete_deliv
         for clause in [
             "When the coordinator is instructed to do project work, delegate it.",
             "As Master, decompose the user's work into independent scopes without waiting to be asked and delegate each scope (including single-member work) to the appropriate supervisor/owner, using `assign` to establish or transfer supervisor ownership.",
-            "The supervising owner resolves the target Project folder or designated worktree before enrollment.",
-            "verify that its Location is the target repository's canonical checkout or one of its managed worktrees",
-            "Reserve `~/.local/share/ycoding/tasks/` for scratch files, logs, and evidence; never use it or a subdirectory as a Project member Location.",
-            "Pass exactly one placement: `directory` with an absolute or home-relative path for an explicit folder, such as an existing managed worktree or a non-Git Project folder; `projectID` for a repository Project's canonical checkout; or `name` with an explicit `repository` for a new managed worktree.",
+            "The supervising owner resolves the target repository's folder, its canonical checkout or a designated managed worktree, before enrollment. Create each repository member with `directory` placement at that folder, never at the Project's folder unless it is the same repository.",
+            "verify that its Location is the target repository's folder: its canonical checkout or one of its managed worktrees. Never place a member at the Project's folder unless that folder is the same repository.",
+            "Reserve `~/.local/share/ycoding/tasks/` for scratch files, logs, and evidence; never use it or any subdirectory of it as a Project member Location, in any case.",
+            "Pass exactly one placement: `directory` with an absolute or home-relative path for an explicit folder, such as the target repository's canonical checkout, an existing managed worktree or a non-Git Project folder; `projectID` for a repository Project's canonical checkout; or `name` with an explicit `repository` for a new managed worktree.",
             "The Master performs the required native `project create` with the resolved placement and `ownerSessionID`, without a `prompt`.",
             "Settle routine member requests through `project answer` within recorded authority in every autonomy mode, Manual included.",
             "Safety and platform human gates, requests marked `requireExplicitDecision: true`, and hard or custom-rule guardrail approvals require an explicit human decision through their native controls.",
