@@ -471,7 +471,7 @@ async fn history_and_latest_response_are_bounded_like_ts_and_none_uses_the_lates
         assert!(service.steer(request(&f.id, None)).await.is_some());
         let message = message(&f, 0);
         assert!(message.starts_with(&format!(
-            "Recent conversation context:\n{}tail\n\nUser-proxy",
+            "Recent conversation context:\n{}tail\n\nGoal steer request:",
             "a".repeat(5996)
         )));
         assert!(message.contains(&format!(

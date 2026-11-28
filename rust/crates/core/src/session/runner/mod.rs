@@ -582,7 +582,19 @@ impl Local {
             })?
         };
         let resolved = model::resolve_catalog(&catalog, selection, saved, connection.as_ref())
-            .map_err(|cause| Unresolved::model(selection, cause, None))?;
+            .map_err(|cause| {
+                let selected = catalog.get(
+                    &selection.provider_id,
+                    &selection.id,
+                    selection.profile.as_ref(),
+                    saved,
+                );
+                Unresolved::model(
+                    selection,
+                    cause,
+                    selected.as_ref().and_then(|model| model.package.as_ref()),
+                )
+            })?;
         let account_identity =
             account_identity_digest(connection.as_ref(), &resolved.info, integration);
         let binding = binding

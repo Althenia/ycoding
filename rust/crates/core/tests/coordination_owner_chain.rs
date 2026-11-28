@@ -917,12 +917,13 @@ async fn a_member_waiting_on_a_pending_request_refuses_project_input_and_the_mas
         .unwrap();
     let text = stringify_json(&escalated.structured);
     assert!(text.contains("stays open as the member's prompt"), "{text}");
+    assert!(text.contains("Session ses_alpha (authority)"), "{text}");
     assert!(
-        text.contains("answers it in member Session ses_alpha (authority)"),
+        text.contains("Follow the applicable native control"),
         "{text}"
     );
     assert!(
-        text.contains("messages or answers relayed through the Master cannot settle it"),
+        text.contains("messages relayed through the Master cannot settle it"),
         "{text}"
     );
     waits.set("ses_alpha", vec![]);
