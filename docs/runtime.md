@@ -1292,7 +1292,7 @@ Selected context accepts nonempty user text without attachments or agent mention
 
 ## Skills
 
-Skills can activate through an explicit reference or the `skill` tool.
+Skills can activate through an explicit reference, the `skill` tool, or automatic selection. Automatic selection considers skills that opt in and pass the current location and permission checks. An exact tag match can select an eligible skill; tags do not change its activation mode or permissions. The metadata and selection rules are described in [repository resources](./repository-resources.md#skills).
 
 The closed remote `session.prompt` input accepts optional `skills`: at most 200 non-whitespace IDs, each 1–128 characters. The connector maps them to the existing Protocol `metadata.skills` entries (`{ id }`) for the Session's backend-owned Location. The browser sends one prompt request, not separate skill-activation requests. Standalone slash-skill activation still uses `session.skill`.
 

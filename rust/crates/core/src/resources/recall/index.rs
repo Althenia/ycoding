@@ -177,7 +177,7 @@ pub fn injected_bytes(doc: &Document) -> usize {
 }
 
 pub fn stamp(hash: &str) -> String {
-    format!("{REVISION}:{hash}")
+    format!("{REVISION}:tags2:{hash}")
 }
 
 fn kind_of(value: &str) -> Option<Kind> {
@@ -356,13 +356,7 @@ impl Store {
                     stamp: stamp(&doc.source.content_hash),
                     hash: doc.source.content_hash.clone(),
                     doc_type: doc.fields.doc_type.clone(),
-                    tags: doc
-                        .fields
-                        .tags
-                        .iter()
-                        .chain(&doc.fields.keywords)
-                        .cloned()
-                        .collect(),
+                    tags: doc.fields.tags.clone(),
                     manual: doc.lifecycle.activation == Some(Activation::Manual),
                     eligible_until: doc.lifecycle.stale_after.unwrap_or(i64::MAX),
                     active: doc.lifecycle.status == Status::Active
@@ -408,7 +402,7 @@ impl Store {
         for tag in tag_terms(doc) {
             out.add_text(f.x_tag, tag);
         }
-        for tag in doc.fields.tags.iter().chain(&doc.fields.keywords) {
+        for tag in &doc.fields.tags {
             out.add_text(f.x_tag_raw, tag);
         }
         out.add_text(f.x_type, &doc.fields.doc_type);
@@ -626,7 +620,7 @@ impl Store {
 
 fn tag_terms(doc: &Document) -> Vec<String> {
     let mut set = BTreeSet::new();
-    for tag in doc.fields.tags.iter().chain(&doc.fields.keywords) {
+    for tag in &doc.fields.tags {
         set.insert(analysis::normalize(tag));
     }
     set.into_iter().collect()

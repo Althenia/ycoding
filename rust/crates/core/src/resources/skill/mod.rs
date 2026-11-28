@@ -395,13 +395,14 @@ pub fn available<'a>(skills: &'a [Info], agent: &ycoding_schema::agent::Info) ->
         .collect()
 }
 
-const ACTIVATION_KEYS: [&str; 6] = [
+const ACTIVATION_KEYS: [&str; 7] = [
     "activation",
     "version",
     "keywords",
     "events",
     "commands",
     "paths",
+    "tags",
 ];
 const METADATA_KEYS: [&str; 16] = [
     "activation",

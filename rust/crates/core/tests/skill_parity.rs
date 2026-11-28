@@ -39,7 +39,7 @@ async fn catalog_refreshes_activation_metadata_and_removes_deleted_sources() {
     let directory = root.join("example");
     fs::create_dir_all(&directory).unwrap();
     let file = directory.join("SKILL.md");
-    fs::write(&file, "---\nname: example\ndescription: example\nmetadata:\n  activation: auto\n  keywords: old phrase\n---\nold content\n").unwrap();
+    fs::write(&file, "---\nname: example\ndescription: example\nmetadata:\n  activation: auto\n  keywords: old phrase\n  tags: release\n---\nold content\n").unwrap();
     let mut service = Service::new(&root);
     service.source(Source::Directory(ycoding_schema::skill::DirectorySource {
         path: AbsolutePath::new(root.to_str().unwrap()).unwrap(),
@@ -48,18 +48,42 @@ async fn catalog_refreshes_activation_metadata_and_removes_deleted_sources() {
     assert_eq!(first.len(), 1);
     let metadata = service.activation_metadata(&first[0]).unwrap();
     assert_eq!(
+        metadata.get(&"tags".into()),
+        Some(&ycoding_schema::JsonValue::String("release".into()))
+    );
+    assert_eq!(
         metadata.get(&"keywords".into()),
         Some(&ycoding_schema::JsonValue::String("old phrase".into()))
     );
-    fs::write(&file, "---\nname: example\ndescription: example\nmetadata:\n  activation: auto\n  keywords: new phrase\n---\nnew content\n").unwrap();
+    fs::write(&file, "---\nname: example\ndescription: example\nmetadata:\n  activation: auto\n  keywords: new phrase\n  tags: release\n---\nnew content\n").unwrap();
     assert!(service.changed(&file));
     let second = service.list().await.unwrap();
     let metadata = service.activation_metadata(&second[0]).unwrap();
+    assert_eq!(
+        metadata.get(&"activation".into()),
+        Some(&ycoding_schema::JsonValue::String("auto".into()))
+    );
+    assert_eq!(
+        metadata.get(&"tags".into()),
+        Some(&ycoding_schema::JsonValue::String("release".into()))
+    );
     assert_eq!(
         metadata.get(&"keywords".into()),
         Some(&ycoding_schema::JsonValue::String("new phrase".into()))
     );
     assert!(second[0].content.as_str().unwrap().contains("new content"));
+    fs::write(&file, "---\nname: example\ndescription: example\nmetadata:\n  activation: auto\n  keywords: new phrase\n  tags: deploy\n---\nnew content\n").unwrap();
+    assert!(service.changed(&file));
+    let third = service.list().await.unwrap();
+    let metadata = service.activation_metadata(&third[0]).unwrap();
+    assert_eq!(
+        metadata.get(&"activation".into()),
+        Some(&ycoding_schema::JsonValue::String("auto".into()))
+    );
+    assert_eq!(
+        metadata.get(&"tags".into()),
+        Some(&ycoding_schema::JsonValue::String("deploy".into()))
+    );
     fs::remove_file(&file).unwrap();
     assert!(service.changed(&file));
     assert!(service.list().await.unwrap().is_empty());

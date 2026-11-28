@@ -849,13 +849,13 @@ impl Local {
                     ));
                 }
             }
-            for (index, score) in skill::ranked_implicit(&implicit, &query) {
+            for (index, method, reason, score) in skill::ranked_implicit(&implicit, &query) {
                 if !ordered.iter().any(|(_, existing)| *existing == index) {
                     ordered.push((
                         super::activation::candidate(
                             candidates[index].0.id.as_str().unwrap_or_default(),
-                            RecallMethod::Bm25,
-                            RecallReason::Lexical,
+                            method,
+                            reason,
                             score,
                             &candidates[index].0.content.to_utf8().unwrap_or_default(),
                         ),

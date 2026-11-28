@@ -1,3 +1,4 @@
+use crate::resources::recall::candidate::{Method, Reason};
 use std::{future::Future, pin::Pin};
 use ycoding_schema::{JsonObject, JsonValue, LosslessString, skill};
 
@@ -76,9 +77,9 @@ fn activation(metadata: &JsonObject) -> Option<Activation> {
 pub(crate) fn ranked_implicit(
     items: &[(&skill::Info, &JsonObject)],
     query: &str,
-) -> Vec<(usize, f64)> {
+) -> Vec<(usize, Method, Reason, f64)> {
     use crate::resources::recall::{
-        candidate::{Method, Query},
+        candidate::Query,
         document::{Activation, Document, Fields, Kind, Lifecycle, Scope, Source},
         hybrid::{Calibration, Retriever},
         index::Entry,
@@ -97,6 +98,20 @@ pub(crate) fn ranked_implicit(
         .iter()
         .map(|(info, metadata)| {
             let keywords = activation(metadata).map(|a| a.keywords).unwrap_or_default();
+            let tags = match metadata.get(&"tags".into()) {
+                Some(JsonValue::String(value)) => value
+                    .as_str()
+                    .map(|value| {
+                        value
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_owned)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            };
             let id = info.id.as_str().unwrap_or_default().to_owned();
             let name = info.name.to_utf8().unwrap_or_default();
             let description = info
@@ -107,7 +122,12 @@ pub(crate) fn ranked_implicit(
                 .to_owned();
             let hash = ring::digest::digest(
                 &ring::digest::SHA256,
-                format!("{id}\0{name}\0{description}\0{}", keywords.join("\0")).as_bytes(),
+                format!(
+                    "{id}\0{name}\0{description}\0{}\0{}",
+                    keywords.join("\0"),
+                    tags.join("\0")
+                )
+                .as_bytes(),
             )
             .as_ref()
             .iter()
@@ -126,6 +146,7 @@ pub(crate) fn ranked_implicit(
                     title: name,
                     description,
                     keywords,
+                    tags,
                     ..Fields::default()
                 },
                 lifecycle: Lifecycle {
@@ -196,8 +217,19 @@ pub(crate) fn ranked_implicit(
         .candidates
         .iter()
         .filter_map(|c| {
+            let index = ids.get(c.id.as_str()).copied()?;
+            if c.reason == Reason::ExactTag {
+                return Some((
+                    index,
+                    Method::Exact,
+                    Reason::ExactTag,
+                    c.score(Method::Exact)?.score,
+                ));
+            }
             Some((
-                ids.get(c.id.as_str()).copied()?,
+                index,
+                Method::Bm25,
+                Reason::Lexical,
                 c.score(Method::Bm25)?.score,
             ))
         })
@@ -228,7 +260,7 @@ mod relevance_tests {
                 "cobalt birch alder willow maple oak pine cedar elm amber quartz violet"
             )
             .into_iter()
-            .map(|(index, _)| index)
+            .map(|(index, _, _, _)| index)
             .collect::<Vec<_>>(),
             vec![1, 0]
         );

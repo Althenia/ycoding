@@ -1415,6 +1415,94 @@ async fn promoted_cue_survives_interruption_until_explicit_activation_is_durable
 struct PathSkills(skill::Info);
 
 struct KeywordSkills(Vec<skill::Info>);
+struct TagSkills(Vec<skill::Info>, std::sync::RwLock<&'static str>);
+impl Resolver for TagSkills {
+    fn list(&self) -> SkillsFuture<'_> {
+        Box::pin(async { Ok(self.0.clone()) })
+    }
+    fn instructions<'a>(&'a self, info: &'a skill::Info) -> InstructionsFuture<'a> {
+        Box::pin(async { Ok(info.content.clone()) })
+    }
+    fn activation_metadata<'a>(
+        &'a self,
+        _: &'a skill::Info,
+    ) -> ycoding_core::session::skill::ActivationFuture<'a> {
+        Box::pin(async move {
+            let tags = *self.1.read().unwrap();
+            Some(
+                ycoding_schema::JsonObject::decode(
+                    &parse_json(&format!(r#"{{"activation":"auto","tags":"{tags}"}}"#)).unwrap(),
+                )
+                .unwrap(),
+            )
+        })
+    }
+}
+
+#[tokio::test]
+async fn tagged_recall_selects_only_allowed_automatic_skills_and_records_the_match() {
+    let root = std::env::temp_dir().join(format!(
+        "ycoding-tag-skill-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let store = support::store();
+    for id in ["ses_tag_match", "ses_tag_old", "ses_tag_new"] {
+        let mut record = support::record(id);
+        record.directory = root.to_str().unwrap().into();
+        store
+            .submit(move |tx| ycoding_store::session::SessionTable::insert(tx, &record))
+            .unwrap()
+            .wait()
+            .unwrap();
+    }
+    let skills = [("allowed", "ALLOWED-TAG-SKILL", true), ("denied", "DENIED-TAG-SKILL", true), ("manual", "MANUAL-TAG-SKILL", false)].into_iter().map(|(id, content, automatic)| {
+        let file = root.join(format!("{id}.md"));
+        std::fs::write(&file, content).unwrap();
+        skill::Info::decode(&parse_json(&format!(r#"{{"id":"{id}","name":"guide","location":"{}","content":"{content}","autoinvoke":{automatic}}}"#, file.display())).unwrap()).unwrap()
+    }).collect();
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT, TEXT]).await;
+    let mut services = recovery_services(&store, &endpoint, &root, Vec::new(), true, registry());
+    let resolver = Arc::new(TagSkills(skills, std::sync::RwLock::new("zirconium")));
+    services.skill_resolver = Some(resolver.clone());
+    let service = Service::new(store.client());
+    let coordinator = Coordinator::new(Arc::new(Local::new(services)));
+    for (id, text, expected) in [
+        ("ses_tag_match", "zirconium", true),
+        ("ses_tag_old", "zirconium", false),
+        ("ses_tag_new", "heliotrope", true),
+    ] {
+        if id == "ses_tag_old" {
+            *resolver.1.write().unwrap() = "heliotrope";
+        }
+        checkpoint::admit(&service, id, &format!("msg_{id}"), text, 1).await;
+        coordinator
+            .run(&session::Id::new(id).unwrap())
+            .await
+            .unwrap();
+        let request = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+        assert_eq!(request.contains("ALLOWED-TAG-SKILL"), expected, "{id}");
+        assert!(!request.contains("DENIED-TAG-SKILL"));
+        assert!(!request.contains("MANUAL-TAG-SKILL"));
+        let events = cue_recall_events(&service, id);
+        let recorded = events.iter().any(|(kind, data)| {
+            kind == "session.recall.recorded"
+                && data.contains(r#""id":"allowed""#)
+                && data.contains(r#""method":"exact""#)
+                && data.contains(r#""reason":"exact-tag""#)
+                && data.contains(r#""stage":"injected""#)
+        });
+        assert_eq!(recorded, expected, "{id}: {events:?}");
+    }
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 impl Resolver for KeywordSkills {
     fn list(&self) -> SkillsFuture<'_> {
         Box::pin(async { Ok(self.0.clone()) })

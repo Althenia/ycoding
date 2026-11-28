@@ -40,7 +40,7 @@ Each `Candidate` reports `bytes`, the size of the document's title, description,
 - The Tantivy index is a rebuildable cache under the owner's data directory. Every document has a key (`scope`, `kind`, `id`) and a content hash; `sync` upserts changed documents, deletes removed ones, and rebuilds when the analyzer revision changes. A reopen with unchanged content does no work.
 - Lifecycle metadata gates results: superseded, inactive, and stale documents are excluded from results.
 - If the on-disk index cannot be opened or written, retrieval continues from an in-memory index.
-- Filters cover kind, scope, tag, document type, implicit-recall eligibility, and the evaluation time.
+- Filters cover kind, scope, tag, document type, implicit-recall eligibility, and the evaluation time. A tag filter matches stored tags exactly, not keywords; exact tag queries normalize case and Unicode.
 
 ## Embedding model provisioning
 

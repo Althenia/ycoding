@@ -218,6 +218,32 @@ fn filters_apply_before_the_limit() {
 }
 
 #[test]
+fn tag_filters_exclude_keywords_and_follow_updates_after_reopen() {
+    let scratch = Scratch::new("tag-filter");
+    let index = scratch.0.join("index");
+    let mut tagged = doc(Kind::Skill, "tagged", "guide", &["release"], "shared guide");
+    tagged.fields.keywords = vec!["build".into()];
+    let mut keyword = doc(Kind::Skill, "keyword", "guide", &[], "shared guide");
+    keyword.fields.keywords = vec!["release".into()];
+    let mut docs = vec![tagged, keyword];
+    let retriever = Retriever::open(Some(index.clone()), None, open_calibration());
+    sync(&retriever, &docs);
+    let mut q = query("shared");
+    q.tags = vec!["release".into()];
+    assert_eq!(ids(&retriever, &q), ["tagged"]);
+    docs[0].fields.tags = vec!["deploy".into()];
+    docs[0].source.content_hash = "tagged-v2".into();
+    sync(&retriever, &docs);
+    assert!(ids(&retriever, &q).is_empty());
+    q.tags = vec!["deploy".into()];
+    assert_eq!(ids(&retriever, &q), ["tagged"]);
+    drop(retriever);
+    let reopened = Retriever::open(Some(index), None, open_calibration());
+    assert_eq!(sync(&reopened, &docs), (Publication::Unchanged, 0));
+    assert_eq!(ids(&reopened, &q), ["tagged"]);
+}
+
+#[test]
 fn lifecycle_gates_exclude_superseded_inactive_and_stale_documents() {
     let retriever = lexical();
     let mut docs = corpus();
