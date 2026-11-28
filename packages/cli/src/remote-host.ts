@@ -1,4 +1,4 @@
-import { RemoteConnection } from "@ycoding-ai/server/remote-connection"
+import type { Remote } from "@ycoding-ai/schema/remote"
 import type { createRemoteConnector } from "./commands/handlers/remote/connector"
 import { createRemotePreferenceRepository } from "./remote-preference"
 import { RemoteSetupError } from "./remote-error"
@@ -11,9 +11,9 @@ export async function createRemoteHost(input: {
   create: () => Promise<Connector>
   waitUntilReady?: (signal: AbortSignal) => Promise<void>
   scheduleRetry?: (retry: () => void, delayMs: number) => () => void
-}): Promise<RemoteConnection.Interface> {
+}) {
   const repository = createRemotePreferenceRepository(input.file)
-  let current: Awaited<ReturnType<RemoteConnection.Interface["status"]>> = { state: "off" }
+  let current: Remote.Status = { state: "off" }
   let connector: Connector | undefined
   let unsubscribe: (() => void) | undefined
   let generation = 0
@@ -109,7 +109,7 @@ export async function createRemoteHost(input: {
   if (enabled) start()
   return {
     status: async () => current,
-    set: (enabled) => {
+    set: (enabled: boolean) => {
       const next = transition.then(async () => {
         await repository.save(enabled)
         if (enabled) return start()

@@ -39,6 +39,7 @@ export function v5Server(
   handle: (name: string, data: unknown) => unknown,
   options: {
     httpRequests?: string[]
+    http?: (request: Request) => Response | undefined | Promise<Response | undefined>
     stop?: (instanceID: string) => boolean
     stream?: (name: string, data: unknown, stream: Stream) => () => void
   } = {},
@@ -65,6 +66,8 @@ export function v5Server(
           throw new Error("Invalid health fixture")
         return Response.json(result.data)
       }
+      const response = await options.http?.(request)
+      if (response) return response
       if (new URL(request.url).pathname !== "/ws/v5/local") return new Response("Not found", { status: 404 })
       authorizations.push(request.headers.get("authorization"))
       const peer = new ScriptedPeer(randomUUID())

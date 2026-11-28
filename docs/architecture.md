@@ -56,7 +56,7 @@ Client, TUI, and Web code must not import Core or Server implementation modules 
 
 ### Remote presentation boundary
 
-The local CLI connects outbound to the relay and maps a fixed operation set onto the existing authenticated local service. An enrolled machine's authenticated owner can access every Session in that backend. The bridge derives each Location from the paginated backend inventory; a browser cannot supply an arbitrary local URL, HTTP method, filesystem path, or Location header.
+The native runtime connects outbound to the relay and handles a fixed operation set. An enrolled machine's authenticated owner can access every Session in that backend. The runtime derives each Location from the backend inventory; a browser cannot supply an arbitrary local URL, HTTP method, filesystem path, or Location header.
 
 The browser relay carries a closed operation set. Native Dots task and decision traffic uses a private Core Host injected into the server-process callback; it does not pass through the relay or a public HTTP adapter. Generic preview infrastructure retains its isolated-origin wire helpers and is disabled in checked-in deployment configuration.
 
@@ -174,7 +174,7 @@ Owns the macOS Electrobun application: the Bun main process (`src/bun/index.ts`)
 
 `infra/cloudflare` owns the `ycoding-cloud` Worker configuration, D1 binding, and SQLite-backed `DeviceRelay` declaration. A relay instance is addressed by `userId:deviceId` and serializes per-WebSocket role and connection metadata so hibernation never depends on ordinary JavaScript memory. The Worker authenticates browser users and enrolled devices before forwarding closed relay operations.
 
-The local outbound WebSocket client is process-owned in `packages/cli`. It is transport-only and opt-in through the remote connection toggle. One socket carries three delivery classes scheduled by the connector under the relay's frame rate: control frames (responses, status, inventory invalidations, receipts, heartbeats) first, then per-Session `events` batches and chunked bulk responses interleaved so no Session's stream or large read blocks another; socket backpressure defers bulk only. A browser's `priority` hint lengthens the coalescing window for its Sessions while it is hidden, and a browser `cancel` releases a pending request on the relay and aborts it on the connector. The server process that hosts the local backend owns it: `packages/cli` creates one remote host per server listener, the managed service or a `--standalone` private server, and passes `packages/server` a narrow status and on/off interface that backs the authenticated `/api/remote` routes, so Server never imports the connector. Core remains the owner of durable Sessions, Location-scoped execution, tools, filesystem access, and model calls; the TUI remains a client and never owns the remote connection's agent Session.
+The native runtime owns the outbound remote connector and its device credentials. The CLI and TUI use authenticated revision-5 operations to enroll the backend, read its connection state, and change its remote access preference. The connector forwards the closed operation set to the local runtime, which resolves each Session's Location and enforces its authority. The TUI remains a client and does not own the remote connection's agent Session.
 
 ## Runtime flow
 

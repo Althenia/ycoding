@@ -330,8 +330,8 @@ test("follow reconciliation waits for attached Project members, then reports pro
     const idle = receipts.filter((r) => r.kind === "reconciliation")
     expect(idle).toHaveLength(1)
     expect(idle[0]).toMatchObject({ reason: "unfinished-idle" })
-    expect(idle[0]?.evidence).toContain("open root todos: 1; next pending: Integrate verified member delivery")
-    expect(idle[0]?.evidence).toContain("ses_member")
+    expect(idle[0]?.evidence).toContain("open root todos: 1; pending: Integrate verified member delivery")
+    expect(receipts).toContainEqual(expect.objectContaining({ kind: "ownership", sessionID: "ses_member" }))
     const before = receipts.filter((r) => r.kind === "heartbeat").length
     await wait(() => receipts.filter((r) => r.kind === "heartbeat").length >= before + 3)
     expect(receipts.filter((r) => r.kind === "reconciliation")).toHaveLength(1)
@@ -352,9 +352,12 @@ for (const mode of ["completed", "open-questions", "recovery-needed", "failed", 
       const summaries = receipts.filter((r) => r.kind === "reconciliation")
       expect(summaries).toHaveLength(1)
       expect(summaries[0]).toMatchObject({ reason: mode === "superseded" ? "unfinished-idle" : mode === "failed" ? "recovery-needed" : mode })
-      if (mode === "open-questions") expect(summaries[0]?.evidence).toContain("review rvw_wait sessionID=ses_target")
-      if (mode === "recovery-needed") expect(summaries[0]?.evidence).toContain("lost: ses_member")
-      if (mode === "failed") expect(summaries[0]?.evidence).toContain("failed: ses_member")
+      if (mode === "open-questions") {
+        expect(summaries[0]?.evidence).toContain("pending requests: 1")
+        expect(receipts).toContainEqual(expect.objectContaining({ kind: "pending", requestKind: "review", id: "rvw_wait", sessionID: "ses_target" }))
+      }
+      if (mode === "recovery-needed") expect(summaries[0]?.evidence).toContain("Action: lost ses_member")
+      if (mode === "failed") expect(summaries[0]?.evidence).toContain("Action: failed ses_member")
     } finally { controller.abort(); await run }
   })
 }

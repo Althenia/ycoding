@@ -93,7 +93,7 @@ describe("SkillPlugin.Plugin", () => {
         expect.objectContaining({
           id: "chatgpt-connectors",
           name: "ChatGPT connectors",
-          location: "/builtin/chatgpt-connectors.md",
+          location: "/builtin/chatgpt-connectors/SKILL.md",
           description: expect.stringContaining("tools.chatgpt"),
         }),
       )
@@ -107,7 +107,7 @@ describe("SkillPlugin.Plugin", () => {
       const skills = yield* registeredSkills()
       for (const id of ["browser-use", "computer-use"]) {
         const skill = skills.find((item) => item.id === id)
-        expect(skill?.location).toBe(AbsolutePath.make(`/builtin/${id}.md`))
+        expect(skill?.location).toBe(AbsolutePath.make(`/builtin/${id}/SKILL.md`))
         expect(skill?.description).toContain("interaction")
         expect(skill?.content.split("\n").length).toBeLessThan(80)
         for (const word of ["status", "observe", "paused", "Stop"]) expect(skill?.content).toContain(word)

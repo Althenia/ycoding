@@ -11,6 +11,7 @@ export const RemoteCommand = Spec.make("remote", {
     Spec.make("enroll", {
       description: "Enroll this machine with the YCoding relay",
       params: {
+        ...ServerParams,
         enrollmentID: Argument.string("enrollmentID").pipe(
           Argument.withDescription("Enrollment ID shown on the YCoding devices page"),
         ),

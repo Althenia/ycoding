@@ -4,6 +4,8 @@ import { ServerConnection } from "../../../services/server-connection"
 import { RemoteCredentials } from "../../../remote-credentials"
 import { RemoteLocal } from "../../../remote-local"
 import { RemoteSetupError } from "../../../remote-error"
+import { frontendClient, type createClient } from "../../../services/client"
+import { RemoteLimits } from "@ycoding-ai/remote"
 
 export const requireIdentity = Effect.fn("cli.remote.identity")(function* () {
   const identity = yield* RemoteCredentials.read()
@@ -14,18 +16,32 @@ export const requireIdentity = Effect.fn("cli.remote.identity")(function* () {
   return identity
 })
 
-export const resolveLocalServer = (input: { readonly server?: string; readonly standalone?: boolean }) =>
+export const resolveRemoteClient = (input: { readonly server?: string; readonly standalone?: boolean }) =>
   Effect.gen(function* () {
+    const server = input.server
+    if (server !== undefined) yield* Effect.try(() => RemoteLocal.assertPrivateEndpoint({ url: server }))
     const resolved = yield* ServerConnection.resolve({ server: input.server, standalone: input.standalone })
     yield* Effect.try(() => RemoteLocal.assertPrivateEndpoint(resolved.endpoint))
-    return RemoteLocal.createLocalServer(resolved.endpoint)
+    const client = yield* frontendClient(resolved.endpoint)
+    return { client, endpoint: resolved.endpoint }
   })
 
-export function credentialState(identity: RemoteCredentials.Identity, now = Date.now()) {
-  if (identity.refreshToken === undefined || identity.refreshExpiresAt === undefined) return "not yet authenticated"
-  if (identity.refreshExpiresAt <= now) return "expired; enroll again"
-  const days = Math.floor((identity.refreshExpiresAt - now) / 86_400_000)
-  return days >= 1 ? `valid for ${days} more day(s)` : "valid for less than a day"
+export async function listBackendSessions(client: ReturnType<typeof createClient>, signal: AbortSignal) {
+  const sessions: Awaited<ReturnType<typeof client.session.list>>["data"] = []
+  const visited = new Set<string>()
+  let cursor: string | undefined
+  for (;;) {
+    const page = await client.session.list({
+      limit: RemoteLimits.maxSessionListPage,
+      order: "desc",
+      ...(cursor === undefined ? {} : { cursor }),
+    }, { signal })
+    sessions.push(...page.data)
+    cursor = page.cursor.next ?? undefined
+    if (cursor === undefined || page.data.length === 0) return sessions
+    if (visited.has(cursor)) throw new Error("Session inventory repeated a page cursor")
+    visited.add(cursor)
+  }
 }
 
 export function line(value: string) {

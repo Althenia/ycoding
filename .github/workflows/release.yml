@@ -114,6 +114,12 @@ jobs:
           bun test --cwd packages/ai ./test/provider/openai-responses.test.ts
           bun test --cwd packages/core ./test/openai-api-key-cache-boundary.test.ts
 
+      - name: Verify CCA task authorization
+        if: matrix.suite == 'types'
+        run: |
+          bun test --cwd packages/core ./test/cca-authorization.test.ts -t "checks current, permission, guardrail, current in order|missing or stale session at the first current check|permission denial rejects without reaching guardrail|guardrail denial rejects with no reservation to release"
+          bun test --cwd packages/cli ./test/frontend-boundary.test.ts
+
       - name: Verify Interaction wire and runtime boundaries
         if: matrix.suite == 'types'
         run: |
@@ -239,6 +245,14 @@ jobs:
           cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --test service_failed_boot failed_store_boot_retains_native_owner_until_authenticated_exact_instance_stop -- --exact
           cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --lib production::tests::retention_settings_fail_startup_when_the_first_load_fails -- --exact
 
+      - name: Verify native assessment and compaction boundaries
+        if: matrix.suite == 'tui-runtime'
+        run: |
+          cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-core --test guardrail_decision qualifying_grades_settle_with_the_highest_confidence_choice_and_full_provenance -- --exact
+          cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-core --test guardrail_decision unqualified_tied_or_conflicting_grades_escalate_with_their_provenance -- --exact
+          cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-core --test guardrail_decision refusal_invalid_grades_and_deadline_escalate_without_grades -- --exact
+          cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-core --test session_compaction_policy constraints_keep_whole_blocks_and_replace_the_overflow_with_one_digest_notice -- --exact
+
       - name: Verify Session pin durability
         if: matrix.suite == 'tui-runtime'
         run: |
@@ -250,6 +264,10 @@ jobs:
         if: matrix.suite == 'tui-project'
         working-directory: packages/core
         run: bun test test/decision-agent-provider.test.ts test/decision-agent.test.ts test/decision-judgment.test.ts test/decision.test.ts test/session-guardrail-service.test.ts
+
+      - name: Verify CCA task cleanup
+        if: matrix.suite == 'tui-project'
+        run: bun test --cwd packages/cli ./test/cca-task-proof.test.ts -t "production cleanup composition attempts runtime close|held runtime close leaves executor completed|cleanup composition surfaces observer failure"
 
       - name: Verify Project ownership and native routing
         if: matrix.suite == 'tui-project'

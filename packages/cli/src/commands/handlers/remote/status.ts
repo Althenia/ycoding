@@ -1,44 +1,31 @@
 import { Effect, Option } from "effect"
 import { EOL } from "node:os"
-import { Service } from "@ycoding-ai/client/effect/service"
-import { YCoding } from "@ycoding-ai/client/promise"
-import { RemoteLocal } from "../../../remote-local"
-import { RemoteCredentials } from "../../../remote-credentials"
 import { Runtime } from "../../../framework/runtime"
-import { ServiceConfig } from "../../../services/service-config"
 import { RemoteCommand } from "../../remote"
-import { credentialState, line } from "./shared"
-import { ServerConnection } from "../../../services/server-connection"
+import { line, listBackendSessions, resolveRemoteClient } from "./shared"
 
 export default Runtime.handler(
   RemoteCommand.commands.status,
   Effect.fn("cli.remote.status")(function* (input) {
-    const identity = yield* RemoteCredentials.read()
-    if (identity === undefined) {
-      line("Not enrolled. Run `ycoding remote enroll <enrollmentID>` with a relay origin.")
-      return
-    }
-    const resolved = yield* ServerConnection.resolve({
+    const { client, endpoint } = yield* resolveRemoteClient({
       server: Option.getOrUndefined(input.server),
       standalone: input.standalone,
     })
-    yield* Effect.try(() => RemoteLocal.assertPrivateEndpoint(resolved.endpoint))
-    const client = YCoding.make({ baseUrl: resolved.endpoint.url, headers: Service.headers(resolved.endpoint) })
-    const remote = yield* Effect.tryPromise(() => client.remote.get())
-    const local = RemoteLocal.createLocalServer(resolved.endpoint)
-    const sessions = yield* Effect.tryPromise(() => RemoteLocal.listSessions(local))
-    const service = yield* Service.discover(yield* ServiceConfig.options()).pipe(
-      Effect.map((found) => found?.url ?? "stopped"),
-      Effect.catch(() => Effect.succeed("unknown")),
-    )
+    const remote = yield* Effect.tryPromise((signal) => client.remote.get({ signal }))
+    const device = remote.device
+    if (device === undefined) {
+      line("Not enrolled. Run `ycoding remote enroll <enrollmentID>` with a relay origin.")
+      return
+    }
+    const sessions = yield* Effect.tryPromise((signal) => listBackendSessions(client, signal))
     process.stdout.write(
       [
         "",
-        `  Device        ${identity.name} (${identity.deviceID})`,
-        `  Relay         ${identity.relayURL}`,
-        `  Credential    ${credentialState(identity)}`,
+        `  Device        ${device.name} (${device.deviceID})`,
+        `  Relay         ${device.relayOrigin}`,
+        `  Credential    ${device.credentialState === "not_authenticated" ? "not yet authenticated" : device.credentialState}`,
         `  Connection    ${remote.state}${remote.message ? ` · ${remote.message}` : ""}`,
-        `  Local server  ${service}`,
+        `  Local server  ${new URL(endpoint.url).origin}`,
         `  Sessions      ${sessions.length} backend session(s), all owner-accessible while connected`,
         "",
       ].join(EOL) + EOL,

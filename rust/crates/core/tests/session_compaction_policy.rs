@@ -64,6 +64,7 @@ fn the_admission_digest_hashes_the_revision_and_ordered_policy() {
 
 #[test]
 fn constraints_keep_whole_blocks_and_replace_the_overflow_with_one_digest_notice() {
+    assert_eq!(compaction_constraints::DEFAULT_MAX_BYTES, 32 * 1024);
     let parts = [Some("alpha"), None, Some("  "), Some("beta"), Some("gamma")];
     assert_eq!(
         compaction_constraints::assemble(&parts, 1_000),
@@ -79,6 +80,11 @@ fn constraints_keep_whole_blocks_and_replace_the_overflow_with_one_digest_notice
     };
     let result = compaction_constraints::assemble(&[Some("keep"), Some(long.as_str())], 250);
     assert_eq!(result, vec!["keep".to_string(), notice(1, 300, &long)]);
+    let changed = "y".repeat(300);
+    assert_ne!(
+        result,
+        compaction_constraints::assemble(&[Some("keep"), Some(changed.as_str())], 250)
+    );
     let both = notice(2, 304, &format!("{long}\0tail"));
     let displaced =
         compaction_constraints::assemble(&[Some(long.as_str()), Some("tail")], both.len() + 2);

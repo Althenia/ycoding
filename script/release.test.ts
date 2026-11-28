@@ -113,6 +113,27 @@ test("release source verification selects the native startup diagnostic regressi
   expect(steps.indexOf(selected[0]!)).toBeGreaterThan(steps.findIndex((step) => step.startsWith("Verify native runtime receipt\n")))
 })
 
+test("release source verification keeps CCA authorization and native assessment boundaries", () => {
+  const authorization = jobStep("verify-source", "Verify CCA task authorization")
+  expect(authorization.if).toBe("matrix.suite == 'types'")
+  expect(authorization.run).toContain("./test/cca-authorization.test.ts")
+  expect(authorization.run).toContain("./test/frontend-boundary.test.ts")
+  expect(authorization.run).toContain("permission denial rejects without reaching guardrail")
+  expect(authorization.run).toContain("guardrail denial rejects with no reservation to release")
+
+  const cleanup = jobStep("verify-source", "Verify CCA task cleanup")
+  expect(cleanup.if).toBe("matrix.suite == 'tui-project'")
+  expect(cleanup.run).toContain("./test/cca-task-proof.test.ts")
+  expect(cleanup.run).toContain("production cleanup composition attempts runtime close")
+
+  const native = jobStep("verify-source", "Verify native assessment and compaction boundaries")
+  expect(native.if).toBe("matrix.suite == 'tui-runtime'")
+  expect(native.run).toContain("qualifying_grades_settle_with_the_highest_confidence_choice_and_full_provenance -- --exact")
+  expect(native.run).toContain("unqualified_tied_or_conflicting_grades_escalate_with_their_provenance -- --exact")
+  expect(native.run).toContain("refusal_invalid_grades_and_deadline_escalate_without_grades -- --exact")
+  expect(native.run).toContain("constraints_keep_whole_blocks_and_replace_the_overflow_with_one_digest_notice -- --exact")
+})
+
 test("release source verification selects duplicate-pin and reclaim durability cases", () => {
   const verify = workflowJob(workflow, "verify-source")
   const steps = verify.split("\n      - name: ").slice(1)

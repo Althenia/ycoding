@@ -6,7 +6,6 @@ import pkg from "../package.json"
 
 const remoteControl = "src/remote-control/"
 const operatorSkill = "src/remote-control/session-operator-skill.ts"
-const remoteHost = "src/remote-host.ts"
 
 function specifiers(file: string, source: string) {
   const found: string[] = []
@@ -74,7 +73,7 @@ function forbidden(file: string, source: string) {
 test("CLI source and manifest keep execution behind the client boundary", async () => {
   const root = path.resolve(import.meta.dirname, "..")
   const files = Array.from(new Bun.Glob("src/**/*.{ts,tsx}").scanSync({ cwd: root }))
-  const standalone = (file: string) => file === remoteHost || (file.startsWith(remoteControl) && file !== operatorSkill)
+  const standalone = (file: string) => file.startsWith(remoteControl) && file !== operatorSkill
   const sources = await Promise.all(
     files.map(async (file) => ({ file, source: await readFile(path.join(root, file), "utf8") })),
   )
