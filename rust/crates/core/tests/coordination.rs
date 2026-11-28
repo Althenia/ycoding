@@ -485,27 +485,27 @@ async fn coordination_instruction_release_text_matches_every_role_and_revocation
         (
             Role::Master,
             false,
-            "ab020685cc3968ca8d1ddb9c78f8d467b695e9c76886ec25c18a2ed748c144bc",
+            "6644dd91dd46c73fe608230d99d441f3481c76be06aef6fa82fbe09ea55f4c6e",
         ),
         (
             Role::Master,
             true,
-            "ab020685cc3968ca8d1ddb9c78f8d467b695e9c76886ec25c18a2ed748c144bc",
+            "6644dd91dd46c73fe608230d99d441f3481c76be06aef6fa82fbe09ea55f4c6e",
         ),
         (
             Role::Supervisor,
             false,
-            "de6031e08d15ecca717587bd221864c3cbfd013f422017ad7030b0357be8f00e",
+            "2a4b52dd4547c084c87b9075a5ab34216a36429685c8349402eb4f8c74263037",
         ),
         (
             Role::Supervisor,
             true,
-            "de6031e08d15ecca717587bd221864c3cbfd013f422017ad7030b0357be8f00e",
+            "2a4b52dd4547c084c87b9075a5ab34216a36429685c8349402eb4f8c74263037",
         ),
         (
             Role::Executor,
             false,
-            "37a97c8fb06d37f374a265e6254dbab7ea7eb5c0e09a7bca64f8fcc749ea7ecf",
+            "1e2512b1b6bfcbd0f5645a76ef5f53077415c6b14af0dfaf1de868b827323720",
         ),
         (
             Role::Executor,
@@ -527,7 +527,7 @@ async fn coordination_instruction_release_text_matches_every_role_and_revocation
             let expected = if coordinating {
                 "c041987d38cfa740ce9e90c29299b41eaa18739ac350226615b89c0276e3d410"
             } else {
-                "8536cfa6ff24dd29a406614f717a8fad861e3e301b7da70ca52c5d0695bd39ee"
+                "31f6a7cb37b6d532d3f23f933c548ab1244c713d4f30b1a47fb9adfdf4500bf7"
             };
             assert_eq!(
                 digest(&(source.changed)(&previous, &value).unwrap()),
@@ -605,7 +605,7 @@ fn coordination_guidance_preserves_owner_routing_native_gates_and_complete_deliv
             "Pass exactly one placement: `directory` with an absolute or home-relative path for an explicit folder, such as the target repository's canonical checkout, an existing managed worktree or a non-Git Project folder; `projectID` for a repository Project's canonical checkout; or `name` with an explicit `repository` for a new managed worktree.",
             "The Master performs the required native `project create` with the resolved placement and `ownerSessionID`, without a `prompt`.",
             "Settle routine member requests through `project answer` within recorded authority in every autonomy mode, Manual included.",
-            "Safety and platform human gates, requests marked `requireExplicitDecision: true`, and hard or custom-rule guardrail approvals require an explicit human decision through their native controls.",
+            "Decline an unsafe request when the native control permits it.",
             "Deny rules and permission ceilings still hold",
             "preserve Session and Project histories intact without deleting history as cleanup",
             "unfinished member work or pending family requests stay open with their recorded owner until settled",
@@ -677,7 +677,7 @@ fn project_owners_and_executors_recover_within_their_roles_before_escalating_unr
             "Honor explicit pauses and cancellations.",
             "Preserve model, provider, profile, tool, toolchain and filesystem limits, protect secrets, and stay within authorized side effects.",
             "Honor permission rules, denies, ceilings, guardrails and hard reviews.",
-            "Use native controls for required approvals and human decisions; never bypass a refusal or treat silence as consent.",
+            "Use native controls for required approvals; never bypass a refusal or treat silence as consent.",
             "Never replay an uncertain action.",
         ] {
             once(&value, rule);
@@ -1072,7 +1072,7 @@ fn project_roles_inherit_the_base_swarm_rule_without_separate_coordination_text(
             .to_utf8()
             .unwrap()
     };
-    let rule = "Drive assigned work as a swarm by default: swarm execution is the primary operating mode for every Session, whether Project Master, Project member or standalone, and single-lane execution is the exception for indivisible or tightly coupled work.";
+    let rule = "Default to full native Swarm execution for every Session, whether Project Master, Project member or standalone, and treat single-lane execution as the exception for indivisible or tightly coupled work.";
     let sessions = [
         ("normal", "god", None),
         ("master", "god", Some(Role::Master)),
@@ -1097,7 +1097,7 @@ fn project_roles_inherit_the_base_swarm_rule_without_separate_coordination_text(
         }
         assert_eq!(text.matches(rule).count(), 1, "{name}");
         assert!(
-            text.find(rule).unwrap() < text.find("Work agentically.").unwrap(),
+            text.find("Work agentically:").unwrap() < text.find(rule).unwrap(),
             "{name}"
         );
     }

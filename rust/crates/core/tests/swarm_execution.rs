@@ -49,13 +49,13 @@ fn once(text: &str, clause: &str) {
     assert_eq!((clause, text.split(clause).count()), (clause, 2));
 }
 
-const RULE: &str = "Drive assigned work as a swarm by default: swarm execution is the primary operating mode for every Session, whether Project Master, Project member or standalone, and single-lane execution is the exception for indivisible or tightly coupled work.";
+const RULE: &str = "Default to full native Swarm execution for every Session, whether Project Master, Project member or standalone, and treat single-lane execution as the exception for indivisible or tightly coupled work.";
 const LANES: [&str; 5] = [
-    "Whoever coordinates the work splits it into genuinely independent lanes, launches every ready lane at once, and runs its own independent integration and verification within its authority while the lanes run.",
+    "Whoever coordinates the work splits it into genuinely independent lanes, launches every ready lane at once so independent lanes run in parallel, and coordinates ownership and integration while running its own independent integration and verification within its authority.",
     "Each lane delegates its genuinely independent subtasks to native subagents where its tools grant them, and keeps ownership of its own integration and verification.",
-    "Serialize only real dependencies, overlapping writes and shared integration.",
+    "Serialize only real dependencies, overlapping writes and shared integration, and keep independent work moving while only the dependent step waits, including while a request is pending.",
     "Allow one writer per file, ref or build output, launch a lane or subagent only for work with its own owner, exclusive paths and checks, and never launch filler.",
-    "The configured route, concurrency limits, Project boundaries, pauses and enforced controls stay as they are.",
+    "The configured route, concurrency limits and Project boundaries stay as they are, within the pauses, authorization and enforced controls stated above.",
 ];
 const SEPARATE: [&str; 6] = [
     "swarm",

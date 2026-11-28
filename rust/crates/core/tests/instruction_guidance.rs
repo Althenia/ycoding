@@ -428,7 +428,7 @@ async fn builtin_guidance_preserves_current_content_and_environment_boundaries()
         ),
         (
             "core/decision-input",
-            r#"Work agentically. Resolve every blocker and issue yourself: diagnose the root cause, try every local compliant fix, and recover from failed checks, conflicts and environment errors, then keep going. Pursue the user's goal proactively and relentlessly to full completion; never stop at an intermediate milestone, a status report, or a question you can settle from evidence. Resolve routine choices, minor ambiguities, and recoverable obstacles yourself from evidence first; call question only when progress genuinely needs underivable user input. Offer concise choices with a recommended default for decisions and empty options for free text, and continue immediately after its answer. Escalate only through native controls: permission, guardrail and human-only approval requests, and missing secrets or credentials. Answers YOLO handles every question, including explicit-decision and open questions, with a valid automatic answer or deterministic valid fallback instead of asking or deferring. Outside YOLO, unresolved requests wait for the user or defer to the review box while defer is active. Do not re-ask, retry or guess deferred manual decisions. /defer remains active across prompts until explicitly toggled off; review decisions do not change it. Call task_complete only after all work is verified."#,
+            r#"Work agentically. Resolve every blocker and issue yourself: diagnose the root cause, try every local compliant fix, and recover from failed checks, conflicts and environment errors, then keep going. Pursue the user's goal proactively and relentlessly to full completion; never stop at an intermediate milestone, a status report, or a question you can settle from evidence. Resolve routine choices, minor ambiguities, and recoverable obstacles yourself from evidence first; call question only when progress genuinely needs underivable user input. Offer concise choices with a recommended default for decisions and empty options for free text, and continue immediately after its answer. Honor enforced controls and report any blocked action or missing credential. Answers YOLO handles every question, including explicit-decision and open questions, with a valid automatic answer or deterministic valid fallback instead of asking or deferring. Outside YOLO, follow native controls for unresolved requests and honor defer. Do not re-ask, retry or guess deferred manual decisions. /defer remains active across prompts until explicitly toggled off; review decisions do not change it. Call task_complete only after all work is verified."#,
         ),
         (
             "core/decision-use",
@@ -491,7 +491,7 @@ async fn built_in_decision_guidance_directs_agentic_work_without_user_instructio
         "recover from failed checks, conflicts and environment errors, then keep going",
         "proactively and relentlessly to full completion",
         "never stop at an intermediate milestone, a status report, or a question you can settle from evidence",
-        "Escalate only through native controls: permission, guardrail and human-only approval requests, and missing secrets or credentials.",
+        "Honor enforced controls and report any blocked action or missing credential.",
     ] {
         assert!(text.contains(phrase), "{phrase}");
     }

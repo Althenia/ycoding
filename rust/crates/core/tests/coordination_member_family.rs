@@ -1195,6 +1195,7 @@ fn the_project_tool_description_names_descendant_requests_and_member_autonomy() 
         "A pending request raised by a member's subagent or any deeper descendant Session is listed under that member with requestSessionID naming the requesting Session; inspect, answer and escalate it with the member's sessionID. It neither makes the member waiting nor blocks send.",
         "A request from a member's descendant stays open in its requesting Session, returned as requestSessionID, and the reasons attach to that Session's prompt.",
         "The member takes your effective permissions, guardrails and answers modes when it joins.",
+        "When answer refuses, errors or is uncertain it returns escalated with a reason; escalate that request.",
         "For repository work, use directory at the target repository's canonical checkout or one of its managed worktrees; never the Project's folder unless it is the same repository, and never ~/.local/share/ycoding/tasks/ or any subdirectory of it.",
         "Questions, forms, permission asks and guardrail reviews raised by a member's descendant Sessions are member events whose notifications carry requestSessionID.",
         "Attaching the same Session with the same owner again returns reconciled true and changes nothing; a different owner is refused, so use assign to change it.",

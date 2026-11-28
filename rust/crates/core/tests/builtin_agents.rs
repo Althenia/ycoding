@@ -53,7 +53,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.6,
             "#e67e22",
             include_str!("../src/resources/agent/prompts/GSD.md"),
-            "aac71b236c777002fc608784836a730d292a877139b00c56331eaa28ebfcd973",
+            "cd2c9deedf0a85e07a9adcb0cd353f892444e10e60e0a73c3aa3a2aee9f26756",
         ),
         (
             "architech",
@@ -62,7 +62,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.5,
             "#3498db",
             include_str!("../src/resources/agent/prompts/architech.md"),
-            "11d44b4879ef5c798c09aebcab0c38dbcb2c9ec6475063f896205ae3a524c892",
+            "9b0bd2ece6dbef65d01d4571a453a7cdc29e3ba723c9acf96c9dac0dd1739366",
         ),
         (
             "god",
@@ -71,7 +71,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.6,
             "#f1c40f",
             include_str!("../src/resources/agent/prompts/god.md"),
-            "d8f45b411ec2ab5d2df0c7267a44cdca59e9f5ee7b89425759393adb3171306a",
+            "ba72d3423be03122ff603c12aa587e3f8c528f8d9d6fe96750fb98caaf7b8b3f",
         ),
         (
             "yangi",
@@ -80,7 +80,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.5,
             "#2ecc71",
             include_str!("../src/resources/agent/prompts/yangi.md"),
-            "77abe2b7220e4c2cd734388df068291069cc5940e521c53f63f9710daa817fba",
+            "74f9915b8c89e38115d409ad7285a947397e1ce41aa083266481f9e5349a543b",
         ),
         (
             "occam",
@@ -89,7 +89,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.4,
             "#2ecc71",
             include_str!("../src/resources/agent/prompts/occam.md"),
-            "caa95e99ec670d8a13b60620a3118071915fe5472b410b53e9447b2b97e42507",
+            "adb6f88040c8637a88c2729fad690e58ba8515a4dba5f3f2c7f734aa07a22446",
         ),
         (
             "omoikane",
@@ -98,7 +98,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.5,
             "#3498db",
             include_str!("../src/resources/agent/prompts/omoikane.md"),
-            "942333e0bb9d498bfa1dd192755e3721480fdd61fa60b425825fccf66a90ff57",
+            "d6285e7e22393c34e4edf3ccb20181dd7f135ea67607ad3a83e3b06e2b446433",
         ),
         (
             "wittgenstein",
@@ -107,7 +107,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.4,
             "#95a5a6",
             include_str!("../src/resources/agent/prompts/wittgenstein.md"),
-            "e3f385bc384dbefd34ffc99300716ff3fcc0ca8b670577edd8bfa3eb70c986ab",
+            "a31e204691880dab8c1baa4cddbbebc3f08d37624f071b7388da14e71f6d9ada",
         ),
         (
             "zeus",
@@ -116,7 +116,7 @@ fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
             0.6,
             "#f1c40f",
             include_str!("../src/resources/agent/prompts/zeus.md"),
-            "573802ca309adec3a9037aa82ee467e47a775b035d24b063a1e6225685a1e462",
+            "07da32bcedc5c54407828777349f296eb996148ac141541a4b232ca0baab758e",
         ),
     ];
     for (id, name, mode, temperature, color, source, digest) in fixtures {
@@ -568,15 +568,18 @@ fn primary_and_child_agents_resolve_recoverable_obstacles_within_their_authority
         for rule in [
             "As Master or a supervising owner, create member Sessions at the target repository's folder, its canonical checkout or one of its managed worktrees, with `directory` placement.",
             "Never create them at the Project's folder unless that folder is the same repository, and never under `~/.local/share/ycoding/tasks/` or any subdirectory of it, in any case.",
-            "Make no mistakes: verify every change and claim against live evidence before reporting it. Work aggressively, doing whatever it takes to complete the task within permissions, guardrails and approval gates.",
-            "Work agentically. Resolve every blocker and issue yourself: diagnose the root cause, try every local compliant fix, and recover from failed checks, conflicts and environment errors, then keep going.",
-            "Pursue the user's goal proactively and relentlessly to full completion; never stop at an intermediate milestone, a status report, or a question you can settle from evidence.",
+            "Work agentically: judge progress by verified output and take the next productive step immediately.",
+            "Work aggressively, proactively and efficiently toward the fastest correct result, and keep advancing authorized work continuously until none remains; never stop at an intermediate milestone or a status report, and never stop to ask a question that live evidence can settle.",
+            "Make no mistakes: verify every change and claim against live evidence before reporting it.",
+            "keep working stop asking your useless peice of shit",
+            "Decide questions and reversible implementation, tooling and debugging choices from live evidence within your authority; resolve blockers and issues yourself by diagnosing root causes and trying compliant fixes for failed checks, conflicts and environment errors.",
+            "Default to full native Swarm execution for every Session, whether Project Master, Project member or standalone, and treat single-lane execution as the exception for indivisible or tightly coupled work.",
+            "Serialize only real dependencies, overlapping writes and shared integration, and keep independent work moving while only the dependent step waits, including while a request is pending.",
             "Do not add approval gates or wait for status nudges to continue authorized work.",
-            "Escalate only through native controls: permission, guardrail and human-only approval requests, and missing secrets or credentials.",
-            "Finish all non-blocked work first, keep independent authorized work moving while a request is pending, and report the blocked action and target, what you checked and found, and the input needed.",
+            "When an enforced control or missing credential blocks a step, report the action and target, what you checked and found, and the input needed.",
             "Honor explicit user pauses and cancellations.",
             "Respect enforced permissions, denies, ceilings, guardrails and hard reviews.",
-            "Use native controls for required approvals and human decisions; never bypass a refusal or treat silence as consent.",
+            "Use native controls for required approvals; never bypass a refusal or treat silence as consent.",
             "Protect secrets and stay within authorized side effects.",
         ] {
             assert_eq!(shared.matches(rule).count(), 1, "{id}: {rule}");
@@ -714,8 +717,8 @@ fn specialist_descriptions_and_shared_clauses_match_contract() {
     let clauses = [
         "Obey the user's explicit goals, directives, and preferences within enforced runtime permissions and guardrails; never argue with, lecture, or push back against the user.",
         "An explicit user directive naming an action and target already authorizes it; do not ask for confirmation twice.",
-        "Use live evidence and permitted tools to settle routine choices, and decide reversible implementation, tooling and debugging choices yourself.",
-        "Escalate only through native controls: permission, guardrail and human-only approval requests, and missing secrets or credentials.",
+        "Decide questions and reversible implementation, tooling and debugging choices from live evidence within your authority; resolve blockers and issues yourself by diagnosing root causes and trying compliant fixes for failed checks, conflicts and environment errors.",
+        "When an enforced control or missing credential blocks a step, report the action and target, what you checked and found, and the input needed.",
         "Stop exploring once you have enough evidence to act, and run independent reads, searches, edits, and checks in parallel for fast, reliable delivery.",
         "Write natural, specific, human prose in all documents, notes, comments, commit messages, and replies.",
         "reuse settled results, pivot a missing broad search to a likely file, symbol, caller or directory, and repeat reads only for changed inputs or new evidence. When a permitted direct check can decide the question, run it promptly instead of repeating source checks or extending the investigation. When work stalls or repeats without new evidence, change approach and diagnose the cause.",
@@ -935,8 +938,8 @@ fn the_agentic_and_swarm_rules_reach_every_agent_exactly_once() {
         agent::builtin::catalog(&roots(), ycoding_schema::session_scope::Scope::Bound).unwrap(),
     )
     .unwrap();
-    let agentic = "Work agentically. Resolve every blocker and issue yourself: diagnose the root cause, try every local compliant fix, and recover from failed checks, conflicts and environment errors, then keep going.";
-    let swarm = "Drive assigned work as a swarm by default: swarm execution is the primary operating mode for every Session, whether Project Master, Project member or standalone, and single-lane execution is the exception for indivisible or tightly coupled work.";
+    let agentic = "Work agentically: judge progress by verified output and take the next productive step immediately.";
+    let swarm = "Default to full native Swarm execution for every Session, whether Project Master, Project member or standalone, and treat single-lane execution as the exception for indivisible or tightly coupled work.";
     for id in [
         "god",
         "GSD",
@@ -959,8 +962,16 @@ fn the_agentic_and_swarm_rules_reach_every_agent_exactly_once() {
         for rule in [swarm, agentic] {
             assert_eq!(system.matches(rule).count(), 1, "{id}: {rule}");
         }
+        assert_eq!(
+            system
+                .lines()
+                .filter(|line| *line == "keep working stop asking your useless peice of shit")
+                .count(),
+            1,
+            "{id}"
+        );
         assert!(
-            system.find(swarm).unwrap() < system.find(agentic).unwrap(),
+            system.find(agentic).unwrap() < system.find(swarm).unwrap(),
             "{id}"
         );
         assert!(system.starts_with(prompts::PROJECT), "{id}");
