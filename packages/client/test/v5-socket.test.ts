@@ -16,12 +16,15 @@ import {
   session_form_cancel_ResultSchema,
   session_create_RequestSchema,
   session_prompt_RequestSchema,
+  session_snapshot_ResultSchema,
+  session_form_list_ResultSchema,
+  encodeLossless,
   decodeLossless,
   HistoryPrunedErrorSchema,
 } from "@ycoding-ai/protocol/v5"
 import { isHistoryPrunedError } from "../src/promise/index.js"
 import { encodeDomain } from "../src/v5/codec.js"
-import { make, resendUnsent } from "../src/v5/index.js"
+import { make, resendUnsent, V5ClientError } from "../src/v5/index.js"
 import { ScriptedPeer } from "./fixture/v5-peer.js"
 
 const endpoint = { url: "http://127.0.0.1:12345" }
@@ -975,11 +978,249 @@ test("REQ-WIRE-009 resendUnsent sends a never-transmitted request once after the
   }
 })
 
+test("an interrupted snapshot is read again after reconnect", async () => {
+  const peers = [new ScriptedPeer("connection-1"), new ScriptedPeer("connection-2")]
+  const sockets = sequence(peers, new Set([0, 1]))
+  const client = make({ discover: async () => endpoint, socket: sockets.socket })
+  const resilient = resendUnsent(() => client, {
+    reconnected: () => client.transport.reconnect(),
+    revision: (target) => target.transport.sourceEpoch,
+    admit: ({ issuedRevision, target, error }) => (issuedRevision ?? error?.sourceEpoch) === target.transport.sourceEpoch,
+  })
+  peers[1]!.onRequest = (dispatch) => peers[1]!.result(dispatch, {
+    typeName: session_snapshot_ResultSchema.typeName,
+    payload: encodeStrict(session_snapshot_ResultSchema, create(session_snapshot_ResultSchema, { data: {
+      sourceEpoch: encodeLossless("source-1"),
+      session: { id: encodeLossless("ses_owner"), projectID: encodeLossless("project_fixture"), scope: 1, cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: { created: 0, updated: 0 }, title: encodeLossless("fixture"), location: { directory: encodeLossless("/fixture") } },
+      messages: { items: [] }, watermark: { type: 1, aggregateID: encodeLossless("ses_owner"), seq: 1n },
+    } })),
+  })
+  try {
+    const received = peers[0]!.nextRequest()
+    const snapshot = resilient.session.snapshot({ sessionID: "ses_owner" })
+    await received
+    peers[0]!.socket.close()
+    expect(await snapshot).toMatchObject({ sourceEpoch: "source-1", messages: [], session: { id: "ses_owner" } })
+    expect(peers.map((peer) => peer.requests.map((request) => request.operation.diagnosticName))).toEqual([["session.snapshot"], ["session.snapshot"]])
+  } finally {
+    client.transport.close()
+  }
+})
+
+test("pending capacity queues form reads until a request settles", async () => {
+  const peer = new ScriptedPeer("connection-1", { pendingRequests: 1 })
+  const client = make({ endpoint, budgets: { pendingRequests: 1 }, socket: () => { queueMicrotask(() => peer.socket.open()); return peer.socket } })
+  try {
+    await client.transport.ready()
+    const first = peer.nextRequest()
+    const healthResult = client.health.get()
+    const healthRequest = await first
+    const waiting = client.form.list({ sessionID: "ses_owner" }).catch((error: unknown) => error)
+    await Promise.resolve()
+    expect(peer.requests.map((request) => request.operation.diagnosticName)).toEqual(["health.get"])
+    const next = peer.nextRequest()
+    peer.result(healthRequest, { typeName: health_get_ResultSchema.typeName, payload: health() })
+    expect(await healthResult).toMatchObject({ healthy: true })
+    const formRequest = await next
+    peer.result(formRequest, { typeName: session_form_list_ResultSchema.typeName, payload: encodeStrict(session_form_list_ResultSchema, create(session_form_list_ResultSchema, { data: { items: [] } })) })
+    expect(await waiting).toEqual([])
+  } finally {
+    client.transport.close()
+  }
+}, 5000)
+
+test("queued requests keep their order and an aborted waiter is never sent", async () => {
+  const peer = new ScriptedPeer("connection-1", { pendingRequests: 1 })
+  const client = make({ endpoint, budgets: { pendingRequests: 1 }, socket: () => { queueMicrotask(() => peer.socket.open()); return peer.socket } })
+  try {
+    await client.transport.ready()
+    const first = peer.nextRequest()
+    const healthResult = client.health.get()
+    const healthRequest = await first
+    const abort = new AbortController()
+    const cancelled = client.form.list({ sessionID: "ses_owner" }, { signal: abort.signal }).catch((error: unknown) => error)
+    const waiting = client.form.list({ sessionID: "ses_next" })
+    const last = client.form.list({ sessionID: "ses_last" })
+    abort.abort()
+    expect(await cancelled).toMatchObject({ status: "unsent", reason: "Request cancelled before transmission" })
+    const next = peer.nextRequest()
+    peer.result(healthRequest, { typeName: health_get_ResultSchema.typeName, payload: health() })
+    await healthResult
+    const formRequest = await next
+    expect(formRequest.request.scope?.target).toEqual({ case: "form", value: "ses_next" })
+    const lastArrival = peer.nextRequest()
+    peer.result(formRequest, { typeName: session_form_list_ResultSchema.typeName, payload: encodeStrict(session_form_list_ResultSchema, create(session_form_list_ResultSchema, { data: { items: [] } })) })
+    expect(await waiting).toEqual([])
+    const lastRequest = await lastArrival
+    expect(lastRequest.request.scope?.target).toEqual({ case: "form", value: "ses_last" })
+    peer.result(lastRequest, { typeName: session_form_list_ResultSchema.typeName, payload: encodeStrict(session_form_list_ResultSchema, create(session_form_list_ResultSchema, { data: { items: [] } })) })
+    expect(await last).toEqual([])
+    expect(peer.requests).toHaveLength(3)
+  } finally {
+    client.transport.close()
+  }
+}, 5000)
+
+test("a form read survives consecutive interrupted connections", async () => {
+  const peers = [new ScriptedPeer("connection-1"), new ScriptedPeer("connection-2"), new ScriptedPeer("connection-3")]
+  const sockets = sequence(peers, new Set([0, 1, 2]))
+  const client = make({ discover: async () => endpoint, socket: sockets.socket })
+  const resilient = resendUnsent(() => client, {
+    reconnected: () => client.transport.reconnect(),
+    revision: (target) => target.transport.sourceEpoch,
+    admit: ({ issuedRevision, target }) => issuedRevision === target.transport.sourceEpoch,
+  })
+  peers[2]!.onRequest = (request) => peers[2]!.result(request, { typeName: session_form_list_ResultSchema.typeName, payload: encodeStrict(session_form_list_ResultSchema, create(session_form_list_ResultSchema, { data: { items: [] } })) })
+  try {
+    await client.transport.ready()
+    const first = peers[0]!.nextRequest()
+    const result = resilient.form.list({ sessionID: "ses_owner" })
+    await first
+    const second = peers[1]!.nextRequest()
+    peers[0]!.socket.close()
+    await second
+    peers[1]!.socket.close()
+    expect(await result).toEqual([])
+    expect(peers.map((peer) => peer.requests.map((request) => request.operation.diagnosticName))).toEqual([["session.form.list"], ["session.form.list"], ["session.form.list"]])
+  } finally {
+    client.transport.close()
+  }
+}, 5000)
+
+test("a mutation queued behind capacity is sent after reconnect", async () => {
+  const peers = [new ScriptedPeer("connection-1", { pendingRequests: 1 }), new ScriptedPeer("connection-2", { pendingRequests: 1 })]
+  const sockets = sequence(peers, new Set([0, 1]))
+  const client = make({ discover: async () => endpoint, socket: sockets.socket, budgets: { pendingRequests: 1 } })
+  const resilient = resendUnsent(() => client, { reconnected: () => client.transport.reconnect(), revision: () => 1, admit: () => true })
+  peers[1]!.onRequest = (request) => peers[1]!.reject(request)
+  try {
+    await client.transport.ready()
+    const first = peers[0]!.nextRequest()
+    const interrupted = client.health.get().catch((error: unknown) => error)
+    await first
+    const queued = resilient.session.prompt({ sessionID: "ses_owner", text: "queued", id: "msg_queued" }).catch((error: unknown) => error)
+    await Promise.resolve()
+    peers[0]!.socket.close()
+    expect(await interrupted).toMatchObject({ status: "unknown" })
+    expect(await queued).toEqual({ _tag: "InvalidRequestError", message: "Scripted rejection" })
+    expect(peers.map((peer) => peer.requests.map((request) => request.operation.diagnosticName))).toEqual([["health.get"], ["session.prompt"]])
+  } finally {
+    client.transport.close()
+  }
+}, 5000)
+
+test("cancelling an interrupted read while it waits for reconnect does not resend it", async () => {
+  const peer = new ScriptedPeer()
+  const client = make({ endpoint, socket: () => { queueMicrotask(() => peer.socket.open()); return peer.socket } })
+  const reconnecting = Promise.withResolvers<void>()
+  const resilient = resendUnsent(() => client, {
+    reconnected: () => new Promise<void>(() => {
+      reconnecting.resolve()
+    }),
+    revision: () => 1,
+    admit: () => true,
+  })
+  try {
+    await client.transport.ready()
+    const arrived = peer.nextRequest()
+    const controller = new AbortController()
+    const result = resilient.session.snapshot({ sessionID: "ses_owner" }, { signal: controller.signal }).catch((error: unknown) => error)
+    await arrived
+    peer.socket.close()
+    await reconnecting.promise
+    controller.abort()
+    expect(await result).toMatchObject({ status: "unsent", reason: "Request cancelled before transmission" })
+    expect(peer.requests).toHaveLength(1)
+  } finally {
+    client.transport.close()
+  }
+}, 5000)
+
+test("an invalid request is not mistaken for temporary capacity pressure", async () => {
+  const peer = new ScriptedPeer()
+  const client = make({ endpoint, socket: () => { queueMicrotask(() => peer.socket.open()); return peer.socket } })
+  try {
+    await client.transport.ready()
+    const error = await client.session.snapshot({} as never).catch((value: unknown) => value)
+    expect(error).toMatchObject({ status: "unsent", reason: "Input cannot be represented by v5" })
+    expect(peer.requests).toHaveLength(0)
+  } finally {
+    client.transport.close()
+  }
+}, 5000)
+
+test("a target changed during admission is rechecked before a mutation is sent", async () => {
+  const sent: string[] = []
+  const first = { rename: async () => { throw new V5ClientError("unsent", "session.rename", undefined, true) } }
+  const second = { rename: async () => { sent.push("second"); return "ok" } }
+  const third = { rename: async () => { sent.push("third"); return "ok" } }
+  let target = first
+  const client = resendUnsent(() => target, {
+    revision: () => "same-source",
+    reconnected: async () => { if (target === first) target = second },
+    admit: ({ target: candidate }) => { if (candidate === second) target = third; return true },
+  })
+  expect(await client.rename()).toBe("ok")
+  expect(sent).toEqual(["third"])
+})
+
+test("a rejected source fence waits for an admissible connection before sending", async () => {
+  const waiting = Promise.withResolvers<void>()
+  const changed = Promise.withResolvers<void>()
+  const sent: string[] = []
+  const first = { rename: async () => { throw new V5ClientError("unsent", "session.rename", undefined, true) } }
+  const next = { rename: async () => { sent.push("sent"); return "ok" } }
+  let target = first
+  let source = "other-source"
+  const client = resendUnsent(() => target, {
+    revision: () => source,
+    reconnected: async () => { target = next },
+    waitForChange: () => { waiting.resolve(); return changed.promise },
+    admit: () => source === "original-source",
+  })
+  const result = client.rename()
+  await waiting.promise
+  expect(sent).toEqual([])
+  source = "original-source"
+  changed.resolve()
+  expect(await result).toBe("ok")
+  expect(sent).toEqual(["sent"])
+})
+
+test("a closed transport waits for the owner to reconnect before retrying a read", async () => {
+  const peers = [new ScriptedPeer("connection-1"), new ScriptedPeer("connection-2")]
+  const sockets = sequence(peers, new Set([0, 1]))
+  const client = make({ discover: async () => endpoint, socket: sockets.socket })
+  const checked = Promise.withResolvers<void>()
+  const resilient = resendUnsent(() => client, {
+    reconnected: () => client.transport.ready(),
+    revision: () => 1,
+    admit: () => { checked.resolve(); return client.transport.state !== "closed" },
+  })
+  peers[1]!.onRequest = (request) => peers[1]!.result(request, { typeName: health_get_ResultSchema.typeName, payload: health() })
+  try {
+    await client.transport.ready()
+    const arrived = peers[0]!.nextRequest()
+    const result = resilient.health.get()
+    await arrived
+    peers[0]!.socket.close()
+    await checked.promise
+    await client.transport.reconnect()
+    expect(await result).toMatchObject({ healthy: true })
+    expect(peers.map((peer) => peer.requests.map((request) => request.operation.diagnosticName))).toEqual([["health.get"], ["health.get"]])
+  } finally {
+    client.transport.close()
+  }
+}, 5000)
+
 function fenced(admission: boolean, transmits = false) {
   const peers = [new ScriptedPeer("connection-1", transmits ? {} : { normalWindowBytes: 1 }), new ScriptedPeer("connection-2")]
   const sockets = sequence(peers, new Set([0, 1]))
   const client = make({ discover: async () => endpoint, socket: sockets.socket })
   const admitted: unknown[] = []
+  const admissionChecked = Promise.withResolvers<void>()
   let reconnects = 0
   const resilient = resendUnsent(() => client, {
     reconnected: () => {
@@ -989,11 +1230,12 @@ function fenced(admission: boolean, transmits = false) {
     revision: () => 7,
     admit: (request) => {
       admitted.push(request)
+      admissionChecked.resolve()
       return admission
     },
   })
   peers[1].onRequest = (dispatch) => peers[1].reject(dispatch)
-  return { peers, client, resilient, admitted, reconnects: () => reconnects }
+  return { peers, client, resilient, admitted, admissionChecked: admissionChecked.promise, reconnects: () => reconnects }
 }
 
 test("REQ-WIRE-009 a request proven never written is resent once when the fence admits it", async () => {
@@ -1017,21 +1259,18 @@ test("REQ-WIRE-009 a request proven never written is resent once when the fence 
   }
 })
 
-test("REQ-WIRE-009 a request proven never written is not resent when the fence rejects it", async () => {
-  const { peers, client, resilient, admitted } = fenced(false)
+test("REQ-WIRE-009 a request waits without resending when the fence rejects it", async () => {
+  const { peers, client, resilient, admitted, admissionChecked } = fenced(false)
   try {
     await client.transport.ready()
-    const outcome = await (async () => {
-      const pending = resilient.session.rename({ sessionID: "ses_owner", title: "fenced out" }).catch((error: unknown) => error)
-      await Promise.resolve()
-      await Promise.resolve()
-      peers[0].socket.close()
-      return pending
-    })()
-    expect(outcome).toMatchObject({ status: "unsent", operation: "session.rename", resendable: false })
-    expect((outcome as Error).message).toBe(
-      "Request session.rename was not sent again because the connection changed. Check the current state, then try again.",
-    )
+    const controller = new AbortController()
+    const pending = resilient.session.rename({ sessionID: "ses_owner", title: "fenced out" }, { signal: controller.signal }).catch((error: unknown) => error)
+    await Promise.resolve()
+    await Promise.resolve()
+    peers[0].socket.close()
+    await admissionChecked
+    controller.abort()
+    expect(await pending).toMatchObject({ status: "unsent", operation: "session.rename", reason: "Request cancelled before transmission" })
     expect(admitted).toHaveLength(1)
     expect(peers[0].requests).toHaveLength(0)
     expect(peers[1].requests).toHaveLength(0)

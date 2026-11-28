@@ -45,6 +45,7 @@ export class V5ClientError extends Error {
     readonly operation?: string,
     readonly reason?: string,
     readonly resendable = false,
+    readonly sourceEpoch?: string,
   ) {
     super(describe(status, operation, reason))
   }

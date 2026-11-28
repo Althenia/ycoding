@@ -24,7 +24,6 @@ type ManagedService = {
 
 type ClientEventMap = { [Type in EventSubscribeOutput["type"]]: Extract<EventSubscribeOutput, { type: Type }> }
 const connectTimeout = 2_000
-const resendTimeout = 10_000
 const connectionHistoryLimit = 50
 
 export const { use: useClient, provider: ClientProvider } = createSimpleContext({
@@ -48,29 +47,34 @@ export const { use: useClient, provider: ClientProvider } = createSimpleContext(
     let stream: AbortController | undefined
     const reconnectWaiters = new Set<() => void>()
     const usable = () => connection.status === "connected" && api.transport.state !== "closed"
-    const reconnected = (signal?: AbortSignal) =>
-      usable()
+    const reconnected = (signal?: AbortSignal, next = false) =>
+      !next && usable()
         ? Promise.resolve()
         : new Promise<void>((resolve, reject) => {
+            const lifetime = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal
             const settle = (done: () => void) => {
-              clearTimeout(timer)
-              signal?.removeEventListener("abort", cancel)
+              lifetime.removeEventListener("abort", cancel)
               reconnectWaiters.delete(check)
               done()
             }
             const check = () => {
               if (usable()) settle(resolve)
             }
-            const cancel = () => settle(() => reject(signal?.reason))
-            const timer = setTimeout(() => settle(() => reject(new Error("Timed out waiting for the server connection"))), resendTimeout)
-            signal?.addEventListener("abort", cancel, { once: true })
+            const cancel = () => settle(() => reject(lifetime.reason))
+            if (lifetime.aborted) return cancel()
+            lifetime.addEventListener("abort", cancel, { once: true })
             reconnectWaiters.add(check)
           })
     const resilient = resendUnsent(() => api, {
-      reconnected,
+      reconnected: (signal) => reconnected(signal),
+      waitForChange: (signal) => reconnected(signal, true),
       revision: (client) => client.transport.sourceEpoch,
-      admit: ({ issuedRevision, target }) =>
-        issuedRevision !== undefined && target === api && usable() && target.transport.sourceEpoch === issuedRevision,
+      admit: ({ issuedRevision, issuedOn, target, error }) => {
+        const sourceEpoch = issuedRevision ?? error?.sourceEpoch
+        return target === api && usable() && (sourceEpoch === undefined
+          ? error?.status === "unsent" && issuedOn === target
+          : target.transport.sourceEpoch === sourceEpoch)
+      },
     })
 
     function record(status: ClientConnectionEvent["data"]["status"], attempt: number, error?: string) {

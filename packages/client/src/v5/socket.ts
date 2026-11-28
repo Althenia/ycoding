@@ -14,6 +14,7 @@ import {
   PeerRole,
   ScopeKind,
   Streaming,
+  MutationClass,
   FailureCategory,
   LedgerClass,
   CONTRACT_DIGEST,
@@ -58,13 +59,6 @@ type Pending = {
   reject: (error: unknown) => void
   stream?: DeliveryStream<unknown>
 }
-type Waiting = {
-  binding: Binding
-  resolve: () => void
-  reject: (error: unknown) => void
-  signal?: AbortSignal
-  abort: () => void
-}
 type Owner = {
   active: boolean
   ready: Promise<void>
@@ -81,7 +75,8 @@ type Owner = {
     { stream: DeliveryStream<unknown>; operation: OperationDescriptor; scope: Scope; closing: boolean }
   >
   opening: number
-  waiting: Waiting[]
+  queue: Array<{ operation: string; resolve: () => void; reject: (error: unknown) => void; signal?: AbortSignal; abort: () => void; after?: number }>
+  capacityRevision: number
   epoch?: string
   sourceEpoch?: string
 }
@@ -89,6 +84,8 @@ type Owner = {
 export class LocalTransport {
   #owner: Owner
   #pumping = false
+  #changes = new EventTarget()
+  #changeVersion = 0
   readonly #options: V5Options
 
   constructor(options: V5Options) {
@@ -115,15 +112,37 @@ export class LocalTransport {
   ready() {
     return this.#owner.ready
   }
+  get changeVersion() {
+    return this.#changeVersion
+  }
+  waitForChange(signal?: AbortSignal) {
+    if (signal?.aborted) return Promise.reject(signal.reason)
+    return new Promise<void>((resolve, reject) => {
+      const done = () => { cleanup(); resolve() }
+      const abort = () => { cleanup(); reject(signal?.reason) }
+      const cleanup = () => {
+        this.#changes.removeEventListener("change", done)
+        signal?.removeEventListener("abort", abort)
+      }
+      this.#changes.addEventListener("change", done, { once: true })
+      signal?.addEventListener("abort", abort, { once: true })
+    })
+  }
+  private changed() {
+    this.#changeVersion++
+    this.#changes.dispatchEvent(new Event("change"))
+  }
   globalScope = globalScope
 
   close() {
     this.shutdown(this.#owner, new V5ClientError("unavailable", undefined, "Connection closed"))
+    this.changed()
   }
 
   reconnect() {
     this.shutdown(this.#owner, new V5ClientError("unknown", undefined, "Connection replaced"))
     this.#owner = this.open()
+    this.changed()
     return this.#owner.ready
   }
 
@@ -193,7 +212,8 @@ export class LocalTransport {
       normalSentAt: [],
       streams: new Map(),
       opening: 0,
-      waiting: [],
+      queue: [],
+      capacityRevision: 0,
     }
     void owner.ready.catch(() => {})
     queueMicrotask(() => {
@@ -332,20 +352,28 @@ export class LocalTransport {
   ): Promise<unknown> {
     const operation = operations.find((operation) => operation.operationId === binding.operationID)!
     if (!owner.active || owner !== this.#owner)
-      throw new V5ClientError("unsent", binding.method, unsentReason.closed, true)
-    await this.admit(owner, binding, options?.signal)
+      throw new V5ClientError("unsent", binding.method, unsentReason.closed, true, owner.sourceEpoch)
+    await this.acquire(owner, binding.method, options?.signal)
     const aborted = Promise.withResolvers<never>()
     const abortOpening = () =>
       aborted.reject(new V5ClientError("unsent", binding.method, unsentReason.cancelled))
     options?.signal?.addEventListener("abort", abortOpening, { once: true })
     if (options?.signal?.aborted) abortOpening()
-    const pending = Promise.withResolvers<unknown>()
-    let requestID: string | undefined
     try {
       await Promise.race([owner.ready, aborted.promise])
+    } catch (error) {
+      this.release(owner)
+      if (error instanceof V5ClientError && error.status !== "protocol")
+        throw new V5ClientError("unsent", binding.method, error.reason, error.status !== "unsent", owner.sourceEpoch)
+      throw error
+    } finally {
+      options?.signal?.removeEventListener("abort", abortOpening)
+    }
+    let holding = true
+    try {
       if (options?.signal?.aborted) throw new V5ClientError("unsent", binding.method, unsentReason.cancelled)
       if (owner !== this.#owner || !owner.active)
-        throw new V5ClientError("unsent", binding.method, unsentReason.closed, true)
+        throw new V5ClientError("unsent", binding.method, unsentReason.closed, true, owner.sourceEpoch)
       const connection = owner.connection!
       const request = (() => {
         const reservation = connection.budgets.clientFrameBytes + connection.budgets.inlineBytes
@@ -359,19 +387,28 @@ export class LocalTransport {
           connection.reservation.release(reservation)
         }
       })()
-      const sent = connection.request(
+      const pending = Promise.withResolvers<unknown>()
+      let sent = connection.request(
         operation.operationId,
         request.scope,
         request.payload,
         request.payload.length + encodeStrict(ScopeSchema, request.scope).length + 256,
         performance.now(),
       )
-      if (!sent.requestID) {
+      while (!sent.requestID) {
         this.process(owner, sent.decisions)
-        throw new V5ClientError("unsent", binding.method, unsentReason.notAdmitted)
+        if (!owner.active || owner !== this.#owner) throw new V5ClientError("unsent", binding.method, unsentReason.closed, true, owner.sourceEpoch)
+        if (!owner.pending.size) throw new V5ClientError("unsent", binding.method, unsentReason.unrepresentable)
+        const revision = owner.capacityRevision
+        const waiting = this.acquire(owner, binding.method, options?.signal, revision, true)
+        this.release(owner)
+        holding = false
+        await waiting
+        holding = true
+        sent = connection.request(operation.operationId, request.scope, request.payload,
+          request.payload.length + encodeStrict(ScopeSchema, request.scope).length + 256, performance.now())
       }
-      requestID = sent.requestID
-      owner.pending.set(requestID, {
+      owner.pending.set(sent.requestID, {
         binding,
         operation,
         scope: request.target ?? request.scope,
@@ -379,64 +416,62 @@ export class LocalTransport {
         reject: pending.reject,
         stream,
       })
+      this.release(owner)
+      holding = false
       this.process(owner, sent.decisions)
-    } catch (error) {
-      if (error instanceof V5ClientError && error.status !== "protocol")
-        throw new V5ClientError("unsent", binding.method, error.reason, error.status !== "unsent" || error.resendable)
-      throw error
-    } finally {
-      owner.opening--
-      options?.signal?.removeEventListener("abort", abortOpening)
-      this.drainWaiting(owner)
-    }
-    const connection = owner.connection!
-    const abort = () => {
-      this.process(owner, connection.cancel(requestID!, performance.now()))
+      const abort = () => {
+        this.process(owner, connection.cancel(sent.requestID!, performance.now()))
+        this.pump(owner)
+      }
+      options?.signal?.addEventListener("abort", abort, { once: true })
+      if (options?.signal?.aborted) abort()
       this.pump(owner)
-    }
-    options?.signal?.addEventListener("abort", abort, { once: true })
-    if (options?.signal?.aborted) abort()
-    this.pump(owner)
-    try {
-      return await pending.promise
-    } finally {
-      options?.signal?.removeEventListener("abort", abort)
+      try {
+        return await pending.promise
+      } finally {
+        options?.signal?.removeEventListener("abort", abort)
+      }
+    } catch (error) {
+      if (holding) this.release(owner)
+      throw error
     }
   }
 
-  private admit(owner: Owner, binding: Binding, signal?: AbortSignal) {
-    return new Promise<void>((resolve, reject) => {
-      const waiting: Waiting = {
-        binding,
-        resolve,
-        reject,
-        signal,
-        abort: () => {
-          const index = owner.waiting.indexOf(waiting)
-          if (index < 0) return
-          owner.waiting.splice(index, 1)
-          signal?.removeEventListener("abort", waiting.abort)
-          reject(new V5ClientError("unsent", binding.method, unsentReason.cancelled))
-          this.drainWaiting(owner)
-        },
-      }
-      owner.waiting.push(waiting)
-      signal?.addEventListener("abort", waiting.abort, { once: true })
-      if (signal?.aborted) waiting.abort()
-      else this.drainWaiting(owner)
+  private acquire(owner: Owner, operation: string, signal?: AbortSignal, after?: number, first = false): Promise<void> {
+    if (signal?.aborted) return Promise.reject(new V5ClientError("unsent", operation, unsentReason.cancelled))
+    if (!owner.active || owner !== this.#owner) return Promise.reject(new V5ClientError("unsent", operation, unsentReason.closed, true, owner.sourceEpoch))
+    return new Promise((resolve, reject) => {
+      const entry = { operation, resolve, reject, signal, after, abort: () => {
+        const index = owner.queue.indexOf(entry)
+        if (index < 0) return
+        owner.queue.splice(index, 1)
+        signal?.removeEventListener("abort", entry.abort)
+        reject(new V5ClientError("unsent", operation, unsentReason.cancelled))
+        this.wake(owner)
+      } }
+      if (first) owner.queue.unshift(entry)
+      else owner.queue.push(entry)
+      signal?.addEventListener("abort", entry.abort, { once: true })
+      this.wake(owner)
     })
   }
 
-  private drainWaiting(owner: Owner) {
-    if (!owner.active || owner !== this.#owner) return
-    const capacity = owner.connection?.budgets.pendingRequests ?? this.#options.budgets?.pendingRequests ?? defaultBudgets.pendingRequests
-    while (owner.waiting.length && owner.opening + owner.pending.size < capacity &&
+  private wake(owner: Owner) {
+    const limit = owner.connection?.budgets.pendingRequests ?? this.#options.budgets?.pendingRequests ?? defaultBudgets.pendingRequests
+    while (owner.active && owner.queue.length && owner.opening + owner.pending.size < limit &&
       (!owner.connection || owner.opening < owner.connection.requestSlots)) {
-      const waiting = owner.waiting.shift()!
-      waiting.signal?.removeEventListener("abort", waiting.abort)
+      const entry = owner.queue[0]!
+      if (entry.after === owner.capacityRevision) return
+      owner.queue.shift()
+      entry.signal?.removeEventListener("abort", entry.abort)
       owner.opening++
-      waiting.resolve()
+      entry.resolve()
     }
+  }
+
+  private release(owner: Owner) {
+    owner.opening--
+    this.wake(owner)
   }
 
   private prepare(
@@ -529,6 +564,7 @@ export class LocalTransport {
         owner.epoch = decision.epoch
         owner.sourceEpoch = decision.sourceEpoch
         owner.resolve()
+        this.changed()
         continue
       }
       if (decision.type === "closed") {
@@ -547,10 +583,11 @@ export class LocalTransport {
         const pending = owner.pending.get(decision.requestID)
         if (!pending) continue
         owner.pending.delete(decision.requestID)
+        owner.capacityRevision++
         try {
           if (decision.status !== "success" && decision.status !== "rejected") {
             pending.reject(
-              new V5ClientError(decision.status, pending.binding.method, undefined, decision.status === "unsent"),
+              new V5ClientError(decision.status, pending.binding.method, undefined, decision.status === "unsent" || decision.status === "unknown" && pending.operation.mutation === MutationClass.READ, owner.sourceEpoch),
             )
             continue
           }
@@ -673,7 +710,7 @@ export class LocalTransport {
         })
       }
     }
-    this.drainWaiting(owner)
+    this.wake(owner)
   }
 
   private pump(owner: Owner) {
@@ -716,9 +753,10 @@ export class LocalTransport {
   private shutdown(owner: Owner, error: V5ClientError, code = 1012) {
     if (!owner.active) return
     owner.active = false
-    for (const waiting of owner.waiting.splice(0)) {
-      waiting.signal?.removeEventListener("abort", waiting.abort)
-      waiting.reject(new V5ClientError("unsent", waiting.binding.method, unsentReason.closed, true))
+    this.changed()
+    for (const entry of owner.queue.splice(0)) {
+      entry.signal?.removeEventListener("abort", entry.abort)
+      entry.reject(error.status === "protocol" ? new V5ClientError("protocol", entry.operation, error.reason) : new V5ClientError("unsent", entry.operation, unsentReason.closed, true, owner.sourceEpoch))
     }
     owner.reject(error)
     owner.detach?.()
