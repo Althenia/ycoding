@@ -485,27 +485,27 @@ async fn coordination_instruction_release_text_matches_every_role_and_revocation
         (
             Role::Master,
             false,
-            "6644dd91dd46c73fe608230d99d441f3481c76be06aef6fa82fbe09ea55f4c6e",
+            "870bf77566eec82fb757ba844ce19e2def1c880f27f60f24a08db64b3db4145f",
         ),
         (
             Role::Master,
             true,
-            "6644dd91dd46c73fe608230d99d441f3481c76be06aef6fa82fbe09ea55f4c6e",
+            "870bf77566eec82fb757ba844ce19e2def1c880f27f60f24a08db64b3db4145f",
         ),
         (
             Role::Supervisor,
             false,
-            "2a4b52dd4547c084c87b9075a5ab34216a36429685c8349402eb4f8c74263037",
+            "9aa0883c57afc67fbe11591b1fdaadc7855b02e6b14027ae0182b3be2fc53dfc",
         ),
         (
             Role::Supervisor,
             true,
-            "2a4b52dd4547c084c87b9075a5ab34216a36429685c8349402eb4f8c74263037",
+            "9aa0883c57afc67fbe11591b1fdaadc7855b02e6b14027ae0182b3be2fc53dfc",
         ),
         (
             Role::Executor,
             false,
-            "1e2512b1b6bfcbd0f5645a76ef5f53077415c6b14af0dfaf1de868b827323720",
+            "5500abe460a073cf8c83f5a38c109e241356805af9cba6ccce214cc8235fe230",
         ),
         (
             Role::Executor,
@@ -527,7 +527,7 @@ async fn coordination_instruction_release_text_matches_every_role_and_revocation
             let expected = if coordinating {
                 "c041987d38cfa740ce9e90c29299b41eaa18739ac350226615b89c0276e3d410"
             } else {
-                "31f6a7cb37b6d532d3f23f933c548ab1244c713d4f30b1a47fb9adfdf4500bf7"
+                "7bdaa3c877d9a28c9fd95676a86da92554eae3a59a9496807af18883369cd173"
             };
             assert_eq!(
                 digest(&(source.changed)(&previous, &value).unwrap()),
@@ -598,7 +598,7 @@ fn coordination_guidance_preserves_owner_routing_native_gates_and_complete_deliv
         let value = coordination::instructions::initial(role, false);
         for clause in [
             "When the coordinator is instructed to do project work, delegate it.",
-            "As Master, decompose the user's work into independent scopes without waiting to be asked and delegate each scope (including single-member work) to the appropriate supervisor/owner, using `assign` to establish or transfer supervisor ownership.",
+            "As Master, decompose the assigned work into independent scopes without waiting to be asked and delegate each scope (including single-member work) to the appropriate supervisor/owner, using `assign` to establish or transfer supervisor ownership.",
             "The supervising owner resolves the target repository's folder, its canonical checkout or a designated managed worktree, before enrollment. Create each repository member with `directory` placement at that folder, never at the Project's folder unless it is the same repository.",
             "verify that its Location is the target repository's folder: its canonical checkout or one of its managed worktrees. Never place a member at the Project's folder unless that folder is the same repository.",
             "Reserve `~/.local/share/ycoding/tasks/` for scratch files, logs, and evidence; never use it or any subdirectory of it as a Project member Location, in any case.",
@@ -610,7 +610,7 @@ fn coordination_guidance_preserves_owner_routing_native_gates_and_complete_deliv
             "preserve Session and Project histories intact without deleting history as cleanup",
             "unfinished member work or pending family requests stay open with their recorded owner until settled",
             "Start ready work immediately as soon as its inputs are final, without slots, handoffs, ceremony, or resource-limitation waits.",
-            "Never attribute a one-lane pause or your own scheduling to the human, and never hold members on ceremony, handoffs, slots, or resource-limitation waits.",
+            "Preserve the provenance of a one-lane pause or scheduling decision; never hold members on ceremony, handoffs, slots, or resource-limitation waits.",
         ] {
             once(&value, clause);
         }
@@ -625,7 +625,7 @@ fn coordination_guidance_preserves_owner_routing_native_gates_and_complete_deliv
         let value = coordination::instructions::initial(role, false);
         for clause in [
             "evidence directly as command + exit code + pass/fail counts + commit or diff stat.",
-            "Never create REPORT.md, HANDOFF.md, RECEIPT.md, RECEIPT.json, owner-handoff.md or SHA-256 manifest artifacts unless the user explicitly requests a file artifact.",
+            "Never create REPORT.md, HANDOFF.md, RECEIPT.md, RECEIPT.json, owner-handoff.md or SHA-256 manifest artifacts unless explicitly requested.",
             "Never follow up solely to request a report file or restate receipts.",
             "Reject unrequested synthetic viewport/theme combinatoric matrices.",
             "consolidated selected checks → single commit → linear rebase onto the latest target head → ff-only merge → safe non-force worktree removal, without ceremony, handoffs, or slots.",
@@ -669,8 +669,8 @@ fn project_owners_and_executors_recover_within_their_roles_before_escalating_unr
     for role in [Role::Master, Role::Supervisor, Role::Executor] {
         let value = coordination::instructions::initial(role, false);
         for rule in [
-            "Obey the user's explicit directives and never argue with the user; state a verified technical risk plainly once if needed, then execute the chosen direction.",
-            "Work fast, reliably, and proactively toward the user's goal: decide reversible local choices from evidence and exhaust compliant local diagnosis and recovery on errors, conflicts, and failing checks before escalating.",
+            "Follow explicit directives without arguing; state a verified technical risk plainly once if needed, then execute the chosen direction.",
+            "Work fast, reliably, and proactively toward the goal: decide reversible local choices from evidence and exhaust compliant local diagnosis and recovery on errors, conflicts, and failing checks before escalating.",
             "Use live evidence and permitted tools to settle routine choices within your authority.",
             "Keep independent authorized work moving while an affected lane waits.",
             "Report a blocker only after reasonable recovery, naming the blocked action and target, verified evidence, and the decision or input needed.",

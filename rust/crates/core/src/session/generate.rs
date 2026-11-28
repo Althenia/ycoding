@@ -224,16 +224,7 @@ impl Service {
     }
 }
 fn default_system() -> LosslessString {
-    let JsonValue::Object(contract) =
-        ycoding_schema::parse_json(include_str!("../tools/builtin/image-analyzer.json"))
-            .expect("embedded session helper contract")
-    else {
-        unreachable!()
-    };
-    let Some(JsonValue::String(system)) = contract.get(&"defaultSessionSystem".into()) else {
-        unreachable!()
-    };
-    system.clone()
+    include_str!("system_prompt/base.txt").into()
 }
 
 pub fn system(

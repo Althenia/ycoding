@@ -81,7 +81,7 @@ impl Tool for Goal {
             }
             if action == "set" {
                 return Err(Failure::message(
-                    "The goal objective is owned by the user. The user must create or replace it through the /goal command or goal dialog; the assistant can manage status with get/update/report/complete/stop.",
+                    "Do not create or replace a goal with this tool. Goal creation and replacement require /goal or the goal dialog; manage status with get/update/report/complete/stop.",
                 ));
             }
             let before = match self.autonomy.get(&context.session_id) {
@@ -125,7 +125,7 @@ impl Tool for Goal {
                         .0;
                     if open > 0 {
                         let message = format!(
-                            "Not counted: {open} item(s) in this Session family await the user's review."
+                            "Not counted: {open} item(s) in this Session family remain in review."
                         );
                         (action, before, message)
                     } else {
@@ -235,9 +235,7 @@ impl Tool for Goal {
                 }
                 "update" => {
                     let goal = existing.ok_or_else(|| {
-                        Failure::message(
-                            "No existing goal to update. The user creates goals via /goal.",
-                        )
+                        Failure::message("No existing goal to update. Create a goal through /goal.")
                     })?;
                     match status.as_ref().and_then(LosslessString::as_str) {
                         Some("completed") => {
@@ -262,7 +260,7 @@ impl Tool for Goal {
                         ),
                         Some("active") if goal.status != GoalStatus::Active => {
                             return Err(Failure::message(
-                                "Goal can only be started by the user. Re-activating a stopped goal must be done by the user via /goal.",
+                                "Do not resume a goal with this tool. Resume through /goal.",
                             ));
                         }
                         _ => {

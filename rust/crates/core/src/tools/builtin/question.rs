@@ -110,13 +110,13 @@ impl Tool for Question {
             let form_id = form.id.clone();
             let wait = match self.forms.ask(form) {
                 Ok(wait) => wait,
-                Err(FormError::ReviewFull { .. }) => return Ok(unanswered(questions.len(), "reviewFull", JsonValue::Bool(true), None, "The user's review box is full, so this question was not recorded. Do not guess an answer; continue independent work and stop when only blocked work remains.".into())),
+                Err(FormError::ReviewFull { .. }) => return Ok(unanswered(questions.len(), "reviewFull", JsonValue::Bool(true), None, "The review box is full, so this question was not recorded. Do not guess an answer; continue independent work and stop when only blocked work remains.".into())),
                 Err(error) => return Err(Failure::Defect(format!("{error:?}"))),
             };
             let state = tokio::select! { biased; _ = context.cancellation.cancelled() => return Err(Failure::Cancelled), state = wait => state.map_err(|_| Failure::Cancelled)? };
             if let Some(error) = self.forms.failure(&form_id) {
                 if matches!(error, FormError::ReviewFull { .. }) {
-                    return Ok(unanswered(questions.len(), "reviewFull", JsonValue::Bool(true), None, "The user's review box is full, so this question was not recorded. Do not guess an answer; continue independent work and stop when only blocked work remains.".into()));
+                    return Ok(unanswered(questions.len(), "reviewFull", JsonValue::Bool(true), None, "The review box is full, so this question was not recorded. Do not guess an answer; continue independent work and stop when only blocked work remains.".into()));
                 }
                 return Err(Failure::Defect(format!("{error:?}")));
             }
@@ -135,7 +135,7 @@ impl Tool for Question {
                         ycoding_schema::DomainEncode::encode(&item_id),
                         settlement()?.assessment.as_ref(),
                         format!(
-                            "Defer is on. These questions were added to the user's review box as item {}; the answer will arrive later as a user message. Do not guess the answer or act as if it were given. Continue with work that does not depend on it; if nothing else remains, summarize what waits on the user and stop.",
+                            "Defer is on. These questions were added to the review box as item {}. Do not guess the answer or act as if it were given. Continue independent work; if only blocked work remains, report the pending decision.",
                             item_id.as_lossless().to_utf8().unwrap_or_default()
                         ),
                     ));
@@ -218,12 +218,10 @@ impl Tool for Question {
                     text
                 } else if automatic {
                     format!(
-                        "Answers were selected automatically, not provided or approved by the user: {formatted}. Continue independent work within the authorized scope and follow the active goal when one exists. Do not reopen routine choices or treat an automatic selection to wait as a new user instruction or authorization constraint. Permissions and guardrails still apply."
+                        "Answers were selected automatically, not through an explicit decision or approval: {formatted}. Continue independent work within the authorized scope and follow the active goal when one exists. Do not reopen routine choices or treat an automatic selection to wait as an explicit instruction or authorization constraint. Permissions and guardrails still apply."
                     )
                 } else {
-                    format!(
-                        "User has answered your questions: {formatted}. You can now continue with the user's answers in mind."
-                    )
+                    format!("Questions answered: {formatted}. Continue with the recorded answers.")
                 },
             ))
         })
@@ -243,7 +241,7 @@ fn source_text(source: &form::ReplySource, formatted: &str) -> Option<String> {
             "The authenticated Dots client answered these questions: {formatted}. Answers do not approve a permission or guardrail request."
         )),
         "coordinator" if text("via") == Some("goal") => Some(format!(
-            "The Goal agent answered these questions under the active goal from bounded task context: {formatted}. These answers grant no permission, consent, or explicit decision approval. This automatic answer is never a human reply."
+            "The active goal produced these answers from bounded task context: {formatted}. These automatic answers grant no permission, consent, or explicit decision approval."
         )),
         "coordinator" => Some(format!(
             "The native coordinator answered these questions{}: {formatted}. These answers grant no permission, consent, or explicit decision approval.",

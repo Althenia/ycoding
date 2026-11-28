@@ -303,7 +303,7 @@ async fn a_human_answer_returns_the_unassessed_field_without_automatic_markers()
         assert!(find(out, key).is_none(), "{key}");
     }
     assert_eq!(get(first_field(out), "status"), &string("not_assessed"));
-    assert!(message(&result).contains("User has answered your questions"));
+    assert!(message(&result).contains("Questions answered"));
     rig.close();
 }
 

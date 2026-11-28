@@ -547,11 +547,11 @@ fn guidance(
     let named = title.map_or_else(String::new, |title| format!(" ({})", text(title)));
     match requesting {
         None => format!(
-            "The request stays open as the member's prompt. The user answers it in member Session {}{named}; messages or answers relayed through the Master cannot settle it, so do not wait on a reply to a message sent to that member.",
+            "The request stays open as the member's prompt in Session {}{named}. Follow the applicable native control; messages relayed through the Master cannot settle it. Continue independent work.",
             text(member.as_lossless())
         ),
         Some(requesting) => format!(
-            "The request stays open as the prompt of Session {}, a descendant of member Session {}{named}. The user answers it in Session {}; messages or answers relayed through the Master cannot settle it, so do not wait on a reply to a message sent to that member.",
+            "The request stays open as the prompt of Session {}, a descendant of member Session {}{named}. Follow the applicable native control for Session {}; messages relayed through the Master cannot settle it. Continue independent work.",
             text(requesting.as_lossless()),
             text(member.as_lossless()),
             text(requesting.as_lossless())

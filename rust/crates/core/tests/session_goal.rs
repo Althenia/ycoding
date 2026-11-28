@@ -125,9 +125,9 @@ async fn synthesis_and_start_steer_match_ts_messages_and_leave_the_user_owned_st
         f.provider.reply(Reply::Text("Inspect the migration next.".into()));
         assert_eq!(service.start(&session, &Goal::new(&text, Some("Fix the migration"), None), &cancellation).await.unwrap(), "Inspect the migration next.");
         let steer = message(&f, 1);
-        assert!(steer.starts_with("Recent conversation context:\nUser: The project uses SQLite.\nAssistant: The build is fixed.\n\nUser-proxy steer request:\nActive goal: Repair the migration and verify the suite.\nPhase: start\nCurrent iteration: 0\nGoal phase: active; rework 0; stalled units stopped 0; no progress 0/3\nVerification: no file changes recorded in recent history."));
+        assert!(steer.starts_with("Recent conversation context:\nUser: The project uses SQLite.\nAssistant: The build is fixed.\n\nGoal steer request:\nActive goal: Repair the migration and verify the suite.\nPhase: start\nCurrent iteration: 0\nGoal phase: active; rework 0; stalled units stopped 0; no progress 0/3\nVerification: no file changes recorded in recent history."));
         assert!(steer.contains("Automatic answering: disabled\nLatest assistant response: The build is fixed."));
-        assert!(steer.ends_with("Preserve the active goal and produce only the next concise user-proxy steer."));
+        assert!(steer.ends_with("Preserve the active goal and produce only the next concise steer."));
         assert_eq!(f.sessions.context(&f.id).unwrap(), before);
         assert_eq!(f.autonomy.snapshot(&f.id).unwrap(), autonomy);
         assert_eq!(f.sessions.get(&f.id).unwrap().unwrap().tokens.input.get(), 20.0);
@@ -210,7 +210,7 @@ async fn contextual_goal_steer_uses_the_configured_system_and_records_accounting
         assert!(steer.contains("Phase: continue\nCurrent iteration: 2\nGoal phase: active; rework 0; stalled units stopped 0; no progress 1/3"));
         assert!(steer.contains("Verification: no file changes recorded in recent history."));
         assert!(steer.contains("Latest assistant response: Which migration should I inspect?"));
-        assert!(steer.ends_with("Preserve the active goal and produce only the next concise user-proxy steer."));
+        assert!(steer.ends_with("Preserve the active goal and produce only the next concise steer."));
         let records = ycoding_store::resources::requests(&f.store.snapshot().unwrap(), f.id.as_lossless(), ycoding_store::IndexOrder::Ascending, None, 10).unwrap();
         let row = &records[0].record;
         assert_eq!((row.source.as_str(), row.agent.as_str(), row.request, row.attempts), (Some("goal"), Some("goal"), 1, 1));

@@ -53,7 +53,7 @@ pub fn catalog(roots: &Roots, scope: Scope) -> Result<Vec<agent::Info>, Error> {
                         .then_some(index)
                     })
                     .unwrap_or(base.len());
-                format!("{}\n\nThis is a standalone text conversation. Only question, todowrite, goal, task_complete are available. There is no host filesystem, shell, worktree, subagent, plugin, skill, MCP, or network access. Obey the user's explicit direction without arguing, decide routine choices pragmatically to minimize escalation, follow the user's constraints, distinguish verified facts from uncertainty, write plain natural prose without AI filler or stock phrasing, and drive concisely to the user's goal.", &base[..end])
+                format!("{}\n\nThis is a standalone text conversation. Only question, todowrite, goal, task_complete are available. There is no host filesystem, shell, worktree, subagent, plugin, skill, MCP, or network access. Follow explicit direction without arguing, decide routine choices pragmatically to minimize escalation, honor stated constraints, distinguish verified facts from uncertainty, write plain natural prose without AI filler or stock phrasing, and drive concisely to the stated goal.", &base[..end])
             } else if agent.mode == "primary".into() {
                 [
                     prompts::PROJECT,

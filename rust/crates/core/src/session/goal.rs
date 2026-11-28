@@ -118,7 +118,7 @@ impl Service {
         );
         let description = request.goal.describe();
         self.generate(session, format!(
-            "User-proxy steer request:\nActive goal: {}\nPhase: {phase}\nCurrent iteration: {}\n{description}\n{checked}\nAutomatic answering: {}\nLatest assistant response: {}\nIdentify unmet acceptance criteria from current evidence and choose the highest-value next action. Run independent work in parallel. After edits, continue through the checks until the outcome is verified or a blocker remains. Preserve the active goal and produce only the next concise user-proxy steer.",
+            "Goal steer request:\nActive goal: {}\nPhase: {phase}\nCurrent iteration: {}\n{description}\n{checked}\nAutomatic answering: {}\nLatest assistant response: {}\nIdentify unmet acceptance criteria from current evidence and choose the highest-value next action. Run independent work in parallel. After edits, continue through the checks until the outcome is verified or a blocker remains. Preserve the active goal and produce only the next concise steer.",
             request.goal.text.to_utf8().map_err(|_| Error::CalculationFailed)?,
             request.goal.iteration,
             if automatic { "enabled" } else { "disabled" },
@@ -273,7 +273,7 @@ fn context_message(message: session_message::Info) -> Result<Option<String>, Fro
             Some(format!("Context: {}", message.text.to_utf8()?))
         }
         session_message::Info::Synthetic(message) => Some(format!(
-            "Synthetic observation (not a human reply): {}",
+            "Synthetic observation (not an explicit reply): {}",
             message.text.to_utf8()?
         )),
         session_message::Info::Skill(message) => {
@@ -319,7 +319,7 @@ mod context_tests {
         let synthetic = session_message::Info::decode(&parse_json(r#"{"type":"synthetic","id":"msg_synthetic","text":"An automatic selection","time":{"created":1}}"#).unwrap()).unwrap();
         assert_eq!(
             context_message(synthetic).unwrap().unwrap(),
-            "Synthetic observation (not a human reply): An automatic selection"
+            "Synthetic observation (not an explicit reply): An automatic selection"
         );
     }
 }

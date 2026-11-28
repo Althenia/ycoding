@@ -27,6 +27,45 @@ fn id() -> session::Id {
 }
 
 #[tokio::test]
+async fn builtins_direct_event_driven_execution_and_preserve_git_identity() {
+    use ycoding_core::instructions::{Observation, builtins};
+    let sources = builtins::load(
+        builtins::Environment {
+            directory: "/project".into(),
+            project_root: "/project".into(),
+            git: true,
+            platform: "test".into(),
+            data: "/data/ycoding".into(),
+        },
+        std::sync::Arc::new(|| 0),
+        ycoding_schema::session_scope::Scope::Bound,
+    );
+    for (key, required, forbidden) in [
+        (
+            "core/subagent-reuse",
+            "Act on completion and failure events",
+            "wait for a nudge",
+        ),
+        (
+            "core/git-attribution",
+            "use the existing Git author and committer identity",
+            "the user's",
+        ),
+    ] {
+        let source = sources
+            .iter()
+            .find(|source| ycoding_core::instructions::key(&source.key).as_str() == Some(key))
+            .unwrap();
+        let Observation::Value(JsonValue::String(text)) = (source.read)().await.unwrap() else {
+            panic!("expected guidance for {key}")
+        };
+        let text = text.to_utf8().unwrap();
+        assert!(text.contains(required), "{key}: missing {required}");
+        assert!(!text.contains(forbidden), "{key}: contains {forbidden}");
+    }
+}
+
+#[tokio::test]
 async fn overlapping_initial_observations_remain_quiet_until_instructions_change() {
     use ycoding_core::instructions;
     let store = support::store();

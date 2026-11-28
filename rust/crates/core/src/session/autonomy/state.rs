@@ -479,10 +479,10 @@ impl State {
                 "Keep the full objective and use current files and command output to decide what remains. Run independent work in parallel and continue from edits through verification.".into(),
                 "Record reopened work with goal rework, naming the unit and failing evidence. Resolve it only after rerunning its check successfully. Rework does not spend a no-progress attempt.".into(),
                 "Complete the active goal and verify its outcome. Resolve routine implementation choices within the authorized scope rather than requesting repeated confirmation.".into(),
-                "Do not repeat an automatic waiting answer as a new user instruction. Preserve actual user constraints.".into(),
+                "Do not treat an automatic waiting answer as an explicit instruction. Preserve actual constraints.".into(),
                 match self.answers {
-                    DecisionMode::Auto => "Automatic answering is enabled for this Session. Automatic selections are not human replies or new user instructions. Resolve the choice toward the goal.",
-                    DecisionMode::Yolo => "Answers YOLO uses the answer evaluator and validated fallbacks, including free text questions. Automatic answers are not human replies, new user instructions or external acknowledgements.",
+                    DecisionMode::Auto => "Automatic answering is enabled for this Session. Automatic selections are not explicit replies or instructions. Resolve the choice toward the goal.",
+                    DecisionMode::Yolo => "Answers YOLO uses the answer evaluator and validated fallbacks, including free text and explicit-decision questions. Automatic answers are not explicit replies, instructions or external acknowledgements.",
                     DecisionMode::Manual => "Automatic answering is disabled for this Session. Resolve choices yourself from evidence; the active goal loop may answer pending questions with the Goal agent.",
                 }
                 .into(),

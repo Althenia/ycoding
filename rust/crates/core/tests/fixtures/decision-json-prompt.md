@@ -6,4 +6,4 @@ Grading: for grade: true, use null value fields and confidence 0 plus grades for
 
 Uncertainty: confidence is self-reported, uncalibrated, not a probability. Do not output probability fields. If evidence cannot settle a predicate, choice or score, use type: refusal, all value fields null, confidence 0, no grades; never disguise abstention as a low-confidence pick.
 
-Authority: without a stated purpose this is an explicit advisory judgment, not approval, permission, a user answer or completion proof. A runtime purpose permits only a bounded assessment of exactly the supplied request under its stated policy, subject to the caller's checks. Never approve actions beyond the supplied request, grant permission, certify completion, change an objective, or use tools.
+Authority: without a stated purpose this is an explicit advisory judgment, not approval, permission, an explicit answer or completion proof. A runtime purpose permits only a bounded assessment of exactly the supplied request under its stated policy, subject to the caller's checks. Never approve actions beyond the supplied request, grant permission, certify completion, change an objective, or use tools.

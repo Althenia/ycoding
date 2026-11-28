@@ -807,7 +807,7 @@ async fn registry_contracts_are_exact_ts_definitions_and_compaction_is_not_a_mod
     }
     let goal = goal.description.as_str().unwrap();
     for clause in [
-        "The user alone creates, replaces, or resumes the goal through the /goal command or the UI; never change the objective text.",
+        "Never create, replace, or resume the goal; those operations require the /goal command or the UI; never change the objective text.",
         "Pending family reviews pause no-progress accounting.",
         "a shell run of that check after the latest such edit has passed",
         "An unresolved failure in this Session's own iteration also blocks completion.",
@@ -982,7 +982,7 @@ async fn a_goal_report_with_open_review_items_is_not_counted() {
             .expect("the report succeeds without counting")
     );
     assert!(
-        text.contains("Not counted: 1 item(s) in this Session family await the user's review."),
+        text.contains("Not counted: 1 item(s) in this Session family remain in review."),
         "{text}"
     );
     assert_eq!(autonomy.get(&session).unwrap(), before);
@@ -993,11 +993,31 @@ async fn a_goal_report_with_open_review_items_is_not_counted() {
 async fn goal_tool_preserves_user_objective_denial_budget_and_terminal_rules() {
     let h = Harness::new(TitleMode::Local, "{}").await;
     let autonomy = autonomy::Service::new(h.fixture.authority.store.client());
-    assert!(
+    assert_eq!(
         h.call("goal", r#"{"action":"set","text":"Assistant objective"}"#)
             .await
-            .output
-            .is_none()
+            .result,
+        llm::ToolResultValue::Error(JsonValue::String("Do not create or replace a goal with this tool. Goal creation and replacement require /goal or the goal dialog; manage status with get/update/report/complete/stop.".into()))
+    );
+    let key = tuple_key(&[KeyPart::String(h.context().session_id.as_lossless())]);
+    h.fixture
+        .authority
+        .store
+        .submit(move |tx| {
+            let mut row = tx.get::<SessionTable>(&key)?.unwrap();
+            let mut state = autonomy::State::read(row.autonomy.as_ref());
+            state.goal = None;
+            row.autonomy = Some(state.encode());
+            SessionTable::put(tx, &row)
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(
+        h.call("goal", r#"{"action":"update"}"#).await.result,
+        llm::ToolResultValue::Error(JsonValue::String(
+            "No existing goal to update. Create a goal through /goal.".into()
+        ))
     );
     autonomy
         .set_goal(
@@ -1053,11 +1073,13 @@ async fn goal_tool_preserves_user_objective_denial_budget_and_terminal_rules() {
             .output
             .is_none()
     );
-    assert!(
+    assert_eq!(
         h.call("goal", r#"{"action":"update","status":"active"}"#)
             .await
-            .output
-            .is_none()
+            .result,
+        llm::ToolResultValue::Error(JsonValue::String(
+            "Do not resume a goal with this tool. Resume through /goal.".into()
+        ))
     );
     autonomy
         .set_goal(
@@ -1271,7 +1293,7 @@ async fn subagent_launch_is_background_runs_real_runner_and_records_child_ceilin
         get(output(&result), "status"),
         &JsonValue::String("running".into())
     );
-    assert!(text(get(output(&result), "output")).contains("Do not poll"));
+    assert!(text(get(output(&result), "output")).contains("Do not busy-poll"));
     let job = within(h.jobs.wait(id.as_lossless().as_str().unwrap(), None)).await;
     assert_eq!(job.info.unwrap().status, job::Status::Completed);
     let task = h.orchestration.get(&h.context().session_id, &id).unwrap();
@@ -3857,7 +3879,7 @@ async fn a_required_question_waits_for_its_answer_without_a_deadline() {
         &parse_json(r#"{"answers":[["Yes"]]}"#).unwrap()
     );
     assert!(
-        matches!(&result.result, llm::ToolResultValue::Text(JsonValue::String(text)) if text.to_utf8().unwrap().contains("User has answered your questions") && !text.to_utf8().unwrap().contains("best judgment"))
+        matches!(&result.result, llm::ToolResultValue::Text(JsonValue::String(text)) if text.to_utf8().unwrap().contains("Questions answered") && !text.to_utf8().unwrap().contains("best judgment"))
     );
     assert!(forms.list(None).is_empty());
     assert!(h.server.seen.lock().unwrap().is_empty());

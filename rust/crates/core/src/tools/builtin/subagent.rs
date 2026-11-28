@@ -394,7 +394,7 @@ impl Tool for Subagent {
                 .background(&job_id)
                 .ok_or_else(|| Failure::message("Job not found"))?;
             let text = format!(
-                "Subagent launched (id: {job_id}). Completion notifications are delivered automatically. Do not poll status or wait with sleep or no-op commands. Do not mention the launch or any running, completed, failed, or total status unless the user explicitly asks for subagent status."
+                "Subagent launched (id: {job_id}). Act on completion and failure notifications, verify and relay results, recover stalled or failed direct children through native controls, and start ready work immediately. Do not busy-poll status or wait with sleep or no-op commands. Do not mention the launch or any running, completed, failed, or total status unless explicitly requested."
             );
             Ok(output(
                 ObjectEncoder::new()
