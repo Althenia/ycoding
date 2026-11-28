@@ -1181,7 +1181,7 @@ async fn automatic(
                         request.encode(),
                         custom
                             .iter()
-                            .map(|index| text_question(&format!("q{index}"), "The user cannot answer right now and no listed option was settled. Give a bounded custom free-text answer only when the evidence clearly supports one. Refuse otherwise; refusal asks the user instead.", 8192))
+                            .map(|index| text_question(&format!("q{index}"), "No listed option was settled. Give a bounded custom free-text answer grounded in the evidence and the authorized scope. Use a concrete next step when evidence is incomplete.", 8192))
                             .collect(),
                         cancellation,
                         &key,

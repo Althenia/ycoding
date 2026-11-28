@@ -672,7 +672,7 @@ async fn uncertain_dispatched_tools_hold_the_child_for_a_review_box_recovery_dec
     assert!(text(&question).starts_with("qst_"));
     let asked = text(row.question.as_ref().unwrap());
     assert!(asked.contains("write, bash"), "{asked}");
-    assert!(asked.contains("The user must choose Continue or Stop"));
+    assert!(asked.contains("Await a Continue or Stop decision through the review box"));
 
     let open = items(&harness, &child);
     assert_eq!(open.len(), 1);
@@ -783,6 +783,11 @@ async fn continue_on_the_open_hold_answers_once_with_a_provenance_input_and_no_t
             .unwrap()
             .contains("they were not retried")
     );
+    assert!(
+        string(field(input, &["input", "data", "text"]))
+            .unwrap()
+            .contains("Recovery review decision: Continue")
+    );
     assert_eq!(
         string(field(
             input,
@@ -834,10 +839,12 @@ async fn stop_loses_the_child_and_only_one_later_human_continue_restarts_it() {
     assert_eq!(lost.len(), 1);
     let excerpt = lost[0].excerpt.as_ref().map(text).unwrap();
     assert!(
-        excerpt.contains("The user stopped this subagent"),
+        excerpt.contains("The recovery decision stopped this subagent"),
         "{excerpt}"
     );
-    assert!(excerpt.contains("Only the user can continue it"));
+    assert!(
+        excerpt.contains("Continue requires an explicit recovery decision through the review box")
+    );
 
     let sent = harness
         .orchestration

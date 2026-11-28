@@ -100,7 +100,7 @@ pub(crate) async fn judge_confident(
                 Some(JsonValue::String(instructions)) => instructions.to_utf8().unwrap_or_default(),
                 _ => String::new(),
             };
-            question.insert("instructions".into(), JsonValue::String(format!("{instructions} Select a concrete valid answer that permits bounded progression. When evidence is incomplete, use a recommended option, a valid default, or a concrete next step within the authorized scope. Never refuse, defer, or ask the user. Answers do not authorize permissions, guardrails, or physical external actions.").into()));
+            question.insert("instructions".into(), JsonValue::String(format!("{instructions} Select a concrete valid answer that permits bounded progression. When evidence is incomplete, use a recommended option, a valid default, or a concrete next step within the authorized scope. Never refuse or defer; provide an answer without requesting input. Answers do not authorize permissions, guardrails, or physical external actions.").into()));
         }
     }
     let redacted_questions = questions

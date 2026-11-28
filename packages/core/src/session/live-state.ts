@@ -79,11 +79,11 @@ export const authoritativeStatePrefix = "Authoritative current Session state (JS
 
 const answerReminder = {
   manual:
-    "This Session's effective answers mode is Manual: explicit decisions go to the user's decision surface. The active goal loop may answer pending routine questions using the Goal agent. Resolve choices that need no user input yourself.",
+    "This Session's effective answers mode is Manual: explicit decisions require the decision surface. The active goal loop may answer pending routine questions using the Goal agent. Resolve choices within your authority yourself.",
   auto:
     "This Session's effective answers mode is Auto: ask-time answers use only a valid explicit default or exactly one Recommended option. The active goal loop may use the Goal agent for pending routine questions. Automatic answers are not explicit client replies or new user instructions.",
   yolo:
-    "This Session's effective answers mode is YOLO: answer all questions, free-text questions, and open questions autonomously, including explicit-decision requests. Use the answer evaluator and a deterministic valid fallback when evaluation fails or cannot settle a valid answer. Automatic answers are not human replies or new user instructions.",
+    "This Session's effective answers mode is YOLO: answer all questions, free-text questions, and open questions autonomously, including explicit-decision requests. Use the answer evaluator and a deterministic valid fallback when evaluation fails or cannot settle a valid answer. Automatic answers are neither explicit replies nor new instructions.",
 } as const
 
 export const goalReminder = (autonomy: SessionAutonomy.State) => {
@@ -99,7 +99,7 @@ export const goalReminder = (autonomy: SessionAutonomy.State) => {
     "After edits, run the checks that verify them before treating the work as done. When a check fails or a regression appears, call goal rework with the unit and reason, fix it, re-run the check, and resolve the rework with the passing evidence. Rework is neither a no-progress report nor a reason to stop.",
     "Do not repeat an automatic waiting answer as a new user instruction. Preserve actual user constraints and required explicit decisions.",
     answerReminder[autonomy.answers],
-    "Each autonomy category (permissions, guardrails, answers) uses its own decision mode. The autonomy modes above are effective: YOLO takes precedence over Auto and Manual across managed parent tasks; ancestor Auto answers do not propagate, and guardrails follow the root Session. Manual and Auto remain model-free at ask time. Guardrails YOLO allows every action, including hard, catastrophic, and destructive guardrails and custom denies, without review. Permissions YOLO allows denies, ceilings, and explicit-decision requests; Project coordinator separation remains enforced. Answers YOLO settles every question with a valid fallback rather than waiting. Outside the corresponding YOLO category, required decisions wait for the user or defer to the review box while defer is active. Goals do not override these gates.",
+    "Each autonomy category (permissions, guardrails, answers) uses its own decision mode. The autonomy modes above are effective: YOLO takes precedence over Auto and Manual across managed parent tasks; ancestor Auto answers do not propagate, and guardrails follow the root Session. Manual and Auto remain model-free at ask time. Guardrails YOLO allows every action, including hard, catastrophic, and destructive guardrails and custom denies, without review. Permissions YOLO allows denies, ceilings, and explicit-decision requests; Project coordinator separation remains enforced. Answers YOLO settles every question with a valid fallback rather than waiting. Outside the corresponding YOLO category, required decisions remain pending or move to the review box while defer is active. Goals do not override these gates.",
     "Only call goal report after you encounter a blocker, try to resolve it yourself, and still cannot make progress.",
     "Do not call goal report for ordinary progress; each report consumes one no-progress retry attempt.",
     "Active background subagents or shells are unfinished work, not automatic no progress; continue useful independent work or finish the iteration and wait for automatic notification. A live child, shell or review is a verified wait, never a reason to call goal report.",
@@ -111,7 +111,7 @@ export const deferReminder = (autonomy: SessionAutonomy.State, machineAwake?: bo
   if (!autonomy.defer)
     return undefined
   return [
-    "Defer mode is active until the user explicitly disables it with /defer or the autonomy control. User prompts do not disable defer. Continue independent work while unresolved manual decisions wait in the review box.",
+    "Defer mode is active until explicitly disabled through /defer or the autonomy control. New prompts do not disable defer. Continue independent work while unresolved manual decisions wait in the review box.",
     "Defer changes no autonomy category. YOLO permissions and guardrails allow requests immediately, and YOLO answers settle all questions with valid answers instead of deferring. Auto keeps its deterministic rules. Do not guess manual answers or replay deferred actions.",
     machineAwake === undefined
       ? "Keep-awake status is unknown; this machine may sleep."
@@ -349,7 +349,7 @@ const makeLayer = <R>(readGuardrails: Effect.Effect<Pick<SessionGuardrail.Observ
       const reviewFamily = yield* SessionReviewFold.familyFold(db, sessionID)
       const openReviews = reviewFamily?.folded.filter(SessionReviewFold.isOpen) ?? []
       const reviewNotice = openReviews.length
-        ? `Pending your review: ${openReviews.length} item(s) in this Session family (${openReviews.map((item) => `${item.kind} ${item.itemID}`).join(", ")}). The user decides them through the review box; decisions arrive as user messages without changing sleep. Do not guess outcomes, retry deferred actions, or call goal report for them. Continue independent work; when only these remain, state what is waiting and stop.`
+        ? `Pending review: ${openReviews.length} item(s) in this Session family (${openReviews.map((item) => `${item.kind} ${item.itemID}`).join(", ")}). Await decisions through the review box; review-sourced messages do not change sleep. Do not guess outcomes, retry deferred actions, or call goal report for them. Continue independent work; when only these remain, state what is waiting and stop.`
         : undefined
       const text = [
         authoritativeStatePrefix +

@@ -8,7 +8,7 @@ use ycoding_schema::{
 use ycoding_store::{Error, session};
 
 pub const TEAM_VIEW_BYTES: usize = 32 * 1024;
-const PREFIX: &str = "Internal orchestration context (JSON). Use it to coordinate work. Do not surface subagent status unless the user explicitly asks; report a failure only when it blocks the requested outcome:\n";
+const PREFIX: &str = "Internal orchestration context (JSON). Use it to coordinate work. Do not surface subagent status unless explicitly requested; report a failure only when it blocks the requested outcome:\n";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Rendered {

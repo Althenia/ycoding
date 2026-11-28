@@ -19,7 +19,7 @@ use ycoding_store::{
 };
 
 const DEFERRED: &str = "Defer is on. Unresolved requests go to the review box without waiting for user input. Continue independent work under the current autonomy modes; do not guess outcomes or retry deferred actions. A keep-awake hold is requested for this Session family; on battery it drains the battery and a closed lid traps heat.";
-const INTERACTIVE: &str = "Defer is off. Unresolved requests return to the user under the current autonomy modes. Existing review items retain their current settlement paths.";
+const INTERACTIVE: &str = "Defer is off. Unresolved requests return to the decision surface under the current autonomy modes. Existing review items retain their current settlement paths.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Origin {

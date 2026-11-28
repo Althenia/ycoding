@@ -558,6 +558,11 @@ fn orchestration_source_tracks_child_task_revisions_and_exposes_the_team_view() 
             .text
             .starts_with("Internal orchestration context (JSON).")
     );
+    assert!(
+        team_view
+            .text
+            .contains("Do not surface subagent status unless explicitly requested")
+    );
     assert!(team_view.text.contains(r#""description":"child work""#));
 
     let second = task(3);

@@ -1528,7 +1528,7 @@ fn prompt(item: &Folded, decision: &Decision) -> Result<String, Error> {
                 .collect::<Vec<_>>()
                 .join(", ");
             Ok(format!(
-                "Decision on deferred questions {id} (asked while the user slept): {formatted}. Continue with the work that depended on it."
+                "Decision on deferred questions {id}: {formatted}. Continue with the work that depended on it."
             ))
         }
         (
@@ -1561,7 +1561,7 @@ fn prompt(item: &Folded, decision: &Decision) -> Result<String, Error> {
                 .collect::<Vec<_>>()
                 .join(", ");
             Ok(format!(
-                "Decision on deferred questions {id} (asked while the user slept): {formatted}. Continue with the work that depended on it."
+                "Decision on deferred questions {id}: {formatted}. Continue with the work that depended on it."
             ))
         }
         (
@@ -1570,7 +1570,7 @@ fn prompt(item: &Folded, decision: &Decision) -> Result<String, Error> {
             },
             Payload::Form(payload),
         ) => Ok(format!(
-            "The user answered deferred form {id} \"{}\": {}. Continue with the work that depended on it.",
+            "Deferred form {id} \"{}\" was answered: {}. Continue with the work that depended on it.",
             text(&payload.title),
             stringify_json(&JsonValue::Object(answer.0.clone()))
         )),
@@ -1578,11 +1578,11 @@ fn prompt(item: &Folded, decision: &Decision) -> Result<String, Error> {
             let action = text(&payload.action);
             if *reply == guardrail::Reply::Reject {
                 return Ok(format!(
-                    "The user rejected deferred guardrail item {id} ({action}). Do not retry it; choose another approach or report the blocker to the user."
+                    "Recorded review decision: rejected deferred guardrail item {id} ({action}). Do not retry it; choose another approach or report the blocker."
                 ));
             }
             let once = format!(
-                "The user approved deferred guardrail item {id} once: {action} on {}. Re-issue exactly that action now if it is still needed; the approval covers one identical request from this Session.",
+                "Recorded review decision: approved deferred guardrail item {id} once: {action} on {}. Re-issue exactly that action now if it is still needed; the approval covers one identical request from this Session.",
                 joined(&payload.resources)
             );
             if *reply == guardrail::Reply::Always && !payload.directories.is_empty() {
@@ -1597,10 +1597,10 @@ fn prompt(item: &Folded, decision: &Decision) -> Result<String, Error> {
             let action = text(&payload.action);
             match reply.0.as_str() {
                 Some("reject") => Ok(format!(
-                    "The user rejected deferred permission item {id} ({action}). Do not retry it; choose another approach or report the blocker to the user."
+                    "Recorded review decision: rejected deferred permission item {id} ({action}). Do not retry it; choose another approach or report the blocker."
                 )),
                 choice => Ok(format!(
-                    "The user approved deferred permission item {id} {}: {action} on {}. Re-issue exactly that action now if it is still needed; the approval covers one identical request from this Session.",
+                    "Recorded review decision: approved deferred permission item {id} {}: {action} on {}. Re-issue exactly that action now if it is still needed; the approval covers one identical request from this Session.",
                     if choice == Some("always") {
                         "always"
                     } else {
@@ -1616,7 +1616,7 @@ fn prompt(item: &Folded, decision: &Decision) -> Result<String, Error> {
 
 fn dismissal(item: &Folded) -> String {
     format!(
-        "The user dismissed deferred question {} without answering; proceed on your own judgment.",
+        "Deferred question {} was dismissed without an answer; proceed on your own judgment.",
         text(item.item_id.as_lossless())
     )
 }

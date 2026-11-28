@@ -2090,7 +2090,7 @@ impl Service {
         {
             return SleepAnswer::deferred(Reason::InvalidRequest);
         }
-        let instructions = "The user cannot answer this subagent's question right now. Answer from the evidence given. Refuse when the evidence does not support an answer; refusal hands the question to the user.";
+        let instructions = "Answer this subagent's question from the evidence given. Refuse when the evidence does not support an answer; an unsettled result uses a valid fallback.";
         let asked = if options.is_empty() {
             crate::tools::policy::text_question("subagent_question", instructions, 8192)
         } else {

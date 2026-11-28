@@ -41,7 +41,11 @@ testEffect(Layer.empty).effect("goal reminders resolve routine choices without m
     expect(text).toContain("Do not repeat an automatic waiting answer")
     expect(text).toContain("required explicit decisions")
     expect(text).toContain("Goals do not override these gates")
+    expect(text).toContain("required decisions remain pending or move to the review box while defer is active")
+    if (!autoAnswer) expect(text).toContain("explicit decisions require the decision surface")
   }
+  const yolo = SessionLiveState.goalReminder({ mode: "normal", permissions: "manual", guardrails: "manual", goal, answers: "yolo" })
+  expect(yolo).toContain("Automatic answers are neither explicit replies nor new instructions")
 }))
 
 testEffect(Layer.empty).effect("defer notices persist across prompts and distinguish YOLO from manual review", () =>
@@ -49,7 +53,7 @@ testEffect(Layer.empty).effect("defer notices persist across prompts and disting
     const state = { mode: "normal", permissions: "yolo", guardrails: "yolo", answers: "yolo", defer: {} } as const
     const text = SessionLiveState.deferReminder(state, true, true)
     expect(text).toContain("Defer mode is active")
-    expect(text).toContain("User prompts do not disable defer")
+    expect(text).toContain("New prompts do not disable defer")
     expect(text).toContain("YOLO")
     expect(text).toContain("manual")
     expect(SessionLiveState.deferReminder({ ...state, defer: undefined })).toBeUndefined()

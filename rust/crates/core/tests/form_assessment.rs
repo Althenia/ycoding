@@ -1476,6 +1476,11 @@ async fn a_boolean_answer_settles_with_the_helper_confidence_and_yolo_attributio
     );
     let state = settle(forms.ask(info.clone()).unwrap()).await;
     assert_eq!(state, form::State::Answered(answer(r#"{"ok":true}"#)));
+    let sent = stringify_json(&evaluator.seen.lock().unwrap()[0].input);
+    assert!(sent.contains("Never refuse or defer; provide an answer without requesting input"));
+    assert!(
+        sent.contains("Do not claim synthetic values are observed facts or explicit authorization")
+    );
     let settlement = forms.settlement(&info.id).unwrap();
     assert_eq!(
         settlement.automatic,

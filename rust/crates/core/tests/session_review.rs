@@ -921,7 +921,7 @@ async fn a_form_decision_is_admitted_once_as_a_review_steer_without_waking_the_f
     assert_eq!(
         string(field(&admitted.data, "text")),
         format!(
-            r#"The user answered deferred form {} "Plan": {{"plan":"A"}}. Continue with the work that depended on it."#,
+            r#"Deferred form {} "Plan" was answered: {{"plan":"A"}}. Continue with the work that depended on it."#,
             text(item.deferral.item_id.as_lossless())
         )
     );
@@ -1025,7 +1025,7 @@ async fn decisions_validate_kind_answers_and_live_form_rules_before_settlement()
     assert_eq!(
         prompt_text(&f.store, &questions.deferral.item_id),
         format!(
-            r#"Decision on deferred questions {} (asked while the user slept): "Which plan?"="/literal input", "Which scope?"="a, b". Continue with the work that depended on it."#,
+            r#"Decision on deferred questions {}: "Which plan?"="/literal input", "Which scope?"="a, b". Continue with the work that depended on it."#,
             text(questions.deferral.item_id.as_lossless())
         )
     );
@@ -1066,7 +1066,7 @@ async fn decisions_validate_kind_answers_and_live_form_rules_before_settlement()
     assert_eq!(
         prompt_text(&f.store, &dismissed.deferral.item_id),
         format!(
-            "The user dismissed deferred question {} without answering; proceed on your own judgment.",
+            "Deferred question {} was dismissed without an answer; proceed on your own judgment.",
             text(dismissed.deferral.item_id.as_lossless())
         )
     );
@@ -1181,7 +1181,7 @@ async fn guardrail_decisions_grant_once_record_family_directories_and_reject_har
     assert_eq!(
         prompt_text(&f.store, &hard.deferral.item_id),
         format!(
-            "The user approved deferred guardrail item {} once: shell on git reset --hard. Re-issue exactly that action now if it is still needed; the approval covers one identical request from this Session.",
+            "Recorded review decision: approved deferred guardrail item {} once: shell on git reset --hard. Re-issue exactly that action now if it is still needed; the approval covers one identical request from this Session.",
             text(hard.deferral.item_id.as_lossless())
         )
     );
@@ -1233,7 +1233,7 @@ async fn guardrail_decisions_grant_once_record_family_directories_and_reject_har
     assert_eq!(
         prompt_text(&f.store, &rejected.deferral.item_id),
         format!(
-            "The user rejected deferred guardrail item {} (shell). Do not retry it; choose another approach or report the blocker to the user.",
+            "Recorded review decision: rejected deferred guardrail item {} (shell). Do not retry it; choose another approach or report the blocker.",
             text(rejected.deferral.item_id.as_lossless())
         )
     );
@@ -1281,7 +1281,7 @@ async fn permission_always_saves_project_rules_in_the_decision_commit() {
     assert_eq!(
         prompt_text(&f.store, &saved.deferral.item_id),
         format!(
-            "The user approved deferred permission item {} always: edit on file. Re-issue exactly that action now if it is still needed; the approval covers one identical request from this Session.",
+            "Recorded review decision: approved deferred permission item {} always: edit on file. Re-issue exactly that action now if it is still needed; the approval covers one identical request from this Session.",
             text(saved.deferral.item_id.as_lossless())
         )
     );
@@ -1868,7 +1868,7 @@ async fn a_dismissed_child_question_answers_with_the_dismissal_and_no_data() {
     assert_eq!(
         text(&answers[0].text),
         format!(
-            "The user dismissed deferred question {} without answering; proceed on your own judgment.",
+            "Deferred question {} was dismissed without an answer; proceed on your own judgment.",
             text(item.deferral.item_id.as_lossless())
         )
     );

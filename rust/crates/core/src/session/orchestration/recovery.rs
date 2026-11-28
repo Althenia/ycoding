@@ -225,7 +225,7 @@ impl Service {
                 }
                 let question = Question {
                     id: QuestionId(format!("qst_{}", &sha256(&format!("{}\0{}\0restart", text(&row.session_id), row.revision))[..24]).into()),
-                    text: truncate_utf8(&format!("The service restarted while these tool calls were running: {}. Their effects are unknown and they were not retried. The user must choose Continue or Stop.", names.iter().map(text).collect::<Vec<_>>().join(", ")), 8 * 1024).into(),
+                    text: truncate_utf8(&format!("The service restarted while these tool calls were running: {}. Their effects are unknown and they were not retried. Await a Continue or Stop decision through the review box.", names.iter().map(text).collect::<Vec<_>>().join(", ")), 8 * 1024).into(),
                     data: None,
                     time: non_negative(created)?,
                     deferred: None,
@@ -437,7 +437,7 @@ impl Service {
                 id: review::prompt_id(&item.item_id),
                 session_id: resolution.child_id.clone(),
                 input: synthetic(
-                    format!("The user chose Continue after a service restart interrupted {tools}. Their effects are unknown and they were not retried; check their results before repeating any of them."),
+                    format!("Recovery review decision: Continue after a service restart interrupted {tools}. Their effects are unknown and they were not retried; check their results before repeating any of them."),
                     "Restart recovery · continue",
                     ObjectEncoder::new().field("review", &ObjectEncoder::new().field("itemID", &item.item_id).field("kind", "recovery").finish()).finish(),
                     "steer",
@@ -447,7 +447,7 @@ impl Service {
             })
         }).transpose().map_err(delivery_error)?;
         let change = if !continuing {
-            Change::Lost { excerpt: Some(format!("The user stopped this subagent after a service restart interrupted {tools}; their effects are unknown. Only the user can continue it.").into()) }
+            Change::Lost { excerpt: Some(format!("The recovery decision stopped this subagent after a service restart interrupted {tools}; their effects are unknown. Continue requires an explicit recovery decision through the review box.").into()) }
         } else if stopped {
             Change::Started
         } else {

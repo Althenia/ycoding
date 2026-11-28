@@ -26,7 +26,7 @@ use ycoding_schema::{
 };
 
 const RETENTION: u64 = 600_000;
-const FIELD: &str = "Answer this field with a concrete valid value for the form's stated purpose and constraints. Choose a recommended option or valid default when evidence is incomplete. Never refuse, defer, or ask the user. Do not claim synthetic values are observed facts or human authorization.";
+const FIELD: &str = "Answer this field with a concrete valid value for the form's stated purpose and constraints. Choose a recommended option or valid default when evidence is incomplete. Never refuse or defer; provide an answer without requesting input. Do not claim synthetic values are observed facts or explicit authorization.";
 
 #[derive(Clone, PartialEq)]
 struct Fence {

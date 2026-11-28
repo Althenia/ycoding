@@ -303,6 +303,9 @@ async fn every_family_member_observes_each_transition_once() {
         let texts = observations(&store, member);
         assert_eq!(texts.len(), 2, "{member}");
         assert!(texts[1].contains("Defer is off"), "{member}: {}", texts[1]);
+        assert!(texts[1].contains(
+            "Unresolved requests return to the decision surface under the current autonomy modes"
+        ));
         assert!(!texts[1].contains("restore"), "{member}: {}", texts[1]);
     }
     assert!(observations(&store, "ses_two").is_empty());
